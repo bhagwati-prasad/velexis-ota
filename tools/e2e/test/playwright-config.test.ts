@@ -1,10 +1,10 @@
-// The projects of playwright.config.ts (PFE-014, OFE-008, OFE-017): which exist with and without E2E_WITH_OTA=1 and
-// E2E_STRIPE=1, and which tests each selects. `playwright test --list` shows the same against the specs themselves.
+// The projects of playwright.config.ts (PFE-014, OFE-008, OFE-017, OAD-016): which exist with and without
+// E2E_WITH_OTA=1 and E2E_STRIPE=1, and which tests each selects. `playwright test --list` shows the same against the specs themselves.
 import { type PlaywrightTestConfig, type Project } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { projectsFor } from "../playwright.config";
 import { PROJECT_TAGS } from "../support/fixtures";
-import { PORTAL_URL, STOREFRONT_URL } from "../support/stack";
+import { OTA_ADMIN_URL, PORTAL_URL, STOREFRONT_URL } from "../support/stack";
 
 const names = (projects: readonly Project[]): (string | undefined)[] =>
   projects.map((project) => project.name);
@@ -29,6 +29,7 @@ describe("projectsFor", () => {
       "portal",
       "platform-admin",
       "storefront",
+      "ota-admin",
     ]);
     expect(names(projectsFor({ withOta: false, withStripe: true }))).toEqual([
       "portal",
@@ -39,9 +40,31 @@ describe("projectsFor", () => {
       "portal",
       "platform-admin",
       "storefront",
+      "ota-admin",
       "portal-stripe",
       "storefront-stripe",
     ]);
+  });
+
+  it("has the ota-admin project only with E2E_WITH_OTA=1: the OTA admin's specs against the built OTA admin [OAD-016 AC1]", () => {
+    expect(names(projectsFor({ withOta: false, withStripe: true }))).not.toContain("ota-admin");
+    for (const withStripe of [false, true]) {
+      const projects = projectsFor({ withOta: true, withStripe });
+      const otaAdmin = byName(projects, "ota-admin");
+      expect(otaAdmin).toMatchObject({
+        testMatch: ["specs/ota-admin/**/*.e2e.ts"],
+        use: { baseURL: OTA_ADMIN_URL },
+      });
+      expect(OTA_ADMIN_URL).toBe("http://127.0.0.1:3002");
+      const journey = "the OTA admin's SSO and bookings journey › issues the manual-review booking";
+      expect(selects(otaAdmin, journey)).toBe(true);
+      // A journey that needs Stripe over the network never runs in it.
+      expect(selects(otaAdmin, `a payments journey › captures ${PROJECT_TAGS.stripe}`)).toBe(false);
+      // No other project selects the OTA admin's specs: they are no storefront, portal or platform admin spec.
+      for (const project of projects.filter((candidate) => candidate.name !== "ota-admin")) {
+        expect([project.testMatch].flat().join(" ")).not.toContain("ota-admin");
+      }
+    }
   });
 
   it("runs the storefront's @stripe tests in storefront-stripe only, against the demo OTA's storefront [OFE-017 AC1]", () => {
@@ -105,7 +128,13 @@ describe("the configuration's projects from the environment", () => {
 
   it("defines storefront-stripe with E2E_STRIPE=1 and E2E_WITH_OTA=1, and not without either [OFE-017 AC1]", () => {
     expect(withStripe).toContain("storefront-stripe");
-    expect(withoutStripe).toEqual(["portal", "platform-admin", "storefront"]);
+    expect(withoutStripe).toEqual(["portal", "platform-admin", "storefront", "ota-admin"]);
     expect(stripeWithoutOta).toEqual(["portal", "platform-admin", "portal-stripe"]);
+  });
+
+  it("defines ota-admin with E2E_WITH_OTA=1 only [OAD-016 AC1]", () => {
+    expect(withStripe).toContain("ota-admin");
+    expect(withoutStripe).toContain("ota-admin");
+    expect(stripeWithoutOta).not.toContain("ota-admin");
   });
 });

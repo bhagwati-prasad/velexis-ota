@@ -14,6 +14,8 @@ import {
   DEMO_STOREFRONT_HOST,
   exampleEnv,
   newDatabaseName,
+  nextAppsOf,
+  OTA_ADMIN_URL,
   OTA_API_URL,
   otaStripeKeys,
   PLATFORM_ADMIN_URL,
@@ -61,6 +63,7 @@ const ALL_SERVICES: readonly ServiceName[] = [
   "ota-worker",
   "ota-api",
   "ota-cli",
+  "ota-admin",
   "storefront",
   "suspended-storefront",
   "admin-suspension-storefront",
@@ -70,6 +73,7 @@ const ALL_SERVICES: readonly ServiceName[] = [
 const WITHOUT_DSN = [
   "portal",
   "platform-admin",
+  "ota-admin",
   "amadeus-stub",
   "storefront",
   "suspended-storefront",
@@ -362,6 +366,24 @@ describe("serviceEnv", () => {
     expect(ADMIN_SUSPENSION_TENANT_KEY).not.toBe(SUSPENDED_TENANT_KEY);
   });
 
+  it("runs the OTA admin on 3002 against the OTA API, with the API's service key and the stack's public URLs [OAD-016 AC1]", () => {
+    const admin = serviceEnv("ota-admin", context);
+    expect(admin).toMatchObject({
+      PORT: "3002",
+      HOSTNAME: "127.0.0.1",
+      OTA_API_URL,
+      PUBLIC_OTA_ADMIN_URL: OTA_ADMIN_URL,
+      PUBLIC_PORTAL_URL: PORTAL_URL,
+      APP_ENV: "test",
+    });
+    // The development service key of ota/admin/.env.example is the one the OTA API accepts (OADR-0009 rule 1.2).
+    expect(admin["OTA_ADMIN_SERVICE_KEY"]).toMatch(/^sk_dev_/);
+    expect(admin["OTA_ADMIN_SERVICE_KEY"]).toBe(serviceEnv("ota-api", context)["OTA_ADMIN_SERVICE_KEY"]);
+    // The portal hands staff over to this admin, and the platform names its /sso: both get its public URL.
+    expect(serviceEnv("portal", context)["PUBLIC_OTA_ADMIN_URL"]).toBe(OTA_ADMIN_URL);
+    expect(serviceEnv("platform-api", context)["PUBLIC_OTA_ADMIN_URL"]).toBe(OTA_ADMIN_URL);
+  });
+
   it("points every process at the stack's Redis database, Mailpit, ports and 127.0.0.1 public URLs", () => {
     for (const name of ALL_SERVICES) {
       const values = serviceEnv(name, context);
@@ -446,11 +468,29 @@ describe("stackServices", () => {
       "platform-admin",
       "ota-worker",
       "ota-api",
+      "ota-admin",
       "storefront",
       "suspended-storefront",
       "admin-suspension-storefront",
     ]);
     expect(new Set(withOta.map((service) => service.port)).size).toBe(withOta.length);
+  });
+
+  it("starts the built OTA admin's standalone server on 3002 with E2E_WITH_OTA=1 only [OAD-016 AC1]", () => {
+    const platform = stackServices(stackContext(settings(), DATABASE));
+    expect(platform.map((service) => service.name)).not.toContain("ota-admin");
+    expect(nextAppsOf(platform)).toEqual(["platform/frontend", "platform/admin"]);
+    const withOta = stackServices(stackContext(settings({ E2E_WITH_OTA: "1" }), DATABASE));
+    expect(withOta.find((service) => service.name === "ota-admin")).toMatchObject({
+      entry: "ota/admin/.next/standalone/ota/admin/server.js",
+      argv: ["ota/admin/.next/standalone/ota/admin/server.js"],
+      build: "pnpm --filter @velexis/ota-admin build",
+      cwd: "ota/admin/.next/standalone/ota/admin",
+      port: STACK_PORTS.otaAdmin,
+      readyUrl: `${OTA_ADMIN_URL}/health/ready`,
+    });
+    // Its static assets are copied into the standalone tree, as for the platform's two Next.js apps.
+    expect(nextAppsOf(withOta)).toEqual(["platform/frontend", "platform/admin", "ota/admin"]);
   });
 
   it("waits for /health/ready with 200, for the stub's 404 and for each preview's home page [OFE-008 AC1]", () => {

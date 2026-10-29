@@ -12,10 +12,11 @@
 //      secret, which the OTA API gets as STRIPE_WEBHOOK_SECRET_VELEXIS_TEST (the keys go to the OTA API and worker);
 //   4. start the BUILT apps on their ports of docs/mvp/architecture.md §3: the platform API (3100) and worker (3101),
 //      the portal (3000) and the platform admin (3001) from their Next.js standalone servers, and with E2E_WITH_OTA=1
-//      the Amadeus stub (4900), the OTA worker (4001), the OTA API (4000) and `vite preview` of the built storefront
-//      three times: on 4173 for the demo OTA's host and on 4174 for the host of the OTA a journey suspends (OFE-008),
-//      and on 4175 for the host of the OTA that the platform admin suspends and resumes (PAD-011), each with the
-//      preview proxy to the OTA API and the production headers of the Caddyfile (OADR-0015 point 11);
+//      the Amadeus stub (4900), the OTA worker (4001), the OTA API (4000), the OTA admin (3002, its Next.js standalone
+//      server, OAD-016) and `vite preview` of the built storefront three times: on 4173 for the demo OTA's host and on
+//      4174 for the host of the OTA a journey suspends (OFE-008), and on 4175 for the host of the OTA that the platform
+//      admin suspends and resumes (PAD-011), each with the preview proxy to the OTA API and the production headers of
+//      the Caddyfile (OADR-0015 point 11);
 //   5. wait until each answers GET /health/ready with 200 (the stub, which has no health route, with its 404; a
 //      storefront preview with its home page);
 //   6. with E2E_WITH_OTA=1, run the platform's and then the OTA backend's `dev:seed` from their built CLIs: the
@@ -89,7 +90,10 @@ export const PORTAL_URL = origin(STACK_PORTS.portal);
 export const PLATFORM_ADMIN_URL = origin(STACK_PORTS.platformAdmin);
 /** The platform API, which the tests may call to arrange data (PADR-0017 item 5). */
 export const PLATFORM_API_URL = origin(STACK_PORTS.platformApi);
-/** The OTA admin: not started by this harness yet (OAD-016 adds it), but its URL is set. */
+/**
+ * The OTA admin (E2E_WITH_OTA=1, OAD-016): base URL of the `ota-admin` project and `PUBLIC_OTA_ADMIN_URL` of every app,
+ * so the portal's console hand-off posts to its `/sso` and the platform names its `consoleSsoUrl` there.
+ */
 export const OTA_ADMIN_URL = origin(STACK_PORTS.otaAdmin);
 /** The OTA API (E2E_WITH_OTA=1), which the storefront previews proxy `/api/*` to. */
 export const OTA_API_URL = origin(STACK_PORTS.otaApi);
@@ -345,6 +349,7 @@ export type ServiceName =
   | "ota-worker"
   | "ota-api"
   | "ota-cli"
+  | "ota-admin"
   | "storefront"
   | "suspended-storefront"
   | "admin-suspension-storefront";
@@ -360,6 +365,7 @@ const EXAMPLE_ENV_FILES: Readonly<Record<ServiceName, readonly string[]>> = {
   "ota-worker": [".env.example", "ota/backend/.env.example"],
   "ota-api": [".env.example", "ota/backend/.env.example"],
   "ota-cli": [".env.example", "ota/backend/.env.example"],
+  "ota-admin": [".env.example", "ota/admin/.env.example"],
   storefront: [".env.example", "ota/frontend/.env.example"],
   "suspended-storefront": [".env.example", "ota/frontend/.env.example"],
   "admin-suspension-storefront": [".env.example", "ota/frontend/.env.example"],
@@ -368,11 +374,11 @@ const EXAMPLE_ENV_FILES: Readonly<Record<ServiceName, readonly string[]>> = {
 /**
  * DSNs no process gets from the `.env.example` files or the developer's shell, which name the development database
  * `velexis`: each backend process gets the stack database's DSN of its own role instead (`serviceOverrides`), the
- * Next.js apps, the stub and the storefront previews get none. The migrator's and the test admin's DSNs are for
- * `pnpm db:migrate` and the harness only (root .env.example: "Never given to a running app"); the one exception is the
- * OTA backend's development-only `dev:seed`, a command and no app, which writes the demo OTA's platform rows as the
- * migrator (ota/backend/README.md §5). The provisioner's DSN is the OTA worker's and that seed's alone (ADR-0004,
- * ADR-0026).
+ * Next.js apps (the OTA admin among them), the stub and the storefront previews get none. The migrator's and the test
+ * admin's DSNs are for `pnpm db:migrate` and the harness only (root .env.example: "Never given to a running app"); the
+ * one exception is the OTA backend's development-only `dev:seed`, a command and no app, which writes the demo OTA's
+ * platform rows as the migrator (ota/backend/README.md §5). The provisioner's DSN is the OTA worker's and that seed's
+ * alone (ADR-0004, ADR-0026).
  */
 const WITHHELD = [
   "DATABASE_URL",
@@ -489,6 +495,10 @@ function serviceOverrides(name: ServiceName, context: StackContext): Record<stri
         HEALTH_PORT: String(STACK_PORTS.otaWorker),
         ...otaStripeOverrides(name, context),
       };
+    case "ota-admin":
+      // The standalone server reads PORT and HOSTNAME; the SDK reaches the OTA API on OTA_API_URL (a direct loopback
+      // connection, so the API takes the service key of ota/admin/.env.example, the same as ota/backend's).
+      return { PORT: String(STACK_PORTS.otaAdmin), HOSTNAME: STACK_HOST };
     case "ota-cli":
       // `dev:seed`: the demo OTA's platform rows as the migrator, its schema as the provisioner, read back as the app.
       return {
@@ -559,8 +569,16 @@ export interface ServiceSpec {
 const READY_PATH = "/health/ready";
 const ok = (status: number): boolean => status === 200;
 
-/** The Next.js apps: the standalone server, plus the static assets that `deploy/scripts/pack-release.sh` copies. */
-const NEXT_APPS = ["platform/frontend", "platform/admin"] as const;
+/** Where a Next.js app's standalone server is, below the app's folder (`<app>/.next/standalone/<app>/server.js`). */
+const NEXT_STANDALONE = /^(.+)\/\.next\/standalone\/\1\/server\.js$/;
+
+/**
+ * The Next.js apps of `services` (the portal, the platform admin, and with E2E_WITH_OTA=1 the OTA admin): the folders
+ * whose standalone server a service runs, which need the static assets that `deploy/scripts/pack-release.sh` copies.
+ */
+export function nextAppsOf(services: readonly Pick<ServiceSpec, "entry">[]): string[] {
+  return services.flatMap((service) => NEXT_STANDALONE.exec(service.entry)?.[1] ?? []);
+}
 
 /** Vite's command line in the storefront package: `vite preview` serves the built `dist/` (ota/frontend/README.md §11). */
 const VITE_BIN = "ota/frontend/node_modules/vite/bin/vite.js";
@@ -649,6 +667,13 @@ export function stackServices(context: StackContext): readonly ServiceSpec[] {
       build: "pnpm --filter @velexis/ota-backend build",
       cwd: "ota/backend",
       port: STACK_PORTS.otaApi,
+    }),
+    // OAD-016: ready when its /health/ready finds the OTA API live (ota/admin/README.md §5).
+    service("ota-admin", {
+      entry: "ota/admin/.next/standalone/ota/admin/server.js",
+      build: "pnpm --filter @velexis/ota-admin build",
+      cwd: "ota/admin/.next/standalone/ota/admin",
+      port: STACK_PORTS.otaAdmin,
     }),
     storefront("storefront", STACK_PORTS.storefront),
     storefront("suspended-storefront", STACK_PORTS.suspendedStorefront),
@@ -1006,8 +1031,8 @@ async function flushRedis(redisUrl: string): Promise<void> {
 }
 
 /** Copies `.next/static` (and `public/`) of each Next.js app into its standalone tree, as pack-release.sh does. */
-async function syncNextStaticAssets(): Promise<void> {
-  for (const app of NEXT_APPS) {
+async function syncNextStaticAssets(apps: readonly string[]): Promise<void> {
+  for (const app of apps) {
     const source = join(REPO_ROOT, app);
     const target = join(source, ".next", "standalone", app);
     await rm(join(target, ".next", "static"), { recursive: true, force: true });
@@ -1118,7 +1143,7 @@ export async function startStack(settings: StackSettings): Promise<Stack> {
         stackContext(settings, context.databaseName, { webhookSecret: forwarder.webhookSecret }),
       );
     }
-    await syncNextStaticAssets();
+    await syncNextStaticAssets(nextAppsOf(services));
     for (const spec of toStart) {
       running.push(startService(spec));
     }

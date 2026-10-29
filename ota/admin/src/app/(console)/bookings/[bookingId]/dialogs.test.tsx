@@ -95,7 +95,10 @@ function controlsOf(root: ParentNode): string[] {
 }
 
 const STRIPE_CAPTURE: IssuePlan = { kind: "capture", amount: eur("1414.06") };
-const AIRLINE: IssuePlan = { kind: "airline_card", flightOfferIds: ["1", "2"] };
+/** An airline-card booking whose card the airline charged. */
+const AIRLINE: IssuePlan = { kind: "airline_card", flightOfferIds: ["1", "2"], charged: true };
+/** An airline-card booking whose card the airline did not charge (no ticket came back: the payment is `processing`). */
+const AIRLINE_UNCHARGED: IssuePlan = { kind: "airline_card", flightOfferIds: ["1"], charged: false };
 
 function issueDialog(plan: IssuePlan, canAllowUnpaid = false, key = KEY) {
   return (
@@ -181,14 +184,38 @@ describe("IssueDialog", () => {
       ["settlement", "CASH"],
     ]);
     expect(hidden(form, "flightOfferIds")).toBe("1,2");
-    // Not even an owner gets `allowUnpaid` here: the airline card took the money.
+    // Not even an owner gets `allowUnpaid` here: the airline charged the card, so the booking is paid.
     expect(within(dialog).queryByLabelText(ISSUE_STRINGS.allowUnpaid)).toBeNull();
+    expect(within(dialog).queryByText(ISSUE_STRINGS.airlineUncharged, { exact: false })).toBeNull();
     expect(controlsOf(dialog).filter((control) => CARD_FIELD.test(control))).toEqual([]);
 
     fireEvent.click(within(dialog).getByLabelText(/CASH/));
     confirm(dialog, form);
     await waitFor(() => expect(actions.issueTickets).toHaveBeenCalledTimes(1), UI_WAIT);
     expect(lastForm(actions.issueTickets).get("settlement")).toBe("CASH");
+  });
+
+  it("offers allowUnpaid with the settlement for an airline card the airline did not charge, to an owner or an admin only [OAD-016 AC1]", async () => {
+    // console-operations.md §2 step 8: the API counts such a booking as unpaid (402 PAYMENT_REQUIRED without it).
+    render(issueDialog(AIRLINE_UNCHARGED, true));
+    let { dialog, form } = await open(ISSUE_STRINGS.trigger);
+    expect(within(dialog).getByText(ISSUE_STRINGS.airlineUncharged, { exact: false })).toBeTruthy();
+    fireEvent.click(within(dialog).getByLabelText(/ACCOUNT/));
+    fireEvent.click(within(dialog).getByLabelText(ISSUE_STRINGS.allowUnpaid));
+    expect(controlsOf(dialog).filter((control) => CARD_FIELD.test(control))).toEqual([]);
+    confirm(dialog, form);
+    await waitFor(() => expect(actions.issueTickets).toHaveBeenCalledTimes(1), UI_WAIT);
+    expect(lastForm(actions.issueTickets).get("settlement")).toBe("ACCOUNT");
+    expect(lastForm(actions.issueTickets).get("allowUnpaid")).toBe("true");
+    expect(hidden(form, "flightOfferIds")).toBe("1");
+    cleanup();
+    document.body.replaceChildren();
+
+    // An agent may not: the dialog says who can, and offers no checkbox.
+    render(issueDialog(AIRLINE_UNCHARGED, false));
+    ({ dialog, form } = await open(ISSUE_STRINGS.trigger));
+    expect(within(dialog).getByText(ISSUE_STRINGS.airlineUnpaidRefused, { exact: false })).toBeTruthy();
+    expect(within(dialog).queryByLabelText(ISSUE_STRINGS.allowUnpaid)).toBeNull();
   });
 
   it("offers allowUnpaid for an unpaid booking to an owner or an admin only", async () => {

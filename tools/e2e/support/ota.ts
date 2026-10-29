@@ -15,6 +15,15 @@
 //   await moveBookingIntoThePast(trip.bookingId);       // its flight 30 days ago: a past trip
 //   await expireAccessToken(context);                   // the access token in the cookie, as the API sees it 16 min later
 //
+// The OTA admin's journeys of OAD-016 add (the end of this file):
+//
+//   const owned = await newOwnerWithActiveOta("Olga Owner", "sso");  // an owner's OTA, set up, with its test office
+//   await switchAirlineCardOn(owned.schema);                         // its test storefront takes the airline card
+//   const edge = new EdgeApi(owned.storefrontHost, ip);              // the OTA API as that OTA's storefront edge
+//   await bookAirlineCardTrip(edge, { …, completionScenario: "ticketing-failed" });  // left in manual review
+//   const order = await createStubOrder({ officeId, … });            // an Amadeus order made outside Velexis
+//   await openConsoleFromPortal(page, owned.ota.id);                 // portal → "Open console" → /bookings
+//
 // Tenant data goes through `tenantTx` of @velexis/db as velexis_ota_app, the OTA backend's own role, never through
 // schema-qualified SQL or a session-level search_path (ADR-0004). The platform row of the suspended OTA is written as
 // velexis_migrator, as the OTA backend's development seed writes the demo OTA's (ota/backend/README.md §5): the platform
@@ -24,7 +33,7 @@
 import { createPrivateKey, randomInt, randomUUID, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { expect, type BrowserContext } from "@playwright/test";
+import { expect, type BrowserContext, type Page } from "@playwright/test";
 import { INVALIDATION_CHANNEL, type TenantInvalidation } from "@velexis/api-types/jobs";
 import {
   createPool,
@@ -35,16 +44,24 @@ import {
   type TenantDatabase,
 } from "@velexis/db";
 import Redis from "ioredis";
-import { stack, withDatabase } from "./seed";
+import { expectNoSeriousA11yViolations } from "./a11y";
+import { createVerifiedAccount, signInWithApi, type SessionTokens } from "./fixtures";
+import { buildAccount, stack, withDatabase } from "./seed";
 import {
+  AMADEUS_STUB_URL,
   DEMO_TENANT_KEY,
+  OTA_ADMIN_URL,
+  OTA_API_URL,
+  PORTAL_URL,
   REPO_ROOT,
   serviceEnv,
   stackDatabaseUrl,
+  STOREFRONT_BASE_DOMAIN,
   STOREFRONT_URL,
   SUSPENDED_TENANT_KEY,
 } from "./stack";
 import { CSRF_COOKIE } from "./storefront-guards";
+import { createOtaWithApi, uniqueOtaKey, waitForOtaStatus, type Ota, type SignedInOwner } from "./tenants";
 
 /** The schema of the demo OTA that the OTA backend's `dev:seed` provisions. */
 export const DEMO_TENANT_SCHEMA = `tenant_${DEMO_TENANT_KEY}`;
@@ -317,13 +334,11 @@ export async function storefrontOffersAirlineCard(): Promise<boolean> {
 }
 
 /**
- * Turns the airline card on for the demo OTA's test storefront (`storefront_settings.airline_card_enabled_test`, the
- * switch of the OTA admin; AIRLINE_CARD_ENABLED is true in ota/backend/.env.example, which the stack's OTA processes
- * get) and waits until storefront.get offers it: each poll drops the cached entries first, so an entry that a request
- * of another journey filled from the old row meanwhile goes too. It stays on: no journey needs it off.
+ * Sets `storefront_settings.airline_card_enabled_test` of the OTA of `schema`, the switch of the OTA admin, when it is
+ * off (a new OTA has it off). Callers drop or wait out the storefront.get entries that may hold the old value.
  */
-export async function enableAirlineCard(): Promise<void> {
-  await withTenantTx(DEMO_TENANT_SCHEMA, async (trx) => {
+export async function switchAirlineCardOn(schema: string): Promise<void> {
+  await withTenantTx(schema, async (trx) => {
     await trx
       .updateTable("storefront_settings")
       .set({
@@ -334,6 +349,16 @@ export async function enableAirlineCard(): Promise<void> {
       .where("airline_card_enabled_test", "=", false)
       .execute();
   });
+}
+
+/**
+ * Turns the airline card on for the demo OTA's test storefront (`storefront_settings.airline_card_enabled_test`, the
+ * switch of the OTA admin; AIRLINE_CARD_ENABLED is true in ota/backend/.env.example, which the stack's OTA processes
+ * get) and waits until storefront.get offers it: each poll drops the cached entries first, so an entry that a request
+ * of another journey filled from the old row meanwhile goes too. It stays on: no journey needs it off.
+ */
+export async function enableAirlineCard(): Promise<void> {
+  await switchAirlineCardOn(DEMO_TENANT_SCHEMA);
   const tenantId = await demoTenantId();
   await expect
     .poll(
@@ -429,7 +454,8 @@ export class StorefrontApi {
 
   /**
    * Calls `method path` of the OTA API (`/v1/…`) with `body` and returns the JSON answer; a status other than
-   * `expected` throws a StorefrontApiError that names `operation`, the status and the error code only.
+   * `expected` throws a StorefrontApiError that names `operation`, the status and the error code only. `extra` adds
+   * headers of the call's own (the stub's `X-Stub-Scenario`); the client's own headers win over them.
    */
   async call(
     operation: string,
@@ -437,8 +463,13 @@ export class StorefrontApi {
     path: string,
     body?: unknown,
     expected = 200,
+    extra: Readonly<Record<string, string>> = {},
   ): Promise<unknown> {
-    const headers: Record<string, string> = { accept: "application/json", "x-forwarded-for": this.endUserIp };
+    const headers: Record<string, string> = {
+      ...extra,
+      accept: "application/json",
+      "x-forwarded-for": this.endUserIp,
+    };
     if (method !== "GET") {
       headers["content-type"] = "application/json";
       headers["x-csrf-token"] = await this.csrfToken();
@@ -485,6 +516,12 @@ export interface AirlineCardTripInput {
   readonly traveller: SeedTraveller;
   /** The booking's contact e-mail address. */
   readonly email: string;
+  /**
+   * The Amadeus stub's scenario for the completion alone (`X-Stub-Scenario`, which the OTA API forwards outside
+   * production): `ticketing-failed` makes Flight Create Orders store the order without its tickets, so the airline-card
+   * booking waits in `manual_review` for the staff (OAD-016). Default: none, the airline issues the tickets.
+   */
+  readonly completionScenario?: "ticketing-failed";
 }
 
 /** A booking that `bookAirlineCardTrip` made. */
@@ -540,12 +577,14 @@ const objectOf = (value: unknown): Record<string, unknown> =>
   typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 
 /**
- * Books a one-way trip from Madrid to Paris on the demo OTA through the OTA API, as the storefront's pages would, paid
- * with the airline card so that no Stripe is needed (ota/docs/flows/checkout-airline-card.md): flights.search, the
- * first offer priced, checkout.create (for the customer of the context's session, or a guest), the traveller and the
- * contact, checkout.createPayment `airline_card` with the terms accepted, checkout.updatePayment with the card's brand
- * and BIN (the airline's card fee), checkout.completeWithAirlineCard for the quoted total. The demo OTA issues the
- * tickets at completion (`issue_after_payment`). Needs `enableAirlineCard()` first.
+ * Books a one-way trip from Madrid to Paris through the OTA API, as the storefront's pages would (on the demo OTA with
+ * `StorefrontApi`, on a journey's own OTA with `EdgeApi`), paid with the airline card so that no Stripe is needed
+ * (ota/docs/flows/checkout-airline-card.md): flights.search, the first offer priced, checkout.create (for the customer
+ * of the context's session, or a guest), the traveller and the contact, checkout.createPayment `airline_card` with the
+ * terms accepted, checkout.updatePayment with the card's brand and BIN (the airline's card fee),
+ * checkout.completeWithAirlineCard for the quoted total. The OTA issues the tickets at completion
+ * (`issue_after_payment`, the demo OTA's and a new OTA's policy). Needs the airline card switched on first
+ * (`enableAirlineCard()` for the demo OTA, `switchAirlineCardOn(schema)` for a journey's own).
  */
 export async function bookAirlineCardTrip(api: SeedApi, input: AirlineCardTripInput): Promise<SeededBooking> {
   const search = await api.call(
@@ -620,6 +659,7 @@ export async function bookAirlineCardTrip(api: SeedApi, input: AirlineCardTripIn
     `/v1/checkouts/${checkoutId}/airline-card-completion`,
     { paymentId, expectedTotal, card },
     201,
+    input.completionScenario === undefined ? {} : { "x-stub-scenario": input.completionScenario },
   );
   const booking = objectOf(objectOf(completed)["booking"]);
   return {
@@ -752,4 +792,502 @@ export async function expireAccessToken(
     EXPIRED_TOKEN_AGE_SECONDS,
   );
   await context.addCookies([{ ...cookie, value }]);
+}
+
+// ---- The OTA admin's journeys (OAD-016) ------------------------------------------------------------------------------
+
+/** The schema of the OTA `key` (ADR-0004: `tenant_<key>`). */
+export function tenantSchemaOf(key: string): string {
+  if (!/^[a-z][a-z0-9]{2,29}$/.test(key)) {
+    throw new TypeError("not an OTA key");
+  }
+  return `tenant_${key}`;
+}
+
+/** The storefront host of the OTA `key`, which `createTenant` registers: `<key>.<STOREFRONT_BASE_DOMAIN>`. */
+export function storefrontHostOf(key: string): string {
+  return `${key}.${STOREFRONT_BASE_DOMAIN}`;
+}
+
+/** An OTA's Amadeus test connection, as the platform's set-up left it (`platform.supplier_connections`). */
+export interface AmadeusTestConnection {
+  readonly status: string;
+  /** The office of its calls (the default, queuing and owner office of a connection on the Velexis account). */
+  readonly officeId: string;
+  /** Every office of the connection: the OTA's orders are the orders of these offices (ADR-0012). */
+  readonly officeIds: readonly string[];
+}
+
+/**
+ * The Amadeus test connection of `tenantId` when it is `active` with an office, else `undefined` (none, or one that
+ * waits for an office: `pending_verification`, PADR-0012). Read as velexis_ota_app, which reads the platform's tables
+ * and never writes them.
+ */
+export async function activeAmadeusConnectionOf(
+  tenantId: string,
+): Promise<AmadeusTestConnection | undefined> {
+  const row = await withDatabase("ota", async (client) => {
+    const { rows } = await client.query<{
+      status: string;
+      default_office_id: string | null;
+      office_ids: string[];
+    }>(
+      `SELECT status, default_office_id, office_ids
+         FROM platform.supplier_connections
+        WHERE tenant_id = $1 AND provider = 'amadeus' AND environment = 'test'`,
+      [tenantId],
+    );
+    return rows[0];
+  });
+  return row?.status === "active" && row.default_office_id !== null
+    ? { status: row.status, officeId: row.default_office_id, officeIds: row.office_ids }
+    : undefined;
+}
+
+/** How long `waitForUnheldTestOffice` waits: the bound of a hold (support/tenants.ts `withAvailableOfficesHeld`). */
+const POOL_HOLD_WAIT_MS = 45_000;
+
+/**
+ * Waits until the Velexis test pool has an available office that no transaction holds: one that the set-up step of a
+ * new OTA (`FOR UPDATE SKIP LOCKED`) would take now. Checked in a transaction of the platform API's own role that
+ * locks it with `SKIP LOCKED` and rolls back, so nothing is written or kept held.
+ */
+async function waitForUnheldTestOffice(): Promise<void> {
+  await expect
+    .poll(
+      async () =>
+        await withDatabase("platform", async (client) => {
+          await client.query("BEGIN");
+          try {
+            const { rowCount } = await client.query(
+              `SELECT o.id
+                 FROM platform.amadeus_offices o
+                 JOIN platform.amadeus_accounts a ON a.id = o.amadeus_account_id
+                WHERE a.environment = 'test' AND o.status = 'available'
+                LIMIT 1
+                  FOR UPDATE OF o SKIP LOCKED`,
+            );
+            return (rowCount ?? 0) > 0;
+          } finally {
+            await client.query("ROLLBACK");
+          }
+        }),
+      {
+        timeout: POOL_HOLD_WAIT_MS,
+        message: "the Velexis test pool has an available office that no other journey holds",
+      },
+    )
+    .toBe(true);
+}
+
+/** An OTA of an OTA admin journey: a new owner's, set up by the OTA worker, with its Amadeus test office. */
+export interface OwnedOta {
+  readonly owner: SignedInOwner;
+  /** The owner's portal session, for the browser context's cookies (`addSessionCookies(context, "portal", …)`). */
+  readonly session: SessionTokens;
+  readonly ota: Ota;
+  /** `tenant_<key>`. */
+  readonly schema: string;
+  /** `<key>.ota.example.com`, the host its storefront edge calls name (`EdgeApi`). */
+  readonly storefrontHost: string;
+  readonly connection: AmadeusTestConnection;
+}
+
+/** How many OTAs `newOwnerWithActiveOta` sets up at most to get one with an office (see there). */
+const OFFICE_SETUP_ATTEMPTS = 3;
+
+/**
+ * A new portal account (`fullName`), verified and signed in, that creates an OTA through `createTenant` (a key of
+ * `keyPrefix` and 10 random hex digits) and waits for the OTA worker to set it up (`active`, about 2 s locally) with
+ * its Amadeus test connection on an office of the Velexis test pool (ten from the platform's dev:seed).
+ *
+ * The set-up passes over offices that another transaction holds, and admin-amadeus-pool.e2e.ts holds every available
+ * one while its own OTA is set up (`withAvailableOfficesHeld`): an OTA set up in those seconds gets a connection that
+ * waits for an office (`pending_verification`), which only an admin's assignment would end. So when that happens, the
+ * owner waits until an available office is free of holds again and sets up another OTA (at most
+ * OFFICE_SETUP_ATTEMPTS OTAs); the one without an office is left as it is. A pool without an available office fails
+ * at once with that reason.
+ */
+export async function newOwnerWithActiveOta(fullName: string, keyPrefix: string): Promise<OwnedOta> {
+  const account = await createVerifiedAccount(buildAccount({ fullName }));
+  const session = await signInWithApi(account);
+  const owner: SignedInOwner = { account, accessToken: session.accessToken };
+  for (let attempt = 1; ; attempt += 1) {
+    const created = await createOtaWithApi(owner, { key: uniqueOtaKey(keyPrefix) });
+    const ota = await waitForOtaStatus(owner, created.id, "active");
+    // The connection is written by the set-up's `assign_amadeus_office` step, before the one that activates the OTA.
+    const connection = await activeAmadeusConnectionOf(ota.id);
+    if (connection !== undefined) {
+      return {
+        owner,
+        session,
+        ota,
+        schema: tenantSchemaOf(ota.key),
+        storefrontHost: storefrontHostOf(ota.key),
+        connection,
+      };
+    }
+    if (attempt === OFFICE_SETUP_ATTEMPTS) {
+      throw new Error(
+        `${OFFICE_SETUP_ATTEMPTS} OTAs were set up without an Amadeus test office: the Velexis test pool had none ` +
+          "available (tools/e2e/README.md, Troubleshooting)",
+      );
+    }
+    await waitForUnheldTestOffice();
+  }
+}
+
+/** The `fetch` the API clients of this section use (the global one; a fake in the unit tests). */
+export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
+
+/** What `EdgeApi` needs besides the host and the end-user IP; the defaults are the stack's. */
+export interface EdgeApiOptions {
+  /** The OTA API (default OTA_API_URL). */
+  readonly baseUrl?: string;
+  /** VELEXIS_EDGE_SECRET (default: the development value of ota/backend/.env.example that the stack's API gets). */
+  readonly edgeSecret?: string;
+  readonly fetch?: FetchLike;
+}
+
+/** The development edge secret of the stack's OTA API (never logged). */
+function stackEdgeSecret(): string {
+  const secret = serviceEnv("ota-api", stack())["VELEXIS_EDGE_SECRET"];
+  if (secret === undefined || secret === "") {
+    throw new Error("ota/backend/.env.example names no VELEXIS_EDGE_SECRET");
+  }
+  return secret;
+}
+
+/** The value of the cookie `name` among `Set-Cookie` header values, if one sets it. */
+export function setCookieValue(setCookies: readonly string[], name: string): string | undefined {
+  for (const header of setCookies) {
+    const [pair = ""] = header.split(";");
+    const separator = pair.indexOf("=");
+    if (separator > 0 && pair.slice(0, separator).trim() === name) {
+      return pair.slice(separator + 1).trim();
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The OTA API as the hosted storefront of any OTA's host calls it through Caddy (OADR-0009 rule 1.1), from the test
+ * process: `X-Velexis-Edge` with the stack's development secret, `X-Velexis-Host` and `Origin: https://<host>` as Caddy
+ * and the storefront previews send them, the journey's end-user IP as `X-Forwarded-For` (the client address the API
+ * takes behind a loopback proxy, so per-IP limits count this journey alone), and on every write the CSRF double submit
+ * of OADR-0006 point 3: the `__Host-vx_csrf` value that storefront.get issued, as the cookie and as `X-CSRF-Token`, and
+ * a new `Idempotency-Key` on every POST. For an OTA whose storefront no preview serves (a journey's own OTA), so its
+ * bookings are made as a traveller's browser would make them (PADR-0017 item 5), with the airline card and no Stripe.
+ * The secret, the CSRF value and the answers stay in this process; a refusal names the operation, status and code only.
+ */
+export class EdgeApi {
+  private readonly baseUrl: string;
+  private readonly fetchImpl: FetchLike;
+  private readonly edgeSecret: string | undefined;
+  private csrf: string | undefined;
+
+  constructor(
+    readonly host: string,
+    private readonly endUserIp: string,
+    options: EdgeApiOptions = {},
+  ) {
+    this.baseUrl = options.baseUrl ?? OTA_API_URL;
+    this.fetchImpl = options.fetch ?? ((input, init) => fetch(input, init));
+    this.edgeSecret = options.edgeSecret;
+  }
+
+  /** The edge headers of every call: what Caddy adds in front of the storefront. */
+  private edgeHeaders(): Record<string, string> {
+    return {
+      accept: "application/json",
+      "x-velexis-edge": this.edgeSecret ?? stackEdgeSecret(),
+      "x-velexis-host": this.host,
+      origin: `https://${this.host}`,
+      "x-forwarded-for": this.endUserIp,
+    };
+  }
+
+  /** The CSRF value storefront.get issued to this client (asked for once, before the first write). */
+  private async csrfToken(): Promise<string> {
+    if (this.csrf === undefined) {
+      const response = await this.fetchImpl(`${this.baseUrl}/v1/storefront`, {
+        method: "GET",
+        headers: this.edgeHeaders(),
+        signal: AbortSignal.timeout(15_000),
+      });
+      await response.body?.cancel();
+      if (response.status !== 200) {
+        throw new StorefrontApiError("storefront.get", response.status, undefined);
+      }
+      this.csrf = setCookieValue(response.headers.getSetCookie(), CSRF_COOKIE);
+      if (this.csrf === undefined) {
+        throw new Error(`storefront.get set no ${CSRF_COOKIE} cookie`);
+      }
+    }
+    return this.csrf;
+  }
+
+  /**
+   * Calls `method path` of the OTA API (`/v1/…`) with `body` as the storefront edge of `host`, and returns the JSON
+   * answer; a status other than `expected` throws a StorefrontApiError (operation, status and error code only).
+   * `extra` adds headers of the call's own (the stub's `X-Stub-Scenario`); the edge's own headers win over them.
+   */
+  async call(
+    operation: string,
+    method: ApiMethod,
+    path: string,
+    body?: unknown,
+    expected = 200,
+    extra: Readonly<Record<string, string>> = {},
+  ): Promise<unknown> {
+    const headers: Record<string, string> = { ...extra, ...this.edgeHeaders() };
+    if (method !== "GET") {
+      const csrf = await this.csrfToken();
+      headers["content-type"] = "application/json";
+      headers["cookie"] = `${CSRF_COOKIE}=${csrf}`;
+      headers["x-csrf-token"] = csrf;
+    }
+    if (method === "POST") {
+      headers["idempotency-key"] = randomUUID();
+    }
+    const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      method,
+      headers,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      // The airline-card completion waits for Flight Create Orders: the SDK's 60 s of a long operation.
+      signal: AbortSignal.timeout(60_000),
+    });
+    const text = await response.text();
+    let answer: unknown;
+    try {
+      answer = text === "" ? undefined : JSON.parse(text);
+    } catch {
+      answer = undefined;
+    }
+    if (response.status !== expected) {
+      throw new StorefrontApiError(operation, response.status, errorCodeOf(answer));
+    }
+    return answer;
+  }
+}
+
+/** An Amadeus order made in the stub outside Velexis, as an agent books one in a GDS terminal. */
+export interface StubOrderInput {
+  /** The office that holds it: its queuing and owner office. */
+  readonly officeId: string;
+  readonly traveller: SeedTraveller;
+  /** The traveller's contact e-mail address: one of the journey's own, since an import may e-mail it. */
+  readonly email: string;
+  /** Its flight's departure, days from today (the times of day of the stub's offer are kept). */
+  readonly daysAhead: number;
+}
+
+/** An order of the stub: its Amadeus id and its record locator. */
+export interface StubOrder {
+  readonly id: string;
+  readonly recordLocator: string;
+}
+
+/** What `createStubOrder` needs besides the order; the defaults are the stack's stub and the global `fetch`. */
+export interface StubOrderOptions {
+  readonly baseUrl?: string;
+  readonly fetch?: FetchLike;
+}
+
+/** The test client of the stub's token endpoint: any non-empty pair gets a token from the stub CLI. */
+const STUB_TERMINAL_CLIENT = { id: "e2e-gds-terminal", secret: "e2e-gds-terminal-dummy" } as const;
+
+const DAY_MS = 86_400_000;
+
+/** A local Amadeus time (`YYYY-MM-DDTHH:MM:SS`) or date moved `days` days, its time of day kept. */
+export function shiftLocal(value: string, days: number): string {
+  const time = Date.parse(`${value.length === 10 ? `${value}T00:00:00` : value}Z`);
+  if (!Number.isFinite(time)) {
+    throw new TypeError("not a local Amadeus time");
+  }
+  const shifted = new Date(time + days * DAY_MS).toISOString();
+  return value.length === 10 ? shifted.slice(0, 10) : shifted.slice(0, 19);
+}
+
+/**
+ * The first offer of a stub search with its flights moved to depart `daysAhead` days from today (`now`): every
+ * segment's local times and the last ticketing date by the same whole days, never a fixed calendar date.
+ */
+export function offerDepartingIn(
+  offer: Record<string, unknown>,
+  daysAhead: number,
+  now = new Date(),
+): unknown {
+  const itineraries = Array.isArray(offer["itineraries"]) ? (offer["itineraries"] as unknown[]) : [];
+  const segments = itineraries.flatMap((itinerary) => {
+    const list = objectOf(itinerary)["segments"];
+    return Array.isArray(list) ? (list as unknown[]).map(objectOf) : [];
+  });
+  const first = objectOf(segments[0]?.["departure"])["at"];
+  if (typeof first !== "string") {
+    throw new Error("the stub's offer has no departure");
+  }
+  const target = Date.parse(`${departureDate(daysAhead, now)}T00:00:00Z`);
+  const days = Math.round((target - Date.parse(`${first.slice(0, 10)}T00:00:00Z`)) / DAY_MS);
+  const moved = structuredClone(offer);
+  for (const itinerary of (moved["itineraries"] as unknown[] | undefined) ?? []) {
+    for (const segment of (objectOf(itinerary)["segments"] as unknown[] | undefined) ?? []) {
+      for (const end of ["departure", "arrival"] as const) {
+        const point = objectOf(objectOf(segment)[end]);
+        if (typeof point["at"] === "string") {
+          point["at"] = shiftLocal(point["at"], days);
+        }
+      }
+    }
+  }
+  if (typeof moved["lastTicketingDate"] === "string") {
+    moved["lastTicketingDate"] = shiftLocal(moved["lastTicketingDate"], days);
+  }
+  return moved;
+}
+
+/**
+ * Creates an Amadeus order in the stack's stub directly, as a GDS terminal or another Amadeus client would, so Velexis
+ * knows nothing of it (ota/docs/flows/console-operations.md §2 "PNR lookup and import"): a token, a search (the stub
+ * answers its fixture's flights from Madrid to Paris), and Flight Create Orders of its first offer for one adult,
+ * queued and owned by `officeId`, without issuing it. The stub keeps the order in memory and answers it to every
+ * by-reference read; which OTA may see it is the OTA API's office isolation (ADR-0012).
+ */
+export async function createStubOrder(
+  input: StubOrderInput,
+  options: StubOrderOptions = {},
+): Promise<StubOrder> {
+  const baseUrl = options.baseUrl ?? AMADEUS_STUB_URL;
+  const send = options.fetch ?? ((url, init) => fetch(url, init));
+  const json = async (operation: string, response: Response, expected: number): Promise<unknown> => {
+    const text = await response.text();
+    if (response.status !== expected) {
+      throw new Error(`the stub's ${operation} answered ${response.status}`);
+    }
+    return JSON.parse(text) as unknown;
+  };
+  const token = field(
+    await json(
+      "token",
+      await send(`${baseUrl}/v1/security/oauth2/token`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "client_credentials",
+          client_id: STUB_TERMINAL_CLIENT.id,
+          client_secret: STUB_TERMINAL_CLIENT.secret,
+        }).toString(),
+      }),
+      200,
+    ),
+    "the stub's token",
+    (value) => value["access_token"],
+  );
+  const authorization = { authorization: `Bearer ${token}` };
+  const query = new URLSearchParams({
+    originLocationCode: "MAD",
+    destinationLocationCode: "PAR",
+    departureDate: departureDate(input.daysAhead),
+    adults: "1",
+    max: "1",
+  });
+  const search = objectOf(
+    await json(
+      "getFlightOffers",
+      await send(`${baseUrl}/v2/shopping/flight-offers?${query.toString()}`, {
+        method: "GET",
+        headers: authorization,
+      }),
+      200,
+    ),
+  );
+  const offers = Array.isArray(search["data"]) ? (search["data"] as unknown[]) : [];
+  const offer = offerDepartingIn(objectOf(offers[0]), input.daysAhead);
+  const { traveller } = input;
+  const order = objectOf(
+    objectOf(
+      await json(
+        "createFlightOrders",
+        await send(`${baseUrl}/v1/booking/flight-orders`, {
+          method: "POST",
+          headers: { ...authorization, "content-type": "application/vnd.amadeus+json" },
+          body: JSON.stringify({
+            data: {
+              type: "flight-order",
+              queuingOfficeId: input.officeId,
+              ownerOfficeId: input.officeId,
+              flightOffers: [offer],
+              travelers: [
+                {
+                  id: "1",
+                  dateOfBirth: traveller.dateOfBirth,
+                  gender: traveller.gender,
+                  name: {
+                    firstName: traveller.firstName.toUpperCase(),
+                    lastName: traveller.lastName.toUpperCase(),
+                  },
+                  contact: {
+                    emailAddress: input.email,
+                    phones: [{ deviceType: "MOBILE", countryCallingCode: "34", number: "600000000" }],
+                  },
+                },
+              ],
+              ticketingAgreement: { option: "CONFIRM" },
+            },
+          }),
+        }),
+        201,
+      ),
+    )["data"],
+  );
+  const records = Array.isArray(order["associatedRecords"]) ? (order["associatedRecords"] as unknown[]) : [];
+  return {
+    id: field(order, "the stub's createFlightOrders", (value) => value["id"]),
+    recordLocator: field(records[0], "the stub's createFlightOrders", (value) => value["reference"]),
+  };
+}
+
+/** The cookies of a staff session that the OTA admin sets at its single sign-on (ota/admin/README.md §4). */
+export const STAFF_COOKIES = Object.freeze([
+  "__Host-vx_staff_at",
+  "__Host-vx_staff_rt",
+  "__Host-vx_env",
+  "__Host-vx_tenant",
+] as const);
+
+/** What `scriptReadableCookieNames` needs of a page: running a function in its document (a Playwright `Page`). */
+export interface DocumentEvaluator {
+  evaluate<R>(pageFunction: () => R): Promise<R>;
+}
+
+/** The names of the cookies JavaScript of `page`'s document can read (`document.cookie`); values never leave it. */
+export async function scriptReadableCookieNames(page: DocumentEvaluator): Promise<string[]> {
+  return await page.evaluate(() =>
+    document.cookie
+      .split(";")
+      .map((pair) => pair.split("=")[0]?.trim() ?? "")
+      .filter((name) => name !== ""),
+  );
+}
+
+/** The portal's page of an OTA, where its owner finds "Open console" (platform/frontend/README.md §2). */
+export function portalOtaPath(tenantId: string): string {
+  return `${PORTAL_URL}/otas/${encodeURIComponent(tenantId)}`;
+}
+
+/**
+ * The single sign-on from the portal into the OTA admin (ota/admin/README.md §3, PADR-0007 §4), in `page` of a context
+ * with the portal session's cookies: the portal's page of the OTA (axe once its title is in place), "Open console", whose
+ * form posts to the launch route, whose hand-off page submits the one-time `portalToken` to the OTA admin's `/sso`,
+ * which sets the staff session's cookies and answers `303` to `/bookings`. Resolves on `/bookings` of the OTA admin.
+ */
+export async function openConsoleFromPortal(page: Page, tenantId: string): Promise<void> {
+  await page.goto(portalOtaPath(tenantId));
+  await expect(page).toHaveTitle("Overview · Velexis");
+  await expectNoSeriousA11yViolations(page);
+  await page
+    .getByRole("main")
+    .getByRole("button", { name: /^Open console/ })
+    .click();
+  await page.waitForURL(`${OTA_ADMIN_URL}/bookings`);
 }

@@ -11,6 +11,8 @@
 // - An airline-card booking (its tickets did not all come back): the airline card cannot be charged again, so the
 //   dialog offers only the OTA's own settlement with the airline, `CASH` or `ACCOUNT`, as an `other` form of payment
 //   for the booking's flight offers. There is no card input here or anywhere in the admin; the other way out is Cancel.
+//   When the airline did not charge the card, the API counts the booking as unpaid (console-operations.md §2 step 8):
+//   the dialog says so and offers `allowUnpaid` to an owner or an admin, as for any unpaid booking (OAD-016).
 // - The trigger is highlighted when ticketing failed or waits in manual review.
 import {
   ALLOW_UNPAID_FIELD,
@@ -42,6 +44,8 @@ export const ISSUE_STRINGS = Object.freeze({
   unpaidRefused: "Only an owner or an admin can issue it unpaid: capture the payment first.",
   airlineCard:
     "The airline card cannot be charged again. Issue with the OTA's own settlement with the airline, or cancel the booking. No card is ever entered in the console.",
+  airlineUncharged: "The airline has not charged the card, so the booking is not paid.",
+  airlineUnpaidRefused: "Only an owner or an admin can issue it unpaid; you can cancel it.",
   settlement: "Settlement with the airline",
   allowUnpaid: "Issue although the payment is not captured",
   allowUnpaidHint: "Owner and admin only.",
@@ -69,7 +73,17 @@ export interface IssueDialogProps {
 function IssueSummary({ plan, canAllowUnpaid }: Pick<IssueDialogProps, "plan" | "canAllowUnpaid">) {
   switch (plan.kind) {
     case "airline_card":
-      return <p>{ISSUE_STRINGS.airlineCard}</p>;
+      return (
+        <>
+          <p>{ISSUE_STRINGS.airlineCard}</p>
+          {plan.charged ? null : (
+            <p>
+              {ISSUE_STRINGS.airlineUncharged}{" "}
+              {canAllowUnpaid ? ISSUE_STRINGS.unpaidAllowed : ISSUE_STRINGS.airlineUnpaidRefused}
+            </p>
+          )}
+        </>
+      );
     case "capture":
       return (
         <p>
@@ -109,6 +123,8 @@ export function IssueDialog({
   urgent = false,
 }: IssueDialogProps) {
   const airline = plan.kind === "airline_card";
+  // Not paid: a booking without a captured payment, or an airline card the airline did not charge.
+  const unpaid = plan.kind === "unpaid" || (plan.kind === "airline_card" && !plan.charged);
   return (
     <ConfirmDialog
       trigger={
@@ -148,7 +164,7 @@ export function IssueDialog({
               choices={SETTLEMENT_METHODS}
             />
           ) : null}
-          {plan.kind === "unpaid" && canAllowUnpaid ? (
+          {unpaid && canAllowUnpaid ? (
             <CheckboxField
               name={ALLOW_UNPAID_FIELD}
               label={ISSUE_STRINGS.allowUnpaid}

@@ -1,27 +1,39 @@
-// The pure helpers of support/ota.ts (OFE-008, OFE-019). The database and Redis helpers run in the storefront journeys
-// (specs/storefront/search.e2e.ts, account-bookings.e2e.ts, keyboard-checkout.e2e.ts), against the stack's own
-// database; the API client and the booking seed run here against a fake browser context and a fake API.
+// The pure helpers of support/ota.ts (OFE-008, OFE-019, OAD-016). The database and Redis helpers run in the storefront
+// journeys (specs/storefront/search.e2e.ts, account-bookings.e2e.ts, keyboard-checkout.e2e.ts) and the OTA admin's
+// (specs/ota-admin/), against the stack's own database; the API clients, the booking seed and the stub order run here
+// against a fake browser context, a fake API and a fake `fetch`.
 import { createPublicKey, generateKeyPairSync, sign, verify } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ACCESS_TOKEN_TTL_SECONDS,
   agedAccessToken,
   airlineTestCard,
   bookAirlineCardTrip,
+  createStubOrder,
   customerScopeLeaks,
   DEMO_TENANT_SCHEMA,
   departureDate,
+  EdgeApi,
   errorCodeOf,
   EXPIRED_TOKEN_AGE_SECONDS,
   newTenantId,
+  offerDepartingIn,
+  scriptReadableCookieNames,
   searchIdOf,
+  setCookieValue,
+  shiftLocal,
+  STAFF_COOKIES,
+  storefrontHostOf,
   StorefrontApi,
   StorefrontApiError,
+  tenantSchemaOf,
   type ApiMethod,
+  type DocumentEvaluator,
+  type FetchLike,
   type SeedApi,
   type StorefrontApiContext,
 } from "../support/ota";
-import { STOREFRONT_URL } from "../support/stack";
+import { AMADEUS_STUB_URL, OTA_API_URL, STOREFRONT_URL } from "../support/stack";
 import { CSRF_COOKIE } from "../support/storefront-guards";
 
 describe("searchIdOf", () => {
@@ -299,6 +311,7 @@ interface SeedCall {
   readonly path: string;
   readonly body: unknown;
   readonly expected: number;
+  readonly extra: Readonly<Record<string, string>> | undefined;
 }
 
 /** A fake OTA API that answers the booking seed's calls like the demo OTA, or refuses `failAt`. */
@@ -315,8 +328,8 @@ function fakeSeedApi(failAt?: string): { api: SeedApi; calls: SeedCall[] } {
     "checkout.completeWithAirlineCard": { booking: { id: "bkg_1", reference: "VXABC234" } },
   };
   const api: SeedApi = {
-    call: (operation, method, path, body, expected = 200) => {
-      calls.push({ operation, method, path, body, expected });
+    call: (operation, method, path, body, expected = 200, extra) => {
+      calls.push({ operation, method, path, body, expected, extra });
       if (operation === failAt) {
         return Promise.reject(new StorefrontApiError(operation, 402, "PAYMENT_DECLINED"));
       }
@@ -386,6 +399,23 @@ describe("bookAirlineCardTrip", () => {
     // The card number goes to the completion alone.
     const withCard = calls.filter((call) => JSON.stringify(call.body).includes("4111111111111111"));
     expect(withCard.map((call) => call.operation)).toEqual(["checkout.completeWithAirlineCard"]);
+  });
+
+  it("sends the stub's scenario with the completion alone, when one is asked for [OAD-016 AC1]", async () => {
+    const plain = fakeSeedApi();
+    await bookAirlineCardTrip(plain.api, SEED_INPUT);
+    expect(
+      plain.calls.every((call) => call.extra === undefined || Object.keys(call.extra).length === 0),
+    ).toBe(true);
+
+    const review = fakeSeedApi();
+    await bookAirlineCardTrip(review.api, { ...SEED_INPUT, completionScenario: "ticketing-failed" });
+    expect(
+      review.calls
+        .filter((call) => call.extra?.["x-stub-scenario"] !== undefined)
+        .map((call) => call.operation),
+    ).toEqual(["checkout.completeWithAirlineCard"]);
+    expect(review.calls.at(-1)?.extra).toEqual({ "x-stub-scenario": "ticketing-failed" });
   });
 
   it("fails with the refusal alone, never quoting the card [OFE-019 AC1]", async () => {
@@ -470,5 +500,297 @@ describe("agedAccessToken", () => {
         "agedAccessToken: the value is not a customer access token of the OTA API",
       );
     }
+  });
+});
+
+// ---- The OTA admin's journeys (OAD-016) -------------------------------------------------------------------------------
+
+describe("tenantSchemaOf and storefrontHostOf", () => {
+  it("name an OTA's schema and storefront host after its key [OAD-016 AC1]", () => {
+    expect(tenantSchemaOf("sso0a1b2c3d4e")).toBe("tenant_sso0a1b2c3d4e");
+    expect(storefrontHostOf("sso0a1b2c3d4e")).toBe("sso0a1b2c3d4e.ota.example.com");
+    expect(() => tenantSchemaOf("x; drop")).toThrow("not an OTA key");
+  });
+});
+
+/** One request a fake `fetch` received. */
+interface FetchCall {
+  readonly url: string;
+  readonly method: string;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly body: string | undefined;
+}
+
+/** A fake `fetch` that answers `answers` in order and records each request. */
+function fakeFetch(answers: Response[]): { fetch: FetchLike; calls: FetchCall[] } {
+  const calls: FetchCall[] = [];
+  const fetch: FetchLike = (url, init) => {
+    calls.push({
+      url,
+      method: init.method ?? "GET",
+      headers: { ...(init.headers as Record<string, string>) },
+      body: typeof init.body === "string" ? init.body : undefined,
+    });
+    const answer = answers.shift();
+    if (answer === undefined) {
+      throw new Error(`no fake answer left for ${init.method ?? "GET"} ${url}`);
+    }
+    return Promise.resolve(answer);
+  };
+  return { fetch, calls };
+}
+
+const json = (status: number, body: unknown, headers: Record<string, string> = {}): Response =>
+  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
+
+/** The CSRF value storefront.get issues: 43 base64url characters. */
+const CSRF = "c".repeat(43);
+
+describe("EdgeApi", () => {
+  const HOST = "sso0a1b2c3d4e.ota.example.com";
+  const edge = (fetch: FetchLike) =>
+    new EdgeApi(HOST, "198.18.7.7", { fetch, edgeSecret: "edge-test-secret", baseUrl: OTA_API_URL });
+
+  it("calls the OTA API as the OTA's storefront edge, with the CSRF double submit of storefront.get on writes [OAD-016 AC1]", async () => {
+    const { fetch, calls } = fakeFetch([
+      json(
+        200,
+        { brandName: "E2E Travel" },
+        { "set-cookie": `__Host-vx_csrf=${CSRF}; Path=/; Secure; SameSite=Lax` },
+      ),
+      json(201, { id: "srch_1" }),
+      json(201, { id: "srch_2" }),
+      json(200, { id: "pay_1" }),
+      json(200, { data: [] }),
+    ]);
+    const api = edge(fetch);
+    await api.call("flights.search", "POST", "/v1/flight-searches", { mode: "simple" }, 201, {
+      "x-stub-scenario": "ticketing-failed",
+      "x-velexis-host": "other.ota.example.com",
+    });
+    await api.call("flights.search", "POST", "/v1/flight-searches", {}, 201);
+    await api.call("checkout.updatePayment", "PATCH", "/v1/payments/pay_1", { card: { brand: "VISA" } });
+    await expect(api.call("bookings.list", "GET", "/v1/bookings")).resolves.toEqual({ data: [] });
+
+    // storefront.get once, before the first write; then each call at the API's own address.
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      `GET ${OTA_API_URL}/v1/storefront`,
+      `POST ${OTA_API_URL}/v1/flight-searches`,
+      `POST ${OTA_API_URL}/v1/flight-searches`,
+      `PATCH ${OTA_API_URL}/v1/payments/pay_1`,
+      `GET ${OTA_API_URL}/v1/bookings`,
+    ]);
+    const edgeHeaders = {
+      accept: "application/json",
+      "x-velexis-edge": "edge-test-secret",
+      "x-velexis-host": HOST,
+      origin: `https://${HOST}`,
+      "x-forwarded-for": "198.18.7.7",
+    };
+    expect(calls[0]?.headers).toEqual(edgeHeaders);
+    // A call's own header goes along; the edge's own headers win over one of the same name.
+    const [, first, second, patch, read] = calls;
+    expect(first?.headers).toMatchObject({
+      ...edgeHeaders,
+      "x-stub-scenario": "ticketing-failed",
+      "content-type": "application/json",
+      cookie: `__Host-vx_csrf=${CSRF}`,
+      "x-csrf-token": CSRF,
+    });
+    expect(first?.body).toBe(JSON.stringify({ mode: "simple" }));
+    expect(first?.headers["idempotency-key"]).toMatch(UUID);
+    expect(second?.headers["idempotency-key"]).toMatch(UUID);
+    expect(second?.headers["idempotency-key"]).not.toBe(first?.headers["idempotency-key"]);
+    expect(second?.headers).not.toHaveProperty("x-stub-scenario");
+    expect(patch?.headers).toMatchObject({ "x-csrf-token": CSRF, cookie: `__Host-vx_csrf=${CSRF}` });
+    expect(patch?.headers).not.toHaveProperty("idempotency-key");
+    expect(read?.headers).toEqual(edgeHeaders);
+  });
+
+  it("names the operation, the status and the error code of a refusal, never the body [OAD-016 AC1]", async () => {
+    const { fetch } = fakeFetch([
+      json(200, {}, { "set-cookie": `__Host-vx_csrf=${CSRF}; Path=/` }),
+      json(402, { error: { code: "PAYMENT_DECLINED", message: "secret-detail" } }),
+    ]);
+    const refusal = await edge(fetch)
+      .call(
+        "checkout.completeWithAirlineCard",
+        "POST",
+        "/v1/checkouts/chk_1/airline-card-completion",
+        {},
+        201,
+      )
+      .catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(StorefrontApiError);
+    expect(String(refusal)).toBe(
+      "StorefrontApiError: checkout.completeWithAirlineCard answered 402 PAYMENT_DECLINED",
+    );
+  });
+
+  it("stops before a write when storefront.get issues no CSRF cookie [OAD-016 AC1]", async () => {
+    const { fetch, calls } = fakeFetch([json(200, {})]);
+    await expect(edge(fetch).call("checkout.create", "POST", "/v1/checkouts", {}, 201)).rejects.toThrow(
+      "storefront.get set no __Host-vx_csrf cookie",
+    );
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe("setCookieValue", () => {
+  it("reads one cookie's value from Set-Cookie headers [OAD-016 AC1]", () => {
+    const headers = ["__Host-vx_bt=bkg_1.x; Path=/; HttpOnly", `__Host-vx_csrf=${CSRF}; Path=/; Secure`];
+    expect(setCookieValue(headers, "__Host-vx_csrf")).toBe(CSRF);
+    expect(setCookieValue(headers, "__Host-vx_at")).toBeUndefined();
+    expect(setCookieValue(["broken"], "broken")).toBeUndefined();
+  });
+});
+
+describe("shiftLocal and offerDepartingIn", () => {
+  const NOW = new Date(Date.UTC(2030, 0, 31, 23, 30));
+  const OFFER = {
+    id: "1",
+    lastTicketingDate: "2031-03-01",
+    itineraries: [
+      {
+        segments: [
+          {
+            departure: { iataCode: "MAD", at: "2031-03-01T06:00:00" },
+            arrival: { iataCode: "LIS", at: "2031-03-01T06:25:00" },
+          },
+          {
+            departure: { iataCode: "LIS", at: "2031-03-01T08:10:00" },
+            arrival: { iataCode: "ORY", at: "2031-03-02T00:45:00" },
+          },
+        ],
+      },
+    ],
+  };
+
+  it("moves local Amadeus times and dates by whole days, their times of day kept [OAD-016 AC1]", () => {
+    expect(shiftLocal("2031-03-01T06:00:00", -2)).toBe("2031-02-27T06:00:00");
+    expect(shiftLocal("2031-02-28", 1)).toBe("2031-03-01");
+    expect(() => shiftLocal("tomorrow", 1)).toThrow("not a local Amadeus time");
+  });
+
+  it("moves every segment of the stub's offer to depart the given days from today [OAD-016 AC1]", () => {
+    const moved = offerDepartingIn(OFFER, 10, NOW) as typeof OFFER;
+    // 10 days after 2030-01-31 (UTC) is 2030-02-10.
+    expect(
+      moved.itineraries[0]?.segments.map((segment) => [segment.departure.at, segment.arrival.at]),
+    ).toEqual([
+      ["2030-02-10T06:00:00", "2030-02-10T06:25:00"],
+      ["2030-02-10T08:10:00", "2030-02-11T00:45:00"],
+    ]);
+    expect(moved.lastTicketingDate).toBe("2030-02-10");
+    // The stub's offer itself is unchanged.
+    expect(OFFER.itineraries[0]?.segments[0]?.departure.at).toBe("2031-03-01T06:00:00");
+  });
+});
+
+describe("createStubOrder", () => {
+  const OFFER = {
+    type: "flight-offer",
+    id: "1",
+    lastTicketingDate: "2027-01-15",
+    itineraries: [
+      { segments: [{ departure: { at: "2027-01-15T06:00:00" }, arrival: { at: "2027-01-15T06:25:00" } }] },
+    ],
+  };
+
+  it("books the stub's first offer for the office, outside Velexis and without issuing it [OAD-016 AC1]", async () => {
+    const { fetch, calls } = fakeFetch([
+      json(200, { access_token: "stub-token" }),
+      json(200, { data: [OFFER] }),
+      json(201, {
+        data: {
+          id: "UDVHU0dCfDIwMjYtMTAtMjk",
+          associatedRecords: [{ reference: "P5GSGB", originSystemCode: "GDS" }],
+        },
+      }),
+    ]);
+    const order = await createStubOrder(
+      {
+        officeId: "DEV1A0006",
+        traveller: { firstName: "Gita", lastName: "Terminal", dateOfBirth: "1990-06-30", gender: "FEMALE" },
+        email: "gita@example.com",
+        daysAhead: 58,
+      },
+      { fetch, baseUrl: AMADEUS_STUB_URL },
+    );
+    expect(order).toEqual({ id: "UDVHU0dCfDIwMjYtMTAtMjk", recordLocator: "P5GSGB" });
+
+    const [token, search, create] = calls;
+    expect(token).toMatchObject({ method: "POST", url: `${AMADEUS_STUB_URL}/v1/security/oauth2/token` });
+    expect(new URLSearchParams(token?.body).get("grant_type")).toBe("client_credentials");
+    const query = new URL(search?.url ?? "").searchParams;
+    expect(Object.fromEntries(query)).toEqual({
+      originLocationCode: "MAD",
+      destinationLocationCode: "PAR",
+      departureDate: departureDate(58),
+      adults: "1",
+      max: "1",
+    });
+    expect(search?.headers["authorization"]).toBe("Bearer stub-token");
+    // Flight Create Orders without `issue=true`: the order waits for its tickets, as an agent's booking does.
+    expect(create?.url).toBe(`${AMADEUS_STUB_URL}/v1/booking/flight-orders`);
+    expect(create?.headers).toMatchObject({
+      authorization: "Bearer stub-token",
+      "content-type": "application/vnd.amadeus+json",
+    });
+    const data = (JSON.parse(create?.body ?? "{}") as { data: Record<string, unknown> }).data;
+    expect(data).toMatchObject({
+      type: "flight-order",
+      queuingOfficeId: "DEV1A0006",
+      ownerOfficeId: "DEV1A0006",
+      travelers: [
+        {
+          id: "1",
+          name: { firstName: "GITA", lastName: "TERMINAL" },
+          contact: { emailAddress: "gita@example.com" },
+        },
+      ],
+    });
+    const offer = (data["flightOffers"] as (typeof OFFER)[])[0];
+    expect(offer?.itineraries[0]?.segments[0]?.departure.at.slice(0, 10)).toBe(departureDate(58));
+    // No form of payment, so no card: the order is paid outside Velexis.
+    expect(data).not.toHaveProperty("formOfPayments");
+  });
+
+  it("names the stub's operation and status when it refuses, never the body [OAD-016 AC1]", async () => {
+    const { fetch } = fakeFetch([json(401, { error: "invalid_client", error_description: "secret-detail" })]);
+    const failure = await createStubOrder(
+      {
+        officeId: "DEV1A0006",
+        traveller: { firstName: "A", lastName: "B", dateOfBirth: "1990-01-01", gender: "MALE" },
+        email: "a@example.com",
+        daysAhead: 30,
+      },
+      { fetch },
+    ).catch((error: unknown) => error);
+    expect(String(failure)).toBe("Error: the stub's token answered 401");
+  });
+});
+
+describe("STAFF_COOKIES and scriptReadableCookieNames", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("are the OTA admin's four session cookies [OAD-016 AC1]", () => {
+    expect(STAFF_COOKIES).toEqual([
+      "__Host-vx_staff_at",
+      "__Host-vx_staff_rt",
+      "__Host-vx_env",
+      "__Host-vx_tenant",
+    ]);
+  });
+
+  it("names the cookies a document's JavaScript reads, never their values [OAD-016 AC1]", async () => {
+    // A page whose document is this process's stubbed `document`.
+    const page: DocumentEvaluator = { evaluate: (fn) => Promise.resolve(fn()) };
+    vi.stubGlobal("document", { cookie: "" });
+    await expect(scriptReadableCookieNames(page)).resolves.toEqual([]);
+    vi.stubGlobal("document", { cookie: "theme=dark; __Host-vx_csrf=secret-value" });
+    await expect(scriptReadableCookieNames(page)).resolves.toEqual(["theme", "__Host-vx_csrf"]);
   });
 });

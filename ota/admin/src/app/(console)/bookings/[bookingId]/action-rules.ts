@@ -9,7 +9,10 @@
 // - Issue (`console.bookings.issue`): an airline-card booking is issued only with an `other` form of payment of the OTA's
 //   own settlement with the airline, `CASH` or `ACCOUNT`, for the booking's flight offers; any other booking without one
 //   (the API uses the OTA-merchant `other` of the ticketing job). An authorised Stripe payment is captured first; an
-//   unpaid booking needs `allowUnpaid`, which only an owner or an admin may send (OADR-0008).
+//   unpaid booking needs `allowUnpaid`, which only an owner or an admin may send (OADR-0008). An airline-card booking
+//   whose card the airline did not charge (its payment not `captured`: the airline issued no ticket, so the payment
+//   stayed `processing`) is unpaid too, and needs both (console-operations.md §2 step 8; OAD-016's journey found that
+//   the dialog offered no `allowUnpaid` there, so such a booking could not be issued at all).
 // - Cancel (`console.bookings.cancel`): what Amadeus is asked for follows the tickets (nothing issued: the order is
 //   released; every ticket issued today in the OTA's time zone: void; a ticket of an earlier day or of an unknown time:
 //   the void will most likely be refused, and the cancellation is a request to the airline), and the refund modes follow
@@ -423,9 +426,15 @@ export function flightOfferIdsOf(booking: ConsoleBooking): string[] {
 export type IssuePlan =
   /**
    * An airline-card booking: the card cannot be charged again, so the dialog asks for the OTA's settlement (`CASH` or
-   * `ACCOUNT`) for `flightOfferIds`; no capture, no card.
+   * `ACCOUNT`) for `flightOfferIds`; no capture, no card. `charged`: the airline charged the card (a payment
+   * `captured`); when it did not, the API counts the booking as unpaid, and only an owner or an admin may issue it
+   * (`allowUnpaid`).
    */
-  | { readonly kind: "airline_card"; readonly flightOfferIds: readonly string[] }
+  | {
+      readonly kind: "airline_card";
+      readonly flightOfferIds: readonly string[];
+      readonly charged: boolean;
+    }
   /** A Stripe authorisation, captured before the issuance. */
   | { readonly kind: "capture"; readonly amount: MoneyValue }
   /** Paid already (captured), or a console or imported booking without payment. */
@@ -436,7 +445,12 @@ export type IssuePlan =
 /** What issuing `booking` takes (see `IssuePlan`). */
 export function issuePlanOf(booking: ConsoleBooking): IssuePlan {
   if (booking.payments.some(isAirlinePayment)) {
-    return { kind: "airline_card", flightOfferIds: flightOfferIdsOf(booking) };
+    return {
+      kind: "airline_card",
+      flightOfferIds: flightOfferIdsOf(booking),
+      // As the API's issuePaymentOf counts it: a payment that captured money pays the issuance.
+      charged: booking.payments.some((payment) => CAPTURED_STATUSES.has(payment.status)),
+    };
   }
   if (booking.payments.some((payment) => CAPTURED_STATUSES.has(payment.status))) {
     return { kind: "paid" };

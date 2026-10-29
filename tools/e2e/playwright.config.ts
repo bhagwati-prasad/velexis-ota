@@ -2,12 +2,12 @@
 //
 // One global setup (support/stack.ts) starts the built stack on a fresh database for the whole run and stops it at
 // the end. Projects select their spec files by name; a spec shared by several projects (specs/smoke.e2e.ts) pins each
-// test to its project with a tag. The OTA plan adds its projects here: `storefront` (OFE-008), the nightly
-// `storefront-stripe` (OFE-017) and `ota-admin` (OAD-016).
+// test to its project with a tag. The OTA plan's projects: `storefront` (OFE-008), the nightly `storefront-stripe`
+// (OFE-017) and `ota-admin` (OAD-016), each only with E2E_WITH_OTA=1.
 import { defineConfig, devices, type Project } from "@playwright/test";
 import { loadDevEnvFiles } from "@velexis/config";
 import { PROJECT_TAGS } from "./support/fixtures";
-import { PLATFORM_ADMIN_URL, PORTAL_URL, STOREFRONT_URL } from "./support/stack";
+import { OTA_ADMIN_URL, PLATFORM_ADMIN_URL, PORTAL_URL, STOREFRONT_URL } from "./support/stack";
 
 /** Matches `name` as a whole tag: `@portal` does not match `@portal-stripe`. */
 const tag = (name: string): RegExp => new RegExp(`${name}(?![\\w-])`);
@@ -60,6 +60,16 @@ export function projectsFor(options: ProjectOptions): Project[] {
       grepInvert: [tag(PROJECT_TAGS.stripe)],
       use: { ...desktopChrome, baseURL: STOREFRONT_URL },
     });
+    // The OTA admin's journeys (OAD-016, ota/admin/README.md §12): the built OTA admin's standalone server, which the
+    // stack starts with the OTA API only with E2E_WITH_OTA=1, so without it the project does not exist and
+    // `--project=ota-admin` fails at once. Staff arrive by the portal's single sign-on, as on the VM. A journey that
+    // needs Stripe over the network (tagged `@stripe`) never runs here.
+    projects.push({
+      name: "ota-admin",
+      testMatch: ["specs/ota-admin/**/*.e2e.ts"],
+      grepInvert: [tag(PROJECT_TAGS.stripe)],
+      use: { ...desktopChrome, baseURL: OTA_ADMIN_URL },
+    });
   }
 
   if (options.withStripe) {
@@ -100,7 +110,7 @@ export default defineConfig({
   // A failure is a finding, not something to retry away (AGENTS.md §7).
   retries: 0,
   // Locally Playwright's default (half the CPU cores); two in CI (a GitHub-hosted runner has 2 or 4 cores), next to
-  // the processes of the stack (nine with E2E_WITH_OTA=1).
+  // the processes of the stack (eleven with E2E_WITH_OTA=1).
   ...(CI ? { workers: 2 } : {}),
   reporter: CI ? [["list"], ["html", { open: "never", outputFolder: "playwright-report" }]] : [["list"]],
   use: {

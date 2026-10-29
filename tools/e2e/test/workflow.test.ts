@@ -42,8 +42,9 @@ const steps = job?.steps ?? [];
 const runs = steps.map((step) => step.run ?? "");
 const indexOfRun = (pattern: RegExp): number => runs.findIndex((run) => pattern.test(run));
 
-/** The run of the projects that need no Stripe: the platform's (PFE-014) and the storefront (OFE-008). */
-const PROJECTS_RUN = "pnpm test:e2e -- --project=portal --project=platform-admin --project=storefront";
+/** The run of the projects that need no Stripe: the platform's (PFE-014), the storefront (OFE-008), the OTA admin (OAD-016). */
+const PROJECTS_RUN =
+  "pnpm test:e2e -- --project=portal --project=platform-admin --project=storefront --project=ota-admin";
 
 describe(".github/workflows/e2e.yml", () => {
   it("runs nightly, on demand and on pull requests labelled e2e only [PFE-014 AC2]", () => {
@@ -100,6 +101,16 @@ describe(".github/workflows/e2e.yml", () => {
     expect(indexOfRun(/^pnpm dev:keys$/)).toBeLessThan(projects);
     // The project's whole name: `--project=storefront-stripe` (OFE-017, nightly) is another project.
     expect(runs.filter((run) => /--project=storefront(?![\w-])/.test(run))).toHaveLength(1);
+  });
+
+  it("runs the ota-admin project in the same run, nightly and on labelled pull requests [OAD-016 AC1]", () => {
+    const projects = runs.indexOf(PROJECTS_RUN);
+    expect(projects).toBeGreaterThan(runs.indexOf("pnpm build"));
+    expect(steps[projects]?.if).toBeUndefined();
+    expect(steps[projects]?.name).toContain("[OAD-016 AC1]");
+    // The project exists only with E2E_WITH_OTA=1, which the job sets: the stack then starts the built OTA admin.
+    expect(job?.env["E2E_WITH_OTA"]).toBe("1");
+    expect(runs.filter((run) => /--project=ota-admin(?![\w-])/.test(run))).toHaveLength(1);
   });
 
   it("runs portal-stripe only at night and only with the Stripe test secrets (PADR-0017 item 4)", () => {

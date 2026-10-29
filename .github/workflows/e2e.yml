@@ -3,12 +3,12 @@
 # a run, and every push to the pull request runs again while the label is on.
 # What: on a clean runner with PostgreSQL 16, Redis 7.4 and Mailpit as service containers (as ci.yml's build-test job),
 # build everything, let tools/e2e/support/stack.ts start the built stack on a fresh database (with E2E_WITH_OTA=1 also
-# the Amadeus stub, the OTA worker and API, the storefront previews and the demo OTA), and run the `portal`,
-# `platform-admin` and `storefront` (OFE-008) Playwright projects in one run. The nightly run also runs `portal-stripe`
-# when the repository has the Stripe test secrets E2E_STRIPE_SECRET_KEY and E2E_STRIPE_BILLING_WEBHOOK_SECRET
-# (PADR-0017 item 4), and `storefront-stripe` (OFE-017) with the pinned Stripe CLI when E2E_STRIPE_PUBLISHABLE_KEY exists
-# too. When a step fails, the traces, screenshots, HTML report and the stack's logs
-# (tools/e2e/test-results/stack/) are uploaded as the artefact e2e-<run id>-<attempt>.
+# the Amadeus stub, the OTA worker, API and admin, the storefront previews and the demo OTA), and run the `portal`,
+# `platform-admin`, `storefront` (OFE-008) and `ota-admin` (OAD-016) Playwright projects in one run. The nightly run
+# also runs `portal-stripe` when the repository has the Stripe test secrets E2E_STRIPE_SECRET_KEY and
+# E2E_STRIPE_BILLING_WEBHOOK_SECRET (PADR-0017 item 4), and `storefront-stripe` (OFE-017) with the pinned Stripe CLI
+# when E2E_STRIPE_PUBLISHABLE_KEY exists too. When a step fails, the traces, screenshots, HTML report and the stack's
+# logs (tools/e2e/test-results/stack/) are uploaded as the artefact e2e-<run id>-<attempt>.
 # Agents never change this file to get their own change through (AGENTS.md §7). Third-party actions are pinned to full
 # commit SHAs with the tag as the last thing in the comment (tools/ci/check-package-json.mjs, ADR-0023).
 name: E2E
@@ -114,8 +114,8 @@ jobs:
       - name: Install Playwright's Chromium and its system libraries
         run: pnpm --filter @velexis/e2e exec playwright install --with-deps chromium
 
-      - name: "[PFE-014 AC1] [OFE-008 AC1] Playwright projects portal, platform-admin and storefront"
-        run: pnpm test:e2e -- --project=portal --project=platform-admin --project=storefront
+      - name: "[PFE-014 AC1] [OFE-008 AC1] [OAD-016 AC1] Playwright projects portal, platform-admin, storefront and ota-admin"
+        run: pnpm test:e2e -- --project=portal --project=platform-admin --project=storefront --project=ota-admin
 
       - name: Stripe journeys (nightly, project portal-stripe)
         if: github.event_name == 'schedule' && env.STRIPE_CONFIGURED == 'true'

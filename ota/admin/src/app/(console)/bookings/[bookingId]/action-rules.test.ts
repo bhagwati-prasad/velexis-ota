@@ -1,10 +1,10 @@
 // What staff may still refund of a payment (action-rules.ts `refundableOf`; FIX-W32-OTA, lead decision (1h) of
 // 2026-10-28): captured less refunded less the refunds still on their way to Stripe, as the API counts it, on the
 // booking page and on the payment's own page alike.
-import type { ConsolePayment } from "@velexis/ota-sdk";
+import type { ConsoleBooking, ConsolePayment } from "@velexis/ota-sdk";
 import { describe, expect, it } from "vitest";
 
-import { refundableOf, refundsInFlightOf } from "./action-rules";
+import { issuePlanOf, refundableOf, refundsInFlightOf } from "./action-rules";
 
 const eur = (amount: string) => ({ amount, currency: "EUR" });
 
@@ -75,5 +75,36 @@ describe("refundableOf", () => {
       refundableOf(payment([], { provider: "airline", method: "airline_card" } as never)),
     ).toBeUndefined();
     expect(refundableOf(payment([], { status: "authorized" }))).toBeUndefined();
+  });
+});
+
+describe("issuePlanOf", () => {
+  /** A booking of one flight offer with `payments` (the fields the plan reads). */
+  const booking = (payments: readonly Partial<ConsoleBooking["payments"][number]>[]): ConsoleBooking =>
+    ({
+      itineraries: [{ segments: [{ flightOfferId: "1" }] }],
+      recordLocators: [],
+      formOfPayments: [],
+      paymentStatus: "unpaid",
+      payments,
+    }) as unknown as ConsoleBooking;
+
+  it("[OAD-016 AC1] counts an airline card the airline did not charge as unpaid, as the API does", () => {
+    // No ticket came back: the payment stays `processing` (backend settleAirlineCardOrder), and only an owner or an
+    // admin may issue the booking, with allowUnpaid and the OTA's settlement (console-operations.md §2 step 8).
+    expect(
+      issuePlanOf(booking([{ method: "airline_card", provider: "airline", status: "processing" }])),
+    ).toEqual({
+      kind: "airline_card",
+      flightOfferIds: ["1"],
+      charged: false,
+    });
+    expect(
+      issuePlanOf(booking([{ method: "airline_card", provider: "airline", status: "captured" }])),
+    ).toEqual({
+      kind: "airline_card",
+      flightOfferIds: ["1"],
+      charged: true,
+    });
   });
 });

@@ -64,6 +64,12 @@ import {
 } from "@/lib/action-state";
 import type { StaffEnvironment } from "@/lib/permissions";
 
+/**
+ * The dialog panel never grows past the window (1 rem of margin above and below) and scrolls inside it instead
+ * (WCAG 1.4.10 and 2.4.11: what is cut off by a fixed panel can be neither seen nor reached).
+ */
+export const SCROLLING_DIALOG_CLASS = "max-h-[calc(100dvh-2rem)] overflow-y-auto";
+
 // The field names and the reason's bounds live in lib/action-state.ts, which server actions can import too.
 export { ACTION_KEY_FIELD, REASON_FIELD, REASON_MAX_LENGTH, REASON_MIN_LENGTH };
 
@@ -218,8 +224,13 @@ export function ConfirmDialog({
         }}
       >
         <DialogTrigger asChild>{trigger}</DialogTrigger>
-        {/* A click outside does not throw a typed reason away; Escape and "Cancel" still close the dialog. */}
-        <DialogContent onInteractOutside={(event) => event.preventDefault()}>
+        {/* A click outside does not throw a typed reason away; Escape and "Cancel" still close the dialog. A dialog
+            taller than the window (the PNR import's) scrolls inside it, so its title and its buttons stay reachable:
+            the centred, fixed panel would otherwise cut both off on a 720-pixel screen (OAD-016's journey). */}
+        <DialogContent
+          onInteractOutside={(event) => event.preventDefault()}
+          className={SCROLLING_DIALOG_CLASS}
+        >
           <DialogHeader>
             <div className="flex items-center gap-2">
               <DialogTitle>{title}</DialogTitle>

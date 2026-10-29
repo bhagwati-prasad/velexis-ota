@@ -19,6 +19,7 @@ import {
   REASON_FIELD,
   reasonLength,
   reasonProblem,
+  SCROLLING_DIALOG_CLASS,
   type ConfirmAction,
 } from "./confirm-dialog";
 
@@ -243,6 +244,14 @@ describe("ConfirmDialog", () => {
     ).toBe("live");
     expect(within(dialog).getByRole("note").textContent).toBe(CONFIRM_STRINGS.liveWarning);
     expect(within(dialog).getByRole("button", { name: "Issue tickets in LIVE" })).toBeTruthy();
+  });
+
+  it("[OAD-016 AC1] keeps a dialog taller than the window inside it, scrolling, so its title and buttons stay reachable", async () => {
+    const { action } = recordingAction(() => ({ ok: true }));
+    renderDialog(action);
+    const { dialog } = await open();
+    expect(dialog.className.split(" ")).toEqual(expect.arrayContaining(SCROLLING_DIALOG_CLASS.split(" ")));
+    expect(SCROLLING_DIALOG_CLASS).toBe("max-h-[calc(100dvh-2rem)] overflow-y-auto");
   });
 
   it("shows TEST and no live warning in the test environment", async () => {
