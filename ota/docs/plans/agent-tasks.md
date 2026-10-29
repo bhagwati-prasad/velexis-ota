@@ -1628,7 +1628,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
 - **Acceptance:**
   - The journey passes nightly with the storefront guards of OFE-008 active [OF-04 AC1].
   - The sold-out test ends with the authorisation voided [OF-04 AC2].
-- **Verify:** `E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront-stripe specs/storefront/checkout-stripe.e2e.ts`
+- **Verify:** `E2E_WITH_OTA=1 E2E_STRIPE=1 pnpm test:e2e -- --project=storefront-stripe specs/storefront/checkout-stripe.e2e.ts`, with the Stripe test keys that tools/e2e/README.md lists for the `storefront-stripe` project (nightly in `.github/workflows/e2e.yml`)
 
 ### OFE-018 · Write the airline-card journey with leak checks
 - **Component:** ota-frontend
@@ -1854,7 +1854,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 - **Read first:** ota/docs/flows/console-operations.md §2 (Customers, Supplier log), §3 (step 7); docs/velexis-sdk/openapi/velexis-ota-booking-api.openapi.yaml (grep `operationId: consoleListCustomers`, `consoleGetCustomer`, `consoleListSupplierRequests`)
 - **Files:** `ota/backend/src/console/customers.controller.ts`, `ota/backend/src/console/customers.service.ts`, `ota/backend/src/console/customers.repository.ts`, `ota/backend/src/console/supplier-log.controller.ts`, `ota/backend/src/console/supplier-log.repository.ts`, `ota/backend/src/common/http/pending-operations.ts`, `ota/backend/test/integration/console/customers-supplier-log.int.test.ts`
 - **Steps:**
-  1. `console.customers.list` (`customers:read`): search by e-mail and name prefixes, cursor; `console.customers.get` with booking statistics; reading a customer writes `staff_actions` `customer.get`.
+  1. `console.customers.list` (`customers:read`): search by e-mail and name prefixes, cursor; `console.customers.get` with booking statistics; reading a customer writes `staff_actions` `customer.view` (OADR-0011 point 8).
   2. `console.supplierRequests.list` (`supplier_requests:read`): filters (operation, outcome, booking, time), redacted bodies as stored.
   3. Remove the three operations from `pending-operations.ts`.
 - **Acceptance:**
