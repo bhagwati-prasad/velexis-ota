@@ -28,14 +28,14 @@
 // every step.
 //
 // The demo OTA offers the airline card only with AIRLINE_CARD_ENABLED (true in ota/backend/.env.example, which the
-// stack's OTA processes get) and its storefront setting for the test environment, which `beforeAll` turns on (and
-// leaves on: no other journey depends on it being off). Each journey's browser sends an end-user IP of its own
-// (X-Forwarded-For through the preview, as Caddy's would be), so its completions count against a per-IP limit of their
-// own (5 a minute, architecture §8) whatever other journeys run meanwhile.
+// stack's OTA processes get) and its storefront setting for the test environment, which `beforeAll` turns on with
+// support/ota.ts `enableAirlineCard`, as OFE-019's journeys do (and leaves on: no other journey depends on it being
+// off). Each journey's browser sends an end-user IP of its own (X-Forwarded-For through the preview, as Caddy's would
+// be), so its completions count against a per-IP limit of their own (5 a minute, architecture §8) whatever other
+// journeys run meanwhile.
 import { randomUUID } from "node:crypto";
 import { type Browser, type BrowserContext, type Page, type Response } from "@playwright/test";
 import { sql } from "@velexis/db";
-import Redis from "ioredis";
 import {
   CardLeakGuards,
   cardValuesIn,
@@ -44,9 +44,8 @@ import {
 } from "../../support/card-leak-guards";
 import { uniqueTestIp } from "../../support/fixtures";
 import { uniqueEmail } from "../../support/mailpit";
-import { DEMO_TENANT_SCHEMA, withTenantTx } from "../../support/ota";
-import { stack, withDatabase } from "../../support/seed";
-import { DEMO_TENANT_KEY, OTA_API_URL, STOREFRONT_URL } from "../../support/stack";
+import { DEMO_TENANT_SCHEMA, enableAirlineCard, withTenantTx } from "../../support/ota";
+import { OTA_API_URL, STOREFRONT_URL } from "../../support/stack";
 import { expect, StorefrontGuards, test } from "../../support/storefront-guards";
 
 /** A booking id as the API writes it. */
@@ -59,8 +58,6 @@ const TICKET_LINE = /^\d{3}-\d{10}: \S/;
 const PAY_BUTTON = /^Pay €[\d,]+\.\d{2}$/;
 /** The Amadeus stub's card fee for a VISA card on one offer (tools/amadeus-stub README, `credit-card-fees`). */
 const VISA_CARD_FEE = "€1.20";
-/** How long the switch may take to show in storefront.get: a cache entry another journey fills meanwhile is dropped. */
-const SWITCH_WAIT_MS = 10_000;
 
 /** The departure of each journey: a date of its own, days from today, never a fixed calendar date. */
 const SUCCESS_DAYS_AHEAD = 46;
@@ -118,84 +115,6 @@ interface Journey {
   readonly page: Page;
   readonly guards: StorefrontGuards;
   readonly leaks: CardLeakGuards;
-}
-
-/** The demo OTA's tenant id (its platform row, read as the OTA backend's own role). */
-async function demoTenantId(): Promise<string> {
-  return await withDatabase("ota", async (client) => {
-    const { rows } = await client.query<{ id: string }>("SELECT id FROM platform.tenants WHERE key = $1", [
-      DEMO_TENANT_KEY,
-    ]);
-    const id = rows[0]?.id;
-    if (id === undefined) {
-      throw new Error(`the stack has no tenant ${DEMO_TENANT_KEY}`);
-    }
-    return id;
-  });
-}
-
-/**
- * Deletes the demo OTA's storefront.get entries of the test environment (`t:<tenantId>:test:sf:*`, 5 minutes), as
- * the settings change of the console does after its commit (OBE-070), so the next storefront.get reads the row.
- */
-async function dropStorefrontCache(tenantId: string): Promise<void> {
-  const redis = new Redis(stack().redisUrl, { lazyConnect: true, maxRetriesPerRequest: 1 });
-  redis.on("error", () => undefined);
-  try {
-    await redis.connect();
-    let cursor = "0";
-    do {
-      const [next, keys] = await redis.scan(cursor, "MATCH", `t:${tenantId}:test:sf:*`, "COUNT", 100);
-      cursor = next;
-      if (keys.length > 0) {
-        await redis.del(...keys);
-      }
-    } while (cursor !== "0");
-  } finally {
-    redis.disconnect();
-  }
-}
-
-/** Whether storefront.get, asked through the preview as the storefront edge, offers the airline card now. */
-async function storefrontOffersAirlineCard(): Promise<boolean> {
-  const answer = await fetch(`${STOREFRONT_URL}/api/v1/storefront`, {
-    headers: { accept: "application/json" },
-  });
-  if (!answer.ok) {
-    return false;
-  }
-  const config = (await answer.json()) as { payment?: { supportedMethods?: unknown } };
-  const methods = config.payment?.supportedMethods;
-  return Array.isArray(methods) && methods.includes("airline_card");
-}
-
-/**
- * Turns the airline card on for the demo OTA's test storefront (`storefront_settings.airline_card_enabled_test`, the
- * switch the OTA admin sets; `tenantTx` as velexis_ota_app), then waits until storefront.get offers it: each poll drops
- * the cached entries first, so an entry that a request of another journey filled from the old row meanwhile goes too.
- */
-async function turnAirlineCardOn(): Promise<void> {
-  await withTenantTx(DEMO_TENANT_SCHEMA, async (trx) => {
-    await trx
-      .updateTable("storefront_settings")
-      .set({
-        airline_card_enabled_test: true,
-        version: sql<number>`version + 1`,
-        updated_at: sql<Date>`now()`,
-      })
-      .where("airline_card_enabled_test", "=", false)
-      .execute();
-  });
-  const tenantId = await demoTenantId();
-  await expect
-    .poll(
-      async () => {
-        await dropStorefrontCache(tenantId);
-        return await storefrontOffersAirlineCard();
-      },
-      { timeout: SWITCH_WAIT_MS },
-    )
-    .toBe(true);
 }
 
 /** A new browser context for a journey: its own end-user IP, the storefront guards and the card leak checks. */
@@ -437,7 +356,7 @@ async function lostAnswerState(bookingId: string, paymentId: string) {
 
 test.beforeAll(async () => {
   // The demo OTA's test storefront offers the airline card (the OTA admin's switch); AIRLINE_CARD_ENABLED is on.
-  await turnAirlineCardOn();
+  await enableAirlineCard();
 });
 
 test.describe("the airline-card checkout journey", () => {
