@@ -56,6 +56,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { StepUpDialog, useStepUpAction } from "@/components/step-up-dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { ApiError } from "@/lib/api";
 import { ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE, type AdminSession } from "@/lib/session";
 import {
@@ -949,6 +950,30 @@ describe("Alert", () => {
     expect(classes).toContain("*:data-[slot=alert-description]:text-destructive");
     expect(classes.filter((name) => /text-destructive\/\d+$/.test(name))).toEqual([]);
     expect(screen.getByText("Try again in a moment.").dataset["slot"]).toBe("alert-description");
+  });
+});
+
+describe("Tabs", () => {
+  it("[FIX-W32-PLATFORM AC3] sets the tab list's text in the foreground colour on the muted background, never the muted one", () => {
+    render(
+      <Tabs defaultValue="overview">
+        <TabsList aria-label="Tenant sections">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="members">Members</TabsTrigger>
+        </TabsList>
+        <TabsContent value="overview">The OTA&apos;s fields.</TabsContent>
+      </Tabs>,
+    );
+
+    // text-muted-foreground on bg-muted is 4.34:1, under the 4.5:1 of WCAG 1.4.3; text-foreground there is 18.15:1.
+    const list = screen.getByRole("tablist", { name: "Tenant sections" });
+    const classes = list.className.split(/\s+/);
+    expect(classes).toEqual(expect.arrayContaining(["bg-muted", "text-foreground"]));
+    expect(classes.filter((name) => /(^|:)text-muted-foreground$/.test(name))).toEqual([]);
+    // The triggers keep the colour they had, so the tabs look as before.
+    for (const tab of screen.getAllByRole("tab")) {
+      expect(tab.className.split(/\s+/)).toContain("text-foreground");
+    }
   });
 });
 

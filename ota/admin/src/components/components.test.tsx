@@ -24,6 +24,8 @@ import { ErrorState } from "./error-state";
 import { JsonView, formatJson } from "./json-view";
 import { Money, formatMoney } from "./money";
 import { STATUS_LABELS, StatusBadge, describeStatus } from "./status-badge";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 
 /** A server action through React's action queue: quick alone, slower on a busy CI runner than one second. */
 const UI_WAIT = { timeout: 3_000 } as const;
@@ -342,5 +344,58 @@ describe("EnvironmentBanner", () => {
 
     fireEvent.click(screen.getByRole("button", { name: ENVIRONMENT_STRINGS.dismiss }));
     expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
+describe("DropdownMenuItem", () => {
+  it("[FIX-W32-PLATFORM AC3] labels a focused destructive item in the foreground colour on its tint, never the destructive one", () => {
+    render(
+      <DropdownMenu open>
+        <DropdownMenuTrigger>Booking actions</DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuItem>Add a note</DropdownMenuItem>
+          <DropdownMenuItem variant="destructive">Cancel the booking</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    );
+
+    const item = within(screen.getByRole("menu")).getByRole("menuitem", { name: "Cancel the booking" });
+    expect(item.dataset["variant"]).toBe("destructive");
+    const classes = item.className.split(/\s+/);
+    // text-destructive on bg-destructive/10 over the popover is 4.0:1, under the 4.5:1 of WCAG 1.4.3; text-foreground
+    // there is 16.63:1. The look stays: the red label at rest (4.76:1), the tint and the red icon on focus.
+    expect(classes).toEqual(
+      expect.arrayContaining([
+        "data-[variant=destructive]:text-destructive",
+        "data-[variant=destructive]:focus:bg-destructive/10",
+        "data-[variant=destructive]:*:[svg]:!text-destructive",
+        "data-[variant=destructive]:focus:text-foreground",
+      ]),
+    );
+    expect(classes.filter((name) => /(^|:)focus:text-destructive/.test(name))).toEqual([]);
+  });
+});
+
+describe("Tabs", () => {
+  it("[FIX-W32-PLATFORM AC3] sets the tab list's text in the foreground colour on the muted background, never the muted one", () => {
+    render(
+      <Tabs defaultValue="summary">
+        <TabsList aria-label="Booking sections">
+          <TabsTrigger value="summary">Summary</TabsTrigger>
+          <TabsTrigger value="payments">Payments</TabsTrigger>
+        </TabsList>
+        <TabsContent value="summary">The booking&apos;s summary.</TabsContent>
+      </Tabs>,
+    );
+
+    // text-muted-foreground on bg-muted is 4.34:1, under the 4.5:1 of WCAG 1.4.3; text-foreground there is 18.15:1.
+    const list = screen.getByRole("tablist", { name: "Booking sections" });
+    const classes = list.className.split(/\s+/);
+    expect(classes).toEqual(expect.arrayContaining(["bg-muted", "text-foreground"]));
+    expect(classes.filter((name) => /(^|:)text-muted-foreground$/.test(name))).toEqual([]);
+    // The triggers keep the colour they had, so the tabs look as before.
+    for (const tab of screen.getAllByRole("tab")) {
+      expect(tab.className.split(/\s+/)).toContain("text-foreground");
+    }
   });
 });

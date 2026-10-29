@@ -14,10 +14,6 @@
 //   failure handler (failure-handler.test.ts), billing sync of Stripe subscriptions (billing-events.int.test.ts), the
 //   verification job of a shared Amadeus account (amadeus-accounts.int.test.ts), and the developer's commands
 //   (`dev:seed`, `admin:reset-mfa`: dev-seed.int.test.ts, admin-cli.int.test.ts).
-// - The owner's retryProvisioning moves a `failed` tenant back to `provisioning` without a `tenant` event (the
-//   admin's retry, in the table, publishes one). The OTA backend answers both statuses alike (`TENANT_SUSPENDED`), and
-//   the activation that ends the setup publishes the event (notify.step.ts), so nothing the OTA caches goes wrong. It
-//   stays out of the table until lifecycle.service.ts publishes the event too (PBE-036 reported it as a follow-up).
 //
 // How the events are read: a subscriber on `vx:invalidate` keeps the events that name an id, key prefix or plan code
 // of this file's rows (Redis pub/sub is not scoped to a database index, and other test files may publish at the same
@@ -462,6 +458,35 @@ const COVERAGE: readonly CoverageRow[] = [
       const headers = await adminHeaders();
       return {
         send: () => t.http.post(`/v1/admin/provisioning-jobs/${job.id}/retry`).set(headers),
+        status: 202,
+        events: [{ v: 1, type: "tenant", id: tenant.id }],
+      };
+    },
+  },
+  {
+    // FIX-W32-PLATFORM: the owner's retry publishes the event as the admin's does (architecture §6.3).
+    change: "failed setup retried by the owner (status failed → provisioning)",
+    operationId: "retryProvisioning",
+    publishes: ["tenant"],
+    async arrange() {
+      const owner = await person();
+      const { tenant } = await ota({
+        tenant: { status: "failed", activated_at: null },
+        members: [[owner, "owner"]],
+      });
+      await insertRow(pool, "provisioning_jobs", {
+        id: ids.new("job"),
+        tenant_id: tenant.id,
+        kind: "provision",
+        status: "failed",
+        attempt: 5,
+        scheduled_at: t.clock.now(),
+        finished_at: t.clock.now(),
+        error: "run_migrations failed: LOCK_TIMEOUT: The tenant schema was locked by another migration.",
+      });
+      const headers = await portal(owner.id);
+      return {
+        send: () => t.http.post(`/v1/tenants/${tenant.id}/provisioning/retry`).set(headers),
         status: 202,
         events: [{ v: 1, type: "tenant", id: tenant.id }],
       };

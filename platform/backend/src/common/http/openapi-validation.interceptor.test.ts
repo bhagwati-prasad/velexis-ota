@@ -69,6 +69,13 @@ class ValidationTestController {
     return "handled";
   }
 
+  // Pending until PBE-040 binds it in the API: bound here only to run its request validation.
+  @Patch("tenants/:tenantId/amadeus-connections/:environment")
+  @OpenApiOperation("updateAmadeusConnection")
+  updateAmadeusConnection(): string {
+    return "handled";
+  }
+
   @Get("unbound")
   unbound(): string {
     return "handled";
@@ -250,6 +257,37 @@ describe("OpenApiValidationInterceptor", () => {
       ]),
     );
     expect(JSON.stringify(tenant.error?.fieldErrors)).not.toContain("<script>");
+  });
+
+  it("[FIX-W32-PLATFORM AC1] refuses a monitored queue numbered above 99 with 400 VALIDATION_FAILED at the queue's path, and takes 0 to 99", async () => {
+    const settings = (queueId: number) =>
+      request({
+        params: { tenantId: TENANT_ID, environment: "test" },
+        headers: { "if-match": '"2"' },
+        body: {
+          monitoredQueues: [
+            { officeId: "NCE1A0955", queueId: 8, category: 0 },
+            { officeId: "NCE1A0955", queueId, category: 1 },
+          ],
+        },
+      });
+
+    for (const queueId of [0, 99]) {
+      expect([queueId, await run("updateAmadeusConnection", settings(queueId))]).toEqual([
+        queueId,
+        { answer: "handled" },
+      ]);
+    }
+    for (const queueId of [100, 512]) {
+      const { error } = await run("updateAmadeusConnection", settings(queueId));
+      expect(error?.code).toBe("VALIDATION_FAILED");
+      expect(error?.status).toBe(400);
+      expect(error?.fieldErrors).toEqual([
+        { path: "/monitoredQueues/1/queueId", code: "maximum", message: "Must be at most 99." },
+      ]);
+      // The message names the rule, never the value.
+      expect(JSON.stringify(error?.fieldErrors)).not.toContain(String(queueId));
+    }
   });
 
   it("reads header parameters case-insensitively, as Node lower-cases header names", async () => {

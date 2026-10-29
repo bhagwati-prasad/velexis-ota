@@ -2829,6 +2829,66 @@ describe("the M3 and M4 slice: statement descriptor, console token and Amadeus s
     }
   });
 
+  it("[FIX-W32-PLATFORM AC1] bounds a monitored queue's number to 0–99, as the OTA document's queue reads and the OTA poller do", () => {
+    const bounds = (document: Json, schema: unknown) => {
+      const resolved = resolve(document, schema);
+      return isObject(resolved)
+        ? { type: resolved["type"], minimum: resolved["minimum"], maximum: resolved["maximum"] }
+        : {};
+    };
+    const queue = objectAt(objectAt(objectAt(platform, "components"), "schemas"), "AmadeusMonitoredQueue");
+    const properties = objectAt(queue, "properties");
+    expect(bounds(platform, properties["queueId"])).toEqual({ type: "integer", minimum: 0, maximum: 99 });
+    expect(bounds(platform, properties["category"])).toEqual({ type: "integer", minimum: 0, maximum: 254 });
+
+    // Every `queueId` parameter of the OTA document (the console's two Queue List reads and the snapshot filter) has
+    // the same bounds, so every queue the portal can store is one the OTA backend reads (its poller counts any other
+    // as invalid: parseMonitoredQueues of ota/backend's platform-read.repository.ts).
+    const otaQueueIds: string[] = [];
+    for (const item of Object.values(objectAt(ota, "paths"))) {
+      for (const method of HTTP_METHODS) {
+        const parameters = objectAt(item, method)["parameters"];
+        for (const parameter of Array.isArray(parameters) ? parameters : []) {
+          const resolved = resolve(ota, parameter);
+          if (isObject(resolved) && resolved["name"] === "queueId") {
+            otaQueueIds.push(JSON.stringify(bounds(ota, resolved["schema"])));
+          }
+        }
+      }
+    }
+    expect(otaQueueIds.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(otaQueueIds)).toEqual(
+      new Set([JSON.stringify({ type: "integer", minimum: 0, maximum: 99 })]),
+    );
+
+    // A request body with a number outside the bounds is refused, naming the queue's field.
+    const requests = requestBodyChecker(["updateAmadeusConnection"]);
+    const check = (queueId: unknown) =>
+      requests
+        .check("updateAmadeusConnection", {
+          status: 200,
+          body: { monitoredQueues: [{ officeId: "NCE1A0955", queueId, category: 0 }] },
+        })
+        .map((problem) => `${problem.path} ${problem.keyword}`);
+    expect(check(0)).toEqual([]);
+    expect(check(99)).toEqual([]);
+    expect(check(100)).toEqual(["/monitoredQueues/0/queueId maximum"]);
+    expect(check(999)).toEqual(["/monitoredQueues/0/queueId maximum"]);
+    expect(check(-1)).toEqual(["/monitoredQueues/0/queueId minimum"]);
+
+    // The answer shares the schema, so the response checks of the integration tests refuse such a stored queue too.
+    const [example] = examplesOf(platform, jsonMedia(successOf("updateAmadeusConnection", "200")) ?? {});
+    const answered = (queueId: number) =>
+      checker
+        .check("updateAmadeusConnection", {
+          status: 200,
+          body: { ...(example as Json), monitoredQueues: [{ officeId: "NCE1A0955", queueId, category: 0 }] },
+        })
+        .map((problem) => `${problem.path} ${problem.keyword}`);
+    expect(answered(99)).toEqual([]);
+    expect(answered(100)).toEqual(["/monitoredQueues/0/queueId maximum"]);
+  });
+
   it("answers no property ending in Secret, Ciphertext or Hash in any response of the slice", () => {
     const leaky = (name: string): boolean => /(secret|ciphertext|hash)$/i.test(name);
     // The walk reaches the connection shapes, so the check cannot pass by not looking.

@@ -4208,7 +4208,7 @@ export interface components {
         /** @description An Amadeus queue that the OTA backend polls into its queue snapshots. */
         AmadeusMonitoredQueue: {
             officeId: components["schemas"]["AmadeusOfficeId"];
-            /** @description Queue number. */
+            /** @description Queue number, 0–99 (Queue List `queue-id`, as the OTA document's console queue reads bound it; the OTA backend's poller skips any other value). */
             queueId: number;
             /** @description Queue category. */
             category: number;

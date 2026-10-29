@@ -16270,7 +16270,10 @@ components:
         queueId:
           type: integer
           minimum: 0
-          description: Queue number.
+          maximum: 99
+          description: >-
+            Queue number, 0–99 (Queue List `queue-id`, as the OTA document's console queue reads bound it; the OTA
+            backend's poller skips any other value).
         category:
           type: integer
           minimum: 0
