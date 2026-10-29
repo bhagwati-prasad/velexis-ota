@@ -55,6 +55,7 @@ import { REVEAL_DURATION_MS, RevealPanel } from "@/components/reveal-panel";
 import { StatusBadge } from "@/components/status-badge";
 import { StepUpDialog, useStepUpAction } from "@/components/step-up-dialog";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { ApiError } from "@/lib/api";
@@ -950,6 +951,26 @@ describe("Alert", () => {
     expect(classes).toContain("*:data-[slot=alert-description]:text-destructive");
     expect(classes.filter((name) => /text-destructive\/\d+$/.test(name))).toEqual([]);
     expect(screen.getByText("Try again in a moment.").dataset["slot"]).toBe("alert-description");
+  });
+});
+
+describe("destructive Button and Badge", () => {
+  it("darken on hover instead of fading, so their white text keeps 4.5:1", () => {
+    render(
+      <>
+        <Button variant="destructive">Reset two-factor</Button>
+        <Badge variant="destructive">Failed</Badge>
+      </>,
+    );
+
+    // bg-destructive/90 over a white page is #ea1a23: 4.49:1 for white text, under the 4.5:1 of WCAG 1.4.3 (axe found
+    // it on a hovered button in e2e run 40938272523). Mixing in 10% black is #c90008: 6.03:1; at rest 4.76:1.
+    const hover = "hover:bg-[color-mix(in_oklch,var(--destructive),black_10%)]";
+    const button = screen.getByRole("button", { name: "Reset two-factor" }).className.split(/\s+/);
+    const badge = screen.getByText("Failed").className.split(/\s+/);
+    expect(button).toContain(hover);
+    expect(badge).toContain(`[a&]:${hover}`);
+    expect([...button, ...badge].filter((name) => /hover:bg-destructive\/\d+$/.test(name))).toEqual([]);
   });
 });
 

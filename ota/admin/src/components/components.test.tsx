@@ -24,6 +24,8 @@ import { ErrorState } from "./error-state";
 import { JsonView, formatJson } from "./json-view";
 import { Money, formatMoney } from "./money";
 import { STATUS_LABELS, StatusBadge, describeStatus } from "./status-badge";
+import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 
@@ -373,6 +375,26 @@ describe("DropdownMenuItem", () => {
       ]),
     );
     expect(classes.filter((name) => /(^|:)focus:text-destructive/.test(name))).toEqual([]);
+  });
+});
+
+describe("destructive Button and Badge", () => {
+  it("darken on hover instead of fading, so their white text keeps 4.5:1", () => {
+    render(
+      <>
+        <Button variant="destructive">Reset two-factor</Button>
+        <Badge variant="destructive">Failed</Badge>
+      </>,
+    );
+
+    // bg-destructive/90 over a white page is #ea1a23: 4.49:1 for white text, under the 4.5:1 of WCAG 1.4.3 (axe found
+    // it on a hovered button in e2e run 40938272523). Mixing in 10% black is #c90008: 6.03:1; at rest 4.76:1.
+    const hover = "hover:bg-[color-mix(in_oklch,var(--destructive),black_10%)]";
+    const button = screen.getByRole("button", { name: "Reset two-factor" }).className.split(/\s+/);
+    const badge = screen.getByText("Failed").className.split(/\s+/);
+    expect(button).toContain(hover);
+    expect(badge).toContain(`[a&]:${hover}`);
+    expect([...button, ...badge].filter((name) => /hover:bg-destructive\/\d+$/.test(name))).toEqual([]);
   });
 });
 
