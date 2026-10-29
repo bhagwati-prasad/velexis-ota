@@ -49,6 +49,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { AmadeusClient } from "../../../src/amadeus/amadeus.client";
 import { AMADEUS_LIMITS, DEFAULT_AMADEUS_LIMITS, type AmadeusLimits } from "../../../src/amadeus/limits";
 import { newBookingReference } from "../../../src/bookings/booking-reference";
+import { CustomerBookingsService } from "../../../src/bookings/customer-bookings.service";
 import {
   CANCELLATION_CHECK_JOB,
   CancellationRecorder,
@@ -808,6 +809,44 @@ function nextCallWith(method: "issueFlightOrder" | "cancelFlightOrder", scenario
     .mockImplementationOnce((context, req, options) =>
       cancelOrder({ ...context, stubScenario: scenario }, req, options),
     );
+}
+
+const claimedAtOf = async (bookingId: string): Promise<Date | null> =>
+  (
+    await inTenant((trx) =>
+      trx
+        .selectFrom("bookings")
+        .select("cancellation_claimed_at")
+        .where("id", "=", bookingId)
+        .executeTakeFirstOrThrow(),
+    )
+  ).cancellation_claimed_at;
+
+/**
+ * The API's next Flight Order Management DELETE held by a barrier: `reached` resolves once the claim (T1) committed
+ * and the DELETE is about to leave; `pass()` lets it go to the stub with `scenario` (none: the stub's own answer).
+ */
+function holdNextDelete(scenario?: string) {
+  const client = api.app.get(AmadeusClient, { strict: false });
+  const cancelOrder = client.cancelFlightOrder.bind(client);
+  let reach = (): void => undefined;
+  const reached = new Promise<void>((resolveReach) => {
+    reach = resolveReach;
+  });
+  let pass = (): void => undefined;
+  const passed = new Promise<void>((resolvePass) => {
+    pass = resolvePass;
+  });
+  const spy = vi.spyOn(client, "cancelFlightOrder").mockImplementationOnce(async (context, req, options) => {
+    reach();
+    await passed;
+    return await cancelOrder(
+      scenario === undefined ? context : { ...context, stubScenario: scenario },
+      req,
+      options,
+    );
+  });
+  return { reached, pass, spy };
 }
 
 // Cloning the template, starting the stub and the fake Stripe API, building the API's and the worker's module graphs,
@@ -1653,46 +1692,6 @@ describe("the ticketing claims while a staff cancellation is undecided (FIX-W31-
     return booking;
   }
 
-  const claimedAtOf = async (bookingId: string): Promise<Date | null> =>
-    (
-      await inTenant((trx) =>
-        trx
-          .selectFrom("bookings")
-          .select("cancellation_claimed_at")
-          .where("id", "=", bookingId)
-          .executeTakeFirstOrThrow(),
-      )
-    ).cancellation_claimed_at;
-
-  /**
-   * The API's next Flight Order Management DELETE held by a barrier: `reached` resolves once the claim (T1) committed
-   * and the DELETE is about to leave; `pass()` lets it go to the stub with `scenario` (none: the stub's own answer).
-   */
-  function holdNextDelete(scenario?: string) {
-    const client = api.app.get(AmadeusClient, { strict: false });
-    const cancelOrder = client.cancelFlightOrder.bind(client);
-    let reach = (): void => undefined;
-    const reached = new Promise<void>((resolveReach) => {
-      reach = resolveReach;
-    });
-    let pass = (): void => undefined;
-    const passed = new Promise<void>((resolvePass) => {
-      pass = resolvePass;
-    });
-    const spy = vi
-      .spyOn(client, "cancelFlightOrder")
-      .mockImplementationOnce(async (context, req, options) => {
-        reach();
-        await passed;
-        return await cancelOrder(
-          scenario === undefined ? context : { ...context, stubScenario: scenario },
-          req,
-          options,
-        );
-      });
-    return { reached, pass, spy };
-  }
-
   /** What the ticketing job and a staff issuance answered while the staff's DELETE was held. */
   interface Held {
     readonly claimedAt: Date | null;
@@ -1821,4 +1820,150 @@ describe("the ticketing claims while a staff cancellation is undecided (FIX-W31-
     expect(amadeusCalls("getFlightOrder").map((call) => call.status)).toEqual([200]);
     expect(amadeusCalls("issueFlightOrder").map((call) => call.status)).toEqual([200]);
   });
+});
+
+describe("a second staff cancellation while another one's DELETE is in flight (FIX-W32-OTA)", () => {
+  const body = { reasonCode: "customer_request", reason: "Customer asked by phone" };
+
+  /**
+   * The next refresh of an order the API makes (console.bookings.cancel's read between its checks without a lock and
+   * its claim) held by a barrier: `reached` resolves once the checks without a lock (T0) passed.
+   */
+  function holdNextRefresh() {
+    const bookings = api.app.get(CustomerBookingsService, { strict: false });
+    const refresh = bookings.refresh.bind(bookings);
+    let reach = (): void => undefined;
+    const reached = new Promise<void>((resolveReach) => {
+      reach = resolveReach;
+    });
+    let pass = (): void => undefined;
+    const passed = new Promise<void>((resolvePass) => {
+      pass = resolvePass;
+    });
+    const spy = vi.spyOn(bookings, "refresh").mockImplementationOnce(async (...args) => {
+      reach();
+      await passed;
+      return await refresh(...args);
+    });
+    return { reached, pass, spy };
+  }
+
+  it("[FIX-W32-OTA AC2] refuses a second staff cancellation sent with the ETag the first one's claim left: 409 pending, one DELETE", async () => {
+    const owner = await staff("owner");
+    const booking = await seedBooking("cancel.staff_second");
+    await seedPayment(booking.id, "captured");
+    const held = holdNextDelete();
+    let second: Response;
+    let first: Response;
+    try {
+      const cancelling = owner.cancel(booking.id, await etagOf(owner, booking.id), body).then((res) => res);
+      await held.reached;
+      stub.clearRequests();
+      // The first claim (T1) committed and moved the version; another staff member's page reloads it and cancels.
+      second = await owner.cancel(booking.id, await etagOf(owner, booking.id), body);
+      held.pass();
+      first = await cancelling;
+    } finally {
+      held.pass();
+      held.spy.mockRestore();
+    }
+
+    expect(answer(second)).toEqual([409, "BOOKING_NOT_MODIFIABLE"]);
+    expect(second.body.error.details).toMatchObject({ reason: "pending" });
+    expectResponseToMatch("consoleCancelBooking", second);
+    expect(answer(first)).toEqual([200, undefined]);
+    // One DELETE: the second request read nothing and sent nothing to Amadeus.
+    expect(amadeusCalls("cancelFlightOrder").map((call) => call.status)).toEqual([204]);
+    expect(amadeusCalls("getFlightOrder")).toEqual([]);
+    expect(await bookingRow(booking.id)).toMatchObject({ status: "cancelled", cancelled_by: "staff" });
+    expect(await claimedAtOf(booking.id)).toBeNull();
+  });
+
+  it("[FIX-W32-OTA AC2] refuses it again under the claim's lock when another claim's marker appeared after the checks without a lock", async () => {
+    const owner = await staff("owner");
+    const booking = await seedBooking("cancel.staff_second_t1");
+    await seedPayment(booking.id, "captured");
+    const etag = await etagOf(owner, booking.id);
+    const held = holdNextRefresh();
+    const other = new Date();
+    let res: Response;
+    try {
+      const cancelling = owner.cancel(booking.id, etag, body).then((answered) => answered);
+      await held.reached;
+      stub.clearRequests();
+      await inTenant((trx) =>
+        trx
+          .updateTable("bookings")
+          .set({ cancellation_claimed_at: other })
+          .where("id", "=", booking.id)
+          .execute(),
+      );
+      held.pass();
+      res = await cancelling;
+    } finally {
+      held.pass();
+      held.spy.mockRestore();
+    }
+
+    expect(answer(res)).toEqual([409, "BOOKING_NOT_MODIFIABLE"]);
+    expect(res.body.error.details).toMatchObject({ reason: "pending" });
+    expectResponseToMatch("consoleCancelBooking", res);
+    expect(amadeusCalls("cancelFlightOrder")).toEqual([]);
+    expect(await bookingRow(booking.id)).toMatchObject({ status: "confirmed" });
+    expect(await claimedAtOf(booking.id)).toEqual(other);
+  });
+
+  it.each([
+    {
+      scenario: undefined,
+      prefix: "cancel.staff_own_record",
+      answered: [200, undefined],
+      status: "cancelled",
+    },
+    {
+      scenario: "timeout",
+      prefix: "cancel.staff_own_flag",
+      answered: [504, "SUPPLIER_TIMEOUT"],
+      status: "confirmed",
+    },
+    {
+      scenario: "cancel-refused",
+      prefix: "cancel.staff_own_release",
+      answered: [422, "SUPPLIER_REJECTED"],
+      status: "confirmed",
+    },
+  ])(
+    "[FIX-W32-OTA AC2] clears only its own claim's marker when its outcome is recorded ($prefix)",
+    async ({ scenario, prefix, answered, status }) => {
+      const owner = await staff("owner");
+      const booking = await seedBooking(prefix);
+      await seedPayment(booking.id, "captured");
+      const etag = await etagOf(owner, booking.id);
+      const held = holdNextDelete(scenario);
+      const other = new Date(Date.now() + MINUTE);
+      let res: Response;
+      try {
+        const cancelling = owner.cancel(booking.id, etag, body).then((answeredRes) => answeredRes);
+        await held.reached;
+        expect(await claimedAtOf(booking.id)).toBeInstanceOf(Date);
+        await inTenant((trx) =>
+          trx
+            .updateTable("bookings")
+            .set({ cancellation_claimed_at: other })
+            .where("id", "=", booking.id)
+            .execute(),
+        );
+        held.pass();
+        res = await cancelling;
+      } finally {
+        held.pass();
+        held.spy.mockRestore();
+      }
+
+      expect(answer(res)).toEqual(answered);
+      expectResponseToMatch("consoleCancelBooking", res);
+      expect((await bookingRow(booking.id)).status).toBe(status);
+      expect(await claimedAtOf(booking.id)).toEqual(other);
+    },
+  );
 });

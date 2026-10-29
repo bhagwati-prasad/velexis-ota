@@ -21,7 +21,12 @@
 // call; a rate limit, a timeout, an Amadeus error; an answer that is not a list of PNRs) stores nothing, is logged with
 // its code and counted as `failed`, and the job goes on with the next queue: the next iteration reads it again in 15
 // minutes, and a failure never makes BullMQ repeat the reads that succeeded. A connection the resolver refuses (`424
-// SUPPLIER_NOT_CONFIGURED`) is not asked again in the job. Log lines carry ids, offices, queue numbers, codes and
+// SUPPLIER_NOT_CONFIGURED`) is not asked again in the job. A connection whose read timed out or found Amadeus
+// unavailable (`504 SUPPLIER_TIMEOUT`, `503 SUPPLIER_UNAVAILABLE`, after the client's own retry of a read) is not asked
+// again in the job either (FIX-W32-OTA, lead decision (1g) of 2026-10-28): its remaining queues of the batch are
+// skipped, counted as `skipped` and logged once per connection (`queues.poll_skipped`, with the code and the count), so
+// an Amadeus outage costs one read per connection and job, not one per queue; the next iteration (or the next job of
+// the run, for the queues of a later batch) tries them again. Log lines carry ids, offices, queue numbers, codes and
 // counts, never a name of a PNR.
 import { Injectable } from "@nestjs/common";
 import { isAppError } from "@velexis/errors";
@@ -51,6 +56,12 @@ export const QUEUES_POLL_JOB = "queues.poll";
 export const QUEUE_POLL_MAX = 500;
 
 const MINUTE_MS = 60_000;
+
+/**
+ * The codes of a read after which the job asks the connection nothing more (see the file header): Amadeus did not answer
+ * in time, or was unavailable (a network error, a `502`/`503`, its shared quota's `429`).
+ */
+const OUTAGE_CODES: ReadonlySet<string> = new Set(["SUPPLIER_TIMEOUT", "SUPPLIER_UNAVAILABLE"]);
 
 /** The queues one run reads, in order: those of the `active` connections, and how many it leaves out. */
 export function pollTargets(connections: readonly PlatformMonitoredQueues[]): {
@@ -91,6 +102,8 @@ export interface QueuePollCounts extends Readonly<Record<string, number>> {
   readonly alreadyPolled: number;
   /** Reads that failed, or that were not tried after the connection was refused. */
   readonly failed: number;
+  /** Queues not read after a timeout or an unavailable answer of their connection in this job (FIX-W32-OTA). */
+  readonly skipped: number;
   /** Queues of connections that are not active (the first job of a run only). */
   readonly inactive: number;
   /** Malformed entries of the monitored lists (the first job of a run only). */
@@ -121,12 +134,21 @@ export class QueuePollerProcessor implements TenantJobHandler {
     const size = JOB_BATCH_LIMITS.queuePoll;
     const batch = targets.slice(continuation * size, (continuation + 1) * size);
     const refused = new Set<AmadeusEnvironment>();
+    // The connections that timed out or were unavailable in this job: the code, and the queues skipped after it.
+    const down = new Map<AmadeusEnvironment, { readonly code: string; skipped: number }>();
     let snapshots = 0;
     let alreadyPolled = 0;
     let failed = 0;
+    let skipped = 0;
     for (const queue of batch) {
       if (refused.has(queue.environment)) {
         failed += 1;
+        continue;
+      }
+      const outage = down.get(queue.environment);
+      if (outage !== undefined) {
+        outage.skipped += 1;
+        skipped += 1;
         continue;
       }
       if (await this.tx.run((trx) => this.snapshots.polledSince(trx, queue, since, QUEUE_POLL_OPERATION))) {
@@ -140,7 +162,17 @@ export class QueuePollerProcessor implements TenantJobHandler {
         failed += 1;
         if (outcome === "connection_refused") {
           refused.add(queue.environment);
+        } else if (outcome !== "failed") {
+          down.set(queue.environment, { code: outcome.outage, skipped: 0 });
         }
+      }
+    }
+    for (const [environment, outage] of down) {
+      if (outage.skipped > 0) {
+        this.logger.warn(
+          { tenantId: tenant.id, environment, continuation, code: outage.code, skipped: outage.skipped },
+          "queues.poll_skipped",
+        );
       }
     }
     const first = continuation === 0;
@@ -149,6 +181,7 @@ export class QueuePollerProcessor implements TenantJobHandler {
       snapshots,
       alreadyPolled,
       failed,
+      skipped,
       inactive: first ? inactive : 0,
       invalid: first ? invalid : 0,
     };
@@ -163,7 +196,7 @@ export class QueuePollerProcessor implements TenantJobHandler {
     tenant: PlatformTenant,
     queue: QueueKey,
     requestId: string,
-  ): Promise<"stored" | "failed" | "connection_refused"> {
+  ): Promise<"stored" | "failed" | "connection_refused" | { readonly outage: string }> {
     const where = {
       tenantId: tenant.id,
       environment: queue.environment,
@@ -190,7 +223,10 @@ export class QueuePollerProcessor implements TenantJobHandler {
         throw error;
       }
       this.logger.warn({ ...where, code: error.code }, "queues.poll_failed");
-      return error.code === "SUPPLIER_NOT_CONFIGURED" ? "connection_refused" : "failed";
+      if (error.code === "SUPPLIER_NOT_CONFIGURED") {
+        return "connection_refused";
+      }
+      return OUTAGE_CODES.has(error.code) ? { outage: error.code } : "failed";
     }
     const entries = queueEntriesOf(reply.body);
     if (entries === undefined) {

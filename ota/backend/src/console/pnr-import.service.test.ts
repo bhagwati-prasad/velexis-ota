@@ -28,6 +28,7 @@ import {
   storedDocumentOf,
   WITHHELD_ORDER,
   withheldBody,
+  withheldResponseOf,
   type AttachedBooking,
   type ImportRulesContext,
 } from "./pnr-import.service";
@@ -182,6 +183,31 @@ describe("the office isolation of the shared account (ADR-0012)", () => {
     // A Management GET answer (one order) is reduced the same way.
     expect(withheldBody({ data: theirs }, [theirs])).toEqual({
       data: { type: "flight-order", id: theirs["id"], withheld: WITHHELD_ORDER },
+    });
+  });
+
+  it("[FIX-W32-OTA AC4] gives the client a recorded response that withholds another office's orders, and keeps every other answer", () => {
+    const recorded = withheldResponseOf(OFFICES);
+    const mine = orderData({ ownerOfficeId: OWN });
+    const theirs = orderData({ ownerOfficeId: OTHER });
+    const listed = { data: [mine, theirs], dictionaries: { carriers: { ZZ: "ZED AIR" } } };
+
+    expect(recorded(listed)).toEqual(withheldBody(listed, [theirs]));
+    expect(recorded({ data: theirs })).toEqual({
+      data: { type: "flight-order", id: theirs["id"], withheld: WITHHELD_ORDER },
+    });
+    // The tenant's orders, an error answer, no answer: as they are.
+    expect(recorded({ data: [mine], dictionaries: { carriers: { ZZ: "ZED AIR" } } })).toEqual({
+      data: [mine],
+      dictionaries: { carriers: { ZZ: "ZED AIR" } },
+    });
+    const error = { errors: [{ status: 404, code: 1797, title: "NOT FOUND" }] };
+    expect(recorded(error)).toBe(error);
+    expect(recorded(undefined)).toBeUndefined();
+    expect(recorded("not json")).toBe("not json");
+    // An order without any office is not the tenant's either.
+    expect(recorded({ data: { type: "flight-order", id: "x" } })).toEqual({
+      data: { type: "flight-order", id: "x", withheld: WITHHELD_ORDER },
     });
   });
 });

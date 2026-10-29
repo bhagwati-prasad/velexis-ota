@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Lead architect. Decided during planning; revisit when a second VM, a managed database, or more than one person on call makes a hosted log and metrics service worth its cost.
-**Revisions:** 2026-10-12 (planning review): card objects are censored at every depth and bodies never reach the `err` serializer; security logs are kept 12 months off the VM ([ADR-0027](0027-pci-scope-and-vm-controls.md)).
+**Revisions:** 2026-10-12 (planning review): card objects are censored at every depth and bodies never reach the `err` serializer; security logs are kept 12 months off the VM ([ADR-0027](0027-pci-scope-and-vm-controls.md)). 2026-10-28 (lead decision (1j) of the OTA, recording FIX-W32-OTA): the OTA reports the ages of its queues from its worker only (dated note under Health).
 
 ## Context
 
@@ -46,6 +46,7 @@ M6 includes "monitoring and alerting". The stack must be cheap and simple to run
   - `GET /health/live`: the process is up.
   - `GET /health/ready`: PostgreSQL and Redis are reachable. Backends also report the age of the oldest waiting job per queue.
 - Workers expose the same endpoints on their health-only ports (3101, 4001).
+- **2026-10-28 (lead decision (1j) of the OTA, FIX-W32-OTA; [OADR-0014](../../../ota/docs/adr/0014-per-tenant-workers-and-schedulers.md) point 8, OBE-025, accepted as built):** the OTA reports the age of the oldest waiting job per queue from its **worker only**: the worker's `/health/ready` (port 4001) adds `queues` (per OTA queue: the jobs waiting, the age of the oldest in seconds, the failures of the last hour; `src/health/queue-age.ts`), while the OTA API's `/health/ready` reports PostgreSQL and Redis only, as the API process only produces jobs. A worker answer without `queues` means the queue part is unknown (Redis refused or did not answer within the readiness's second), never "no queue waits", and old jobs never make the readiness `503`. `amadeus:ping`, the support check of OBE-025, checks one OTA's Amadeus connection and reads no queue.
 - Caddy blocks `/health/*` from the internet except `/health/live` on the API hosts.
 
 ### Metrics and alerting (MVP level)

@@ -128,7 +128,7 @@ describe("QueuePollerProcessor", () => {
 
     expect(outcome).toEqual({
       more: false,
-      counts: { queues: 2, snapshots: 2, alreadyPolled: 0, failed: 0, inactive: 0, invalid: 0 },
+      counts: { queues: 2, snapshots: 2, alreadyPolled: 0, failed: 0, skipped: 0, inactive: 0, invalid: 0 },
     });
     expect(listQueue).toHaveBeenCalledTimes(2);
     expect(listQueue).toHaveBeenNthCalledWith(
@@ -212,6 +212,49 @@ describe("QueuePollerProcessor", () => {
     expect(stored.map((record) => record.environment)).toEqual(["live"]);
   });
 
+  it.each(["SUPPLIER_TIMEOUT", "SUPPLIER_UNAVAILABLE"] as const)(
+    "[FIX-W32-OTA AC6] asks a connection nothing more in the job after %s, skips its other queues and logs the skip",
+    async (code) => {
+      const { processor, listQueue, stored, logger } = poller(
+        [connection("test", [50, 8, 9]), connection("live", [50])],
+        ({ environment }) => (environment === "test" ? new AppError(code) : { data: [] }),
+      );
+
+      const outcome = await processor.run(TENANT, job(0));
+
+      // One read of the test connection (the client sent it twice already), none for its two other queues; the live
+      // connection is read as usual.
+      expect(
+        listQueue.mock.calls.map(([context, request]) => [context.environment, request.queueId]),
+      ).toEqual([
+        ["test", 50],
+        ["live", 50],
+      ]);
+      expect(outcome.counts).toMatchObject({ queues: 4, snapshots: 1, failed: 1, skipped: 2 });
+      expect(stored.map((record) => record.environment)).toEqual(["live"]);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ tenantId: TENANT.id, environment: "test", code, skipped: 2 }),
+        "queues.poll_skipped",
+      );
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ skipped: 2, failed: 1, snapshots: 1 }),
+        "queues.polled",
+      );
+    },
+  );
+
+  it("[FIX-W32-OTA AC6] goes on reading a connection after another failure (a refusal of one office, an unreadable answer)", async () => {
+    const { processor, listQueue, logger } = poller([connection("test", [50, 8, 9])], ({ queueId }) =>
+      queueId === 50 ? new AppError("RATE_LIMITED") : { data: [] },
+    );
+
+    const outcome = await processor.run(TENANT, job(0));
+
+    expect(listQueue).toHaveBeenCalledTimes(3);
+    expect(outcome.counts).toMatchObject({ queues: 3, snapshots: 2, failed: 1, skipped: 0 });
+    expect(logger.warn).not.toHaveBeenCalledWith(expect.anything(), "queues.poll_skipped");
+  });
+
   it("reads no queue twice for one iteration (a retried job)", async () => {
     const { processor, listQueue, stored } = poller(
       [connection("test", [50, 8])],
@@ -237,7 +280,7 @@ describe("QueuePollerProcessor", () => {
 
     await expect(processor.run(TENANT, job(0))).resolves.toEqual({
       more: false,
-      counts: { queues: 0, snapshots: 0, alreadyPolled: 0, failed: 0, inactive: 0, invalid: 0 },
+      counts: { queues: 0, snapshots: 0, alreadyPolled: 0, failed: 0, skipped: 0, inactive: 0, invalid: 0 },
     });
     expect(listQueue).not.toHaveBeenCalled();
     expect(logger.info).not.toHaveBeenCalled();

@@ -5,7 +5,8 @@
 // form carries the idempotency key the page rendered with it, so a double click or a retry adds one note; the button is
 // disabled while the note is being saved. A success empties the text, and the page's new render brings a new key for
 // the next note; a final refusal the API stored under the key brings a new one with the action's state, which the next
-// submission sends (`useActionKey` of the confirmation dialog, OADR-0018 point 5 revised on 2026-10-27, FIX-W31-OTA).
+// submission sends (`useActionKey` of the confirmation dialog, OADR-0018 point 5 revised on 2026-10-27, FIX-W31-OTA);
+// `409 IDEMPOTENCY_KEY_REUSED` brings none and asks for a reload (revised on 2026-10-28, FIX-W32-OTA).
 // The note is never sent to Amadeus and changes no booking version.
 import { LoaderCircleIcon } from "lucide-react";
 import { startTransition, useActionState, useEffect, useId, useState, type FormEvent } from "react";

@@ -196,22 +196,39 @@ export function bookingSyncStatusOf(status: ConsoleBookingSyncStatus): Booking["
   return status === "not_applicable" ? "fresh" : status;
 }
 
+/** `customers.status` of a deleted account. */
+const DELETED_CUSTOMER = "deleted";
+
+/**
+ * A customer reference without its names (`null`): a deleted account as the console shows it (ConsoleCustomerRef,
+ * "null for deleted accounts"). console.customers.get's recent bookings and console.bookings.list and get use it.
+ */
+export function withoutDeletedName(ref: ConsoleCustomerRef): ConsoleCustomerRef {
+  return { ...ref, firstName: null, lastName: null };
+}
+
 /** The owning customer, or `null` for a guest booking (or one whose customer row is gone). */
 function customerRefOf(row: {
   readonly customerId: string | null;
   readonly customerEmail: string | null;
   readonly customerFirstName: string | null;
   readonly customerLastName: string | null;
+  readonly customerStatus: string | null;
 }): ConsoleCustomerRef | null {
   if (row.customerId === null || row.customerEmail === null) {
     return null;
   }
-  return {
+  const ref: ConsoleCustomerRef = {
     id: row.customerId,
     email: row.customerEmail,
     firstName: row.customerFirstName,
     lastName: row.customerLastName,
   };
+  // A deleted account keeps its row (and, until the purge, its names) for its bookings, but its names are not shown:
+  // `null`, as the contract says of ConsoleCustomerRef (FIX-W32-OTA, lead decision (1f) of 2026-10-28; OBE-066's rule
+  // of console.customers.get's recent bookings, `withoutDeletedName`). Its address is the `…@deleted.invalid`
+  // placeholder already.
+  return row.customerStatus === DELETED_CUSTOMER ? withoutDeletedName(ref) : ref;
 }
 
 // ---- console.bookings.list -----------------------------------------------------------------------------------------

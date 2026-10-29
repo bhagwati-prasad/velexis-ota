@@ -79,11 +79,15 @@ function requireStripe(): OtaStripeKeys {
   return keys;
 }
 
-/** A new browser context for a journey, with the storefront guards installed before its first navigation. */
+/**
+ * A new browser context for a journey, with the storefront guards installed before its first navigation: a
+ * storefront-stripe journey's, which allow the Stripe.js cookies from the card page on (OADR-0006, revision of
+ * 2026-10-28).
+ */
 async function openJourney(browser: Browser): Promise<Journey> {
   requireStripe();
   const context = await browser.newContext({ baseURL: STOREFRONT_URL });
-  const guards = await StorefrontGuards.install(context);
+  const guards = await StorefrontGuards.install(context, { stripeJourney: true });
   const page = await context.newPage();
   return { context, page, guards };
 }

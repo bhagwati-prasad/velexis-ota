@@ -9579,10 +9579,13 @@ paths:
         `404`); `allowedActions.canCancel` (`409 BOOKING_NOT_MODIFIABLE` with `details.reason`, `flown` once a
         segment departed and `too_close_to_departure` 3 hours or less before the first departure, the one rule
         bookings.get shows; `409 BOOKING_ALREADY_CANCELLED`; `403 FEATURE_DISABLED` when the storefront disabled
-        self-service cancellation); no issuance in progress (a fresh ticketing claim of the ticketing job or of a staff
-        issuance: `409 BOOKING_NOT_MODIFIABLE` with `details.reason = ticketing_in_progress`, as console.bookings.cancel
-        answers, and nothing is sent to Amadeus). `If-Match` (booking ETag) required → `412 PRECONDITION_FAILED` when
-        stale.
+        self-service cancellation); no other cancellation in progress (an earlier one whose outcome is undecided or
+        that waits for the staff, or another cancellation whose Flight Order Management DELETE is in flight, claimed
+        less than 5 minutes ago: `409 BOOKING_NOT_MODIFIABLE` with `details.reason = pending`, checked again when the
+        booking row is claimed, as console.bookings.cancel answers, so a second DELETE is never sent); no issuance in
+        progress (a fresh ticketing claim of the ticketing job or of a staff issuance: `409 BOOKING_NOT_MODIFIABLE` with
+        `details.reason = ticketing_in_progress`, as console.bookings.cancel answers, and nothing is sent to Amadeus).
+        `If-Match` (booking ETag) required → `412 PRECONDITION_FAILED` when stale.
 
         2. Recompute the quote (Redis `cxq:{bookingId}` if still valid, else **Flight Order Management** `GET
         …?fareRules=refunds`, getFlightOrder). If it differs from `expectedRefund`, or `expectedRefund` was left out →
@@ -12863,10 +12866,14 @@ paths:
 
         **Preconditions.** `If-Match`; not already cancelled (`409 BOOKING_ALREADY_CANCELLED`); has an Amadeus order
         (`409 BOOKING_NOT_MODIFIABLE` for failed/pending); no segment departed, flown or past its departure time (`409
-        BOOKING_NOT_MODIFIABLE`, `details.reason = flown`; `consoleActions.canCancel` follows the same rule); no
-        issuance in progress (a fresh ticketing claim of the ticketing job or of a staff issuance: `409
-        BOOKING_NOT_MODIFIABLE`, `details.reason = ticketing_in_progress`). Permission `bookings:cancel`. Unlike
-        bookings.cancel (customer scope) there is no self-service window or cancellation-quote requirement.
+        BOOKING_NOT_MODIFIABLE`, `details.reason = flown`; `consoleActions.canCancel` follows the same rule); no other
+        cancellation in progress (a cancellation whose outcome is undecided, or another cancellation, the customer's or
+        the staff's, whose Flight Order Management DELETE is in flight, claimed less than 5 minutes ago: `409
+        BOOKING_NOT_MODIFIABLE`, `details.reason = pending`, checked again when the booking row is claimed, so a second
+        DELETE is never sent; a customer's request waiting for the staff is finished here); no issuance in progress (a
+        fresh ticketing claim of the ticketing job or of a staff issuance: `409 BOOKING_NOT_MODIFIABLE`,
+        `details.reason = ticketing_in_progress`). Permission `bookings:cancel`. Unlike bookings.cancel (customer scope)
+        there is no self-service window or cancellation-quote requirement.
 
 
         **Idempotency.** Required; a retry returns the stored result. A timeout (`504`) leaves the booking unchanged

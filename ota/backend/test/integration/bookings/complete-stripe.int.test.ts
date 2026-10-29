@@ -20,6 +20,8 @@
 // FIX-W25-BOOKINGS (third batch: checkout, booking, payment, refund): the transactions after Flight Create Orders (T2,
 // the failure, the unknown outcome) lock the checkout before the booking, proven the same way with the checkout held;
 // and a claim that a reconciliation decided before the order was sent (an adopted claim) sends no order at all.
+// FIX-W32-OTA (lead decision (1a) of 2026-10-28): the issuance of step 5 respects a cancellation's hold, proven with a
+// barrier at the capture that commits a cancellation's claim (or the flag of a DELETE without an answer) first.
 import { randomBytes } from "node:crypto";
 import { getQueueToken } from "@nestjs/bullmq";
 import { encryptValue, hashApiKey, type KeyProvider } from "@velexis/crypto";
@@ -47,7 +49,9 @@ import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PAYMENT_JOBS } from "../../../src/bookings/booking-orchestrator.service";
 import { BOOKING_REFERENCE_PATTERN } from "../../../src/bookings/booking-reference";
+import { CancellationRepository } from "../../../src/bookings/cancellation.service";
 import { OrderRecorder } from "../../../src/bookings/order-recorder";
+import { claimSkip, TicketingRepository } from "../../../src/bookings/ticketing.service";
 import { BOOKING_TOKEN_PATTERN } from "../../../src/common/auth/booking-access.guard";
 import { newId } from "../../../src/common/ids";
 import { OTA_QUEUE } from "../../../src/common/queues/queue-names";
@@ -1704,6 +1708,144 @@ describe("checkout.complete after the order exists", () => {
     expect(row).toMatchObject({ ticketing_status: "failed", ticketing_error_code: "TICKETING_FAILED" });
     expect(row.ticketing_next_attempt_at).not.toBeNull();
     expect(await eventTypes(booking.id)).toContain("booking.ticketing_failed");
+  });
+});
+
+describe("checkout.complete's issuance while a cancellation holds the booking (FIX-W32-OTA)", () => {
+  const cancellations = new CancellationRepository();
+  const ticketing = new TicketingRepository();
+
+  /**
+   * The barrier: when Stripe is asked to capture (after the record step's commit, before the issuance, no transaction
+   * open), `hold` commits a cancellation's hold of the booking in a transaction of its own that claims the booking as
+   * T1 of bookings.cancel does (`FOR NO KEY UPDATE SKIP LOCKED`); the capture answers only once it committed, so the
+   * issuance's claim comes after it, every run.
+   */
+  function holdAtCapture(
+    paymentId: string,
+    hold: (trx: TenantTransaction, bookingId: string) => Promise<void>,
+  ): { readonly bookingId: () => string } {
+    let held: string | undefined;
+    stripe.onRequest(async (req) => {
+      if (req.method !== "POST" || !req.path.endsWith("/capture") || held !== undefined) {
+        return;
+      }
+      const { bookingId } = await alphaTx((trx) =>
+        trx
+          .selectFrom("payments")
+          .select("booking_id as bookingId")
+          .where("id", "=", paymentId)
+          .executeTakeFirstOrThrow(),
+      );
+      if (bookingId === null) {
+        throw new Error("the payment has no booking at its capture");
+      }
+      held = bookingId;
+      await alphaTx(async (trx) => {
+        if (!(await cancellations.lock(trx, bookingId, true))) {
+          throw new Error("the booking is held by another transaction at its capture");
+        }
+        await hold(trx, bookingId);
+      });
+    });
+    return {
+      bookingId: () => {
+        if (held === undefined) {
+          throw new Error("the capture never came");
+        }
+        return held;
+      },
+    };
+  }
+
+  /** Whether the ticketing job would claim the booking now (its scan lists it, and its claim does not skip it). */
+  async function jobWouldClaim(bookingId: string): Promise<string | undefined> {
+    return await alphaTx(async (trx) => {
+      const now = new Date();
+      const due = await ticketing.dueBookingIds(trx, { now, paidOnly: false, limit: 1000 });
+      if (!due.includes(bookingId)) {
+        return "not_listed";
+      }
+      const row = await ticketing.lock(trx, bookingId, { skipLocked: true });
+      return row === undefined ? "not_claimable" : claimSkip(row, now, "active");
+    });
+  }
+
+  async function expectHeldIssuance(res: { status: number; body: unknown }, paymentId: string) {
+    expect(res.status).toBe(201);
+    expectResponseToMatch("completeCheckout", res);
+    const { booking } = res.body as CompletionBody;
+    // Confirmed and paid; no Flight Order Issue went to the order whose cancellation was in flight.
+    expect(booking).toMatchObject({ status: "confirmed", ticketing: { status: "pending" } });
+    expect(amadeusCalls("issueFlightOrder")).toEqual([]);
+    expect(await paymentRow(paymentId)).toMatchObject({ status: "captured", booking_id: booking.id });
+    const row = await bookingRow(booking.id);
+    expect(row).toMatchObject({ status: "confirmed", ticketing_status: "pending", issue_requested: false });
+    // Left to the ticketing job: due now, as the payments queue's safety net makes it.
+    expect(row.ticketing_next_attempt_at).toBeInstanceOf(Date);
+    expect(api.sink.text()).toContain("bookings.issue_held_by_cancellation");
+    return booking.id;
+  }
+
+  it("[FIX-W32-OTA AC1] sends no Flight Order Issue when a cancellation's claim committed between the confirmation and the issuance, and leaves the booking due for the ticketing job once the claim ends", async () => {
+    const { checkout, payment } = await paidCheckout();
+    let claimedAt: Date | undefined;
+    const barrier = holdAtCapture(payment.id, async (trx, bookingId) => {
+      claimedAt = new Date();
+      await cancellations.claim(trx, bookingId, claimedAt);
+    });
+
+    const res = await complete(checkout.id);
+
+    const bookingId = await expectHeldIssuance(res, payment.id);
+    expect(bookingId).toBe(barrier.bookingId());
+    // While the cancellation's DELETE is in flight the job skips the booking, as it skips any booking it holds.
+    expect(await jobWouldClaim(bookingId)).toBe("cancellation_pending");
+    // The DELETE applied nothing (the airline refused it, Amadeus's 2552): the claim's release lets the job issue.
+    const marker = claimedAt;
+    if (marker === undefined) {
+      throw new Error("the barrier wrote no claim");
+    }
+    await alphaTx((trx) => cancellations.releaseClaim(trx, bookingId, marker));
+    expect(await jobWouldClaim(bookingId)).toBeUndefined();
+  });
+
+  it("[FIX-W32-OTA AC1] sends no Flight Order Issue while a cancellation's DELETE without an answer is undecided", async () => {
+    const { checkout, payment } = await paidCheckout();
+    holdAtCapture(payment.id, async (trx, bookingId) => {
+      const now = new Date();
+      // The flag of a DELETE without an answer (cancellation.service.ts recordUnknownOutcome), its claim released.
+      await trx
+        .insertInto("booking_events")
+        .values({
+          id: newId("evt"),
+          booking_id: bookingId,
+          type: "booking.cancellation_timeout",
+          actor_type: "system",
+          actor_id: null,
+          summary: "Amadeus did not confirm the cancellation.",
+          data: JSON.stringify({
+            mode: "release",
+            reasonCode: "change_of_plans",
+            estimate: { amountPaid: "0.00", estimatedRefund: "0.00", penalty: "0.00", otaFee: "0.00" },
+            currency: "EUR",
+            requestedAt: now.toISOString(),
+            until: new Date(now.getTime() + 15 * 60_000).toISOString(),
+            actor: { type: "system", id: null },
+            requestId: "req_test",
+            reason: "SUPPLIER_TIMEOUT",
+          }),
+          visible_to_customer: false,
+          created_at: now,
+          updated_at: now,
+        })
+        .execute();
+    });
+
+    const res = await complete(checkout.id);
+
+    const bookingId = await expectHeldIssuance(res, payment.id);
+    expect(await jobWouldClaim(bookingId)).toBe("cancellation_pending");
   });
 });
 

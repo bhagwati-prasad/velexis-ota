@@ -1015,6 +1015,42 @@ describe("refundPayment", () => {
     }
   });
 
+  it("[FIX-W32-OTA AC7] says how much can still be refunded when the amount is above it (the API's details.refundable), on the amount", async () => {
+    signedIn("owner");
+    api.on(REFUND, () =>
+      apiError("UNPROCESSABLE", 422, {
+        details: { reason: "amount_exceeds_captured", refundable: { amount: "36.50", currency: "EUR" } },
+      }),
+    );
+
+    const state = await refundPayment(INITIAL_ACTION_STATE, refundForm(randomUUID()));
+
+    const message = "The amount is above what can still be refunded: at most €36.50.";
+    expect(state).toMatchObject({
+      ok: false,
+      code: "UNPROCESSABLE",
+      message,
+      fieldErrors: { amount: message },
+    });
+    // A final refusal the API keeps under the key: the corrected amount goes with a new one (FIX-W31-OTA).
+    expect(state.nextActionKey).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it("[FIX-W32-OTA AC7] falls back to the reload message when the refusal carries no readable refundable amount", async () => {
+    signedIn("owner");
+    for (const details of [
+      { reason: "amount_exceeds_captured" },
+      { reason: "amount_exceeds_captured", refundable: { amount: 36.5, currency: "EUR" } },
+      { reason: "amount_exceeds_captured", refundable: { amount: "36.50", currency: "euro" } },
+    ]) {
+      api.on(REFUND, () => apiError("UNPROCESSABLE", 422, { details }));
+      expect(await refundPayment(INITIAL_ACTION_STATE, refundForm(randomUUID()))).toMatchObject({
+        ok: false,
+        message: "The amount is above what can still be refunded. Reload the page to see it.",
+      });
+    }
+  });
+
   it("answers an airline-card payment's refusal: the airline refunds it", async () => {
     signedIn("owner");
     api.on(REFUND, () => apiError("UNPROCESSABLE", 422, { details: { reason: "refund_via_airline" } }));
@@ -1262,12 +1298,74 @@ describe("the idempotency key after a refusal (OADR-0018 point 5, revision of 20
       { refund: { mode: "amount", amount: { amount: "120.50", currency: "EUR" } } },
       { refund: { mode: "amount", amount: { amount: "90.00", currency: "EUR" } } },
     ]);
-    // The rendered key is used up: the corrected form under it would only get 409 IDEMPOTENCY_KEY_REUSED, which brings
-    // a new key too, so even then no reload is needed.
+    // The rendered key is used up: the corrected form under it would only get 409 IDEMPOTENCY_KEY_REUSED, which since
+    // the revision of 2026-10-28 brings no new key but a reload (the next test, FIX-W32-OTA AC3).
     const reused = await cancelBooking(refused, cancelAmountForm(rendered, "90.00"));
     expect(reused).toMatchObject({ ok: false, code: "IDEMPOTENCY_KEY_REUSED" });
-    expect(reused.nextActionKey).toMatch(UUID);
-    expect([rendered, next]).not.toContain(reused.nextActionKey);
+    expect(reused.nextActionKey).toBeUndefined();
+  });
+
+  it("[FIX-W32-OTA AC3] hands no new key after 409 IDEMPOTENCY_KEY_REUSED and asks for a reload: the earlier request under the key may still be running", async () => {
+    signedIn("owner");
+    let calls = 0;
+    keyedRoute(REFUND, () => {
+      calls += 1;
+      // The first answer is a 504 (never kept under the key); the retry with the same values makes the refund (201,
+      // kept under the key).
+      return calls === 1
+        ? apiError("SUPPLIER_TIMEOUT", 504, {}, { "Retry-After": "60" })
+        : Response.json({ payment: {}, refund: { status: "pending" } }, { status: 201 });
+    });
+    const rendered = randomUUID();
+    const refundForm = (key: string, amount: string) =>
+      formOf({
+        paymentId: PAYMENT_ID,
+        bookingId: BOOKING_ID,
+        actionKey: key,
+        reason: "Goodwill after the schedule change",
+        refundReason: "goodwill",
+        amount,
+        currency: "EUR",
+      });
+
+    const timedOut = await refundPayment(INITIAL_ACTION_STATE, refundForm(rendered, "50.00"));
+    expect(timedOut).toMatchObject({ ok: false, code: "SUPPLIER_TIMEOUT" });
+    expect(timedOut.nextActionKey).toBeUndefined();
+    const kept = await refundPayment(timedOut, refundForm(rendered, "50.00"));
+    expect(kept).toEqual({ ok: true, message: "Refund of €50.00 requested: Stripe completes it." });
+    // Another tab of the same render, which saw only the 504, sends the key with another amount: the API refuses the
+    // key, which holds the refund made under it.
+    const reused = await refundPayment(timedOut, refundForm(rendered, "40.00"));
+
+    expect(reused).toMatchObject({
+      ok: false,
+      code: "IDEMPOTENCY_KEY_REUSED",
+      message:
+        "This form was already sent with other values, and that request may still be running. Reload the page to see what it did before you send it again.",
+    });
+    // No new key: a new one would send a second refund next to the one the key already made.
+    expect(reused.nextActionKey).toBeUndefined();
+    const again = actionKeyAfter(rendered, reused);
+    expect(again).toBe(rendered);
+    expect(await refundPayment(reused, refundForm(again, "40.00"))).toMatchObject({
+      ok: false,
+      code: "IDEMPOTENCY_KEY_REUSED",
+    });
+    expect(keysSent(REFUND)).toEqual([rendered, rendered, rendered, rendered]);
+    // One refund was made: the second request replayed the first one's kept answer.
+    expect(calls).toBe(2);
+  });
+
+  it("[FIX-W32-OTA AC3] hands no new key to any keyed action after 409 IDEMPOTENCY_KEY_REUSED, and still one after another stored 4xx", async () => {
+    signedIn("owner");
+    const keyed = new Set(["issueTickets", "cancelBooking", "addNote", "capturePayment", "refundPayment"]);
+    for (const submission of SUBMISSIONS.filter((entry) => keyed.has(entry.name))) {
+      api.on(submission.route, () => apiError("IDEMPOTENCY_KEY_REUSED", 409));
+      const state = await submission.run();
+      expect(state, submission.name).toMatchObject({ ok: false, code: "IDEMPOTENCY_KEY_REUSED" });
+      expect(state.message, submission.name).toMatch(/Reload the page/);
+      expect(state.nextActionKey, submission.name).toBeUndefined();
+    }
   });
 
   it("[FIX-W31-OTA AC2] a 503 then a resubmit sends the same key, which runs the request once", async () => {

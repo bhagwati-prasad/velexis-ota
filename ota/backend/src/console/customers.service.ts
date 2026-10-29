@@ -37,7 +37,10 @@ import { Money } from "../pricing/pricing.types";
 import { invalidCursor } from "../reference/reference.mapper";
 import { TenantContext } from "../tenancy/tenant-context";
 import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
-import { toConsoleBookingSummary } from "./console-bookings.mapper";
+import {
+  toConsoleBookingSummary,
+  withoutDeletedName as withoutDeletedRefName,
+} from "./console-bookings.mapper";
 import { ConsoleBookingsRepository } from "./console-bookings.repository";
 import { DEFAULT_CONSOLE_PAGE_LIMIT } from "./console-bookings.service";
 import {
@@ -257,11 +260,15 @@ export function toConsoleCustomerStats(
   };
 }
 
-/** A booking of a deleted account as the console shows it: its customer without a name (ConsoleCustomerRef). */
+/**
+ * A booking of a deleted account as the console shows it: its customer without a name (ConsoleCustomerRef,
+ * console-bookings.mapper.ts `withoutDeletedName`, which console.bookings.list and get apply from the customer's status
+ * since FIX-W32-OTA; kept here for the account console.customers.get reads).
+ */
 export function withoutDeletedName(summary: ConsoleBookingSummary): ConsoleBookingSummary {
   return summary.customer === null
     ? summary
-    : { ...summary, customer: { ...summary.customer, firstName: null, lastName: null } };
+    : { ...summary, customer: withoutDeletedRefName(summary.customer) };
 }
 
 @Injectable()

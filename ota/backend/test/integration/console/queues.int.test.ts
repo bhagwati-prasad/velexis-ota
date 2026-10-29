@@ -42,6 +42,7 @@ import { startAmadeusStub, type AmadeusStub } from "@velexis/testing/amadeus";
 import type { Job, Queue } from "bullmq";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { AmadeusClient } from "../../../src/amadeus/amadeus.client";
 import { newBookingReference } from "../../../src/bookings/booking-reference";
 import { buildCreateOrderRequest } from "../../../src/bookings/order-request.builder";
 import { newId } from "../../../src/common/ids";
@@ -74,6 +75,8 @@ const DAY = 24 * 60 * MINUTE;
 const SCHEMAS = { alpha: "tenant_alpha", beta: "tenant_beta" } as const satisfies Record<string, string>;
 /** How long a test waits at most for the worker to finish a job it added (they take milliseconds). */
 const JOB_WAIT = { timeout: 4000, interval: 20 } as const;
+/** The worker's log lines. */
+const workerSink = new MemorySink();
 /** The booking queue of the tenants (the provisioning seed's queue 50, category 0) and alpha's second queue. */
 const BOOKING_QUEUE = 50;
 const OTHER_QUEUE = 8;
@@ -473,7 +476,14 @@ beforeAll(async () => {
     clientId: `velexis-test-${randomBytes(4).toString("hex")}`,
     clientSecret: randomBytes(24).toString("base64url"),
   };
-  stub = await startAmadeusStub({ credentials: stubCredentials });
+  stub = await startAmadeusStub({
+    credentials: stubCredentials,
+    // The `timeout` scenario holds an answer for 100 ms, then gives up with its 504 (Amadeus's gateway), as after 30 s.
+    timers: {
+      setTimeout: (callback, ms) => setTimeout(callback, Math.min(ms, 100)),
+      clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout),
+    },
+  });
   const officeOf = (prefix: string): string => `${prefix}${randomBytes(2).toString("hex").toUpperCase()}`;
   offices.alpha = officeOf("NCE1A");
   offices.beta = officeOf("MAD1A");
@@ -497,7 +507,7 @@ beforeAll(async () => {
     REDIS_URL: redis.url,
   });
   @Module({
-    imports: [WorkerModule.forRoot(config, { logger: createWorkerLogger(config, new MemorySink()) })],
+    imports: [WorkerModule.forRoot(config, { logger: createWorkerLogger(config, workerSink) })],
   })
   class WorkerRootModule {}
   useNextApplicationLoggerOutsideRequests();
@@ -684,7 +694,7 @@ describe("the queue poller", () => {
       task: QUEUES_POLL_JOB,
       tenantId: tenants.alpha,
       outcome: "done",
-      counts: { queues: 2, snapshots: 2, alreadyPolled: 0, failed: 0, inactive: 0, invalid: 0 },
+      counts: { queues: 2, snapshots: 2, alreadyPolled: 0, failed: 0, skipped: 0, inactive: 0, invalid: 0 },
       continued: false,
     });
     expect(polled).toEqual([
@@ -806,6 +816,53 @@ describe("the queue poller", () => {
     expect(other.status).toBe(400);
     expectResponseToMatch("consoleListQueueSnapshots", other);
     expect(other.body.error.fieldErrors).toEqual([expect.objectContaining({ path: "/query/cursor" })]);
+  });
+
+  it("[FIX-W32-OTA AC6] asks a connection that timed out nothing more in the job: one call (and its retry), not one per queue", async () => {
+    // An iteration of its own, later than the others of the file, so neither of alpha's queues counts as polled.
+    const later = new Date(due.getTime() + 50 * MINUTE);
+    const client = worker.get(AmadeusClient, { strict: false });
+    const listQueue = client.listQueue.bind(client);
+    // Every Queue List read of the worker meets the stub's `timeout` scenario (its 504 after the hold).
+    const calls: number[] = [];
+    const spy = vi.spyOn(client, "listQueue").mockImplementation((context, request, options) => {
+      calls.push(request.queueId);
+      return listQueue({ ...context, stubScenario: "timeout" }, request, options);
+    });
+    stub.clearRequests();
+    const logged = workerSink.lines.length;
+    let outcome: TenantJobResult;
+    try {
+      outcome = await pollIteration(later);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(outcome).toMatchObject({
+      outcome: "done",
+      counts: { queues: 2, snapshots: 0, alreadyPolled: 0, failed: 1, skipped: 1 },
+    });
+    // One call of the client for the first queue (a read is sent once more after a 5xx), none for the second.
+    expect(calls).toEqual([BOOKING_QUEUE]);
+    const reads = queueReads(offices.alpha);
+    expect(reads.map((read) => [read.path, read.status])).toEqual([
+      [`/v1/office/queues/${BOOKING_QUEUE}`, 504],
+      [`/v1/office/queues/${BOOKING_QUEUE}`, 504],
+    ]);
+    // The skip is logged with its connection, code and count; the next iteration reads both queues again.
+    const lines = workerSink.lines.slice(logged).map((line) => JSON.parse(line) as JsonObject);
+    expect(lines.filter((line) => line["msg"] === "queues.poll_skipped")).toEqual([
+      expect.objectContaining({
+        tenantId: tenants.alpha,
+        environment: "test",
+        code: "SUPPLIER_TIMEOUT",
+        skipped: 1,
+      }),
+    ]);
+    stub.clearRequests();
+    const next = await pollIteration(new Date(later.getTime() + MINUTE));
+    expect(next).toMatchObject({ counts: { queues: 2, snapshots: 2, failed: 0, skipped: 0 } });
+    expect(queueReads(offices.alpha)).toHaveLength(2);
   });
 });
 

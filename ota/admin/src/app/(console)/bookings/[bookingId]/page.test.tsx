@@ -1826,6 +1826,38 @@ describe("/bookings/[bookingId] actions (OAD-008)", () => {
     expect(buttonsOf(payment)).toEqual([]);
   });
 
+  it("[FIX-W32-OTA AC7] offers no refund while the refunds still on their way to Stripe take what is left, as the API counts it", async () => {
+    staffOf("owner");
+    bookingAnswers(ticketedBooking());
+    const payment = stripePayment();
+    const inFlight = (id: string, amount: string, status: "pending" | "processing") => ({
+      ...(payment.refunds[0] as ConsolePayment["refunds"][number]),
+      id,
+      amount: eur(amount),
+      status,
+      processedAt: null,
+      providerRefundId: null,
+    });
+    // Captured 1,414.06, refunded 100.00, and 1,314.06 asked for but not finished at Stripe: nothing left to refund.
+    api.on(PAYMENT(STRIPE_PAYMENT_ID), () =>
+      Response.json({
+        ...payment,
+        refunds: [
+          ...payment.refunds,
+          inFlight("rfd_01JA6B2C4D6E8F0G2H4J6K8M1P", "1300.00", "pending"),
+          inFlight("rfd_01JA6B2C4D6E8F0G2H4J6K8M2Q", "14.06", "processing"),
+        ],
+      }),
+    );
+
+    const page = await renderTab(BOOKING_ID, "payments");
+
+    const card = within(region(page, "Payments")).getByRole("article", {
+      name: `Payment ${STRIPE_PAYMENT_ID}`,
+    });
+    expect(buttonsOf(card)).toEqual([]);
+  });
+
   it("offers a capture of an authorised Stripe payment to a role with payments:capture", async () => {
     staffOf("finance");
     const [summary] = ticketedBooking().payments;

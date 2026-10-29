@@ -23,9 +23,10 @@ export interface ActionState {
   readonly fieldErrors?: FieldErrors;
   /**
    * A new idempotency key for the form's next submission (`crypto.randomUUID()` of the server action), after a failure
-   * that used up the key the form sent: the API stored its final answer under that key, or refused the key as another
-   * request's (`withNextActionKey`). Absent: the next submission sends the same key again, so a retry replays the
-   * first request or waits for it (OADR-0018 point 5, revision of 2026-10-27, FIX-W31-OTA). Not shown.
+   * that used up the key the form sent: the API stored its final answer under that key (`withNextActionKey`). Absent:
+   * the next submission sends the same key again, so a retry replays the first request or waits for it (OADR-0018
+   * point 5, revisions of 2026-10-27, FIX-W31-OTA, and 2026-10-28, FIX-W32-OTA: none after `409
+   * IDEMPOTENCY_KEY_REUSED`, whose message asks for a reload). Not shown.
    */
   readonly nextActionKey?: string;
 }
@@ -47,16 +48,20 @@ export interface KeyedCallFailure {
  * Whether a form sends the same idempotency key again after its call failed with `failure` (OADR-0018 point 5,
  * revision of 2026-10-27, FIX-W31-OTA, lead decision (1) of 2026-10-27). The OTA API stores a final `4xx` under the key
  * for 24 hours (`idempotency.service.ts` `outcomeDisposition`), so a corrected resubmission with that key would only
- * get `409 IDEMPOTENCY_KEY_REUSED`: after one, and after `409 IDEMPOTENCY_KEY_REUSED` itself, the form needs a new
- * key. It keeps the key after `412 PRECONDITION_FAILED` (the page is out of date: a reload renders a new one), after
- * the API's transient answers that it never stores (`429`, `409 CONFLICT` with `details.reason =
- * idempotency_key_in_use`: the first request with the key still runs), after `503`, `504` and every other `5xx`, and
- * after a timeout or a network error (`status` 0): a retry then replays the first request's answer, waits for it, or
- * runs it once.
+ * get `409 IDEMPOTENCY_KEY_REUSED`: after one, the form needs a new key. It keeps the key after `412
+ * PRECONDITION_FAILED` (the page is out of date: a reload renders a new one), after the API's transient answers that
+ * it never stores (`429`, `409 CONFLICT` with `details.reason = idempotency_key_in_use`: the first request with the
+ * key still runs), after `503`, `504` and every other `5xx`, and after a timeout or a network error (`status` 0): a
+ * retry then replays the first request's answer, waits for it, or runs it once.
+ *
+ * Revision of 2026-10-28 (FIX-W32-OTA, lead decision (1d)): it keeps the key after `409 IDEMPOTENCY_KEY_REUSED` too.
+ * The key was sent before with other values, by a request whose answer this form never saw (a timeout, a `5xx`, another
+ * tab): that request may still be running, or may have refunded or captured, so a new key could do it twice. The
+ * message asks staff to reload the page (lib/errors.ts), whose new render shows what happened and brings a new key.
  */
 export function keepsActionKey(failure: KeyedCallFailure): boolean {
   if (failure.code === "IDEMPOTENCY_KEY_REUSED") {
-    return false;
+    return true;
   }
   if (failure.status < 400 || failure.status >= 500) {
     return true;

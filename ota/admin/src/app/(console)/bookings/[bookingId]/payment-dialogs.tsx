@@ -132,8 +132,8 @@ export function CaptureDialog({
 
 export interface RefundDialogProps extends PaymentDialogBase {
   /**
-   * What is still refundable: captured less refunded (action-rules.ts `refundableOf`) on the booking page; on the
-   * payment's own page also less the refunds still on their way to Stripe, as the API counts it.
+   * What is still refundable: captured less refunded less the refunds still on their way to Stripe, as the API counts
+   * it (action-rules.ts `refundableOf`), on the booking page and on the payment's own page (FIX-W32-OTA).
    */
   readonly refundable: MoneyValue;
 }

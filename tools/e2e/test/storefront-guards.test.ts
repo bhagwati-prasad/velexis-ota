@@ -12,6 +12,7 @@ import {
   GUARD_INIT_SCRIPT,
   isCardPage,
   isThirdPartyRequest,
+  STRIPE_JS_COOKIES,
   StorefrontGuards,
   unexpectedCookieNames,
   withoutQuery,
@@ -74,6 +75,24 @@ describe("unexpectedCookieNames", () => {
     expect(unexpectedCookieNames([CSRF_COOKIE])).toEqual([]);
     expect(unexpectedCookieNames([])).toEqual([]);
     expect(unexpectedCookieNames([CSRF_COOKIE, " vx_at", "", "_ga", "_ga"])).toEqual(["vx_at", "_ga"]);
+  });
+
+  it("[FIX-W32-OTA AC9] lets exactly the names it is given through besides the CSRF cookie, never others", () => {
+    expect(STRIPE_JS_COOKIES).toEqual(["__stripe_mid", "__stripe_sid"]);
+    expect(unexpectedCookieNames([CSRF_COOKIE, "__stripe_mid", "__stripe_sid"], STRIPE_JS_COOKIES)).toEqual(
+      [],
+    );
+    expect(
+      unexpectedCookieNames(
+        ["__stripe_mid", "__stripe_orig_props", "__stripe_sid_x", "__Host-vx_at", "_ga"],
+        STRIPE_JS_COOKIES,
+      ),
+    ).toEqual(["__stripe_orig_props", "__stripe_sid_x", "__Host-vx_at", "_ga"]);
+    // Without the allowance (every journey but the storefront-stripe ones): Stripe's cookies are refused like any.
+    expect(unexpectedCookieNames([CSRF_COOKIE, "__stripe_mid", "__stripe_sid"])).toEqual([
+      "__stripe_mid",
+      "__stripe_sid",
+    ]);
   });
 });
 
@@ -248,6 +267,65 @@ describe("StorefrontGuards", () => {
     installed.binding?.({}, { kind: "cookies", names: [CSRF_COOKIE, "vx_session"], document: HOME });
     installed.binding?.({}, { kind: "cookies", names: [CSRF_COOKIE, "vx_session"], document: HOME });
     expect(guards.problems).toEqual([{ kind: "cookie", names: ["vx_session"], document: HOME }]);
+  });
+
+  it("[FIX-W32-OTA AC9] allows the Stripe.js cookies in a storefront-stripe journey from the card page on, and nothing more", async () => {
+    const stripeCookies = ["__stripe_mid", "__stripe_sid"];
+    const confirmation = `${STOREFRONT_URL}/confirmation.html?booking=bkg_1`;
+    const { context, installed } = fakeContext([
+      { name: CSRF_COOKIE, httpOnly: false },
+      { name: "__stripe_mid", httpOnly: false },
+      { name: "__stripe_sid", httpOnly: false },
+    ]);
+    const guards = await StorefrontGuards.install(context, { stripeJourney: true });
+    expect(guards.allowedCookies).toEqual([]);
+    // Before the card page: the Stripe.js cookies are not the storefront's (Stripe.js runs on the card page only).
+    installed.binding?.({}, { kind: "cookies", names: [CSRF_COOKIE, ...stripeCookies], document: HOME });
+    expect(guards.forget()).toEqual([{ kind: "cookie", names: stripeCookies, document: HOME }]);
+
+    // The card page (its document, or a request it makes), and every page after it in the context.
+    installed.onRequest?.(fakeRequest("https://js.stripe.com/v3/", CARD_PAGE));
+    expect(guards.allowedCookies).toEqual(STRIPE_JS_COOKIES);
+    installed.binding?.({}, { kind: "cookies", names: [CSRF_COOKIE, ...stripeCookies], document: CARD_PAGE });
+    installed.binding?.(
+      {},
+      { kind: "cookies", names: [CSRF_COOKIE, ...stripeCookies], document: confirmation },
+    );
+    await guards.finish(closedPage);
+    expect(guards.problems).toEqual([]);
+
+    // Never another name, even after the card page.
+    installed.binding?.(
+      {},
+      { kind: "cookies", names: [...stripeCookies, "__stripe_orig_props", "_ga"], document: confirmation },
+    );
+    expect(guards.forget()).toEqual([
+      {
+        kind: "cookie",
+        names: ["__stripe_orig_props", "_ga"],
+        document: `${STOREFRONT_URL}/confirmation.html`,
+      },
+    ]);
+  });
+
+  it("[FIX-W32-OTA AC9] refuses the Stripe.js cookies in any other journey, even on the card page, and at the end", async () => {
+    const { context, installed } = fakeContext([{ name: "__stripe_mid", httpOnly: false }]);
+    const guards = await StorefrontGuards.install(context);
+    installed.onRequest?.(fakeRequest("https://js.stripe.com/v3/", CARD_PAGE));
+    installed.binding?.({}, { kind: "cookies", names: [CSRF_COOKIE, "__stripe_sid"], document: CARD_PAGE });
+    expect(guards.allowedCookies).toEqual([]);
+    await expect(guards.finish(closedPage)).rejects.toThrow(
+      /cookie readable by JavaScript other than __Host-vx_csrf: __stripe_sid on .*\n.*__stripe_mid on context/s,
+    );
+  });
+
+  it("[FIX-W32-OTA AC9] refuses the Stripe.js cookies of a storefront-stripe journey's context that never showed the card page", async () => {
+    const { context } = fakeContext([
+      { name: CSRF_COOKIE, httpOnly: false },
+      { name: "__stripe_mid", httpOnly: false },
+    ]);
+    const guards = await StorefrontGuards.install(context, { stripeJourney: true });
+    await expect(guards.finish(closedPage)).rejects.toThrow(/__stripe_mid on context/);
   });
 
   it("checks the context's cookies at the end: httpOnly ones are allowed, readable ones only the CSRF cookie [OFE-008 AC2]", async () => {

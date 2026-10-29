@@ -25,8 +25,10 @@
 //   1. Checks without a lock (T0), so that a stale request costs no Amadeus call: `409 BOOKING_ALREADY_CANCELLED`,
 //      `412 PRECONDITION_FAILED` (`details.currentVersion`), `403 FEATURE_DISABLED` (`details.feature =
 //      "selfServiceCancellation"`) when the storefront has self-service cancellation off, `409 BOOKING_NOT_MODIFIABLE`
-//      (`details.reason = "pending"`) while an earlier cancellation is undecided (a DELETE without an answer, below) or
-//      a cancellation request waits for the staff, and `409 BOOKING_NOT_MODIFIABLE` (`details.reason =
+//      (`details.reason = "pending"`) while an earlier cancellation is undecided (a DELETE without an answer, below), a
+//      cancellation request waits for the staff, or another cancellation's claim is fresh (its DELETE in flight:
+//      `bookings.cancellation_claimed_at` younger than 5 minutes, `refuseWhileClaimed`; FIX-W32-OTA, lead decision (1b)
+//      of 2026-10-28), and `409 BOOKING_NOT_MODIFIABLE` (`details.reason =
 //      "ticketing_in_progress"`, the staff cancellation's refusal: `ticketingInProgress`) while the ticketing job or a
 //      staff issuance holds a fresh ticketing claim (OADR-0014 point 6; FIX-W30-OTA, lead decision (1) of 2026-10-26).
 //   2. The quote: the cached one when it was made for the booking's current `version` and is still valid (a void
@@ -48,10 +50,15 @@
 //      `bookings.cancellation_claimed_at` (`CancellationRepository.claim`), which every outcome step clears: the record
 //      of the cancellation (`markCancelled`), of a request (`bumpVersion`), the flag of an unknown outcome (whose
 //      `undecided` state holds from then on) and the release of a DELETE that applied nothing (Amadeus's 2552, a request
-//      that never reached it, the staff cancellation's refusal: `releaseClaim`, this claim's marker only). From T1's
-//      commit until then the ticketing job skips the booking (`cancellation_pending`) and console.bookings.issue refuses
-//      it (cancellation-state.ts `cancellationHoldOf`), so no Flight Order Issue goes to an order being deleted; a
-//      marker 5 minutes old (a request that stopped mid-DELETE) holds nothing back.
+//      that never reached it, the staff cancellation's refusal: `releaseClaim`). Since FIX-W32-OTA (lead decision (1b)
+//      of 2026-10-28) each of them clears its own claim's marker only (the value its T1 wrote: `ownClaimCleared`,
+//      `releaseClaim`), so an outcome never ends another claim's hold, and a request with the ETag T1 left (another
+//      tab that reloaded the booking) is refused while the marker is fresh (step 1's `pending`, checked again under
+//      the lock), so no second DELETE is sent. From T1's
+//      commit until then the ticketing job skips the booking (`cancellation_pending`), console.bookings.issue refuses
+//      it and checkout.complete's own issuance leaves it to the job (cancellation-state.ts `cancellationHoldOf`), so no
+//      Flight Order Issue goes to an order being deleted; a marker 5 minutes old (a request that stopped mid-DELETE)
+//      holds nothing back.
 //   4. `release` and `void`: Flight Order Management DELETE with no transaction open (OADR-0003 point 1):
 //      - `204`: the record step (T2, `CancellationRecorder.recordCancelled`) and the money step in the same
 //        transaction, then `200`; a T2 that fails (the order is gone, nothing was recorded) is answered and decided like
@@ -151,8 +158,9 @@
 // flow console-operations.md §2 "Cancel", change-and-cancel.md §3 step 6): the same claim, DELETE, record step, money
 // step, unknown outcome and worker's check, with what the staff decide instead of the quote. No self-service window and
 // no quote: the checks are the booking of the environment, `409 BOOKING_ALREADY_CANCELLED`, `412`, an Amadeus order
-// (`409 BOOKING_NOT_MODIFIABLE`), no undecided cancellation (`details.reason = "pending"`; a customer's request waiting
-// for the staff is what the staff finish here), no fresh ticketing claim of a staff issuance or of the ticketing job
+// (`409 BOOKING_NOT_MODIFIABLE`), no undecided cancellation and no other cancellation's fresh claim (`details.reason =
+// "pending"`, the latter since FIX-W32-OTA; a customer's request waiting for the staff is what the staff finish here),
+// no fresh ticketing claim of a staff issuance or of the ticketing job
 // (`details.reason = "ticketing_in_progress"`: its capture would race the money step; `ticketingInProgress`, which
 // bookings.cancel answers too since FIX-W30-OTA) and no segment departed (`details.reason = "flown"`, after the GET
 // that refreshes the order and its ticket states through the customer refresh, without its throttle; the departure
@@ -278,6 +286,7 @@ import {
 } from "./cancellation-mode";
 import {
   CANCELLATION_EVENTS,
+  cancellationClaimFresh,
   cancellationEventsOf,
   cancellationStateOf,
   cancelledEventOf,
@@ -721,6 +730,20 @@ export function quoteValid(cached: CachedQuote, version: number, now: Date): boo
 // ---- The repository -------------------------------------------------------------------------------------------------
 
 /**
+ * The `cancellation_claimed_at` change of an outcome step (FIX-W32-OTA, lead decision (1b) of 2026-10-28): it clears the
+ * marker of its own claim (`claimedAt`, the value its T1 wrote) and leaves any other claim's, as `releaseClaim` does;
+ * without a claim of its own (`null`) it changes nothing.
+ */
+function ownClaimCleared(claimedAt: Date | null) {
+  return claimedAt === null
+    ? {}
+    : {
+        cancellation_claimed_at: sql<Date | null>`case when cancellation_claimed_at = ${claimedAt} then null
+          else cancellation_claimed_at end`,
+      };
+}
+
+/**
  * The storefront settings a cancellation reads. No alert address: StaffRecipients chooses the recipients of a staff
  * alert (notifications/staff-recipients.ts, OADR-0013).
  */
@@ -807,6 +830,8 @@ export class CancellationRepository {
       readonly cancelledBy: "customer" | "staff";
       readonly cancelReason: string;
       readonly now: Date;
+      /** The claim whose outcome this is (`ownClaimCleared`); `null` for the worker's check, whose flag ended it. */
+      readonly claimedAt: Date | null;
     },
   ): Promise<void> {
     await trx
@@ -819,8 +844,8 @@ export class CancellationRepository {
         ticketing_status: sql<string>`case when ticketing_status in ('pending', 'in_progress', 'failed',
           'manual_review') then 'not_applicable' else ticketing_status end`,
         ticketing_next_attempt_at: null,
-        // The outcome of the cancellation's claim (FIX-W31-OTA): recorded.
-        cancellation_claimed_at: null,
+        // The outcome of the cancellation's claim (FIX-W31-OTA): recorded; its own marker only (FIX-W32-OTA).
+        ...ownClaimCleared(values.claimedAt),
         updated_at: values.now,
         version: sql`version + 1`,
       })
@@ -864,11 +889,20 @@ export class CancellationRepository {
       .execute();
   }
 
-  /** `version + 1` (the record of a request, an outcome: the cancellation's claim, if any, ends with it). */
-  async bumpVersion(trx: TenantTransaction, bookingId: string, now: Date): Promise<void> {
+  /**
+   * `version + 1` (the record of a request, an outcome: the cancellation's claim ends with it). `claimedAt` is the claim
+   * whose outcome this is (its own marker only, FIX-W32-OTA: `ownClaimCleared`); `null` for a request recorded by the
+   * claim's own transaction (`request_only`), which wrote no marker.
+   */
+  async bumpVersion(
+    trx: TenantTransaction,
+    bookingId: string,
+    now: Date,
+    claimedAt: Date | null,
+  ): Promise<void> {
     await trx
       .updateTable("bookings")
-      .set({ updated_at: now, version: sql`version + 1`, cancellation_claimed_at: null })
+      .set({ updated_at: now, version: sql`version + 1`, ...ownClaimCleared(claimedAt) })
       .where("id", "=", bookingId)
       .execute();
   }
@@ -876,19 +910,30 @@ export class CancellationRepository {
   /**
    * Ends a cancellation's claim without another change (FIX-W31-OTA): the flag of a DELETE without an answer (whose
    * `undecided` state holds the ticketing claims from then on), or a DELETE that applied nothing (Amadeus's 2552, a
-   * request that never reached it, a refusal of the airline that the staff's cancellation answers). With `claimedAt`,
-   * only that claim (a later claim's marker stays). `version` and `updated_at` stay as they are.
+   * request that never reached it, a refusal of the airline that the staff's cancellation answers). Only the claim of
+   * `claimedAt` (a later claim's marker stays: FIX-W32-OTA, lead decision (1b) of 2026-10-28, every outcome step).
+   * `version` and `updated_at` stay as they are.
    */
-  async releaseClaim(trx: TenantTransaction, bookingId: string, claimedAt?: Date): Promise<void> {
-    let update = trx
+  async releaseClaim(trx: TenantTransaction, bookingId: string, claimedAt: Date): Promise<void> {
+    await trx
       .updateTable("bookings")
       .set({ cancellation_claimed_at: null })
       .where("id", "=", bookingId)
-      .where("cancellation_claimed_at", "is not", null);
-    if (claimedAt !== undefined) {
-      update = update.where("cancellation_claimed_at", "=", claimedAt);
-    }
-    await update.execute();
+      .where("cancellation_claimed_at", "=", claimedAt)
+      .execute();
+  }
+
+  /**
+   * `bookings.cancellation_claimed_at` of the booking (a cancellation's claim whose outcome is not recorded yet), or
+   * `null`; read in a statement after the caller's lock in T1, so it holds what another cancellation's T1 committed.
+   */
+  async cancellationClaimedAt(trx: TenantTransaction, bookingId: string): Promise<Date | null> {
+    const row = await trx
+      .selectFrom("bookings")
+      .select("cancellation_claimed_at as claimedAt")
+      .where("id", "=", bookingId)
+      .executeTakeFirst();
+    return row?.claimedAt ?? null;
   }
 }
 
@@ -1153,7 +1198,8 @@ export class CancellationRecorder {
   /**
    * The record step and the money step (see the file header), in `trx`, whose caller locked the booking `FOR NO KEY
    * UPDATE` and found it live. `via` says what proved the cancellation (the DELETE's `204`, the worker's read, or, for
-   * a staff cancellation, an order Amadeus no longer has).
+   * a staff cancellation, an order Amadeus no longer has), and which claim's outcome it is (`claimedAt`: its marker is
+   * cleared, and only it, FIX-W32-OTA; `null` for the worker's check, whose flag ended the claim).
    */
   async recordCancelled(
     trx: TenantTransaction,
@@ -1163,6 +1209,7 @@ export class CancellationRecorder {
     via: {
       readonly cause: "deleted" | "checked" | "order_not_found";
       readonly supplierRequestId: string | null;
+      readonly claimedAt: Date | null;
     },
   ): Promise<RecordedCancellation> {
     const now = this.clock.now();
@@ -1171,6 +1218,10 @@ export class CancellationRecorder {
       throw new AppError("NOT_FOUND");
     }
     if (!LIVE_STATUSES.has(booking.status)) {
+      // Someone else cancelled it meanwhile: this claim's outcome all the same, its marker ends here.
+      if (via.claimedAt !== null) {
+        await this.repository.releaseClaim(trx, bookingId, via.claimedAt);
+      }
       return { kind: "not_live", status: booking.status };
     }
     const children = await this.bookings.children(trx, bookingId);
@@ -1179,6 +1230,7 @@ export class CancellationRecorder {
       cancelledBy,
       cancelReason: cancelReasonOf(ask),
       now,
+      claimedAt: via.claimedAt,
     });
     const voided = await this.repository.cancelChildren(trx, bookingId, now);
     const money = await this.moneyStep(
@@ -1416,6 +1468,8 @@ export class CancellationRecorder {
   /**
    * A cancellation handed to the staff (`request_only`, a refusal, an order Amadeus no longer has), in `trx`, whose
    * caller locked the booking and found it live: `version + 1`, the event, the traveller's e-mail and the staff alert.
+   * `claimedAt` is the claim whose outcome this is (its marker is cleared, and only it, FIX-W32-OTA); `null` for a
+   * `request_only` request, which T1 records itself without a claim.
    */
   async recordRequest(
     trx: TenantTransaction,
@@ -1424,10 +1478,11 @@ export class CancellationRecorder {
     ask: CancellationAsk,
     cause: "request_only" | "refused" | "order_not_found",
     supplierCode: string | null,
+    claimedAt: Date | null,
   ): Promise<void> {
     const now = this.clock.now();
     const children = await this.bookings.children(trx, booking.id);
-    await this.repository.bumpVersion(trx, booking.id, now);
+    await this.repository.bumpVersion(trx, booking.id, now, claimedAt);
     await this.recorder.event(trx, booking.id, {
       type: CANCELLATION_EVENTS.requested,
       actor: eventActorOf(ask.actor),
@@ -1466,13 +1521,17 @@ export class CancellationRecorder {
     this.logger.info({ bookingId: booking.id, mode: ask.mode, cause }, "bookings.cancellation_requested");
   }
 
-  /** The flag of a DELETE without an answer (the staff event the worker decides), in the caller's transaction. */
+  /**
+   * The flag of a DELETE without an answer (the staff event the worker decides), in the caller's transaction; the claim
+   * of `claimedAt` ends with it (its marker only, FIX-W32-OTA).
+   */
   async recordUnknownOutcome(
     trx: TenantTransaction,
     tenant: CancellationTenant,
     booking: BookingRow,
     ask: CancellationAsk,
     reason: string,
+    claimedAt: Date,
   ): Promise<Date> {
     const now = this.clock.now();
     const until = new Date(now.getTime() + CANCELLATION_CHECK_WINDOW_MS);
@@ -1501,8 +1560,9 @@ export class CancellationRecorder {
       now,
     });
     // The claim ends with its flag: the flag's `undecided` state holds the ticketing claims from here until the
-    // worker decides (FIX-W31-OTA), in the same transaction, so there is no moment without either.
-    await this.repository.releaseClaim(trx, booking.id);
+    // worker decides (FIX-W31-OTA), in the same transaction, so there is no moment without either. Its own marker only
+    // (FIX-W32-OTA): another claim's stays.
+    await this.repository.releaseClaim(trx, booking.id, claimedAt);
     return until;
   }
 
@@ -2242,7 +2302,7 @@ export class CancellationService {
     const claim = await this.tx.run(async (trx): Promise<Claim> => {
       const booking = await this.check(trx, tenant, bookingId, ifMatch, cached.version);
       if (ask.mode === "request_only") {
-        await this.recorder.recordRequest(trx, ctenant, booking.row, ask, "request_only", null);
+        await this.recorder.recordRequest(trx, ctenant, booking.row, ask, "request_only", null, null);
         return { kind: "requested", booking: booking.row };
       }
       const orderId = booking.row.amadeusOrderId;
@@ -2268,14 +2328,14 @@ export class CancellationService {
     }
     switch (outcome.kind) {
       case "cancelled":
-        return await this.recordDeleted(ctenant, bookingId, ask, outcome.supplierRequestId);
+        return await this.recordDeleted(ctenant, bookingId, ask, outcome.supplierRequestId, claim.claimedAt);
       case "order_not_found":
       case "refused": {
         const cause = outcome.kind;
         const supplierCode = outcome.kind === "refused" ? outcome.code : null;
         await this.tx.run(async (trx) => {
           const booking = await this.lockedLive(trx, bookingId);
-          await this.recorder.recordRequest(trx, ctenant, booking, ask, cause, supplierCode);
+          await this.recorder.recordRequest(trx, ctenant, booking, ask, cause, supplierCode, claim.claimedAt);
         });
         this.logger.info({ bookingId, cause }, "bookings.cancel_converted_to_request");
         return await this.answer(bookingId, 202, this.pendingCancellation(bookingId, ask, quote));
@@ -2293,6 +2353,7 @@ export class CancellationService {
           ask,
           isAppError(outcome.error) ? outcome.error.code : "UNKNOWN",
           outcome.error,
+          claim.claimedAt,
         );
     }
   }
@@ -2309,11 +2370,12 @@ export class CancellationService {
     ask: CancellationAsk,
     reason: string,
     cause: unknown,
+    claimedAt: Date,
   ): Promise<AppError> {
     try {
       await this.tx.run(async (trx) => {
         const booking = await this.lockedLive(trx, bookingId);
-        const until = await this.recorder.recordUnknownOutcome(trx, tenant, booking, ask, reason);
+        const until = await this.recorder.recordUnknownOutcome(trx, tenant, booking, ask, reason, claimedAt);
         const job = cancellationCheckJob(tenant.tenantId, bookingId, until.getTime(), 1);
         afterCommit(trx, () => this.recorder.enqueue(this.bookingsQueue, job.name, job.data, job.opts));
       });
@@ -2372,6 +2434,9 @@ export class CancellationService {
     if (state.kind === "undecided" || state.kind === "requested") {
       throw cancellationPending();
     }
+    // Another cancellation's DELETE in flight (FIX-W32-OTA, lead decision (1b) of 2026-10-28): its T1 bumped the
+    // version, so a request with the new ETag would claim again and send a second DELETE.
+    await this.refuseWhileClaimed(trx, bookingId);
     // An issuance in progress (FIX-W30-OTA): the staff cancellation's check. Before the quote (no Amadeus call for a
     // request refused anyway) and again under the claim's lock, which a ticketing claim also takes: the claim never
     // passes while an issuance holds a fresh claim, so no DELETE races it.
@@ -2392,6 +2457,20 @@ export class CancellationService {
     const ticketing = await this.repository.ticketingClaim(trx, bookingId);
     if (ticketing !== undefined && ticketingClaimFresh(ticketing, this.clock.now())) {
       throw ticketingInProgress();
+    }
+  }
+
+  /**
+   * `409 BOOKING_NOT_MODIFIABLE` (`pending`, the answer of an undecided cancellation) while another cancellation's claim
+   * is fresh (`bookings.cancellation_claimed_at`, FIX-W32-OTA, lead decision (1b) of 2026-10-28): its DELETE is in
+   * flight and its outcome not recorded. The check of every cancellation, the customer's and the staff's, in T0 and
+   * again in T1 under the booking's lock (read in a statement after it). A claim older than CANCELLATION_CLAIM_TTL_MS
+   * (a request that stopped mid-DELETE) holds nothing back, as for the ticketing claims.
+   */
+  private async refuseWhileClaimed(trx: TenantTransaction, bookingId: string): Promise<void> {
+    const claimedAt = await this.repository.cancellationClaimedAt(trx, bookingId);
+    if (cancellationClaimFresh(claimedAt, this.clock.now())) {
+      throw cancellationPending();
     }
   }
 
@@ -2419,6 +2498,7 @@ export class CancellationService {
     bookingId: string,
     ask: CancellationAsk,
     supplierRequestId: string | null,
+    claimedAt: Date,
   ): Promise<CancelAnswer> {
     let recorded: RecordedCancellation;
     try {
@@ -2429,6 +2509,7 @@ export class CancellationService {
         return await this.recorder.recordCancelled(trx, tenant, bookingId, ask, {
           cause: "deleted",
           supplierRequestId,
+          claimedAt,
         });
       });
     } catch (error) {
@@ -2440,7 +2521,7 @@ export class CancellationService {
       // order gone and records the cancellation with its money step, once; never a `500` the client would retry with
       // a stale `If-Match`.
       this.logger.error({ bookingId, err: error }, "bookings.cancel_record_failed");
-      throw await this.unknownOutcome(tenant, bookingId, ask, "record_failed", error);
+      throw await this.unknownOutcome(tenant, bookingId, ask, "record_failed", error, claimedAt);
     }
     if (recorded.kind === "not_live") {
       throw new AppError("BOOKING_ALREADY_CANCELLED");
@@ -2505,6 +2586,7 @@ export class CancellationService {
         await this.recordStaffCancelled(ctenant, bookingId, claim.ask, before, {
           cause,
           supplierRequestId: outcome.kind === "cancelled" ? outcome.supplierRequestId : null,
+          claimedAt: claim.claimedAt,
           audit,
         });
         return { orderNotFound: cause === "order_not_found" };
@@ -2527,6 +2609,7 @@ export class CancellationService {
           claim.ask,
           isAppError(outcome.error) ? outcome.error.code : "UNKNOWN",
           outcome.error,
+          claim.claimedAt,
         );
     }
   }
@@ -2572,6 +2655,8 @@ export class CancellationService {
     if (state.kind === "undecided") {
       throw cancellationPending();
     }
+    // Another cancellation's DELETE in flight, the customer's or the staff's (FIX-W32-OTA): never a second DELETE.
+    await this.refuseWhileClaimed(trx, bookingId);
     // A staff issuance or the ticketing job holds a fresh claim (OBE-044): its capture and Flight Order Issue would race
     // the DELETE and the money step (an authorisation captured while it is voided), so the staff wait for its outcome.
     await this.refuseWhileIssuing(trx, bookingId);
@@ -2636,6 +2721,8 @@ export class CancellationService {
     via: {
       readonly cause: StaffCancelRecord["cause"];
       readonly supplierRequestId: string | null;
+      /** The claim whose outcome this is. */
+      readonly claimedAt: Date;
       readonly audit: (trx: TenantTransaction, record: StaffCancelRecord) => Promise<void>;
     },
   ): Promise<void> {
@@ -2648,6 +2735,7 @@ export class CancellationService {
         const result = await this.recorder.recordCancelled(trx, tenant, bookingId, ask, {
           cause: via.cause,
           supplierRequestId: via.supplierRequestId,
+          claimedAt: via.claimedAt,
         });
         if (result.kind === "cancelled") {
           await via.audit(trx, {
@@ -2665,7 +2753,7 @@ export class CancellationService {
         throw error;
       }
       this.logger.error({ bookingId, err: error }, "bookings.staff_cancel_record_failed");
-      throw await this.unknownOutcome(tenant, bookingId, ask, "record_failed", error);
+      throw await this.unknownOutcome(tenant, bookingId, ask, "record_failed", error, via.claimedAt);
     }
     if (recorded.kind === "not_live") {
       throw new AppError("BOOKING_ALREADY_CANCELLED");
@@ -3126,6 +3214,8 @@ export class CancellationChecks {
       return await this.recorder.recordCancelled(trx, ctenant, bookingId, ask, {
         cause: "checked",
         supplierRequestId: order.supplierRequestId,
+        // The flag ended the claim of its request (FIX-W31-OTA): no marker of the check's own to clear.
+        claimedAt: null,
       });
     });
     if (recorded?.kind === "cancelled") {

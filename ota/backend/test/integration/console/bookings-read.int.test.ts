@@ -37,6 +37,8 @@ import {
 import { startAmadeusStub, type AmadeusStub } from "@velexis/testing/amadeus";
 import request, { type Response } from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { AccountRepository } from "../../../src/account/account.repository";
+import { DELETED_ADDRESS_KEY_BYTES, deletedAddress } from "../../../src/account/account.service";
 import { newBookingReference } from "../../../src/bookings/booking-reference";
 import { orderSegmentsOf } from "../../../src/bookings/order-diff";
 import { buildCreateOrderRequest } from "../../../src/bookings/order-request.builder";
@@ -1080,6 +1082,68 @@ describe("console.bookings.list: filters, sorts and pages", () => {
     expect(customerKey.body.error.details).toEqual({ requiredScope: "console:automation" });
     expectResponseToMatch("consoleListBookings", customerKey);
     expect(answer(anonymous)[0]).toBe(401);
+  });
+});
+
+describe("console.bookings.list and get of a deleted customer's booking (FIX-W32-OTA)", () => {
+  it("[FIX-W32-OTA AC5] shows the customer of a deleted account without its kept names, in the list and in the detail", async () => {
+    const agent = await staffSession(alphaId, "agent");
+    const tag = `deleted-${randomBytes(3).toString("hex")}`;
+    // A customer whose names are found nowhere else in the answer (the traveller is TESTA SAMPLE).
+    const kept = { firstName: "Gunnhild", lastName: "Vestergaard" };
+    const customerId = newId("cus");
+    const email = `${customerId.toLowerCase()}@example.com`;
+    await inTenant("tenant_alpha", (trx) =>
+      trx
+        .insertInto("customers")
+        .values({
+          id: customerId,
+          email,
+          email_verified_at: new Date(),
+          first_name: kept.firstName,
+          last_name: kept.lastName,
+        })
+        .execute(),
+    );
+    const bookingId = await seedBooking({ tags: [tag], customerId });
+    // account.delete as its repository writes it: the placeholder address; the names are kept until the erasure job.
+    await inTenant("tenant_alpha", (trx) =>
+      new AccountRepository().markDeleted(trx, {
+        customerId,
+        placeholder: deletedAddress(email, randomBytes(DELETED_ADDRESS_KEY_BYTES)),
+        now: new Date(),
+      }),
+    );
+    const stored = await inTenant("tenant_alpha", (trx) =>
+      trx
+        .selectFrom("customers")
+        .select(["status", "first_name", "last_name"])
+        .where("id", "=", customerId)
+        .executeTakeFirstOrThrow(),
+    );
+    expect(stored).toEqual({ status: "deleted", first_name: kept.firstName, last_name: kept.lastName });
+
+    const listed = await agent.get(`/v1/console/bookings?tag=${tag}`);
+    const got = await agent.get(`/v1/console/bookings/${bookingId}`);
+
+    expect(answer(listed)).toEqual([200, undefined]);
+    expectResponseToMatch("consoleListBookings", listed);
+    expect(answer(got)).toEqual([200, undefined]);
+    expectResponseToMatch("consoleGetBooking", got);
+    const placeholder = /^[0-9a-f]{64}@deleted\.invalid$/;
+    for (const customer of [(listed.body as PageBody).data[0]?.["customer"], got.body.customer]) {
+      expect(customer).toEqual({
+        id: customerId,
+        email: expect.stringMatching(placeholder) as unknown,
+        firstName: null,
+        lastName: null,
+      });
+    }
+    for (const res of [listed, got]) {
+      for (const value of [kept.firstName, kept.lastName, email]) {
+        expect(res.text).not.toContain(value);
+      }
+    }
   });
 });
 

@@ -100,6 +100,8 @@ export interface ConsoleBookingListRow {
   readonly customerEmail: string | null;
   readonly customerFirstName: string | null;
   readonly customerLastName: string | null;
+  /** `customers.status` (`deleted`: its names are not shown, FIX-W32-OTA), `null` for a guest booking. */
+  readonly customerStatus: string | null;
   /** `FIRST LAST` of the lead traveller, or `null` before the order is recorded. */
   readonly leadTravelerName: string | null;
   readonly leadLastName: string;
@@ -149,6 +151,8 @@ export interface ConsoleBookingDetailsRow {
   readonly customerEmail: string | null;
   readonly customerFirstName: string | null;
   readonly customerLastName: string | null;
+  /** `customers.status` (`deleted`: its names are not shown, FIX-W32-OTA), `null` for a guest booking. */
+  readonly customerStatus: string | null;
 }
 
 /** A `booking_events` row as staff see it, with the name of a customer actor. */
@@ -447,6 +451,7 @@ export class ConsoleBookingsRepository {
         "c.email as customerEmail",
         "c.first_name as customerFirstName",
         "c.last_name as customerLastName",
+        "c.status as customerStatus",
         "b.lead_last_name as leadLastName",
         "b.travelers_count as travelersCount",
         "b.trip_type as tripType",
@@ -539,6 +544,7 @@ export class ConsoleBookingsRepository {
         "c.email as customerEmail",
         "c.first_name as customerFirstName",
         "c.last_name as customerLastName",
+        "c.status as customerStatus",
         sql<string | null>`b.net_services_amount::text`.as("netServicesAmount"),
         paymentStatusOf.as("paymentStatus"),
       ])

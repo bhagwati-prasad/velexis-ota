@@ -11,7 +11,7 @@
 //   amounts, the card's brand and last 4 only, never its expiry or holder, 3-D Secure, the failure, the account, the
 //   times, the version, the events and the refunds), under a header with the booking link, the checkout and what is
 //   still refundable: the captured amount less the refunded amount less the refunds still on their way to Stripe
-//   (`pending`, `processing`), as the API counts it.
+//   (`pending`, `processing`), as the API counts it (action-rules.ts `refundableOf`, the booking page's figure too).
 // - Actions (routes.md §3.2 "Actions", OADR-0018 points 5 and 8): the booking page's Capture and Refund dialogs on
 //   OAD-004's `ConfirmDialog` (reason, amount, the environment badge and the live warning, the idempotency key the
 //   page renders here once per render, `ifMatch` = the payment's `version` for a capture) with this page's server
@@ -32,13 +32,10 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import {
-  amountUnits,
   capturableOf,
   isAirlinePayment,
-  isPositiveAmount,
   refundableOf,
-  subtractAmounts,
-  unitsAmount,
+  refundsInFlightOf,
 } from "@/app/(console)/bookings/[bookingId]/action-rules";
 import { CaptureDialog, RefundDialog } from "@/app/(console)/bookings/[bookingId]/payment-dialogs";
 import {
@@ -49,7 +46,7 @@ import {
   labelOf,
 } from "@/app/(console)/bookings/[bookingId]/sections";
 import { ErrorState } from "@/components/error-state";
-import { Money, type MoneyValue } from "@/components/money";
+import { Money } from "@/components/money";
 import { StatusBadge, toneClasses, type StatusTone } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { errorMessage, isVelexisErrorLike, withRequestId, type VelexisErrorLike } from "@/lib/errors";
@@ -103,8 +100,6 @@ const PAYMENT_ID_PATTERN = /^pay_[0-9A-Za-z]{16,40}$/;
 const REFRESH_PARAM = "refresh";
 /** The code of a refresh that failed at Stripe: the payment is read again as it is stored. */
 const REFRESH_PROVIDER_CODE = "PAYMENT_PROVIDER_ERROR";
-/** The refunds the API still counts against what is refundable: asked for, not finished at Stripe. */
-const IN_FLIGHT_REFUND_STATUSES: ReadonlySet<string> = new Set(["pending", "processing"]);
 
 type SearchParams = Record<string, string | string[] | undefined>;
 
@@ -162,43 +157,6 @@ async function loadPayment(
       return { ok: false, error: await apiFailure(second, here) };
     }
   }
-}
-
-// ---- Amounts --------------------------------------------------------------------------------------------------------
-
-/**
- * The refunds of `payment` still on their way to Stripe, summed, or `undefined` when there are none or one of them
- * cannot be counted (not a decimal string, or not in the payment's currency, which the API never answers): what is
- * refundable is then shown as captured less refunded, and the API decides.
- */
-function refundsInFlightOf(payment: ConsolePayment): MoneyValue | undefined {
-  let units = 0n;
-  for (const refund of payment.refunds) {
-    if (!IN_FLIGHT_REFUND_STATUSES.has(refund.status)) {
-      continue;
-    }
-    const amount = amountUnits(refund.amount.amount);
-    if (amount === undefined || refund.amount.currency !== payment.amount.currency) {
-      return undefined;
-    }
-    units += amount;
-  }
-  return units > 0n ? { amount: unitsAmount(units), currency: payment.amount.currency } : undefined;
-}
-
-/**
- * What staff may still refund of `payment` now, as the API counts it: a Stripe payment that captured money, less what
- * was refunded, less the refunds still on their way to Stripe; never an airline-card payment. `undefined` when nothing
- * is left.
- */
-function refundableNow(payment: ConsolePayment): MoneyValue | undefined {
-  const refundable = refundableOf(payment);
-  if (refundable === undefined) {
-    return undefined;
-  }
-  const inFlight = refundsInFlightOf(payment);
-  const rest = inFlight === undefined ? refundable : subtractAmounts(refundable, inFlight);
-  return rest !== undefined && isPositiveAmount(rest.amount) ? rest : undefined;
 }
 
 // ---- Actions --------------------------------------------------------------------------------------------------------
@@ -267,7 +225,7 @@ function paymentActions(
       </p>,
     );
   } else {
-    const refundable = can(staff, "payments:refund") ? refundableNow(payment) : undefined;
+    const refundable = can(staff, "payments:refund") ? refundableOf(payment) : undefined;
     if (refundable !== undefined) {
       controls.push(
         <RefundDialog
@@ -325,7 +283,7 @@ function bookingFact(payment: ConsolePayment): ReactNode {
 
 /** The payment's header: its id and status, provider and method, and the facts the card below does not show. */
 function Header({ payment }: { readonly payment: ConsolePayment }) {
-  const refundable = refundableNow(payment);
+  const refundable = refundableOf(payment);
   const inFlight = refundsInFlightOf(payment);
   const facts: Fact[] = [
     [PAGE_STRINGS.booking, bookingFact(payment)],

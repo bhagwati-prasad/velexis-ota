@@ -341,6 +341,78 @@ describe("the operations", () => {
     });
     expect(JSON.stringify(rows)).not.toContain("4111111111111111");
   });
+
+  it("[FIX-W32-OTA AC4] stores the caller's recorded response instead of the answer, and answers the answer as it came", async () => {
+    const theirs = { type: "flight-order", id: "ORDER-THEIRS", ownerOfficeId: FOREIGN_OFFICE };
+    const answer = { data: [theirs], dictionaries: { locations: { CDG: { cityCode: "PAR" } } } };
+    fetchMock.mockResolvedValueOnce(json(answer));
+    const seen: unknown[] = [];
+
+    const result = await client().getFlightOrderByReference(
+      context,
+      { query: { reference: "ABC123", originSystemCode: "GDS" } },
+      {
+        recordedResponse: (body) => {
+          seen.push(body);
+          return { data: [{ type: "flight-order", id: "ORDER-THEIRS", withheld: "office_not_allowed" }] };
+        },
+      },
+    );
+
+    expect(result.body).toEqual(answer);
+    expect(seen).toEqual([answer]);
+    // The one write of the row holds the caller's body: the answer was never written.
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.responseBody).toEqual({
+      data: [{ type: "flight-order", id: "ORDER-THEIRS", withheld: "office_not_allowed" }],
+    });
+    expect(JSON.stringify(rows)).not.toContain(FOREIGN_OFFICE);
+  });
+
+  it("[FIX-W32-OTA AC4] applies it to every request's row, error answers included, and stores no answer when it throws", async () => {
+    fetchMock
+      .mockResolvedValueOnce(amadeusError(503, 141))
+      .mockResolvedValueOnce(json({ data: { id: "X" } }));
+    const result = await client().getFlightOrder(
+      context,
+      { flightOrderId: ORDER_ID },
+      { recordedResponse: (body) => ({ kept: body }) },
+    );
+    expect(result.call.attempts).toBe(2);
+    expect(rows.map((row) => row.responseBody)).toEqual([
+      { kept: expect.objectContaining({ errors: expect.any(Array) as unknown }) as unknown },
+      { kept: { data: { id: "X" } } },
+    ]);
+
+    rows = [];
+    fetchMock.mockResolvedValueOnce(json({ data: { id: "SECRET-ORDER" } }));
+    await client().getFlightOrder(
+      context,
+      { flightOrderId: ORDER_ID },
+      {
+        recordedResponse: () => {
+          throw new Error("SECRET-ORDER cannot be withheld");
+        },
+      },
+    );
+    expect(rows.map((row) => row.responseBody)).toEqual([null]);
+    expect(JSON.stringify(rows)).not.toContain("SECRET-ORDER");
+    const failed = logs.filter(([, , message]) => message === "amadeus.recorded_response_failed");
+    expect(failed).toEqual([
+      [
+        "warn",
+        expect.objectContaining({ amadeusOperation: "getFlightOrder", errorName: "Error" }),
+        expect.any(String),
+      ],
+    ]);
+    expect(JSON.stringify(logs)).not.toContain("SECRET-ORDER");
+  });
+
+  it("[FIX-W32-OTA AC4] stores the answer as before without a recorded response", async () => {
+    fetchMock.mockResolvedValueOnce(json({ data: { id: "MINE" } }));
+    await client().getFlightOrder(context, { flightOrderId: ORDER_ID });
+    expect(rows.map((row) => row.responseBody)).toEqual([{ data: { id: "MINE" } }]);
+  });
 });
 
 describe("retries", () => {

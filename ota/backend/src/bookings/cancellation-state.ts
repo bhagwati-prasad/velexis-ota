@@ -12,7 +12,9 @@
 // BOOKING_NOT_MODIFIABLE`, `details.reason = cancellation_pending`) leave a booking alone from the commit of a
 // cancellation's claim until its outcome is recorded (`bookings.cancellation_claimed_at`, tenant migration 0005,
 // fresh for CANCELLATION_CLAIM_TTL_MS) and while its cancellation state is `undecided` (`cancellationHoldOf`), so no
-// Flight Order Issue goes to an order whose DELETE may have removed it.
+// Flight Order Issue goes to an order whose DELETE may have removed it. Since FIX-W32-OTA (lead decision (1a) of
+// 2026-10-28) checkout.complete's own issuance (booking-orchestrator.service.ts `issue`) is the third claim that
+// respects it: under the hold it leaves the issuance to the job (`cancellationHoldFactsOf`).
 //
 // The money facts of a cancelled booking (`CancellationFacts.payments`): the payments its `booking.cancelled` event
 // names, the authorisation voided after the commit (`voidPaymentId`) and the authorisation the cancellation captured
@@ -194,6 +196,26 @@ export function cancellationHoldOf(facts: CancellationHoldFacts, now: Date): Can
 /** Whether the booking's cancellation state is `undecided` (its events read in `trx`, after the booking's lock). */
 export async function cancellationUndecidedOf(trx: TenantTransaction, bookingId: string): Promise<boolean> {
   return cancellationStateOf(await cancellationEventsOf(trx, bookingId)).kind === "undecided";
+}
+
+/**
+ * What a hold of the booking's cancellation is read from (CancellationHoldFacts), in statements after the caller's
+ * lock of the booking, so they hold what a cancellation whose claim or outcome it waited for committed (FIX-W32-OTA:
+ * checkout.complete's own issuance, which locks the booking `FOR UPDATE`, as the ticketing job reads its row).
+ */
+export async function cancellationHoldFactsOf(
+  trx: TenantTransaction,
+  bookingId: string,
+): Promise<CancellationHoldFacts> {
+  const row = await trx
+    .selectFrom("bookings")
+    .select("cancellation_claimed_at as cancellationClaimedAt")
+    .where("id", "=", bookingId)
+    .executeTakeFirst();
+  return {
+    cancellationClaimedAt: row?.cancellationClaimedAt ?? null,
+    cancellationUndecided: await cancellationUndecidedOf(trx, bookingId),
+  };
 }
 
 // ---- Reads -------------------------------------------------------------------------------------------------------

@@ -33,7 +33,12 @@ import {
 import { startAmadeusStub, type AmadeusStub } from "@velexis/testing/amadeus";
 import type { Queue } from "bullmq";
 import request, { type Response } from "supertest";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { AmadeusClient } from "../../../src/amadeus/amadeus.client";
+import {
+  SupplierRequestsRepository,
+  type SupplierRequestRecord,
+} from "../../../src/amadeus/supplier-requests.repository";
 import { buildCreateOrderRequest, buildIssueRequest } from "../../../src/bookings/order-request.builder";
 import { newId } from "../../../src/common/ids";
 import { OTA_QUEUE } from "../../../src/common/queues/queue-names";
@@ -543,6 +548,50 @@ describe("console.bookings.findByRecordLocator", () => {
     }
   });
 
+  it("[FIX-W32-OTA AC4] writes the row of a by-reference read of another office's order with the withheld body from its first write", async () => {
+    const order = await stubOrder({ queuing: alphaOffice, owner: alphaOffice });
+    const betaAgent = await staffSession(betaId, "agent");
+    // Every row the API's client writes, as it writes it (the insert is the row's first and, now, only write).
+    const repository = api.app.get(SupplierRequestsRepository, { strict: false });
+    const insert = repository.insert.bind(repository);
+    const written: SupplierRequestRecord[] = [];
+    const spy = vi.spyOn(repository, "insert").mockImplementation(async (trx, record) => {
+      written.push(record);
+      await insert(trx, record);
+    });
+    let lookedUp: Response;
+    let imported: Response;
+    try {
+      lookedUp = await betaAgent.lookup(order.recordLocator);
+      imported = await betaAgent.import({ reference: order.recordLocator, pricing: { mode: "net" } });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(answer(lookedUp)).toEqual([403, "OFFICE_NOT_ALLOWED"]);
+    expect(answer(imported)).toEqual([403, "OFFICE_NOT_ALLOWED"]);
+    const withheld = { data: [{ type: "flight-order", id: order.id, withheld: "office_not_allowed" }] };
+    // The by-reference reads (Get Flight Order By Record Locator: `?reference=…`).
+    const reads = written.filter((record) => record.path.includes("reference="));
+    expect(reads.map((record) => record.operation)).toEqual([
+      "console.bookings.findByRecordLocator",
+      "console.bookings.import",
+    ]);
+    for (const record of reads) {
+      expect(record.responseBody).toStrictEqual(withheld);
+      for (const secret of [order.passportNumber.slice(-4), "SAMPLE", "TESTA", "contact-", "dictionaries"]) {
+        expect(JSON.stringify(record.responseBody)).not.toContain(secret);
+      }
+    }
+    // And the rows as stored: beta's supplier log never held alpha's order.
+    for (const operation of ["console.bookings.findByRecordLocator", "console.bookings.import"]) {
+      const rows = (await supplierRequestsOf("tenant_beta", operation)).filter((row) =>
+        JSON.stringify(row.response_body).includes(order.id),
+      );
+      expect(rows.map((row) => row.response_body)).toStrictEqual([withheld]);
+    }
+  });
+
   it("[OBE-064 AC1] takes the owner office before the queuing office, and the queuing office of an order without owner", async () => {
     const agent = await staffSession(alphaId, "agent");
     const ownedByBeta = await stubOrder({ queuing: alphaOffice, owner: betaOffice });
@@ -761,6 +810,69 @@ describe("console.bookings.import", () => {
     expect(
       answer(await alphaAgent.import({ reference: order.recordLocator, pricing: { mode: "net" } })),
     ).toEqual([201, undefined]);
+  });
+
+  it("[FIX-W32-OTA AC4] writes the row of an import's Management GET that names another office with the withheld body from its first write", async () => {
+    const order = await stubOrder({ queuing: alphaOffice, owner: alphaOffice });
+    const betaOwner = await staffSession(betaId, "owner");
+    // The by-reference answer names beta's office (as an order that changed hands between the two reads would); the
+    // complete order of the Management GET that follows names alpha's, as the stub stores it.
+    const client = api.app.get(AmadeusClient, { strict: false });
+    const byReference = client.getFlightOrderByReference.bind(client);
+    const referenceSpy = vi
+      .spyOn(client, "getFlightOrderByReference")
+      .mockImplementationOnce(async (context, req, options) => {
+        const reply = await byReference(context, req, options);
+        const body = reply.body as unknown as JsonObject;
+        const data = (body["data"] as JsonObject[]).map((entry) => ({
+          ...entry,
+          queuingOfficeId: betaOffice,
+          ownerOfficeId: betaOffice,
+        }));
+        return { ...reply, body: { ...body, data } as unknown as typeof reply.body };
+      });
+    const repository = api.app.get(SupplierRequestsRepository, { strict: false });
+    const insert = repository.insert.bind(repository);
+    const written: SupplierRequestRecord[] = [];
+    const insertSpy = vi.spyOn(repository, "insert").mockImplementation(async (trx, record) => {
+      written.push(record);
+      await insert(trx, record);
+    });
+    let res: Response;
+    try {
+      res = await betaOwner.import({ reference: order.recordLocator, pricing: { mode: "net" } });
+    } finally {
+      insertSpy.mockRestore();
+      referenceSpy.mockRestore();
+    }
+
+    expect(answer(res)).toEqual([403, "OFFICE_NOT_ALLOWED"]);
+    expectResponseToMatch("consoleImportBooking", res);
+    expect(JSON.stringify(res.body)).not.toContain(order.passportNumber);
+    expect(await bookingsOf("tenant_beta", order.recordLocator)).toEqual([]);
+    // The order was read for beta once, and the row of that read held only its id and the marker from its first write.
+    expect(amadeusCalls("getFlightOrder")).toHaveLength(1);
+    const reads = written.filter(
+      (record) => record.path.startsWith("/v1/booking/flight-orders/") && !record.path.includes("reference="),
+    );
+    expect(reads).toHaveLength(1);
+    const withheld = { data: { type: "flight-order", id: order.id, withheld: "office_not_allowed" } };
+    expect(reads[0]?.responseBody).toStrictEqual(withheld);
+    // And as stored: beta's supplier log keeps the call, never alpha's order.
+    const stored = (await supplierRequestsOf("tenant_beta", "console.bookings.import")).filter(
+      (row) => row.id === reads[0]?.id,
+    );
+    expect(stored.map((row) => row.response_body)).toStrictEqual([withheld]);
+    for (const secret of [order.passportNumber.slice(-4), "SAMPLE", "TESTA", "contact-", alphaOffice]) {
+      expect(JSON.stringify(stored)).not.toContain(secret);
+    }
+    expect(await staffActionsOf("tenant_beta", order.recordLocator)).toEqual([
+      expect.objectContaining({
+        action: "bookings.import",
+        outcome: "denied",
+        target_type: "record_locator",
+      }),
+    ]);
   });
 
   it("prices with the tenant's markup rules by default, channel console", async () => {

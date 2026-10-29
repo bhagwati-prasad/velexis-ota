@@ -17,7 +17,12 @@
 //      are allowed on `/checkout/pay-card.html` only (the page and the frames inside it), and nothing else anywhere;
 //   3. a cookie that page JavaScript can read other than `__Host-vx_csrf`: the names of `document.cookie` of every
 //      storefront document, when it has loaded and when it is left, and every cookie of the context that is not
-//      httpOnly at the end. Values never leave the page: the CSRF token is no credential, but it stays out of reports;
+//      httpOnly at the end. Values never leave the page: the CSRF token is no credential, but it stays out of reports.
+//      In the storefront-stripe journeys only (`install(context, { stripeJourney: true })`), the two first-party
+//      cookies Stripe.js sets for Stripe Radar's fraud signals, `__stripe_mid` and `__stripe_sid` (STRIPE_JS_COOKIES),
+//      are allowed too, from the card payment page on: on `/checkout/pay-card.html` and on every page the context shows
+//      after it (OADR-0006, revision of 2026-10-28, FIX-W32-OTA; they hold no session or credential). Never another
+//      name, never before the card page, and never in any other journey;
 //   4. a serious or critical axe violation (WCAG 2.2 A and AA) on the page the test ends on. Journeys also call
 //      `guards.checkA11y(page)` on every page they visit, once it shows what they came for (tools/e2e/README.md).
 //
@@ -32,6 +37,14 @@ export { expect } from "./fixtures";
 
 /** The only cookie storefront JavaScript may read: the CSRF token of the SDK's cookie mode (OADR-0006). */
 export const CSRF_COOKIE = "__Host-vx_csrf";
+
+/**
+ * The first-party cookies Stripe.js sets on the card payment page for Stripe Radar's advanced fraud signals, readable
+ * by JavaScript (a device id for a year and a session id for 30 minutes; no session, token or card data of Velexis or
+ * the traveller): allowed in the storefront-stripe journeys from the card page on, and nowhere else (OADR-0006,
+ * revision of 2026-10-28).
+ */
+export const STRIPE_JS_COOKIES: readonly string[] = Object.freeze(["__stripe_mid", "__stripe_sid"]);
 
 /** The origins of the storefront under test: everything a page may load from, besides Stripe on the card page. */
 export const FIRST_PARTY_ORIGINS: readonly string[] = Object.freeze([
@@ -123,9 +136,18 @@ export function isCardPage(pageUrl: string): boolean {
   }
 }
 
-/** The names among `names` that are not CSRF_COOKIE, in order, without repeats and empty names. */
-export function unexpectedCookieNames(names: readonly string[]): string[] {
-  return [...new Set(names.map((name) => name.trim()).filter((name) => name !== "" && name !== CSRF_COOKIE))];
+/**
+ * The names among `names` that are neither CSRF_COOKIE nor one of `allowed` (STRIPE_JS_COOKIES where the guards allow
+ * them), in order, without repeats and empty names.
+ */
+export function unexpectedCookieNames(names: readonly string[], allowed: readonly string[] = []): string[] {
+  return [
+    ...new Set(
+      names
+        .map((name) => name.trim())
+        .filter((name) => name !== "" && name !== CSRF_COOKIE && !allowed.includes(name)),
+    ),
+  ];
 }
 
 /** One line per problem, for the error that fails the test. */
@@ -193,15 +215,32 @@ export type GuardedContext = Pick<BrowserContext, "addInitScript" | "exposeBindi
   on(event: "request", listener: (request: Request) => void): unknown;
 };
 
+/** How the guards of one context are set up. */
+export interface StorefrontGuardOptions {
+  /**
+   * A storefront-stripe journey (OFE-017): Stripe.js runs on its card payment page, so its cookies (STRIPE_JS_COOKIES)
+   * are allowed from that page on. Every other journey leaves it out, and allows only CSRF_COOKIE.
+   */
+  readonly stripeJourney?: boolean | undefined;
+}
+
 /** The guards of one test's browser context. */
 export class StorefrontGuards {
   readonly #problems: GuardProblem[] = [];
+  /** The context showed the card payment page (a document or a request of it): the Stripe.js cookies may follow. */
+  #cardPageSeen = false;
 
-  private constructor(private readonly context: GuardedContext) {}
+  private constructor(
+    private readonly context: GuardedContext,
+    private readonly options: StorefrontGuardOptions,
+  ) {}
 
   /** Installs the guards on `context` (before its first navigation) and returns them. */
-  static async install(context: GuardedContext): Promise<StorefrontGuards> {
-    const guards = new StorefrontGuards(context);
+  static async install(
+    context: GuardedContext,
+    options: StorefrontGuardOptions = {},
+  ): Promise<StorefrontGuards> {
+    const guards = new StorefrontGuards(context, options);
     await context.exposeBinding(GUARD_BINDING, (_source, report: unknown) => guards.record(report));
     await context.addInitScript({ content: GUARD_INIT_SCRIPT });
     context.on("request", (request) => guards.request(request));
@@ -230,12 +269,23 @@ export class StorefrontGuards {
     await expectNoSeriousA11yViolations(page);
   }
 
+  /**
+   * The readable cookies allowed besides CSRF_COOKIE now: the Stripe.js cookies in a storefront-stripe journey once its
+   * context showed the card payment page, else none.
+   */
+  get allowedCookies(): readonly string[] {
+    return this.options.stripeJourney === true && this.#cardPageSeen ? STRIPE_JS_COOKIES : [];
+  }
+
   /** The cookie guard at the end: every cookie of the storefront's origins that is not httpOnly. */
   async checkContextCookies(): Promise<void> {
     const readable = (await this.context.cookies([...FIRST_PARTY_ORIGINS])).filter(
       (cookie) => !cookie.httpOnly,
     );
-    const names = unexpectedCookieNames(readable.map((cookie) => cookie.name));
+    const names = unexpectedCookieNames(
+      readable.map((cookie) => cookie.name),
+      this.allowedCookies,
+    );
     if (names.length > 0) {
       this.#add({ kind: "cookie", names, document: "context" });
     }
@@ -264,7 +314,10 @@ export class StorefrontGuards {
         sample: data.sample,
       });
     } else if (data.kind === "cookies") {
-      const names = unexpectedCookieNames(data.names);
+      if (isCardPage(data.document)) {
+        this.#cardPageSeen = true;
+      }
+      const names = unexpectedCookieNames(data.names, this.allowedCookies);
       // Only the storefront's own documents: a cross-origin page (an error page of a refused navigation) has its own.
       if (names.length > 0 && FIRST_PARTY_ORIGINS.some((origin) => data.document.startsWith(`${origin}/`))) {
         this.#add({ kind: "cookie", names, document: withoutQuery(data.document) });
@@ -279,6 +332,9 @@ export class StorefrontGuards {
       pageUrl = request.frame().page().url();
     } catch {
       // A request without a frame (a service worker's): the storefront allows none (`worker-src 'none'`).
+    }
+    if (isCardPage(pageUrl)) {
+      this.#cardPageSeen = true;
     }
     if (isThirdPartyRequest(request.url(), pageUrl)) {
       this.#add({

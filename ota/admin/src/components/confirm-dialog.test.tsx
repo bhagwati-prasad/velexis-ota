@@ -10,6 +10,7 @@ vi.mock("@/app/(console)/env-actions", () => ({
 
 import { Button } from "@/components/ui/button";
 import type { ActionState } from "@/lib/action-state";
+import { ERROR_MESSAGES } from "@/lib/errors";
 
 import {
   ACTION_KEY_FIELD,
@@ -285,11 +286,12 @@ describe("ConfirmDialog", () => {
           // A 503: nothing is kept under the key, the retry sends it again.
           return { ok: false, code: "SERVICE_UNAVAILABLE", message: "The OTA API is unavailable right now." };
         case 3:
-          // 409 IDEMPOTENCY_KEY_REUSED (another tab used the key): another new one.
+          // Another final refusal the API keeps under the key: another new one. (Before the revision of 2026-10-28 this
+          // was 409 IDEMPOTENCY_KEY_REUSED, which now brings no new key: FIX-W32-OTA AC3 below.)
           return {
             ok: false,
-            code: "IDEMPOTENCY_KEY_REUSED",
-            message: "Sent already.",
+            code: "BOOKING_NOT_MODIFIABLE",
+            message: "Changed meanwhile.",
             nextActionKey: LATER_KEY,
           };
         default:
@@ -336,5 +338,31 @@ describe("ConfirmDialog", () => {
     fireEvent.submit(next.form);
     await waitFor(() => expect(action).toHaveBeenCalledTimes(5), UI_WAIT);
     expect(submissions.at(-1)?.key).toBe(RENDERED_AGAIN_KEY);
+  });
+
+  it("[FIX-W32-OTA AC3] keeps its key after 409 IDEMPOTENCY_KEY_REUSED and tells staff to reload the page", async () => {
+    const message = ERROR_MESSAGES.IDEMPOTENCY_KEY_REUSED ?? "";
+    // The action's state of the refusal: the reload message and no new key (lib/action-state.ts `keepsActionKey`).
+    const { action, submissions } = recordingAction(() => ({
+      ok: false,
+      code: "IDEMPOTENCY_KEY_REUSED",
+      message,
+      requestId: "req_reused",
+    }));
+    render(dialogOf(action));
+    const { dialog, reason, form } = await open();
+    fireEvent.change(reason, { target: { value: "Customer confirmed by phone" } });
+
+    fireEvent.submit(form);
+    const alert = await within(dialog).findByRole("alert", {}, UI_WAIT);
+    expect(alert.textContent).toContain("may still be running");
+    expect(alert.textContent).toContain("Reload the page");
+    expect(
+      form.querySelector(`input[type="hidden"][name="${ACTION_KEY_FIELD}"]`)?.getAttribute("value"),
+    ).toBe(KEY);
+    fireEvent.submit(form);
+    await waitFor(() => expect(action).toHaveBeenCalledTimes(2), UI_WAIT);
+    // Never a new key: only the page's next render (the reload) brings one.
+    expect(submissions.map((submission) => submission.key)).toEqual([KEY, KEY]);
   });
 });

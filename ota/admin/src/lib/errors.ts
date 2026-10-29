@@ -53,8 +53,9 @@ export const ERROR_MESSAGES: Readonly<Partial<Record<KnownErrorCode, string>>> =
   FEATURE_DISABLED: "This feature is not enabled for this OTA.",
   NOT_FOUND: "Not found. It may have been removed, or the link is wrong.",
   CONFLICT: "This conflicts with the current state. Reload the page and try again.",
+  // OADR-0018 point 5, revision of 2026-10-28 (FIX-W32-OTA): no new key after it, a reload instead.
   IDEMPOTENCY_KEY_REUSED:
-    "This form was already sent with other values. Reload the page and fill it in again.",
+    "This form was already sent with other values, and that request may still be running. Reload the page to see what it did before you send it again.",
   VERSION_CONFLICT: "This record changed; reload to see the latest version.",
   PRECONDITION_FAILED: "This record changed; reload to see the latest version.",
   BOOKING_NOT_MODIFIABLE: "This booking can no longer be changed.",

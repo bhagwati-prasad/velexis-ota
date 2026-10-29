@@ -52,7 +52,8 @@ const REFUND = `POST /v1/console/payments/${PAYMENT_ID}/refunds`;
 
 /** The words of the payment's dialogs for the API's refusals (bookings/[bookingId]/actions.ts). */
 const MESSAGES = Object.freeze({
-  amountExceedsCaptured: "The amount is above what can still be refunded. Reload the page to see it.",
+  // With the API's `details.refundable` (FIX-W32-OTA AC7, lead decision (1h) of 2026-10-28; before: the reload message).
+  amountExceedsRefundable: "The amount is above what can still be refunded: at most €1,314.06.",
   refundViaAirline:
     "The airline charged this card: it is refunded by the airline, not from the console. Refund nothing here.",
   authorisationExpired: "The authorisation has expired; contact the traveller.",
@@ -181,9 +182,9 @@ describe("refundPayment", () => {
     expect(state).toMatchObject({
       ok: false,
       code: "UNPROCESSABLE",
-      message: MESSAGES.amountExceedsCaptured,
+      message: MESSAGES.amountExceedsRefundable,
       requestId: "req_fake_1",
-      fieldErrors: { amount: MESSAGES.amountExceedsCaptured },
+      fieldErrors: { amount: MESSAGES.amountExceedsRefundable },
     });
     // The amount went to the API, which decided: the page refuses nothing it cannot know.
     expect(only(REFUND).body).toMatchObject({ amount: { amount: "2000.00", currency: "EUR" } });

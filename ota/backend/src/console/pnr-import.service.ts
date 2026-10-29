@@ -14,7 +14,10 @@
 // office's orders are left out of the answer, and of the tenant's `supplier_requests` row of the call too (its
 // response keeps their id and a `withheld` marker only, without the answer's `included` and `dictionaries`, which
 // describe every order of the answer: `withheldBody`), so that the supplier log never shows another OTA's PNR or its
-// route either; when no order is left, the answer is `403 OFFICE_NOT_ALLOWED` and the staff action is `denied`.
+// route either; when no order is left, the answer is `403 OFFICE_NOT_ALLOWED` and the staff action is `denied`. Since
+// FIX-W32-OTA (lead decision (1e) of 2026-10-28) the row holds the withheld body from its first write: the client
+// applies `withheldResponseOf` (its `recordedResponse` hook) before it writes the row, where OBE-064 replaced the row's
+// answer after the write, so a row briefly (or, when the process stopped in between, for ever) held the other order.
 //
 // - `findByRecordLocator` (`bookings:read`): the local bookings of the environment with this record locator (the
 //   unique index `bookings_record_locator_uq` and `booking_associated_records`, "local index first"), then Get Flight
@@ -75,7 +78,6 @@ import {
 } from "../amadeus/connection-resolver";
 import { AmadeusCallError } from "../amadeus/error-mapper";
 import { AMADEUS_OPERATIONS, type AmadeusOperationName } from "../amadeus/limits";
-import { supplierRequestBody } from "../amadeus/supplier-requests.repository";
 import { newBookingReference } from "../bookings/booking-reference";
 import { AIRLINE_CANCEL_REASON } from "../bookings/booking-sync.service";
 import { dictionariesOf } from "../bookings/bookings.mapper";
@@ -279,6 +281,26 @@ export function withheldBody(body: JsonObject, withheld: readonly JsonObject[]):
     return { ...rest, data: records(body["data"]).map(reduce) };
   }
   return isRecord(body["data"]) ? { ...rest, data: reduce(body["data"]) } : rest;
+}
+
+/**
+ * The `supplier_requests` hook of a read that can answer orders of other offices on the shared account (AmadeusClient
+ * `recordedResponse`, FIX-W32-OTA, lead decision (1e) of 2026-10-28): the answer with the orders of offices other than
+ * `officeIds` withheld (`partitionOrders`, `withheldBody`), whether it holds a list of orders (Get Flight Order By Record
+ * Locator) or one (Flight Order Management GET); any other answer (an error, no order) as it is. The client applies it
+ * before it writes the row, so the row never holds another office's order, even for a moment. Pure: other reads of
+ * orders on the shared account (OBE-067's raw reads) can pass it as they are.
+ */
+export function withheldResponseOf(officeIds: readonly string[]): (body: unknown) => unknown {
+  const offices = [...officeIds];
+  return (body: unknown): unknown => {
+    if (!isRecord(body)) {
+      return body;
+    }
+    const data = body["data"];
+    const orders = Array.isArray(data) ? records(data) : isRecord(data) ? [data] : [];
+    return withheldBody(body, partitionOrders(orders, offices).withheld);
+  };
 }
 
 // ---- The lookup's answer --------------------------------------------------------------------------------------------
@@ -971,16 +993,6 @@ export class PnrImportRepository {
     );
   }
 
-  /** Replaces the stored response of a `supplier_requests` row (`withheldBody`), through the table's storage rules. */
-  async replaceSupplierResponse(trx: TenantTransaction, id: string, body: unknown): Promise<void> {
-    const stored = supplierRequestBody(body);
-    await trx
-      .updateTable("supplier_requests")
-      .set({ response_body: stored.json, ...(stored.truncated ? { truncated: true } : {}) })
-      .where("id", "=", id)
-      .execute();
-  }
-
   /** Links the import's `supplier_requests` rows to its booking (written before the booking existed). */
   async linkSupplierRequests(
     trx: TenantTransaction,
@@ -1057,7 +1069,7 @@ export class PnrImportService {
     );
     const amadeusQuery = { ...ref, ...(include.length > 0 ? { include: [...include] } : {}) };
     const reply = await this.byReference(tenant, OPERATIONS.lookup, amadeusQuery);
-    const orders = await this.tenantOrders(tenant, "lookup", query.reference, reply);
+    const orders = await this.tenantOrders("lookup", query.reference, reply);
     const unlinked = orders.allowed.filter((order) => attachedBookingOf(order, local) === undefined);
     const byOrder =
       unlinked.length === 0
@@ -1153,7 +1165,7 @@ export class PnrImportService {
     flightOrderId: string | undefined,
   ): Promise<ImportOrder> {
     const reply = await this.byReference(tenant, OPERATIONS.import, { ...ref, include: ["bags"] });
-    const orders = await this.tenantOrders(tenant, "import", ref.reference, reply);
+    const orders = await this.tenantOrders("import", ref.reference, reply);
     let chosen: JsonObject;
     try {
       chosen = chooseImportOrder(orders.allowed, orders.withheld, flightOrderId);
@@ -1171,10 +1183,12 @@ export class PnrImportService {
     let full: Reply;
     try {
       full = await this.objectReply(() =>
-        this.amadeus.getFlightOrder(this.context(tenant, OPERATIONS.import, office), {
-          flightOrderId: orderId,
-          query: { include: ["bags"] },
-        }),
+        this.amadeus.getFlightOrder(
+          this.context(tenant, OPERATIONS.import, office),
+          { flightOrderId: orderId, query: { include: ["bags"] } },
+          // The complete order may name another office than its by-reference answer did: its row withholds it then.
+          { recordedResponse: withheldResponseOf(orders.connection.officeIds) },
+        ),
       );
     } catch (error) {
       throw supplierAnswerOf(error, "Amadeus no longer has this order.");
@@ -1184,8 +1198,8 @@ export class PnrImportService {
       throw new AppError("SUPPLIER_ERROR", { message: "Amadeus answered without the order." });
     }
     if (!isTenantOrder(data, orders.connection.officeIds)) {
-      // The complete order names another office than its by-reference answer did: never recorded, nor kept.
-      await this.withhold(full, [data]);
+      // The complete order names another office than its by-reference answer did: never recorded, nor kept (its row
+      // holds the withheld body, `withheldResponseOf`).
       await this.denyOffice("import", ref.reference, 1);
       throw new AppError("OFFICE_NOT_ALLOWED");
     }
@@ -1748,18 +1762,25 @@ export class PnrImportService {
 
   // ---- Amadeus and the office isolation ------------------------------------------------------------------------------
 
-  /** Get Flight Order By Record Locator (no transaction open). */
+  /**
+   * Get Flight Order By Record Locator (no transaction open), with the tenant's connection: its `supplier_requests` row
+   * withholds the orders of other offices from its first write (`withheldResponseOf`, the client's `recordedResponse`).
+   */
   private async byReference(
     tenant: RequestTenant,
     operation: string,
     query: { readonly reference: string; readonly originSystemCode: string; readonly include?: "bags"[] },
-  ): Promise<Reply> {
+  ): Promise<Reply & { readonly connection: ResolvedAmadeusConnection }> {
     try {
-      return await this.objectReply(() =>
-        this.amadeus.getFlightOrderByReference(this.context(tenant, operation, null), {
-          query: { ...query, ...(query.include === undefined ? {} : { include: [...query.include] }) },
-        }),
+      const connection = await this.connections.resolve(tenant.tenantId, tenant.environment);
+      const reply = await this.objectReply(() =>
+        this.amadeus.getFlightOrderByReference(
+          this.context(tenant, operation, null),
+          { query: { ...query, ...(query.include === undefined ? {} : { include: [...query.include] }) } },
+          { recordedResponse: withheldResponseOf(connection.officeIds) },
+        ),
       );
+      return { ...reply, connection };
     } catch (error) {
       throw supplierAnswerOf(error, "Amadeus has no order with this record locator.");
     }
@@ -1780,14 +1801,13 @@ export class PnrImportService {
 
   /**
    * The tenant's orders of a by-reference answer (see the file header): another office's are withheld from the
-   * answer and from the tenant's `supplier_requests` row; none left is `403 OFFICE_NOT_ALLOWED`, `denied`. An answer
-   * without any order is `404 NOT_FOUND`.
+   * answer (the tenant's `supplier_requests` row never held them: `byReference`); none left is `403
+   * OFFICE_NOT_ALLOWED`, `denied`. An answer without any order is `404 NOT_FOUND`.
    */
   private async tenantOrders(
-    tenant: RequestTenant,
     kind: "lookup" | "import",
     reference: string,
-    reply: Reply,
+    reply: Reply & { readonly connection: ResolvedAmadeusConnection },
   ): Promise<{
     readonly allowed: JsonObject[];
     readonly withheld: JsonObject[];
@@ -1798,10 +1818,9 @@ export class PnrImportService {
     if (orders.length === 0) {
       throw new AppError("NOT_FOUND", { message: "Amadeus has no order with this record locator." });
     }
-    const connection = await this.connections.resolve(tenant.tenantId, tenant.environment);
+    const { connection } = reply;
     const { allowed, withheld } = partitionOrders(orders, connection.officeIds);
     if (withheld.length > 0) {
-      await this.withhold(reply, withheld);
       this.logger.warn(
         { operation: OPERATIONS[kind], withheldOrders: withheld.length, allowedOrders: allowed.length },
         "console.pnr_office_not_allowed",
@@ -1814,16 +1833,6 @@ export class PnrImportService {
       });
     }
     return { allowed, withheld, connection, supplierRequestId: reply.call.supplierRequestId };
-  }
-
-  /** Keeps the orders of other offices out of the tenant's `supplier_requests` row of `reply` (`withheldBody`). */
-  private async withhold(reply: Reply, withheld: readonly JsonObject[]): Promise<void> {
-    const id = reply.call.supplierRequestId;
-    if (id !== null && withheld.length > 0) {
-      await this.tx.run((trx) =>
-        this.repository.replaceSupplierResponse(trx, id, withheldBody(reply.body, withheld)),
-      );
-    }
   }
 
   /**

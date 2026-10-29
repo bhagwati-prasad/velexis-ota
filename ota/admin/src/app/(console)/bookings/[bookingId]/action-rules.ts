@@ -18,8 +18,9 @@
 //   authorisation is released whole (`full`), in part (`amount`: the rest is captured) or captured whole (`none`); an
 //   airline card and a booking without payment take `none` only (`refund_via_airline`).
 // - Payments (`console.payments.capture`, `.refund`): capture for an `authorized` Stripe payment, up to the authorised
-//   amount; refund for a `captured` or `partially_refunded` Stripe payment, up to what is still refundable. Airline-card
-//   payments are never refunded here.
+//   amount; refund for a `captured` or `partially_refunded` Stripe payment, up to what is still refundable (captured
+//   less refunded less the refunds still `pending` or `processing`, as the API counts it). Airline-card payments are
+//   never refunded here.
 // - Patch (`console.bookings.patch`): the API replaces an order contact of the same purpose whole, and a traveller's
 //   `contact` whole, so the traveller and contact dialogs post the stored contact (`KEPT_FIELD`, `keptContactOf`) and the
 //   action puts the dialog's values over it: what the dialog does not show is sent back as it was.
@@ -566,14 +567,47 @@ export function capturableOf(payment: ConsolePayment): MoneyValue | undefined {
   return isStripe(payment) && payment.status === "authorized" ? payment.amountAuthorized : undefined;
 }
 
+/** The refunds the API still counts against what is refundable: asked for, not finished at Stripe. */
+export const IN_FLIGHT_REFUND_STATUSES: ReadonlySet<string> = new Set(["pending", "processing"]);
+
 /**
- * What staff may still refund of a payment: a Stripe payment that captured money, less what was refunded; never an
- * airline-card payment (`refund_via_airline`).
+ * The refunds of `payment` still on their way to Stripe (`pending`, `processing`), summed, or `undefined` when there are
+ * none or one of them cannot be counted (not a decimal string, or not in the payment's currency, which the API never
+ * answers): what is refundable is then shown as captured less refunded, and the API decides.
+ */
+export function refundsInFlightOf(
+  payment: Pick<ConsolePayment, "amount" | "refunds">,
+): MoneyValue | undefined {
+  let units = 0n;
+  for (const refund of payment.refunds) {
+    if (!IN_FLIGHT_REFUND_STATUSES.has(refund.status)) {
+      continue;
+    }
+    const amount = amountUnits(refund.amount.amount);
+    if (amount === undefined || refund.amount.currency !== payment.amount.currency) {
+      return undefined;
+    }
+    units += amount;
+  }
+  return units > 0n ? { amount: unitsAmount(units), currency: payment.amount.currency } : undefined;
+}
+
+/**
+ * What staff may still refund of a payment now, as the API counts it (`refundableAmount` of the backend's
+ * refunds.repository.ts): a Stripe payment that captured money, less what was refunded, less the refunds still on their
+ * way to Stripe (`refundsInFlightOf`); never an airline-card payment (`refund_via_airline`). `undefined` when nothing is
+ * left. The booking page's Payments tab and the payment's own page show and offer the same figure (FIX-W32-OTA, lead
+ * decision (1h) of 2026-10-28: the booking page subtracted no refund in flight until then).
  */
 export function refundableOf(payment: ConsolePayment): MoneyValue | undefined {
   if (!isStripe(payment) || isAirlinePayment(payment) || !CAPTURED_STATUSES.has(payment.status)) {
     return undefined;
   }
   const refundable = subtractAmounts(payment.amountCaptured, payment.amountRefunded);
-  return refundable !== undefined && isPositiveAmount(refundable.amount) ? refundable : undefined;
+  if (refundable === undefined) {
+    return undefined;
+  }
+  const inFlight = refundsInFlightOf(payment);
+  const rest = inFlight === undefined ? refundable : subtractAmounts(refundable, inFlight);
+  return rest !== undefined && isPositiveAmount(rest.amount) ? rest : undefined;
 }

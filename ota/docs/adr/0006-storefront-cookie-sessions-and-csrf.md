@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** OTA backend tech lead. Decided during planning; revisit when a custom domain becomes primary and sessions must follow the redirect (ADR-0018 follow-up), or when the storefront moves to a framework with server rendering.
-**Revisions:** 2026-10-27 (lead decision (3), accepted as built): point 3 records that a visitor without a session gets `401` before the CSRF check on an operation that needs a customer (dated note).
+**Revisions:** 2026-10-27 (lead decision (3), accepted as built): point 3 records that a visitor without a session gets `401` before the CSRF check on an operation that needs a customer (dated note). 2026-10-28 (lead decision (1k), recording FIX-W32-OTA): new point 10, the two first-party cookies that Stripe.js sets on the card payment page, readable by JavaScript, are accepted; the storefront guards of the journeys allow exactly these two names, from the card payment page on, in the storefront-stripe journeys only; the Consequences follow.
 
 ## Context
 
@@ -32,12 +32,14 @@
 7. **Host-only sessions.** Sessions do not cross hosts (`acme.ota.example.com` vs `travel.acme.com`), which ADR-0018 accepts; the primary-domain redirect follow-up reduces it.
 8. **Development.** Browsers treat `http://localhost` as a secure context, so `__Host-` cookies work with the Vite dev server, which adds the edge headers like Caddy ([`local-development.md`](../../../docs/mvp/local-development.md)).
 9. **Tests** assert, for every auth and booking-access operation, that edge responses contain no token in the body, that cookies carry the attributes above, and that bearer mode is unchanged.
+10. **Stripe.js cookies (2026-10-28, lead decision (1k), FIX-W32-OTA).** Stripe.js, which the card payment page `/checkout/pay-card.html` loads for the Payment Element ([OADR-0015](0015-storefront-build-urls-and-hosting.md) point 9, [ADR-0011](../../../docs/mvp/adr/0011-payments-stripe-and-airline-card.md)), sets two first-party cookies on the storefront's host that JavaScript can read: `__stripe_mid` (a device id, one year) and `__stripe_sid` (a session id, 30 minutes). They feed Stripe Radar's advanced fraud signals, which stay on, and hold no session, token or credential of the storefront, the traveller or Velexis, nor card data. They are accepted as an exception to "no cookie readable by JavaScript but `__Host-vx_csrf`": the storefront guards of the end-to-end journeys (OFE-008, `tools/e2e/support/storefront-guards.ts` `STRIPE_JS_COOKIES`) allow exactly these two names, only in the storefront-stripe journeys and only from the card payment page on (that page and the pages the browser shows after it, which still carry the cookies); any other name, these two on a page before the card page, and these two in any other journey fail the journey as before. Other findings from Stripe's frames (none known yet) wait for the first nightly run of those journeys.
 
 ## Consequences
 
 ### Positive
 
 - No access, refresh or guest token is ever readable by storefront JavaScript, including third-party code that might be injected.
+- Stripe Radar keeps its advanced fraud signals on the card payment page (point 10, 2026-10-28).
 - Anonymous POSTs (search, checkout) are CSRF-protected from the first call.
 - Token-mode clients of the contract see no change.
 
@@ -46,6 +48,7 @@
 - Two response shapes for three operations; SDK and tests must cover both.
 - `__Host-` requires `Path=/`, so the refresh cookie is sent with every storefront API request (it is httpOnly and same-site, but it travels more than strictly needed).
 - A traveller who clears cookies loses guest access and must use the lookup.
+- Since 2026-10-28 two cookies of Stripe.js are readable by the storefront's JavaScript after the card payment page (point 10): a device id and a session id that Stripe uses for fraud scoring, no credential.
 
 ### Follow-ups
 

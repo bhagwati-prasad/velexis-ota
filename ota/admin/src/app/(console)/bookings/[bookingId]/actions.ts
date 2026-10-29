@@ -20,12 +20,14 @@
 // `actionKey`, rendered once with the page, so a double submit or a retry replays the same action instead of issuing,
 // cancelling, capturing or refunding twice; a patch has no key in the contract (`If-Match` makes its replay a `412`).
 // When the call of a keyed action (issue, cancel, note, capture, refund) ends in a final refusal that the API stores
-// under the key (a stored `4xx` but `412`; `429` and a request still running under the key are not stored) or in `409
-// IDEMPOTENCY_KEY_REUSED`, its state brings a new key (`keyedFailure`: lib/action-state.ts `withNextActionKey`,
-// `crypto.randomUUID()` here on the server), which the dialog or form sends next, so a corrected resubmission is a new
-// request; after `412`, `429`, `5xx`, a timeout or a network error the key stays, so a retry replays or waits for the
-// first request (OADR-0018 point 5, revision of 2026-10-27, FIX-W31-OTA). A refusal before the call (the form's schema,
-// a permission) used no key and keeps it.
+// under the key (a stored `4xx` but `412`; `429` and a request still running under the key are not stored), its state
+// brings a new key (`keyedFailure`: lib/action-state.ts `withNextActionKey`, `crypto.randomUUID()` here on the server),
+// which the dialog or form sends next, so a corrected resubmission is a new request; after `412`, `429`, `5xx`, a
+// timeout or a network error the key stays, so a retry replays or waits for the first request (OADR-0018 point 5,
+// revision of 2026-10-27, FIX-W31-OTA). After `409 IDEMPOTENCY_KEY_REUSED` the key stays too and the message asks for a
+// reload (revision of 2026-10-28, FIX-W32-OTA): an earlier request under the key may still be running, and a new key
+// could refund or capture twice. A refusal before the call (the form's schema, a permission) used no key and keeps it.
+// A refund above what can still be refunded says the API's `details.refundable` (FIX-W32-OTA).
 // Known API codes are answered here as the action's state (README §7, routes.md §1: messages of lib/errors.ts, some in
 // this action's own words, `fieldErrors` mapped to the dialog's fields, the request id), never thrown to `error.tsx`;
 // only Next.js's redirects (an ended session) and bugs are thrown. A success revalidates the booking's page, whose new
@@ -128,6 +130,9 @@ const STRINGS = Object.freeze({
   refundViaAirline:
     "The airline charged this card: it is refunded by the airline, not from the console. Refund nothing here.",
   amountExceedsCaptured: "The amount is above what can still be refunded. Reload the page to see it.",
+  /** A refund above what can still be refunded, with the API's figure (`details.refundable`, FIX-W32-OTA). */
+  amountExceedsRefundable: (refundable: string) =>
+    `The amount is above what can still be refunded: at most ${refundable}.`,
   amountExceedsAuthorized: "The amount is above the authorised amount.",
   currencyMismatch: "The amount must be in the payment's currency.",
   notRefundable: "This payment cannot be refunded in its current state. Reload the page.",
@@ -150,8 +155,18 @@ const STRINGS = Object.freeze({
   refundRequested: (amount: string) => `Refund of ${amount} requested: Stripe completes it.`,
 });
 
+/** A message of an override: fixed, or built from the error's `details` (an amount the API answered, say). */
+type OverrideMessage = string | ((details: Readonly<Record<string, unknown>>) => string);
+
 /** Overrides of the message (and the field it belongs to) by `CODE` or `CODE:details.reason`. */
-type Overrides = Readonly<Record<string, string | { readonly message: string; readonly field: string }>>;
+type Overrides = Readonly<
+  Record<string, OverrideMessage | { readonly message: OverrideMessage; readonly field: string }>
+>;
+
+/** The text of an override's message for an error with `details`. */
+function overrideText(message: OverrideMessage, details: Readonly<Record<string, unknown>>): string {
+  return typeof message === "string" ? message : message(details);
+}
 
 /** The overrides every booking action shares. */
 const BOOKING_OVERRIDES: Overrides = Object.freeze({
@@ -208,13 +223,15 @@ function failure(
   if (override === undefined) {
     return state;
   }
-  if (typeof override === "string") {
-    return { ...state, message: override };
+  const details = error.details ?? {};
+  if (typeof override === "string" || typeof override === "function") {
+    return { ...state, message: overrideText(override, details) };
   }
+  const message = overrideText(override.message, details);
   return {
     ...state,
-    message: override.message,
-    fieldErrors: { ...state.fieldErrors, [override.field]: override.message },
+    message,
+    fieldErrors: { ...state.fieldErrors, [override.field]: message },
   };
 }
 
@@ -1046,6 +1063,38 @@ const PAYMENT_OVERRIDES: Overrides = Object.freeze({
   "CONFLICT:payment_not_capturable": STRINGS.notCapturable,
 });
 
+/** A `Money` of an error's `details` as the API answers it, or `undefined` when it is not one. */
+function moneyOfDetail(value: unknown): MoneyValue | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const { amount, currency } = value as Record<string, unknown>;
+  return typeof amount === "string" &&
+    /^[0-9]{1,12}(?:\.[0-9]{1,4})?$/.test(amount) &&
+    typeof currency === "string" &&
+    /^[A-Z]{3}$/.test(currency)
+    ? { amount, currency }
+    : undefined;
+}
+
+/**
+ * A refund above what can still be refunded (`422 UNPROCESSABLE`, `amount_exceeds_captured`) says how much can (the
+ * API's `details.refundable`: captured less refunded less the refunds still on their way to Stripe), so staff correct
+ * the amount without a reload (FIX-W32-OTA, lead decision (1h) of 2026-10-28); without the figure, the reload message.
+ */
+function refundableRefusal(details: Readonly<Record<string, unknown>>): string {
+  const refundable = moneyOfDetail(details["refundable"]);
+  return refundable === undefined
+    ? STRINGS.amountExceedsCaptured
+    : STRINGS.amountExceedsRefundable(moneyText(refundable));
+}
+
+/** The overrides of a refund: a payment's, with the refundable amount in the refusal of a too large one. */
+const REFUND_OVERRIDES: Overrides = Object.freeze({
+  ...PAYMENT_OVERRIDES,
+  "UNPROCESSABLE:amount_exceeds_captured": { message: refundableRefusal, field: AMOUNT_FIELD },
+});
+
 const CaptureForm = z.object({
   paymentId: PaymentId,
   bookingId: optional(BookingId),
@@ -1150,7 +1199,7 @@ export async function refundPayment(_previous: ActionState, form: FormData): Pro
     return keyedFailure(
       error,
       { ...PAYMENT_POINTERS, "/reason": REFUND_REASON_FIELD, "/reasonNote": REASON_FIELD },
-      PAYMENT_OVERRIDES,
+      REFUND_OVERRIDES,
     );
   }
   revalidatePayment(paymentId, bookingId);

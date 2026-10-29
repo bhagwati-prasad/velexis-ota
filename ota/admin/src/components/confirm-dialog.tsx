@@ -8,10 +8,12 @@
 // action (or waits for it) instead of issuing or refunding twice.
 //
 // After a final refusal that the API stores under the key (a stored `4xx` but `412`; `429` and a request still running
-// under the key are not stored) and after `409 IDEMPOTENCY_KEY_REUSED`, the action's state brings a new key
-// (`nextActionKey`, lib/action-state.ts `withNextActionKey`), which the dialog sends from then on (`useActionKey`): a
-// corrected resubmission, an amount lowered after a `422` say, is a new request instead of a `409
-// IDEMPOTENCY_KEY_REUSED` that only a reload would end (OADR-0018 point 5, revision of 2026-10-27, FIX-W31-OTA). Every
+// under the key are not stored), the action's state brings a new key (`nextActionKey`, lib/action-state.ts
+// `withNextActionKey`), which the dialog sends from then on (`useActionKey`): a corrected resubmission, an amount
+// lowered after a `422` say, is a new request instead of a `409 IDEMPOTENCY_KEY_REUSED` that only a reload would end
+// (OADR-0018 point 5, revision of 2026-10-27, FIX-W31-OTA). After `409 IDEMPOTENCY_KEY_REUSED` itself no new key comes
+// (revision of 2026-10-28, FIX-W32-OTA): an earlier request under the key, with other values, may still be running or
+// may have refunded or captured, so the dialog keeps its key and its message tells staff to reload the page. Every
 // dialog built on this one gets it; the note form of a booking uses the same hook.
 //
 // The action is a server action for `useActionState` (`(state, formData) => Promise<ActionState>`). It receives the
@@ -65,7 +67,8 @@ export { ACTION_KEY_FIELD, REASON_FIELD, REASON_MAX_LENGTH, REASON_MIN_LENGTH };
  * The idempotency key of a dialog's or form's next submission (OADR-0018 point 5, revision of 2026-10-27): the key the
  * page rendered (`rendered`) until an action's state brings a new one (`nextActionKey`, after a final refusal the API
  * stored under the key), which every later submission sends until the next one comes; a state without a new key (a
- * retry after a timeout, a `412`, a `5xx`, the form's own validation) keeps the current key. A new render of the page
+ * retry after a timeout, a `412`, a `5xx`, a `409 IDEMPOTENCY_KEY_REUSED` since 2026-10-28, the form's own validation)
+ * keeps the current key. A new render of the page
  * (after a success, which revalidates it, or a reload) brings a new `rendered` key, which replaces it.
  */
 export function useActionKey(rendered: string, state: ActionState): string {

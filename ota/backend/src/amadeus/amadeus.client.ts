@@ -24,8 +24,10 @@
 //
 // Bodies are logged nowhere: the log line has ids, statuses, codes and durations; the row has the bodies through the
 // shared redactor (supplier-requests.repository.ts). A caller that sends a card passes a copy redacted before the call
-// as `redactedRequest` (OADR-0004), which the row stores instead of the request. A row that cannot be written is
-// logged (`amadeus.supplier_request_not_recorded`) and never fails the call: the call happened at Amadeus.
+// as `redactedRequest` (OADR-0004), which the row stores instead of the request; a caller whose answers may hold what
+// the tenant's row must not (another office's orders on the shared account) passes `recordedResponse`, which the client
+// applies to the answer before it writes the row (FIX-W32-OTA, lead decision (1e) of 2026-10-28). A row that cannot be
+// written is logged (`amadeus.supplier_request_not_recorded`) and never fails the call: the call happened at Amadeus.
 import { Inject, Injectable, Optional } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { AppError } from "@velexis/errors";
@@ -161,6 +163,16 @@ export interface AmadeusCallOptions {
    * `supplier_requests` row stores it instead of the request, after the same redaction steps.
    */
   readonly redactedRequest?: unknown;
+  /**
+   * What the `supplier_requests` row stores as the answer (FIX-W32-OTA, lead decision (1e) of 2026-10-28): the client
+   * applies it to the parsed answer of every request it sends for the call (an order, an error answer, `undefined`
+   * without one) before it writes that request's row, so the row never holds what the caller keeps out of it, not even
+   * for a moment: another office's orders on the shared Amadeus account, say (PnrImportService's withheld body). Its
+   * result goes through the same redaction and size rules as an answer. It changes only the row: the call answers the
+   * answer as Amadeus sent it. A hook that throws leaves the row without an answer (`null`, log line
+   * `amadeus.recorded_response_failed`), never with the answer it was given. Default: the answer as Amadeus sent it.
+   */
+  readonly recordedResponse?: (body: unknown) => unknown;
 }
 
 /** The facts of a call: what the console's raw calls return in `call`. */
@@ -510,7 +522,7 @@ export class AmadeusClient {
       });
       const token = await this.token(connection);
       const result = parse(await this.send(spec, connection, path, token, prepared.body, scenario));
-      const supplierRequestId = await this.record(context, spec, prepared, path, result);
+      const supplierRequestId = await this.record(context, spec, prepared, path, result, options);
       this.logCall(context, spec, prepared.officeId, result, attempts, supplierRequestId);
 
       if (result.ok) {
@@ -639,6 +651,35 @@ export class AmadeusClient {
     }
   }
 
+  /**
+   * The answer as the row stores it: the caller's `recordedResponse` of it (AmadeusCallOptions), else the answer. A hook
+   * that throws stores no answer, and its error is logged by name only (it may quote the answer).
+   */
+  private recordedResponse(
+    context: AmadeusCallContext,
+    spec: AmadeusOperationSpec,
+    options: AmadeusCallOptions,
+    body: unknown,
+  ): unknown {
+    if (options.recordedResponse === undefined) {
+      return body;
+    }
+    try {
+      return options.recordedResponse(body);
+    } catch (error) {
+      this.logger.warn(
+        {
+          tenantId: context.tenantId,
+          amadeusOperation: spec.name,
+          requestId: context.requestId,
+          errorName: error instanceof Error ? error.name : typeof error,
+        },
+        "amadeus.recorded_response_failed",
+      );
+      return null;
+    }
+  }
+
   /** Writes the row of one request in a transaction of its own; `null` (and a log line) when that fails. */
   private async record(
     context: AmadeusCallContext,
@@ -646,6 +687,7 @@ export class AmadeusClient {
     prepared: PreparedRequest,
     path: string,
     result: Result,
+    options: AmadeusCallOptions,
   ): Promise<string | null> {
     const record: SupplierRequestRecord = {
       id: this.ids.newId("sreq"),
@@ -663,7 +705,7 @@ export class AmadeusClient {
       correlationId: result.correlationId,
       requestId: context.requestId,
       requestBody: prepared.recorded,
-      responseBody: result.body,
+      responseBody: this.recordedResponse(context, spec, options, result.body),
       bookingId: context.bookingId ?? null,
       searchId: context.searchId ?? null,
       staffId: context.staffId ?? null,

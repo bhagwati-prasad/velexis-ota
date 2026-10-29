@@ -302,7 +302,7 @@ Journeys (one per main flow, [ADR-0015](../../docs/mvp/adr/0015-testing-strategy
 4. **M3** sign-up → verify through the Mailpit link → sign-in → my bookings tabs → change contacts → cancel with refund preview; guest lookup; session refresh after access-token expiry.
 5. **M3** keyboard-only checkout.
 
-Assertions in every journey: no CSP violation (a `securitypolicyviolation` listener fails the test), `document.cookie` contains only `__Host-vx_csrf`, no request to a third-party host except Stripe on the card page and none at all on the airline-card page, and axe reports no serious or critical violation.
+Assertions in every journey: no CSP violation (a `securitypolicyviolation` listener fails the test), `document.cookie` contains only `__Host-vx_csrf` (in the storefront-stripe journeys also, from `/checkout/pay-card.html` on, the two first-party cookies of Stripe.js, `__stripe_mid` and `__stripe_sid`, which feed Stripe Radar's fraud signals and hold no session or credential: [OADR-0006](../docs/adr/0006-storefront-cookie-sessions-and-csrf.md) point 10, 2026-10-28; never another name), no request to a third-party host except Stripe on the card page and none at all on the airline-card page, and axe reports no serious or critical violation.
 
 ## 14. Build your own frontend
 
