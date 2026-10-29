@@ -2249,7 +2249,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - A refund above the captured amount shows the API's message; an agent sees no refund button.
 - **Verify:** `pnpm --filter @velexis/ota-admin test`
 
-### OAD-012 · Build customers, the supplier log and portal links
+### OAD-012 · Build customers, the supplier log and portal links ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-admin
 - **Milestone:** M4
 - **Depends on:** OAD-004, OBE-066
