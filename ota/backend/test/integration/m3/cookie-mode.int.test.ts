@@ -31,6 +31,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Global, Module, type DynamicModule } from "@nestjs/common";
 import { otaOperations, type OtaOperationId } from "@velexis/api-types/operations";
 import { encryptValue, generateToken, hashApiKey, sha256Hex, type KeyProvider } from "@velexis/crypto";
 import {
@@ -56,6 +57,7 @@ import {
 import { startAmadeusStub, type AmadeusStub } from "@velexis/testing/amadeus";
 import request, { type Response } from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { AMADEUS_LIMITS, DEFAULT_AMADEUS_LIMITS, type AmadeusLimits } from "../../../src/amadeus/limits";
 import { BOOKING_TOKEN_PATTERN } from "../../../src/common/auth/booking-access.guard";
 import { CSRF_TOKEN_PATTERN } from "../../../src/common/auth/csrf.guard";
 import { parseBookingTokens, STOREFRONT_COOKIES } from "../../../src/common/http/cookie-writer";
@@ -90,6 +92,32 @@ const SETUP_TIMEOUT_MS = Math.max(OPENAPI_SETUP_TIMEOUT_MS, 90_000);
  * allows for CI load and only stops a journey that hangs.
  */
 const JOURNEY_TIMEOUT_MS = 120_000;
+
+/**
+ * The Amadeus client's buckets of this file: the edge journey makes its searches, prices and bookings for one tenant one
+ * after the other, faster than the tenant bucket's 10-call burst refills on a fast runner, and an empty bucket answers
+ * the journey's next call `429 RATE_LIMITED` before Amadeus is called (CI run 102: the guest's airline-card
+ * completion). The buckets hold enough for the whole file, as in cancel.int.test.ts; the buckets themselves are
+ * rate-limiter.test.ts's subject (limits.ts: tests pass their own).
+ */
+const LIMITS: AmadeusLimits = Object.freeze({
+  ...DEFAULT_AMADEUS_LIMITS,
+  credentialBucket: Object.freeze({ ratePerSecond: 20, burst: 500 }),
+  tenantBucket: Object.freeze({ ratePerSecond: 5, burst: 500 }),
+});
+
+/** A global module that provides LIMITS to the API's Amadeus client and rate limiter. */
+function amadeusLimitsModule(): DynamicModule {
+  @Global()
+  @Module({})
+  class TestAmadeusLimitsModule {}
+  return {
+    module: TestAmadeusLimitsModule,
+    providers: [{ provide: AMADEUS_LIMITS, useValue: LIMITS }],
+    exports: [AMADEUS_LIMITS],
+    global: true,
+  };
+}
 
 const ALPHA_HOST = "alpha.ota.example.com";
 const TERMS_VERSION = "2026-09-01";
@@ -818,7 +846,7 @@ beforeAll(async () => {
   api = await createTestApp({
     database: db,
     redis,
-    imports: [stripeEndpointModule(stripe.endpoint)],
+    imports: [stripeEndpointModule(stripe.endpoint), amadeusLimitsModule()],
     env: {
       AMADEUS_BASE_URL_TEST: stub.url,
       STRIPE_SECRET_KEY_TEST: STRIPE_SECRET_KEY,
