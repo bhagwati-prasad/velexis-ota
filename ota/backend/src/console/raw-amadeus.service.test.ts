@@ -8,7 +8,7 @@ import { AppError, isAppError } from "@velexis/errors";
 import type { PinoLogger } from "nestjs-pino";
 import { describe, expect, it, vi } from "vitest";
 import { buildCreatedOrderBody } from "../../test/builders/bookings";
-import type { AmadeusClient, AmadeusResponse } from "../amadeus/amadeus.client";
+import type { AmadeusCallOptions, AmadeusClient, AmadeusResponse } from "../amadeus/amadeus.client";
 import { AmadeusOfficeNotAllowedError } from "../amadeus/amadeus.client";
 import type { ConnectionResolver } from "../amadeus/connection-resolver";
 import { mapAmadeusError } from "../amadeus/error-mapper";
@@ -357,30 +357,32 @@ const TENANT: RequestTenant = {
 
 function harness(reply: { readonly body: unknown; readonly officeId?: string }) {
   const entries: StaffActionEntry[] = [];
-  const replaced: Array<[string, unknown]> = [];
-  const response = (): AmadeusResponse<unknown> => ({
-    body: reply.body,
-    call: {
-      supplierRequestId: "sreq_01JA4H1A3C5E7G9J1L3N5Q7S9U",
-      officeId: reply.officeId ?? OWN,
-      status: 200,
-      durationMs: 12,
-      correlationId: "0005K2D7QX1JZT",
-      attempts: 1,
-    },
-  });
+  // What the client's supplier_requests row stores of each answer: its `recordedResponse` of it (AmadeusClient).
+  const recorded: unknown[] = [];
+  const response = (options: AmadeusCallOptions): AmadeusResponse<unknown> => {
+    recorded.push(options.recordedResponse === undefined ? reply.body : options.recordedResponse(reply.body));
+    return {
+      body: reply.body,
+      call: {
+        supplierRequestId: "sreq_01JA4H1A3C5E7G9J1L3N5Q7S9U",
+        officeId: reply.officeId ?? OWN,
+        status: 200,
+        durationMs: 12,
+        correlationId: "0005K2D7QX1JZT",
+        attempts: 1,
+      },
+    };
+  };
+  const call = (_context: unknown, _request: unknown, options: AmadeusCallOptions) =>
+    Promise.resolve(response(options));
   const amadeus = {
-    searchFlightOffers: vi.fn(() => Promise.resolve(response())),
-    getFlightOrder: vi.fn(() => Promise.resolve(response())),
+    searchFlightOffers: vi.fn(call),
+    getFlightOrder: vi.fn(call),
   };
   const repository = {
     bookingExists: vi.fn(() => Promise.resolve(false)),
     orderBooking: vi.fn(() => Promise.resolve(undefined)),
     lastSupplierRequestId: vi.fn(() => Promise.resolve(undefined)),
-    replaceSupplierResponse: vi.fn((_trx: TenantTransaction, id: string, body: unknown) => {
-      replaced.push([id, body]);
-      return Promise.resolve();
-    }),
   };
   const audit = {
     recordAlone: vi.fn((entry: StaffActionEntry) => {
@@ -407,7 +409,7 @@ function harness(reply: { readonly body: unknown; readonly officeId?: string }) 
     new Clock(),
     { warn: vi.fn(), info: vi.fn(), error: vi.fn() } as unknown as PinoLogger,
   );
-  return { service, amadeus, repository, entries, replaced };
+  return { service, amadeus, repository, entries, recorded };
 }
 
 describe("the raw read use cases", () => {
@@ -418,12 +420,11 @@ describe("the raw read use cases", () => {
     const error = await h.service.getFlightOrder("eJzOther0001", {}).catch((caught: unknown) => caught);
 
     expect(isAppError(error) ? [error.status, error.code] : error).toEqual([403, "OFFICE_NOT_ALLOWED"]);
-    expect(h.replaced).toEqual([
-      [
-        "sreq_01JA4H1A3C5E7G9J1L3N5Q7S9U",
-        { data: { type: "flight-order", id: "eJzOther0001", withheld: WITHHELD } },
-      ],
-    ]);
+    // The client's row holds the withheld order from its first write (its recordedResponse hook).
+    expect(h.amadeus.getFlightOrder).toHaveBeenCalledWith(expect.anything(), expect.anything(), {
+      recordedResponse: expect.any(Function),
+    });
+    expect(h.recorded).toEqual([{ data: { type: "flight-order", id: "eJzOther0001", withheld: WITHHELD } }]);
     expect(h.entries).toEqual([
       expect.objectContaining({
         action: "amadeus.getFlightOrder",
@@ -436,7 +437,8 @@ describe("the raw read use cases", () => {
 
   it("[OBE-067 AC1] answers the tenant's order with its call and audit row, the supplier log untouched", async () => {
     const own = orderData({ id: "eJzOwn000001", ownerOfficeId: OWN_SECOND });
-    const h = harness({ body: { data: own }, officeId: OWN });
+    const body = { data: own };
+    const h = harness({ body, officeId: OWN });
 
     const result = await h.service.getFlightOrder("eJzOwn000001", { include: ["bags"] });
 
@@ -454,9 +456,11 @@ describe("the raw read use cases", () => {
     expect(h.amadeus.getFlightOrder).toHaveBeenCalledWith(
       expect.objectContaining({ operation: "console.amadeus.getFlightOrder", staffId: TENANT.actor.id }),
       { flightOrderId: "eJzOwn000001", query: { include: ["bags"] } },
-      {},
+      { recordedResponse: expect.any(Function) },
     );
-    expect(h.replaced).toEqual([]);
+    // The row stores the very answer: nothing of the tenant's own order is withheld.
+    expect(h.recorded).toHaveLength(1);
+    expect(h.recorded[0]).toBe(body);
     expect(h.entries).toEqual([
       expect.objectContaining({ action: "amadeus.getFlightOrder", targetId: "eJzOwn000001" }),
     ]);

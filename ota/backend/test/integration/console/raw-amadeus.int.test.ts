@@ -35,7 +35,11 @@ import {
 } from "@velexis/testing";
 import { startAmadeusStub, type AmadeusStub } from "@velexis/testing/amadeus";
 import request, { type Response } from "supertest";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  SupplierRequestsRepository,
+  type SupplierRequestRecord,
+} from "../../../src/amadeus/supplier-requests.repository";
 import { newBookingReference } from "../../../src/bookings/booking-reference";
 import { buildCreateOrderRequest } from "../../../src/bookings/order-request.builder";
 import { newId } from "../../../src/common/ids";
@@ -920,6 +924,49 @@ describe("console.amadeus order reads", () => {
     const [kept] = (betaRow?.response_body as { data: JsonObject[] }).data;
     expect(kept).toMatchObject({ id: betaOrder.id, ownerOfficeId: betaOffice });
     expect(kept).not.toHaveProperty("withheld");
+  });
+
+  it("[OBE-067 AC1] [OF-09 AC3] writes the rows of another office's order reads with the withheld body from their first write", async () => {
+    const betaOrder = await stubOrder({ queuing: betaOffice, owner: betaOffice });
+    const agent = await staffSession(alphaId, "agent");
+    // Every row the API's client writes, as it writes it: the client applies the read's `recordedResponse` hook
+    // (rawRecordedResponseOf) before the insert, the row's first and only write.
+    const repository = api.app.get(SupplierRequestsRepository, { strict: false });
+    const insert = repository.insert.bind(repository);
+    const written: SupplierRequestRecord[] = [];
+    const spy = vi.spyOn(repository, "insert").mockImplementation(async (trx, record) => {
+      written.push(record);
+      await insert(trx, record);
+    });
+    let byId: Response;
+    let byReference: Response;
+    try {
+      byId = await agent.get(`${ORDERS}/${betaOrder.id}`);
+      byReference = await agent.get(
+        `${BY_REFERENCE}?reference=${betaOrder.recordLocator}&originSystemCode=GDS`,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect([answer(byId), answer(byReference)]).toEqual([
+      [403, "OFFICE_NOT_ALLOWED"],
+      [403, "OFFICE_NOT_ALLOWED"],
+    ]);
+    const withheld = { type: "flight-order", id: betaOrder.id, withheld: "office_not_allowed" };
+    expect(written.map((record) => [record.operation, record.responseBody])).toStrictEqual([
+      ["console.amadeus.getFlightOrder", { data: withheld }],
+      ["console.amadeus.getFlightOrderByReference", { data: [withheld] }],
+    ]);
+    for (const record of written) {
+      for (const secret of [betaOrder.lastName, betaOrder.passportNumber.slice(-4), "dictionaries"]) {
+        expect(JSON.stringify(record.responseBody)).not.toContain(secret);
+      }
+    }
+    // And the rows as stored are the rows as written: nothing replaced them afterwards.
+    expect(
+      (await supplierRequestsOf("tenant_alpha", agent.member.staffId)).map((row) => row.response_body),
+    ).toStrictEqual([{ data: withheld }, { data: [withheld] }]);
   });
 
   it("answers an order Amadeus does not have with 404 NOT_FOUND", async () => {

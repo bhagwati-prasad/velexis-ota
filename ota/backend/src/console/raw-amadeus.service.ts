@@ -47,9 +47,9 @@
 //     console.queues.list, OBE-065).
 // In each case the tenant's `supplier_requests` row of the call keeps another office's order (or entry) as its id and
 // the `withheld` marker only (`rawRecordedResponseOf`), so the supplier log never shows another OTA's traveller, PNR
-// or route either. `rawRecordedResponseOf` is pure and has the shape of the Amadeus client's `recordedResponse` hook
-// (FIX-W32-OTA, lead decision (1e) of 2026-10-28), which applies it before the client writes the row; until the hook
-// is wired here (`withholdRecorded`), the row's answer is replaced right after the call, as OBE-064 first did.
+// or route either. `rawRecordedResponseOf` is pure and is the Amadeus client's `recordedResponse` hook (FIX-W32-OTA,
+// lead decision (1e) of 2026-10-28) of each order read and Queue List read: the client applies it before it writes the
+// row, so the row never holds another office's order, not even for a moment.
 //
 // Audit (OADR-0011 point 8 as decided on 2026-10-21): the raw reads are audited reads. Each handler opts in with
 // `@AuditedRead`, and each use case writes its `succeeded` row `amadeus.<operation>` itself, after the read in a
@@ -89,7 +89,6 @@ import type { AmadeusCallContext } from "../amadeus/call-context";
 import { ConnectionResolver, type ResolvedAmadeusConnection } from "../amadeus/connection-resolver";
 import { AmadeusCallError } from "../amadeus/error-mapper";
 import { AMADEUS_OPERATIONS, type AmadeusOperationName } from "../amadeus/limits";
-import { supplierRequestBody } from "../amadeus/supplier-requests.repository";
 import { dictionariesOf } from "../bookings/bookings.mapper";
 import { Clock } from "../common/clock";
 import { IdGenerator } from "../common/ids";
@@ -429,19 +428,6 @@ export class RawAmadeusRepository {
       .orderBy("id", "desc")
       .executeTakeFirst();
     return row?.id;
-  }
-
-  /**
-   * Replaces the stored answer of a `supplier_requests` row through the table's storage rules (the withheld answer of
-   * `rawRecordedResponseOf`, until the client's `recordedResponse` hook writes it in the first place).
-   */
-  async replaceSupplierResponse(trx: TenantTransaction, id: string, body: unknown): Promise<void> {
-    const stored = supplierRequestBody(body);
-    await trx
-      .updateTable("supplier_requests")
-      .set({ response_body: stored.json, ...(stored.truncated ? { truncated: true } : {}) })
-      .where("id", "=", id)
-      .execute();
   }
 }
 
@@ -813,7 +799,8 @@ export class RawAmadeusService {
   /**
    * One Amadeus call (no transaction open): the client's errors answered as the raw reads answer them (`rawErrorOf`),
    * an answer that is not a JSON object `502 SUPPLIER_ERROR`, a call whose row could not be written a failure. With
-   * `recorded` (`rawRecordedResponseOf`), the call's `supplier_requests` row keeps what it leaves of the answer.
+   * `recorded` (`rawRecordedResponseOf`), the client's `recordedResponse` hook, the call's `supplier_requests` row keeps
+   * only what it leaves of the answer, from the row's first write.
    */
   private async send(
     tenant: RequestTenant,
@@ -822,9 +809,9 @@ export class RawAmadeusService {
     link: CallLink = {},
   ): Promise<RawReply> {
     const context = this.context(tenant, read, link.bookingId, link.orderOffice);
-    // FIX-W32-OTA's client takes `link.recorded` here as its `recordedResponse` hook (lead decision (1e) of
-    // 2026-10-28), which then replaces `withholdRecorded` below.
-    const options: AmadeusCallOptions = {};
+    // The client applies `link.recorded` before it writes the row (lead decision (1e) of 2026-10-28).
+    const options: AmadeusCallOptions =
+      link.recorded === undefined ? {} : { recordedResponse: link.recorded };
     let reply: AmadeusResponse<unknown>;
     try {
       reply = await call(context, options);
@@ -840,9 +827,6 @@ export class RawAmadeusService {
       // The answer names its supplier_requests row, which could not be written (the client's log line says why).
       throw new Error(`${read.operation}: the Amadeus call could not be recorded`);
     }
-    if (link.recorded !== undefined) {
-      await this.withholdRecorded(supplierRequestId, reply.body, link.recorded);
-    }
     if (!isRecord(reply.body)) {
       throw new AppError("SUPPLIER_ERROR", {
         message: "Amadeus answered with something that is not an object.",
@@ -857,22 +841,6 @@ export class RawAmadeusService {
       return await this.connections.resolve(tenant.tenantId, tenant.environment);
     } catch (error) {
       throw rawErrorOf(read, error, null);
-    }
-  }
-
-  /**
-   * Keeps another office's orders (or queue entries) out of the tenant's `supplier_requests` row `supplierRequestId`:
-   * its answer is replaced by `recorded` of it when that withholds anything. FIX-W32-OTA's `recordedResponse` hook of
-   * the Amadeus client takes `recorded` instead, so that the row never holds them, not even until this replacement.
-   */
-  private async withholdRecorded(
-    supplierRequestId: string,
-    body: unknown,
-    recorded: (body: unknown) => unknown,
-  ): Promise<void> {
-    const kept = recorded(body);
-    if (kept !== body) {
-      await this.tx.run((trx) => this.repository.replaceSupplierResponse(trx, supplierRequestId, kept));
     }
   }
 
