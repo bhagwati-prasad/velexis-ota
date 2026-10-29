@@ -1630,7 +1630,8 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - The sold-out test ends with the authorisation voided [OF-04 AC2].
 - **Verify:** `E2E_WITH_OTA=1 E2E_STRIPE=1 pnpm test:e2e -- --project=storefront-stripe specs/storefront/checkout-stripe.e2e.ts`, with the Stripe test keys that tools/e2e/README.md lists for the `storefront-stripe` project (nightly in `.github/workflows/e2e.yml`)
 
-### OFE-018 · Write the airline-card journey with leak checks
+### OFE-018 · Write the airline-card journey with leak checks ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M3
 - **Depends on:** OFE-014, OFE-017
