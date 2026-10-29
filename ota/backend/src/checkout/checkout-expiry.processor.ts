@@ -39,6 +39,12 @@
 //
 // A full batch asks for more (the runner re-enqueues the job, fan-out.ts). The job logs `checkouts.expired` with the
 // counts, never an id of a checkout, customer or payment.
+//
+// The suspension's expiry (`tenant.suspend`, OBE-074, provisioning/housekeeping.service.ts; OADR-0007 point 8) uses
+// the same rule: the same selection of checkouts (`open` or `payment_pending`, held by no booking, checked again after
+// the lock by `expireLockedCheckouts`) and the same voidable payments, only without the `expires_at` cut-off, in id
+// order and waiting for the row locks (`lockOpenCheckouts`), and with the voids of exactly the checkouts it expired
+// (`voidablePaymentsOfCheckouts`).
 import { InjectQueue } from "@nestjs/bullmq";
 import { Injectable } from "@nestjs/common";
 import { sql } from "@velexis/db";
@@ -82,16 +88,15 @@ export interface CheckoutExpiryBatch {
 }
 
 /**
- * Step 1: locks at most `limit` checkouts that are `open` or `payment_pending` past their `expires_at` at `now` and
- * that no booking holds (in the statement's snapshot), oldest expiry first, `FOR UPDATE SKIP LOCKED`; answers their
- * ids in that order.
+ * The checkouts an expiry may take (this job's and the suspension's of OBE-074, OADR-0007 point 8): `open` or
+ * `payment_pending`, held by no booking in the statement's snapshot. Steps 2 and 3 (`expireLockedCheckouts`) check
+ * the bookings again once the rows are locked.
  */
-export async function lockDueCheckouts(trx: TenantTransaction, now: Date, limit: number): Promise<string[]> {
-  const rows = await trx
+function expiringCheckouts(trx: TenantTransaction) {
+  return trx
     .selectFrom("checkouts as c")
     .select("c.id")
     .where("c.status", "in", [...EXPIRING_CHECKOUT_STATUSES])
-    .where("c.expires_at", "<=", now)
     .where(({ not, exists, selectFrom }) =>
       not(
         exists(
@@ -100,13 +105,47 @@ export async function lockDueCheckouts(trx: TenantTransaction, now: Date, limit:
             .whereRef("b.checkout_id", "=", "c.id"),
         ),
       ),
-    )
+    );
+}
+
+/**
+ * Step 1: locks at most `limit` checkouts that are `open` or `payment_pending` past their `expires_at` at `now` and
+ * that no booking holds (in the statement's snapshot), oldest expiry first, `FOR UPDATE SKIP LOCKED`; answers their
+ * ids in that order.
+ */
+export async function lockDueCheckouts(trx: TenantTransaction, now: Date, limit: number): Promise<string[]> {
+  const rows = await expiringCheckouts(trx)
+    .where("c.expires_at", "<=", now)
     .orderBy("c.expires_at")
     .orderBy("c.id")
     .limit(limit)
     .forUpdate("c")
     .skipLocked()
     .execute();
+  return rows.map((row) => row.id);
+}
+
+/**
+ * Step 1 of the suspension's expiry (`tenant.suspend`, OBE-074; OADR-0007 point 8,
+ * provisioning/housekeeping.service.ts): locks at most `limit` checkouts that are `open` or `payment_pending` and that
+ * no booking holds (in the statement's snapshot), whatever their `expires_at`, in id order after `after` (the last id
+ * of the previous batch), and answers their ids in that order. It locks `FOR UPDATE` and waits for a lock a request
+ * holds (a checkout step, or the claim of checkout.complete, both short transactions that commit before any Amadeus or
+ * Stripe call), so a suspension leaves no checkout behind; the tenant transaction's statement_timeout bounds the wait.
+ * The rows are locked in id order, as the account deletion locks a customer's checkouts, so the two never deadlock.
+ * Steps 2 and 3 are this job's (`expireLockedCheckouts`): a claim that committed while the statement waited for its
+ * lock leaves its checkout as it was.
+ */
+export async function lockOpenCheckouts(
+  trx: TenantTransaction,
+  after: string | undefined,
+  limit: number,
+): Promise<string[]> {
+  let selection = expiringCheckouts(trx);
+  if (after !== undefined) {
+    selection = selection.where("c.id", ">", after);
+  }
+  const rows = await selection.orderBy("c.id").limit(limit).forUpdate("c").execute();
   return rows.map((row) => row.id);
 }
 
@@ -156,6 +195,36 @@ export async function expireDueCheckouts(
 }
 
 /**
+ * The Stripe payments an expiry voids (this job's and the suspension's): of `expired` checkouts, with a PaymentIntent
+ * in a voidable status, paying for no order (no booking, or a `failed` one). Read without a lock: the void job reads
+ * the payment again.
+ */
+function voidablePayments(trx: TenantTransaction) {
+  return (
+    trx
+      .selectFrom("payments as p")
+      .innerJoin("checkouts as c", "c.id", "p.checkout_id")
+      .select("p.id")
+      // Both environments, by name: the leading column of `payments_status_idx` (environment, status, created_at).
+      .where("p.environment", "in", ["test", "live"])
+      .where("p.status", "in", [...VOIDABLE_STATUSES])
+      .where("p.provider", "=", "stripe")
+      .where("p.provider_payment_id", "is not", null)
+      .where("c.status", "=", "expired")
+      .where(({ not, exists, selectFrom }) =>
+        not(
+          exists(
+            selectFrom("bookings as b")
+              .select(sql<number>`1`.as("booked"))
+              .whereRef("b.id", "=", "p.booking_id")
+              .where("b.status", "<>", "failed"),
+          ),
+        ),
+      )
+  );
+}
+
+/**
  * The Stripe payments to void (see the file header): of checkouts that expired at `expiredSince` or later, with a
  * PaymentIntent in a voidable status, paying for no order (no booking, or a `failed` one); newest expiry first, then
  * by id, at most `limit`. Read without a lock: the void job reads the payment again.
@@ -165,30 +234,30 @@ export async function voidablePaymentsOfExpiredCheckouts(
   expiredSince: Date,
   limit: number,
 ): Promise<string[]> {
-  const rows = await trx
-    .selectFrom("payments as p")
-    .innerJoin("checkouts as c", "c.id", "p.checkout_id")
-    .select("p.id")
-    // Both environments, by name: the leading column of `payments_status_idx` (environment, status, created_at).
-    .where("p.environment", "in", ["test", "live"])
-    .where("p.status", "in", [...VOIDABLE_STATUSES])
-    .where("p.provider", "=", "stripe")
-    .where("p.provider_payment_id", "is not", null)
-    .where("c.status", "=", "expired")
+  const rows = await voidablePayments(trx)
     .where("c.updated_at", ">=", expiredSince)
-    .where(({ not, exists, selectFrom }) =>
-      not(
-        exists(
-          selectFrom("bookings as b")
-            .select(sql<number>`1`.as("booked"))
-            .whereRef("b.id", "=", "p.booking_id")
-            .where("b.status", "<>", "failed"),
-        ),
-      ),
-    )
     .orderBy("c.updated_at", "desc")
     .orderBy("p.id")
     .limit(limit)
+    .execute();
+  return rows.map((row) => row.id);
+}
+
+/**
+ * The Stripe payments to void of the checkouts `checkoutIds` that an expiry has just made `expired` (the suspension's,
+ * OBE-074), by the rule of `voidablePaymentsOfExpiredCheckouts`, in id order: all of them, since a checkout has one
+ * live payment and at most a few earlier ones whose release is still due.
+ */
+export async function voidablePaymentsOfCheckouts(
+  trx: TenantTransaction,
+  checkoutIds: readonly string[],
+): Promise<string[]> {
+  if (checkoutIds.length === 0) {
+    return [];
+  }
+  const rows = await voidablePayments(trx)
+    .where("c.id", "in", [...checkoutIds])
+    .orderBy("p.id")
     .execute();
   return rows.map((row) => row.id);
 }

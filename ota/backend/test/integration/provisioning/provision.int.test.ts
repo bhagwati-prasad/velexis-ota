@@ -612,9 +612,11 @@ describe("tenant.provision on ota-tenant-ops", () => {
     expect(await catalogHash("tenant_foxtrot")).toBe(await catalogHash("tenant_golf"));
   });
 
-  it("fails a message this release does not handle as unrecoverable, without an event", async () => {
+  it("fails a message outside the queue's contract as unrecoverable, without an event", async () => {
     const tenantId = await insertTenant({ key: "hotel", name: "Hotel Hops", status: "active" });
-    const message = { ...provisionMessage(tenantId), name: "tenant.resume" as const };
+    // Every message of the contract is handled since OBE-074 (tenant.suspend and tenant.resume:
+    // suspend-resume.int.test.ts); a name the contract does not have is refused at once.
+    const message = { ...provisionMessage(tenantId), name: "tenant.delete" as const };
 
     const outcome = await dispatch(message, 1);
 

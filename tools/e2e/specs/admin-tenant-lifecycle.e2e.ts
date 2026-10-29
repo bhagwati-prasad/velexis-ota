@@ -4,17 +4,20 @@
 // e2e workflow sets it).
 //
 //   the admin finds the OTA by its owner's e-mail address → suspends it with a reason → the suspension job dispatches
-//   `tenant.suspend` to the OTA worker → the owner sees the suspended banner in the portal and gets an e-mail → the
-//   admin resumes it → the banner is gone → both actions, with their reasons, are in the OTA's audit tab → the OTA's
-//   jobs, filtered in the URL, and the queues of both backends → the OTA queue's failed attempt of the suspension, with
-//   its reason and no retry
+//   `tenant.suspend` to the OTA worker, which answers `tenant.suspended`, and the job is done → the owner sees the
+//   suspended banner in the portal and gets an e-mail → the admin resumes it → the banner is gone → both actions, with
+//   their reasons, are in the OTA's audit tab → the OTA's jobs, done and filtered in the URL, and the queues of both
+//   backends → a migration to a version the OTA worker's release does not have fails, and its job shows the reason →
+//   the OTA queue's failed attempt of that migration, with its reason and no retry
 //
-// The OTA worker of M1 does not handle `tenant.suspend` and `tenant.resume` (ota/backend/src/provisioning/
-// tenant-ops.processor.ts; the consumer comes with OBE-074 in M4): it fails each dispatch attempt at once as
-// unrecoverable, and the platform job stays `running` until the reconciler counts the attempt as lost. So the journey
-// checks the dispatch and, for PF-84, that failed attempt in `ota-tenant-ops`. The storefront following a suspension
-// is PAD-011's journey, the OTA API's `TENANT_SUSPENDED` PBE-036's cross-backend test. Once OBE-074 answers the
-// messages, the last step changes to the jobs' success.
+// Since OBE-074 the OTA worker handles `tenant.suspend` and `tenant.resume` (ota/backend/src/provisioning/
+// housekeeping.service.ts: the staff cut-off, the expiry of open checkouts and their voids, PADR-0014 item 3) and
+// answers both, so the suspension's and the resumption's jobs end `succeeded`. PF-84's failed job with its reason comes
+// from a `migrate` job whose target version no tenant migration of the release has: the OTA worker answers
+// `tenant.migration_failed` (`UNKNOWN_TARGET_VERSION`, not retryable) and fails the dispatch attempt at once as
+// unrecoverable, so the attempt is listed in `ota-tenant-ops` with its reason and the job ends `failed` with it, while
+// the OTA's status does not change (PADR-0001 item 7). The storefront following a suspension is PAD-011's journey, the
+// OTA API's `TENANT_SUSPENDED` PBE-036's cross-backend test.
 //
 // The steps are tests in order (`mode: "serial"`) on the admin's page and the owner's page: a failed step stops the
 // rest. Every page the journey visits passes `expectNoSeriousA11yViolations` once its title is in place.
@@ -51,12 +54,32 @@ async function expectAccessible(
 
 const SUSPEND_REASON = "Card testing reported by the acquirer (PAD-010 journey).";
 const RESUME_REASON = "The OTA closed the abused search form (PAD-010 journey).";
+/** A tenant migration version of the right shape that no release has: the OTA worker refuses it, not retryable. */
+const UNKNOWN_TARGET_VERSION = "9999_not_in_this_release";
+
+/**
+ * Reloads `target` (a server-rendered snapshot) until the job summary's first description list matches `pattern`;
+ * the OTA worker answers within milliseconds, and the platform worker applies the answer right after.
+ */
+async function expectJobSummary(target: Page, pattern: RegExp): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        await target.reload();
+        return await target.locator("dl").first().innerText();
+      },
+      { timeout: 15_000 },
+    )
+    .toMatch(pattern);
+}
 
 let owner: PortalAccount;
 let admin: MfaAccount;
 let ota: Ota;
 /** The suspension's provisioning job (`job_…`), from the outcome's link. */
 let suspensionJobId: string;
+/** The migration's provisioning job (`job_…`), from the outcome's link. */
+let migrationJobId: string;
 let adminContext: BrowserContext;
 let adminPage: Page;
 let ownerContext: BrowserContext;
@@ -133,28 +156,22 @@ test("suspends the OTA with a reason; the outcome shows its new status and the s
   await expectAccessible(adminPage, "Tenant");
 });
 
-test("the suspension job sends tenant.suspend to the OTA worker [PAD-010 AC1]", async () => {
+test("the suspension job sends tenant.suspend to the OTA worker, which answers it: the job is done [OBE-074] [PAD-010 AC1]", async () => {
   const outcome = adminPage.getByRole("status").filter({ hasText: "The OTA is suspended." });
   await outcome.getByRole("link").click();
   await adminPage.waitForURL(/\/provisioning-jobs\/job_[0-9A-HJKMNP-TV-Z]{26}$/);
   const jobId = new URL(adminPage.url()).pathname.split("/").pop() ?? "";
   suspensionJobId = jobId;
   await expect(adminPage.getByRole("heading", { level: 1 })).toBeVisible();
-  // PF-82 and PF-83: the job dispatches `tenant.suspend` to `ota-tenant-ops` (its BullMQ job `<job id>-<attempt>`).
-  // The page is a snapshot, so it is reloaded until it shows the dispatch, which happens right after the commit. The
-  // OTA worker of M1 does not handle the message yet (M4–M5), so the job is retried and ends failed later, while the
-  // OTA stays suspended (flows/platform-admin-operations.md "Failure handling"): its status is not part of the check.
-  await expect
-    .poll(
-      async () => {
-        await adminPage.reload();
-        return await adminPage.locator("dl").first().innerText();
-      },
-      { timeout: 10_000 },
-    )
-    .toMatch(new RegExp(`BullMQ job\\s+${jobId}-\\d+ on ota-tenant-ops`));
-  await expect(adminPage.locator("dl").first()).toContainText("Suspension");
-  await expect(adminPage.locator("dl").first()).toContainText(ota.key);
+  // PF-82 and PF-83: the job dispatches `tenant.suspend` to `ota-tenant-ops` (its BullMQ job `<job id>-<attempt>`),
+  // and the OTA worker's `tenant.suspended` marks it done (OBE-074). The page is a snapshot, so it is reloaded until it
+  // shows both.
+  await expectJobSummary(adminPage, /Status\s+Done/);
+  const summary = adminPage.locator("dl").first();
+  // The text content of the description list has no spaces between its terms and values.
+  await expect(summary).toContainText(new RegExp(`BullMQ job\\s*${jobId}-\\d+\\s*on\\s*ota-tenant-ops`));
+  await expect(summary).toContainText("Suspension");
+  await expect(summary).toContainText(ota.key);
   await expectAccessible(adminPage, "Provisioning job");
 });
 
@@ -215,12 +232,22 @@ test("the OTA's jobs are listed and filtered in the URL, next to the queues of b
     (url) => url.pathname === "/provisioning-jobs" && url.searchParams.get("tenantId") === ota.id,
   );
   await expect(adminPage.getByText("Only the jobs of one OTA are shown.")).toBeVisible();
-  // PF-83: the set-up (done), the suspension and the resumption (dispatched; see the suspension step above).
+  // PF-83: the set-up, the suspension and the resumption, each answered by the OTA worker and done (OBE-074). The
+  // list is a snapshot, so it is reloaded until the resumption's answer has arrived too.
   const rows = adminPage.getByRole("row").filter({ hasText: ota.key });
+  await expect
+    .poll(
+      async () => {
+        await adminPage.reload();
+        return await rows.filter({ hasText: "Done" }).count();
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(3);
   await expect(rows).toHaveCount(3);
-  await expect(rows.filter({ hasText: "Set-up" })).toContainText("Done");
-  for (const kind of ["Suspension", "Resumption"]) {
+  for (const kind of ["Set-up", "Suspension", "Resumption"]) {
     await expect(rows.filter({ hasText: kind })).toHaveCount(1);
+    await expect(rows.filter({ hasText: kind })).toContainText("Done");
   }
   await expectAccessible(adminPage, "Provisioning jobs");
 
@@ -241,7 +268,38 @@ test("the OTA's jobs are listed and filtered in the URL, next to the queues of b
   await expectAccessible(adminPage, "Queues");
 });
 
-test("the OTA queue lists the suspension's failed attempt with its reason, view only [PAD-010 AC1]", async () => {
+test("a migration to a version the release does not have fails on the OTA worker, and its job shows why [OBE-074] [PAD-010 AC1]", async () => {
+  await adminPage.goto(`/tenants/${ota.id}`);
+  await expect(adminPage.getByRole("heading", { level: 1, name: ota.name })).toBeVisible();
+  await adminPage.getByLabel("Target version (optional)").fill(UNKNOWN_TARGET_VERSION);
+  await adminPage.getByRole("button", { name: "Migrate", exact: true }).click();
+  // ConfirmDialog asks first (an alert dialog: it confirms, it takes no input).
+  const dialog = adminPage.getByRole("alertdialog", { name: `Run the tenant migrations of ${ota.name}?` });
+  await expect(dialog).toContainText(UNKNOWN_TARGET_VERSION);
+  await expectNoSeriousA11yViolations(adminPage);
+  await dialog.getByRole("button", { name: "Start migration" }).click();
+  const outcome = adminPage
+    .getByRole("status")
+    .filter({ hasText: "The migrate job is on its way to the OTA worker." });
+  await expect(outcome).toContainText("Migration");
+  await expectAccessible(adminPage, "Tenant");
+
+  await outcome.getByRole("link").click();
+  await adminPage.waitForURL(/\/provisioning-jobs\/job_[0-9A-HJKMNP-TV-Z]{26}$/);
+  migrationJobId = new URL(adminPage.url()).pathname.split("/").pop() ?? "";
+  // PF-83 and PF-84: the OTA worker answers `tenant.migration_failed` (not retryable), so the job fails at once with
+  // the OTA worker's reason; the OTA stays active (PADR-0001 item 7).
+  await expectJobSummary(adminPage, /Status\s+Failed/);
+  const summary = adminPage.locator("dl").first();
+  await expect(summary).toContainText("Migration");
+  await expect(summary).toContainText(
+    `UNKNOWN_TARGET_VERSION: No tenant migration of this release has the target version ${UNKNOWN_TARGET_VERSION}`,
+  );
+  await expectAccessible(adminPage, "Provisioning job");
+});
+
+test("the OTA queue lists the migration's failed attempt with its reason, view only [OBE-074] [PAD-010 AC1]", async () => {
+  await adminPage.goto("/queues");
   await adminPage
     .getByRole("region", { name: "OTA queues" })
     .getByRole("link", { name: "ota-tenant-ops", exact: true })
@@ -249,9 +307,9 @@ test("the OTA queue lists the suspension's failed attempt with its reason, view 
   await adminPage.waitForURL("/queues/ota-tenant-ops");
   await expect(adminPage.getByRole("heading", { level: 1, name: "ota-tenant-ops" })).toBeVisible();
   await expect(adminPage.getByText("OTA queue, view only")).toBeVisible();
-  // PF-84: a failed job shows its reason. The OTA worker of M1 refuses `tenant.suspend` as soon as it takes the
+  // PF-84: a failed job shows its reason. The OTA worker refuses the migration's target as soon as it takes the
   // attempt (see the file header); the page is a snapshot, so it is reloaded until the attempt is listed.
-  const attempt = adminPage.getByRole("row").filter({ hasText: `${suspensionJobId}-` });
+  const attempt = adminPage.getByRole("row").filter({ hasText: `${migrationJobId}-` });
   await expect
     .poll(
       async () => {
@@ -261,13 +319,17 @@ test("the OTA queue lists the suspension's failed attempt with its reason, view 
       { timeout: 10_000 },
     )
     .toBe(1);
-  await expect(attempt).toContainText("tenant.suspend");
-  await expect(attempt).toContainText("tenant.suspend is not handled by this release of the OTA worker");
+  await expect(attempt).toContainText("tenant.migrate");
+  await expect(attempt).toContainText(
+    `UNKNOWN_TARGET_VERSION: No tenant migration of this release has the target version ${UNKNOWN_TARGET_VERSION}`,
+  );
   // A dispatch attempt links to its provisioning job, where a tenant job is retried (PF-83).
   await expect(attempt.getByRole("link", { name: "Provisioning job" })).toHaveAttribute(
     "href",
-    `/provisioning-jobs/${suspensionJobId}`,
+    `/provisioning-jobs/${migrationJobId}`,
   );
+  // The suspension's attempt completed (OBE-074), so it is not among the failed jobs.
+  await expect(adminPage.getByRole("row").filter({ hasText: `${suspensionJobId}-` })).toHaveCount(0);
   // PF-84: retry for platform queues only; an OTA queue offers none.
   await expect(adminPage.getByRole("button", { name: /^Retry/ })).toHaveCount(0);
   await expectAccessible(adminPage, "Queues");

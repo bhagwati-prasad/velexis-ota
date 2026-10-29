@@ -1985,7 +1985,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - After `reset` the next e-mail uses the code default.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- settings && pnpm --filter @velexis/ota-backend test:int settings`
 
-### OBE-074 · Handle tenant.suspend and tenant.resume
+### OBE-074 · Handle tenant.suspend and tenant.resume ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M4
 - **Depends on:** OBE-006, OBE-056, OBE-059
