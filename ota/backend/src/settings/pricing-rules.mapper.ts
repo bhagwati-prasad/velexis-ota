@@ -67,10 +67,15 @@ type MoneyAmount = Schemas["Money"];
 
 /** A markup rule as a create writes it: every field of the input, the omitted ones defaulted. */
 export type MarkupRuleState = Required<MarkupRuleInput>;
+/**
+ * Every column of `T`, each with a value. Not `Required<T>`: since Kysely 0.28.18 `Updateable` types every column as
+ * `… | undefined`, which `Required` keeps under `exactOptionalPropertyTypes`, and an insert needs the values.
+ */
+type AllColumns<T> = { [K in keyof T]-?: Exclude<T[K], undefined> };
 /** Every column a markup rule's create or update writes. */
-export type MarkupRuleColumns = Required<MarkupRuleChanges>;
+export type MarkupRuleColumns = AllColumns<MarkupRuleChanges>;
 /** Every column a fee rule's create or update writes. */
-export type FeeRuleColumns = Required<FeeRuleChanges>;
+export type FeeRuleColumns = AllColumns<FeeRuleChanges>;
 /** A fee rule as a create writes it: every field of the input, the omitted ones defaulted. */
 export type FeeRuleState = Required<FeeRuleInput>;
 
