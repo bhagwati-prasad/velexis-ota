@@ -899,7 +899,7 @@ const OFFICE_SETUP_ATTEMPTS = 3;
 /**
  * A new portal account (`fullName`), verified and signed in, that creates an OTA through `createTenant` (a key of
  * `keyPrefix` and 10 random hex digits) and waits for the OTA worker to set it up (`active`, about 2 s locally) with
- * its Amadeus test connection on an office of the Velexis test pool (ten from the platform's dev:seed).
+ * its Amadeus test connection on an office of the Velexis test pool (twenty from the platform's dev:seed).
  *
  * The set-up passes over offices that another transaction holds, and admin-amadeus-pool.e2e.ts holds every available
  * one while its own OTA is set up (`withAvailableOfficesHeld`): an OTA set up in those seconds gets a connection that

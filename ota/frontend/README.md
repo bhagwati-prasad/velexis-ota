@@ -267,6 +267,7 @@ const apiProxy = {                                          // server.proxy and 
 | Storefront `header` block (CSP and the other headers) | `vite preview` only: `STOREFRONT_HEADERS`, a copy that `test/csp.test.js` compares with the Caddyfile. No HSTS (plain HTTP); the dev server sends no CSP (it injects HMR code). |
 | Storefront `header` block: `-Cross-Origin-Opener-Policy` (the API's helmet adds COOP `same-origin` to every answer) | The proxy drops the API's COOP too (`test/pay-airline.test.js`), so only the airline-card page sends COOP `same-origin` |
 | `header @pay_airline` (the airline-card page's CSP, COOP `same-origin`, `no-store`) | `vite preview` only: `PAY_AIRLINE_HEADERS` of `vite.config.js` on `/checkout/pay-airline.html` and `/checkout/pay-airline`, which `test/pay-airline.test.js` compares with the Caddyfile |
+| `header @public_asset` (`/api/v1/assets/*`, the OTA API's public images: the API's own `Content-Security-Policy: default-src 'none'` instead of the storefront CSP; lead decision (2b) of 2026-10-30, FIX-W34-SHARED) | Nothing of its own: the proxy passes the API's answers on with the API's headers (`STOREFRONT_HEADERS` go only on the files and the 404 page that `vite preview` serves itself), so an image keeps `getPublicAsset`'s CSP |
 
 The variables are listed in [`.env.example`](.env.example) (`STOREFRONT_DEV_PORT` and `STOREFRONT_PREVIEW_PORT` move the ports). `vite build` needs none of them.
 

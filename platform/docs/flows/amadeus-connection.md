@@ -60,7 +60,7 @@ sequenceDiagram
 1. A platform admin creates one `amadeus_accounts` row per environment (`test` in M1, `live` before the first OTA goes live in M5). The secret is envelope-encrypted with associated data `platform.amadeus_accounts.client_secret_ciphertext:<id>`.
 2. The `amadeus_account.verify` job decrypts the secret, requests an OAuth token from `{baseUrl}/v1/security/oauth2/token` with a 10 s timeout, discards the token, and sets `active` or `invalid_credentials` with a short `last_error` (HTTP status and Amadeus error code, never the body).
 3. Rotating the secret is an update of the same row followed by verification and a `vx:invalidate` `{type: "amadeus_account", id}`. The OTA backend drops its cached account row; cached Amadeus access tokens expire on their own.
-4. Offices are added in bulk (one id per line, 9 characters, upper-cased). Duplicates are skipped. The daily `amadeus.pool_level` job e-mails ops when fewer than 3 offices are `available` in an environment. In development, `pnpm --filter @velexis/platform-backend dev:seed` creates a test account pointing at the Amadeus stub (`http://127.0.0.1:4900`) and 10 offices.
+4. Offices are added in bulk (one id per line, 9 characters, upper-cased). Duplicates are skipped. The daily `amadeus.pool_level` job e-mails ops when fewer than 3 offices are `available` in an environment. In development, `pnpm --filter @velexis/platform-backend dev:seed` creates a test account pointing at the Amadeus stub (`http://127.0.0.1:4900`) and 20 offices, `DEV1A0001` to `DEV1A0020` (10 until 2026-10-30, lead decision (2f): whole e2e runs set up one OTA per journey).
 
 ### B. Test office at provisioning (M1)
 

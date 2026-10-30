@@ -698,8 +698,8 @@ export interface SeedCommand {
 
 /**
  * The development seeds, in order (E2E_WITH_OTA=1; nothing otherwise): the platform's `dev:seed` (the platform admin
- * `admin@example.com`, the Velexis test Amadeus account, verified against the stub, and its ten test offices), then the
- * OTA backend's (the demo OTA on DEMO_STOREFRONT_HOST with an Amadeus test connection and `tenant_demo`). Both are
+ * `admin@example.com`, the Velexis test Amadeus account, verified against the stub, and its twenty test offices), then
+ * the OTA backend's (the demo OTA on DEMO_STOREFRONT_HOST with an Amadeus test connection and `tenant_demo`). Both are
  * idempotent: a journey that runs one again changes nothing.
  */
 export function seedCommands(context: StackContext): readonly SeedCommand[] {

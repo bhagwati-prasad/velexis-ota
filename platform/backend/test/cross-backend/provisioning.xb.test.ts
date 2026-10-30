@@ -1,7 +1,7 @@
 // Provisioning end to end with the real OTA worker (PBE-035; platform/docs/flows/provisioning.md "Tests that prove
 // it", PADR-0017 item 2, OADR-0007). The stack of ./stack.ts runs the platform API and worker and the BUILT OTA worker
 // (ota/backend/dist/worker.js) on one database clone and one Redis database, after `dev:seed` has put the verified
-// Velexis test Amadeus account and its ten test offices in place. No fake answers here: the OTA worker builds the
+// Velexis test Amadeus account and its twenty test offices in place. No fake answers here: the OTA worker builds the
 // schema as velexis_provisioner and answers `tenant.provisioned`, and the platform worker runs the post-steps.
 //
 // The journey goes through the public API, as the portal does: a person signs up, verifies the address with the

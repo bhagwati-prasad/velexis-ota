@@ -31,9 +31,18 @@
 #     and `Cache-Control: no-store`, also through path variants that serve it; no other storefront path (pages,
 #     assets, the 404 page, the /api proxy, whose upstream sends COOP `same-origin` as the APIs' helmet does) sends
 #     COOP `same-origin`;
+#   - the OTA API's public images through the storefront (/api/v1/assets/<key>/<id>.png, getPublicAsset, OADR-0012
+#     point 3; lead decision (2b) of 2026-10-30, FIX-W34-SHARED) carry exactly the API's own CSP `default-src 'none'`,
+#     also through path variants, with the other storefront headers (HSTS, nosniff, Referrer-Policy, no COOP, no
+#     Server), while every other /api answer (/api/v1/storefront, ...) gets the storefront CSP instead of the CSP the
+#     upstream sends, as the OTA API's helmet does;
 #   - on api.ota.localhost and api.platform.localhost, /internal/* and /health/ready (and the same variants)
 #     answer 404 without reaching the upstream, /health/live reaches it, and client copies of the edge headers are
 #     removed;
+#   - request bodies (lead decision (2c) of 2026-10-30, FIX-W34-SHARED): POST /v1/console/settings/assets on
+#     api.ota.localhost passes a body of 1,060,000 bytes whole to the upstream and answers 413 to 1,200,000 (1100KiB);
+#     every other route and method of both API hosts passes 990,000 bytes and answers 413 to 1,060,000 (1MB), and the
+#     storefront's /api keeps its 256KB;
 #   - an unknown host (evil.localhost) and a storefront key the `ask` endpoint refuses get no certificate: the
 #     TLS handshake fails after Caddy asked, and nothing is stored;
 #   - the portal and both admin hosts reach their app (3000, 3001, 3002) with the security headers;
@@ -473,6 +482,60 @@ fetch "api.$STOREFRONT" /x
 same "the OTA API's own answer (api.$STOREFRONT) carries the upstream's COOP same-origin [OFE-014 AC3]" \
   "$(coop_values)" same-origin
 
+# ---- 5c. the OTA API's public images (getPublicAsset, OADR-0012 point 3, lead decision (2b) of 2026-10-30) --------
+step "Public images on $TENANT: the OTA API's own CSP default-src 'none'; the storefront CSP on the rest of /api"
+ASSET_FILE=acme/ast_01JA2Z7Q4M9R2T6V0X3Z8B1D5F.png
+ASSET_PATH="/v1/assets/$ASSET_FILE"
+ASSET_CSP="default-src 'none'"                         # PUBLIC_ASSET_CSP of the OTA API's getPublicAsset
+HELMET_CSP="default-src 'none'; frame-ancestors 'none'" # the echo's CSP on every other answer, as the OTA API's helmet
+# What the storefront has to change: the OTA API's own answers, as api.$STOREFRONT passes them on.
+fetch "api.$STOREFRONT" "$ASSET_PATH"
+same "the OTA API's image (api.$STOREFRONT$ASSET_PATH) carries its own CSP default-src 'none' [FIX-W34-SHARED 2b]" \
+  "$(header_count Content-Security-Policy) $(header Content-Security-Policy)" "1 $ASSET_CSP"
+fetch "api.$STOREFRONT" /v1/storefront
+same "the OTA API's other answers (api.$STOREFRONT/v1/storefront) carry helmet's CSP [FIX-W34-SHARED 2b]" \
+  "$(header Content-Security-Policy)" "$HELMET_CSP"
+public_image_headers() { # label: the last response is the OTA API's image with its own CSP and the storefront headers
+  same "$1 carries exactly one CSP, the OTA API's own default-src 'none' [FIX-W34-SHARED 2b]" \
+    "$(header_count Content-Security-Policy) $(header Content-Security-Policy)" "1 $ASSET_CSP"
+  same "$1 keeps the image's Content-Type and Cache-Control [FIX-W34-SHARED 2b]" \
+    "$(header Content-Type) | $(header Cache-Control)" "image/png | public, max-age=31536000, immutable"
+  same "$1 has HSTS (ADR-0027) [FIX-W34-SHARED 2b]" "$(header Strict-Transport-Security)" "max-age=31536000"
+  same "$1 has X-Content-Type-Options nosniff, once [FIX-W34-SHARED 2b]" \
+    "$(header_count X-Content-Type-Options) $(header X-Content-Type-Options)" "1 nosniff"
+  same "$1 has the storefront's Referrer-Policy and Permissions-Policy [FIX-W34-SHARED 2b]" \
+    "$(header Referrer-Policy) | $(header Permissions-Policy)" \
+    "strict-origin-when-cross-origin | camera=(), microphone=(), geolocation=()"
+  same "$1 has no Cross-Origin-Opener-Policy (the storefront removes the API's) [FIX-W34-SHARED 2b]" \
+    "$(header_count Cross-Origin-Opener-Policy)" 0
+  same "$1 hides the Server header [FIX-W34-SHARED 2b]" "$(header_count Server)" 0
+}
+fetch "$TENANT" "/api$ASSET_PATH"
+same "/api$ASSET_PATH answers 200 from the OTA API as $ASSET_PATH [FIX-W34-SHARED 2b]" \
+  "$STATUS $(json port) $(json url)" "200 4000 $ASSET_PATH"
+public_image_headers "/api$ASSET_PATH"
+fetch "$TENANT" "/api$ASSET_PATH?v=2"
+public_image_headers "/api$ASSET_PATH?v=2"
+# Other spellings of the path, sent as they are: wherever the OTA API answers with the image, the image's own CSP;
+# elsewhere one CSP all the same.
+for path in "/API/V1/ASSETS/$ASSET_FILE" "/api//v1/assets/$ASSET_FILE" "/api/v1/x/../assets/$ASSET_FILE" \
+  "/api/v1/assets/acme/./${ASSET_FILE#acme/}"; do
+  fetch "$TENANT" "$path" --path-as-is
+  if [ "$(header Content-Type)" = image/png ]; then
+    public_image_headers "$path (variant, the image)"
+  else
+    same "$path (variant, $STATUS, not the image) carries exactly one CSP [FIX-W34-SHARED 2b]" \
+      "$(header_count Content-Security-Policy)" 1
+  fi
+done
+# Every other answer of the OTA API through the storefront: the storefront CSP, never the API's own.
+for path in /api/v1/storefront /api/v1/storefront/pages/terms /api/v1/assets /api/v1/assetsx/acme/x.png; do
+  fetch "$TENANT" "$path"
+  same "$path reaches the OTA API ($STATUS) [FIX-W34-SHARED 2b]" "$(json port)" 4000
+  check "$path: the storefront CSP with worker-src 'none', not the API's own [FIX-W34-SHARED 2b]" \
+    csp_has "${CSP_DIRECTIVES[@]}" "$STOREFRONT_SCRIPTS"
+done
+
 # ---- 6. the API hosts -------------------------------------------------------------------------------------------
 for api in "api.$STOREFRONT 4000" "api.$PLATFORM 3100"; do
   read -r host port <<<"$api"
@@ -489,6 +552,48 @@ for api in "api.$STOREFRONT 4000" "api.$PLATFORM 3100"; do
   same "a client's X-Velexis-Host is removed [X-022 AC1]" "$(json headers.x-velexis-host)" ""
   same "$host has HSTS (ADR-0027)" "$(header Strict-Transport-Security)" "max-age=31536000"
 done
+
+# ---- 6a. request body limits of the API hosts (lead decision (2c) of 2026-10-30) ---------------------------------
+UPLOAD=/v1/console/settings/assets # consoleUploadStorefrontAsset (OADR-0012 point 2)
+step "Request bodies: up to 1100KiB for POST $UPLOAD on api.$STOREFRONT, 1MB on every other route of both API hosts"
+# 1MB is 1,000,000 bytes and 1100KiB 1,126,400; the OTA API itself refuses an upload above 1 MiB + 16 KiB (1,064,960).
+UPLOAD_OK=1060000  # passes the upload route, which the API accepts; too large for every other route
+UPLOAD_BIG=1200000 # too large for the upload route as well
+UNDER_1MB=990000   # passes every route
+body_file() { # bytes -> a file of that many bytes in the temporary folder (written once)
+  local file="$TMP/body-$1.bin"
+  [ -s "$file" ] || head -c "$1" /dev/zero >"$file"
+  printf '%s' "$file"
+}
+send_body() { # host path bytes [method] -> fetch with a request body of that many bytes (POST unless given)
+  # `Expect:` (empty) keeps curl from sending `Expect: 100-continue` with a body above 1 MB when it falls back to
+  # HTTP/1.1: Caddy then answers `100 Continue` and closes the connection at the limit, and curl can see an empty
+  # reply (exit 52) instead of the 413 about one time in twenty-five. Over HTTP/2, which curl negotiates here, curl
+  # sends no Expect header anyway.
+  fetch "$1" "$2" -X "${4:-POST}" -H "Content-Type: application/octet-stream" -H "Expect:" \
+    --data-binary "@$(body_file "$3")"
+}
+send_body "api.$STOREFRONT" "$UPLOAD" "$UPLOAD_OK"
+same "POST $UPLOAD with $UPLOAD_OK bytes reaches the OTA API with every byte [FIX-W34-SHARED 2c]" \
+  "$STATUS $(json port) $(json method) $(json url) $(json bytes)" "200 4000 POST $UPLOAD $UPLOAD_OK"
+send_body "api.$STOREFRONT" "$UPLOAD" "$UPLOAD_BIG"
+same "POST $UPLOAD with $UPLOAD_BIG bytes answers 413 from Caddy [FIX-W34-SHARED 2c]" "$STATUS $(json port)" "413 "
+send_body "api.$STOREFRONT" /v1/console/settings/pages "$UPLOAD_OK"
+same "POST /v1/console/settings/pages (another route) with $UPLOAD_OK bytes answers 413 [FIX-W34-SHARED 2c]" \
+  "$STATUS $(json port)" "413 "
+send_body "api.$STOREFRONT" "$UPLOAD" "$UPLOAD_OK" PUT
+same "PUT $UPLOAD (another method) with $UPLOAD_OK bytes answers 413 [FIX-W34-SHARED 2c]" "$STATUS $(json port)" "413 "
+for host in "api.$STOREFRONT" "api.$PLATFORM"; do
+  send_body "$host" /v1/console/settings/pages "$UNDER_1MB"
+  same "$host: POST /v1/console/settings/pages with $UNDER_1MB bytes reaches the upstream [FIX-W34-SHARED 2c]" \
+    "$STATUS $(json bytes)" "200 $UNDER_1MB"
+done
+send_body "api.$PLATFORM" "$UPLOAD" "$UPLOAD_OK"
+same "api.$PLATFORM: POST $UPLOAD with $UPLOAD_OK bytes answers 413 (1MB on every route) [FIX-W34-SHARED 2c]" \
+  "$STATUS $(json port)" "413 "
+send_body "$TENANT" "/api$UPLOAD" 300000
+same "$TENANT: POST /api$UPLOAD with 300000 bytes answers 413 (the storefront's 256KB) [FIX-W34-SHARED 2c]" \
+  "$STATUS $(json port)" "413 "
 
 # The Next.js hosts: portal, platform admin, OTA admin.
 NEXT_HOSTS=("$PLATFORM 3000" "admin.$PLATFORM 3001" "admin.$STOREFRONT 3002")

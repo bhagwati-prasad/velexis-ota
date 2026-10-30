@@ -24,7 +24,7 @@
 //      has none), as `pnpm db:seed:reference` would load it, written as velexis_platform_app.
 //   4. **The Amadeus stub** in this process (`@velexis/testing/amadeus`, a free port) and **`dev:seed`** (PBE-034)
 //      run in-process as `node dist/cli.js dev:seed` runs it: the platform admin, the verified Velexis test Amadeus
-//      account at the stub and its ten test offices, so provisioning can assign an office. Its stdout holds the new
+//      account at the stub and its twenty test offices, so provisioning can assign an office. Its stdout holds the new
 //      admin's password and TOTP URI: it is dropped, never printed; only its stderr appears in an error.
 //   5. **The platform worker**: the module graph of dist/worker.js (WorkerModule, its processors and schedulers) on
 //      the same database, Redis database and key folder, on the real Clock.

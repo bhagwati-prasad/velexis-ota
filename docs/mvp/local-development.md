@@ -52,7 +52,7 @@ Per-app overrides go into `<app>/.env.local` (for example the OTA backend's `DAT
 
 ```bash
 pnpm stub:amadeus &                                      # the platform seed verifies its test Amadeus account against it
-pnpm --filter @velexis/platform-backend dev:seed         # platform admin admin@example.com (MFA), test Amadeus account, 10 test offices
+pnpm --filter @velexis/platform-backend dev:seed         # platform admin admin@example.com (MFA), test Amadeus account, 20 test offices
 pnpm --filter @velexis/ota-backend dev:seed              # the demo OTA tenant_demo on demo.ota.example.com, with two test API keys
 ```
 
