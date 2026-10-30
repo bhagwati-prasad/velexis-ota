@@ -48,9 +48,9 @@ info:
     internal endpoints, health checks and webhook receivers); `x-idempotent: true` (`Idempotency-Key` required);
     `x-mfa-step-up: true` (a TOTP step-up within 15 minutes, else `401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without
     MFA); `x-feature: <switch>` (a milestone switch of PADR-0015, `403 FEATURE_DISABLED` when off);
-    `x-reason-required: true` (admin actions with a required `reason`, 5–500 characters, kept in the audit row);
-    `x-error-codes` (the catalogue codes an operation answers); `x-platform-tables` (the `platform` tables it reads or
-    writes); `x-error-catalogue` (root: every error code with its HTTP status and default message).
+    `x-reason-required: true` (admin actions with a required `reason`, 5–500 characters after trimming, kept in the
+    audit row); `x-error-codes` (the catalogue codes an operation answers); `x-platform-tables` (the `platform` tables
+    it reads or writes); `x-error-catalogue` (root: every error code with its HTTP status and default message).
   contact:
     name: Velexis platform team
   license:
@@ -5862,8 +5862,11 @@ paths:
         The bank identifiers are stored envelope-encrypted as one JSON value; only `last4`, the last 4 characters of the
         IBAN or account number, is kept in clear. Every change sets the status back to `pending_review` until a platform
         admin verifies it, writes the audit row `payout_account.updated` without the numbers and e-mails ops
-        (`ops.alert`). `iban`, `bic`, `accountNumber` and `routingNumber` are write-only: never logged and never
-        answered, so the answer is the masked account.
+        (`ops.alert`). The stored account typed again is no change (lead decision (2i) of 2026-10-30): when the holder
+        (trimmed), country, currency, scheme and identifiers, normalised as above, are the stored ones, the answer is the
+        current account as it is (the same `200`, version and status: a verified account stays verified), and nothing
+        is written, audited or e-mailed. `iban`, `bic`, `accountNumber` and `routingNumber` are write-only: never logged
+        and never answered, so the answer is the masked account.
       tags:
         - Settlements
       security:
@@ -7087,11 +7090,12 @@ paths:
       summary: Suspend an OTA
       description: >-
         Suspends an `active` OTA (PADR-0014) for `abuse`, `request` or `admin`, with a written `reason` of 5–500
-        characters that the audit row keeps; `billing` suspensions are set only by billing sync. One transaction sets
-        the status `suspended`, `suspended_at`, `suspension_reason` and a new version, inserts a `suspend` job and
-        writes the audit row. After commit it publishes a `tenant` invalidation, so the storefront and the OTA API
-        answer `TENANT_SUSPENDED` within 60 seconds, dispatches `tenant.suspend` to the OTA worker and e-mails the
-        owners. Any other status answers `409 CONFLICT` (`details.reason = not_active`). Data is never deleted.
+        characters after trimming that the audit row keeps; `billing` suspensions are set only by billing sync. One
+        transaction sets the status `suspended`, `suspended_at`, `suspension_reason` and a new version, inserts a
+        `suspend` job and writes the audit row. After commit it publishes a `tenant` invalidation, so the storefront
+        and the OTA API answer `TENANT_SUSPENDED` within 60 seconds, dispatches `tenant.suspend` to the OTA worker and
+        e-mails the owners. Any other status answers `409 CONFLICT` (`details.reason = not_active`). Data is never
+        deleted.
       tags:
         - Admin tenants
       security:
@@ -7174,13 +7178,13 @@ paths:
       operationId: adminResumeTenant
       summary: Resume a suspended OTA
       description: >-
-        Resumes a `suspended` OTA (PADR-0014 item 4), with a written `reason` of 5–500 characters that the audit row
-        keeps. A `billing` suspension resumes here only while the current subscription is `trialing` or `active`
-        (billing sync also resumes it on its own when the payment arrives). One transaction sets the status `active`,
-        clears the suspension fields, inserts a `resume` job and writes the audit row; after commit a `tenant`
-        invalidation, the `tenant.resume` dispatch and an e-mail to the owners. `409 CONFLICT` when the OTA is not
-        suspended (`details.reason = not_suspended`), or is suspended for billing without a `trialing` or `active`
-        subscription (`details.reason = subscription_not_active`).
+        Resumes a `suspended` OTA (PADR-0014 item 4), with a written `reason` of 5–500 characters after trimming that
+        the audit row keeps. A `billing` suspension resumes here only while the current subscription is `trialing` or
+        `active` (billing sync also resumes it on its own when the payment arrives). One transaction sets the status
+        `active`, clears the suspension fields, inserts a `resume` job and writes the audit row; after commit a
+        `tenant` invalidation, the `tenant.resume` dispatch and an e-mail to the owners. `409 CONFLICT` when the OTA
+        is not suspended (`details.reason = not_suspended`), or is suspended for billing without a `trialing` or
+        `active` subscription (`details.reason = subscription_not_active`).
       tags:
         - Admin tenants
       security:
@@ -7380,11 +7384,11 @@ paths:
       summary: Disable or re-enable a connection of an OTA
       description: >-
         Sets the Amadeus or payment connection of one environment to `disabled` or back to `active`, with a written
-        `reason` of 5–500 characters that the audit row keeps. A disabled connection stops the OTA's supplier or
-        payment calls in that environment; for example, staff disable the Amadeus connection of an abusive OTA while
-        its paid bookings settle (PADR-0014). `404 NOT_FOUND` when the OTA has no such connection; `409 CONFLICT` when
-        the connection cannot take the status, for example `active` on a connection that is not `disabled`
-        (`details.reason = not_disabled`). Writes an audit row and, after commit, publishes a `connection`
+        `reason` of 5–500 characters after trimming that the audit row keeps. A disabled connection stops the OTA's
+        supplier or payment calls in that environment; for example, staff disable the Amadeus connection of an abusive
+        OTA while its paid bookings settle (PADR-0014). `404 NOT_FOUND` when the OTA has no such connection; `409
+        CONFLICT` when the connection cannot take the status, for example `active` on a connection that is not
+        `disabled` (`details.reason = not_disabled`). Writes an audit row and, after commit, publishes a `connection`
         invalidation, so the OTA backend reloads the connection. The answer is the masked connection, as the portal
         lists it.
       tags:
@@ -7733,9 +7737,9 @@ paths:
       summary: Cancel a queued tenant job
       description: >-
         Cancels a `queued` job that was never dispatched or waits for its next attempt (for example a `provision` job
-        waiting for its Checkout gate), with a written `reason` of 5–500 characters that the audit row keeps. The job
-        becomes `canceled` and nothing more is sent to the OTA worker; the tenant status does not change. A `running`
-        or finished job answers `409 CONFLICT` (`details.reason = not_queued`).
+        waiting for its Checkout gate), with a written `reason` of 5–500 characters after trimming that the audit row
+        keeps. The job becomes `canceled` and nothing more is sent to the OTA worker; the tenant status does not
+        change. A `running` or finished job answers `409 CONFLICT` (`details.reason = not_queued`).
       tags:
         - Admin provisioning jobs
       security:
@@ -8622,10 +8626,10 @@ paths:
       summary: Edit a manual subscription
       description: >-
         Changes a **manual** subscription (the trials before M5): its plan, its trial end, or its status (`trialing`
-        or `canceled`), with a written `reason` of 5–500 characters that the audit row keeps. At least one change
-        comes with the reason. A change of plan also sets `tenants.plan_code` and, after commit, publishes a `tenant`
-        invalidation; `canceled` sets `canceled_at`. `If-Match` carries the subscription's `version`; a stale version
-        answers `412 PRECONDITION_FAILED`.
+        or `canceled`), with a written `reason` of 5–500 characters after trimming that the audit row keeps. At least
+        one change comes with the reason. A change of plan also sets `tenants.plan_code` and, after commit, publishes
+        a `tenant` invalidation; `canceled` sets `canceled_at`. `If-Match` carries the subscription's `version`; a
+        stale version answers `412 PRECONDITION_FAILED`.
 
 
         `409 CONFLICT` when the subscription is billed by Stripe (`details.reason = stripe_billed`; Stripe
@@ -9816,11 +9820,11 @@ paths:
       summary: Return an office to the pool
       description: >-
         Returns an office to `available` (M5, PADR-0012 item 5): it keeps no OTA and gets `releasedAt`. This is the
-        manual step after an OTA moved to its own Amadeus credentials, which left the Velexis office `releasing` so the
-        OTA backend can still service the orders created through it. The admin releases it only once the OTA confirmed,
-        from its bookings console filtered by office, that no booking with future travel remains on it: the body
-        carries `confirmNoOpenBookings: true` and a written `reason` of 5–500 characters that the audit row keeps.
-        There is no automatic timer.
+        manual step after an OTA moved to its own Amadeus credentials, which left the Velexis office `releasing` so
+        the OTA backend can still service the orders created through it. The admin releases it only once the OTA
+        confirmed, from its bookings console filtered by office, that no booking with future travel remains on it: the
+        body carries `confirmNoOpenBookings: true` and a written `reason` of 5–500 characters after trimming that the
+        audit row keeps. There is no automatic timer.
 
 
         A `releasing` office is released. An `assigned` office is released only when it backs no active `velexis`
@@ -9919,7 +9923,7 @@ paths:
       summary: Retire an office
       description: >-
         Takes an `available` office out of use for good (`retired`, PADR-0012 item 1), with a written `reason` of
-        5–500 characters that the audit row keeps. An office in any other status answers `409 CONFLICT`
+        5–500 characters after trimming that the audit row keeps. An office in any other status answers `409 CONFLICT`
         (`details.reason = not_available`): an assigned office is released first (`adminReleaseAmadeusOffice`, M5).
       tags:
         - Admin Amadeus
@@ -10435,10 +10439,11 @@ paths:
       description: >-
         Adds a manual `adjustment` line to a **draft** (M5, PADR-0003 item 5): a signed amount in the statement's
         currency (positive is owed to the OTA; another currency answers `400 VALIDATION_FAILED`), a `description` that
-        the OTA sees on the line, and a written `reason` of 5–500 characters that the audit row keeps. The totals are
-        recomputed in the same transaction (`adjustmentsAmount`, `netAmount`, `lineCount`) and the statement's version
-        rises. Any other status answers `409 SETTLEMENT_STATE_INVALID`: approved, paid and carried-forward statements
-        are immutable. A regeneration of the draft keeps no adjustment, as it rebuilds every line.
+        the OTA sees on the line, and a written `reason` of 5–500 characters after trimming that the audit row keeps.
+        The totals are recomputed in the same transaction (`adjustmentsAmount`, `netAmount`, `lineCount`) and the
+        statement's version rises. Any other status answers `409 SETTLEMENT_STATE_INVALID`: approved, paid and
+        carried-forward statements are immutable. A regeneration of the draft keeps no adjustment, as it rebuilds
+        every line.
       tags:
         - Admin settlements
       security:
@@ -10838,10 +10843,11 @@ paths:
       operationId: adminVoidSettlement
       summary: Void a draft
       description: >-
-        Voids a **draft** (M5, PADR-0003 items 8 and 9) with a written `reason` of 5–500 characters that the statement
-        (`voidReason`) and the audit row keep: the statement becomes `void` and keeps its totals for the record, and its
-        lines are deleted in the same transaction (`lineCount` 0), so their balance transactions can be settled again
-        by a new draft (`adminGenerateSettlements`). Any other status answers `409 SETTLEMENT_STATE_INVALID`.
+        Voids a **draft** (M5, PADR-0003 items 8 and 9) with a written `reason` of 5–500 characters after trimming
+        that the statement (`voidReason`) and the audit row keep: the statement becomes `void` and keeps its totals
+        for the record, and its lines are deleted in the same transaction (`lineCount` 0), so their balance
+        transactions can be settled again by a new draft (`adminGenerateSettlements`). Any other status answers `409
+        SETTLEMENT_STATE_INVALID`.
       tags:
         - Admin settlements
       security:
@@ -11002,10 +11008,11 @@ paths:
         Decrypts and answers the full bank identifiers of the OTA's payout account (M5, PADR-0003 item 10), so that
         Velexis can pay an approved statement by bank transfer: the IBAN and the BIC (when one was given) of an `iban`
         account, or the account and routing numbers of a `local` one. It needs a TOTP step-up within the last 15
-        minutes (`401 REAUTH_REQUIRED`, PADR-0006 item 4) and a written `reason` of 5–500 characters. Every reveal is a
-        sensitive read: the audit row `payout_account.revealed` keeps the reason and never a number (PADR-0006, Audit
-        item 2). The answer is `no-store`, never cached nor kept for a replay; the identifiers are never logged. An
-        unknown OTA, or an OTA without a payout account, answers `404 NOT_FOUND`.
+        minutes (`401 REAUTH_REQUIRED`, PADR-0006 item 4) and a written `reason` of 5–500 characters after trimming.
+        Every reveal is a sensitive read: the audit row `payout_account.revealed` keeps the reason and never a number
+        (PADR-0006, Audit item 2), the trimmed reason as `AdminReason` says. The answer is `no-store`, never cached nor
+        kept for a replay; the identifiers are never logged. An unknown OTA, or an OTA without a payout account,
+        answers `404 NOT_FOUND`.
       tags:
         - Admin settlements
       security:
@@ -11309,12 +11316,12 @@ paths:
       operationId: adminRemoveDomain
       summary: Remove an abusive custom domain
       description: >-
-        Removes a custom domain of any OTA in any status (M5, PF-92), for example one used for phishing, with a written
-        `reason` of 5–500 characters that the audit row keeps: as `removeDomain` does, the row is deleted and, if it was
-        primary, the sub-domain becomes primary again, in one transaction; after commit the `domain` invalidations are
-        published and the cached `tlsask:<host>` answer is deleted, so neither the storefront nor the TLS gate serves
-        the host any more. The owners are e-mailed through the outbox. The OTA's status does not matter. The sub-domain
-        cannot be removed (`409 CONFLICT`, `details.reason = subdomain`).
+        Removes a custom domain of any OTA in any status (M5, PF-92), for example one used for phishing, with a
+        written `reason` of 5–500 characters after trimming that the audit row keeps: as `removeDomain` does, the row
+        is deleted and, if it was primary, the sub-domain becomes primary again, in one transaction; after commit the
+        `domain` invalidations are published and the cached `tlsask:<host>` answer is deleted, so neither the
+        storefront nor the TLS gate serves the host any more. The owners are e-mailed through the outbox. The OTA's
+        status does not matter. The sub-domain cannot be removed (`409 CONFLICT`, `details.reason = subdomain`).
       tags:
         - Admin domains
       security:
@@ -11538,13 +11545,13 @@ paths:
       operationId: adminDisableAccount
       summary: Disable an account
       description: >-
-        Blocks an account (`disabled`), with a written `reason` of 5–500 characters that the audit row keeps. One
-        transaction sets the status and revokes every session of the account (portal and admin); after commit it
-        writes the cut-off `staffdeny:acct:<id>` in Redis, so the OTA admin refuses the account's staff sessions at
-        once, and publishes an `account` invalidation. The account's sign-ins then answer `403 ACCOUNT_DISABLED`. `403
-        FORBIDDEN` for the caller's own account (`details.reason = self`) or the last active platform admin
-        (`details.reason = last_admin`); `409 CONFLICT` when the account is already `disabled` or `deleted`
-        (`details.reason = not_enabled`).
+        Blocks an account (`disabled`), with a written `reason` of 5–500 characters after trimming that the audit row
+        keeps. One transaction sets the status and revokes every session of the account (portal and admin); after
+        commit it writes the cut-off `staffdeny:acct:<id>` in Redis, so the OTA admin refuses the account's staff
+        sessions at once, and publishes an `account` invalidation. The account's sign-ins then answer `403
+        ACCOUNT_DISABLED`. `403 FORBIDDEN` for the caller's own account (`details.reason = self`) or the last active
+        platform admin (`details.reason = last_admin`); `409 CONFLICT` when the account is already `disabled` or
+        `deleted` (`details.reason = not_enabled`).
       tags:
         - Admin accounts
       security:
@@ -11637,11 +11644,10 @@ paths:
       operationId: adminEnableAccount
       summary: Enable a disabled account
       description: >-
-        Unblocks a `disabled` account, with a written `reason` of 5–500 characters that the audit row keeps: the
-        status goes back to `active`, or to `pending_verification` when the e-mail address was never verified. The
-        revoked sessions stay revoked; the person signs in again. After commit it publishes an `account`
-        invalidation. `409 CONFLICT` when the account is not `disabled` (`details.reason =
-        not_disabled`).
+        Unblocks a `disabled` account, with a written `reason` of 5–500 characters after trimming that the audit row
+        keeps: the status goes back to `active`, or to `pending_verification` when the e-mail address was never
+        verified. The revoked sessions stay revoked; the person signs in again. After commit it publishes an `account`
+        invalidation. `409 CONFLICT` when the account is not `disabled` (`details.reason = not_disabled`).
       tags:
         - Admin accounts
       security:
@@ -11779,12 +11785,12 @@ paths:
       summary: Turn off the MFA of an account after an identity check
       description: >-
         The support case of a person who lost their authenticator, after an identity check done outside the system;
-        the written `reason` of 5–500 characters records how, and the audit row keeps it. Needs a TOTP step-up within
-        the last 15 minutes (PADR-0006 item 4). One transaction turns MFA off, erases the TOTP secret, deletes the
-        recovery codes and revokes every session; after commit it writes `staffdeny:acct:<id>`, publishes an `account`
-        invalidation and e-mails the person (`auth.mfa_changed`). A platform admin cannot be the target (`403
-        FORBIDDEN`, `details.reason = platform_admin`): another admin first revokes the admin rights, or the developer
-        runs `admin:reset-mfa` on the VM (PADR-0006 item 6). `409 CONFLICT` when the account has no MFA
+        the written `reason` of 5–500 characters after trimming records how, and the audit row keeps it. Needs a TOTP
+        step-up within the last 15 minutes (PADR-0006 item 4). One transaction turns MFA off, erases the TOTP secret,
+        deletes the recovery codes and revokes every session; after commit it writes `staffdeny:acct:<id>`, publishes
+        an `account` invalidation and e-mails the person (`auth.mfa_changed`). A platform admin cannot be the target
+        (`403 FORBIDDEN`, `details.reason = platform_admin`): another admin first revokes the admin rights, or the
+        developer runs `admin:reset-mfa` on the VM (PADR-0006 item 6). `409 CONFLICT` when the account has no MFA
         (`details.reason = mfa_not_enabled`).
       tags:
         - Admin accounts
@@ -11940,13 +11946,13 @@ paths:
       operationId: adminGrantAdmin
       summary: Grant platform admin rights
       description: >-
-        Makes an existing account a platform admin, with a written `reason` of 5–500 characters that the audit row
-        keeps. Needs a TOTP step-up within the last 15 minutes (PADR-0006 item 4). The account must be `active`, with a
-        verified e-mail address and MFA enabled, because every admin sign-in asks for a TOTP code: otherwise `422
-        UNPROCESSABLE` with `details.reason` `account_not_active`, `email_not_verified` or `mfa_not_enabled`. No account
-        with the e-mail address answers `404 NOT_FOUND`; an account that is already a platform admin answers `409
-        CONFLICT` (`details.reason = already_admin`). The new admin signs in on the admin host; portal sessions are
-        unaffected.
+        Makes an existing account a platform admin, with a written `reason` of 5–500 characters after trimming that
+        the audit row keeps. Needs a TOTP step-up within the last 15 minutes (PADR-0006 item 4). The account must be
+        `active`, with a verified e-mail address and MFA enabled, because every admin sign-in asks for a TOTP code:
+        otherwise `422 UNPROCESSABLE` with `details.reason` `account_not_active`, `email_not_verified` or
+        `mfa_not_enabled`. No account with the e-mail address answers `404 NOT_FOUND`; an account that is already a
+        platform admin answers `409 CONFLICT` (`details.reason = already_admin`). The new admin signs in on the admin
+        host; portal sessions are unaffected.
       tags:
         - Admin accounts
       security:
@@ -12081,8 +12087,8 @@ paths:
           in: query
           required: false
           description: >-
-            Why the rights are revoked (5–500 characters), kept in the audit row. Optional: PADR-0006 item 5 does not
-            require a reason for a revocation.
+            Why the rights are revoked (5–500 characters after trimming), kept in the audit row. Optional: PADR-0006
+            item 5 does not require a reason for a revocation.
           schema:
             $ref: '#/components/schemas/AdminReason'
           example: Left the support team on 2027-01-31.
@@ -17717,7 +17723,10 @@ components:
     AdminReason:
       type: string
       description: >-
-        Why a Velexis staff member takes the action (PADR-0006 item 5), kept in the `details` of the audit row.
+        Why a Velexis staff member takes the action (PADR-0006 item 5), kept in the `details` of the audit row. The API
+        trims the white space at either end first, and the 5–500 characters count after trimming: a reason of only
+        spaces answers `400 VALIDATION_FAILED` (`minLength`), and the audit row (or the record that keeps the reason)
+        holds the trimmed reason (lead decision (2j) of 2026-10-30).
       minLength: 5
       maxLength: 500
       examples:

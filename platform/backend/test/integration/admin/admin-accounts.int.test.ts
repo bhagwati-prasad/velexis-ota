@@ -1305,3 +1305,65 @@ describe("audit rows of the changes", () => {
     );
   });
 });
+
+describe("admin reasons, trimmed before they are counted (FIX-W35-PLATFORM, lead decision (2j) of 2026-10-30)", () => {
+  const minLength = { path: "/reason", code: "minLength", message: "Must be at least 5 characters long." };
+
+  it("[FIX-W35-PLATFORM AC4] refuses a reason of only spaces or of 4 characters once trimmed with 400 VALIDATION_FAILED, on a body and in a query, and changes nothing", async () => {
+    const person = await insertPerson();
+    const target = await insertAdmin();
+    const before = await auditMark();
+
+    for (const reason of ["        ", "   abcd   ", "\t\n abc \n "]) {
+      const disable = await call("post", `/v1/admin/accounts/${person.id}/disable`, { body: { reason } });
+      expect(outcomeOf(disable)).toBe("400 VALIDATION_FAILED");
+      expectResponseToMatch("adminDisableAccount", disable, { document: "platform" });
+      expect(errorOf(disable).fieldErrors).toEqual([minLength]);
+
+      const revoke = await call(
+        "delete",
+        `/v1/admin/admins/${target.id}?reason=${encodeURIComponent(reason)}`,
+      );
+      expect(outcomeOf(revoke)).toBe("400 VALIDATION_FAILED");
+      expectResponseToMatch("adminRevokeAdmin", revoke, { document: "platform" });
+      expect(errorOf(revoke).fieldErrors).toEqual([{ ...minLength, path: "/query/reason" }]);
+    }
+
+    expect((await accountRow(person.id)).status).toBe("active");
+    expect((await accountRow(target.id)).is_platform_admin).toBe(true);
+    expect(await auditRowsSince(before)).toEqual([]);
+  });
+
+  it("[FIX-W35-PLATFORM AC4] audits the trimmed reason, and counts the 500 characters once trimmed", async () => {
+    const person = await insertPerson();
+    const target = await insertAdmin();
+    const other = await insertPerson();
+    const longest = "x".repeat(500);
+    const before = await auditMark();
+
+    const tooLong = await call("post", `/v1/admin/accounts/${other.id}/disable`, {
+      body: { reason: `  ${longest}x  ` },
+    });
+    const disabled = await call("post", `/v1/admin/accounts/${person.id}/disable`, {
+      body: { reason: ` \n ${longest}  \t` },
+    });
+    const revoked = await call(
+      "delete",
+      `/v1/admin/admins/${target.id}?reason=${encodeURIComponent(`  ${REASON}  `)}`,
+    );
+
+    expect(outcomeOf(tooLong)).toBe("400 VALIDATION_FAILED");
+    expect(errorOf(tooLong).fieldErrors).toEqual([
+      { path: "/reason", code: "maxLength", message: "Must be at most 500 characters long." },
+    ]);
+    expect(outcomeOf(disabled)).toBe("200");
+    expect(outcomeOf(revoked)).toBe("204");
+    expect((await accountRow(other.id)).status).toBe("active");
+    expect(
+      (await auditRowsSince(before)).map((row) => [row.action, row.target_id, row.details["reason"]]),
+    ).toEqual([
+      ["account.disabled", person.id, longest],
+      ["admin.revoked", target.id, REASON],
+    ]);
+  });
+});

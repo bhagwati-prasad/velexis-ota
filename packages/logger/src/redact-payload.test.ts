@@ -368,7 +368,8 @@ describe("redactPayload", () => {
         iban: REDACT_CENSOR,
         account_number: REDACT_CENSOR,
         last4: "3333",
-        bic: "TESTXXYY",
+        // A bank number since FIX-W35-PLATFORM (lead decision (2h) of 2026-10-30): it stayed visible before.
+        bic: REDACT_CENSOR,
       },
       after: { IBAN: REDACT_CENSOR, AccountNumber: REDACT_CENSOR },
       secretKey: REDACT_CENSOR,
@@ -380,9 +381,63 @@ describe("redactPayload", () => {
       mfaChallengeToken: REDACT_CENSOR,
       invitationToken: REDACT_CENSOR,
     });
-    for (const value of [iban, accountNumber, totpSecret, TEST_TOKEN, "TEST-AAAA"]) {
+    for (const value of [iban, accountNumber, totpSecret, TEST_TOKEN, "TEST-AAAA", "TESTXXYY"]) {
       expect(JSON.stringify(output)).not.toContain(value);
     }
+  });
+
+  it("replaces bic, routingNumber, routing_number and account_number like iban and accountNumber, in nested objects and arrays [FIX-W35-PLATFORM AC2]", () => {
+    // Test values only: a made-up IBAN, BIC, account number and routing number.
+    const iban = "XX00TEST0000111122223333";
+    const bic = "TESTXXYYZZZ";
+    const accountNumber = "000123456789";
+    const routingNumber = "000000000";
+    const input = deepFreeze({
+      payoutAccount: { scheme: "iban", iban, bic, last4: "3333" },
+      local: { scheme: "local", accountNumber, routingNumber, last4: "6789" },
+      snake: { account_number: accountNumber, routing_number: routingNumber },
+      shouty: { BIC: bic, "ROUTING-NUMBER": routingNumber, Account_Number: accountNumber },
+      history: [
+        { version: 1, details: { iban, bic } },
+        { version: 2, details: [{ accountNumber, routingNumber }, { routing_number: routingNumber }] },
+      ],
+      bic,
+      routingNumber,
+      routing_number: routingNumber,
+      account_number: accountNumber,
+      bankCountry: "GB",
+    });
+    const output = redactPayload(input);
+    expect(output).toEqual({
+      payoutAccount: { scheme: "iban", iban: REDACT_CENSOR, bic: REDACT_CENSOR, last4: "3333" },
+      local: { scheme: "local", accountNumber: REDACT_CENSOR, routingNumber: REDACT_CENSOR, last4: "6789" },
+      snake: { account_number: REDACT_CENSOR, routing_number: REDACT_CENSOR },
+      shouty: { BIC: REDACT_CENSOR, "ROUTING-NUMBER": REDACT_CENSOR, Account_Number: REDACT_CENSOR },
+      history: [
+        { version: 1, details: { iban: REDACT_CENSOR, bic: REDACT_CENSOR } },
+        {
+          version: 2,
+          details: [
+            { accountNumber: REDACT_CENSOR, routingNumber: REDACT_CENSOR },
+            { routing_number: REDACT_CENSOR },
+          ],
+        },
+      ],
+      bic: REDACT_CENSOR,
+      routingNumber: REDACT_CENSOR,
+      routing_number: REDACT_CENSOR,
+      account_number: REDACT_CENSOR,
+      bankCountry: "GB",
+    });
+    for (const value of [iban, bic, accountNumber, routingNumber]) {
+      expect(JSON.stringify(output)).not.toContain(value);
+    }
+    // A bank number given as an object or a list is censored whole, like an IBAN.
+    expect(redactPayload({ bic: { code: bic }, routingNumber: [routingNumber], iban: [iban] })).toEqual({
+      bic: REDACT_CENSOR,
+      routingNumber: REDACT_CENSOR,
+      iban: REDACT_CENSOR,
+    });
   });
 
   it("replaces an e-mail's secret variables and its links with tokens with [REDACTED] (PBE-011)", () => {

@@ -8,7 +8,7 @@ Related: [`flows/platform-admin-operations.md`](flows/platform-admin-operations.
 
 - Auth `admin`: an access token with audience `platform_admin`, issued only after password **and** TOTP; the guard re-reads `is_platform_admin` and `status` on every call, and the token of an account that is no longer an active platform admin answers `401 UNAUTHENTICATED`.
 - Every admin call that changes state writes `platform_audit_log` with `actor_type = 'platform_admin'`, in the same transaction. Reads of sensitive data (payout account reveal, audit export) are audited too.
-- Actions marked **reason** require `{reason}` (5–500 characters), stored in the audit `details`.
+- Actions marked **reason** require `{reason}` (5–500 characters after trimming: the API trims the white space at either end first, so a reason of only spaces answers `400 VALIDATION_FAILED`; lead decision (2j) of 2026-10-30), stored trimmed in the audit `details`.
 - Actions marked MFA↑ require a TOTP step-up within the last 15 minutes (`POST /v1/admin/auth/step-up`).
 - Admin endpoints never touch tenant schemas. Tenant data such as bookings is out of reach by design.
 

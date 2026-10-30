@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Platform tech lead. Decided during planning; revisit when Velexis has more than two staff (admin sub-roles), or when a customer contract requires an external audit store.
+**Revisions:** 2026-10-30 (lead decision (2j) of 2026-10-30, recorded with FIX-W35-PLATFORM): item 5's 5–500 characters count after trimming (dated note under item 5).
 
 ## Context
 
@@ -17,6 +18,7 @@
 3. **Re-check on every request.** `AdminAuthGuard` re-reads `is_platform_admin` and `status`, so revoking an admin takes effect at once.
 4. **Step-up** (TOTP within 15 minutes) for: entering or rotating shared Amadeus credentials, approving and marking settlements paid, revealing payout accounts, resetting an account's MFA, granting and revoking admins.
 5. **Reasons** (5–500 characters, stored in the audit `details`) for: suspend, resume, cancel jobs, disable or enable accounts and connections, reset MFA, manual subscription edits, settlement adjustments and voids, domain removals, admin grants.
+   - *Note (2026-10-30, lead decision (2j), FIX-W35-PLATFORM).* The API trims a reason (the white space at either end) before it counts the 5–500 characters, for every admin reason (the document's `AdminReason`, also the optional reason of a revocation and the reveal's reason), in one place: the request validation of the platform API (`TRIMMED_SCHEMAS` of `platform/backend/src/common/http/openapi-validation.interceptor.ts`). A reason of only spaces answers `400 VALIDATION_FAILED`, and the audit row (and any record that keeps the reason) holds the trimmed reason. The platform admin's `ReasonDialog` and server actions already trim and count the same way.
 6. **Bootstrap.** The first admin is granted by a CLI command run on the VM by the developer (`node dist/cli.js admin:grant <email>`), which requires an existing, verified account with MFA enabled and writes an audit row with `actor_type = 'system'` and the operator's name. `admin:reset-mfa <email>` exists for the case where the only admin loses their authenticator. No admin is created by migrations or seeds in production.
 7. **Network.** The admin host is served by Caddy like the portal; an optional IP allow-list can be set in the Caddy configuration. The admin app sets `X-Robots-Tag: noindex`.
 8. **No tenant data.** Admin endpoints never touch tenant schemas. Supporting an OTA's bookings means being invited as a member like anyone else, which is then visible to the OTA in its team list.

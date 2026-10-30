@@ -13,15 +13,20 @@
 //   identifiers are envelope-encrypted as one JSON value bound to the row (`bankDetailsPlace`) before the transaction;
 //   in it the row is written (a new one, or the next version of the old one) back in `pending_review` with the review
 //   cleared, audited as `payout_account.updated` (the masked fields before and after: `last4`, never a number), and an
-//   `ops.alert` e-mail asks a platform admin to review it. Every successful call is a change: a new ciphertext, a new
-//   version and a new review, even for the same numbers (bank fields are write-only, so the owner types them again on
-//   purpose). The tenant may be in any state its members see: settlements of a suspended OTA are still paid
-//   (PADR-0014 item 5 makes API keys, domains and connections read-only, not the payout account).
-// - `reveal` (`adminRevealPayoutAccount`, MFA step-up, **reason**): the reason must keep 5 characters once the spaces
-//   at either end are gone (`400 VALIDATION_FAILED` on `/reason` otherwise: five spaces are no reason); in one
-//   transaction the row is read `FOR SHARE`, its bank identifiers decrypted and the audit row `payout_account.revealed`
-//   written with the trimmed reason (never a number); the identifiers are answered only after the commit, so no reveal
-//   goes unaudited. The controller sends the answer with `Cache-Control: no-store`; nothing here logs it.
+//   `ops.alert` e-mail asks a platform admin to review it. The account the owner typed again changes nothing
+//   (FIX-W35-PLATFORM, lead decision (2i) of 2026-10-30): when the holder (trimmed), country, currency, scheme and the
+//   identifiers after the save's normalisation (iban.ts) are the stored ones, the stored copy being decrypted in the
+//   transaction, in memory only, and compared there, the answer is the current account as it is (same version, status
+//   and review: a verified account stays verified), with no write, no audit row and no e-mail. A stored copy that
+//   cannot be decrypted is replaced as a change. The tenant may be in any state its members see: settlements of a
+//   suspended OTA are still paid (PADR-0014 item 5 makes API keys, domains and connections read-only, not the payout
+//   account).
+// - `reveal` (`adminRevealPayoutAccount`, MFA step-up, **reason**): the request validation trims the reason before it
+//   counts its 5–500 characters, as it does every admin reason (FIX-W35-PLATFORM: `400 VALIDATION_FAILED` on
+//   `/reason` otherwise, so five spaces are no reason); in one transaction the row is read `FOR SHARE`, its bank
+//   identifiers decrypted and the audit row `payout_account.revealed` written with that trimmed reason (never a
+//   number); the identifiers are answered only after the commit, so no reveal goes unaudited. The controller sends
+//   the answer with `Cache-Control: no-store`; nothing here logs it.
 // - `review` (`adminReviewPayoutAccount`, `If-Match`): `verified` (the note cleared) or `rejected` with a note. In one
 //   transaction the row is locked; a stale `If-Match` answers `412 PRECONDITION_FAILED` (for example after the owner
 //   changed the account, which returned it to `pending_review`). The review is written with `version + 1`, audited as
@@ -33,6 +38,7 @@
 // table, platform/docs/architecture.md §7). "Now" is the injected Clock's time.
 import { Inject, Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types/platform";
+import { DecryptionError } from "@velexis/crypto";
 import { AppError } from "@velexis/errors";
 import type { PlatformTransaction } from "../audit/audit.repository";
 import { AuditService, type AuditValues } from "../audit/audit.service";
@@ -54,6 +60,7 @@ import {
 } from "./iban";
 import {
   PayoutAccountsRepository,
+  type PayoutAccountRecord,
   type PayoutAccountView,
   type PayoutScheme,
   type TenantLabel,
@@ -89,6 +96,12 @@ export function toPayoutAccount(row: PayoutAccountView): PayoutAccount {
     updatedAt: row.updated_at.toISOString(),
     version: row.version,
   };
+}
+
+/** The view of a record: every column but the ciphertext, which never leaves the service. */
+function viewOf(record: PayoutAccountRecord): PayoutAccountView {
+  const { bank_details_ciphertext: _ciphertext, ...view } = record;
+  return view;
 }
 
 /** The masked fields of a row, as the audit rows keep them (`last4`, never a bank number). */
@@ -194,11 +207,15 @@ export function revealedDetails(value: unknown, scheme: string): RevealedPayoutA
   throw new CiphertextContentError();
 }
 
-/**
- * The shortest reason of a reveal once the spaces at either end are gone (`AdminReason`'s `minLength`): the request
- * validation counts the spaces, so `"     "` passes it and is refused here.
- */
-const MIN_REASON_LENGTH = 5;
+/** Whether two sets of bank identifiers are the same: the same fields with the same values (`bic` absent counts). */
+function sameBankDetails(left: RevealedPayoutAccount, right: RevealedPayoutAccount): boolean {
+  const a: Readonly<Record<string, unknown>> = left;
+  const b: Readonly<Record<string, unknown>> = right;
+  const keys = Object.keys(a);
+  return (
+    keys.length === Object.keys(b).length && keys.every((key) => Object.hasOwn(b, key) && a[key] === b[key])
+  );
+}
 
 /** The `payouts.reviewed` e-mail's outcome and next step, by decision (no note: the portal shows it). */
 const REVIEW_OUTCOMES = Object.freeze({
@@ -233,10 +250,14 @@ export class PayoutAccountsService {
     return row;
   }
 
-  /** setPayoutAccount: sets or replaces the tenant's payout account for the owner `membership` (see the file header). */
+  /**
+   * setPayoutAccount: sets or replaces the tenant's payout account for the owner `membership`, or answers the current
+   * one unchanged when the owner typed it again (see the file header).
+   */
   async set(membership: TenantMembership, body: SetPayoutAccountRequest): Promise<PayoutAccountView> {
     const { tenantId, accountId } = membership;
     const bank = bankDetailsOf(body);
+    const accountHolderName = body.accountHolderName.trim();
     // Encrypted before the transaction: the plaintext JSON exists only inside encryptJson.
     const encrypted = await this.envelope.encryptJson(bank.details, bankDetailsPlace(tenantId));
     return runInTransaction(this.db, async (trx) => {
@@ -244,10 +265,16 @@ export class PayoutAccountsService {
       if (tenant === undefined) {
         throw new AppError("NOT_FOUND");
       }
-      const before = await this.accounts.lockForTenant(trx, tenantId);
+      const stored = await this.accounts.lockWithDetailsForTenant(trx, tenantId);
+      const typed = { accountHolderName, countryCode: body.countryCode, currency: body.currency };
+      if (stored !== undefined && (await this.isStoredAccount(stored, typed, bank))) {
+        // The owner typed the stored account again: nothing changes, nobody is told (lead decision (2i)).
+        return viewOf(stored);
+      }
+      const before = stored === undefined ? undefined : viewOf(stored);
       const after = await this.accounts.upsert(trx, {
         tenantId,
-        accountHolderName: body.accountHolderName.trim(),
+        accountHolderName,
         countryCode: body.countryCode,
         currency: body.currency,
         scheme: bank.scheme,
@@ -275,26 +302,10 @@ export class PayoutAccountsService {
 
   /**
    * adminRevealPayoutAccount: the bank identifiers of the tenant's payout account for the platform admin of `caller`,
-   * audited with the trimmed `typedReason` in the same transaction; `400` for a reason shorter than 5 characters once
-   * trimmed, `404` without an account (see the file header).
+   * audited with `reason` (as the request validation trimmed it) in the same transaction; `404` without an account
+   * (see the file header).
    */
-  async reveal(
-    caller: AccessTokenClaims,
-    tenantId: string,
-    typedReason: string,
-  ): Promise<RevealedPayoutAccount> {
-    const reason = typedReason.trim();
-    if (reason.length < MIN_REASON_LENGTH) {
-      throw new AppError("VALIDATION_FAILED", {
-        fieldErrors: [
-          {
-            path: "/reason",
-            code: "minLength",
-            message: `Write why you reveal the bank details, in at least ${MIN_REASON_LENGTH} characters besides spaces.`,
-          },
-        ],
-      });
-    }
+  async reveal(caller: AccessTokenClaims, tenantId: string, reason: string): Promise<RevealedPayoutAccount> {
     return runInTransaction(this.db, async (trx) => {
       const row = await this.accounts.findWithDetails(trx, tenantId);
       if (row === undefined) {
@@ -365,6 +376,41 @@ export class PayoutAccountsService {
       await this.notifyOwners(trx, tenantId, reviewed);
       return reviewed;
     });
+  }
+
+  /**
+   * Whether the stored record is the account of a validated request (`typed`, its holder trimmed) and of its bank
+   * identifiers after the save's normalisation (`bank`): the masked columns first, then the identifiers, decrypted
+   * here in memory only and never logged or answered. A stored copy that cannot be decrypted or read is no match, so
+   * the request replaces it.
+   */
+  private async isStoredAccount(
+    stored: PayoutAccountRecord,
+    typed: Pick<SetPayoutAccountRequest, "accountHolderName" | "countryCode" | "currency">,
+    bank: BankDetails,
+  ): Promise<boolean> {
+    if (
+      stored.account_holder_name !== typed.accountHolderName ||
+      stored.country_code !== typed.countryCode ||
+      stored.currency !== typed.currency ||
+      stored.scheme !== bank.scheme ||
+      stored.last4 !== bank.last4
+    ) {
+      return false;
+    }
+    let details: RevealedPayoutAccount;
+    try {
+      details = revealedDetails(
+        await this.envelope.decryptJson(stored.bank_details_ciphertext, bankDetailsPlace(stored.tenant_id)),
+        stored.scheme,
+      );
+    } catch (error) {
+      if (error instanceof DecryptionError || error instanceof CiphertextContentError) {
+        return false;
+      }
+      throw error;
+    }
+    return sameBankDetails(details, bank.details);
   }
 
   /** Queues the `ops.alert` of a new or changed payout account: who, never a number. */

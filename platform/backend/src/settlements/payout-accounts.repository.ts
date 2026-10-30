@@ -6,9 +6,11 @@
 // tables (ADR-0005).
 //
 // Every read that answers the portal or the admin selects the row without its ciphertext (`PayoutAccountView`); only
-// `findWithDetails`, for the admin's reveal, selects it. The owners' e-mail of a review reads their active owner
-// memberships and accounts (`activeOwners`), and the ops alert the OTA's name and key (`tenantLabel`), read only, as
-// the operations' `x-platform-tables` say (as billing-customers.repository.ts reads the tenant and the account).
+// `findWithDetails`, for the admin's reveal, and `lockWithDetailsForTenant`, for the owner's change (which compares
+// the stored identifiers with the typed ones in memory, FIX-W35-PLATFORM), select it. The owners' e-mail of a review
+// reads their active owner memberships and accounts (`activeOwners`), and the ops alert the OTA's name and key
+// (`tenantLabel`), read only, as the operations' `x-platform-tables` say (as billing-customers.repository.ts reads
+// the tenant and the account).
 import { Inject, Injectable } from "@nestjs/common";
 import type { PlatformDatabase, Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -114,6 +116,23 @@ export class PayoutAccountsRepository {
       .selectAll()
       .where("tenant_id", "=", tenantId)
       .forShare()
+      .executeTakeFirst();
+  }
+
+  /**
+   * The tenant's payout account **with** its ciphertext, locked for the rest of `trx` (`FOR UPDATE`): for
+   * `setPayoutAccount` only, which decrypts it in memory to find out whether the owner typed the stored account again
+   * (FIX-W35-PLATFORM, lead decision (2i) of 2026-10-30). Never answer the record: answer its view.
+   */
+  async lockWithDetailsForTenant(
+    trx: PlatformTransaction,
+    tenantId: string,
+  ): Promise<PayoutAccountRecord | undefined> {
+    return trx
+      .selectFrom("platform.tenant_payout_accounts")
+      .selectAll()
+      .where("tenant_id", "=", tenantId)
+      .forUpdate()
       .executeTakeFirst();
   }
 

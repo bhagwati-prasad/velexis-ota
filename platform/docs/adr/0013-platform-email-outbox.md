@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Platform tech lead. Decided during planning; revisit when sending volume needs a provider API (bounces, complaints) or when portal e-mails need localisation.
+**Revisions:** 2026-10-30 (lead decision (2g) of 2026-10-30, recorded with FIX-W35-PLATFORM): item 5 names the `payouts.reviewed` template that PBE-058 added (dated note under item 5).
 
 ## Context
 
@@ -31,6 +32,8 @@
    | `connection.credentials_applied`, `connection.credentials_failed`, `connection.stripe_disconnected` | Connections (M5) | — |
    | `settlement.paid` | Admin marks paid (M5) | — |
    | `ops.alert` | Pool low, live office request, payout account to review, provisioning failure | — (sent to `OPS_ALERT_EMAIL`) |
+
+   *Note (2026-10-30, lead decision (2g), FIX-W35-PLATFORM).* PBE-058 added one template to this list: **`payouts.reviewed`**, queued when a platform admin verifies or rejects an OTA's payout account (`adminReviewPayoutAccount`, [`../flows/stripe-payments-account.md`](../flows/stripe-payments-account.md) §B, [PADR-0003](0003-settlement-of-velexis-collected-payments.md) item 10) to every active owner of the OTA, once per owner and account version. It has no secret variables: its data are the owner's name, the OTA's name and key, the outcome (`verified` or `rejected`), the next step and the link to the portal's payout account page (built from `PUBLIC_PORTAL_URL`, item 7). The reviewer's note and the bank details stay out of it (the portal shows the note). A new or changed payout account still goes to ops as an `ops.alert` (the "payout account to review" row above). The template lives with the others in `platform/backend/src/notifications/templates/` and has its fixture test (`templates.test.ts`).
 
 6. **Sender.** `MAIL_FROM` (for example `"Velexis" <no-reply@mail.platform.example.com>`), SPF, DKIM and DMARC set for the sending domain (deploy task).
 7. **Links** always use `PUBLIC_PORTAL_URL` or `PUBLIC_PLATFORM_ADMIN_URL`; never a host from the request.

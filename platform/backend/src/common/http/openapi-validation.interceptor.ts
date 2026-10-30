@@ -10,6 +10,13 @@
 // `fieldErrors[].path` is a JSON pointer: into the body for body problems (`/email`, `""` for the body itself), as the
 // document's examples show, and `/<in>/<name>` for a parameter (`/query/limit`, `/path/tenantId`,
 // `/header/Idempotency-Key`), with the parameter's name as the document writes it.
+//
+// Every admin reason is trimmed here, before it is validated (FIX-W35-PLATFORM, lead decision (2j) of 2026-10-30): a
+// string of a schema of `TRIMMED_SCHEMAS` (the document's `AdminReason`, which every admin operation's `reason` is, in
+// a body or as `adminRevokeAdmin`'s query parameter) loses the white space at either end before `minLength` and
+// `maxLength` count it, so a reason of only spaces answers `400 VALIDATION_FAILED` (`minLength`), and the handler, and
+// with it the audit row and the stored reason, gets the trimmed value. The parameters are validated as copies anyway;
+// a body that can hold such a string is validated, trimmed and handed on as a copy, so the request is never changed.
 import { readFileSync } from "node:fs";
 import type { IncomingHttpHeaders } from "node:http";
 import { join } from "node:path";
@@ -22,7 +29,7 @@ import {
 } from "@nestjs/common";
 import { DiscoveryService, MetadataScanner } from "@nestjs/core";
 import { AppError, type FieldError } from "@velexis/errors";
-import Ajv2020, { type ErrorObject, type ValidateFunction } from "ajv/dist/2020";
+import Ajv2020, { type ErrorObject, type FuncKeywordDefinition, type ValidateFunction } from "ajv/dist/2020";
 import addFormats from "ajv-formats";
 import type { Observable } from "rxjs";
 import { parse } from "yaml";
@@ -34,6 +41,46 @@ export const PLATFORM_OPENAPI_FILE = join(APP_DIR, "openapi", "velexis-platform-
 
 /** At most this many field errors are answered; a body with thousands of unknown properties gets the first ones. */
 export const MAX_FIELD_ERRORS = 50;
+
+/**
+ * The component schemas whose strings are trimmed before they are validated (see the file header): `AdminReason`, the
+ * schema of every admin reason (PADR-0006 item 5), whose 5–500 characters count after trimming.
+ */
+export const TRIMMED_SCHEMAS: readonly string[] = Object.freeze(["AdminReason"]);
+
+/** The Ajv keyword the validator adds to each schema of TRIMMED_SCHEMAS (a name the document cannot use). */
+const TRIM_KEYWORD = "velexisTrim";
+
+/**
+ * Trims the string it validates in place, in the object or list that holds it, and is always valid. It is an untyped
+ * keyword, so Ajv runs it before the string keywords (`minLength`, `maxLength`, `pattern`), and `modifying`, so those
+ * read the trimmed value. A string that is the whole validated value has no holder and is left as it is.
+ */
+const TRIM_KEYWORD_DEFINITION: FuncKeywordDefinition = {
+  keyword: TRIM_KEYWORD,
+  schemaType: "boolean",
+  modifying: true,
+  errors: false,
+  validate: (
+    trim: unknown,
+    data: unknown,
+    _parentSchema?: unknown,
+    context?: { readonly parentData?: unknown; readonly parentDataProperty?: string | number },
+  ): boolean => {
+    const holder = context?.parentData;
+    const key = context?.parentDataProperty;
+    if (
+      trim === true &&
+      typeof data === "string" &&
+      holder !== null &&
+      typeof holder === "object" &&
+      key !== undefined
+    ) {
+      Reflect.set(holder, key, data.trim());
+    }
+    return true;
+  },
+};
 
 type JsonObject = Record<string, unknown>;
 
@@ -274,7 +321,14 @@ interface CompiledLocation {
 
 interface CompiledOperation {
   readonly locations: ReadonlyMap<ParameterLocation, CompiledLocation>;
-  readonly body: { readonly required: boolean; readonly validate: ValidateFunction } | undefined;
+  readonly body:
+    | {
+        readonly required: boolean;
+        readonly validate: ValidateFunction;
+        /** True when the body schema reaches a schema of TRIMMED_SCHEMAS: the body is validated as a copy. */
+        readonly trims: boolean;
+      }
+    | undefined;
 }
 
 /** A message without the value: the keyword and the schema's own parameters only. */
@@ -400,11 +454,22 @@ export class OpenApiRequestValidator {
   private readonly bodyAjv: Ajv2020;
   private readonly parameterAjv: Ajv2020;
   private readonly compiled = new Map<string, CompiledOperation>();
+  /** The component schemas, their `$ref`s rewritten into the Ajv root schema. */
+  private readonly defs: JsonObject;
+  /** The rewritten `$ref`s of the schemas of TRIMMED_SCHEMAS that the document has. */
+  private readonly trimmedRefs: ReadonlySet<string>;
 
   constructor(private readonly api: PlatformOpenApi) {
     const keywords = [...OPENAPI_ANNOTATIONS, ...extensionKeys(api.document)];
     const components = isObject(api.document["components"]) ? api.document["components"] : {};
-    const defs = rewriteRefs(components["schemas"] ?? {});
+    const rewritten = rewriteRefs(components["schemas"] ?? {});
+    const defs: JsonObject = isObject(rewritten) ? { ...rewritten } : {};
+    const trimmed = TRIMMED_SCHEMAS.filter((name) => isObject(defs[name]));
+    for (const name of trimmed) {
+      defs[name] = { ...(defs[name] as JsonObject), [TRIM_KEYWORD]: true };
+    }
+    this.defs = defs;
+    this.trimmedRefs = new Set(trimmed.map((name) => `${ROOT_ID}#/$defs/${name}`));
     const create = (options: { coerceTypes: false | "array"; useDefaults: boolean }): Ajv2020 => {
       // Strict for unknown keywords, so a misspelt keyword in the document fails here instead of being ignored;
       // strictTypes and strictRequired judge how a schema is written, not what it accepts (as @velexis/testing).
@@ -420,6 +485,7 @@ export class OpenApiRequestValidator {
       for (const keyword of keywords) {
         ajv.addKeyword({ keyword });
       }
+      ajv.addKeyword(TRIM_KEYWORD_DEFINITION);
       ajv.addSchema({ $id: ROOT_ID, $defs: defs });
       return ajv;
     };
@@ -452,19 +518,44 @@ export class OpenApiRequestValidator {
         names: new Map(parameters.map((p) => [key(p.name), p.name])),
       });
     }
-    const body =
-      operation.requestBody === undefined
-        ? undefined
-        : {
-            required: operation.requestBody.required,
-            validate: this.bodyAjv.compile(rewriteRefs(operation.requestBody.schema) as JsonObject),
-          };
+    let body: CompiledOperation["body"];
+    if (operation.requestBody !== undefined) {
+      const schema = rewriteRefs(operation.requestBody.schema) as JsonObject;
+      body = {
+        required: operation.requestBody.required,
+        validate: this.bodyAjv.compile(schema),
+        trims: this.reachesTrimmed(schema, new Set()),
+      };
+    }
     this.compiled.set(operationId, { locations, body });
+  }
+
+  /** Whether `value` (a rewritten schema) refers to a schema of TRIMMED_SCHEMAS, directly or through other schemas. */
+  private reachesTrimmed(value: unknown, seen: Set<string>): boolean {
+    if (Array.isArray(value)) {
+      return value.some((item) => this.reachesTrimmed(item, seen));
+    }
+    if (!isObject(value)) {
+      return false;
+    }
+    return Object.entries(value).some(([key, child]) => {
+      if (key !== "$ref" || typeof child !== "string") {
+        return this.reachesTrimmed(child, seen);
+      }
+      if (this.trimmedRefs.has(child)) {
+        return true;
+      }
+      if (seen.has(child) || !child.startsWith(`${ROOT_ID}#/$defs/`)) {
+        return false;
+      }
+      seen.add(child);
+      return this.reachesTrimmed(this.defs[child.slice(`${ROOT_ID}#/$defs/`.length)], seen);
+    });
   }
 
   /**
    * The validated request and its field errors (empty when valid). The parameters are copies with the documented
-   * types; the input is never changed.
+   * types, and the body is a copy when one of its strings may be trimmed (TRIMMED_SCHEMAS); the input is never changed.
    */
   validate(
     operationId: string,
@@ -499,31 +590,32 @@ export class OpenApiRequestValidator {
         errors.push(...fieldErrorsOf(compiled.validate.errors, { in: location, names: compiled.names }));
       }
     }
-    errors.push(...this.bodyErrors(operation, input));
+    // A copy of a body whose admin reasons the trim keyword changes (JSON values only, so structuredClone copies all).
+    const body =
+      operation.body?.trims === true && input.body !== undefined ? structuredClone(input.body) : input.body;
+    errors.push(...this.bodyErrors(operation, input, body));
     return {
-      validated: { path: validated.path, query: validated.query, header: validated.header, body: input.body },
+      validated: { path: validated.path, query: validated.query, header: validated.header, body },
       fieldErrors: distinct(errors),
     };
   }
 
-  private bodyErrors(operation: CompiledOperation, input: RequestInput): FieldError[] {
+  private bodyErrors(operation: CompiledOperation, input: RequestInput, body: unknown): FieldError[] {
     if (input.unreadBody) {
       return [{ path: "", code: "mediaType", message: "The request body must be JSON (application/json)." }];
     }
     if (operation.body === undefined) {
       // A JSON content type with an empty body parses as `{}`: that is no body either.
-      return input.body === undefined || isEmptyObject(input.body)
+      return body === undefined || isEmptyObject(body)
         ? []
         : [{ path: "", code: "body", message: "This operation takes no request body." }];
     }
-    if (input.body === undefined) {
+    if (body === undefined) {
       return operation.body.required
         ? [{ path: "", code: "required", message: "A JSON request body is required." }]
         : [];
     }
-    return operation.body.validate(input.body)
-      ? []
-      : fieldErrorsOf(operation.body.validate.errors, undefined);
+    return operation.body.validate(body) ? [] : fieldErrorsOf(operation.body.validate.errors, undefined);
   }
 }
 

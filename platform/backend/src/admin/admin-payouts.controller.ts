@@ -8,8 +8,8 @@
 //   the review). Not audited: it holds no bank number.
 // - `adminRevealPayoutAccount` (`POST …/reveal`): the full bank identifiers, to pay a statement by bank transfer. Its
 //   operation is `x-mfa-step-up` (RecentMfaGuard: `401 REAUTH_REQUIRED` without a TOTP step-up in the last 15
-//   minutes) and needs a `reason` of 5–500 characters (the request validation; the service also refuses one that is
-//   shorter once trimmed). The answer is sent with `Cache-Control: no-store`, set before the service runs so the
+//   minutes) and needs a `reason` of 5–500 characters once trimmed (the request validation trims every admin reason,
+//   FIX-W35-PLATFORM). The answer is sent with `Cache-Control: no-store`, set before the service runs so the
 //   service's own refusals carry it too; the service writes the audit row `payout_account.revealed` before it answers.
 //   Nothing here logs the answer.
 // - `adminReviewPayoutAccount` (`POST …/review`, `If-Match`): `verified`, or `rejected` with a note; the owners are

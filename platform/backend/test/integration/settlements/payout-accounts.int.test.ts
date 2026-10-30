@@ -5,6 +5,7 @@
 // - the portal: owners set the account with a TOTP step-up while `FEATURE_SETTLEMENTS` is on; a wrong IBAN checksum
 //   answers `400 VALIDATION_FAILED` without the value; a valid IBAN is stored envelope-encrypted (bound to the row),
 //   answered masked (`last4`), audited without numbers and announced to ops; owners and finance members read it masked;
+//   the stored account typed again changes nothing, while one changed field is a change (FIX-W35-PLATFORM);
 // - the platform admin: the masked view, the reveal (a reason and a step-up, `no-store`, one audit row with the reason
 //   and no number) and the review (`If-Match`, the owners e-mailed `payouts.reviewed`).
 //
@@ -50,6 +51,15 @@ const IBAN_WRONG_CHECKSUM = "GB82 WEST 1234 5698 7654 33";
 const NO_IBAN = "NO9386011117947";
 const ACCOUNT_NUMBER = "000123456789";
 const ROUTING_NUMBER = "110000000";
+/** Another routing number for the same account number (a test value only). */
+const ROUTING_NUMBER_CHANGED = "110000001";
+/**
+ * Another valid IBAN and another account number with the same last 4 as IBAN and ACCOUNT_NUMBER (test values only):
+ * the masked account stays the same, so only the decrypted identifiers tell the change.
+ */
+const IBAN_SAME_LAST4_TYPED = "GB32 WEST 1234 5699 7654 32";
+const IBAN_SAME_LAST4 = "GB32WEST12345699765432";
+const ACCOUNT_NUMBER_SAME_LAST4 = "999123456789";
 /**
  * Every bank number and BIC of this file, as typed and as stored (the BICs are write-only like the numbers): none may
  * reach a log line, an audit row, an error answer or an e-mail.
@@ -65,6 +75,11 @@ const NUMBERS = [
   "8601 1117 947",
   ACCOUNT_NUMBER,
   ROUTING_NUMBER,
+  ROUTING_NUMBER_CHANGED,
+  IBAN_SAME_LAST4,
+  "WEST12345699765432",
+  "1234 5699 7654",
+  ACCOUNT_NUMBER_SAME_LAST4,
   "WESTGB2L",
   "westgb2l",
   "DNBANOKK",
@@ -500,6 +515,121 @@ describe("setPayoutAccount and getPayoutAccount (portal)", () => {
     expect((await emailsOf(f.tenant.id, "ops.alert")).length).toBe(2);
   });
 
+  it("[FIX-W35-PLATFORM AC3] the stored account typed again changes nothing: the same answer, verified stays verified, no audit row, no ops alert", async () => {
+    const f = await fixture();
+    expect(outcomeOf(await setAccount(f, ibanBody()))).toBe("200");
+    expect(outcomeOf(await review(f.tenant.id, '"1"', { decision: "verified" }))).toBe("200");
+    const current = await t.http.get(path(f)).set(await portal(f, "owner", false));
+    expect(current.body).toMatchObject({ status: "verified", version: 2 });
+    const storedBefore = await storedRow(f.tenant.id);
+    t.clock.advance(60_000);
+
+    // The same account as the save normalises it: the holder trimmed, the IBAN without spaces and upper-cased, the
+    // BIC upper-cased.
+    const res = await setAccount(
+      f,
+      ibanBody({ accountHolderName: "  Agency Travel AS ", iban: IBAN, bic: "WESTGB2L" }),
+    );
+
+    expect(outcomeOf(res)).toBe("200");
+    expectResponseToMatch("setPayoutAccount", res, { document: "platform" });
+    expect(res.body).toEqual(current.body);
+    expect(res.headers["etag"]).toBe('"2"');
+    // Nothing was written: the same ciphertext, version, review and writer.
+    expect(await storedRow(f.tenant.id)).toEqual(storedBefore);
+    expect(storedBefore).toMatchObject({ status: "verified", reviewed_by_account_id: admin, version: 2 });
+    expect((await auditOf(f.tenant.id, "payout_account.updated")).map((row) => row["details"])).toEqual([
+      expect.objectContaining({ version: 1 }),
+    ]);
+    expect(await emailsOf(f.tenant.id, "ops.alert")).toHaveLength(1);
+    expect(await emailsOf(f.tenant.id, "payouts.reviewed")).toHaveLength(2);
+
+    // A local account typed again keeps its pending review, version and time as well.
+    const g = await fixture();
+    const first = await setAccount(g, localBody());
+    t.clock.advance(60_000);
+    const again = await setAccount(g, localBody());
+    expect(outcomeOf(again)).toBe("200");
+    expect(again.body).toEqual(first.body);
+    expect(again.body).toMatchObject({ status: "pending_review", version: 1 });
+    expect(again.headers["etag"]).toBe('"1"');
+    expect(await auditOf(g.tenant.id, "payout_account.updated")).toHaveLength(1);
+    expect(await emailsOf(g.tenant.id, "ops.alert")).toHaveLength(1);
+    expectLogsWithoutBankNumbers("PUT", "/v1/tenants/:tenantId/payout-account", [200]);
+  });
+
+  it("[FIX-W35-PLATFORM AC3] one changed field after normalisation is a change: a new version back in pending_review, an audit row and an ops alert", async () => {
+    const f = await fixture();
+    expect(outcomeOf(await setAccount(f, ibanBody()))).toBe("200");
+    const holder = "Agency Travel AS Ltd";
+    const withoutBic = Object.fromEntries(
+      Object.entries(ibanBody({ accountHolderName: holder })).filter(([key]) => key !== "bic"),
+    );
+    const iban = { accountHolderName: holder, bic: "DNBANOKK", currency: "EUR", countryCode: "IE" };
+    const local = { ...localBody(), accountHolderName: holder, routingNumber: ROUTING_NUMBER_CHANGED };
+    // Each differs from the account stored before it in one thing only (the scheme comes with its own identifiers,
+    // country and currency). The BIC, the IBAN and the account number with the same last 4 and the routing number
+    // change nothing of the masked account: only the identifiers, decrypted and compared, tell them apart.
+    const changes: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+      ["holder", ibanBody({ accountHolderName: holder })],
+      ["no BIC", withoutBic],
+      ["BIC", ibanBody({ accountHolderName: holder, bic: "DNBANOKK" })],
+      ["currency", ibanBody({ accountHolderName: holder, bic: "DNBANOKK", currency: "EUR" })],
+      ["country", ibanBody(iban)],
+      ["IBAN with the same last 4", ibanBody({ ...iban, iban: IBAN_SAME_LAST4_TYPED })],
+      ["scheme", { ...localBody(), accountHolderName: holder }],
+      ["routing number", local],
+      ["account number with the same last 4", { ...local, accountNumber: ACCOUNT_NUMBER_SAME_LAST4 }],
+    ];
+    let version = 1;
+    for (const [what, body] of changes) {
+      expect(outcomeOf(await review(f.tenant.id, `"${version}"`, { decision: "verified" })), what).toBe(
+        "200",
+      );
+      const res = await setAccount(f, body);
+      version += 2;
+      const last4 = body["scheme"] === "local" ? "6789" : "5432";
+      expect(outcomeOf(res), what).toBe("200");
+      expect(res.body, what).toMatchObject({ status: "pending_review", reviewNote: null, version, last4 });
+      expect(res.headers["etag"], what).toBe(`"${version}"`);
+    }
+    const audit = await auditOf(f.tenant.id, "payout_account.updated");
+    expect(audit.map((row) => (row["details"] as { version: number }).version)).toEqual(
+      Array.from({ length: changes.length + 1 }, (_, index) => 1 + 2 * index),
+    );
+    expect(
+      audit.slice(1).map((row) => (row["details"] as { before: { status: string } }).before.status),
+    ).toEqual(Array(changes.length).fill("verified"));
+    expect(await emailsOf(f.tenant.id, "ops.alert")).toHaveLength(changes.length + 1);
+    const decrypted = async (tenantId: string): Promise<unknown> =>
+      envelope.decryptJson(
+        (await storedRow(tenantId))?.bank_details_ciphertext ?? Buffer.alloc(0),
+        bankDetailsPlace(tenantId),
+      );
+    await expect(decrypted(f.tenant.id)).resolves.toEqual({
+      accountNumber: ACCOUNT_NUMBER_SAME_LAST4,
+      routingNumber: ROUTING_NUMBER_CHANGED,
+    });
+
+    // A stored copy that cannot be decrypted (here another OTA's, bound to that OTA's row) is replaced, not matched,
+    // even when the account typed is the one that copy holds and the masked columns are the stored ones.
+    const other = await fixture();
+    expect(outcomeOf(await setAccount(other, localBody()))).toBe("200");
+    await pool.query(
+      "UPDATE platform.tenant_payout_accounts SET bank_details_ciphertext = $1 WHERE tenant_id = $2",
+      [(await storedRow(other.tenant.id))?.bank_details_ciphertext, f.tenant.id],
+    );
+    const replaced = await setAccount(f, { ...localBody(), accountHolderName: holder });
+    expect(outcomeOf(replaced)).toBe("200");
+    expect(replaced.body).toMatchObject({ status: "pending_review", version: version + 1, last4: "6789" });
+    await expect(decrypted(f.tenant.id)).resolves.toEqual({
+      accountNumber: ACCOUNT_NUMBER,
+      routingNumber: ROUTING_NUMBER,
+    });
+    expect(await auditOf(f.tenant.id, "payout_account.updated")).toHaveLength(changes.length + 2);
+    expect(await emailsOf(f.tenant.id, "ops.alert")).toHaveLength(changes.length + 2);
+  });
+
   it("needs a step-up, MFA, the settlements switch and the owner role, and writes nothing otherwise", async () => {
     const f = await fixture();
 
@@ -557,7 +687,9 @@ describe("the payout account in the platform admin", () => {
     const withoutStepUp = await reveal(f.tenant.id, { reason }, false);
     const withoutReason = await reveal(f.tenant.id, {});
     const shortReason = await reveal(f.tenant.id, { reason: "pay" });
-    // Five characters for the request schema, but no reason once the spaces are gone.
+    // Five characters for the request schema, but no reason once the spaces are gone: the request validation trims
+    // every admin reason before it counts it (FIX-W35-PLATFORM), so these are refused before the handler, as the
+    // short one is (and, like it, without the handler's `no-store`: no error answer holds a bank number).
     const blankReasons = [
       await reveal(f.tenant.id, { reason: "     " }),
       await reveal(f.tenant.id, { reason: "   pay   " }),
@@ -570,7 +702,7 @@ describe("the payout account in the platform admin", () => {
       expect(errorOf(res).fieldErrors?.map(({ path: at, code }) => [at, code])).toEqual([
         ["/reason", "minLength"],
       ]);
-      expect(res.headers["cache-control"]).toBe("no-store");
+      expect(errorOf(res).fieldErrors).toEqual(errorOf(shortReason).fieldErrors);
     }
     for (const res of [withoutStepUp, withoutReason, shortReason, ...blankReasons]) {
       expectResponseToMatch("adminRevealPayoutAccount", res, { document: "platform" });
@@ -613,6 +745,8 @@ describe("the payout account in the platform admin", () => {
     const none = await reveal(f.tenant.id, { reason });
     expect(outcomeOf(none)).toBe("404 NOT_FOUND");
     expectResponseToMatch("adminRevealPayoutAccount", none, { document: "platform" });
+    // The handler sets `no-store` before the service runs, so the service's own refusals carry it too.
+    expect(none.headers["cache-control"]).toBe("no-store");
     expect(await auditOf(f.tenant.id, "payout_account.revealed")).toEqual([]);
 
     expect(outcomeOf(await setAccount(f, localBody()))).toBe("200");

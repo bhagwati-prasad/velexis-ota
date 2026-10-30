@@ -27,14 +27,15 @@
  * identification (`formOfIdentifications[*].number`: passport, identity card or driving licence numbers;
  * FIX-W26-SECURITY) are censored at the same depths: as the list itself (depth 1 of the line) and one level down.
  *
- * The platform's paths (platform/docs/architecture.md §8): Stripe secret keys and webhook secrets, bank numbers,
- * recovery codes, TOTP secrets and `otpauth://` URLs, MFA challenge and invitation tokens, the secret variables of an
- * e-mail (`secretData`, and the links with tokens it holds: `verifyUrl`, `resetUrl`, `acceptUrl`; PBE-011), and the
- * `code` and `state` of an MFA or OAuth body. pino paths
- * cannot look at a sibling key, and `code` alone is the error code of every `err` and error envelope, so `code` and
- * `state` are censored only below the keys `mfa` and `oauth`: a body of
- * `verifyMfa`, `stepUp`, `enableMfa` or `completeStripeConnect` that is ever logged goes under one of those two keys
- * (`logger.warn({ mfa: body }, …)`), never under a generic one.
+ * The platform's paths (platform/docs/architecture.md §8): Stripe secret keys and webhook secrets, bank numbers (a
+ * payout account's `iban` and `accountNumber`, and since FIX-W35-PLATFORM, lead decision (2h) of 2026-10-30, its
+ * `bic` and `routingNumber`; pino paths are literal, so the snake_case `routing_number` and `account_number` are
+ * listed too), recovery codes, TOTP secrets and `otpauth://` URLs, MFA challenge and invitation tokens, the secret
+ * variables of an e-mail (`secretData`, and the links with tokens it holds: `verifyUrl`, `resetUrl`, `acceptUrl`;
+ * PBE-011), and the `code` and `state` of an MFA or OAuth body. pino paths cannot look at a sibling key, and `code`
+ * alone is the error code of every `err` and error envelope, so `code` and `state` are censored only below the keys
+ * `mfa` and `oauth`: a body of `verifyMfa`, `stepUp`, `enableMfa` or `completeStripeConnect` that is ever logged goes
+ * under one of those two keys (`logger.warn({ mfa: body }, …)`), never under a generic one.
  *
  * The airline card's paths (ota/docs/architecture.md §9, OADR-0004 point 2; OBE-050): the whole `card` object of the
  * airline-card completion body (the `card` paths above), and its fields `holderName`, `expiryMonth` and `expiryYear` at
@@ -76,6 +77,10 @@ export const REDACT_PATHS: readonly string[] = Object.freeze([
   "webhookSecret",
   "iban",
   "accountNumber",
+  "bic",
+  "routingNumber",
+  "routing_number",
+  "account_number",
   "recoveryCode",
   "recoveryCodes",
   "totpSecret",
@@ -116,6 +121,10 @@ export const REDACT_PATHS: readonly string[] = Object.freeze([
   "*.webhookSecret",
   "*.iban",
   "*.accountNumber",
+  "*.bic",
+  "*.routingNumber",
+  "*.routing_number",
+  "*.account_number",
   "*.recoveryCode",
   "*.recoveryCodes",
   "*.totpSecret",
