@@ -1666,7 +1666,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - Switching back clears every secret and reference; live without a verified payout account answers 422.
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int connections`
 
-### PBE-058 · Implement payout accounts
+### PBE-058 · Implement payout accounts ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-042

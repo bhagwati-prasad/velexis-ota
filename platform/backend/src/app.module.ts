@@ -23,6 +23,7 @@ import { HealthModule } from "./health/health.module";
 import { MembershipsModule } from "./memberships/memberships.module";
 import { PaymentConnectionsModule } from "./payment-connections/payment-connections.module";
 import { ProvisioningModule } from "./provisioning/provisioning.module";
+import { SettlementsModule } from "./settlements/settlements.module";
 import { TenantsModule } from "./tenants/tenants.module";
 
 /** Every route of the application, in the path-to-regexp 8 syntax of NestJS 11 (`*` alone is deprecated). */
@@ -56,6 +57,8 @@ export class AppModule implements NestModule {
         // The domain list and Caddy's TLS `ask` endpoint, whose cache listens to `vx:invalidate` (PBE-027).
         DomainsModule.forApi(),
         PaymentConnectionsModule.forApi(),
+        // The payout account of the portal (PBE-058); the settlements join it in M5.
+        SettlementsModule.forApi(),
         ProvisioningModule.forApi(),
         // The Stripe Billing webhook receiver: stores and queues events, never calls Stripe (layer 3, PBE-043).
         BillingSyncModule,

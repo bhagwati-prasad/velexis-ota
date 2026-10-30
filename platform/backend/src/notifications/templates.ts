@@ -18,7 +18,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import Handlebars from "handlebars";
 
-/** The template keys of M1 (PADR-0013 item 5). M5 tasks add theirs here and in `templates/`. */
+/** The template keys of M1 (PADR-0013 item 5) and of the M5 tasks, which add theirs here and in `templates/`. */
 export const EMAIL_TEMPLATE_KEYS = [
   "auth.verify_email",
   "auth.account_exists",
@@ -31,6 +31,8 @@ export const EMAIL_TEMPLATE_KEYS = [
   "tenant.suspended",
   "tenant.resumed",
   "ops.alert",
+  // M5: the review of a payout account (PBE-058, adminReviewPayoutAccount).
+  "payouts.reviewed",
 ] as const;
 
 /** A key of EMAIL_TEMPLATE_KEYS. */
@@ -88,6 +90,14 @@ export const EMAIL_TEMPLATES: Readonly<Record<EmailTemplateKey, EmailTemplateDef
   "ops.alert": definition("Pool low, live office request, payout account to review, provisioning failure", [
     "title",
     "message",
+  ]),
+  "payouts.reviewed": definition("A platform admin verified or rejected the payout account (to the owners)", [
+    "fullName",
+    "tenantName",
+    "tenantKey",
+    "outcome",
+    "nextStep",
+    "payoutAccountUrl",
   ]),
 });
 
