@@ -2318,8 +2318,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - A Markdown error is shown next to the reported line.
 - **Verify:** `pnpm --filter @velexis/ota-admin test`
 
-### OAD-016 · Add the OTA admin Playwright project with the SSO and bookings journeys
-- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the nightly run of the e2e workflow on GitHub)
+### OAD-016 · Add the OTA admin Playwright project with the SSO and bookings journeys ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-admin
 - **Milestone:** M4
 - **Depends on:** OAD-008, OAD-009, PFE-017, PFE-014
