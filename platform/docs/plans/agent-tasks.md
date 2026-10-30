@@ -1705,7 +1705,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - Running the generation twice gives the same drafts; an approved statement is unchanged by a re-run.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int settlements`
 
-### PBE-060 · Implement the settlement review workflow and portal statements
+### PBE-060 · Implement the settlement review workflow and portal statements ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-059

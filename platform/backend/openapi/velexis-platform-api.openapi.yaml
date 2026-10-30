@@ -10494,11 +10494,11 @@ paths:
       description: >-
         Adds a manual `adjustment` line to a **draft** (M5, PADR-0003 item 5): a signed amount in the statement's
         currency (positive is owed to the OTA; another currency answers `400 VALIDATION_FAILED`), a `description` that
-        the OTA sees on the line, and a written `reason` of 5–500 characters after trimming that the audit row keeps.
-        The totals are recomputed in the same transaction (`adjustmentsAmount`, `netAmount`, `lineCount`) and the
-        statement's version rises. Any other status answers `409 SETTLEMENT_STATE_INVALID`: approved, paid and
-        carried-forward statements are immutable. A regeneration of the draft keeps no adjustment, as it rebuilds
-        every line.
+        the OTA sees on the line (stored trimmed: one of only white space answers `400 VALIDATION_FAILED`), and a
+        written `reason` of 5–500 characters after trimming that the audit row keeps. The totals are recomputed in the
+        same transaction (`adjustmentsAmount`, `netAmount`, `lineCount`) and the statement's version rises. Any other
+        status answers `409 SETTLEMENT_STATE_INVALID`: approved, paid and carried-forward statements are immutable. A
+        regeneration of the draft keeps no adjustment, as it rebuilds every line.
       tags:
         - Admin settlements
       security:
@@ -10615,7 +10615,12 @@ paths:
         PAYOUT_ACCOUNT_REQUIRED`); a net of zero or less makes it `carried_forward`, and the next month's draft absorbs
         it as a `carry_forward` line. Approving also sets `carriedToId` on the earlier carried-forward statements this
         draft absorbed. From then on the statement is immutable and the portal shows it. Any other status answers
-        `409 SETTLEMENT_STATE_INVALID`. Writes an audit row.
+        `409 SETTLEMENT_STATE_INVALID`. A carried-forward balance is absorbed once (PADR-0003 item 7: by the earliest
+        later open draft of the same OTA, environment and currency), so the approval checks the draft's `carry_forward`
+        line again: when it no longer holds exactly the balances this draft absorbs now (another statement absorbed one
+        of them since the draft was generated, or a balance was carried forward after it), the answer is `409
+        SETTLEMENT_STATE_INVALID` with `details.reason = carry_forward_changed` and nothing changes; generate the month
+        again (`adminGenerateSettlements`) and approve the rebuilt draft. Writes an audit row.
       tags:
         - Admin settlements
       security:
@@ -10635,6 +10640,7 @@ paths:
         - INTERNAL_ERROR
       x-platform-tables:
         - settlements
+        - settlement_lines
         - tenants
         - tenant_payout_accounts
         - platform_audit_log
@@ -10775,11 +10781,12 @@ paths:
       summary: Record the bank transfer of an approved statement
       description: >-
         Records that Velexis paid an **approved** statement by bank transfer (M5, PADR-0003 items 9 and 11): the date
-        of the transfer (`paidAt`, not in the future) and the bank's reference, with a TOTP step-up within the last 15
-        minutes (`401 REAUTH_REQUIRED`), `If-Match` (`412 PRECONDITION_FAILED`) and a `verified` payout account (`422
-        PAYOUT_ACCOUNT_REQUIRED`, PADR-0003 item 9). The statement becomes `paid`, an audit row is written, and the
-        owners and finance members of the OTA are e-mailed (`settlements.paid`) through the outbox. Any other status
-        answers `409 SETTLEMENT_STATE_INVALID`.
+        of the transfer (`paidAt`, not in the future) and the bank's reference (stored trimmed: one of only white space
+        answers `400 VALIDATION_FAILED`), with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`),
+        `If-Match` (`412 PRECONDITION_FAILED`) and a `verified` payout account (`422 PAYOUT_ACCOUNT_REQUIRED`, PADR-0003
+        item 9). The statement becomes `paid`, an audit row is written, and the active owners and finance members of
+        the OTA are e-mailed (`settlement.paid`, PADR-0013 item 5) through the outbox. Any other status answers `409
+        SETTLEMENT_STATE_INVALID`.
       tags:
         - Admin settlements
       security:
@@ -13354,7 +13361,9 @@ components:
     SettlementStateInvalid:
       description: >-
         The statement's status does not allow the action (`details.status`): adjustments, approval and voiding need a
-        `draft`, marking paid an `approved` statement. Possible codes: SETTLEMENT_STATE_INVALID.
+        `draft`, marking paid an `approved` statement. An approval also answers it for a draft whose carried-forward
+        balance is out of date (`details.reason = carry_forward_changed`: generate the month again). Possible codes:
+        SETTLEMENT_STATE_INVALID.
       headers:
         X-Request-Id:
           $ref: '#/components/headers/X-Request-Id'

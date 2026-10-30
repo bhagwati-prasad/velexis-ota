@@ -34,8 +34,8 @@
 //   TenantsModule, a module of its own layer (architecture §2.2).
 // - AdminPayoutsController: the payout accounts (masked view, reveal with a reason and a step-up, review) over
 //   SettlementsModule's PayoutAccountsService (PBE-058).
-// - AdminSettlementsController: the settlement statements, first the generation of a month's drafts over
-//   SettlementsModule's SettlementJobs (PBE-059); the review workflow joins it (PBE-060).
+// - AdminSettlementsController: the settlement statements: the generation of a month's drafts over SettlementsModule's
+//   SettlementJobs (PBE-059) and the review workflow over its SettlementReviewService (PBE-060).
 //
 // Later tasks add the other areas of platform/docs/api-inventory-admin.md, one controller per area. The admin
 // bootstrap commands of dist/cli.js (`admin:grant`, `admin:reset-mfa`, admin-cli.commands.ts) run outside this module,

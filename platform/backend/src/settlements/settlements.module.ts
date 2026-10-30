@@ -6,7 +6,10 @@
 // verified-account check (PBE-061).
 //
 // - `SettlementsModule.forApi()` (AppModule) adds the portal's payout account routes (`getPayoutAccount`,
-//   `setPayoutAccount`, PBE-058); the portal's statements (PBE-060) join it.
+//   `setPayoutAccount`, PBE-058) and its statements (`listSettlements`, `getSettlement`, `downloadSettlementLines`,
+//   SettlementsController, PBE-060).
+// - The review workflow of the platform admin (PBE-060): SettlementReviewService over SettlementReviewRepository and
+//   the statements' repository, exported for AdminModule's AdminSettlementsController.
 // - `SettlementsModule.forWorker()` (WorkerModule) is the worker's part (PBE-059): the one processor of
 //   `platform-settlements` (SettlementsProcessor) over SettlementGenerator, which lists the month's Stripe balance
 //   transactions with the Stripe client and rebuilds the drafts, and the `settlements.monthly` handler of the
@@ -24,7 +27,10 @@ import { PayoutAccountsController } from "./payout-accounts.controller";
 import { PayoutAccountsRepository } from "./payout-accounts.repository";
 import { PayoutAccountsService } from "./payout-accounts.service";
 import { SettlementGenerator } from "./settlement-generator";
+import { SettlementReviewRepository } from "./settlement-review.repository";
+import { SettlementReviewService } from "./settlement-review.service";
 import { SettlementsMonthlyScheduler } from "./settlements-monthly.scheduler";
+import { SettlementsController } from "./settlements.controller";
 import { SettlementJobs, SettlementsProcessor } from "./settlements.processor";
 import { SettlementsRepository } from "./settlements.repository";
 
@@ -44,15 +50,22 @@ export class SettlementsWorkerModule {}
 
 @Module({
   imports: [AuditModule, NotificationsModule, QueuesModule],
-  providers: [PayoutAccountsRepository, PayoutAccountsService, SettlementsRepository, SettlementJobs],
-  exports: [PayoutAccountsRepository, PayoutAccountsService, SettlementJobs],
+  providers: [
+    PayoutAccountsRepository,
+    PayoutAccountsService,
+    SettlementsRepository,
+    SettlementJobs,
+    SettlementReviewRepository,
+    SettlementReviewService,
+  ],
+  exports: [PayoutAccountsRepository, PayoutAccountsService, SettlementJobs, SettlementReviewService],
 })
 export class SettlementsModule {
-  /** The module with the portal's payout account routes, for AppModule. */
+  /** The module with the portal's payout account and statement routes, for AppModule. */
   static forApi(): DynamicModule {
     return {
       module: SettlementsModule,
-      controllers: [PayoutAccountsController],
+      controllers: [PayoutAccountsController, SettlementsController],
     };
   }
 

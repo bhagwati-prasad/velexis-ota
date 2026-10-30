@@ -33,6 +33,8 @@ export const EMAIL_TEMPLATE_KEYS = [
   "ops.alert",
   // M5: the review of a payout account (PBE-058, adminReviewPayoutAccount).
   "payouts.reviewed",
+  // M5: a settlement statement paid by bank transfer (PBE-060, adminMarkSettlementPaid; PADR-0013 item 5).
+  "settlement.paid",
 ] as const;
 
 /** A key of EMAIL_TEMPLATE_KEYS. */
@@ -99,6 +101,19 @@ export const EMAIL_TEMPLATES: Readonly<Record<EmailTemplateKey, EmailTemplateDef
     "nextStep",
     "payoutAccountUrl",
   ]),
+  "settlement.paid": definition(
+    "A platform admin recorded the bank transfer of a settlement statement (to the owners and finance members)",
+    [
+      "fullName",
+      "tenantName",
+      "tenantKey",
+      "period",
+      "netAmount",
+      "paidOn",
+      "payoutReference",
+      "statementUrl",
+    ],
+  ),
 });
 
 /** Variables every template may use, filled in by the renderer from the configuration (PADR-0013 item 7). */

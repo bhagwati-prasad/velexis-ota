@@ -90,6 +90,20 @@ const SAMPLES: Readonly<Record<EmailTemplateKey, EmailVariables>> = {
     },
     secretData: {},
   },
+  "settlement.paid": {
+    data: {
+      fullName: "Ana Lima",
+      tenantName: "Acme Travel",
+      tenantKey: "acme",
+      period: "January 2027",
+      netAmount: "8935.10 EUR",
+      paidOn: "2027-02-07",
+      payoutReference: "VX-SETTLE-2027-01-ACME",
+      statementUrl:
+        "https://platform.example.com/otas/ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/payments/settlements/stl_01JC7T1V5X9Z3B7D1F5H9K3N7Q",
+    },
+    secretData: {},
+  },
 };
 
 const templates = EmailTemplates.load();
@@ -137,8 +151,9 @@ describe("e-mail templates", () => {
         "tenant.suspended",
         "tenant.resumed",
         "ops.alert",
-        // M5: the payout account review (PBE-058).
+        // M5: the payout account review (PBE-058) and the paid settlement (PBE-060).
         "payouts.reviewed",
+        "settlement.paid",
       ].sort(),
     );
     for (const key of EMAIL_TEMPLATE_KEYS) {
