@@ -2464,7 +2464,8 @@ The platform turns on own Stripe, own Amadeus credentials, custom domains and go
   - Booking e-mails link to the primary custom domain when it is set.
 - **Verify:** `pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int tenancy`
 
-### OBE-081 · Serve the live environment for live tenants
+### OBE-081 · Serve the live environment for live tenants ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M5
 - **Depends on:** OBE-077, OBE-060

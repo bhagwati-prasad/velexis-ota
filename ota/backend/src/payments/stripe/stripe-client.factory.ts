@@ -20,6 +20,11 @@
 // PAYMENT_PROVIDER_NOT_CONFIGURED` (stripe.gateway.ts). One Velexis client per environment is created on first use and
 // kept for the process. The keys stay in this class: no getter returns the secret key, and nothing logs it.
 //
+// The live pair (STRIPE_SECRET_KEY_LIVE, STRIPE_PUBLISHABLE_KEY_LIVE) is therefore needed only once a live tenant
+// (`storefront_environment = live`) uses `velexis` or `connect_standard` (OBE-081): nothing reads it at start-up, an
+// `api_keys` target never touches it, so a process without it serves live tenants on their own accounts, and a live
+// `velexis` or `connect_standard` tenant gets `424` and a storefront without a card method until it is filled in.
+//
 // `api_keys` (the OTA's own account): the connection row carries the secret key as the platform's envelope ciphertext
 // (`platform.payment_provider_connections.secret_ciphertext`, associated data `platform.payment_provider_connections.
 // secret_ciphertext:<ppc_id>`, ADR-0010), cached as base64 text like any connection row. `withAccount` decrypts it
