@@ -1,26 +1,36 @@
-// Unit tests of the Velexis Stripe webhook receiver (OBE-039; OADR-0010 point 4): the signature check on the raw body,
-// the livemode and metadata cross-checks, the tenant and payment lookups, the stored row and the queued job. The
-// deliveries are the signed fixtures of @velexis/testing/stripe with this file's own secret; the tenant transaction,
-// the repository, the platform cache, the queue and Stripe are fakes, so every test sees exactly what was written,
-// queued and logged.
+// Unit tests of the Stripe webhook receiver (OBE-039, OBE-078; OADR-0010 point 4): the signature check on the raw body,
+// the livemode and metadata cross-checks, the tenant and payment lookups, the stored row and the queued job, for the
+// Velexis endpoint, the Connect endpoint (the tenant only from `event.account`) and an `api_keys` connection's own
+// endpoint (its encrypted signing secret, the tenant only from the path's connection). The deliveries are the signed
+// fixtures of @velexis/testing/stripe with this file's own secrets; the tenant transaction, the repository, the
+// platform cache and repository, the queue and Stripe are fakes, so every test sees exactly what was written, queued
+// and logged. The connections' signing secrets are sealed with the test KEKs, as the platform seals them.
 import { randomBytes } from "node:crypto";
 import type { ConfigService } from "@nestjs/config";
+import { encryptValue, type KeyProvider } from "@velexis/crypto";
 import { AppError } from "@velexis/errors";
 import { signedStripeEvent, stripeFixture } from "@velexis/testing/stripe";
 import type { Queue } from "bullmq";
 import type { PinoLogger } from "nestjs-pino";
 import Stripe from "stripe";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { testKeyProvider } from "../../../test/helpers/api-env";
 import type { Clock } from "../../common/clock";
 import type { IdGenerator } from "../../common/ids";
 import type { ApiConfig } from "../../config";
 import type { PlatformCache } from "../../tenancy/platform-cache";
+import type {
+  PlatformPaymentConnection,
+  PlatformPaymentConnectionWebhook,
+  PlatformReadRepository,
+} from "../../tenancy/platform-read.repository";
 import type { PlatformTenant } from "../../tenancy/platform-read.types";
 import type { RequestTenant, TenantContext } from "../../tenancy/tenant-context";
 import type { TenantTransaction, TenantTx } from "../../tenancy/tenant-tx";
 import type { PaymentRow, PaymentsRepository } from "../payments.repository";
 import type { StripeClientFactory } from "../stripe/stripe-client.factory";
 import {
+  connectionWebhookSecretAad,
   ENQUEUE_TIMEOUT_MS,
   STRIPE_EVENT_JOB,
   storedPayloadOf,
@@ -28,9 +38,20 @@ import {
   eventFactsOf,
 } from "./webhook-receiver.service";
 
-/** This file's signing secret: built at run time, never a committed value. */
+/** This file's signing secrets: built at run time, never committed values. */
 const SECRET = `whsec_${randomBytes(24).toString("base64url")}`;
+const CONNECT_SECRET = `whsec_${randomBytes(24).toString("base64url")}`;
+const CONNECTION_SECRET = `whsec_${randomBytes(24).toString("hex")}`;
 const NOW = new Date("2026-11-03T10:00:00.000Z");
+
+/** The OTA's own Stripe accounts (`acct_` and letters and digits, as the platform's CHECK has them). */
+const CONNECTED_ACCOUNT = "acct_1TestAlphaConnected";
+const OWN_ACCOUNT = "acct_1TestAlphaOwnKeys";
+const CONNECT_CONNECTION_ID = "ppc_01JBWEBHOOKCONNECT0000000";
+const OWN_CONNECTION_ID = "ppc_01JBWEBHOOKOWNKEYS0000000";
+
+/** The test KEKs (MASTER_KEY_DIR as the API loads them), loaded once in `beforeAll`. */
+let keys: KeyProvider;
 
 /** The fixtures' tenant, payment and PaymentIntent (packages/testing/fixtures/README.md). */
 const TENANT_ID = "ten_test_alpha";
@@ -89,6 +110,39 @@ function paymentRow(overrides: Partial<PaymentRow> = {}): PaymentRow {
   };
 }
 
+/** A Stripe payment connection of the fixtures' tenant, as the platform read repository answers it. */
+function connectionRow(overrides: Partial<PlatformPaymentConnection> = {}): PlatformPaymentConnection {
+  return {
+    id: CONNECT_CONNECTION_ID,
+    tenantId: TENANT_ID,
+    provider: "stripe",
+    environment: "test",
+    accountMode: "connect_standard",
+    accountReference: CONNECTED_ACCOUNT,
+    publishableKey: null,
+    supportedMethods: ["card"],
+    captureMode: "manual",
+    status: "active",
+    statementDescriptorSuffix: null,
+    secretCiphertext: null,
+    ...overrides,
+  };
+}
+
+/** `secret` sealed as the platform seals connection `id`'s webhook signing secret (base64, as the repository reads it). */
+async function sealedWebhookSecret(secret: string, id = OWN_CONNECTION_ID): Promise<string> {
+  const { ciphertext } = await encryptValue(Buffer.from(secret, "utf8"), {
+    aad: connectionWebhookSecretAad(id),
+    keys,
+  });
+  return Buffer.from(ciphertext).toString("base64");
+}
+
+/** The account snapshot a payment created on an OTA's own account records (`payments.metadata`, OBE-077). */
+const createdOn = (accountMode: "connect_standard" | "api_keys", accountReference: string) => ({
+  connection: { accountMode, accountReference },
+});
+
 interface Harness {
   readonly receiver: WebhookReceiverService;
   /** The platform tenants by id. */
@@ -102,7 +156,15 @@ interface Harness {
   readonly retrieveIntent: ReturnType<typeof vi.fn>;
   readonly lookups: ReturnType<typeof vi.fn>;
   readonly logs: Array<{ level: string; object: Record<string, unknown>; message: string }>;
+  /** The `connect_standard` connections by `<environment>:<acct_…>` (connectPaymentConnection). */
+  readonly connectConnections: Map<string, PlatformPaymentConnection>;
+  /** The connections with their webhook secret's ciphertext by id (paymentConnectionWebhook). */
+  readonly ownConnections: Map<string, PlatformPaymentConnectionWebhook>;
+  readonly platformLookups: ReturnType<typeof vi.fn>;
   secret: string | undefined;
+  connectSecret: string | undefined;
+  /** When set, every platform lookup fails as a database outage would. */
+  platformDown: boolean;
 }
 
 function harness(): Harness {
@@ -111,6 +173,11 @@ function harness(): Harness {
   const events = new Map<string, Record<string, unknown>>();
   const contexts: RequestTenant[] = [];
   const logs: Harness["logs"] = [];
+  const connectConnections = new Map<string, PlatformPaymentConnection>([
+    [`test:${CONNECTED_ACCOUNT}`, connectionRow()],
+  ]);
+  const ownConnections = new Map<string, PlatformPaymentConnectionWebhook>();
+  const platformLookups = vi.fn();
   const log =
     (level: string) =>
     (object: Record<string, unknown>, message: string): void => {
@@ -136,13 +203,32 @@ function harness(): Harness {
     retrieveIntent,
     lookups,
     logs,
+    connectConnections,
+    ownConnections,
+    platformLookups,
     secret: SECRET,
+    connectSecret: CONNECT_SECRET,
+    platformDown: false,
     receiver: undefined as unknown as WebhookReceiverService,
   };
   const config = {
     get: (name: keyof ApiConfig) =>
-      name === "STRIPE_WEBHOOK_SECRET_VELEXIS_TEST" ? state.secret : undefined,
+      name === "STRIPE_WEBHOOK_SECRET_VELEXIS_TEST"
+        ? state.secret
+        : name === "STRIPE_WEBHOOK_SECRET_CONNECT_TEST"
+          ? state.connectSecret
+          : undefined,
   } as unknown as ConfigService<ApiConfig, true>;
+  const platformRead = <T>(lookup: string, value: () => T): Promise<T> => {
+    platformLookups(lookup);
+    return state.platformDown ? Promise.reject(new Error("connect ECONNREFUSED")) : Promise.resolve(value());
+  };
+  const platform = {
+    connectPaymentConnection: (environment: string, account: string) =>
+      platformRead("connect", () => connectConnections.get(`${environment}:${account}`) ?? null),
+    paymentConnectionWebhook: (id: string) =>
+      platformRead("connection", () => ownConnections.get(id) ?? null),
+  } as unknown as PlatformReadRepository;
   const clients = {
     velexisClient: () => ({ paymentIntents: { retrieve: retrieveIntent } }) as unknown as Stripe,
   } as unknown as StripeClientFactory;
@@ -195,6 +281,8 @@ function harness(): Harness {
       clock,
       queue as unknown as Queue,
       logger,
+      platform,
+      keys,
     ),
   });
   return state;
@@ -210,6 +298,11 @@ function signedEvent(event: Record<string, unknown>): { payload: string; header:
 }
 
 let h: Harness;
+
+// Reading the test KEKs from disk once; a few milliseconds, well inside the hook's default budget.
+beforeAll(async () => {
+  keys = await testKeyProvider();
+});
 
 beforeEach(() => {
   h = harness();
@@ -505,6 +598,335 @@ describe("a verified event", () => {
     });
 
     expect((await h.receiver.receiveVelexis("test", raw(payload), header)).outcome).toBe("stored");
+  });
+});
+
+/** An event of the fixtures' tenant on its connected account, signed with the Connect secret. */
+function connectEvent(
+  overrides: Parameters<typeof signedStripeEvent<"payment_intent.succeeded">>[1] = {},
+  secret = CONNECT_SECRET,
+): ReturnType<typeof signedStripeEvent<"payment_intent.succeeded">> {
+  return signedStripeEvent("payment_intent.succeeded", { account: CONNECTED_ACCOUNT, ...overrides }, secret);
+}
+
+describe("the Connect endpoint (OBE-078)", () => {
+  beforeEach(() => {
+    h.payments.set(PAYMENT_ID, paymentRow({ metadata: createdOn("connect_standard", CONNECTED_ACCOUNT) }));
+  });
+
+  it("takes the tenant only from event.account and stores the event with its account and connection [OBE-078 AC1]", async () => {
+    const { payload, header, event } = connectEvent();
+
+    const receipt = await h.receiver.receiveConnect("test", raw(payload), header);
+
+    expect(receipt).toEqual({ outcome: "stored", paymentEventId: expect.stringMatching(/^pev_/) });
+    expect(h.platformLookups.mock.calls).toEqual([["connect"]]);
+    expect(h.lookups).toHaveBeenCalledWith(TENANT_ID);
+    const storedPayload = JSON.parse(String(h.events.get(event.id)?.["payload"])) as Record<string, unknown>;
+    expect(storedPayload).toMatchObject({
+      endpoint: "connect",
+      account: CONNECTED_ACCOUNT,
+      connectionId: CONNECT_CONNECTION_ID,
+      eventId: event.id,
+      paymentIntentId: INTENT_ID,
+    });
+    expect(h.queue.add).toHaveBeenCalledWith(
+      STRIPE_EVENT_JOB,
+      { tenantId: TENANT_ID, paymentEventId: receipt.paymentEventId },
+      { jobId: event.id },
+    );
+    // Delivered again: one row, the same job id.
+    expect(await h.receiver.receiveConnect("test", raw(payload), header)).toEqual({
+      outcome: "duplicate",
+      paymentEventId: receipt.paymentEventId,
+    });
+    expect(h.events.size).toBe(1);
+  });
+
+  it("finds the tenant without any metadata: the account alone chooses it", async () => {
+    const { payload, header } = connectEvent({
+      data: { object: { metadata: { velexis_tenant_id: undefined, velexis_environment: undefined } } },
+    });
+
+    expect((await h.receiver.receiveConnect("test", raw(payload), header)).outcome).toBe("stored");
+  });
+
+  it("answers 400 to an event signed with the Velexis or a connection's secret, or without the Connect secret", async () => {
+    for (const secret of [SECRET, CONNECTION_SECRET]) {
+      const { payload, header } = connectEvent({}, secret);
+      await expect(h.receiver.receiveConnect("test", raw(payload), header)).rejects.toMatchObject({
+        code: "INVALID_REQUEST",
+        details: { reason: "signature_invalid" },
+      });
+    }
+    h.connectSecret = undefined;
+    const { payload, header } = connectEvent();
+    await expect(h.receiver.receiveConnect("test", raw(payload), header)).rejects.toMatchObject({
+      code: "INVALID_REQUEST",
+    });
+    expect(h.logs).toContainEqual(
+      expect.objectContaining({
+        message: "payments.webhook_secret_missing",
+        object: { endpoint: "connect/test" },
+      }),
+    );
+    expect(h.platformLookups).not.toHaveBeenCalled();
+    expect(h.events.size).toBe(0);
+  });
+
+  it("acknowledges an event without account or of an acct_ no connection has, without effect [OBE-078 AC2]", async () => {
+    for (const account of [undefined, "acct_1NoSuchAccount", "acct_test_alpha", "not-an-account"]) {
+      const { payload, header } = signedStripeEvent("payment_intent.succeeded", { account }, CONNECT_SECRET);
+
+      expect([account, await h.receiver.receiveConnect("test", raw(payload), header)]).toEqual([
+        account,
+        { outcome: "account_unknown", paymentEventId: null },
+      ]);
+    }
+    // Only the well-formed unknown account was looked up; nothing else happened.
+    expect(h.platformLookups.mock.calls).toEqual([["connect"]]);
+    expect(h.lookups).not.toHaveBeenCalled();
+    expect(h.events.size).toBe(0);
+    expect(h.queue.add).not.toHaveBeenCalled();
+    expect(h.logs.filter((line) => line.message === "payments.webhook_mismatch")).toEqual([]);
+  });
+
+  it("never follows metadata that names another tenant: nothing written, a security event [OBE-078 AC3]", async () => {
+    const otherTenant = "ten_01JBOTHERTENANT00000000000";
+    h.tenants.set(otherTenant, {
+      ...TENANT,
+      id: otherTenant,
+      key: "beta",
+      schemaName: "tenant_beta" as PlatformTenant["schemaName"],
+    });
+    const { payload, header, event } = connectEvent({
+      data: { object: { metadata: { velexis_tenant_id: otherTenant } } },
+    });
+
+    expect(await h.receiver.receiveConnect("test", raw(payload), header)).toEqual({
+      outcome: "mismatch",
+      paymentEventId: null,
+    });
+    expect(h.lookups).not.toHaveBeenCalled();
+    expect(h.contexts).toEqual([]);
+    expect(h.events.size).toBe(0);
+    expect(h.queue.add).not.toHaveBeenCalled();
+    expect(h.logs).toContainEqual({
+      level: "warn",
+      message: "payments.webhook_mismatch",
+      object: expect.objectContaining({
+        securityEvent: "payments.webhook_mismatch",
+        check: "metadata_tenant",
+        endpoint: "connect/test",
+        eventId: event.id,
+        account: CONNECTED_ACCOUNT,
+        tenantId: TENANT_ID,
+      }),
+    });
+    expect(JSON.stringify(h.logs)).not.toContain("secret_synthetic");
+  });
+
+  it("with a livemode or metadata environment other than the path's writes nothing and logs a security event [OBE-078 AC3]", async () => {
+    const live = connectEvent({ livemode: true, data: { object: { livemode: true } } });
+    expect((await h.receiver.receiveConnect("test", raw(live.payload), live.header)).outcome).toBe(
+      "mismatch",
+    );
+    expect(h.logs.at(-1)?.object).toMatchObject({
+      securityEvent: "payments.webhook_mismatch",
+      check: "livemode",
+    });
+    expect(h.platformLookups).not.toHaveBeenCalled();
+
+    const otherEnvironment = connectEvent({
+      data: { object: { metadata: { velexis_environment: "live" } } },
+    });
+    expect(
+      (await h.receiver.receiveConnect("test", raw(otherEnvironment.payload), otherEnvironment.header))
+        .outcome,
+    ).toBe("mismatch");
+    expect(h.logs.at(-1)?.object).toMatchObject({ check: "metadata_environment" });
+    expect(h.events.size).toBe(0);
+  });
+
+  it("refuses a payment that does not live on the event's account: a Velexis one, or another acct_'s", async () => {
+    for (const metadata of [undefined, {}, createdOn("connect_standard", "acct_1AnotherAccount")]) {
+      h.payments.set(PAYMENT_ID, paymentRow({ metadata }));
+      const { payload, header } = connectEvent();
+
+      expect((await h.receiver.receiveConnect("test", raw(payload), header)).outcome).toBe("mismatch");
+      expect(h.logs.at(-1)?.object).toMatchObject({ check: "payment_account", paymentId: PAYMENT_ID });
+    }
+    expect(h.events.size).toBe(0);
+    // An `api_keys` payment of that same account (connected with Connect since) is that account's.
+    h.payments.set(PAYMENT_ID, paymentRow({ metadata: createdOn("api_keys", CONNECTED_ACCOUNT) }));
+    const { payload, header } = connectEvent();
+    expect((await h.receiver.receiveConnect("test", raw(payload), header)).outcome).toBe("stored");
+  });
+
+  it("answers 503 when the connection cannot be looked up, so that Stripe sends the event again", async () => {
+    h.platformDown = true;
+    const { payload, header } = connectEvent();
+
+    await expect(h.receiver.receiveConnect("test", raw(payload), header)).rejects.toMatchObject({
+      code: "SERVICE_UNAVAILABLE",
+    });
+    expect(h.events.size).toBe(0);
+  });
+});
+
+describe("an api_keys connection's endpoint c/<ppc_id> (OBE-078)", () => {
+  beforeEach(async () => {
+    h.payments.set(PAYMENT_ID, paymentRow({ metadata: createdOn("api_keys", OWN_ACCOUNT) }));
+    h.ownConnections.set(OWN_CONNECTION_ID, {
+      connection: connectionRow({
+        id: OWN_CONNECTION_ID,
+        accountMode: "api_keys",
+        accountReference: OWN_ACCOUNT,
+        publishableKey: "pk_test_ownKeysPublishable",
+        secretCiphertext: "c2VhbGVk",
+      }),
+      webhookSecretCiphertext: await sealedWebhookSecret(CONNECTION_SECRET),
+    });
+  });
+
+  /** An event of the OTA's own account, signed with `secret` (its own by default). */
+  const ownEvent = (
+    overrides: Parameters<typeof signedStripeEvent<"payment_intent.succeeded">>[1] = {},
+    secret = CONNECTION_SECRET,
+  ) => signedStripeEvent("payment_intent.succeeded", overrides, secret);
+
+  it("verifies with the connection's own secret, takes the tenant from the path's connection and stores the event [OBE-078 AC1]", async () => {
+    const { payload, header, event } = ownEvent();
+
+    const receipt = await h.receiver.receiveConnection(OWN_CONNECTION_ID, raw(payload), header);
+
+    expect(receipt).toEqual({ outcome: "stored", paymentEventId: expect.stringMatching(/^pev_/) });
+    expect(h.platformLookups.mock.calls).toEqual([["connection"]]);
+    const storedPayload = JSON.parse(String(h.events.get(event.id)?.["payload"])) as Record<string, unknown>;
+    expect(storedPayload).toMatchObject({
+      endpoint: "connection",
+      account: OWN_ACCOUNT,
+      connectionId: OWN_CONNECTION_ID,
+      eventId: event.id,
+    });
+    expect(h.contexts).toEqual([expect.objectContaining({ tenantId: TENANT_ID, environment: "test" })]);
+    expect(h.queue.add).toHaveBeenCalledWith(
+      STRIPE_EVENT_JOB,
+      { tenantId: TENANT_ID, paymentEventId: receipt.paymentEventId },
+      { jobId: event.id },
+    );
+  });
+
+  it("answers the same 400 to another connection's secret, an unknown id, another mode, no secret, a secret sealed for another row or not a secret [OBE-078 AC1]", async () => {
+    const answers: unknown[] = [];
+    const refusal = async (connectionId: string, secret = CONNECTION_SECRET): Promise<void> => {
+      const { payload, header } = ownEvent({}, secret);
+      answers.push(
+        await h.receiver
+          .receiveConnection(connectionId, raw(payload), header)
+          .catch((error: unknown) => error),
+      );
+    };
+    // Signed with another connection's secret (or the Connect secret).
+    await refusal(OWN_CONNECTION_ID, `whsec_${randomBytes(24).toString("hex")}`);
+    await refusal(OWN_CONNECTION_ID, CONNECT_SECRET);
+    // An id no connection has.
+    await refusal("ppc_01JBWEBHOOKNOSUCH00000000");
+    // A connection that is not in api_keys mode, one without a secret, and a secret sealed for another row.
+    const own = h.ownConnections.get(OWN_CONNECTION_ID);
+    if (own === undefined) {
+      throw new Error("the connection of the test is missing");
+    }
+    h.ownConnections.set(OWN_CONNECTION_ID, {
+      ...own,
+      connection: { ...own.connection, accountMode: "connect_standard" },
+    });
+    await refusal(OWN_CONNECTION_ID);
+    h.ownConnections.set(OWN_CONNECTION_ID, { ...own, webhookSecretCiphertext: null });
+    await refusal(OWN_CONNECTION_ID);
+    h.ownConnections.set(OWN_CONNECTION_ID, {
+      ...own,
+      webhookSecretCiphertext: await sealedWebhookSecret(CONNECTION_SECRET, "ppc_01JBWEBHOOKOTHERROW000000"),
+    });
+    await refusal(OWN_CONNECTION_ID);
+    // A value sealed for this row that is not a signing secret (a damaged or mistaken save).
+    h.ownConnections.set(OWN_CONNECTION_ID, {
+      ...own,
+      webhookSecretCiphertext: await sealedWebhookSecret("not-a-signing-secret"),
+    });
+    await refusal(OWN_CONNECTION_ID);
+
+    expect(answers).toHaveLength(7);
+    for (const answer of answers) {
+      expect(answer).toBeInstanceOf(AppError);
+      expect(answer).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: "The Stripe signature of the request is not valid.",
+        details: { reason: "signature_invalid" },
+      });
+    }
+    expect(
+      h.logs
+        .filter((line) => line.message === "payments.webhook_connection_unusable")
+        .map((line) => line.object["reason"]),
+    ).toEqual([
+      "connection_unknown",
+      "connection_not_api_keys",
+      "no_webhook_secret",
+      "webhook_secret_unreadable",
+      "webhook_secret_invalid",
+    ]);
+    expect(h.events.size).toBe(0);
+    expect(h.lookups).not.toHaveBeenCalled();
+    expect(JSON.stringify(h.logs)).not.toContain("not-a-signing-secret");
+  });
+
+  it("looks nothing up for a delivery without a body or a signature", async () => {
+    const { payload } = ownEvent();
+
+    await expect(
+      h.receiver.receiveConnection(OWN_CONNECTION_ID, raw(payload), undefined),
+    ).rejects.toMatchObject({
+      code: "INVALID_REQUEST",
+    });
+    expect(h.platformLookups).not.toHaveBeenCalled();
+  });
+
+  it("never follows metadata that names another tenant, nor a livemode other than the connection's [OBE-078 AC3]", async () => {
+    const forged = ownEvent({
+      data: { object: { metadata: { velexis_tenant_id: "ten_01JBOTHERTENANT00000000000" } } },
+    });
+    expect(
+      (await h.receiver.receiveConnection(OWN_CONNECTION_ID, raw(forged.payload), forged.header)).outcome,
+    ).toBe("mismatch");
+    expect(h.logs.at(-1)?.object).toMatchObject({
+      securityEvent: "payments.webhook_mismatch",
+      check: "metadata_tenant",
+      endpoint: `c/${OWN_CONNECTION_ID}`,
+    });
+
+    const live = ownEvent({ livemode: true, data: { object: { livemode: true } } });
+    expect(
+      (await h.receiver.receiveConnection(OWN_CONNECTION_ID, raw(live.payload), live.header)).outcome,
+    ).toBe("mismatch");
+    expect(h.logs.at(-1)?.object).toMatchObject({ check: "livemode" });
+    expect(h.lookups).not.toHaveBeenCalled();
+    expect(h.events.size).toBe(0);
+    expect(h.queue.add).not.toHaveBeenCalled();
+  });
+
+  it("refuses a payment created on another account, and never logs the connection's secret or the signature", async () => {
+    h.payments.set(PAYMENT_ID, paymentRow({ metadata: createdOn("connect_standard", CONNECTED_ACCOUNT) }));
+    const { payload, header } = ownEvent();
+
+    expect((await h.receiver.receiveConnection(OWN_CONNECTION_ID, raw(payload), header)).outcome).toBe(
+      "mismatch",
+    );
+    expect(h.logs.at(-1)?.object).toMatchObject({ check: "payment_account" });
+    const logged = JSON.stringify(h.logs);
+    for (const secret of [CONNECTION_SECRET, header, "secret_synthetic"]) {
+      expect([secret, logged.includes(secret)]).toEqual([secret, false]);
+    }
   });
 });
 

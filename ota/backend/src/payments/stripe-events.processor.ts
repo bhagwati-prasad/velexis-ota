@@ -5,9 +5,22 @@
 //
 //   1. the tenant through the platform cache (`active` or `suspended`, as the receiver; otherwise skipped), then, in
 //      its context, the stored event and its payment;
-//   2. the object is read again from Stripe, with the Velexis key of the payment's environment (the events of the
-//      `velexis` endpoint are about objects of the Velexis account, whatever the tenant's connection says now, so a
-//      connection switched or disabled since never stops a capture or a refund from being recorded):
+//   2. the object is read again from Stripe on the account it lives on (StripeClientFactory.withAccount):
+//        endpoint `velexis`      the Velexis key of the payment's environment (the events of the `velexis` endpoint
+//                                are about objects of the Velexis account, whatever the tenant's connection says now,
+//                                so a connection switched or disabled since never stops a capture or a refund from
+//                                being recorded);
+//        `connect`, `connection` (OBE-078) the account the payment was created on (`payments.metadata.connection`,
+//                                payment-gateway.ts `recordedPaymentAccount`), which the receiver checked is the
+//                                `acct_…` the event came from and the stored payload names: a `connect_standard`
+//                                payment with the Velexis key and `Stripe-Account: <acct_…>`; an `api_keys` payment
+//                                with the key the tenant's payment connection of the environment holds for that same
+//                                `acct_…` (any status; read through the 60-second platform cache, decrypted by the
+//                                factory for this job only), or through the Connect path on that account once the
+//                                tenant connected it with Connect Standard (lead decision (2i) of 2026-10-30, as the
+//                                gateway's captures, voids and refunds). An account that cannot be reached (no Velexis
+//                                keys, a key that cannot be decrypted, no connection of the tenant holding that account
+//                                any more) fails the job for BullMQ's retries, logged with ids only:
 //        payment_intent.amount_capturable_updated, .succeeded, .payment_failed, .canceled
 //                                   the PaymentIntent (with its payment method and latest charge): authorised,
 //                                   captured, declined (back to requires_payment_method with the decline code) or
@@ -32,10 +45,11 @@
 //      refunds: the lock order checkout, booking, payment, refund (OADR-0003 point 11).
 //
 // An object whose metadata names another tenant, environment or payment is a security event (logged without the
-// object) and changes nothing. A Stripe failure that can pass (connection, timeout, 5xx, rate limit) fails the job for
-// BullMQ's retries; a permanent one (the object does not exist on the account, a refused request) fails it at once
-// (`UnrecoverableError`). Processing twice is harmless: the second run finds the row in the state Stripe reports and
-// writes nothing. Log lines carry ids, types, statuses and Stripe's error codes, never an object of Stripe.
+// object) and changes nothing; so is a stored Connect or connection event whose payment does not live on the event's
+// `acct_…` (the receiver refuses those already). A Stripe failure that can pass (connection, timeout, 5xx, rate
+// limit) fails the job for BullMQ's retries; a permanent one (the object does not exist on the account, a refused
+// request) fails it at once (`UnrecoverableError`). Processing twice is harmless: the second run finds the row in the
+// state Stripe reports and writes nothing. Log lines carry ids, types, statuses and Stripe's error codes, never an object of Stripe.
 import { OnWorkerEvent, Processor, WorkerHost } from "@nestjs/bullmq";
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
@@ -50,9 +64,10 @@ import type { WorkerConfig } from "../config";
 import { jobTenant } from "../jobs/fan-out";
 import { StaffRecipients } from "../notifications/staff-recipients";
 import { PlatformCache } from "../tenancy/platform-cache";
+import { PlatformReadRepository } from "../tenancy/platform-read.repository";
 import { TenantContext } from "../tenancy/tenant-context";
 import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
-import type { GatewayState } from "./payment-gateway";
+import { ACCOUNT_REFERENCE, recordedPaymentAccount, type GatewayState } from "./payment-gateway";
 import {
   matchRefund,
   providerStateUpdate,
@@ -61,9 +76,16 @@ import {
   type ProviderRefund,
 } from "./payment-state";
 import { PaymentsRepository, type PaymentEventRow, type PaymentRow } from "./payments.repository";
-import { StripeClientFactory } from "./stripe/stripe-client.factory";
-import { fromMinorUnits, stateOfPaymentIntent } from "./stripe/stripe.gateway";
 import {
+  StripeAccountUnavailableError,
+  StripeClientFactory,
+  type StripeAccountTarget,
+  type StripeRequestScope,
+} from "./stripe/stripe-client.factory";
+import { fromMinorUnits, parsePaymentConnection, stateOfPaymentIntent } from "./stripe/stripe.gateway";
+import {
+  CONNECT_ENDPOINT,
+  CONNECTION_ENDPOINT,
   STRIPE_EVENT_JOB,
   VELEXIS_ENDPOINT,
   WEBHOOK_TENANT_STATUSES,
@@ -143,6 +165,35 @@ export function storedFactsOf(event: Pick<PaymentEventRow, "type" | "payload">):
   };
 }
 
+/** The endpoints whose events are read again and applied. */
+const PROCESSED_ENDPOINTS: readonly string[] = Object.freeze([
+  VELEXIS_ENDPOINT,
+  CONNECT_ENDPOINT,
+  CONNECTION_ENDPOINT,
+]);
+
+/**
+ * The OTA's Stripe account a stored Connect or connection event came from (`account` of the stored payload, OBE-078),
+ * or `null` (a `velexis` event, or a value the receiver did not write).
+ */
+export function storedAccountOf(event: Pick<PaymentEventRow, "payload">): string | null {
+  const payload = isRecord(event.payload) ? event.payload : {};
+  const account = payload["account"];
+  return typeof account === "string" && account.length <= 255 && ACCOUNT_REFERENCE.test(account)
+    ? account
+    : null;
+}
+
+/** The account of a job's reads, or why it is not the payment's. */
+type ReadAccount =
+  { readonly target: StripeAccountTarget } | { readonly mismatch: string } | { readonly unavailable: string };
+
+/** The request options of a read on `scope`'s account: `Stripe-Account` in `connect_standard` mode, else none. */
+function readOptionsOf(scope: StripeRequestScope): Stripe.RequestOptions | undefined {
+  // The SDK skips an options argument that is `undefined` and refuses an empty object (an unknown argument to it).
+  return scope.stripeAccount === undefined ? undefined : { stripeAccount: scope.stripeAccount };
+}
+
 /** What one `stripe.event` job did. */
 export type StripeEventOutcome =
   "applied" | "unchanged" | "stale" | "ignored" | "mismatch" | "alerted" | "missing";
@@ -185,6 +236,8 @@ export class StripeEventHandler {
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
     @InjectPinoLogger(StripeEventHandler.name) private readonly logger: PinoLogger,
+    private readonly cache: PlatformCache,
+    private readonly platform: PlatformReadRepository,
   ) {}
 
   async handle(
@@ -200,30 +253,133 @@ export class StripeEventHandler {
       PAYMENT_INTENT_EVENTS.includes(facts.type) ||
       REFUND_EVENTS.includes(facts.type) ||
       facts.type === DISPUTE_CREATED;
-    if (!handled || facts.endpoint !== VELEXIS_ENDPOINT || payment.provider !== "stripe") {
+    if (
+      !handled ||
+      facts.endpoint === null ||
+      !PROCESSED_ENDPOINTS.includes(facts.endpoint) ||
+      payment.provider !== "stripe"
+    ) {
       this.logger.debug({ paymentEventId, type: facts.type }, "payments.stripe_event_ignored");
       return { type: facts.type, outcome: "ignored" };
     }
     const environment = payment.environment === "live" ? "live" : "test";
-    const client = this.clients.velexisClient(environment);
-    if (client === undefined) {
-      // A configuration gap that a restart with the keys repairs: BullMQ retries the job meanwhile.
-      this.logger.error({ paymentEventId, environment }, "payments.stripe_event_not_configured");
-      throw new Error(`no Stripe keys of the Velexis account for ${environment}`);
+    const account = await this.readAccountOf(stored, facts.endpoint, environment);
+    if ("mismatch" in account) {
+      return { type: facts.type, outcome: this.mismatch(stored, account.mismatch) };
+    }
+    if ("unavailable" in account) {
+      return this.notConfigured(paymentEventId, environment, account.unavailable, null);
     }
     let outcome: StripeEventOutcome;
-    if (PAYMENT_INTENT_EVENTS.includes(facts.type)) {
-      outcome = await this.paymentIntent(client, stored);
-    } else if (REFUND_EVENTS.includes(facts.type)) {
-      outcome = await this.refunds(client, stored);
-    } else {
-      outcome = await this.dispute(client, stored);
+    try {
+      outcome = await this.clients.withAccount(account.target, async (client, scope) => {
+        const options = readOptionsOf(scope);
+        if (PAYMENT_INTENT_EVENTS.includes(facts.type)) {
+          return await this.paymentIntent(client, options, stored);
+        }
+        if (REFUND_EVENTS.includes(facts.type)) {
+          return await this.refunds(client, options, stored);
+        }
+        return await this.dispute(client, options, stored);
+      });
+    } catch (error) {
+      if (error instanceof StripeAccountUnavailableError) {
+        return this.notConfigured(paymentEventId, environment, error.reason, error.connectionId);
+      }
+      throw error;
     }
     this.logger.info(
-      { paymentEventId, paymentId: payment.id, type: facts.type, outcome },
+      {
+        paymentEventId,
+        paymentId: payment.id,
+        type: facts.type,
+        accountMode: account.target.accountMode,
+        outcome,
+      },
       "payments.stripe_event_processed",
     );
     return { type: facts.type, outcome };
+  }
+
+  /**
+   * The account the stored event's object is read from again (file header, step 2): the Velexis account of the
+   * environment for the `velexis` endpoint; for `connect` and `connection` the account the payment was created on,
+   * which must be the event's `acct_…`.
+   */
+  private async readAccountOf(
+    stored: StoredEvent,
+    endpoint: string,
+    environment: "test" | "live",
+  ): Promise<ReadAccount> {
+    if (endpoint === VELEXIS_ENDPOINT) {
+      return { target: { accountMode: "velexis", environment } };
+    }
+    const recorded = recordedPaymentAccount(stored.payment.metadata);
+    const account = storedAccountOf(stored.event);
+    if (
+      recorded === null ||
+      recorded.accountMode === "velexis" ||
+      account === null ||
+      recorded.accountReference !== account
+    ) {
+      return { mismatch: "payment_account" };
+    }
+    if (recorded.accountMode === "connect_standard") {
+      return { target: { accountMode: "connect_standard", environment, accountReference: account } };
+    }
+    // `api_keys`: the key the tenant's connection holds for that account, or the Connect path once it is connected.
+    const tenantId = this.tenants.require().tenantId;
+    const connection = await this.cache.connection(
+      "payment",
+      tenantId,
+      environment,
+      () => this.platform.paymentConnection(tenantId, environment),
+      parsePaymentConnection,
+    );
+    if (
+      connection === null ||
+      connection.provider !== "stripe" ||
+      connection.tenantId !== tenantId ||
+      connection.environment !== environment ||
+      connection.accountReference !== account
+    ) {
+      return { unavailable: "payment_account_unavailable" };
+    }
+    if (connection.accountMode === "connect_standard") {
+      return { target: { accountMode: "connect_standard", environment, accountReference: account } };
+    }
+    if (
+      connection.accountMode !== "api_keys" ||
+      connection.secretCiphertext === null ||
+      connection.secretCiphertext === ""
+    ) {
+      return { unavailable: "payment_account_unavailable" };
+    }
+    return {
+      target: {
+        accountMode: "api_keys",
+        environment,
+        connectionId: connection.id,
+        secretCiphertext: connection.secretCiphertext,
+      },
+    };
+  }
+
+  /**
+   * An account the job cannot read from: a configuration gap that a restart with the keys, or the platform's next
+   * connection change, repairs, so BullMQ retries the job meanwhile. Logged with ids and the reason only.
+   */
+  private notConfigured(
+    paymentEventId: string,
+    environment: "test" | "live",
+    reason: string,
+    connectionId: string | null,
+  ): never {
+    this.logger.error(
+      { paymentEventId, environment, reason, connectionId },
+      "payments.stripe_event_not_configured",
+    );
+    throw new Error(`the Stripe account of the payment cannot be read (${environment}): ${reason}`);
   }
 
   private async read(trx: TenantTransaction, paymentEventId: string): Promise<StoredEvent | undefined> {
@@ -241,14 +397,18 @@ export class StripeEventHandler {
 
   // ---- PaymentIntents --------------------------------------------------------------------------------------------
 
-  private async paymentIntent(client: Stripe, stored: StoredEvent): Promise<StripeEventOutcome> {
+  private async paymentIntent(
+    client: Stripe,
+    options: Stripe.RequestOptions | undefined,
+    stored: StoredEvent,
+  ): Promise<StripeEventOutcome> {
     const { payment, facts } = stored;
     const intentId = payment.providerPaymentId ?? facts.paymentIntentId;
     if (intentId === null) {
       return "ignored";
     }
     const intent = await this.stripe("paymentIntents.retrieve", stored, () =>
-      client.paymentIntents.retrieve(intentId, { expand: ["payment_method", "latest_charge"] }),
+      client.paymentIntents.retrieve(intentId, { expand: ["payment_method", "latest_charge"] }, options),
     );
     if (!this.isOurs(metadataOf(intent), payment) || intent.id !== intentId) {
       return this.mismatch(stored, "payment_intent_metadata");
@@ -304,19 +464,27 @@ export class StripeEventHandler {
 
   // ---- Refunds ---------------------------------------------------------------------------------------------------
 
-  private async refunds(client: Stripe, stored: StoredEvent): Promise<StripeEventOutcome> {
+  private async refunds(
+    client: Stripe,
+    options: Stripe.RequestOptions | undefined,
+    stored: StoredEvent,
+  ): Promise<StripeEventOutcome> {
     const { facts, payment } = stored;
     let chargeId = facts.type === "charge.refunded" ? facts.objectId : facts.chargeId;
     if (facts.type === "charge.refund.updated" && facts.objectId !== null) {
       const refundId = facts.objectId;
-      const refund = await this.stripe("refunds.retrieve", stored, () => client.refunds.retrieve(refundId));
+      const refund = await this.stripe("refunds.retrieve", stored, () =>
+        client.refunds.retrieve(refundId, {}, options),
+      );
       chargeId = referenceOf(refund.charge) ?? chargeId;
     }
     if (chargeId === null) {
       return "ignored";
     }
     const id = chargeId;
-    const charge = await this.stripe("charges.retrieve", stored, () => client.charges.retrieve(id));
+    const charge = await this.stripe("charges.retrieve", stored, () =>
+      client.charges.retrieve(id, {}, options),
+    );
     const intentId = payment.providerPaymentId ?? facts.paymentIntentId;
     const chargeMetadata = metadataOf(charge);
     if (
@@ -327,7 +495,7 @@ export class StripeEventHandler {
       return this.mismatch(stored, "charge");
     }
     const listed = await this.stripe("refunds.list", stored, () =>
-      client.refunds.list({ charge: id, limit: REFUNDS_PAGE_LIMIT }),
+      client.refunds.list({ charge: id, limit: REFUNDS_PAGE_LIMIT }, options),
     );
     const refunds: ProviderRefund[] = listed.data.map((refund) => {
       const refundMetadata = metadataOf(refund);
@@ -437,13 +605,19 @@ export class StripeEventHandler {
 
   // ---- Disputes --------------------------------------------------------------------------------------------------
 
-  private async dispute(client: Stripe, stored: StoredEvent): Promise<StripeEventOutcome> {
+  private async dispute(
+    client: Stripe,
+    options: Stripe.RequestOptions | undefined,
+    stored: StoredEvent,
+  ): Promise<StripeEventOutcome> {
     const { facts, payment } = stored;
     const disputeId = facts.objectId;
     if (disputeId === null) {
       return "ignored";
     }
-    const dispute = await this.stripe("disputes.retrieve", stored, () => client.disputes.retrieve(disputeId));
+    const dispute = await this.stripe("disputes.retrieve", stored, () =>
+      client.disputes.retrieve(disputeId, {}, options),
+    );
     const intentId = payment.providerPaymentId ?? facts.paymentIntentId;
     if (intentId === null || referenceOf(dispute.payment_intent) !== intentId) {
       return this.mismatch(stored, "dispute");

@@ -288,6 +288,13 @@ export const apiConfigSchema = {
   // Only the webhook receiver reads them (src/payments/webhooks/webhook-receiver.service.ts); never logged.
   STRIPE_WEBHOOK_SECRET_VELEXIS_TEST: env.string({ pattern: STRIPE_WEBHOOK_SECRET_PATTERN, optional: true }),
   STRIPE_WEBHOOK_SECRET_VELEXIS_LIVE: env.string({ pattern: STRIPE_WEBHOOK_SECRET_PATTERN, optional: true }),
+  // The signing secrets of the Velexis platform's Connect endpoints for the OTAs' connected accounts,
+  // `/webhooks/stripe/connect/{test,live}` (OBE-078, OADR-0010 point 4): the payment events of every `connect_standard`
+  // account. Optional, as the Velexis ones: an environment without its secret refuses every delivery with `400`. The
+  // `api_keys` endpoint `/webhooks/stripe/c/<ppc_id>` has no variable: each connection's own secret is stored
+  // encrypted on its platform row. Only the webhook receiver reads them; never logged.
+  STRIPE_WEBHOOK_SECRET_CONNECT_TEST: env.string({ pattern: STRIPE_WEBHOOK_SECRET_PATTERN, optional: true }),
+  STRIPE_WEBHOOK_SECRET_CONNECT_LIVE: env.string({ pattern: STRIPE_WEBHOOK_SECRET_PATTERN, optional: true }),
   // The global kill switch of the airline-card method (ADR-0011, OADR-0004 point 1; OBE-050), `false` by default
   // (`true`, `false`, `1` or `0`; anything else is refused at start-up). Off, checkout.createPayment refuses
   // `airline_card` (`403 FEATURE_DISABLED`) and storefront.get never lists it, whatever the tenants' settings say.

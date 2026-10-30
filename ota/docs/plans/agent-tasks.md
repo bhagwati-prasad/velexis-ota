@@ -2413,7 +2413,8 @@ The platform turns on own Stripe, own Amadeus credentials, custom domains and go
   - The decrypted secret never appears in a log line or an error.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- payments && pnpm --filter @velexis/ota-backend test:int payments`
 
-### OBE-078 · Receive Connect and per-connection Stripe webhooks
+### OBE-078 · Receive Connect and per-connection Stripe webhooks ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M5
 - **Depends on:** OBE-077, OBE-090

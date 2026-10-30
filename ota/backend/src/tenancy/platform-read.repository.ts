@@ -10,9 +10,11 @@
 // (`paymentConnection`, for the Stripe gateway of src/payments/), a staff member's membership with its account in
 // OBE-059 (`staffMember`, for the staff sessions of src/identity/staff/), the account modes of a tenant's payment
 // connections in OBE-068 (`paymentConnectionModes`, for console.payments of src/console/), the e-mail addresses of a
-// tenant's owners in OBE-055 (`ownerEmails`, for the staff alerts of src/notifications/staff-recipients.ts), and the
+// tenant's owners in OBE-055 (`ownerEmails`, for the staff alerts of src/notifications/staff-recipients.ts), the
 // monitored queues of a tenant's Amadeus connections in OBE-065 (`monitoredQueues`, for the queue poller of
-// src/console/queue-poller.processor.ts).
+// src/console/queue-poller.processor.ts), and the payment connection of a connected Stripe account and a connection
+// with its webhook signing secret's ciphertext in OBE-078 (`connectPaymentConnection`, `paymentConnectionWebhook`, for
+// the Connect and `c/<ppc_id>` receivers of src/payments/webhooks/).
 import { Inject, Injectable } from "@nestjs/common";
 import {
   assertTenantSchema,
@@ -371,6 +373,21 @@ type PaymentConnectionRow = Pick<
   (typeof PAYMENT_CONNECTION_COLUMNS)[number]
 >;
 
+/**
+ * A payment connection with the ciphertext of its webhook signing secret (OBE-078): what the receiver of
+ * `/webhooks/stripe/c/<ppc_id>` (`api_keys` mode) checks a delivery's signature with. Read for each delivery and never
+ * cached, so the signing secret's ciphertext stays out of the `conn:payment:` cache.
+ */
+export interface PlatformPaymentConnectionWebhook {
+  readonly connection: PlatformPaymentConnection;
+  /**
+   * base64 of `webhook_secret_ciphertext` (`api_keys` mode only, else `null`): the OTA's signing secret, encrypted by
+   * the platform for `platform.payment_provider_connections.webhook_secret_ciphertext:<id>`, decrypted only by the
+   * webhook receiver.
+   */
+  readonly webhookSecretCiphertext: string | null;
+}
+
 /** `platform.tenant_memberships.role`: the console roles (scope §1.3), the contract's `StaffRole`. */
 export const STAFF_ROLES = ["owner", "admin", "agent", "finance", "viewer"] as const;
 export type StaffRole = (typeof STAFF_ROLES)[number];
@@ -459,6 +476,8 @@ const ACCOUNT_ID_PATTERN = /^acc_[0-9A-Za-z]{1,60}$/;
 const AMADEUS_ACCOUNT_ID_PATTERN = /^ama_[0-9A-Za-z]{1,60}$/;
 /** A payment connection id (`ppc_` and a ULID). */
 const PAYMENT_CONNECTION_ID_PATTERN = /^ppc_[0-9A-Za-z]{1,60}$/;
+/** A Stripe account (`acct_` and letters and digits, the platform's CHECK `payment_provider_connections_mode_ck`). */
+const STRIPE_ACCOUNT_PATTERN = /^acct_[0-9A-Za-z]{1,255}$/;
 
 /**
  * A host name as `platform.tenant_domains.hostname` stores it (PADR-0004 item 1, the rule of `redis.keys.ts`): lower
@@ -674,6 +693,59 @@ export class PlatformReadRepository {
         .executeTakeFirst(),
     );
     return row === undefined ? null : toPlatformPaymentConnection(row);
+  }
+
+  /**
+   * The `connect_standard` Stripe connection of `environment` whose `account_reference` is `accountReference`
+   * (`payment_provider_connections_connect_uq`: at most one), whatever its tenant, default flag and status, or `null`
+   * (OBE-078): the only source of the tenant on the Connect webhook endpoint (OADR-0010 point 4). A value that cannot be
+   * a Stripe account or an environment is unknown without a query. The webhook signing secret is not read.
+   */
+  async connectPaymentConnection(
+    environment: AmadeusEnvironment,
+    accountReference: string,
+  ): Promise<PlatformPaymentConnection | null> {
+    if (!STRIPE_ACCOUNT_PATTERN.test(accountReference) || !isOneOf(environment, AMADEUS_ENVIRONMENTS)) {
+      return null;
+    }
+    const row = await this.read((trx) =>
+      trx
+        .selectFrom("platform.payment_provider_connections")
+        .select(PAYMENT_CONNECTION_COLUMNS)
+        .where("provider", "=", "stripe")
+        .where("environment", "=", environment)
+        .where("account_mode", "=", "connect_standard")
+        .where("account_reference", "=", accountReference)
+        .executeTakeFirst(),
+    );
+    return row === undefined ? null : toPlatformPaymentConnection(row);
+  }
+
+  /**
+   * Payment connection `id` with the ciphertext of its webhook signing secret (`PlatformPaymentConnectionWebhook`),
+   * whatever its tenant, provider, mode, default flag and status, or `null` (OBE-078): the only source of the tenant on
+   * the `c/<ppc_id>` webhook endpoint, whose receiver checks the mode (OADR-0010 point 4). Both ciphertexts are read as
+   * base64 text and never decrypted here. A value that cannot be a connection id is unknown without a query.
+   */
+  async paymentConnectionWebhook(id: string): Promise<PlatformPaymentConnectionWebhook | null> {
+    if (!PAYMENT_CONNECTION_ID_PATTERN.test(id)) {
+      return null;
+    }
+    const row = await this.read((trx) =>
+      trx
+        .selectFrom("platform.payment_provider_connections")
+        .select([...PAYMENT_CONNECTION_COLUMNS, "webhook_secret_ciphertext"])
+        .where("id", "=", id)
+        .executeTakeFirst(),
+    );
+    if (row === undefined) {
+      return null;
+    }
+    const { webhook_secret_ciphertext: webhookSecret, ...connection } = row;
+    return Object.freeze({
+      connection: toPlatformPaymentConnection(connection),
+      webhookSecretCiphertext: webhookSecret === null ? null : webhookSecret.toString("base64"),
+    });
   }
 
   /**

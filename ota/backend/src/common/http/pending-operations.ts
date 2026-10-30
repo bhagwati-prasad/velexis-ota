@@ -6,7 +6,9 @@
 // The task that implements an operation removes its entry in the same change; a spec task that adds an operation
 // adds one. The route-parity contract test fails when an operation has neither a handler nor an entry, when it has
 // both, when an entry names no operation, and when a task id is not a task of the plan with the operation's
-// milestone. At the M4 exit only `deferred` entries (and the two M5 webhooks of OBE-078) remain (OBE-075).
+// milestone. At the M4 exit only `deferred` entries (and the two M5 webhooks of OBE-078) remain (OBE-075); since
+// OBE-078 serves the Connect and API-key webhooks (receiveStripeConnectWebhook, receiveStripeConnectionWebhook), only
+// the `deferred` ones.
 import type { OtaOperationId } from "@velexis/api-types/operations";
 
 /** The plan task that implements an operation (`OBE-016`), or `"deferred"` for an operation outside the MVP. */
@@ -38,9 +40,6 @@ export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, Pending
   consoleAmadeusIssueFlightOrder: "deferred",
   consoleAmadeusCancelFlightOrder: "deferred",
   consoleAmadeusPatchFlightOrder: "deferred",
-  // Stripe webhooks of the Connect and API-key modes (OBE-090 documents them in M4; served from M5)
-  receiveStripeConnectWebhook: "OBE-078",
-  receiveStripeConnectionWebhook: "OBE-078",
 });
 
 /**
