@@ -1342,7 +1342,8 @@ The OTA group builds the OTA admin and the console in M4. The platform issues th
   - `/console?tenant=<id>` pre-selects that OTA.
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-018 · Add the Amadeus connection settings form
+### PFE-018 · Add the Amadeus connection settings form ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M4
 - **Depends on:** PFE-013, PBE-040
