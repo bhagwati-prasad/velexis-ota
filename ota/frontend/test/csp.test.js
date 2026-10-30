@@ -247,7 +247,9 @@ describe("the production build and its preview", () => {
     for (const file of files) {
       expect(readFileSync(join(out, file), "utf8"), file).not.toContain(EDGE_SECRET);
     }
-    expect(existsSync(join(out, "fonts"))).toBe(false);
+    // The bundled fonts are copied (OFE-020), their Markdown note is not.
+    expect(existsSync(join(out, "fonts", "inter", "inter-400.woff2"))).toBe(true);
+    expect(existsSync(join(out, "fonts", "README.md"))).toBe(false);
   });
 
   it("[OFE-001 AC2] vite preview sends the Caddyfile CSP on pages and on the 404 page", async () => {

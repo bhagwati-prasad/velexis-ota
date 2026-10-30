@@ -237,6 +237,11 @@
 		header @hashed Cache-Control "public, max-age=31536000, immutable"
 		@not_hashed not path /assets/*
 		header @not_hashed Cache-Control "no-cache"
+		# The OTA's content pages (OADR-0015 point 4, OADR-0012 point 5): /p/<slug> is served by p.html, which reads the
+		# slug from its address and asks the OTA API for the page (an unknown slug shows the 404 content there, with
+		# noindex). `rewrite` runs before `try_files` (Caddy's directive order); the dev server and `vite preview` do the
+		# same (ota/frontend/scripts/vite-plugins.js).
+		rewrite /p/* /p.html
 		try_files {path} {path}.html {path}/index.html
 		file_server
 	}

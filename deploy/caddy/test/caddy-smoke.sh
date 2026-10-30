@@ -36,6 +36,10 @@
 #     also through path variants, with the other storefront headers (HSTS, nosniff, Referrer-Policy, no COOP, no
 #     Server), while every other /api answer (/api/v1/storefront, ...) gets the storefront CSP instead of the CSP the
 #     upstream sends, as the OTA API's helmet does;
+#   - the content pages (task OFE-020, OADR-0015 point 4): /p/<slug> (also with a trailing slash, in upper case and
+#     with a query) is served by p.html with the storefront headers, as are /p/, /p and /p.html, while no other path
+#     is rewritten (/px/terms, /pages/terms, /x/p/terms and /p-terms answer the 404 page), and path variants through
+#     /p/ never serve the airline-card page without its own headers;
 #   - on api.ota.localhost and api.platform.localhost, /internal/* and /health/ready (and the same variants)
 #     answer 404 without reaching the upstream, /health/live reaches it, and client copies of the edge headers are
 #     removed;
@@ -281,6 +285,8 @@ for page in pay-airline pay-card complete; do
 done
 printf '<!doctype html>\n<title>Smoke checkout</title>\n<p>storefront checkout</p>\n' >"$RELEASE/storefront/checkout.html"
 CARD_PAGE="$RELEASE/storefront/checkout/pay-airline.html"
+CONTENT_PAGE="$RELEASE/storefront/p.html" # the content pages' file (OFE-020): every /p/<slug>
+printf '<!doctype html>\n<title>Smoke content page</title>\n<p>storefront content page</p>\n' >"$CONTENT_PAGE"
 
 EDGE_SECRET="smoke-edge-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 FORGED_EDGE="forged-edge-$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
@@ -456,7 +462,8 @@ for path in /checkout/pay-airline.html /checkout/pay-airline "/checkout/pay-airl
 done
 # Other spellings of the path (sent as they are): wherever Caddy serves the card page, it sends the page's headers.
 for path in /checkout//pay-airline.html /checkout/./pay-airline.html /checkout/x/../pay-airline.html \
-  /checkout/%70ay-airline.html /CHECKOUT/PAY-AIRLINE.HTML /checkout/pay-airline.html/; do
+  /checkout/%70ay-airline.html /CHECKOUT/PAY-AIRLINE.HTML /checkout/pay-airline.html/ \
+  /p/../checkout/pay-airline.html /p/x/../../checkout/pay-airline.html /p/%2E%2E/checkout/pay-airline.html; do
   fetch "$TENANT" "$path" --path-as-is
   if [ "$STATUS" = 200 ] && cmp -s "$BODY" "$CARD_PAGE"; then
     card_page_headers "$path (variant)"
@@ -470,7 +477,7 @@ done
 # Every other kind of storefront response keeps the storefront CSP and never sends COOP same-origin, so a window that
 # one of these pages opens on the card page lands in another browsing context group.
 for path in / /assets/a.js /checkout/pay-card.html /checkout/pay-card /checkout/complete.html /checkout.html \
-  /checkout/pay-airline-x.html /no/such/page /api/x; do
+  /checkout/pay-airline-x.html /no/such/page /api/x /p/terms; do
   fetch "$TENANT" "$path"
   check "$path ($STATUS): no Cross-Origin-Opener-Policy same-origin [OFE-014 AC3]" no_coop_same_origin
   check "$path ($STATUS): the storefront CSP with worker-src 'none' [OFE-014 AC3]" \
@@ -535,6 +542,36 @@ for path in /api/v1/storefront /api/v1/storefront/pages/terms /api/v1/assets /ap
   check "$path: the storefront CSP with worker-src 'none', not the API's own [FIX-W34-SHARED 2b]" \
     csp_has "${CSP_DIRECTIVES[@]}" "$STOREFRONT_SCRIPTS"
 done
+
+# ---- 5d. content pages (OFE-020, OADR-0015 point 4) -------------------------------------------------------------
+step "Content pages on $TENANT: /p/<slug> is served by p.html with the storefront headers; nothing else is rewritten"
+content_page_headers() { # label: the last response is p.html with the storefront's headers
+  same "$1 answers 200 [OFE-020 AC2]" "$STATUS" 200
+  check "$1 serves p.html [OFE-020 AC2]" cmp -s "$BODY" "$CONTENT_PAGE"
+  check "$1 has the storefront CSP with worker-src 'none', and no other CSP [OFE-020 AC2]" \
+    csp_has "${CSP_DIRECTIVES[@]}" "$STOREFRONT_SCRIPTS"
+  same "$1 is Cache-Control no-cache, once (HTML is revalidated) [OFE-020 AC2]" \
+    "$(header_count Cache-Control) $(header Cache-Control)" "1 no-cache"
+  check "$1: no Cross-Origin-Opener-Policy same-origin [OFE-020 AC2]" no_coop_same_origin
+  same "$1 has HSTS (ADR-0027)" "$(header Strict-Transport-Security)" "max-age=31536000"
+  same "$1 has X-Content-Type-Options nosniff" "$(header X-Content-Type-Options)" nosniff
+  same "$1 hides the Server header" "$(header_count Server)" 0
+}
+# The page's own spellings: a trailing slash and upper case (Caddy's path matcher ignores case), a query, the slug-less
+# /p/ (p.html shows the not-found content), and the file itself under both of try_files' names.
+for path in /p/terms /p/about-us /p/terms/ /P/Terms "/p/terms?utm_source=smoke&ref=footer" /p/ /p.html /p; do
+  fetch "$TENANT" "$path"
+  content_page_headers "$path"
+done
+# Only /p/* is rewritten: a path that merely looks like it gets the storefront's 404 page.
+for path in /px/terms /pages/terms /x/p/terms /p-terms /p.htm; do
+  fetch "$TENANT" "$path"
+  same "$path answers 404, not p.html (only /p/* is rewritten) [OFE-020 AC2]" "$STATUS" 404
+  check "$path serves the storefront's 404.html" cmp -s "$BODY" "$RELEASE/storefront/404.html"
+done
+# /api/p/* stays the OTA API's (handle /api/* comes first), not the content page.
+fetch "$TENANT" /api/p/terms
+same "/api/p/terms reaches the OTA API as /p/terms, not p.html [OFE-020 AC2]" "$(json port) $(json url)" "4000 /p/terms"
 
 # ---- 6. the API hosts -------------------------------------------------------------------------------------------
 for api in "api.$STOREFRONT 4000" "api.$PLATFORM 3100"; do

@@ -8,6 +8,7 @@ import { createServer, preview } from "vite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
+  STOREFRONT_HEADERS,
   caddyMatchPath,
   envPort,
   htmlInputs,
@@ -365,7 +366,7 @@ describe("the dev and preview servers behave like Caddy for one tenant", () => {
     }
   });
 
-  it("[OFE-001 AC1] serves pages by path and unknown paths and /p/<slug> (until p.html exists) with 404.html", async () => {
+  it("[OFE-001 AC1] serves pages by path and unknown paths with 404.html", async () => {
     for (const [name, url] of servers()) {
       const home = await httpRequest(`${url}/`, { headers: NAVIGATION });
       expect(home.status, name).toBe(200);
@@ -376,11 +377,35 @@ describe("the dev and preview servers behave like Caddy for one tenant", () => {
       expect(byName.status, name).toBe(200);
       expect(byName.body, name).toContain("Search flights");
 
-      for (const path of ["/no-such-page", "/deep/no/such/page.html", "/p/about"]) {
+      for (const path of ["/no-such-page", "/deep/no/such/page.html"]) {
         const res = await httpRequest(`${url}${path}`, { headers: NAVIGATION });
         expect(res.status, `${name} ${path}`).toBe(404);
         expect(res.body, `${name} ${path}`).toContain("Page not found");
         expect(res.body, `${name} ${path}`).toContain("<footer");
+      }
+    }
+  });
+
+  it("[OFE-020 AC2] serves /p/<slug> with p.html, like Caddy's rewrite, and rewrites nothing else", async () => {
+    for (const [name, url] of servers()) {
+      for (const path of ["/p/terms", "/p/about-us/", "/P/Terms", "/p/terms?ref=footer"]) {
+        const res = await httpRequest(`${url}${path}`, { headers: NAVIGATION });
+        expect(res.status, `${name} ${path}`).toBe(200);
+        expect(res.body, `${name} ${path}`).toContain("data-content-page");
+        expect(res.body, `${name} ${path}`).toMatch(
+          /<script type="module"[^>]*src="\/(?:assets\/p-[\w-]+\.js|src\/pages\/p\.js)"/,
+        );
+        expect(res.body, `${name} ${path}`).toContain("<footer");
+        if (name === "preview") {
+          expect(res.headers["content-security-policy"], path).toBe(
+            STOREFRONT_HEADERS["Content-Security-Policy"],
+          );
+        }
+      }
+      for (const path of ["/px/terms", "/pages/terms", "/x/p/terms"]) {
+        const res = await httpRequest(`${url}${path}`, { headers: NAVIGATION });
+        expect(res.status, `${name} ${path}`).toBe(404);
+        expect(res.body, `${name} ${path}`).not.toContain("data-content-page");
       }
     }
   });

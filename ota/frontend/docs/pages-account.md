@@ -164,13 +164,17 @@ How the page decides (OFE-010, `src/pages/account-index.js`, `src/components/dia
 
 **SDK calls**
 
-1. `storefront.getPage({ slug })` with the slug from `location.pathname`.
-2. `lib/blocks.js` renders `blocks` (`heading`, `paragraph`, `list`, `image`, inline `text`, `strong`, `em`, `link`) with `createElement` and `textContent`; images use the same-origin asset URL; links are re-checked (`https:`, `mailto:`, `tel:`, `/p/…`).
-3. The footer of every page lists `storefront.listPages` entries with `showInFooter`, plus `config.legal.links` (external URL or page slug).
+1. `storefront.getPage({ slug })` with the slug from `location.pathname` (`/p/<slug>`, which Caddy rewrites to `p.html`; one trailing slash and upper case are accepted, as Caddy's matcher accepts them). The title is the `h1` and the document title; the article's `lang` is the page's `locale`.
+2. `lib/blocks.js` renders `blocks` (`heading`, `paragraph`, `list`, `image`, inline `text`, `strong`, `em`, `link`) with `createElement` and text nodes, never `innerHTML`; heading levels stay 2 to 4 (the title is the only `h1`). Images use the same-origin asset URL only (`/api/v1/assets/<tenantKey>/<assetId>.<ext>` of this OTA; any other image is left out). Links are re-checked (`https:`, `mailto:`, `tel:`, `/p/<slug>`, at most 2048 characters): `https:` links get `rel="noopener noreferrer"`, and a link that fails (`javascript:`, `data:`, `http:`, another path) is rendered as its plain text.
+3. The footer of every page that `boot()` starts lists `storefront.listPages` entries with `showInFooter` (in the API's order, kept in `sessionStorage` for 5 minutes like the configuration; a failure is ignored), after the legal links of `config.legal` (external URLs or the OTA's own `/p/<slug>` pages, never listed twice) and before the help centre. The link to the page being shown carries `aria-current="page"`. The airline-card page does not run `boot()` ([OADR-0017](../../docs/adr/0017-airline-card-form-isolation.md); `src/pages/checkout-pay-airline.js`): its footer keeps the partial's static links.
 
 | State | Shows |
 |---|---|
-| `404 NOT_FOUND` | The 404 page content in place (status stays 200 because the HTML is static; the page sets `noindex`) |
+| Loading | A skeleton (`aria-hidden`); the live region says "Loading" while boot reads the configuration |
+| `404 NOT_FOUND`, or a slug the API refuses | The 404 page content in place (status stays 200 because the HTML is static; the page sets `noindex`) |
+| An address without a valid slug (`/p/`, `/p.html`, `/p/a/b`) | The same 404 content, without a request |
+| `503`, connection failure, `429`, `500` | The shared inline state with Retry (`500` with the request id); its text is the document title and the live region announces it |
+| `403 TENANT_SUSPENDED`, `HOST_NOT_ALLOWED` | The shared state without Retry, its text the document title and announced |
 | Before M4 | No `/p/` links; legal links point to the OTA's external URLs from the configuration |
 
 ## 8. Not found and error pages (M2)

@@ -424,6 +424,25 @@ The cross-backend half of the task is [`platform/backend/test/cross-backend/cons
 |---|---|
 | AC1: the journey and the cross-backend test pass [PF-22 AC1, AC2, PF-21 AC3] | The four steps above pass locally with `E2E_WITH_OTA=1 pnpm test:e2e -- --project=portal specs/console-sso.e2e.ts`, and next to the other journeys in the CI-like run of the four projects (the `e2e` workflow's `portal` project selects the file); every page visited passes axe and, in the OTA admin, reads no cookie from JavaScript. `pnpm --filter @velexis/platform-backend test:xb` passes with `console-token.xb.test.ts` |
 
+## Tests of OFE-020
+
+The content pages of the storefront ([`ota/frontend/docs/pages-account.md`](../../ota/frontend/docs/pages-account.md) §7, [OADR-0015](../../ota/docs/adr/0015-storefront-build-urls-and-hosting.md) point 4), in the `storefront` project: `vite preview` serves `/p/<slug>` with `p.html`, as Caddy's `rewrite /p/* /p.html` does (the Caddyfile itself is proven by [`deploy/caddy/test/caddy-smoke.sh`](../../deploy/caddy/test/caddy-smoke.sh) step 5d).
+
+```bash
+pnpm build && E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront specs/storefront/content-pages.e2e.ts
+```
+
+| Step | What it proves |
+|---|---|
+| Arrangement (`beforeAll`, `afterAll`) | A published page with `showInFooter` and a draft of the demo OTA, slugs of this run, written into `storefront_pages` through `tenantTx` (the OTA admin's editor is OAD-015's), and the API's pages cache of the demo OTA (`t:<tenantId>:test:pages:*`) dropped until `storefront.listPages` lists the page (each poll drops first, so a list that a parallel journey's request read before the insert and cached after a drop goes too, as `enableAirlineCard` does for `storefront.get`); both rows are deleted again at the end, and the cache dropped until the list no longer names the page |
+| `/p/<slug>` shows the published page, built from its blocks, and the footer lists it | `200`; the title as the `h1` and the document title; the `h2`, the bold text, the list items and the links that the browser built from `storefront.getPage`'s blocks (`/p/privacy`, `mailto:`, and the `https:` link with `rel="noopener noreferrer"`); the footer's link to the page from `storefront.listPages` with `aria-current="page"`, and none to the draft; axe |
+| A page that is not published shows the not-found content with noindex | `200` (static HTML), "Page not found" with the home link, the document title, `noindex`; the footer still lists the published page; axe |
+
+| Acceptance criterion | Proof |
+|---|---|
+| AC1: a block with a `javascript:` link is rendered as plain text; no `innerHTML` | [`ota/frontend/test/blocks.test.js`](../../ota/frontend/test/blocks.test.js) (unit tests; the API refuses such a link when staff save the page, so no journey can show one) |
+| AC2: `/p/terms` serves `p.html` in Caddy and in `vite preview` | Caddy: `caddy-smoke.sh` step 5d. `vite preview`: [`ota/frontend/test/vite-plugins.test.js`](../../ota/frontend/test/vite-plugins.test.js) and the two steps above, which pass locally with the command above and in the full `storefront` project (49 tests) |
+
 ## Troubleshooting
 
 | Problem | Cause | Fix |

@@ -41,7 +41,7 @@ Related: [OTA docs index](../README.md), [`../architecture.md`](../architecture.
 
 | Request | Owner | Asked by |
 |---|---|---|
-| Caddyfile: `rewrite /p/* /p.html` in the storefront `handle` block | Deploy (`deploy/caddy/Caddyfile`) | [OADR-0015](0015-storefront-build-urls-and-hosting.md) |
+| Caddyfile: `rewrite /p/* /p.html` in the storefront `handle` block | Deploy (`deploy/caddy/Caddyfile`; done by OFE-020) | [OADR-0015](0015-storefront-build-urls-and-hosting.md) |
 | Caddyfile: path-specific CSP without Stripe hosts, COOP `same-origin` and `no-store` for `/checkout/pay-airline.html`; `worker-src 'none'` in the general storefront CSP; no COOP `same-origin` elsewhere | Deploy (done by OFE-014) | [OADR-0017](0017-airline-card-form-isolation.md) |
 | Daily integrity check over every page of `payment-page-inventory.json`, not only the two payment pages | Foundation (X-030 healthcheck) | [OADR-0017](0017-airline-card-form-isolation.md) |
 | `deploy.sh`: run `tenants:report-migrations` through `velexis-run ota` after the tenant fan-out; `deployment-single-vm.md` §8–§9 | Deploy (done by OBE-007) | [OADR-0007](0007-tenant-migration-runner-and-provisioning-worker.md) |

@@ -2357,7 +2357,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - The role journey matches scope §1.3 for viewer and agent [OF-09 AC2].
 - **Verify:** `E2E_WITH_OTA=1 pnpm test:e2e -- --project=ota-admin specs/ota-admin/settings-effects.e2e.ts specs/ota-admin/roles.e2e.ts`
 
-### OFE-020 · Build content pages and footer links with the Caddy rewrite
+### OFE-020 · Build content pages and footer links with the Caddy rewrite ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M4
 - **Depends on:** OFE-003, OBE-072, SDK-012
