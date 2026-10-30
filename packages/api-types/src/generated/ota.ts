@@ -1879,7 +1879,7 @@ export interface paths {
         };
         /**
          * Current staff member, tenant and permissions
-         * @description Returns the signed-in staff member (`platform.tenant_memberships` + `platform.accounts`), the OTA (`platform.tenants` in the environment of this request, with the Amadeus offices of that environment's connection from `platform.supplier_connections` — never credentials), the permissions derived from the role, the current staff session (kept in Redis, not a portal session; OADR-0011 point 2) and the environments the staff member may open, read on every call. Use it in the console layout to render navigation and hide actions the role cannot perform.
+         * @description Returns the signed-in staff member (`platform.tenant_memberships` + `platform.accounts`), the OTA (`platform.tenants` in the environment of this request, with the Amadeus offices of that environment's connection from `platform.supplier_connections` — never credentials), the permissions derived from the role, the current staff session (kept in Redis, not a portal session; OADR-0011 point 2) and the environments the staff member may open, read on every call. Use it in the console layout to render navigation and hide actions the role cannot perform, and to show the platform's billing banner from `tenant.billingNotice` (`past_due`, `trial_ending`; `null` or absent: none).
          *
          *     **Role → permissions** (StaffPermission). `owner`, `admin`: all permissions. `agent`: `bookings:read`, `bookings:write`, `bookings:issue`, `bookings:cancel`, `customers:read`, `queues:read`, `supplier_requests:read`, `amadeus:read`, `payments:read`, `payments:capture`, `settings:read`. `finance`: `bookings:read`, `customers:read`, `supplier_requests:read`, `payments:read`, `payments:capture`, `payments:refund`, `settings:read`. `viewer`: `bookings:read`, `customers:read`, `payments:read`, `settings:read`. `amadeus:write` (raw create/patch/issue/cancel) and `settings:write` are limited to `owner` and `admin`. `me` always needs a staff token. Console calls **without** a staff token are automation calls: they are accepted only from a secret key whose scopes include `console:automation`, act with exactly the permissions listed in the key's scopes (never every permission) and are attributed to the API key (`actor.type = api_key`); otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`). See ConsoleApiKeyScope.
          *
@@ -10840,8 +10840,13 @@ export interface components {
                 /** @description Default queuingOfficeId sent at create-order. */
                 queuingOfficeId: string | null;
             };
+            /**
+             * @description The platform's billing banner for this OTA (`platform.tenants.billing_notice`, kept by the platform's billing sync, ADR-0013): `past_due` while a subscription payment has failed or the subscription is paused, `trial_ending` before a trial ends; `null` when there is none. The OTA admin shows it as a banner with a link to the portal's billing page. It never blocks the console: when a subscription ends (`canceled`, `unpaid`), the platform suspends the OTA instead (`403 TENANT_SUSPENDED`). Read from the cached tenant row, which a `tenant` invalidation refreshes; the same in both environments. Optional (added in M5, OBE-076): an answer without it means no banner.
+             * @enum {string|null}
+             */
+            billingNotice?: "past_due" | "trial_ending" | null;
         };
-        /** @description Result of console sign-in and refresh: the tokens of the staff session (`Session.subject.type = staff`, `roles` = the membership's role), the staff member, the OTA in the environment of the request, the role's permissions and the environments the staff member may open. */
+        /** @description Result of console sign-in and refresh: the tokens of the staff session (`Session.subject.type = staff`, `roles` = the membership's role), the staff member, the OTA in the environment of the request (with the platform's billing banner in `tenant.billingNotice`), the role's permissions and the environments the staff member may open. */
         ConsoleStaffSession: {
             /** @description Tokens. `accessToken` is a 15-minute staff JWT with the claims `typ` (`staff`), `sub` (`stf_…`), `tid`, `roles` and `sid` (the session, `asn_…`), and no environment claim; `refreshToken` is opaque and rotating; `refreshTokenExpiresAt` is the session's absolute end, 12 hours after sign-in, which refreshing never moves (OADR-0011 point 2). Store both in httpOnly cookies; never expose them to client components. */
             session: components["schemas"]["Session"];

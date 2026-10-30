@@ -11643,7 +11643,8 @@ paths:
         connection from `platform.supplier_connections` — never credentials), the permissions derived from the role, the
         current staff session (kept in Redis, not a portal session; OADR-0011 point 2) and the environments the
         staff member may open, read on every call. Use it in the console layout to render navigation and hide actions
-        the role cannot perform.
+        the role cannot perform, and to show the platform's billing banner from `tenant.billingNotice` (`past_due`,
+        `trial_ending`; `null` or absent: none).
 
 
         **Role → permissions** (StaffPermission). `owner`, `admin`: all permissions. `agent`: `bookings:read`,
@@ -39229,6 +39230,22 @@ components:
                 - string
                 - 'null'
               description: Default queuingOfficeId sent at create-order.
+        billingNotice:
+          type:
+            - string
+            - 'null'
+          enum:
+            - past_due
+            - trial_ending
+            - null
+          description: >-
+            The platform's billing banner for this OTA (`platform.tenants.billing_notice`, kept by the platform's billing
+            sync, ADR-0013): `past_due` while a subscription payment has failed or the subscription is paused,
+            `trial_ending` before a trial ends; `null` when there is none. The OTA admin shows it as a banner with a link
+            to the portal's billing page. It never blocks the console: when a subscription ends (`canceled`, `unpaid`),
+            the platform suspends the OTA instead (`403 TENANT_SUSPENDED`). Read from the cached tenant row, which a
+            `tenant` invalidation refreshes; the same in both environments. Optional (added in M5, OBE-076): an answer
+            without it means no banner.
     ConsoleStaffSession:
       type: object
       required:
@@ -39239,8 +39256,9 @@ components:
         - environments
       description: >-
         Result of console sign-in and refresh: the tokens of the staff session (`Session.subject.type = staff`,
-        `roles` = the membership's role), the staff member, the OTA in the environment of the request, the role's
-        permissions and the environments the staff member may open.
+        `roles` = the membership's role), the staff member, the OTA in the environment of the request (with the
+        platform's billing banner in `tenant.billingNotice`), the role's permissions and the environments the staff
+        member may open.
       properties:
         session:
           $ref: '#/components/schemas/Session'
@@ -46503,6 +46521,7 @@ components:
               - PAR1A2100
             defaultOfficeId: NCE1A0950
             queuingOfficeId: NCE1A0950
+          billingNotice: null
         permissions:
           - bookings:read
           - bookings:write
@@ -46546,6 +46565,7 @@ components:
               - PAR1A2100
             defaultOfficeId: NCE1A0950
             queuingOfficeId: NCE1A0950
+          billingNotice: null
         permissions:
           - bookings:read
           - bookings:write

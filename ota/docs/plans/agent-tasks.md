@@ -2374,7 +2374,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 
 The platform turns on own Stripe, own Amadeus credentials, custom domains and go-live. The OTA code follows the data (`account_mode`, `credential_source`, verified domains, `storefront_environment`) with no per-tenant code path (OF-12).
 
-### OBE-076 · Spec-first: the billing notice in the console session
+### OBE-076 · Spec-first: the billing notice in the console session ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M5
 - **Depends on:** OBE-058

@@ -105,6 +105,7 @@ These need no SDK code (they come with the generated types), but storefront and 
 | `ConsoleStaffSession` | `environments: ["test"] \| ["test", "live"]` | §5 |
 | `BookingLookupResult.bookingToken` | nullable (`null` in cookie mode) | §2.2 |
 | `console.bookings.list` params (`consoleListBookings` query) | `reconcileOutcome` (`found` \| `not_found` \| `manual_review`, list), `cancellationRequested`, `hasScheduleChange` (booleans): the needs-attention filters | part 2 §7 |
+| `ConsoleTenant` (the `tenant` of `ConsoleStaffSession` and `ConsoleStaffProfile`) | `billingNotice?: "past_due" \| "trial_ending" \| null`: the platform's billing banner (M5; a missing field means none) | part 2 §3.1 |
 
 ## 5. Error codes added to the catalogue
 
