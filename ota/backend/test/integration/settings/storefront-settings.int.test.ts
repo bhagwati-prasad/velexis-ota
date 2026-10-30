@@ -348,7 +348,8 @@ describe("console.settings.storefront.get", () => {
       brand: { name: "Alpha Travel", timeZone: "UTC" },
       currencies: { default: "EUR", supported: ["EUR"] },
       policies: { paymentTiming: "authorize_before_booking", offerTtlMinutes: 30 },
-      airlineCard: { enabledLive: false },
+      // The read-only switch (FIX-W35-OTA): off in the test configuration, so the live airline card cannot be turned on.
+      airlineCard: { enabledLive: false, liveAvailable: false },
       operations: { opsAlertEmail: null, bookingQueue: { number: 50, category: 0 } },
     });
   });
@@ -434,6 +435,69 @@ describe("console.settings.storefront.update", () => {
     const after = await current(owner);
     expect(after.etag).toBe(etag);
     expect(after.settings["policies"]).toEqual(policies);
+  });
+
+  it("[FIX-W35-OTA AC6] refuses only turning the live airline card on while the switch is off: keeping a stored true, or setting false, passes", async () => {
+    const owner = await signIn(alphaId, "owner");
+    const liveFlag = async () =>
+      (
+        await tenantTx(tenantDb, "tenant_alpha", (trx) =>
+          trx.selectFrom("storefront_settings").select("airline_card_enabled_live").executeTakeFirstOrThrow(),
+        )
+      ).airline_card_enabled_live;
+    // 1. From a stored false: refused, nothing saved.
+    const before = await current(owner);
+    const turnOn = await owner.patch({ airlineCard: { enabledTest: false, enabledLive: true } }, before.etag);
+    expect(answer(turnOn)).toEqual([403, "FEATURE_DISABLED"]);
+    expect(turnOn.body.error.details).toEqual({ feature: "airlineCard" });
+    expectResponseToMatch("consoleUpdateStorefrontSettings", turnOn);
+    expect((await current(owner)).etag).toBe(before.etag);
+    expect(await liveFlag()).toBe(false);
+
+    // The live card was turned on while the switch was on (written as that save would have), then the switch went off.
+    await tenantTx(tenantDb, "tenant_alpha", (trx) =>
+      trx.updateTable("storefront_settings").set({ airline_card_enabled_live: true }).execute(),
+    );
+    try {
+      const stored = await current(owner);
+      expect(stored.settings["airlineCard"]).toEqual({
+        enabledTest: false,
+        enabledLive: true,
+        liveAvailable: false,
+      });
+      // 2. A save that keeps the stored true passes: the section sent back as get answered it, and another section.
+      const kept = await owner.patch({ airlineCard: stored.settings["airlineCard"] }, stored.etag);
+      expect(answer(kept)).toEqual([200, undefined]);
+      expectResponseToMatch("consoleUpdateStorefrontSettings", kept);
+      expect(kept.body.airlineCard).toEqual({ enabledTest: false, enabledLive: true, liveAvailable: false });
+      const other = await owner.patch(
+        { features: stored.settings["features"], airlineCard: { enabledTest: true, enabledLive: true } },
+        kept.headers["etag"] as string,
+      );
+      expect(answer(other)).toEqual([200, undefined]);
+      expect(await liveFlag()).toBe(true);
+      // 3. Setting it false passes, and then it cannot be turned on again.
+      const off = await owner.patch(
+        { airlineCard: { enabledTest: true, enabledLive: false } },
+        other.headers["etag"] as string,
+      );
+      expect(answer(off)).toEqual([200, undefined]);
+      expectResponseToMatch("consoleUpdateStorefrontSettings", off);
+      expect(off.body.airlineCard).toEqual({ enabledTest: true, enabledLive: false, liveAvailable: false });
+      expect(await liveFlag()).toBe(false);
+      const again = await owner.patch(
+        { airlineCard: { enabledTest: true, enabledLive: true } },
+        off.headers["etag"] as string,
+      );
+      expect(answer(again)).toEqual([403, "FEATURE_DISABLED"]);
+    } finally {
+      await tenantTx(tenantDb, "tenant_alpha", (trx) =>
+        trx
+          .updateTable("storefront_settings")
+          .set({ airline_card_enabled_live: false, airline_card_enabled_test: false })
+          .execute(),
+      );
+    }
   });
 
   it("needs If-Match, answers a stale one 412 and takes it quoted, weak or bare", async () => {
@@ -648,7 +712,11 @@ describe("console.settings.storefront.update", () => {
           { code: "airline_card_net_price", message: expect.any(String), path: "/airlineCard/enabledTest" },
         ]);
       }
-      expect(withMarkup.body.airlineCard).toEqual({ enabledTest: true, enabledLive: false });
+      expect(withMarkup.body.airlineCard).toEqual({
+        enabledTest: true,
+        enabledLive: false,
+        liveAvailable: false,
+      });
     } finally {
       await tenantTx(tenantDb, "tenant_alpha", async (trx) => {
         await trx.deleteFrom("fee_rules").where("id", "=", fee).execute();

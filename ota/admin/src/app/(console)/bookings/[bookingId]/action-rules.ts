@@ -13,9 +13,12 @@
 //   whose card the airline did not charge (its payment not `captured`: the airline issued no ticket, so the payment
 //   stayed `processing`) is unpaid too, and needs both (console-operations.md §2 step 8; OAD-016's journey found that
 //   the dialog offered no `allowUnpaid` there, so such a booking could not be issued at all).
-// - Cancel (`console.bookings.cancel`): what Amadeus is asked for follows the tickets (nothing issued: the order is
-//   released; every ticket issued today in the OTA's time zone: void; a ticket of an earlier day or of an unknown time:
-//   the void will most likely be refused, and the cancellation is a request to the airline), and the refund modes follow
+// - Cancel (`console.bookings.cancel`): what Amadeus is asked for is the API's own answer, `cancellationMode` of
+//   console.bookings.get (nothing issued: the order is released; every ticket issued today in the OTA's time zone:
+//   void; a ticket of an earlier day or of an unknown time: the void will most likely be refused, and the cancellation
+//   is a request to the airline). The API decides "today" in `storefront_settings.time_zone`, the zone of its
+//   cancellation quote, so the dialog never says void while the API finds the tickets of yesterday (lead decision (2a)
+//   of 2026-10-30, FIX-W35-OTA; until then the dialog decided it from the platform tenant's zone). The refund modes follow
 //   the payment the money step acts on (change-and-cancel.md "Staff cancellations", cancellation.service.ts
 //   `staffRefundOf`): a captured Stripe payment gives back nothing, everything still refundable or an amount; an
 //   authorisation is released whole (`full`), in part (`amount`: the rest is captured) or captured whole (`none`); an
@@ -481,7 +484,11 @@ export type CancelMoney =
 
 /** What cancelling `booking` does: the Amadeus step and the payment's refund modes. */
 export interface CancelPlan {
-  readonly supplier: CancelSupplierStep;
+  /**
+   * The Amadeus step, the API's `cancellationMode.mode`; `null` when the answer has none (the API cannot cancel the
+   * booking, or an answer from before the field): the dialog then names no step.
+   */
+  readonly supplier: CancelSupplierStep | null;
   readonly money: CancelMoney;
   /** The refund modes the dialog offers, the default first. */
   readonly modes: readonly RefundMode[];
@@ -489,44 +496,13 @@ export interface CancelPlan {
   readonly currency: string;
 }
 
-/** A calendar day (`YYYY-MM-DD`) of an instant in `timeZone`, or `undefined` when either cannot be read. */
-export function dayIn(instant: string | number, timeZone: string): string | undefined {
-  const time = typeof instant === "number" ? instant : Date.parse(instant);
-  if (!Number.isFinite(time)) {
-    return undefined;
-  }
-  try {
-    // `en-CA` writes the ISO order (`2026-10-27`).
-    return new Intl.DateTimeFormat("en-CA", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(time);
-  } catch {
-    return undefined;
-  }
-}
-
 /**
- * The Amadeus step of a cancellation: `release` without an issued ticket, `void` when every issued ticket was issued
- * today in the OTA's time zone (the void window closes at midnight there), `request_only` otherwise (a ticket of an
- * earlier day or of an unknown time: Amadeus is expected to refuse the void, and the airline handles the rest).
+ * The Amadeus step of a cancellation as the API decides it (`ConsoleBooking.cancellationMode`, see the file header):
+ * `release` without a ticket that holds a seat, `void` when every such ticket was issued today in the OTA's time zone
+ * (the void window closes at midnight there, `voidDeadlineAt`), `request_only` otherwise; `null` without a mode.
  */
-export function cancelSupplierStepOf(
-  booking: ConsoleBooking,
-  timeZone: string,
-  now: number,
-): CancelSupplierStep {
-  const issued = booking.tickets.filter((ticket) => ticket.status === "ISSUED");
-  if (issued.length === 0) {
-    return "release";
-  }
-  const today = dayIn(now, timeZone);
-  const allToday =
-    today !== undefined &&
-    issued.every((ticket) => ticket.issuedAt !== null && dayIn(ticket.issuedAt, timeZone) === today);
-  return allToday ? "void" : "request_only";
+export function cancelSupplierStepOf(booking: ConsoleBooking): CancelSupplierStep | null {
+  return booking.cancellationMode?.mode ?? null;
 }
 
 /** The payment a cancellation's money step acts on (the airline card first: it is never refunded through Stripe). */
@@ -564,10 +540,10 @@ export function refundModesOf(money: CancelMoney): readonly RefundMode[] {
 }
 
 /** What cancelling `booking` does (see `CancelPlan`). */
-export function cancelPlanOf(booking: ConsoleBooking, timeZone: string, now: number): CancelPlan {
+export function cancelPlanOf(booking: ConsoleBooking): CancelPlan {
   const money = cancelMoneyOf(booking);
   return {
-    supplier: cancelSupplierStepOf(booking, timeZone, now),
+    supplier: cancelSupplierStepOf(booking),
     money,
     modes: refundModesOf(money),
     currency: booking.totals.currency,

@@ -19,7 +19,7 @@ sequenceDiagram
   PW->>Q: ota-tenant-ops tenant.provision {v, jobId, tenantId, requestedAt, requestId} (BullMQ id jobId-attempt)
   OW->>Q: take job
   OW->>OW: validate message (JSON Schema from @velexis/api-types/jobs)
-  OW->>P: tenants row (status provisioning, key, schema_name, name, currency, locale)
+  OW->>P: tenants row (status provisioning, key, schema_name, name, currency, locale), time_zone
   OW->>DB: BEGIN, lock_timeout 5s, advisory lock on the schema name
   OW->>DB: CREATE SCHEMA IF NOT EXISTS tenant_acme AUTHORIZATION velexis_provisioner
   OW->>T: set_config(search_path), verify checksums, apply 0001..N, ledger rows
@@ -46,7 +46,9 @@ sequenceDiagram
 
    The schema name in these statements is quoted with the identifier quoting of `@velexis/db` after the regex check; it is the only identifier ever built into SQL.
 5. **Seed defaults** (`provisioning/seeds/`, all `ON CONFLICT DO NOTHING`):
-   - `storefront_settings`: brand name = tenant name, default currency and locale from the tenant, `time_zone = 'UTC'`, `ticketing_policy = issue_after_payment`, `payment_timing = authorize_before_booking`, `booking_queue_number = 50`, `booking_queue_category = 0` (the Velexis shared offices reserve queue 50 for new orders; an OTA with its own credentials changes it), airline card off;
+   - `storefront_settings`: brand name = tenant name, default currency and locale from the tenant, `time_zone` from the tenant (below; `'UTC'` until 2026-10-30), `ticketing_policy = issue_after_payment`, `payment_timing = authorize_before_booking`, `booking_queue_number = 50`, `booking_queue_category = 0` (the Velexis shared offices reserve queue 50 for new orders; an OTA with its own credentials changes it), airline card off;
+
+     **2026-10-30 (lead decision (2a), FIX-W35-OTA): the tenant's time zone.** `time_zone` starts as the platform tenant's business time zone (`platform.tenants.time_zone`, which `PlatformReadRepository.tenantTimeZone` reads as `tenant_time_zone` before the transaction opens) when the runtime knows the zone, else `'UTC'` (`seedTimeZoneOf` of `provisioning/seeds/storefront-settings.seed.ts`). It is the OTA's day for a same-day void, which the API's cancellation reads and console.bookings.get answers as `cancellationMode` for the OTA admin's cancel dialog ([change-and-cancel.md](change-and-cancel.md) §8); every OTA used to start in UTC while the OTA admin decided "today" in the platform's zone, so the two could disagree around midnight. Like every seed it never overwrites: tenants provisioned before keep `'UTC'` until the OTA sets its zone in the storefront settings (no data repair, there are no production tenants).
    - `markup_rules`: one default catch-all rule, `percentage 0`, `is_default`, priority 1000 (OTAs set real markups in the OTA admin);
    - `notification_templates`: the English code defaults of every MVP key ([OADR-0013](../adr/0013-notifications-and-booking-documents.md)).
 6. **Commit, then report** `tenant.provisioned` with the ledger rows (`version`, `checksum`, `phase`, `appliedAt`, `durationMs`) and the steps. The platform mirrors them into `platform.tenant_schema_migrations` and runs its post-steps.
@@ -84,7 +86,7 @@ Tenant: the whole schema (DDL), `schema_migrations`, `storefront_settings`, `mar
 
 ## 7. Tests
 
-- Integration (`@velexis/testing`): provision a fresh tenant, check ledger, grants (`has_table_privilege` for `velexis_ota_app` on a table created by a later migration), seeds; run the same message twice.
+- Integration (`@velexis/testing`): provision a fresh tenant, check ledger, grants (`has_table_privilege` for `velexis_ota_app` on a table created by a later migration), seeds (the settings' `time_zone` the platform tenant's since FIX-W35-OTA, and `'UTC'` for a zone the runtime does not know: `seeds.int.test.ts`, `storefront-settings.seed.test.ts`); run the same message twice.
 - Two schemas provisioned from scratch are identical (catalog hash), as `check_db.py` asserts for the reference design.
 - Failure classification: forced lock timeout → retryable; edited migration file → non-retryable.
 - Suspend: open checkout expired and its authorisation void enqueued; a checkout whose booking is `pending` keeps its status and its authorisation, with no void; ticketing job still runs for a paid booking.

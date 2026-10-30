@@ -64,6 +64,7 @@ import {
   saveSupport,
 } from "./actions";
 import StorefrontSettingsPage from "./page";
+import { SECTION_STRINGS } from "./sections";
 import type { SettingsActionState, SettingsSection } from "./settings-rules";
 
 const ME = "GET /v1/console/auth/me";
@@ -991,25 +992,68 @@ describe("/settings/storefront", () => {
     },
   );
 
-  it("keeps the live airline card off while the API has it off", async () => {
+  it("[FIX-W35-OTA AC5] keeps the live airline card box off, and says why, while the API's liveAvailable is false", async () => {
     signedIn("owner");
-    serveSettings();
+    // An answer from before the field counts as off too.
+    for (const airlineCard of [
+      { enabledTest: true, enabledLive: false, liveAvailable: false },
+      { enabledTest: true, enabledLive: false },
+    ]) {
+      serveSettings({ ...storefrontSettings(), airlineCard });
 
-    const page = await renderPage();
+      const page = await renderPage();
 
-    expect(page.querySelector('input[name="airlineCard.enabledLive"]')?.hasAttribute("disabled")).toBe(true);
-    expect(page.textContent).toContain("Live stays off until the platform turns the airline card on");
+      const live = page.querySelector('input[name="airlineCard.enabledLive"]');
+      expect(live?.hasAttribute("disabled")).toBe(true);
+      expect(live?.hasAttribute("checked")).toBe(false);
+      expect(page.textContent).toContain(SECTION_STRINGS.liveOff);
+      // Nothing posts the live flag: the section saves it off, as it is.
+      expect(formDataOf(sectionForm(page, "airlineCard")).getAll("airlineCard.enabledLive")).toEqual([]);
+    }
   });
 
-  it("offers the live airline card to turn it off when the API has it on", async () => {
+  it("[FIX-W35-OTA AC5] offers the live airline card box only while the API's liveAvailable is true", async () => {
     signedIn("owner");
-    serveSettings({ ...storefrontSettings(), airlineCard: { enabledTest: true, enabledLive: true } });
+    serveSettings({
+      ...storefrontSettings(),
+      airlineCard: { enabledTest: true, enabledLive: false, liveAvailable: true },
+    });
+    let page = await renderPage();
+    let live = page.querySelector('input[name="airlineCard.enabledLive"]');
+    expect(live?.hasAttribute("disabled")).toBe(false);
+    expect(live?.hasAttribute("checked")).toBe(false);
+    expect(page.textContent).toContain(SECTION_STRINGS.liveAvailable);
+    expect(page.textContent).not.toContain(SECTION_STRINGS.liveOff);
+
+    serveSettings({
+      ...storefrontSettings(),
+      airlineCard: { enabledTest: true, enabledLive: true, liveAvailable: true },
+    });
+    page = await renderPage();
+    live = page.querySelector('input[name="airlineCard.enabledLive"]');
+    expect(live?.hasAttribute("disabled")).toBe(false);
+    expect(live?.hasAttribute("checked")).toBe(true);
+    expect(page.textContent).toContain(SECTION_STRINGS.liveOn);
+  });
+
+  it("[FIX-W35-OTA AC5] keeps a live card that is on while the switch is off as saved: disabled, explained, sent back on", async () => {
+    signedIn("owner");
+    serveSettings({
+      ...storefrontSettings(),
+      airlineCard: { enabledTest: true, enabledLive: true, liveAvailable: false },
+    });
+    serveUpdate();
 
     const page = await renderPage();
 
     const live = page.querySelector('input[name="airlineCard.enabledLive"]');
-    expect(live?.hasAttribute("disabled")).toBe(false);
+    expect(live?.hasAttribute("disabled")).toBe(true);
     expect(live?.hasAttribute("checked")).toBe(true);
+    expect(page.textContent).toContain(SECTION_STRINGS.liveKept);
+    // The disabled box posts nothing; the hidden field sends the saved `true`, which the API keeps (lead decision (2e)).
+    const state = await run(saveAirlineCard, formDataOf(sectionForm(page, "airlineCard")));
+    expect(state).toMatchObject({ ok: true });
+    expect(only(`PATCH ${SETTINGS}`).body).toEqual({ airlineCard: { enabledTest: true, enabledLive: true } });
   });
 
   it("[OAD-014] posts every form as the page renders it to its action: each section is sent back unchanged", async () => {

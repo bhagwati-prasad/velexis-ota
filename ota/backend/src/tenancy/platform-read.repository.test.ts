@@ -84,6 +84,34 @@ const EXPECTED_TENANT: PlatformTenant = {
   billingNotice: "past_due",
 };
 
+describe("PlatformReadRepository.tenantTimeZone (FIX-W35-OTA)", () => {
+  it("[FIX-W35-OTA AC3] reads the tenant's business time zone as tenant_time_zone, in one read-only transaction", async () => {
+    const fake = fakePool([{ tenant_time_zone: "Europe/Oslo" }]);
+    const repository = new PlatformReadRepository(createPlatformDb(fake.pool));
+
+    await expect(repository.tenantTimeZone(TENANT_ID)).resolves.toBe("Europe/Oslo");
+    expect(fake.queries).toEqual([
+      { sql: START_READ_ONLY, parameters: [] },
+      { sql: SET_STATEMENT_TIMEOUT, parameters: [String(PLATFORM_READ_STATEMENT_TIMEOUT_MS)] },
+      {
+        sql: 'select "time_zone" as "tenant_time_zone" from "platform"."tenants" where "id" = $1',
+        parameters: [TENANT_ID],
+      },
+      { sql: "commit", parameters: [] },
+    ]);
+  });
+
+  it("[FIX-W35-OTA AC3] answers null for an unknown tenant, and for a value that cannot be a tenant id without a query", async () => {
+    const fake = fakePool([]);
+    const repository = new PlatformReadRepository(createPlatformDb(fake.pool));
+
+    await expect(repository.tenantTimeZone(newId("ten"))).resolves.toBeNull();
+    const before = fake.queries.length;
+    await expect(repository.tenantTimeZone("tenant'; drop table platform.tenants; --")).resolves.toBeNull();
+    expect(fake.queries).toHaveLength(before);
+  });
+});
+
 describe("PlatformReadRepository.tenantById", () => {
   it("reads the tenant in one read-only transaction with a short statement timeout and maps the row [OBE-003 AC1]", async () => {
     const fake = fakePool([tenantRow()]);

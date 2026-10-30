@@ -1116,15 +1116,30 @@ describe("storefront settings (api-changes part 2 §2.3; OADR-0012, OADR-0015)",
       consent: ["regime", "bannerRequired", "policyVersion", "categories"],
       operations: ["opsAlertEmail", "bookingQueue"],
     };
+    // Read-only fields a section answers besides the ones it is saved with (lead decision (2d) of 2026-10-30, second
+    // batch, FIX-W35-OTA): optional, so the PATCH body stays complete without them, and ignored when sent.
+    const readOnly: Readonly<Record<string, readonly string[]>> = {
+      airlineCard: ["liveAvailable"],
+    };
     for (const section of SECTIONS) {
       const schema = sectionSchema(section);
-      expect([section, Object.keys(objectAt(schema, "properties"))]).toEqual([section, fields[section]]);
+      expect([section, Object.keys(objectAt(schema, "properties"))]).toEqual([
+        section,
+        [...(fields[section] ?? []), ...(readOnly[section] ?? [])],
+      ]);
       // Sections travel in the PATCH body too: closed and complete.
       expect([section, schema["additionalProperties"], schema["required"]]).toEqual([
         section,
         false,
         fields[section],
       ]);
+      for (const name of readOnly[section] ?? []) {
+        expect([section, name, objectAt(schema, "properties", name)]).toEqual([
+          section,
+          name,
+          expect.objectContaining({ type: "boolean", readOnly: true }),
+        ]);
+      }
     }
     const branding = sectionSchema("branding");
     expect(Object.keys(objectAt(branding, "properties", "colors", "properties"))).toEqual([

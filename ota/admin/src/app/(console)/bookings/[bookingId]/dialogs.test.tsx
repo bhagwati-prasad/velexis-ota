@@ -340,6 +340,29 @@ describe("CancelDialog", () => {
     expect(within(dialog).getByText(/Release the whole authorisation/)).toBeTruthy();
   });
 
+  it("[FIX-W35-OTA AC2] names no Amadeus step when the API's answer has no cancellation mode, and keeps the texts", async () => {
+    render(
+      cancelDialog({
+        supplier: null,
+        money: { kind: "captured", refundable: eur("1414.06") },
+        modes: ["none", "full", "amount"],
+        currency: "EUR",
+      }),
+    );
+    const { dialog } = await open(CANCEL_STRINGS.trigger);
+    expect(dialog.querySelector("[data-supplier-step]")).toBeNull();
+    for (const text of Object.values(CANCEL_STRINGS.supplier)) {
+      expect(within(dialog).queryByText(text)).toBeNull();
+    }
+    // The money and the rest of the dialog are as before.
+    expect(within(dialog).getByText(CANCEL_STRINGS.timeout)).toBeTruthy();
+    expect((within(dialog).getAllByRole("radio") as HTMLInputElement[]).map((radio) => radio.value)).toEqual([
+      "none",
+      "full",
+      "amount",
+    ]);
+  });
+
   it("shows the action's field error on the amount", async () => {
     actions.cancelBooking.mockResolvedValueOnce({
       ok: false,

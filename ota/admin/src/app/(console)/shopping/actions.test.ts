@@ -669,7 +669,7 @@ describe("every shopping action", () => {
   });
 });
 
-// ---- Retries (lead decision (2d) of 2026-10-30) ----------------------------------------------------------------------------
+// ---- Retries (lead decisions (2d) of 2026-10-30 and (2b) of its second batch) -------------------------------------------
 
 describe("the retries of the shopping actions", () => {
   /** The `maxRetries` of each console client the action built, in order (`undefined`: the SDK's default). */
@@ -677,7 +677,7 @@ describe("the retries of the shopping actions", () => {
     return vi.mocked(createConsoleClient).mock.calls.map(([input]) => input.maxRetries);
   }
 
-  it("[FIX-W34-OTA AC2] builds the searches' client with maxRetries 0, console.auth.me's with the SDK default", async () => {
+  it("[FIX-W34-OTA AC2] [FIX-W35-OTA AC4] builds every shopping call's client with maxRetries 0, console.auth.me's with the SDK default", async () => {
     signedIn("agent");
 
     expect((await searchOffers(offerForm())).ok).toBe(true);
@@ -689,10 +689,14 @@ describe("the retries of the shopping actions", () => {
     expect(clientRetries()).toEqual([undefined, 0]);
     vi.mocked(createConsoleClient).mockClear();
 
-    // The upsell and the quote of one offer keep the default: one client, also for console.auth.me.
+    // The upsell and the price confirmation of one offer since FIX-W35-OTA (lead decision (2b) of 2026-10-30, second
+    // batch): console.auth.me's client with the default, then the call's own with none.
     expect((await upsellOffer({ offer: OFFER, reason: "" })).ok).toBe(true);
+    expect(clientRetries()).toEqual([undefined, 0]);
+    vi.mocked(createConsoleClient).mockClear();
+
     expect((await quoteOffer({ offer: OFFER, reason: "", fareRules: false })).ok).toBe(true);
-    expect(clientRetries()).toEqual([undefined, undefined]);
+    expect(clientRetries()).toEqual([undefined, 0]);
   });
 
   it("[FIX-W34-OTA AC2] sends a search that timed out at Amadeus once: its 504 SUPPLIER_TIMEOUT reaches the API once", async () => {
@@ -716,9 +720,22 @@ describe("the retries of the shopping actions", () => {
     expect(api.sent(AVAILABILITY)).toHaveLength(1);
   });
 
-  it("[FIX-W34-OTA AC2] keeps the SDK's default elsewhere: the quote's 504 is sent again twice", async () => {
+  it("[FIX-W35-OTA AC4] sends a Branded Fares upsell that timed out at Amadeus once: its 504 reaches the API once", async () => {
     signedIn("agent");
-    // `Retry-After: 0`: the default retries go out at once instead of after the back-off.
+    // No `Retry-After` at all: the SDK's default would retry the 504 twice after its back-off.
+    api.on(UPSELL, () => apiError("SUPPLIER_TIMEOUT", 504));
+
+    expect(await upsellOffer({ offer: OFFER, reason: "" })).toMatchObject({
+      ok: false,
+      code: "SUPPLIER_TIMEOUT",
+    });
+
+    expect(api.sent(UPSELL)).toHaveLength(1);
+  });
+
+  it("[FIX-W35-OTA AC4] sends a price confirmation that timed out at Amadeus once: its 504 reaches the API once", async () => {
+    signedIn("agent");
+    // `Retry-After: 0`: the SDK's default retries would go out at once (until FIX-W35-OTA the 504 was sent three times).
     api.on(PRICING, () => apiError("SUPPLIER_TIMEOUT", 504, {}, { "Retry-After": "0" }));
 
     expect(await quoteOffer({ offer: OFFER, reason: "", fareRules: false })).toMatchObject({
@@ -726,6 +743,6 @@ describe("the retries of the shopping actions", () => {
       code: "SUPPLIER_TIMEOUT",
     });
 
-    expect(api.sent(PRICING)).toHaveLength(3);
+    expect(api.sent(PRICING)).toHaveLength(1);
   });
 });

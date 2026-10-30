@@ -1296,12 +1296,13 @@ export async function openConsoleFromPortal(page: Page, tenantId: string): Promi
 // ---- The OTA's day (lead decision (2g) of 2026-10-30, FIX-W34-OTA) ---------------------------------------------------
 //
 // A journey that books and later voids "the tickets issued today" must not book just before midnight in the OTA's time
-// zone: the void step would run on the next day and find tickets of yesterday. Two clocks decide "today": the OTA
-// admin's cancel dialog reads the OTA's time zone of `console.auth.me` (`platform.tenants.time_zone`, the `timeZone` of
-// the platform's Tenant; Europe/Oslo for the OTAs of `otaInput`), and the API's cancellation reads
-// `storefront_settings.time_zone` (seeded `UTC` by the OTA's provisioning). `bookingDayTimeZones` reads both from the
-// stack, and `waitPastMidnight` waits, by polling the clock, until 00:00:05 of the new day when the journey would book
-// within 3 minutes before midnight in any of them.
+// zone: the void step would run on the next day and find tickets of yesterday. Since lead decision (2a) of 2026-10-30
+// (FIX-W35-OTA) one clock decides "today": the API's, in `storefront_settings.time_zone`, which the cancellation reads
+// and console.bookings.get answers as `cancellationMode` for the OTA admin's cancel dialog (before, the dialog read the
+// platform tenant's zone of `console.auth.me` and the API UTC). Provisioning seeds that column from the platform
+// tenant's zone (Europe/Oslo for the OTAs of `otaInput`). `bookingDayTimeZones` reads it from the stack, and
+// `waitPastMidnight` waits, by polling the clock, until 00:00:05 of the new day when the journey would book within 3
+// minutes before midnight there.
 
 /** How long before an OTA's midnight a journey waits for the new day before it books. */
 export const MIDNIGHT_GUARD_MS = 3 * 60_000;
@@ -1348,15 +1349,15 @@ export function msUntilPastMidnight(now: Date, timeZones: readonly string[]): nu
 }
 
 /**
- * The time zones that decide "issued today" for `owned`'s bookings: the OTA's (`platform.tenants.time_zone`, as the
- * OTA admin's cancel dialog reads it) and its storefront settings' (`storefront_settings.time_zone`, as the API's
- * cancellation reads it), each once.
+ * The time zones that decide "issued today" for `owned`'s bookings: its storefront settings' alone
+ * (`storefront_settings.time_zone`, as the API's cancellation reads it and console.bookings.get answers it to the OTA
+ * admin's cancel dialog, FIX-W35-OTA).
  */
 export async function bookingDayTimeZones(owned: OwnedOta): Promise<string[]> {
   const settings = await withTenantTx(owned.schema, (trx) =>
     trx.selectFrom("storefront_settings").select("time_zone").executeTakeFirstOrThrow(),
   );
-  return [...new Set([owned.ota.timeZone, settings.time_zone])];
+  return [settings.time_zone];
 }
 
 /**

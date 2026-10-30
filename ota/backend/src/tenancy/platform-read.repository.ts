@@ -472,6 +472,27 @@ export class PlatformReadRepository {
   }
 
   /**
+   * The business time zone of the tenant with this id (`platform.tenants.time_zone`, read as `tenant_time_zone` as
+   * `staffMember` reads it; an IANA zone of `reference.time_zones`), or `null` when there is none. `PlatformTenant`
+   * does not carry it (the tenant cache stays as it is): provisioning reads it once to seed the storefront settings'
+   * `time_zone` (lead decision (2a) of 2026-10-30, FIX-W35-OTA). A value that cannot be a tenant id is unknown without
+   * a query.
+   */
+  async tenantTimeZone(id: string): Promise<string | null> {
+    if (!TENANT_ID_PATTERN.test(id)) {
+      return null;
+    }
+    const row = await this.read((trx) =>
+      trx
+        .selectFrom("platform.tenants")
+        .select("time_zone as tenant_time_zone")
+        .where("id", "=", id)
+        .executeTakeFirst(),
+    );
+    return row?.tenant_time_zone ?? null;
+  }
+
+  /**
    * The tenant with this key, or `null` when there is none. A value that cannot be a key, because `tenant_<value>`
    * would not be a valid schema name (a host label with upper case or a dot, an empty string), is unknown without a
    * query.

@@ -21,10 +21,11 @@
 // The OTA's midnight (lead decision (2g) of 2026-10-30, FIX-W34-OTA). The cancel step runs a minute or two after the
 // bookings and expects the void of tickets issued today: booked just before midnight, it would run on the next day and
 // find tickets of yesterday (a request to the airline, no void). So when `beforeAll` reaches the bookings within 3
-// minutes before midnight in a time zone that decides "today" (the OTA's, which the cancel dialog reads, and its
-// storefront settings', which the API's cancellation reads: `bookingDayTimeZones` reads both from the stack, the OTA's
-// is Europe/Oslo), it waits until 00:00:05 of the new day by polling the clock (`waitPastMidnight`), within the hook's
-// budget. The assertions stay as they are.
+// minutes before midnight in the zone that decides "today", it waits until 00:00:05 of the new day by polling the clock
+// (`waitPastMidnight`), within the hook's budget. Since lead decision (2a) of 2026-10-30 (FIX-W35-OTA) that zone is the
+// storefront settings' alone: the API's cancellation reads it, and the cancel dialog shows the API's own
+// `cancellationMode` (`bookingDayTimeZones` reads it from the stack; provisioning seeds it from the OTA's platform zone,
+// Europe/Oslo). The assertions stay as they are.
 //
 // "Cancel with a full refund" for an airline-card booking. The airline charged the traveller's card, so no money goes
 // back through Velexis: the cancel dialog offers "No refund from the console" alone (`refund_via_airline`; a `full`

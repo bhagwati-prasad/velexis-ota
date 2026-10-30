@@ -99,7 +99,8 @@ export interface ConsoleClientInput {
   readonly incoming: IncomingHeaders;
   /**
    * The client's automatic retries (`VelexisClientOptions.maxRetries`); absent for the SDK's default. Staff shopping's
-   * searches pass `0` (`SHOPPING_SEARCH_RETRIES` of the shopping actions), every other caller leaves it out.
+   * calls (the searches, the Branded Fares upsell and the price confirmation) pass `0` (`SHOPPING_RETRIES` of the
+   * shopping actions), every other caller leaves it out.
    */
   readonly maxRetries?: number;
 }

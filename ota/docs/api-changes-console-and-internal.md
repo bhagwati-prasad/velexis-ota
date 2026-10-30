@@ -89,7 +89,7 @@ StorefrontSettings:
       require3ds: boolean, acceptedCardBrands: AmadeusPaymentBrand[]
       requireEmailVerification: boolean
       offerTtlMinutes: 5..240, checkoutTtlMinutes: 5..1440
-    airlineCard: { enabledTest: boolean, enabledLive: boolean }   # live writable only after the M6 review
+    airlineCard: { enabledTest: boolean, enabledLive: boolean, liveAvailable: boolean (read-only) }   # live turned on only after the M6 review
     legal: { termsVersion, privacyVersion, links: [{kind, label, url | pageSlug}] }
     support: { email, phone, hours, helpCenterUrl, emergencyPhone }
     seo: { titleTemplate, defaultTitle, defaultDescription, ogImageAssetId, robots }
@@ -98,7 +98,7 @@ StorefrontSettings:
     version: integer, updatedAt: date-time
 ```
 
-- Validation: currencies against `reference.currencies`; `supported` lists contain the default; a font outside the bundled list, or an asset id of the wrong kind, is `422 UNPROCESSABLE`. `airlineCard.enabledLive = true` is refused (`403 FEATURE_DISABLED`) while `AIRLINE_CARD_ENABLED` is off. Turning on the airline card while active markup or fee rules exist returns a `warnings[]` entry: airline-card bookings are sold at the airline's price ([OADR-0004](adr/0004-airline-card-data-handling.md)).
+- Validation: currencies against `reference.currencies`; `supported` lists contain the default; a font outside the bundled list, or an asset id of the wrong kind, is `422 UNPROCESSABLE`. `airlineCard.enabledLive = true` is refused (`403 FEATURE_DISABLED`) while `AIRLINE_CARD_ENABLED` is off. Since 2026-10-30 (lead decision (2e) of the second batch, FIX-W35-OTA) only a save that turns it on, from a stored `false` to `true`, is refused: a save that keeps a stored `true` or sends `false` passes, so an OTA whose live airline card was on when the switch went off can still save its other sections and turn it off. The answer of get and update carries the read-only `airlineCard.liveAvailable`, the switch itself (lead decision (2d), FIX-W35-OTA; a value sent is ignored), so the OTA admin offers the live box only while it is true. Turning on the airline card while active markup or fee rules exist returns a `warnings[]` entry: airline-card bookings are sold at the airline's price ([OADR-0004](adr/0004-airline-card-data-handling.md)).
 - Effect: bumps `version`, deletes the `storefront.get` caches of both environments; the hosted storefront sees the change within 5 minutes (its `sessionStorage` cache).
 - Errors: `400`, `412`, `422 UNPROCESSABLE`, `403 FEATURE_DISABLED`.
 
@@ -121,7 +121,7 @@ StorefrontPage:
 
 The body is a **Markdown subset**: headings 2–4, paragraphs, bold, italic, bullet and numbered lists, links (`https:`, `mailto:`, `tel:` and relative `/p/<slug>`), and images that reference a `page_image` asset. Anything else (HTML, tables, code, other schemes) is refused with `422 UNPROCESSABLE` and `details.line`. One page per `(slug, locale)` (`409 CONFLICT`). A page referenced by `legal.links` cannot be deleted (`409 CONFLICT`).
 
-Since OBE-072 (2026-10-30): one parser in the backend (`ota/backend/src/storefront/markdown-subset.parser.ts`) checks a body on save and builds storefront.getPage's blocks; besides the refusals of StorefrontPageMarkdown it refuses `+ ` bullets and `1) ` numbers (write `- ` or `1. `), setext headings (`===` or `---` under text), empty headings and items, link titles, links without text and control characters, always with the line they start on, and nests bold, italic and links at most 8 deep. Unmatched `*`, `_` and brackets stay text, as do entities such as `&amp;` (never decoded). A title is stored trimmed (a blank one, or one with a control character, is `400 VALIDATION_FAILED` at `/title`), the locale as the settings write it. The checks of create run in the order of its description: locale, Markdown, images.
+Since OBE-072 (2026-10-30): one parser in the backend (`ota/backend/src/storefront/markdown-subset.parser.ts`) checks a body on save and builds storefront.getPage's blocks; besides the refusals of StorefrontPageMarkdown it refuses `+ ` bullets and `1) ` numbers (write `- ` or `1. `), setext headings (`===` or `---` under text), empty headings and items, link titles, links without text and control characters, always with the line they start on, and nests bold, italic and links at most 8 deep. Unmatched `*`, `_` and brackets stay text, as do entities such as `&amp;` (never decoded). A title is stored trimmed (a blank one, or one with a control character, is `400 VALIDATION_FAILED` at `/title`), the locale as the settings write it. The checks of create run in the order of its description: locale, Markdown, images. Since FIX-W35-OTA (lead decision (2c) of 2026-10-30, second batch; [OADR-0012](adr/0012-storefront-settings-assets-and-pages.md) revision of that day) these stricter checks are named in the OpenAPI descriptions of `StorefrontPageMarkdown`, the page titles, `consoleCreateStorefrontPage` and `consoleUpdateStorefrontPage` (descriptions only), and the pages cache key below is confirmed.
 
 ### 2.5 Storefront assets (`storefront_assets`, new table)
 

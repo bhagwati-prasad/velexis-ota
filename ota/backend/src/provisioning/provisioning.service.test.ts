@@ -426,7 +426,11 @@ describe("ProvisioningService", () => {
     options: ProvisioningOptions = DEFAULT_PROVISIONING_OPTIONS,
   ): ProvisioningService {
     return new ProvisioningService(
-      { tenantById: vi.fn(tenantById) } as unknown as PlatformReadRepository,
+      {
+        tenantById: vi.fn(tenantById),
+        // The platform's zone of a provisioning tenant, read before its transaction (FIX-W35-OTA).
+        tenantTimeZone: vi.fn(() => Promise.resolve("Europe/Oslo")),
+      } as unknown as PlatformReadRepository,
       { url: "postgres://nobody@127.0.0.1:1/none" } as unknown as ProvisionerDatabase,
       options,
       new FakeClock() as Clock,

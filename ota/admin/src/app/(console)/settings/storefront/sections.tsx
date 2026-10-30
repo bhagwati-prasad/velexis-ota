@@ -14,9 +14,13 @@
 //   one someone else changed) starts again from the saved values (`key`), while the others keep what was typed.
 // - Staff without `settings:write` (agents, finance, viewers) see every section read only: the fields disabled, no
 //   "Save" (the actions refuse them anyway).
-// - The airline card in live stays off while the platform's switch is off: the switch cannot be read from here, so the
-//   live box is offered only when the API already has it on (to turn it off); the API refuses turning it on until the
-//   platform's security review switches it on (`403 FEATURE_DISABLED`, shown on the box).
+// - The airline card in live: the box is offered only while the API's `airlineCard.liveAvailable` (its
+//   `AIRLINE_CARD_ENABLED` switch) is true, and otherwise says why (the platform turns the airline card on after its
+//   security review; lead decision (2d) of 2026-10-30, second batch, FIX-W35-OTA; before, the switch could not be read
+//   here and the box was offered only to turn off a live card already on). A live card that is on while the switch is off
+//   (it went off after the card was turned on) stays as saved: the disabled box posts nothing, so a hidden field sends
+//   the saved `true`, which the API keeps (lead decision (2e): it refuses only turning the live card on, `403
+//   FEATURE_DISABLED`, shown on the box).
 //
 // Every input has `autoComplete="off"`; nothing here asks for a card.
 import type { StorefrontSettings } from "@velexis/ota-sdk";
@@ -190,6 +194,9 @@ export const SECTION_STRINGS = Object.freeze({
   liveOff:
     "Live stays off until the platform turns the airline card on after its security review; the API refuses it until then.",
   liveOn: "On in live: untick to stop offering it.",
+  liveAvailable: "The platform has turned the airline card on: tick to offer it in live too.",
+  liveKept:
+    "On in live as saved, but the platform has the airline card switched off, so the live storefront does not offer it; saving keeps it as it is.",
   // Legal
   termsVersion: "Terms version",
   privacyVersion: "Privacy policy version",
@@ -731,7 +738,15 @@ function PoliciesFields({
   );
 }
 
-/** The airline card per environment; live is offered only to turn it off (see the module comment). */
+/** The live airline card's hint: whether it can be changed, and why not (see the module comment). */
+function liveHintOf(liveAvailable: boolean, liveOn: boolean): string {
+  if (liveAvailable) {
+    return liveOn ? SECTION_STRINGS.liveOn : SECTION_STRINGS.liveAvailable;
+  }
+  return liveOn ? SECTION_STRINGS.liveKept : SECTION_STRINGS.liveOff;
+}
+
+/** The airline card per environment; live is offered only while the API can turn it on (see the module comment). */
 function AirlineCardFields({
   airlineCard,
   state,
@@ -742,6 +757,8 @@ function AirlineCardFields({
   const id = useId();
   const liveError = fieldError(state, "airlineCard.enabledLive");
   const liveOn = airlineCard.enabledLive;
+  // The API's switch, read-only (FIX-W35-OTA); an answer without it counts as off.
+  const liveAvailable = airlineCard.liveAvailable === true;
   return (
     <>
       <p
@@ -764,14 +781,18 @@ function AirlineCardFields({
             name="airlineCard.enabledLive"
             value="true"
             defaultChecked={liveOn}
-            disabled={!liveOn}
+            disabled={!liveAvailable}
             className="size-4 accent-primary"
             {...describedBy(`${id}-hint`, `${id}-error`, liveError)}
           />
+          {/* A disabled box posts nothing: the saved `true` goes with the section, so a save keeps it. */}
+          {!liveAvailable && liveOn ? (
+            <input type="hidden" name="airlineCard.enabledLive" value="true" />
+          ) : null}
           <Label htmlFor={id}>{SECTION_STRINGS.enabledLive}</Label>
         </div>
-        <p id={`${id}-hint`} className={MUTED}>
-          {liveOn ? SECTION_STRINGS.liveOn : SECTION_STRINGS.liveOff}
+        <p id={`${id}-hint`} className={MUTED} data-live-available={liveAvailable ? "true" : "false"}>
+          {liveHintOf(liveAvailable, liveOn)}
         </p>
         <FieldMessage id={`${id}-error`} message={liveError} />
       </div>

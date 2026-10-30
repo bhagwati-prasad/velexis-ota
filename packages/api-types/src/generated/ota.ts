@@ -1951,7 +1951,7 @@ export interface paths {
         };
         /**
          * Get a booking with full console detail
-         * @description Returns the booking as the customer sees it (`Booking`: itineraries, travellers, contacts, ancillaries, tickets, payments, refunds, documents, totals, ticketing, fare conditions) **plus** console-only data: environment, Amadeus order id, queuing/owner office, net prices and markup (`pricing`: Amadeus grandTotal, markup rule applied, service fees, selling total, margin), derived `paymentStatus`, supplier sync state (`supplierSync`: last sync, last error, drift detected by the last sync), ticketing agreement, automated processes, redacted forms of payment, commissions, forms of identification, every remark (incl. CONFIDENTIAL / BACKOFFICE staff remarks), internal notes, the last 20 Amadeus calls for this booking (`recentSupplierRequests`, redacted, no bodies), the last 20 staff actions, the full event timeline (incl. events hidden from the customer), the actions the caller may perform now (`consoleActions`) and the failure reason of failed bookings. In console scope `amadeus.order` is the verbatim supplier order (net amounts; card numbers redacted by Velexis before storage).
+         * @description Returns the booking as the customer sees it (`Booking`: itineraries, travellers, contacts, ancillaries, tickets, payments, refunds, documents, totals, ticketing, fare conditions) **plus** console-only data: environment, Amadeus order id, queuing/owner office, net prices and markup (`pricing`: Amadeus grandTotal, markup rule applied, service fees, selling total, margin), derived `paymentStatus`, supplier sync state (`supplierSync`: last sync, last error, drift detected by the last sync), ticketing agreement, automated processes, redacted forms of payment, commissions, forms of identification, every remark (incl. CONFIDENTIAL / BACKOFFICE staff remarks), internal notes, the last 20 Amadeus calls for this booking (`recentSupplierRequests`, redacted, no bodies), the last 20 staff actions, the full event timeline (incl. events hidden from the customer), the actions the caller may perform now (`consoleActions`), what a cancellation would ask Amadeus for now (`cancellationMode`: `release`, `void` with `voidDeadlineAt`, or `request_only`, decided from the stored tickets' issue times in `storefront_settings.time_zone` by the rule of bookings.quoteCancellation's `mode`; `null` when the booking cannot be cancelled) and the failure reason of failed bookings. In console scope `amadeus.order` is the verbatim supplier order (net amounts; card numbers redacted by Velexis before storage).
          *
          *     **Refresh.** Without `refresh` the data comes from the tenant tables (`bookings.order_snapshot`). `refresh=true` first calls Amadeus **Flight Order Management GET** `/v1/booking/flight-orders/{id}` (getFlightOrder) with `include` / `fareRules` passed through, applies the result exactly like console.bookings.resync (status, segments, tickets, schedule changes; `booking_events booking.synced`) and returns it; staff refreshes are throttled to one per 10 s per booking (`supplierSync.status = throttled`). `fareRules` populates `fareRules` (rebooking/refund eligibility). A booking without Amadeus order (`failed`, or `pending` after a create timeout) ignores `refresh`.
          *
@@ -2679,7 +2679,7 @@ export interface paths {
         };
         /**
          * Get the storefront settings
-         * @description Returns the OTA's storefront settings as staff edit them (`storefront_settings`, one row per OTA shared by the test and live environments): brand, branding (asset ids of `storefront_assets`, colours, fonts from the bundled list, corner radius), locales, currencies, markets, features, policies, the airline card per environment, legal versions and links, support, SEO, consent and operations. storefront.get derives the public configuration from them.
+         * @description Returns the OTA's storefront settings as staff edit them (`storefront_settings`, one row per OTA shared by the test and live environments): brand, branding (asset ids of `storefront_assets`, colours, fonts from the bundled list, corner radius), locales, currencies, markets, features, policies, the airline card per environment, legal versions and links, support, SEO, consent and operations. storefront.get derives the public configuration from them. `airlineCard.liveAvailable` (read-only) is the API's global `AIRLINE_CARD_ENABLED` switch: the live airline card can be turned on only while it is true, so the OTA admin offers that switch only then (lead decision (2d) of 2026-10-30, FIX-W35-OTA).
          *
          *     `ETag` = `"<version>"`: pass it as `If-Match` to console.settings.storefront.update. No Amadeus call. Permission `settings:read`. Not audited per call.
          *
@@ -2695,7 +2695,7 @@ export interface paths {
          * Update the storefront settings
          * @description Changes the storefront settings section by section (`StorefrontSettingsUpdate`): each top-level section sent (`brand`, `branding`, `locales`, …) replaces that section as a whole, sections not sent keep their value.
          *
-         *     **Validation.** Beyond the schema (a font outside the bundled list fails it: `400 VALIDATION_FAILED`): currencies must be active currencies of `reference.currencies` with at most 2 minor units (the precision of stored amounts, as flights.search requires) and the time zone must exist in `reference.time_zones`; every `supported` list contains its `default`; markets use supported currencies and locales; asset ids must name an asset of the right kind (`logo`, `logo_dark`, `logo_square`, `favicon`, `og_image`); a legal link's `pageSlug` must name a page of `storefront_pages`; `policies.paymentTiming` other than `authorize_before_booking` is refused in the MVP. These answer `422 UNPROCESSABLE` with `details.reason` and `details.path` (the JSON pointer of the refused field). Setting `airlineCard.enabledLive` to true answers `403 FEATURE_DISABLED` (`details.feature = "airlineCard"`) while the global `AIRLINE_CARD_ENABLED` switch is off. The rules are checked for the sections sent, against the saved settings with those sections replaced (so a market is checked against the currencies and locales it will have), and the first refused field is answered. `details.reason` is one of `unknown_time_zone`, `asset_not_found`, `asset_kind`, `default_not_supported` (a `supported` list without its `default`), `unknown_currency` (not an active currency of `reference.currencies`), `currency_not_supported` (a currency with more than 2 minor units, such as KWD), `unknown_country`, `duplicate_market`, `market_not_listed` (`markets.default`), `market_currency_not_supported`, `market_locale_not_supported`, `page_not_found`, `payment_timing_not_supported`, `duplicate_consent_category` and `consent_category_required` (only `necessary` may be required).
+         *     **Validation.** Beyond the schema (a font outside the bundled list fails it: `400 VALIDATION_FAILED`): currencies must be active currencies of `reference.currencies` with at most 2 minor units (the precision of stored amounts, as flights.search requires) and the time zone must exist in `reference.time_zones`; every `supported` list contains its `default`; markets use supported currencies and locales; asset ids must name an asset of the right kind (`logo`, `logo_dark`, `logo_square`, `favicon`, `og_image`); a legal link's `pageSlug` must name a page of `storefront_pages`; `policies.paymentTiming` other than `authorize_before_booking` is refused in the MVP. These answer `422 UNPROCESSABLE` with `details.reason` and `details.path` (the JSON pointer of the refused field). Turning `airlineCard.enabledLive` on (from a stored `false` to `true`) answers `403 FEATURE_DISABLED` (`details.feature = "airlineCard"`) while the global `AIRLINE_CARD_ENABLED` switch is off; a save that keeps a stored `true` or sends `false` passes, so an OTA whose live airline card was on when the switch went off can still save its other sections, and turn it off (lead decision (2e) of 2026-10-30, FIX-W35-OTA). `airlineCard.liveAvailable` is read-only: the answer carries the switch, and a value sent is ignored. The rules are checked for the sections sent, against the saved settings with those sections replaced (so a market is checked against the currencies and locales it will have), and the first refused field is answered. `details.reason` is one of `unknown_time_zone`, `asset_not_found`, `asset_kind`, `default_not_supported` (a `supported` list without its `default`), `unknown_currency` (not an active currency of `reference.currencies`), `currency_not_supported` (a currency with more than 2 minor units, such as KWD), `unknown_country`, `duplicate_market`, `market_not_listed` (`markets.default`), `market_currency_not_supported`, `market_locale_not_supported`, `page_not_found`, `payment_timing_not_supported`, `duplicate_consent_category` and `consent_category_required` (only `necessary` may be required).
          *
          *     **Warnings.** Turning the airline card on (in either environment) while active markup or fee rules that add an amount exist answers `200` with a `warnings` entry (`airline_card_net_price`, `path` the flag turned on): airline-card bookings are sold at the airline's price, without markup or fees (OADR-0004). A rule adds an amount when it is active, has not ended (`activeUntil`) and has a percentage, a fixed amount or a minimum other than zero, so the default rule at 0 % alone gives no warning.
          *
@@ -2727,7 +2727,7 @@ export interface paths {
          * Create a content page
          * @description Creates a content page of the hosted storefront (OADR-0012 point 5). `slug`, `locale` and `title` are required; omitted fields take their defaults: `kind` `content`, an empty `bodyMarkdown`, `isPublished` and `showInFooter` false, `sortOrder` 100. One page per slug and locale: a translation is another page with the same slug in another locale.
          *
-         *     **Validation.** Beyond the schema: `locale` must be one of the storefront settings' `locales.supported` (`details.reason = "locale_not_supported"`), and the body must keep to the Markdown subset of StorefrontPageMarkdown: anything else answers `details.reason = "markdown_not_allowed"` with the 1-based `details.line` of the first refused line, and an image of an asset that does not exist or is not a `page_image` answers `asset_not_found` or `asset_kind`, with its `details.line`. These answer `422 UNPROCESSABLE` and nothing is saved. A page of the same slug and locale answers `409 CONFLICT` (`details.reason = "page_exists"`).
+         *     **Validation.** Beyond the schema: the title is stored trimmed, and a title that is blank once trimmed or holds a control character answers `400 VALIDATION_FAILED` at `/title`. Then, in this order: `locale` must be one of the storefront settings' `locales.supported` (`details.reason = "locale_not_supported"`), the body must keep to the Markdown subset of StorefrontPageMarkdown (with its stricter cases: `+ ` bullets, `1) ` numbers, setext headings, empty headings and list items, link titles, links without text, control characters and inline nesting deeper than 8): anything else answers `details.reason = "markdown_not_allowed"` with the 1-based `details.line` the refused construct starts on, and an image of an asset that does not exist or is not a `page_image` answers `asset_not_found` or `asset_kind`, with its `details.line`. These answer `422 UNPROCESSABLE` and nothing is saved. A page of the same slug and locale answers `409 CONFLICT` (`details.reason = "page_exists"`).
          *
          *     **Effect.** The answer is the page with `version` 1 and its `ETag`. A page created published gets `publishedAt` and is served by storefront.getPage at once: the page caches of both environments are deleted.
          *
@@ -2773,7 +2773,7 @@ export interface paths {
         head?: never;
         /**
          * Update a content page
-         * @description Changes any subset of a page's fields (`StorefrontPageUpdate`: `kind`, `title`, `bodyMarkdown`, `isPublished`, `showInFooter`, `sortOrder`); fields not sent keep their value. `slug` and `locale` are fixed at creation, as they make the page's address and the target of legal links: to move a page, create it under the new slug and delete the old one. A body is checked as in console.settings.pages.create (`422 UNPROCESSABLE`: `markdown_not_allowed` with `details.line`, `asset_not_found`, `asset_kind`).
+         * @description Changes any subset of a page's fields (`StorefrontPageUpdate`: `kind`, `title`, `bodyMarkdown`, `isPublished`, `showInFooter`, `sortOrder`); fields not sent keep their value. `slug` and `locale` are fixed at creation, as they make the page's address and the target of legal links: to move a page, create it under the new slug and delete the old one. A title and a body are checked as in console.settings.pages.create: the title stored trimmed (blank once trimmed, or with a control character: `400 VALIDATION_FAILED` at `/title`), the body within the Markdown subset and its stricter cases (`422 UNPROCESSABLE`: `markdown_not_allowed` with `details.line`, `asset_not_found`, `asset_kind`).
          *
          *     **Publishing.** `isPublished: true` puts the page on the storefront (the first time also sets `publishedAt`); `false` takes it off (storefront.getPage answers `404`) and keeps it as a draft. A page that a legal link names may be unpublished; the link then leads to the storefront's not-found page until it is published again.
          *
@@ -11049,6 +11049,8 @@ export interface components {
             recentStaffActions: components["schemas"]["ConsoleStaffAction"][];
             /** @description What the caller may do now. */
             consoleActions: components["schemas"]["ConsoleBookingActions"];
+            /** @description What console.bookings.cancel's Flight Order Management DELETE is expected to do now, decided by the API's own clock: the cancellation mode of the booking's stored tickets and their issue times in the OTA's time zone (`storefront_settings.time_zone`), by the rule of bookings.quoteCancellation's `mode` and in its zone, without an Amadeus call. `null` when console.bookings.cancel refuses the booking (`consoleActions.canCancel` false for a reason other than `no_permission`: no Amadeus order, cancelled, a cancellation `pending`, a segment `flown`). Read-only and optional: an answer an `Idempotency-Key` replays from before the field existed has none (lead decision (2a) of 2026-10-30, FIX-W35-OTA). */
+            cancellationMode?: components["schemas"]["ConsoleCancellationMode"] | null;
             /** @description Why the booking failed (status failed), else null. */
             failure: null | {
                 /** @description Public error code. */
@@ -11336,6 +11338,19 @@ export interface components {
             reasons: {
                 [key: string]: "no_permission" | "cancelled" | "failed" | "pending" | "no_amadeus_order" | "already_ticketed" | "flown" | "deadline_passed" | "throttled";
             };
+        };
+        /** @description The cancellation mode of a booking in console scope (`ConsoleBookingDetails.cancellationMode`): what console.bookings.cancel's Flight Order Management DELETE is expected to do to the booking's tickets now, by the rule of bookings.quoteCancellation's `mode` without the customer's refusals (no self-service switch, no 3-hour window). The OTA admin's cancel dialog shows it instead of deciding the step itself. */
+        ConsoleCancellationMode: {
+            /**
+             * @description `release` no ticket holds a seat (none stored, or every stored ticket `VOID` or `REFUNDED`, and the ticketing state does not say `issued` or `partially_issued`): Amadeus cancels the order and releases the seats; `void` every ticket that holds a seat was issued today in the OTA's time zone: Amadeus voids them until `voidDeadlineAt`; `request_only` anything else (a ticket of an earlier day or of an unknown issue time, or a ticketed state without stored tickets): Amadeus will most likely refuse the void, and the airline handles the cancellation.
+             * @enum {string}
+             */
+            mode: "release" | "void" | "request_only";
+            /**
+             * Format: date-time
+             * @description In `void` mode the next midnight in the OTA's time zone (`storefront_settings.time_zone`, UTC when the runtime does not know it), when the void window closes; else null.
+             */
+            voidDeadlineAt: string | null;
         };
         /** @description `error.details` of `504 SUPPLIER_TIMEOUT` from console.bookings.create: Amadeus did not answer Flight Create Orders in time, so the order may exist. The `pending` booking that was kept is identified here — open it (console.bookings.get) and never book again with a new Idempotency-Key. Same-key retries replay these details (`replayed: true`) until the reconciliation job decides. */
         ConsoleBookingTimeoutDetails: {
@@ -12774,12 +12789,14 @@ export interface components {
             /** @description Lifetime of an open checkout. */
             checkoutTtlMinutes: number;
         };
-        /** @description The airline-card payment method per environment (`airline_card_enabled_test`, `_live`; ADR-0011, OADR-0004). It also needs the global `AIRLINE_CARD_ENABLED` switch; `enabledLive` can be set to true only after the M6 security review turns the switch on. */
+        /** @description The airline-card payment method per environment (`airline_card_enabled_test`, `_live`; ADR-0011, OADR-0004). It also needs the global `AIRLINE_CARD_ENABLED` switch; `enabledLive` can be turned on only while that switch is on, after the M6 security review (a stored `true` is kept when the switch goes off: lead decision (2e) of 2026-10-30). */
         StorefrontSettingsAirlineCard: {
             /** @description Offered in the test environment. */
             enabledTest: boolean;
             /** @description Offered in the live environment. */
             enabledLive: boolean;
+            /** @description Read-only: the API's global `AIRLINE_CARD_ENABLED` switch, without which `enabledLive` cannot be turned on. console.settings.storefront.get and update always answer it; a value sent in an update is ignored (lead decision (2d) of 2026-10-30, FIX-W35-OTA). */
+            readonly liveAvailable?: boolean;
         };
         /**
          * @description What a legal link is for.
@@ -12953,7 +12970,7 @@ export interface components {
          * @example baggage-faq
          */
         StorefrontPageSlug: string;
-        /** @description A page body in the Markdown subset of OADR-0012 point 5, at most 50 000 characters. Blocks are separated by blank lines: headings `##`, `###` and `####` (levels 2 to 4; the page title is the level 1), paragraphs (the lines of one paragraph are joined with a space), bullet lists (`- ` or `* `) and numbered lists (`1. `; the first number is the list's start), one level deep, and an image alone on its line, `![alt text](ast_…)` with an alt text of at most 300 characters, which names a `page_image` asset of the OTA. Inside headings, paragraphs and list items: `**bold**` or `__bold__`, `*italic*` or `_italic_`, and links `[text](href)` to an `https:`, `mailto:` or `tel:` URL of at most 2048 characters or a relative `/p/<slug>`; a backslash escapes a Markdown character. Anything else is refused with `422 UNPROCESSABLE` (`details.reason = "markdown_not_allowed"` and the 1-based `details.line`): HTML, tables, code, block quotes, rules, headings of level 1, 5 or 6, nested lists, images inside text, reference links, a longer alt text or URL, and other URLs (`http:`, `javascript:`, `data:`, other relative paths). storefront.getPage serves the body parsed into blocks (StorefrontPageBlock), whose `alt` and `href` keep these limits. */
+        /** @description A page body in the Markdown subset of OADR-0012 point 5, at most 50 000 characters. Blocks are separated by blank lines: headings `##`, `###` and `####` (levels 2 to 4; the page title is the level 1), paragraphs (the lines of one paragraph are joined with a space), bullet lists (`- ` or `* `) and numbered lists (`1. `; the first number is the list's start), one level deep, and an image alone on its line, `![alt text](ast_…)` with an alt text of at most 300 characters, which names a `page_image` asset of the OTA. Inside headings, paragraphs and list items: `**bold**` or `__bold__`, `*italic*` or `_italic_`, and links `[text](href)` to an `https:`, `mailto:` or `tel:` URL of at most 2048 characters or a relative `/p/<slug>`; a backslash escapes a Markdown character. Anything else is refused with `422 UNPROCESSABLE` (`details.reason = "markdown_not_allowed"` and the 1-based `details.line` the refused construct starts on): HTML, tables, code, block quotes, rules, headings of level 1, 5 or 6, nested lists, images inside text, reference links, a longer alt text or URL, and other URLs (`http:`, `javascript:`, `data:`, other relative paths); and, stricter than CommonMark, `+ ` bullets and `1) ` numbers (write `- ` or `1. `), setext headings (`===` or `---` under a line of text), empty headings and empty list items, link titles (`[text](href "title")`), links without text, control characters, and bold, italic and links nested more than 8 deep. An unmatched `*`, `_` or bracket stays text, and an entity such as `&amp;` is kept as written (never decoded). storefront.getPage serves the body parsed into blocks (StorefrontPageBlock), whose `alt` and `href` keep these limits. */
         StorefrontPageMarkdown: string;
         /** @description A content page of the hosted storefront as staff edit it: a row of `storefront_pages`, one per slug and locale, shared by the test and live environments (OADR-0012 point 5). Once published, storefront.listPages lists it and storefront.getPage serves it as blocks. */
         StorefrontPage: {
@@ -12994,7 +13011,7 @@ export interface components {
             slug: components["schemas"]["StorefrontPageSlug"];
             locale: components["schemas"]["LocaleCode"];
             kind?: components["schemas"]["StorefrontPageKind"];
-            /** @description Page title. */
+            /** @description Page title, stored trimmed; blank once trimmed, or with a control character, it answers `400 VALIDATION_FAILED` at `/title`. */
             title: string;
             bodyMarkdown?: components["schemas"]["StorefrontPageMarkdown"];
             /** @description Publish the page at once (default false). */
@@ -13007,7 +13024,7 @@ export interface components {
         /** @description Body of console.settings.pages.update: any subset of the page's writable fields; fields not sent keep their value. `slug` and `locale` are fixed at creation (the page's address `/p/<slug>` and the target of legal links). */
         StorefrontPageUpdate: {
             kind?: components["schemas"]["StorefrontPageKind"];
-            /** @description Page title. */
+            /** @description Page title, stored trimmed; blank once trimmed, or with a control character, it answers `400 VALIDATION_FAILED` at `/title`. */
             title?: string;
             bodyMarkdown?: components["schemas"]["StorefrontPageMarkdown"];
             /** @description Publish the page (true) or take it off the storefront as a draft (false). */
@@ -15710,7 +15727,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description The caller may not change the storefront settings this way. Possible codes: FORBIDDEN (the role lacks `settings:write`, details.requiredPermission), SCOPE_NOT_ALLOWED, TENANT_SUSPENDED, STAFF_MEMBERSHIP_INACTIVE, ENVIRONMENT_NOT_ALLOWED, FEATURE_DISABLED (`details.feature = "airlineCard"`: the airline card cannot be enabled in live while the global switch is off). */
+        /** @description The caller may not change the storefront settings this way. Possible codes: FORBIDDEN (the role lacks `settings:write`, details.requiredPermission), SCOPE_NOT_ALLOWED, TENANT_SUSPENDED, STAFF_MEMBERSHIP_INACTIVE, ENVIRONMENT_NOT_ALLOWED, FEATURE_DISABLED (`details.feature = "airlineCard"`: the airline card cannot be turned on in live, from a stored `false` to `true`, while the global switch is off). */
         StorefrontSettingsForbidden: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];

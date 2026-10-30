@@ -23,6 +23,11 @@ export interface SeedTenant {
   readonly defaultCurrency: string;
   /** BCP 47 locale, such as `en`. */
   readonly defaultLocale: string;
+  /**
+   * The tenant's business time zone (`platform.tenants.time_zone`, IANA), the storefront settings' first `time_zone`
+   * when the runtime knows it; missing, `null` or unknown: `UTC` (FIX-W35-OTA).
+   */
+  readonly timeZone?: string | null | undefined;
 }
 
 export interface SeedTenantOptions {
@@ -61,6 +66,7 @@ export async function seedTenant(
 export { DEFAULT_MARKUP_RULE, seedDefaultMarkupRule } from "./markup-rules.seed";
 export {
   seedStorefrontSettings,
+  seedTimeZoneOf,
   STOREFRONT_SETTINGS_0002_COLUMNS,
   STOREFRONT_SETTINGS_DEFAULTS,
   STOREFRONT_SETTINGS_ID,

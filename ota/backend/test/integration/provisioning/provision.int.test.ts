@@ -122,6 +122,7 @@ interface TenantRow {
   readonly status?: string;
   readonly default_currency?: string;
   readonly default_locale?: string;
+  readonly time_zone?: string;
 }
 
 /** Inserts a tenant as the platform does (velexis_migrator) and returns its id; its schema is `tenant_<key>`. */
@@ -315,6 +316,7 @@ describe("tenant.provision on ota-tenant-ops", () => {
       name: "Acme Travel",
       default_currency: "GBP",
       default_locale: "en-GB",
+      time_zone: "Europe/London",
     });
     const message = provisionMessage(tenantId);
 
@@ -355,7 +357,8 @@ describe("tenant.provision on ota-tenant-ops", () => {
       ).rows,
     ).toEqual([{ usage: true, platform: false }]);
 
-    // Seeds: the settings row from the tenant's name, currency and locale, and the default markup rule.
+    // Seeds: the settings row from the tenant's name, currency, locale and time zone (the platform's, FIX-W35-OTA),
+    // and the default markup rule.
     const seeds = await seedsOf("tenant_acme");
     expect(seeds.settings).toEqual([
       expect.objectContaining({
@@ -363,6 +366,7 @@ describe("tenant.provision on ota-tenant-ops", () => {
         brand_name: "Acme Travel",
         default_currency: "GBP",
         default_locale: "en-GB",
+        time_zone: "Europe/London",
         ticketing_policy: "issue_after_payment",
         payment_timing: "authorize_before_booking",
       }),
@@ -553,8 +557,8 @@ describe("tenant.provision on ota-tenant-ops", () => {
     const message = provisionMessage(tenantId);
     const seen: Array<{ settings: string | null; seeded: boolean }> = [];
     const seedDefaults = service.seedDefaults.bind(service);
-    vi.spyOn(service, "seedDefaults").mockImplementationOnce(async (trx, tenant) => {
-      const seeded = await seedDefaults(trx, tenant);
+    vi.spyOn(service, "seedDefaults").mockImplementationOnce(async (trx, tenant, timeZone) => {
+      const seeded = await seedDefaults(trx, tenant, timeZone);
       const { rows } = await sql<{ settings: string | null }>`
         SELECT to_regclass('storefront_settings')::text AS settings`.execute(trx);
       seen.push({ settings: rows[0]?.settings ?? null, seeded: seeded.storefrontSettings });

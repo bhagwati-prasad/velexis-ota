@@ -335,7 +335,6 @@ function bookingActions(
   tab: BookingTab,
   staff: ConsoleStaffProfile,
   environment: StaffEnvironment,
-  timeZone: string,
   payments: PaymentsView | undefined,
 ): BookingActionSlots {
   const actions = booking.consoleActions;
@@ -362,12 +361,7 @@ function bookingActions(
   }
   if (decided && actions.canCancel && can(staff, "bookings:cancel")) {
     bar.push(
-      <CancelDialog
-        key="cancel"
-        {...common}
-        idempotencyKey={newKey()}
-        plan={cancelPlanOf(booking, timeZone, Date.now())}
-      />,
+      <CancelDialog key="cancel" {...common} idempotencyKey={newKey()} plan={cancelPlanOf(booking)} />,
     );
   }
   if (actions.canResync && can(staff, "bookings:write")) {
@@ -503,7 +497,7 @@ export default async function BookingPage({
       refresh={loaded.refresh}
       payments={payments}
       order={order}
-      actions={bookingActions(booking, tab, staff, environment, timeZone, payments)}
+      actions={bookingActions(booking, tab, staff, environment, payments)}
     />
   );
 }

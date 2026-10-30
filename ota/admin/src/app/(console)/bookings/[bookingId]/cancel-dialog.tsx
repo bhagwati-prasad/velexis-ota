@@ -6,8 +6,10 @@
 // the required reason, the environment badge and, in live mode, the live warning.
 //
 // The dialog says what will happen before anything is sent (`CancelPlan` of action-rules.ts):
-// - at Amadeus: the order is released (nothing ticketed), the tickets voided (all issued today, in the OTA's time zone),
-//   or, for tickets of an earlier day, a request that Amadeus will most likely refuse, which the airline then handles;
+// - at Amadeus, as the API decides it (console.bookings.get's `cancellationMode`, by its own clock in the OTA's
+//   storefront time zone; FIX-W35-OTA): the order is released (nothing ticketed), the tickets voided (all issued today,
+//   in the OTA's time zone), or, for tickets of an earlier day, a request that Amadeus will most likely refuse, which
+//   the airline then handles; without a mode in the answer no step is named;
 // - to the money, per refund mode: a captured Stripe payment refunds nothing, everything still refundable or an amount;
 //   an authorisation is released whole, released in part (the rest captured) or captured whole; an airline card and a
 //   booking without payment are never refunded here (the airline refunds its card).
@@ -144,7 +146,9 @@ export function CancelDialog({
       title={CANCEL_STRINGS.title(reference)}
       summary={
         <div className="grid gap-2">
-          <p data-supplier-step={plan.supplier}>{CANCEL_STRINGS.supplier[plan.supplier]}</p>
+          {plan.supplier === null ? null : (
+            <p data-supplier-step={plan.supplier}>{CANCEL_STRINGS.supplier[plan.supplier]}</p>
+          )}
           <p data-refund-mode={mode}>{details[mode]}</p>
           <p className="text-xs">{CANCEL_STRINGS.timeout}</p>
         </div>

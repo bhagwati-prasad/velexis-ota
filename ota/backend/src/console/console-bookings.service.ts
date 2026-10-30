@@ -18,6 +18,10 @@
 //   cancellation by the airline is recorded here too); `booking.synced` and the projection are console.bookings.resync's
 //   (OBE-062). `supplierSync.nextScheduledSyncAt` is when the background sync is due next (bookings/sync-schedule.ts)
 //   and `supplierSync.differences` what the last recorded synchronisation changed (`bookings.sync_changes`).
+//   `cancellationMode` is what console.bookings.cancel's DELETE is expected to do now, from the stored tickets (the
+//   refresh's when `refresh=true`) and `storefront_settings.time_zone`, by the rule and in the zone of the customer's
+//   cancellation quote (console-bookings.mapper.ts `consoleCancellationModeOf`; lead decision (2a) of 2026-10-30,
+//   FIX-W35-OTA): no Amadeus call of its own.
 //
 // Neither read is audited (the document: "Read-only; not audited per call", "Viewing is not audited"): their handlers
 // do not opt in with `@AuditedRead`, so the console audit interceptor writes a row only for a refused or failed call
@@ -47,6 +51,7 @@ import { nextScheduledSyncOf } from "../bookings/sync-schedule";
 import { roleHasPermission, type StaffPermission } from "../common/auth/roles";
 import { StaffContext } from "../common/auth/staff.guard";
 import { Clock } from "../common/clock";
+import { FALLBACK_TIME_ZONE } from "../common/time-zones";
 import { PaymentsRepository } from "../payments/payments.repository";
 import { toPayment } from "../payments/payments.service";
 import { CallerContext } from "../tenancy/caller-resolver";
@@ -55,6 +60,7 @@ import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
 import {
   bookingSyncStatusOf,
   consoleActionsOf,
+  consoleCancellationModeOf,
   consoleListFingerprint,
   consoleOrderOf,
   consoleRemarksOf,
@@ -268,6 +274,9 @@ export class ConsoleBookingsService {
     const wantsFareRules = options.fareRules !== undefined && options.fareRules.length > 0;
     // The cancellation block and canCancel follow the cancellation's state (FIX-W28-CANCEL).
     const cancellationFacts = await cancellationFactsOf(trx, bookingId, now);
+    // console.bookings.cancel's `pending` refusal (FIX-W33-OTA): an undecided cancellation, or another one's DELETE in
+    // flight.
+    const staffCancellationPending = staffCancellationPendingOf(cancellationFacts);
     const syncStatus =
       refreshed ??
       storedConsoleSyncStatusOf({
@@ -360,11 +369,20 @@ export class ConsoleBookingsService {
           lastArrivalAt: booking.lastArrivalAt,
           segments: children.segments,
           lastRefreshAt: stored.lastRefreshAt,
-          // console.bookings.cancel's `pending` refusal (FIX-W33-OTA): an undecided cancellation, or another one's
-          // DELETE in flight.
-          cancellationPending: staffCancellationPendingOf(cancellationFacts),
+          cancellationPending: staffCancellationPending,
           now,
           can: (permission) => this.can(permission),
+        }),
+        // The API's own clock for a same-day void (lead decision (2a) of 2026-10-30): the OTA admin shows this.
+        cancellationMode: consoleCancellationModeOf({
+          status: booking.status,
+          amadeusOrderId: booking.amadeusOrderId,
+          segments: children.segments,
+          cancellationPending: staffCancellationPending,
+          ticketingStatus: booking.ticketingStatus,
+          tickets: children.tickets,
+          timeZone: settingsRow?.timeZone ?? FALLBACK_TIME_ZONE,
+          now,
         }),
       },
     );

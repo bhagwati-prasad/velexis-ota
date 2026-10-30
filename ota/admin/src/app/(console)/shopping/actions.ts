@@ -3,12 +3,13 @@
 // SDK's console namespace with the client `requireStaff` hands back (the staff token of the request, the service key,
 // the environment of the switch, the end-user headers).
 //
-// The two searches send each request once: their client has `maxRetries: 0` (`SHOPPING_SEARCH_RETRIES`, a client-level
-// SDK option), so a search that timed out at Amadeus (`504 SUPPLIER_TIMEOUT` after the API's 30 s) or met a `503` or
-// `429` is not sent to Amadeus again behind the staff member's back: they read "Search again" and decide (lead decision
-// (2d) of 2026-10-30, FIX-W34-OTA). The SDK would otherwise retry these POSTs (`x-idempotent-by-design`) twice, up to
-// three Amadeus searches and minutes of waiting for one click. The upsell and the quote of one offer, and every other
-// action of the admin, keep the SDK's default retries.
+// Every shopping call sends its request once: the four actions' client has `maxRetries: 0` (`SHOPPING_RETRIES`, a
+// client-level SDK option), so a call that timed out at Amadeus (`504 SUPPLIER_TIMEOUT` after the API's 30 s) or met a
+// `503` or `429` is not sent to Amadeus again behind the staff member's back: they read "Search again" (or "Try again")
+// and decide. The SDK would otherwise retry these POSTs (`x-idempotent-by-design`) twice, up to three Amadeus calls and
+// minutes of waiting for one click. The searches since lead decision (2d) of 2026-10-30 (FIX-W34-OTA), the Branded Fares
+// upsell and the price confirmation of one offer since lead decision (2b) of 2026-10-30, second batch (FIX-W35-OTA).
+// Every other action of the admin keeps the SDK's default retries.
 //
 //   searchOffers         console.amadeus.searchFlightOffers          Flight Offers Search POST
 //   searchAvailability   console.amadeus.searchFlightAvailabilities  Flight Availabilities Search (seats per class)
@@ -167,8 +168,11 @@ const OFFER_MAX_CHARACTERS = 200_000;
 const SHOPPING_TIMEOUT_MS = 60_000;
 /** The most Amadeus issues a failure lists. */
 const MAX_ISSUES = 10;
-/** The automatic retries of the searches' client: none, so a timed-out search reaches Amadeus once (FIX-W34-OTA). */
-const SHOPPING_SEARCH_RETRIES = 0;
+/**
+ * The automatic retries of every shopping call's client: none, so a timed-out search, upsell or price confirmation
+ * reaches Amadeus once (FIX-W34-OTA for the searches, FIX-W35-OTA for the upsell and the price confirmation).
+ */
+const SHOPPING_RETRIES = 0;
 
 const CABINS = ["ECONOMY", "PREMIUM_ECONOMY", "BUSINESS", "FIRST"] as const;
 
@@ -593,7 +597,7 @@ function staleOffer(): ShoppingFailure {
 
 /**
  * The staff context of an action, or the state of its refusal (a missing permission, a refused session); `options`
- * builds its console client (the searches: `maxRetries: 0`).
+ * builds its console client (every shopping call: `maxRetries: 0`).
  */
 async function shopper(
   options: StaffClientOptions = {},
@@ -613,7 +617,7 @@ async function shopper(
  * automatic retry).
  */
 export async function searchOffers(form: OfferSearchForm): Promise<OffersState> {
-  const staff = await shopper({ maxRetries: SHOPPING_SEARCH_RETRIES });
+  const staff = await shopper({ maxRetries: SHOPPING_RETRIES });
   if ("state" in staff) {
     return staff.state;
   }
@@ -636,7 +640,7 @@ export async function searchOffers(form: OfferSearchForm): Promise<OffersState> 
  * the open booking classes and their seats on the flights of one day, from the GDS. Sent once (no automatic retry).
  */
 export async function searchAvailability(form: AvailabilitySearchForm): Promise<AvailabilityState> {
-  const staff = await shopper({ maxRetries: SHOPPING_SEARCH_RETRIES });
+  const staff = await shopper({ maxRetries: SHOPPING_RETRIES });
   if ("state" in staff) {
     return staff.state;
   }
@@ -657,10 +661,10 @@ export async function searchAvailability(form: AvailabilitySearchForm): Promise<
 
 /**
  * "Branded fares" of an offer: Branded Fares Upsell (`console.amadeus.upsellAirOffers`) of the one offer, as the search
- * answered it. Net prices.
+ * answered it. Net prices. Sent once (no automatic retry).
  */
 export async function upsellOffer(request: OfferRequest): Promise<UpsellState> {
-  const staff = await shopper();
+  const staff = await shopper({ maxRetries: SHOPPING_RETRIES });
   if ("state" in staff) {
     return staff.state;
   }
@@ -686,10 +690,11 @@ export async function upsellOffer(request: OfferRequest): Promise<UpsellState> {
 
 /**
  * "Confirm price" of an offer: Flight Offers Price (`console.amadeus.quoteAirOffers`) of the one offer, with its bag
- * options and, when asked, the detailed fare rules. A read-only quote: nothing is stored or booked. Net prices.
+ * options and, when asked, the detailed fare rules. A read-only quote: nothing is stored or booked. Net prices. Sent
+ * once (no automatic retry).
  */
 export async function quoteOffer(request: QuoteRequest): Promise<QuoteState> {
-  const staff = await shopper();
+  const staff = await shopper({ maxRetries: SHOPPING_RETRIES });
   if ("state" in staff) {
     return staff.state;
   }

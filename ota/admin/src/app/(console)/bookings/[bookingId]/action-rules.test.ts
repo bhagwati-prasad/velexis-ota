@@ -1,10 +1,13 @@
 // What staff may still refund of a payment (action-rules.ts `refundableOf`; FIX-W32-OTA, lead decision (1h) of
 // 2026-10-28): captured less refunded less the refunds still on their way to Stripe, as the API counts it, on the
 // booking page and on the payment's own page alike.
+//
+// The cancel dialog's Amadeus step (`cancelPlanOf`, lead decision (2a) of 2026-10-30, FIX-W35-OTA): the API's own
+// `cancellationMode`, whatever the tickets' issue times look like in another zone, and no step without one.
 import type { ConsoleBooking, ConsolePayment } from "@velexis/ota-sdk";
 import { describe, expect, it } from "vitest";
 
-import { issuePlanOf, refundableOf, refundsInFlightOf } from "./action-rules";
+import { cancelPlanOf, issuePlanOf, refundableOf, refundsInFlightOf } from "./action-rules";
 
 const eur = (amount: string) => ({ amount, currency: "EUR" });
 
@@ -106,5 +109,49 @@ describe("issuePlanOf", () => {
       flightOfferIds: ["1"],
       charged: true,
     });
+  });
+});
+
+describe("cancelPlanOf: the API's cancellation mode (FIX-W35-OTA)", () => {
+  const DAY = 24 * 60 * 60_000;
+  /** A ticketed booking without payment whose one ticket was issued at `issuedAt`, with the API's `cancellationMode`. */
+  function ticketedBooking(
+    issuedAt: string,
+    cancellationMode: ConsoleBooking["cancellationMode"],
+  ): ConsoleBooking {
+    return {
+      tickets: [{ status: "ISSUED", issuedAt }],
+      payments: [],
+      totals: { currency: "EUR" },
+      ...(cancellationMode === undefined ? {} : { cancellationMode }),
+    } as unknown as ConsoleBooking;
+  }
+
+  it("[FIX-W35-OTA AC2] shows the step the API decided, not one computed from the tickets' issue times", () => {
+    const twoDaysAgo = new Date(Date.now() - 2 * DAY).toISOString();
+    const deadline = new Date(Date.now() + DAY).toISOString();
+    // The API's day (the storefront's zone) still has these tickets as today's: void, as the API says.
+    expect(
+      cancelPlanOf(ticketedBooking(twoDaysAgo, { mode: "void", voidDeadlineAt: deadline })).supplier,
+    ).toBe("void");
+    // And the other way round: tickets issued a moment ago that the API finds outside its void window.
+    const justNow = new Date().toISOString();
+    expect(
+      cancelPlanOf(ticketedBooking(justNow, { mode: "request_only", voidDeadlineAt: null })).supplier,
+    ).toBe("request_only");
+    expect(cancelPlanOf(ticketedBooking(justNow, { mode: "release", voidDeadlineAt: null })).supplier).toBe(
+      "release",
+    );
+  });
+
+  it("[FIX-W35-OTA AC2] names no step when the answer has no mode (null, or an answer from before the field)", () => {
+    const justNow = new Date().toISOString();
+    expect(cancelPlanOf(ticketedBooking(justNow, null))).toEqual({
+      supplier: null,
+      money: { kind: "none" },
+      modes: ["none"],
+      currency: "EUR",
+    });
+    expect(cancelPlanOf(ticketedBooking(justNow, undefined)).supplier).toBeNull();
   });
 });
