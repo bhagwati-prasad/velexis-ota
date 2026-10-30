@@ -1619,7 +1619,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - A `releasing` office returns to the pool only with the confirmation and a reason [PF-90].
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int supplier-connections`
 
-### PBE-055 · Implement Stripe Connect Standard OAuth
+### PBE-055 · Implement Stripe Connect Standard OAuth ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-043, PBE-041

@@ -4,15 +4,21 @@
 // statement descriptor rules (descriptor.ts, plain functions).
 //
 // - `PaymentConnectionsModule.forApi()` (AppModule) adds the portal's payment routes over PaymentConnectionsService:
-//   `listPaymentConnections` (PBE-027) and the descriptor update `updatePaymentConnection` (PBE-038); the M5 Connect
-//   Standard and API-key modes join it, and the Connect account events a worker part.
+//   `listPaymentConnections` (PBE-027) and the descriptor update `updatePaymentConnection` (PBE-038); and Connect
+//   Standard over StripeConnectService (`startStripeConnect`, `completeStripeConnect`, PBE-055), which calls Stripe
+//   through the StripeClient of common/stripe (tests replace it with the FakeStripe of test/support). The API-key mode
+//   joins it, and the Connect account events a worker part.
 //
-// It uses the global CommonModule (Clock, PLATFORM_DB) and RedisModule (the InvalidationPublisher), and AuditModule.
+// It uses the global CommonModule (Clock, ids, PLATFORM_DB) and RedisModule (the command client, the
+// InvalidationPublisher), and AuditModule.
 import { Module, type DynamicModule } from "@nestjs/common";
 import { AuditModule } from "../audit/audit.module";
+import { stripeClientProvider } from "../common/stripe/stripe.client";
 import { PaymentConnectionsController } from "./payment-connections.controller";
 import { PaymentConnectionsRepository } from "./payment-connections.repository";
 import { PaymentConnectionsService } from "./payment-connections.service";
+import { StripeConnectController } from "./stripe-connect.controller";
+import { StripeConnectService } from "./stripe-connect.service";
 
 @Module({
   imports: [AuditModule],
@@ -24,8 +30,8 @@ export class PaymentConnectionsModule {
   static forApi(): DynamicModule {
     return {
       module: PaymentConnectionsModule,
-      controllers: [PaymentConnectionsController],
-      providers: [PaymentConnectionsService],
+      controllers: [PaymentConnectionsController, StripeConnectController],
+      providers: [PaymentConnectionsService, StripeConnectService, stripeClientProvider],
     };
   }
 }

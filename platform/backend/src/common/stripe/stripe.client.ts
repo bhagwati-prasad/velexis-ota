@@ -68,6 +68,10 @@ export function idempotencyKey(purpose: string, rowId: string): string {
  * these.
  */
 export interface StripeApi {
+  // Connect Standard (Stripe payments flow §C, PBE-055): the OAuth code exchange (a POST with its idempotency key; the
+  // tokens it answers are discarded) and the connected account's capabilities.
+  readonly oauth: Pick<Stripe.OAuthResource, "token">;
+  readonly accounts: Pick<Stripe.AccountsResource, "retrieve">;
   readonly customers: Pick<Stripe.CustomersResource, "create" | "retrieve" | "search">;
   readonly checkout: { readonly sessions: Pick<Stripe.Checkout.SessionsResource, "create" | "retrieve"> };
   readonly billingPortal: { readonly sessions: Pick<Stripe.BillingPortal.SessionsResource, "create"> };

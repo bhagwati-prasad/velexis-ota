@@ -38,7 +38,8 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
 
   // PBE-041: the M5 tenant resources (go-live, custom domains, own Amadeus credentials, Stripe Connect and API keys,
   // the payout account and settlements, and invoices). createCheckoutSession and createCustomerPortalSession are bound
-  // since PBE-044, getPayoutAccount and setPayoutAccount since PBE-058.
+  // since PBE-044, getPayoutAccount and setPayoutAccount since PBE-058, startStripeConnect and completeStripeConnect
+  // since PBE-055.
   { operationId: "goLive", task: "PBE-061" },
   { operationId: "addDomain", task: "PBE-049" },
   { operationId: "removeDomain", task: "PBE-049" },
@@ -47,8 +48,6 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   { operationId: "requestLiveAmadeus", task: "PBE-054" },
   { operationId: "submitAmadeusCredentials", task: "PBE-053" },
   { operationId: "getCredentialSubmission", task: "PBE-052" },
-  { operationId: "startStripeConnect", task: "PBE-055" },
-  { operationId: "completeStripeConnect", task: "PBE-055" },
   { operationId: "submitStripeApiKeys", task: "PBE-057" },
   { operationId: "useVelexisPayments", task: "PBE-057" },
   { operationId: "listInvoices", task: "PBE-046" },

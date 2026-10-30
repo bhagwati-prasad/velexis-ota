@@ -9,11 +9,16 @@
 // (PBE-022, flows/stripe-payments-account.md §A step 1), and the portal's list, read without the ciphertext columns
 // (`listForTenant`, PBE-027), and the platform admin's switch of a connection's status (`lockForTenant` and
 // `setStatus`, PBE-030, `adminSetConnectionStatus`). M3 adds the portal's descriptor update (`tenantStatusForShare`,
-// `lockForTenant` and `setStatementDescriptorSuffix`, PBE-038); go-live's live row and the M5 modes (Connect Standard,
-// API keys) add their reads and writes.
+// `lockForTenant` and `setStatementDescriptorSuffix`, PBE-038); go-live's live row and the API-key mode add their reads
+// and writes. Connect Standard (PBE-055, flows/stripe-payments-account.md §C, PADR-0011 item 2) reads who starts it
+// and the OTA's state (`connectStarter`, `connectMember`, `tenantForShare`: the tenant, the membership and, for the
+// start only, the account, read only, as the operations' `x-platform-tables` say), finds an account connected to
+// another OTA (`connectedElsewhere`), and switches a locked row, or inserts a missing one, to `connect_standard` with
+// the OTA's `acct_…` and no key or secret (`applyConnectStandard`, `insertConnectStandard`).
 import { Inject, Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
+import { MEMBER_VISIBLE_TENANT_STATUSES } from "../common/auth/tenant-role.guard";
 import { PLATFORM_DB, type PlatformDb } from "../common/database";
 
 /** A `platform.payment_provider_connections` row as the platform reads it (with the ciphertexts: never answer it). */
@@ -71,6 +76,53 @@ export interface VelexisPaymentConnectionInsert {
   /** The account that set the mode up; `null` for provisioning. */
   readonly createdByAccountId: string | null;
   readonly now: Date;
+}
+
+/** What Stripe says of a connected account (`account.updated` refreshes it), as `capabilities` stores it. */
+export interface ConnectCapabilities {
+  readonly chargesEnabled: boolean;
+  readonly payoutsEnabled: boolean;
+  readonly detailsSubmitted: boolean;
+}
+
+/** The columns a Connect Standard connection gets (PADR-0011 item 2). */
+export interface ConnectStandardWrite {
+  /** `acct_…`: the OTA's own Stripe account (`payment_provider_connections_mode_ck`). */
+  readonly accountReference: string;
+  readonly capabilities: ConnectCapabilities;
+  /** `active` when the account can take charges, `pending` until `account.updated` says so. */
+  readonly status: "active" | "pending";
+  /** The owner or admin who connected it. */
+  readonly connectedByAccountId: string;
+  readonly now: Date;
+}
+
+/** A missing connection of `environment`, inserted in Connect Standard mode. */
+export interface ConnectStandardInsert extends ConnectStandardWrite {
+  /** `ppc_…`. */
+  readonly id: string;
+  readonly tenantId: string;
+  readonly environment: PaymentEnvironment;
+  readonly statementDescriptorSuffix: string | null;
+}
+
+/** A Connect OAuth's member: the account's active membership (`stf_…`) and role, and the OTA's status. */
+export interface ConnectMember {
+  readonly membership_id: string;
+  readonly role: string;
+  readonly tenant_status: string;
+}
+
+/** Who starts a Connect OAuth: the ConnectMember of the caller and the e-mail address. */
+export interface ConnectStarter extends ConnectMember {
+  readonly email: string;
+}
+
+/** The OTA of a Connect OAuth, read `FOR SHARE`. */
+export interface ConnectTenant {
+  readonly status: string;
+  /** `live` once the OTA went live: its live connection is switched too. */
+  readonly storefront_environment: string;
 }
 
 @Injectable()
@@ -210,5 +262,140 @@ export class PaymentConnectionsRepository {
       .where("id", "=", id)
       .returning(PAYMENT_CONNECTION_VIEW_COLUMNS)
       .executeTakeFirstOrThrow();
+  }
+
+  /**
+   * The account's **active** membership of `tenantId` (in a tenant members may see, as TenantRoleGuard reads it) with
+   * its role and the tenant's status (completeStripeConnect, which reads no account); `undefined` without such a
+   * membership. Read on the pool.
+   */
+  async connectMember(tenantId: string, accountId: string): Promise<ConnectMember | undefined> {
+    return this.memberOf(tenantId, accountId).executeTakeFirst();
+  }
+
+  /**
+   * The ConnectMember of the caller with the account's e-mail address, which startStripeConnect prefills Stripe's
+   * form with; `undefined` without such a membership. Read on the pool.
+   */
+  async connectStarter(tenantId: string, accountId: string): Promise<ConnectStarter | undefined> {
+    return this.memberOf(tenantId, accountId)
+      .innerJoin("platform.accounts as a", "a.id", "m.account_id")
+      .select("a.email")
+      .executeTakeFirst();
+  }
+
+  /**
+   * The status and storefront environment of the tenant `tenantId`, read in `trx` with `FOR SHARE` (the tenant first,
+   * then its connections, as `tenantStatusForShare`); `undefined` when there is no such tenant.
+   */
+  async tenantForShare(trx: PlatformTransaction, tenantId: string): Promise<ConnectTenant | undefined> {
+    return trx
+      .selectFrom("platform.tenants")
+      .select(["status", "storefront_environment"])
+      .where("id", "=", tenantId)
+      .forShare()
+      .executeTakeFirst();
+  }
+
+  /**
+   * The tenant whose `connect_standard` Stripe connection holds `accountReference`, when it is not `tenantId`; read on
+   * `db` (the pool, or the caller's transaction). One `acct_…` per OTA: Connect events are routed by `event.account`
+   * (PADR-0011 item 2, `payment_provider_connections_connect_uq`).
+   */
+  async connectedElsewhere(
+    accountReference: string,
+    tenantId: string,
+    db: PlatformDb | PlatformTransaction = this.db,
+  ): Promise<string | undefined> {
+    const row = await db
+      .selectFrom("platform.payment_provider_connections")
+      .select("tenant_id")
+      .where("provider", "=", STRIPE_PROVIDER)
+      .where("account_mode", "=", "connect_standard")
+      .where("account_reference", "=", accountReference)
+      .where("tenant_id", "<>", tenantId)
+      .orderBy("id")
+      .executeTakeFirst();
+    return row?.tenant_id;
+  }
+
+  /**
+   * Switches a connection locked by `lockForTenant` to Connect Standard in `trx` (flows/stripe-payments-account.md §C
+   * item 4): `account_mode = 'connect_standard'`, the `acct_…`, no publishable key, no secret and no key id (the
+   * storefront uses Velexis's publishable key with `stripeAccount`, the OTA backend Velexis's secret key with
+   * `Stripe-Account`), the capabilities, `connected_at`, no `disconnected_at` or `last_error`, the status, the account
+   * that set the mode up, `version + 1`. The row comes back without the ciphertexts.
+   */
+  async applyConnectStandard(
+    trx: PlatformTransaction,
+    id: string,
+    write: ConnectStandardWrite,
+  ): Promise<PaymentConnectionView> {
+    return trx
+      .updateTable("platform.payment_provider_connections")
+      .set((eb) => ({
+        account_mode: "connect_standard",
+        account_reference: write.accountReference,
+        publishable_key: null,
+        secret_ciphertext: null,
+        webhook_secret_ciphertext: null,
+        encryption_key_id: null,
+        capabilities: JSON.stringify(write.capabilities),
+        connected_at: write.now,
+        disconnected_at: null,
+        last_error: null,
+        status: write.status,
+        created_by_account_id: write.connectedByAccountId,
+        version: eb("version", "+", 1),
+        updated_at: write.now,
+      }))
+      .where("id", "=", id)
+      .returning(PAYMENT_CONNECTION_VIEW_COLUMNS)
+      .executeTakeFirstOrThrow();
+  }
+
+  /**
+   * Inserts the tenant's Stripe connection of an environment that has none yet, in Connect Standard mode, in `trx`:
+   * the columns of `applyConnectStandard`, `manual` capture and the default connection of the environment. The row
+   * comes back without the ciphertexts.
+   */
+  async insertConnectStandard(
+    trx: PlatformTransaction,
+    row: ConnectStandardInsert,
+  ): Promise<PaymentConnectionView> {
+    return trx
+      .insertInto("platform.payment_provider_connections")
+      .values({
+        id: row.id,
+        tenant_id: row.tenantId,
+        provider: STRIPE_PROVIDER,
+        environment: row.environment,
+        account_mode: "connect_standard",
+        account_reference: row.accountReference,
+        capture_mode: "manual",
+        is_default: true,
+        status: row.status,
+        statement_descriptor_suffix: row.statementDescriptorSuffix,
+        capabilities: JSON.stringify(row.capabilities),
+        connected_at: row.now,
+        created_by_account_id: row.connectedByAccountId,
+        created_at: row.now,
+        updated_at: row.now,
+      })
+      .returning(PAYMENT_CONNECTION_VIEW_COLUMNS)
+      .executeTakeFirstOrThrow();
+  }
+
+  /** The query of `connectMember`: the active membership of the account in a tenant its members may see. */
+  private memberOf(tenantId: string, accountId: string) {
+    return this.db
+      .selectFrom("platform.tenant_memberships as m")
+      .innerJoin("platform.tenants as t", "t.id", "m.tenant_id")
+      .select(["m.id as membership_id", "m.role", "t.status as tenant_status"])
+      .where("m.tenant_id", "=", tenantId)
+      .where("m.account_id", "=", accountId)
+      .where("m.status", "=", "active")
+      .where("t.status", "in", MEMBER_VISIBLE_TENANT_STATUSES)
+      .where("t.deleted_at", "is", null);
   }
 }

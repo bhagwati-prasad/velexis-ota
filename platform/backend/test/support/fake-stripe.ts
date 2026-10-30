@@ -36,7 +36,14 @@
 //   `created`, or makes one.
 // - **Calls** are recorded in order (`calls`, `callsOf(method)`) with the id, a copy of the parameters and the
 //   idempotency key, so a test asserts what the platform asked for, and that it asked for nothing (`calls` empty).
+// - **Connect OAuth** (`oauth.token`, PBE-055) exchanges a code that `grantConnectCode(code, {stripeUserId,
+//   livemode})` made, once: it needs an idempotency key (a POST), takes `grant_type: "authorization_code"` only, and
+//   answers Stripe's `OAuthToken` with the account id, the mode and fresh fake tokens (`grantConnectCode` returns them,
+//   so a test can look for them where they must never be). A code it does not hold, or one exchanged already, throws
+//   the SDK's `StripeInvalidGrantError` (400 `invalid_grant`) with Stripe's message, which names the code. The
+//   connected account itself is an `account` object put with `put`, read with `accounts.retrieve(id)`.
 // - `notConfigured()` makes `api()` throw StripeNotConfiguredError, as the application does without STRIPE_SECRET_KEY.
+import { randomBytes } from "node:crypto";
 import Stripe from "stripe";
 import {
   StripeClient,
@@ -46,6 +53,9 @@ import {
 
 /** The calls of StripeApi, as `<resource>.<method>`. */
 export const FAKE_STRIPE_METHODS = Object.freeze([
+  // Connect Standard (PBE-055).
+  "oauth.token",
+  "accounts.retrieve",
   "customers.create",
   "customers.retrieve",
   "customers.search",
@@ -85,6 +95,24 @@ export interface FakeStripeFailureOptions {
   /** Stripe stored the failure for the idempotency key: later calls with the key throw it again. */
   readonly storedForKey?: boolean;
 }
+
+/** What Stripe answers for a Connect OAuth code made with `grantConnectCode` (PBE-055). */
+export interface FakeConnectGrant {
+  /** `acct_…`: the account the person connected (`stripe_user_id`). */
+  readonly stripeUserId: string;
+  /** `livemode` of the answer: Stripe answers the mode of the platform key that exchanges the code. */
+  readonly livemode: boolean;
+}
+
+/** The tokens the fake hands out for a code: what the platform must discard, never store, log or answer. */
+export interface FakeConnectTokens {
+  readonly accessToken: string;
+  readonly refreshToken: string;
+  readonly publishableKey: string;
+}
+
+/** A code `grantConnectCode` made and not exchanged yet. */
+interface ConnectCode extends FakeConnectGrant, FakeConnectTokens {}
 
 /** A failure queued by `failNext`. */
 interface QueuedFailure extends FakeStripeFailureOptions {
@@ -144,6 +172,7 @@ export class FakeStripe extends StripeClient {
   private readonly objects = new Map<string, Json>();
   private readonly failures = new Map<FakeStripeMethod, QueuedFailure[]>();
   private readonly byIdempotencyKey = new Map<string, KeyRecord>();
+  private readonly connectCodes = new Map<string, ConnectCode>();
   private sequence = 0;
   private configured = true;
   private readonly resources: StripeApi;
@@ -151,6 +180,19 @@ export class FakeStripe extends StripeClient {
   constructor() {
     super();
     this.resources = {
+      oauth: {
+        token: (params: unknown, options?: unknown) =>
+          settle(() => this.oauthTokenNow(params, options)) as Promise<Stripe.OAuthToken>,
+      },
+      accounts: {
+        // The SDK also retrieves the platform's own account without an id; the platform always names the account.
+        retrieve: ((id: unknown, params?: unknown) =>
+          typeof id === "string"
+            ? this.retrieve<Stripe.Account>("accounts.retrieve", "account", id, params)
+            : Promise.reject(
+                new Error("FakeStripe: accounts.retrieve needs the id of a connected account"),
+              )) as StripeApi["accounts"]["retrieve"],
+      },
       customers: {
         create: (params?: unknown, options?: unknown) =>
           this.create<Stripe.Customer>("customers.create", params, options),
@@ -295,14 +337,65 @@ export class FakeStripe extends StripeClient {
     return this.calls.filter((call) => call.method === method);
   }
 
-  /** Forgets every call, object, failure and idempotency key. */
+  /**
+   * Makes `code` a Connect OAuth code that `oauth.token` exchanges once for `grant` (file header), and returns the
+   * tokens the exchange will hand out with it. A later grant of the same code replaces it.
+   */
+  grantConnectCode(code: string, grant: FakeConnectGrant): FakeConnectTokens {
+    const suffix = randomBytes(12).toString("hex");
+    const tokens: FakeConnectTokens = {
+      accessToken: `fake_connect_access_${suffix}`,
+      refreshToken: `fake_connect_refresh_${suffix}`,
+      publishableKey: `fake_connect_publishable_${suffix}`,
+    };
+    this.connectCodes.set(code, { ...grant, ...tokens });
+    return tokens;
+  }
+
+  /** Forgets every call, object, failure, idempotency key and Connect code. */
   reset(): this {
     this.calls.length = 0;
     this.objects.clear();
     this.failures.clear();
     this.byIdempotencyKey.clear();
+    this.connectCodes.clear();
     this.configured = true;
     return this;
+  }
+
+  /** `oauth.token`: exchanges a code of `grantConnectCode` once (file header). */
+  private oauthTokenNow(params: unknown, options: unknown): Stripe.Response<Stripe.OAuthToken> {
+    this.record("oauth.token", undefined, params, options);
+    const key = isRecord(options) ? options["idempotencyKey"] : undefined;
+    if (typeof key !== "string" || key.length === 0) {
+      throw new Error(
+        "FakeStripe: oauth.token without an idempotency key (every POST needs one, architecture §7)",
+      );
+    }
+    const query = isRecord(params) ? params : {};
+    if (query["grant_type"] !== "authorization_code") {
+      throw new Error("FakeStripe: oauth.token knows only grant_type authorization_code");
+    }
+    const code = query["code"];
+    const granted = typeof code === "string" ? this.connectCodes.get(code) : undefined;
+    if (typeof code !== "string" || granted === undefined) {
+      // Stripe's OAuth error, as the SDK throws it: its description names the code.
+      throw new Stripe.errors.StripeInvalidGrantError({
+        type: "invalid_grant",
+        message: `Authorization code does not exist: ${String(code)}`,
+        statusCode: 400,
+      });
+    }
+    this.connectCodes.delete(code);
+    return this.response<Stripe.OAuthToken>({
+      access_token: granted.accessToken,
+      livemode: granted.livemode,
+      refresh_token: granted.refreshToken,
+      scope: "read_write",
+      stripe_publishable_key: granted.publishableKey,
+      stripe_user_id: granted.stripeUserId,
+      token_type: "bearer",
+    });
   }
 
   /**
