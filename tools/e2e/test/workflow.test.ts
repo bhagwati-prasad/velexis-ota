@@ -160,6 +160,41 @@ describe(".github/workflows/e2e.yml", () => {
     );
   });
 
+  it("runs the SDK's smoke tests last, nightly and on demand, against the OTA backend with dev:seed's keys [SDK-014 AC1]", () => {
+    const index = steps.findIndex((step) => /--filter @velexis\/ota-sdk test:smoke/.test(step.run ?? ""));
+    const step = steps[index];
+    expect(step?.name).toContain("[SDK-014 AC1]");
+    // Never on a pull request, labelled or not; on the nightly schedule and on demand, with or without Stripe secrets.
+    expect(step?.if).toBe("github.event_name != 'pull_request'");
+    // After every Playwright run (they stop their stacks, so the API's and the stub's ports are free), before the upload.
+    const playwrightRuns = steps.flatMap((other, at) => (/pnpm test:e2e/.test(other.run ?? "") ? [at] : []));
+    expect(playwrightRuns.length).toBeGreaterThanOrEqual(3);
+    expect(index).toBeGreaterThan(Math.max(...playwrightRuns));
+    expect(index).toBeLessThan(
+      steps.findIndex((other) => other.uses?.startsWith("actions/upload-artifact@")),
+    );
+    const lines = (step?.run ?? "").trim().split("\n");
+    // The development values of the .env.example files, the database and seeds, the stub, both dev:seed commands, the API.
+    expect(lines[0]).toBe(
+      'for dir in . platform/backend ota/backend; do cp "$dir/.env.example" "$dir/.env.local"; done',
+    );
+    expect(lines).toContain('pnpm db:migrate > "$logs/db-migrate.log"');
+    expect(lines).toContain('node tools/amadeus-stub/dist/cli.js > "$logs/amadeus-stub.log" 2>&1 &');
+    expect(lines).toContain("node platform/backend/dist/cli.js dev:seed > /dev/null");
+    expect(lines).toContain('seed="$(node ota/backend/dist/cli.js dev:seed)"');
+    expect(lines).toContain('node ota/backend/dist/main.js > "$logs/ota-api.log" 2>&1 &');
+    // The processes stop with the step; their output goes where the upload step finds it.
+    expect(lines).toContain("logs=tools/e2e/test-results/sdk-smoke");
+    expect(lines).toContain("trap 'jobs -p | xargs -r kill' EXIT");
+    // The keys reach the tests in their environment only: no line prints the seed's output.
+    expect(lines.filter((line) => /\$seed/.test(line))).toEqual([
+      `SDK_SMOKE_PUBLISHABLE_KEY="$(printf '%s\\n' "$seed" | grep -Eo 'pk_test_[A-Za-z0-9]{40}')" \\`,
+      `  SDK_SMOKE_SECRET_KEY="$(printf '%s\\n' "$seed" | grep -Eo 'sk_test_[A-Za-z0-9]{40}')" \\`,
+    ]);
+    expect(lines.at(-1)).toBe("  pnpm --filter @velexis/ota-sdk test:smoke");
+    expect(runs.filter((run) => /test:smoke/.test(run))).toHaveLength(1);
+  });
+
   it("uploads traces, screenshots, the report and the stack's logs when a step fails [PFE-014 AC2]", () => {
     const upload = steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
     expect(upload?.if).toBe("failure()");

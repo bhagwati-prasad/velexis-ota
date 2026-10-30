@@ -2076,7 +2076,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - The size check passes with the printed size recorded in the PR.
 - **Verify:** `pnpm --filter @velexis/ota-sdk build && pnpm --filter @velexis/ota-sdk test`
 
-### SDK-014 · Add the nightly smoke tests against the local backend
+### SDK-014 · Add the nightly smoke tests against the local backend ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-sdk
 - **Milestone:** M4
 - **Depends on:** SDK-013, OBE-075

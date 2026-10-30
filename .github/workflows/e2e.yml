@@ -7,8 +7,9 @@
 # `platform-admin`, `storefront` (OFE-008) and `ota-admin` (OAD-016) Playwright projects in one run. The nightly run
 # also runs `portal-stripe` when the repository has the Stripe test secrets E2E_STRIPE_SECRET_KEY and
 # E2E_STRIPE_BILLING_WEBHOOK_SECRET (PADR-0017 item 4), and `storefront-stripe` (OFE-017) with the pinned Stripe CLI
-# when E2E_STRIPE_PUBLISHABLE_KEY exists too. When a step fails, the traces, screenshots, HTML report and the stack's
-# logs (tools/e2e/test-results/stack/) are uploaded as the artefact e2e-<run id>-<attempt>.
+# when E2E_STRIPE_PUBLISHABLE_KEY exists too. Nightly and on demand, the SDK's smoke tests (SDK-014) run last, against
+# the OTA backend started as in local development. When a step fails, the traces, screenshots, HTML report and the
+# stack's logs (tools/e2e/test-results/stack/, sdk-smoke/) are uploaded as the artefact e2e-<run id>-<attempt>.
 # Agents never change this file to get their own change through (AGENTS.md §7). Third-party actions are pinned to full
 # commit SHAs with the tag as the last thing in the comment (tools/ci/check-package-json.mjs, ADR-0023).
 name: E2E
@@ -143,6 +144,32 @@ jobs:
           mkdir -p "$RUNNER_TEMP/stripe-cli"
           tar -xzf "$RUNNER_TEMP/stripe.tgz" -C "$RUNNER_TEMP/stripe-cli" stripe
           E2E_STRIPE_CLI="$RUNNER_TEMP/stripe-cli/stripe" pnpm test:e2e -- --project=storefront-stripe
+
+      # The SDK's smoke tests (ota/sdk/README.md §8.1) once the Playwright stacks above have stopped: the OTA backend
+      # as ota/backend/README.md §6 starts it (the development values of the .env.example files, the job's database
+      # `velexis`, the Amadeus stub, both dev:seed commands, the API). The two test keys the OTA's dev:seed prints go
+      # to the tests in their environment, never to the log; the processes' output goes to
+      # tools/e2e/test-results/sdk-smoke/.
+      - name: "[SDK-014 AC1] SDK smoke tests in token and server mode (nightly and on demand)"
+        if: github.event_name != 'pull_request'
+        env:
+          LOG_LEVEL: info
+        run: |
+          for dir in . platform/backend ota/backend; do cp "$dir/.env.example" "$dir/.env.local"; done
+          logs=tools/e2e/test-results/sdk-smoke
+          mkdir -p "$logs"
+          trap 'jobs -p | xargs -r kill' EXIT
+          pnpm db:migrate > "$logs/db-migrate.log"
+          pnpm db:seed:reference > "$logs/db-seed-reference.log"
+          node tools/amadeus-stub/dist/cli.js > "$logs/amadeus-stub.log" 2>&1 &
+          timeout 60 sh -c 'until curl -s -o /dev/null http://127.0.0.1:4900/; do sleep 1; done'
+          node platform/backend/dist/cli.js dev:seed > /dev/null
+          seed="$(node ota/backend/dist/cli.js dev:seed)"
+          node ota/backend/dist/main.js > "$logs/ota-api.log" 2>&1 &
+          timeout 60 sh -c 'until curl -fs -o /dev/null http://127.0.0.1:4000/health/ready; do sleep 1; done'
+          SDK_SMOKE_PUBLISHABLE_KEY="$(printf '%s\n' "$seed" | grep -Eo 'pk_test_[A-Za-z0-9]{40}')" \
+            SDK_SMOKE_SECRET_KEY="$(printf '%s\n' "$seed" | grep -Eo 'sk_test_[A-Za-z0-9]{40}')" \
+            pnpm --filter @velexis/ota-sdk test:smoke
 
       - name: Upload traces, screenshots, the report and the stack's logs
         if: failure()
