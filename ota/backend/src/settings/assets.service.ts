@@ -1,8 +1,10 @@
 // The storefront assets (OBE-071; api-changes part 2 §2.5 and §4.2, OADR-0012 points 2 and 3, ADR-0018): the images
 // staff upload for the storefront (logos, favicon, Open Graph image, page images), console.settings.assets.list,
-// upload and delete (`settings:read` / `settings:write`), and the public image URL getPublicAsset. One set per OTA,
-// shared by the test and live environments; the rows through the storefront context's repository and `TenantTx`, the
-// files through the StorageAdapter (ADR-0017) under the tenant's own `tenant_<key>/assets/`.
+// upload and delete (`settings:read` / `settings:write`). One set per OTA, shared by the test and live environments;
+// the rows through the storefront context's repository and `TenantTx`, the files through the StorageAdapter
+// (ADR-0017) under the tenant's own `tenant_<key>/assets/`. Their public image URL getPublicAsset is the storefront
+// context's (storefront/public-assets.service.ts), which imports nothing of this module (lead decision (2a) of
+// 2026-10-30, FIX-W34-OTA).
 //
 // upload, in order (each refusal before anything is written):
 //
@@ -43,13 +45,7 @@
 // list: newest first (`created_at`, then `id`), `kind` when given, a keyset cursor bound to the kind filter (`400
 // VALIDATION_FAILED` at `/query/cursor` for another list's), `limit` 1 to 100 (20).
 //
-// getPublicAsset (`publicFile`): the path's tenant key chooses the OTA, whatever credential comes with the request
-// (the tenant guard leaves this operation alone): read through the platform cache, served while `active` or
-// `suspended` (a suspended storefront's maintenance page still shows its logo); the asset row in that tenant's schema
-// (`TenantContext.run`, `TenantTx`), its extension the path's; the file read from storage, checked to lie under the
-// tenant's `assets/` and against `content_hash` (a mismatch is `500` and an error line, never the bytes). Anything
-// unknown is `404 NOT_FOUND`. The controller sets the headers. Log lines carry ids and reasons, never a file name or
-// bytes.
+// Log lines carry ids and reasons, never a file name or bytes.
 import { createHash } from "node:crypto";
 import { Inject, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
@@ -75,8 +71,7 @@ import {
   type ListedAssetRow,
   type StoredAssetRow,
 } from "../storefront/storefront.repository";
-import { PlatformCache } from "../tenancy/platform-cache";
-import { TenantContext, type RequestTenant } from "../tenancy/tenant-context";
+import { TenantContext } from "../tenancy/tenant-context";
 import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
 import { sniffImage, type SniffedImage } from "./image-sniffer";
 
@@ -113,9 +108,6 @@ export const ASSET_KINDS = Object.freeze([
 /** The kinds whose dimensions are limited: the logos. */
 const LOGO_KINDS: ReadonlySet<string> = new Set(["logo", "logo_dark", "logo_square"]);
 
-/** The tenant statuses whose images are served: a suspended storefront still shows its logo. */
-const SERVED_STATUSES: ReadonlySet<string> = new Set(["active", "suspended"]);
-
 /** The longest file name kept (`storefront_assets.file_name`). */
 const MAX_FILE_NAME = 200;
 
@@ -131,12 +123,6 @@ export interface AssetUploadRequest {
   /** The name to show, when the parts give one (`fileName`, else the file part's); else `<kind>.<ext>`. */
   readonly fileName: string | undefined;
   readonly bytes: Buffer;
-}
-
-/** A file's bytes and the type they carry, for getPublicAsset. */
-export interface PublicAssetFile {
-  readonly bytes: Buffer;
-  readonly contentType: string;
 }
 
 const sha256 = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
@@ -327,7 +313,6 @@ export class AssetsService {
     private readonly repository: StorefrontRepository,
     private readonly writer: StaffActionsWriter,
     private readonly ids: IdGenerator,
-    private readonly cache: PlatformCache,
     @Inject(DOCUMENT_STORAGE) private readonly storage: StorageAdapter,
     config: ConfigService<ApiConfig, true>,
     @InjectPinoLogger(AssetsService.name) private readonly logger: PinoLogger,
@@ -496,50 +481,6 @@ export class AssetsService {
     // Last: an upload of the same image waits for this row's storage key and stores its file after the removal.
     await this.storage.delete(row.storageKey);
     return row;
-  }
-
-  // ---- getPublicAsset ---------------------------------------------------------------------------------------------
-
-  /** The file of the public URL `/v1/assets/<tenantKey>/<assetId>.<ext>` (see the file header). */
-  async publicFile(tenantKey: string, assetId: string, extension: string): Promise<PublicAssetFile> {
-    const platform = await this.cache.tenantByKey(tenantKey);
-    if (platform === null || !SERVED_STATUSES.has(platform.status)) {
-      this.logger.info(
-        { assetId, reason: platform === null ? "tenant_unknown" : "tenant_not_served" },
-        "assets.public_refused",
-      );
-      throw new AppError("NOT_FOUND");
-    }
-    const tenant: RequestTenant = {
-      tenantId: platform.id,
-      key: platform.key,
-      schemaName: platform.schemaName,
-      environment: platform.storefrontEnvironment,
-      caller: { type: "anonymous", id: "anonymous" },
-      actor: { type: "guest", id: null },
-      requestId: this.tenants.requestId() ?? "",
-    };
-    const row = await this.tenants.run(tenant, () =>
-      this.tx.run((trx) => this.repository.assetById(trx, assetId)),
-    );
-    if (row === undefined || row.fileExtension !== extension) {
-      this.logger.info({ assetId, reason: "no_asset" }, "assets.public_refused");
-      throw new AppError("NOT_FOUND");
-    }
-    if (!row.storageKey.startsWith(`${platform.schemaName}/assets/`)) {
-      this.logger.error({ assetId, tenantId: platform.id }, "assets.foreign_storage_key");
-      throw new AppError("NOT_FOUND");
-    }
-    const bytes = await this.storage.get(row.storageKey);
-    if (bytes === null) {
-      this.logger.warn({ assetId, tenantId: platform.id }, "assets.file_missing");
-      throw new AppError("NOT_FOUND");
-    }
-    if (sha256(bytes) !== row.contentHash) {
-      this.logger.error({ assetId, tenantId: platform.id }, "assets.file_corrupt");
-      throw new AppError("INTERNAL_ERROR");
-    }
-    return { bytes, contentType: row.contentType };
   }
 }
 

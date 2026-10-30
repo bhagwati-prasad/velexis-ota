@@ -23,6 +23,7 @@
 //   await bookAirlineCardTrip(edge, { …, completionScenario: "ticketing-failed" });  // left in manual review
 //   const order = await createStubOrder({ officeId, … });            // an Amadeus order made outside Velexis
 //   await openConsoleFromPortal(page, owned.ota.id);                 // portal → "Open console" → /bookings
+//   await waitPastMidnight(await bookingDayTimeZones(owned));       // never book in the 3 minutes before its midnight
 //
 // Tenant data goes through `tenantTx` of @velexis/db as velexis_ota_app, the OTA backend's own role, never through
 // schema-qualified SQL or a session-level search_path (ADR-0004). The platform row of the suspended OTA is written as
@@ -1290,4 +1291,92 @@ export async function openConsoleFromPortal(page: Page, tenantId: string): Promi
     .getByRole("button", { name: /^Open console/ })
     .click();
   await page.waitForURL(`${OTA_ADMIN_URL}/bookings`);
+}
+
+// ---- The OTA's day (lead decision (2g) of 2026-10-30, FIX-W34-OTA) ---------------------------------------------------
+//
+// A journey that books and later voids "the tickets issued today" must not book just before midnight in the OTA's time
+// zone: the void step would run on the next day and find tickets of yesterday. Two clocks decide "today": the OTA
+// admin's cancel dialog reads the OTA's time zone of `console.auth.me` (`platform.tenants.time_zone`, the `timeZone` of
+// the platform's Tenant; Europe/Oslo for the OTAs of `otaInput`), and the API's cancellation reads
+// `storefront_settings.time_zone` (seeded `UTC` by the OTA's provisioning). `bookingDayTimeZones` reads both from the
+// stack, and `waitPastMidnight` waits, by polling the clock, until 00:00:05 of the new day when the journey would book
+// within 3 minutes before midnight in any of them.
+
+/** How long before an OTA's midnight a journey waits for the new day before it books. */
+export const MIDNIGHT_GUARD_MS = 3 * 60_000;
+/** How far past midnight it wakes: 00:00:05, so the API, the admin and the test runner agree on the day. */
+export const PAST_MIDNIGHT_MS = 5_000;
+/** How often `waitPastMidnight` reads the clock. */
+const MIDNIGHT_POLL_MS = 1_000;
+/**
+ * What `waitPastMidnight` can take at most, for the budget of the hook that calls it: the 3 minutes of the guard, the
+ * 5 seconds past midnight, and a poll interval and a few seconds for a busy runner.
+ */
+export const MIDNIGHT_WAIT_BUDGET_MS = MIDNIGHT_GUARD_MS + PAST_MIDNIGHT_MS + MIDNIGHT_POLL_MS + 4_000;
+
+/** The milliseconds since the last local midnight in `timeZone` at `now` (a `RangeError` for an unknown zone). */
+function msIntoLocalDay(now: Date, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    hourCycle: "h23",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(now);
+  const part = (type: Intl.DateTimeFormatPartTypes): number =>
+    Number(parts.find((entry) => entry.type === type)?.value);
+  return ((part("hour") * 60 + part("minute")) * 60 + part("second")) * 1_000 + now.getUTCMilliseconds();
+}
+
+/**
+ * How long a journey that books at `now` waits so that its bookings and a void later in the journey fall on one day in
+ * every zone of `timeZones`: 0 when `now` is more than 3 minutes (`MIDNIGHT_GUARD_MS`) before the next midnight of each
+ * zone, otherwise until 00:00:05 (`PAST_MIDNIGHT_MS`) of the new day there (the latest such moment of the zones). A day
+ * is 24 hours: none of the zones the stack uses changes its clocks around midnight. Pure: the caller passes `now`.
+ */
+export function msUntilPastMidnight(now: Date, timeZones: readonly string[]): number {
+  const day = 24 * 60 * 60 * 1_000;
+  let waitMs = 0;
+  for (const timeZone of timeZones) {
+    const untilMidnight = day - msIntoLocalDay(now, timeZone);
+    if (untilMidnight <= MIDNIGHT_GUARD_MS) {
+      waitMs = Math.max(waitMs, untilMidnight + PAST_MIDNIGHT_MS);
+    }
+  }
+  return waitMs;
+}
+
+/**
+ * The time zones that decide "issued today" for `owned`'s bookings: the OTA's (`platform.tenants.time_zone`, as the
+ * OTA admin's cancel dialog reads it) and its storefront settings' (`storefront_settings.time_zone`, as the API's
+ * cancellation reads it), each once.
+ */
+export async function bookingDayTimeZones(owned: OwnedOta): Promise<string[]> {
+  const settings = await withTenantTx(owned.schema, (trx) =>
+    trx.selectFrom("storefront_settings").select("time_zone").executeTakeFirstOrThrow(),
+  );
+  return [...new Set([owned.ota.timeZone, settings.time_zone])];
+}
+
+/**
+ * Waits, by polling the clock (`MIDNIGHT_POLL_MS`), until `msUntilPastMidnight` lets the journey book: at once outside
+ * the 3 minutes before a midnight of `timeZones`, else until 00:00:05 of the new day. The calling hook's budget includes
+ * `MIDNIGHT_WAIT_BUDGET_MS`.
+ */
+export async function waitPastMidnight(timeZones: readonly string[]): Promise<void> {
+  for (;;) {
+    const waitMs = msUntilPastMidnight(new Date(), timeZones);
+    if (waitMs === 0) {
+      return;
+    }
+    const wakeAt = Date.now() + waitMs;
+    await expect
+      .poll(() => Date.now() >= wakeAt, {
+        message: `waiting until 00:00:05 of the new day in ${timeZones.join(", ")}`,
+        timeout: waitMs + MIDNIGHT_POLL_MS * 2,
+        intervals: [MIDNIGHT_POLL_MS],
+      })
+      .toBe(true);
+  }
 }

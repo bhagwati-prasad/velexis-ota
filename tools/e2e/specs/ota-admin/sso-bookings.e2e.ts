@@ -10,12 +10,21 @@
 //
 // The two bookings are airline-card bookings, made in `beforeAll` through the OTA API as the OTA's storefront edge
 // (`EdgeApi` of support/ota.ts: no preview serves this OTA's host, and the airline card needs no Stripe), with the
-// airline card switched on for its test storefront first. The first one's completion carries the Amadeus stub's
+// airline card switched on for its test storefront first, and never in the 3 minutes before the OTA's midnight (below).
+// The first one's completion carries the Amadeus stub's
 // `ticketing-failed` scenario: the airline creates the order but issues no ticket, the card cannot be used again, and
 // the booking waits in `manual_review` for the staff, who issue it with the OTA's own settlement (ACCOUNT), never a card
 // (OADR-0018 point 8); the airline charged nothing, so the API counts it as unpaid and the owner issues it with
 // `allowUnpaid` (console-operations.md §2 step 8). The second one is ticketed at its completion, so its tickets are of
 // today and Amadeus voids them.
+//
+// The OTA's midnight (lead decision (2g) of 2026-10-30, FIX-W34-OTA). The cancel step runs a minute or two after the
+// bookings and expects the void of tickets issued today: booked just before midnight, it would run on the next day and
+// find tickets of yesterday (a request to the airline, no void). So when `beforeAll` reaches the bookings within 3
+// minutes before midnight in a time zone that decides "today" (the OTA's, which the cancel dialog reads, and its
+// storefront settings', which the API's cancellation reads: `bookingDayTimeZones` reads both from the stack, the OTA's
+// is Europe/Oslo), it waits until 00:00:05 of the new day by polling the clock (`waitPastMidnight`), within the hook's
+// budget. The assertions stay as they are.
 //
 // "Cancel with a full refund" for an airline-card booking. The airline charged the traveller's card, so no money goes
 // back through Velexis: the cancel dialog offers "No refund from the console" alone (`refund_via_airline`; a `full`
@@ -35,7 +44,9 @@ import { addSessionCookies, expect, newAccountContext, test, uniqueTestIp } from
 import { uniqueEmail } from "../../support/mailpit";
 import {
   bookAirlineCardTrip,
+  bookingDayTimeZones,
   EdgeApi,
+  MIDNIGHT_WAIT_BUDGET_MS,
   newOwnerWithActiveOta,
   openConsoleFromPortal,
   portalOtaPath,
@@ -43,6 +54,7 @@ import {
   STAFF_COOKIES,
   switchAirlineCardOn,
   withTenantTx,
+  waitPastMidnight,
   type OwnedOta,
   type SeededBooking,
 } from "../../support/ota";
@@ -118,10 +130,14 @@ test.beforeAll(async ({ browser }) => {
     );
   }
   // Budget: a sign-up with its verification e-mail (up to 15 s), the OTA's set-up on the OTA worker (about 2 s locally;
-  // PF-11 allows a minute) and two bookings through the OTA API and the stub (a second or two each).
-  test.setTimeout(120_000);
+  // PF-11 allows a minute) and two bookings through the OTA API and the stub (a second or two each): 120 s; plus, when
+  // the bookings would fall in the 3 minutes before the OTA's midnight, the wait until 00:00:05 of the new day
+  // (MIDNIGHT_WAIT_BUDGET_MS: the 3 minutes, the 5 seconds and a few seconds of polling, about 190 s).
+  test.setTimeout(120_000 + MIDNIGHT_WAIT_BUDGET_MS);
   owned = await newOwnerWithActiveOta("Olga Console", "sso");
   await switchAirlineCardOn(owned.schema);
+  // Never book in the 3 minutes before midnight where "today" is decided: the cancel step voids today's tickets.
+  await waitPastMidnight(await bookingDayTimeZones(owned));
   const edge = new EdgeApi(owned.storefrontHost, uniqueTestIp());
   manualReview = await bookAirlineCardTrip(edge, {
     daysAhead: 52,

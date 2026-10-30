@@ -14,6 +14,10 @@
 // - Server components never refresh (they cannot write cookies): their client has the access token only, and
 //   `getStaff()` sends an expired session to `/auth/refresh`. Refreshes go through `refreshStaffSession`, which is
 //   de-duplicated per refresh token (lib/refresh-dedup.ts).
+// - Retries are the SDK's default (2 for an idempotent request on 429, 503, 504 and network errors) for every caller
+//   but staff shopping: its search actions ask for a client with `maxRetries: 0` (`ConsoleClientInput.maxRetries`, a
+//   client-level SDK option), so a search that timed out at Amadeus (`504 SUPPLIER_TIMEOUT`) reaches Amadeus once
+//   (lead decision (2d) of 2026-10-30, FIX-W34-OTA; README §7).
 import "server-only";
 
 import { createLogger, type Logger } from "@velexis/logger";
@@ -93,6 +97,11 @@ export interface ConsoleClientInput {
   readonly environment: StaffEnvironment;
   /** The incoming request's headers, for the end-user headers. */
   readonly incoming: IncomingHeaders;
+  /**
+   * The client's automatic retries (`VelexisClientOptions.maxRetries`); absent for the SDK's default. Staff shopping's
+   * searches pass `0` (`SHOPPING_SEARCH_RETRIES` of the shopping actions), every other caller leaves it out.
+   */
+  readonly maxRetries?: number;
 }
 
 /** Replacements for tests (OADR-0018 point 10: a fake `fetch` in the real SDK) and for the de-duplication. */
@@ -132,8 +141,9 @@ function logResponse(logger: Logger): ResponseHook {
 
 /**
  * A server-mode console client for one request: the service key, the OTA API on loopback, the staff access token,
- * `sessionKind: "staff"`, the environment, the end-user headers and the response log. It never gets a refresh token
- * (refreshes go through `refreshStaffSession`).
+ * `sessionKind: "staff"`, the environment, the end-user headers and the response log, and `maxRetries` when the
+ * caller gives one (else the SDK's default). It never gets a refresh token (refreshes go through
+ * `refreshStaffSession`).
  */
 export function createConsoleClient(input: ConsoleClientInput, deps: ConsoleClientDeps = {}): ConsoleApi {
   const config = getConfig();
@@ -145,6 +155,7 @@ export function createConsoleClient(input: ConsoleClientInput, deps: ConsoleClie
     headers: endUserHeaders(input.incoming),
     onResponse: logResponse(deps.logger ?? sdkLogger()),
     ...(input.accessToken === null ? {} : { accessToken: input.accessToken }),
+    ...(input.maxRetries === undefined ? {} : { maxRetries: input.maxRetries }),
     ...(deps.fetch === undefined ? {} : { fetch: deps.fetch }),
   };
   return createVelexisClient(options).console;

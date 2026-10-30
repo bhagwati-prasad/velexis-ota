@@ -448,6 +448,31 @@ describe("/settings/markups/[id] and /settings/fees/[id]", () => {
     });
   });
 
+  it("[FIX-W34-OTA AC3] posts the default rule's rendered form as it is: no priority, state or window, a changed percentage alone", async () => {
+    signedIn("owner");
+    api.on(`GET ${MARKUPS}/${DEFAULT_ID}`, () => ruleAnswer(DEFAULT_RULE));
+    api.on(`PATCH ${MARKUPS}/${DEFAULT_ID}`, () =>
+      ruleAnswer({ ...DEFAULT_RULE, percentage: "1.5000", version: 2 }),
+    );
+    const form = within(await markupPage(DEFAULT_ID)).getByRole("form") as HTMLFormElement;
+    for (const name of ["priority", "isActive", "activeFrom", "activeUntil"]) {
+      expect([name, form.querySelector(`[name="${name}"]`)]).toEqual([name, null]);
+    }
+
+    // The missing active checkbox is not "switched off": an untouched form saves nothing.
+    expect(await updateMarkupRule(INITIAL_ACTION_STATE, formDataOf(form))).toEqual({
+      ok: true,
+      message: "Nothing to save: the rule is as shown.",
+    });
+    expect(api.sent(`PATCH ${MARKUPS}/${DEFAULT_ID}`)).toEqual([]);
+
+    inputOf(form, "percentage").value = "1.5";
+    expect(await updateMarkupRule(INITIAL_ACTION_STATE, formDataOf(form))).toMatchObject({ ok: true });
+    const sent = only(`PATCH ${MARKUPS}/${DEFAULT_ID}`);
+    expect(sent.headers.get("If-Match")).toBe('"1"');
+    expect(sent.body).toEqual({ percentage: "1.5" });
+  });
+
   it("[OAD-013 AC2] posts a fee rule's rendered form: its type, card brands and refundable flag as stored", async () => {
     signedIn("admin");
     api.on(`GET ${FEES}/${FEE_ID}`, () => ruleAnswer(feeRule()));

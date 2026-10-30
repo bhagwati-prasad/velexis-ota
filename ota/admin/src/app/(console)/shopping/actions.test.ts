@@ -23,6 +23,11 @@ const nextHeaders = vi.hoisted(() => ({ cookies: vi.fn(), headers: vi.fn() }));
 vi.mock("@/config", () => ({ getConfig: () => TEST_CONFIG }));
 vi.mock("next/headers", () => nextHeaders);
 vi.mock("next/navigation", () => ({ redirect: vi.fn(fakeRedirect) }));
+// The real client factory, watched: which clients `requireStaff` builds, with which retries (FIX-W34-OTA).
+vi.mock("@/lib/velexis", async (importOriginal) => {
+  const actual = await importOriginal<typeof VelexisModule>();
+  return { ...actual, createConsoleClient: vi.fn(actual.createConsoleClient) };
+});
 
 import {
   ENVIRONMENT_COOKIE,
@@ -30,6 +35,8 @@ import {
   STAFF_REFRESH_TOKEN_COOKIE,
   TENANT_COOKIE,
 } from "@/lib/session";
+import { createConsoleClient } from "@/lib/velexis";
+import type * as VelexisModule from "@/lib/velexis";
 
 import {
   quoteOffer,
@@ -222,6 +229,7 @@ beforeAll(async () => {
 }, 30_000); // A hook budget for the cold start above, never a test's own timeout.
 
 beforeEach(() => {
+  vi.mocked(createConsoleClient).mockClear();
   api = fakeOtaApi();
   vi.stubGlobal("fetch", api.fetch);
   nextHeaders.headers.mockResolvedValue(
@@ -658,5 +666,66 @@ describe("every shopping action", () => {
       message: "No Amadeus connection is active for this environment. Set it up in the portal.",
       requestId: "req_fake_1",
     });
+  });
+});
+
+// ---- Retries (lead decision (2d) of 2026-10-30) ----------------------------------------------------------------------------
+
+describe("the retries of the shopping actions", () => {
+  /** The `maxRetries` of each console client the action built, in order (`undefined`: the SDK's default). */
+  function clientRetries(): (number | undefined)[] {
+    return vi.mocked(createConsoleClient).mock.calls.map(([input]) => input.maxRetries);
+  }
+
+  it("[FIX-W34-OTA AC2] builds the searches' client with maxRetries 0, console.auth.me's with the SDK default", async () => {
+    signedIn("agent");
+
+    expect((await searchOffers(offerForm())).ok).toBe(true);
+    // `requireStaff`'s client for console.auth.me first, then the search's own.
+    expect(clientRetries()).toEqual([undefined, 0]);
+    vi.mocked(createConsoleClient).mockClear();
+
+    expect((await searchAvailability(availabilityForm())).ok).toBe(true);
+    expect(clientRetries()).toEqual([undefined, 0]);
+    vi.mocked(createConsoleClient).mockClear();
+
+    // The upsell and the quote of one offer keep the default: one client, also for console.auth.me.
+    expect((await upsellOffer({ offer: OFFER, reason: "" })).ok).toBe(true);
+    expect((await quoteOffer({ offer: OFFER, reason: "", fareRules: false })).ok).toBe(true);
+    expect(clientRetries()).toEqual([undefined, undefined]);
+  });
+
+  it("[FIX-W34-OTA AC2] sends a search that timed out at Amadeus once: its 504 SUPPLIER_TIMEOUT reaches the API once", async () => {
+    signedIn("agent");
+    // No `Retry-After` at all: the SDK's default would retry the 504 twice after its back-off.
+    api.on(OFFERS, () => apiError("SUPPLIER_TIMEOUT", 504));
+    api.on(AVAILABILITY, () => apiError("SUPPLIER_TIMEOUT", 504));
+
+    expect(await searchOffers(offerForm())).toMatchObject({
+      ok: false,
+      code: "SUPPLIER_TIMEOUT",
+      message: "Amadeus did not answer in time. Search again.",
+    });
+    expect(await searchAvailability(availabilityForm())).toMatchObject({
+      ok: false,
+      code: "SUPPLIER_TIMEOUT",
+      message: "Amadeus did not answer in time. Search again.",
+    });
+
+    expect(api.sent(OFFERS)).toHaveLength(1);
+    expect(api.sent(AVAILABILITY)).toHaveLength(1);
+  });
+
+  it("[FIX-W34-OTA AC2] keeps the SDK's default elsewhere: the quote's 504 is sent again twice", async () => {
+    signedIn("agent");
+    // `Retry-After: 0`: the default retries go out at once instead of after the back-off.
+    api.on(PRICING, () => apiError("SUPPLIER_TIMEOUT", 504, {}, { "Retry-After": "0" }));
+
+    expect(await quoteOffer({ offer: OFFER, reason: "", fareRules: false })).toMatchObject({
+      ok: false,
+      code: "SUPPLIER_TIMEOUT",
+    });
+
+    expect(api.sent(PRICING)).toHaveLength(3);
   });
 });

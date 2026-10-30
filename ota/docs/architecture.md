@@ -81,7 +81,7 @@ flowchart TB
   payments --> tenancy
 ```
 
-Rules: controllers call one service method; services own transactions; only `amadeus`, `payments` (gateways), `notifications` (mailer) and `documents` (storage) talk to the outside ([`conventions.md` §2](../../docs/mvp/conventions.md#rules)). Arrows never point from `amadeus` or `payments` back to business modules.
+Rules: controllers call one service method; services own transactions; only `amadeus`, `payments` (gateways), `notifications` (mailer) and `documents` (storage) talk to the outside ([`conventions.md` §2](../../docs/mvp/conventions.md#rules)). Arrows never point from `amadeus` or `payments` back to business modules, nor from `storefront` to `settings`: the settings context edits what the storefront reads, and the storefront's public reads (`getPublicAsset`, the content pages) have services of their own in `src/storefront` (lead decision (2a) of 2026-10-30, FIX-W34-OTA; a source scan, `src/storefront/module-direction.test.ts`, guards it).
 
 ## 3. Request pipeline
 
@@ -144,7 +144,7 @@ The OTA backend signs with its own Ed25519 key (`JWT_PRIVATE_KEY_FILE`) and `kid
 | Amadeus Enterprise | `amadeus` | 12 operations over `fetch`; credentials per connection (Velexis shared account office or OTA-owned); encrypted token cache; token buckets per credential set and per tenant; per-operation timeouts; retries only for reads and token requests | [OADR-0001](adr/0001-amadeus-client-design.md), [`flows/amadeus-connection-and-tokens.md`](flows/amadeus-connection-and-tokens.md) |
 | Stripe | `payments` | PaymentIntents with manual capture; account modes `velexis` (M3), `connect_standard`, `api_keys` (M5); webhooks verified on the raw body, stored as `payment_events`, processed in `ota-stripe-events` | [OADR-0010](adr/0010-stripe-gateway-and-payment-webhooks.md), [ADR-0011](../../docs/mvp/adr/0011-payments-stripe-and-airline-card.md) |
 | SMTP | `notifications` | Nodemailer from the worker only; Mailpit in development | [ADR-0017](../../docs/mvp/adr/0017-email-documents-storage.md) |
-| Storage | `documents`, `settings` | `StorageAdapter` (local disk), keys `tenant_<key>/…`, HMAC-signed URLs for documents, immutable public URLs for storefront assets | [OADR-0012](adr/0012-storefront-settings-assets-and-pages.md), [OADR-0013](adr/0013-notifications-and-booking-documents.md) |
+| Storage | `documents`, `settings`, `storefront` (reads the assets) | `StorageAdapter` (local disk), keys `tenant_<key>/…`, HMAC-signed URLs for documents, immutable public URLs for storefront assets | [OADR-0012](adr/0012-storefront-settings-assets-and-pages.md), [OADR-0013](adr/0013-notifications-and-booking-documents.md) |
 | Platform backend | `tenancy`, `provisioning`, `identity` | No HTTP. Read-only tables, `vx:invalidate`, `ota-tenant-ops` / `platform-tenant-events`, `ptk:*`, `staffdeny:acct:*`, `apikey:used:*` | [platform architecture §6](../../platform/docs/architecture.md#6-integration-with-the-ota-backend) |
 
 ### 5.1 The payment gateway

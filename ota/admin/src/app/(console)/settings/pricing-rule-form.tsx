@@ -15,8 +15,10 @@
 //   save (a fixed amount in another currency than the storefront's default, a markup that can sell below net). A create
 //   carries the idempotency key the page rendered (`useActionKey`, lib/action-state.ts: a double submit creates one
 //   rule) and opens the new rule, or stays to show its warnings; an edit carries the displayed version (`If-Match`)
-//   and the rule as the page rendered it, so only what changed is sent. The default markup rule's scope is not
-//   editable: it matches every offer.
+//   and the rule as the page rendered it, so only what changed is sent. The default markup rule's scope, priority,
+//   active flag and validity window are not editable: it always matches every offer (OADR-0005 point 3, revised
+//   2026-10-30; FIX-W34-OTA). Its form shows them read-only with why, has no inputs for them and marks itself
+//   (`defaultRule`), so the action never sends them.
 // - **Delete** (`DeleteRuleDialog`) is `ConfirmDialog` without a reason (the contract's `DELETE` takes none,
 //   `askReason={false}`), never offered for the default rule.
 //
@@ -153,6 +155,8 @@ export const RULE_STRINGS = Object.freeze({
   scopeHint:
     "Leave a field empty to match every offer for it. A list matches when one of the offer's values is in it.",
   defaultScope: "The default rule matches every offer: its scope cannot be narrowed.",
+  defaultFixed:
+    "The default rule always matches, so every offer gets a base markup: it stays active, has no validity window and keeps priority 1000 (rules with a lower number are checked before it). Its name, notes, calculation, amounts, unit, caps and stacking can still change.",
   minNet: "Lowest net total",
   maxNet: "Highest net total",
   netHint: "Inclusive, in the offer's currency.",
@@ -498,6 +502,32 @@ export function RuleDetails({
   );
 }
 
+/**
+ * The default markup rule's priority, active flag and validity window, read-only with why (FIX-W34-OTA): the form
+ * has no inputs for them, so they are never sent.
+ */
+function DefaultRuleFixed({ rule, timeZone }: { readonly rule: MarkupRule; readonly timeZone: string }) {
+  const words = RULE_STRINGS.details;
+  const rows = [
+    { term: words.priority, value: String(rule.priority) },
+    { term: words.status, value: rule.isActive ? RULE_STRINGS.active : RULE_STRINGS.inactive },
+    { term: words.window, value: windowText(rule, timeZone) },
+  ];
+  return (
+    <div className="grid gap-2">
+      <p className="text-sm">{RULE_STRINGS.defaultFixed}</p>
+      <dl className="grid gap-x-6 gap-y-2 sm:grid-cols-[12rem_1fr]">
+        {rows.map((row) => (
+          <div key={row.term} className="contents">
+            <dt className="text-sm font-medium text-muted-foreground">{row.term}</dt>
+            <dd className="text-sm">{row.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
 // ---- Form fields ------------------------------------------------------------------------------------------------
 
 /** `aria-describedby` and `aria-invalid` of a control with an optional hint and an optional error. */
@@ -829,6 +859,7 @@ export function PricingRuleForm(props: CreateRuleFormProps | EditRuleFormProps) 
             name={RULE_FIELDS.original}
             value={JSON.stringify(ruleBodyOfRule(kind, props.rule))}
           />
+          {isDefaultRule ? <input type="hidden" name={RULE_FIELDS.defaultRule} value="true" /> : null}
         </>
       )}
 
@@ -992,15 +1023,19 @@ export function PricingRuleForm(props: CreateRuleFormProps | EditRuleFormProps) 
       </FormSection>
 
       <FormSection title={RULE_STRINGS.sections.order}>
-        <TextField
-          name={RULE_FIELDS.priority}
-          label={RULE_STRINGS.priority}
-          hint={RULE_STRINGS.priorityHint}
-          state={state}
-          defaultValue={defaults.priority}
-          inputMode="numeric"
-          maxLength={6}
-        />
+        {isDefaultRule ? (
+          <DefaultRuleFixed rule={props.rule as MarkupRule} timeZone={timeZone} />
+        ) : (
+          <TextField
+            name={RULE_FIELDS.priority}
+            label={RULE_STRINGS.priority}
+            hint={RULE_STRINGS.priorityHint}
+            state={state}
+            defaultValue={defaults.priority}
+            inputMode="numeric"
+            maxLength={6}
+          />
+        )}
         {kind === "markup" ? (
           <CheckboxField
             name={RULE_FIELDS.stackable}
@@ -1016,28 +1051,32 @@ export function PricingRuleForm(props: CreateRuleFormProps | EditRuleFormProps) 
             defaultChecked={defaults.refundable}
           />
         )}
-        <CheckboxField
-          name={RULE_FIELDS.isActive}
-          label={RULE_STRINGS.isActive}
-          state={state}
-          defaultChecked={defaults.isActive}
-        />
-        <div className="grid gap-4 sm:grid-cols-2">
-          <DateTimeField
-            name={RULE_FIELDS.activeFrom}
-            label={RULE_STRINGS.activeFrom(timeZone)}
-            hint={RULE_STRINGS.windowHint}
-            state={state}
-            defaultValue={defaults.activeFrom}
-          />
-          <DateTimeField
-            name={RULE_FIELDS.activeUntil}
-            label={RULE_STRINGS.activeUntil(timeZone)}
-            hint={RULE_STRINGS.windowHint}
-            state={state}
-            defaultValue={defaults.activeUntil}
-          />
-        </div>
+        {isDefaultRule ? null : (
+          <>
+            <CheckboxField
+              name={RULE_FIELDS.isActive}
+              label={RULE_STRINGS.isActive}
+              state={state}
+              defaultChecked={defaults.isActive}
+            />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <DateTimeField
+                name={RULE_FIELDS.activeFrom}
+                label={RULE_STRINGS.activeFrom(timeZone)}
+                hint={RULE_STRINGS.windowHint}
+                state={state}
+                defaultValue={defaults.activeFrom}
+              />
+              <DateTimeField
+                name={RULE_FIELDS.activeUntil}
+                label={RULE_STRINGS.activeUntil(timeZone)}
+                hint={RULE_STRINGS.windowHint}
+                state={state}
+                defaultValue={defaults.activeUntil}
+              />
+            </div>
+          </>
+        )}
       </FormSection>
 
       <div className="grid gap-3">

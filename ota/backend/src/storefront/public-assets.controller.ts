@@ -2,8 +2,10 @@
 // `security: []`, `x-sdk-exclude`; OBE-071, OADR-0012 point 3, api-changes part 2 §4.2): what storefront.get's logo,
 // favicon and Open Graph URLs, the page images and the console's `StorefrontAsset.url` point at. The hosted storefront
 // loads it same-origin as `/api/v1/assets/…` (Caddy adds the edge header, so `img-src 'self'` of ADR-0018 holds); key
-// callers get the absolute `PUBLIC_OTA_API_URL` URL. A thin handler over AssetsService.publicFile, which the settings
-// module provides and this controller's module registers (SettingsModule: the uploads are its own).
+// callers get the absolute `PUBLIC_OTA_API_URL` URL. A thin handler over PublicAssetsService.publicFile
+// (public-assets.service.ts), which this module (StorefrontModule) provides and registers with the controller: the
+// storefront context imports nothing of the settings context, whose uploads write the rows and files read here (lead
+// decision (2a) of 2026-10-30, FIX-W34-OTA).
 //
 // The route is public (`@PublicRoute()`): a browser loads the image without a credential, and one that comes with it is
 // classified by the caller guard as on any route (a wrong key is refused) but neither chooses nor refuses the OTA: the
@@ -24,7 +26,7 @@ import {
   OpenApiOperation,
   type ValidatedInput,
 } from "../common/http/openapi-operation.decorator";
-import { AssetsService } from "../settings/assets.service";
+import { PublicAssetsService } from "./public-assets.service";
 
 /** The `Cache-Control` of an image: its URL never changes content (a new image is a new asset). */
 export const PUBLIC_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable";
@@ -35,7 +37,7 @@ export const PUBLIC_ASSET_CSP = "default-src 'none'";
 @Controller("v1/assets")
 @PublicRoute()
 export class PublicAssetsController {
-  constructor(private readonly assets: AssetsService) {}
+  constructor(private readonly assets: PublicAssetsService) {}
 
   @Get(":tenantKey/:assetId.:ext")
   @OpenApiOperation("getPublicAsset")

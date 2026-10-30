@@ -16,6 +16,10 @@ import {
   EdgeApi,
   errorCodeOf,
   EXPIRED_TOKEN_AGE_SECONDS,
+  MIDNIGHT_GUARD_MS,
+  MIDNIGHT_WAIT_BUDGET_MS,
+  msUntilPastMidnight,
+  PAST_MIDNIGHT_MS,
   newTenantId,
   offerDepartingIn,
   scriptReadableCookieNames,
@@ -792,5 +796,49 @@ describe("STAFF_COOKIES and scriptReadableCookieNames", () => {
     await expect(scriptReadableCookieNames(page)).resolves.toEqual([]);
     vi.stubGlobal("document", { cookie: "theme=dark; __Host-vx_csrf=secret-value" });
     await expect(scriptReadableCookieNames(page)).resolves.toEqual(["theme", "__Host-vx_csrf"]);
+  });
+});
+
+describe("msUntilPastMidnight", () => {
+  const OSLO = ["Europe/Oslo"] as const;
+  const at = (instant: string): Date => new Date(instant);
+
+  it("[FIX-W34-OTA AC4] waits nothing more than 3 minutes before Oslo midnight, or after it", () => {
+    // 30 October 2026: Oslo is on winter time (UTC+1) since the 25th.
+    expect(msUntilPastMidnight(at("2026-10-30T22:56:59.999Z"), OSLO)).toBe(0); // 23:56:59.999
+    expect(msUntilPastMidnight(at("2026-10-30T12:00:00.000Z"), OSLO)).toBe(0); // 13:00
+    expect(msUntilPastMidnight(at("2026-10-30T23:00:00.000Z"), OSLO)).toBe(0); // 00:00:00, the new day
+    expect(msUntilPastMidnight(at("2026-10-30T23:00:03.000Z"), OSLO)).toBe(0); // 00:00:03
+  });
+
+  it("[FIX-W34-OTA AC4] waits until 00:00:05 Oslo time from 3 minutes before its midnight", () => {
+    expect(msUntilPastMidnight(at("2026-10-30T22:57:00.000Z"), OSLO)).toBe(
+      MIDNIGHT_GUARD_MS + PAST_MIDNIGHT_MS,
+    );
+    expect(msUntilPastMidnight(at("2026-10-30T22:57:00.000Z"), OSLO)).toBe(185_000);
+    expect(msUntilPastMidnight(at("2026-10-30T22:58:30.250Z"), OSLO)).toBe(94_750); // 23:58:30.250
+    expect(msUntilPastMidnight(at("2026-10-30T22:59:59.500Z"), OSLO)).toBe(5_500); // 23:59:59.500
+    // Summer time (UTC+2): 23:58 Oslo is 21:58 UTC.
+    expect(msUntilPastMidnight(at("2026-07-01T21:58:00.000Z"), OSLO)).toBe(125_000);
+    expect(msUntilPastMidnight(at("2026-07-01T22:58:00.000Z"), OSLO)).toBe(0); // 00:58 Oslo
+  });
+
+  it("[FIX-W34-OTA AC4] takes every zone that decides the day: the latest midnight of the zones near one", () => {
+    const zones = ["Europe/Oslo", "UTC"] as const;
+    // 23:59 UTC is 00:59 in Oslo: only UTC is near its midnight.
+    expect(msUntilPastMidnight(at("2026-10-30T23:59:00.000Z"), zones)).toBe(65_000);
+    // 23:58 in Oslo is 22:58 UTC: only Oslo is.
+    expect(msUntilPastMidnight(at("2026-10-30T22:58:00.000Z"), zones)).toBe(125_000);
+    // Neither.
+    expect(msUntilPastMidnight(at("2026-10-30T20:00:00.000Z"), zones)).toBe(0);
+    expect(msUntilPastMidnight(at("2026-10-30T22:58:00.000Z"), [])).toBe(0);
+  });
+
+  it("[FIX-W34-OTA AC4] refuses a zone it cannot read, and its longest wait fits the hook's budget", () => {
+    expect(() => msUntilPastMidnight(at("2026-10-30T22:58:00.000Z"), ["Mars/Olympus_Mons"])).toThrow(
+      RangeError,
+    );
+    expect(MIDNIGHT_WAIT_BUDGET_MS).toBeGreaterThan(MIDNIGHT_GUARD_MS + PAST_MIDNIGHT_MS);
+    expect(MIDNIGHT_WAIT_BUDGET_MS).toBeLessThanOrEqual(200_000);
   });
 });

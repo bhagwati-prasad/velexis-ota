@@ -953,7 +953,7 @@ export function localesOf(entry: CachedStorefront): string[] {
 
 /**
  * The public URL of an asset (`getPublicAsset`, OADR-0012 point 3; served since OBE-071 by
- * storefront/public-assets.controller.ts): `/api/v1/assets/<key>/<id>.<ext>` on the storefront's own origin for the
+ * storefront/public-assets.controller.ts and public-assets.service.ts): `/api/v1/assets/<key>/<id>.<ext>` on the storefront's own origin for the
  * edge (Caddy proxies `/api/*` to the API), `<PUBLIC_OTA_API_URL>/v1/assets/…` for key callers and for the console's
  * `StorefrontAsset.url` (settings/assets.service.ts).
  */

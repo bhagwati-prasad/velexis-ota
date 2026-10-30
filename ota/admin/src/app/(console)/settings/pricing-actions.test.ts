@@ -173,11 +173,16 @@ function markupEditForm(
     appliesPer: rule.appliesPer,
     "min.amount": rule.min?.amount ?? "",
     "max.amount": rule.max?.amount ?? "",
-    priority: String(rule.priority),
     ...(rule.stackable ? { stackable: "true" } : {}),
-    ...(rule.isActive ? { isActive: "true" } : {}),
-    activeFrom: "",
-    activeUntil: "",
+    // The default rule's form has no priority, active or window inputs (FIX-W34-OTA) and marks itself instead.
+    ...(rule.isDefault
+      ? { defaultRule: "true" }
+      : {
+          priority: String(rule.priority),
+          ...(rule.isActive ? { isActive: "true" } : {}),
+          activeFrom: "",
+          activeUntil: "",
+        }),
     ...changes,
   };
   return formOf(
@@ -186,7 +191,7 @@ function markupEditForm(
         (entry): entry is [string, string | readonly string[]] =>
           entry[1] !== null &&
           // The default rule's form has no scope fields: its catch-all scope is not editable.
-          !(rule.isDefault && entry[0].startsWith("scope.")),
+          !(rule.isDefault && entry[0].startsWith("scope.") && !Object.hasOwn(changes, entry[0])),
       ),
     ),
   );
@@ -614,13 +619,57 @@ describe("updateMarkupRule", () => {
     expect(only(`PATCH ${MARKUPS}/${DEFAULT_MARKUP_ID}`).body).toEqual({ percentage: "2" });
   });
 
+  it("[FIX-W34-OTA AC3] never sends the default rule's priority, active flag or window: its form has none, a forged POST included", async () => {
+    signedIn("owner");
+    const rule = markupRule({
+      id: DEFAULT_MARKUP_ID,
+      name: "Default",
+      description: null,
+      scope: {},
+      percentage: "0.0000",
+      min: null,
+      max: null,
+      priority: 1000,
+      isDefault: true,
+    });
+    api.on(`PATCH ${MARKUPS}/${DEFAULT_MARKUP_ID}`, () => ruleAnswer({ ...rule, percentage: "2.0000" }));
+
+    // As the form posts it: no priority, active or window field, and the marker.
+    expect(await run(updateMarkupRule, markupEditForm(rule, { percentage: "2" }))).toMatchObject({
+      ok: true,
+    });
+    expect(only(`PATCH ${MARKUPS}/${DEFAULT_MARKUP_ID}`).body).toEqual({ percentage: "2" });
+
+    // A forged POST with the fixed fields changed: still the percentage alone.
+    api.requests.length = 0;
+    await run(
+      updateMarkupRule,
+      markupEditForm(rule, {
+        percentage: "3",
+        priority: "5",
+        activeFrom: "2027-01-01T00:00",
+        activeUntil: "2027-02-01T00:00",
+        "scope.carriers": "AF",
+      }),
+    );
+    expect(only(`PATCH ${MARKUPS}/${DEFAULT_MARKUP_ID}`).body).toEqual({ percentage: "3" });
+
+    // Nothing else changed: no call at all (the missing active checkbox is not "switched off").
+    api.requests.length = 0;
+    expect(await run(updateMarkupRule, markupEditForm(rule))).toMatchObject({
+      ok: true,
+      message: "Nothing to save: the rule is as shown.",
+    });
+    expect(actionRequests()).toEqual([]);
+  });
+
   it("answers the API's refusals in this page's words, without a key", async () => {
     signedIn("owner");
     const cases: readonly (readonly [Response, string])[] = [
       [apiError("PRECONDITION_FAILED", 412), "This record changed; reload to see the latest version."],
       [
         apiError("CONFLICT", 409, { details: { reason: "default_rule" } }),
-        "The default rule matches every offer: its scope cannot be narrowed.",
+        "The default rule always matches every offer: its scope stays empty, it stays active with no validity window, and its priority stays 1000. Change its percentage instead.",
       ],
       [apiError("NOT_FOUND", 404), "This markup rule no longer exists. Go back to the list of markup rules."],
     ];

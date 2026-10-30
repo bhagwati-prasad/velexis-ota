@@ -8,14 +8,14 @@
 // the engine e-mails are rendered with. Since OBE-071: the storefront assets (console.settings.assets.list, upload and
 // delete, assets.service.ts), whose rows go through the storefront context's repository and whose files go through
 // the StorageAdapter of ADR-0017 (documentStorageProvider: STORAGE_DRIVER and STORAGE_DIR, as the documents module
-// builds it), with the idempotency hooks of the upload; and their public image URL getPublicAsset, whose controller
-// lives with the storefront's routes (storefront/public-assets.controller.ts) and is registered here, over the same
-// service. Content pages (OBE-072) join here. The console audit (StaffActionsWriter) is global (console.module.ts).
-// API only; the worker never imports it.
+// builds it), with the idempotency hooks of the upload; their public image URL getPublicAsset is the storefront
+// context's (StorefrontModule: storefront/public-assets.controller.ts and public-assets.service.ts), since the
+// dependency is one way, settings → storefront (lead decision (2a) of 2026-10-30, FIX-W34-OTA). Content pages
+// (OBE-072) join here. The console audit (StaffActionsWriter) is global (console.module.ts). API only; the worker
+// never imports it.
 import { Module } from "@nestjs/common";
 import { documentStorageProvider } from "../documents/documents.module";
 import { PricingModule } from "../pricing/pricing.module";
-import { PublicAssetsController } from "../storefront/public-assets.controller";
 import { StorefrontModule } from "../storefront/storefront.module";
 import { TenancyModule } from "../tenancy/tenancy.module";
 import { AssetsController } from "./assets.controller";
@@ -36,7 +36,6 @@ import { TemplateSettingsService } from "./templates.service";
     FeeRulesController,
     NotificationTemplatesController,
     AssetsController,
-    PublicAssetsController,
   ],
   providers: [
     StorefrontSettingsService,

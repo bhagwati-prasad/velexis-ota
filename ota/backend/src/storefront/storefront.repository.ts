@@ -31,7 +31,7 @@
 // The five `*_asset_id` columns reference `storefront_assets` (RESTRICT); the response carries URLs built from the
 // asset id and its file extension (OADR-0012 point 3), so `assetsByIds` reads those two columns and the kind.
 //
-// The uploaded images themselves (OBE-071; settings/assets.service.ts, storefront/public-assets.controller.ts): the
+// The uploaded images themselves (OBE-071; settings/assets.service.ts, storefront/public-assets.service.ts): the
 // `storefront_assets` rows with their file metadata (`StoredAssetRow`), listed newest first with a keyset position,
 // read by id or by storage key (`forUpdate` locks the row: a delete holds it against new settings references, whose
 // foreign key check waits for it), inserted without a second row for a storage key (`ON CONFLICT DO NOTHING`), and

@@ -48,7 +48,7 @@ MarkupRule:            # one row of markup_rules, camelCase
 MarkupRuleInput:       # create: name, scope, calculation and its values required; update: any subset
 ```
 
-List: `?active=true|false`, ordered by `priority, id`, cursor pagination. Rules: the default rule (`isDefault`) cannot be deleted or have its scope narrowed (`409 CONFLICT`, `details.reason = "default_rule"`); deleting a rule keeps history (bookings and priced offers keep amounts, `markup_rule_id` becomes `NULL`). Changes apply to the next search; cached offers keep their prices until they expire ([OADR-0005](adr/0005-markup-and-fee-engine.md)). Errors: `400 VALIDATION_FAILED`, `409 CONFLICT`, `412`.
+List: `?active=true|false`, ordered by `priority, id`, cursor pagination. Rules: the default rule (`isDefault`) cannot be deleted or have its scope narrowed (`409 CONFLICT`, `details.reason = "default_rule"`), and since 2026-10-30 (lead decision (2e), FIX-W34-OTA; [OADR-0005](adr/0005-markup-and-fee-engine.md) point 3 revised) an update that sets `isActive: false`, an `activeFrom` or `activeUntil` other than `null`, or a `priority` other than 1000 is the same `409`: it always matches; deleting a rule keeps history (bookings and priced offers keep amounts, `markup_rule_id` becomes `NULL`). Changes apply to the next search; cached offers keep their prices until they expire ([OADR-0005](adr/0005-markup-and-fee-engine.md)). Errors: `400 VALIDATION_FAILED`, `409 CONFLICT`, `412`.
 
 ### 2.2 Fee rules (`fee_rules`)
 

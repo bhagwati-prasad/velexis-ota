@@ -612,6 +612,7 @@ The OTA backend gets its contract extensions, request pipeline, tenancy, Amadeus
   - OADR-0003 states the confirmed (or changed) queue convention with the date of the answer.
   - No recorded fixture contains personal data (the stub's fixture scan passes).
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- amadeus && pnpm --filter @velexis/amadeus-stub test`
+- **Note:** 2026-10-30 (lead decision (1h), recorded by FIX-W34-OTA): the `flightOrderId` pattern of the frozen contract stays. When the recordings of step 1 are made, check the flight order ids Amadeus returns for `/` or `+` (standard base64 characters that the pattern and a URL path do not take). If they occur, the API maps them to URL-safe base64 (`-` and `_`) at its boundary, in its answers and back in its path parameters, so the contract's pattern stays as it is; if none occurs, record that the recorded ids are URL-safe already.
 
 ### OBE-028 · Load-test search against the stub and tune the Amadeus buckets ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -2334,6 +2335,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 - **Acceptance:**
   - The journeys pass locally and nightly, which meets the gate of platform task PFE-019 (OF-09).
 - **Verify:** `pnpm --filter @velexis/ota-admin build && E2E_WITH_OTA=1 pnpm test:e2e -- --project=ota-admin specs/ota-admin/sso-bookings.e2e.ts specs/ota-admin/pnr-import.e2e.ts`
+- **Note:** 2026-10-30 (lead decision (1j), recorded by FIX-W34-OTA): for an airline-card booking, step 2's "cancel with a full refund" is the airline's void of the tickets issued today: the airline charged the traveller's card, so no money goes back through Velexis (`refund_via_airline`, the dialog offers "No refund from the console" alone), and the void reverses the airline's whole charge, which the journey checks as the payment's `airline.void_expected` event and no refund row (OADR-0004 and OADR-0018 point 8 over the plan text). Lead decision (2g) of the same day: the journey's `beforeAll` never books in the 3 minutes before midnight in the time zones that decide "today" (it waits until 00:00:05 of the new day, within its hook budget), so the cancel step's void of today's tickets never straddles midnight (tools/e2e/README.md, OTA admin journeys).
 
 ### OAD-017 · Write the payments, settings and permissions journeys
 - **Component:** ota-admin

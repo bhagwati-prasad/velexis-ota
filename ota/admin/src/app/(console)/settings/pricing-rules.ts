@@ -15,6 +15,12 @@
 // An update sends only what changed (`updateBodyOf`): the form posts the rule as the page rendered it (`original`, the
 // body of `ruleBodyOfRule`), and every field whose value the form changed goes into the `PATCH` (`scope` as a whole),
 // so a rule edited in one field is written in that field only, and a form sent unchanged makes no call.
+//
+// The default markup rule always matches (OADR-0005 point 3, revised 2026-10-30; lead decision (2e), FIX-W34-OTA): its
+// scope stays `{}`, it stays active with no validity window and keeps priority 1000, and the API answers `409 CONFLICT`
+// `default_rule` to a change of any of them. Its form has no inputs for them (it shows them read-only) and posts the
+// marker `defaultRule`; the action reads them from `original` (`withDefaultRuleValues`) and never sends them
+// (`withoutDefaultRuleFields`), whatever a forged POST carries.
 import type {
   FeeRule,
   FeeRuleInput,
@@ -126,6 +132,8 @@ export const RULE_FIELDS = Object.freeze({
   original: "original",
   /** Hidden: the idempotency key of a create (lib/action-state.ts). */
   actionKey: ACTION_KEY_FIELD,
+  /** Hidden: `true` on the default markup rule's form, which has no scope, priority, active or window inputs. */
+  defaultRule: "defaultRule",
   name: "name",
   description: "description",
   label: "label",
@@ -990,6 +998,58 @@ export function ruleBodyOfRule(kind: RuleKind, rule: PricingRule): RuleBody {
   }
   const fee = rule as FeeRule;
   return { ...common, label: fee.label.trim(), feeType: fee.feeType, refundable: fee.refundable };
+}
+
+// ---- The default markup rule ------------------------------------------------------------------------------------
+
+/**
+ * The fields of the default markup rule that stay as seeded besides its scope (see the file header): its form shows
+ * them read-only and never sends them.
+ */
+export const DEFAULT_RULE_FIXED_FIELDS = Object.freeze([
+  RULE_FIELDS.priority,
+  RULE_FIELDS.isActive,
+  RULE_FIELDS.activeFrom,
+  RULE_FIELDS.activeUntil,
+] as const);
+
+/** The priority the default markup rule keeps (OADR-0005 point 3). */
+export const DEFAULT_RULE_PRIORITY = 1000;
+
+/** Whether `form` is the default markup rule's form (its hidden marker). */
+export function isDefaultRuleForm(kind: RuleKind, form: FormData): boolean {
+  return kind === "markup" && form.get(RULE_FIELDS.defaultRule) === "true";
+}
+
+/**
+ * The input of the default markup rule's form, which has no inputs for its fixed fields: those fields as the page
+ * rendered the rule (`original`, the window in the OTA's `timeZone` as the form would show it), in place of anything
+ * the POST carries, so the form's schema reads them and `updateBodyOf` finds them unchanged.
+ */
+export function withDefaultRuleValues(
+  input: RuleFormInput,
+  original: RuleBody,
+  timeZone: string,
+): RuleFormInput {
+  const local = (instant: string | null): string | undefined =>
+    instant === null ? undefined : localOfInstant(instant, timeZone);
+  return {
+    ...input,
+    [RULE_FIELDS.priority]: String(original.priority),
+    [RULE_FIELDS.isActive]: original.isActive,
+    [RULE_FIELDS.activeFrom]: local(original.activeFrom),
+    [RULE_FIELDS.activeUntil]: local(original.activeUntil),
+  };
+}
+
+/** The `PATCH` body of the default markup rule: `changes` without its scope and its fixed fields, never sent. */
+export function withoutDefaultRuleFields(
+  changes: MarkupRuleUpdate & FeeRuleUpdate,
+): MarkupRuleUpdate & FeeRuleUpdate {
+  const fixed: ReadonlySet<string> = new Set(["scope", ...DEFAULT_RULE_FIXED_FIELDS]);
+  return Object.fromEntries(
+    Object.entries(changes).filter(([name]) => !fixed.has(name)),
+  ) as MarkupRuleUpdate & FeeRuleUpdate;
 }
 
 /** A body without its `null` fields: what a create sends. */

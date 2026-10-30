@@ -398,6 +398,15 @@ export async function clearStaffSession(): Promise<void> {
 
 // ---- requireStaff -------------------------------------------------------------------------------------------
 
+/** How the console client of a server action is built (`requireStaff`'s second argument). */
+export interface StaffClientOptions {
+  /**
+   * The automatic retries of the returned client (`createConsoleClient`'s `maxRetries`); absent for the SDK's default.
+   * `console.auth.me` of `requireStaff` keeps the default either way. Staff shopping's searches pass `0` (FIX-W34-OTA).
+   */
+  readonly maxRetries?: number;
+}
+
 /** What a server action gets from `requireStaff`. */
 export interface StaffContext {
   /** The console client of this request, with the current access token. */
@@ -433,10 +442,14 @@ function forbidden(permission: StaffPermission): PermissionError {
  * - A live environment the API refuses (`403 ENVIRONMENT_NOT_ALLOWED`) resets `__Host-vx_env` to `test` and is
  *   thrown, so the action answers "Live is not available for this OTA or role" (routes.md §1).
  *
- * Use the returned `console` (built with the fresh token), not `getConsole()`, inside the action.
+ * Use the returned `console` (built with the fresh token), not `getConsole()`, inside the action. `options.maxRetries`
+ * builds it with that many automatic retries instead of the SDK's default (staff shopping's searches: `0`).
  */
-export async function requireStaff(permission: StaffPermission): Promise<StaffContext> {
-  const context = await requireStaffSession();
+export async function requireStaff(
+  permission: StaffPermission,
+  options: StaffClientOptions = {},
+): Promise<StaffContext> {
+  const context = await requireStaffSession(options);
   if (!can(context.staff, permission)) {
     throw forbidden(permission);
   }
@@ -448,7 +461,7 @@ export async function requireStaff(permission: StaffPermission): Promise<StaffCo
  * (the environment switch of OAD-004, which weighs `session.environments` instead): the refreshed session and
  * `console.auth.me`, with the same redirects and errors.
  */
-export async function requireStaffSession(): Promise<StaffContext> {
+export async function requireStaffSession(options: StaffClientOptions = {}): Promise<StaffContext> {
   const jar = await cookies();
   const incoming = await headers();
   const session = readSessionCookies(jar);
@@ -496,5 +509,10 @@ export async function requireStaffSession(): Promise<StaffContext> {
     }
     throw error;
   }
-  return { console: client, staff, environment };
+  // The action's own client, when it asks for other retries than the SDK's (`console.auth.me` above kept them).
+  const actionClient =
+    options.maxRetries === undefined
+      ? client
+      : createConsoleClient({ accessToken, environment, incoming, maxRetries: options.maxRetries });
+  return { console: actionClient, staff, environment };
 }

@@ -983,8 +983,9 @@ function createConsoleMarkupRulesApi(core) {
 
     /**
      * Changes any subset of a markup rule's fields (`null` clears a nullable one, `scope` is replaced as a whole); the
-     * default rule keeps its catch-all scope. Requires `ifMatch` (the rule's `version` or ETag); the answer has the new
-     * `version` and may carry `warnings`. Not retried. `PATCH /v1/console/settings/markup-rules/{markupRuleId}` with
+     * default rule always matches: it keeps its catch-all scope, stays active with no validity window and keeps
+     * priority 1000 (`409 CONFLICT` `default_rule` otherwise). Requires `ifMatch` (the rule's `version` or ETag); the
+     * answer has the new `version` and may carry `warnings`. Not retried. `PATCH /v1/console/settings/markup-rules/{markupRuleId}` with
      * `If-Match`; `settings:write`.
      * @param {ConsoleUpdateMarkupRuleParams} params
      * @param {RequestOptions} [options]

@@ -276,6 +276,91 @@ describe("PricingRuleForm", () => {
   });
 });
 
+describe("the default markup rule's form", () => {
+  /** The seeded default rule as the API answers it. */
+  const DEFAULT_RULE: MarkupRule = {
+    ...RULE,
+    id: "mkr_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+    name: "Default",
+    scope: {},
+    percentage: "0.0000",
+    priority: 1000,
+    isDefault: true,
+    version: 3,
+  };
+
+  it("[FIX-W34-OTA AC3] shows its priority, active flag and window read-only, with why, and never offers or sends them", async () => {
+    actions.updateMarkupRule.mockResolvedValueOnce({ ok: true, message: "Saved." } satisfies ActionState);
+    render(
+      <PricingRuleForm
+        kind="markup"
+        mode="edit"
+        rule={DEFAULT_RULE}
+        timeZone="Europe/Oslo"
+        defaultCurrency="EUR"
+      />,
+    );
+    const form = screen.getByRole("form", { name: "Save changes: Default" });
+
+    // No control for what stays fixed: no scope, priority, active flag or window inputs.
+    for (const name of [
+      "priority",
+      "isActive",
+      "activeFrom",
+      "activeUntil",
+      "scope.carriers",
+      "scope.minNet",
+    ]) {
+      expect([name, form.querySelector(`[name="${name}"]`)]).toEqual([name, null]);
+    }
+    expect(within(form).queryByLabelText("Priority")).toBeNull();
+    expect(within(form).queryByLabelText("Active")).toBeNull();
+    expect(within(form).queryByLabelText(/^Active from/)).toBeNull();
+    // Shown read-only, with the explanation.
+    expect(form.textContent).toContain(
+      "The default rule always matches, so every offer gets a base markup: it stays active, has no validity window and keeps priority 1000 (rules with a lower number are checked before it). Its name, notes, calculation, amounts, unit, caps and stacking can still change.",
+    );
+    const fixed = within(form).getByText("1000").closest("dl");
+    expect(
+      [...(fixed?.querySelectorAll("dt") ?? [])].map((term) => [
+        term.textContent,
+        term.nextElementSibling?.textContent,
+      ]),
+    ).toEqual([
+      ["Priority", "1000"],
+      ["Status", "Active"],
+      ["Validity", "Always"],
+    ]);
+    // What may change is still offered.
+    expect(within(form).getByLabelText("Name")).toBeDefined();
+    expect(within(form).getByLabelText("Percentage")).toBeDefined();
+    expect(within(form).getByLabelText(/^Stackable/)).toBeDefined();
+
+    fireEvent.change(within(form).getByLabelText("Percentage"), { target: { value: "2" } });
+    fireEvent.submit(form);
+
+    await waitFor(() => expect(actions.updateMarkupRule).toHaveBeenCalledTimes(1), UI_WAIT);
+    const [posted] = submissions(actions.updateMarkupRule);
+    expect(posted?.get("defaultRule")).toBe("true");
+    expect(posted?.get("percentage")).toBe("2");
+    for (const name of ["priority", "isActive", "activeFrom", "activeUntil"]) {
+      expect([name, posted?.has(name)]).toEqual([name, false]);
+    }
+  });
+
+  it("[FIX-W34-OTA AC3] keeps offering them for every other rule, without the default rule's marker", () => {
+    render(
+      <PricingRuleForm kind="markup" mode="edit" rule={RULE} timeZone="Europe/Oslo" defaultCurrency="EUR" />,
+    );
+    const form = screen.getByRole("form", { name: "Save changes: Long-haul economy" });
+
+    for (const name of ["priority", "isActive", "activeFrom", "activeUntil"]) {
+      expect([name, form.querySelector(`[name="${name}"]`)?.tagName]).toEqual([name, "INPUT"]);
+    }
+    expect(form.querySelector('[name="defaultRule"]')).toBeNull();
+  });
+});
+
 describe("DeleteRuleDialog", () => {
   it("asks no reason, warns that both environments share the rule, and posts the rule and its version", async () => {
     actions.deleteMarkupRule.mockResolvedValueOnce({

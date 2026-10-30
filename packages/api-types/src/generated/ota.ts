@@ -2529,7 +2529,7 @@ export interface paths {
         };
         /**
          * List the markup rules
-         * @description Lists the markup rules of the OTA (`markup_rules`), which turn Amadeus net prices into selling prices, in the order the pricing engine evaluates them: `priority` ascending, then `id`. Cursor pagination. `active=true` lists only enabled rules (`isActive`), `active=false` only disabled ones, no `active` every rule. The seeded default rule (`isDefault`, scope `{}`, priority 1000) is one of them; it cannot be deleted.
+         * @description Lists the markup rules of the OTA (`markup_rules`), which turn Amadeus net prices into selling prices, in the order the pricing engine evaluates them: `priority` ascending, then `id`. Cursor pagination. `active=true` lists only enabled rules (`isActive`), `active=false` only disabled ones, no `active` every rule. The seeded default rule (`isDefault`, scope `{}`, priority 1000, active, no validity window) is one of them; it cannot be deleted and always matches.
          *
          *     Settings are shared by the test and live environments (one set of rules per OTA), so `X-Velexis-Environment` changes nothing here. No Amadeus call. Permission `settings:read`. Not audited per call.
          *
@@ -2587,7 +2587,7 @@ export interface paths {
          * Update a markup rule
          * @description Changes any subset of a markup rule's fields (`MarkupRuleUpdate`); fields not sent keep their value, `null` clears a nullable one, and `scope` is replaced as a whole. The changed rule must still satisfy the rules of console.settings.markupRules.create (the values of its `calculation`, one currency, `activeUntil` after `activeFrom`), else `400 VALIDATION_FAILED`.
          *
-         *     **Default rule.** The seeded default rule (`isDefault`) keeps its catch-all scope: a `scope` that is not empty (`{}`) answers `409 CONFLICT` with `details.reason = "default_rule"`; its percentage, priority and the other fields may change.
+         *     **Default rule.** The seeded default rule (`isDefault`) always matches and catches every offer no other rule takes (OADR-0005 point 3, revised 2026-10-30): it keeps its catch-all scope, stays active, has no validity window and keeps priority 1000. A `scope` that is not empty (`{}`), `isActive: false`, an `activeFrom` or `activeUntil` other than `null`, or a `priority` other than 1000 answers `409 CONFLICT` with `details.reason = "default_rule"`, whose message names what stays fixed; the same values sent unchanged (`scope: {}`, `isActive: true`, `activeFrom: null`, `activeUntil: null`, `priority: 1000`) are accepted. Its name, description, calculation, percentage, fixed amount, unit, caps and `stackable` may change.
          *
          *     **Preconditions.** `If-Match` = the `ETag` of the rule (`412 PRECONDITION_FAILED` when stale). The answer has the new `version` and `ETag`, and can carry `warnings` like create. Changes apply to the next search; stored offers keep their prices (OADR-0005). No Amadeus call. Permission `settings:write`; `staff_actions` records the rule before and after.
          *
@@ -12371,7 +12371,7 @@ export interface components {
             priority: number;
             /** @description Adds to the base rule instead of competing with it. */
             stackable: boolean;
-            /** @description The seeded catch-all rule; it cannot be deleted and its scope stays `{}`. */
+            /** @description The seeded catch-all rule; it cannot be deleted, its scope stays `{}`, it stays active with no validity window and its priority stays 1000. */
             isDefault: boolean;
             /** @description Enabled flag. */
             isActive: boolean;
@@ -15685,7 +15685,7 @@ export interface components {
                 "application/json": components["schemas"]["ConsoleBooking"];
             };
         };
-        /** @description The settings change conflicts with the current state. Possible codes: CONFLICT (`details.reason`, such as `default_rule`: the seeded default markup rule cannot be deleted or narrowed), IDEMPOTENCY_KEY_REUSED. */
+        /** @description The settings change conflicts with the current state. Possible codes: CONFLICT (`details.reason`, such as `default_rule`: the seeded default markup rule always matches, so it cannot be deleted, narrowed, switched off, given a validity window or moved from priority 1000), IDEMPOTENCY_KEY_REUSED. */
         SettingsConflict: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];

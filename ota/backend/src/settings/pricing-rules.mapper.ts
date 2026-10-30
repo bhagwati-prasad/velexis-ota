@@ -25,6 +25,12 @@
 //   /activeFrom|activeUntil an instant `timestamptz` stores as written: not the year 0000, no leap second [format]
 //   /activeUntil           after `activeFrom` [window]
 //
+// The seeded default markup rule (`is_default`) always matches and catches the offers no other rule takes (OADR-0005
+// point 3, revised 2026-10-30; lead decision (2e), FIX-W34-OTA): an update keeps it a catch-all (`defaultRuleChanges`):
+// a scope that is not empty, `isActive: false`, an `activeFrom` or `activeUntil` other than null, or a `priority` other
+// than its seeded 1000 is refused with `409 CONFLICT` `default_rule` (pricing-rules.service.ts), as its delete is;
+// the same values sent unchanged pass, and so does every other field (its percentage, calculation, name, caps).
+//
 // Warnings of a saved rule (SettingsWarning; the rule is saved anyway): `fixed_currency_not_default` when its money
 // fields are in a currency other than the storefront's default currency (they apply only to offers in that currency,
 // no conversion: OADR-0005 point 6), and for a markup rule `sells_below_net` when what its calculation uses can be
@@ -210,6 +216,37 @@ export function isCatchAllScope(scope: FeeRuleScope): boolean {
   return Object.entries(scope).every(([, value]) =>
     Array.isArray(value) ? value.length === 0 : value === null || value === undefined,
   );
+}
+
+/** The priority of the seeded default markup rule (provisioning/seeds/markup-rules.seed.ts), which it keeps. */
+export const DEFAULT_RULE_PRIORITY = 1000;
+
+/** The fields of the default markup rule that an update may not change (see the file header), in the body's order. */
+export type DefaultRuleFixedField = "scope" | "priority" | "isActive" | "activeFrom" | "activeUntil";
+
+/**
+ * The fields of `update` that would stop the default markup rule from matching every offer, or from being the last
+ * rule evaluated (see the file header): a scope that is not a catch-all, a priority other than 1000, `isActive: false`,
+ * a validity window bound other than null. Empty when the update may be applied.
+ */
+export function defaultRuleChanges(update: Partial<MarkupRuleState>): DefaultRuleFixedField[] {
+  const changes: DefaultRuleFixedField[] = [];
+  if (update.scope !== undefined && !isCatchAllScope(update.scope)) {
+    changes.push("scope");
+  }
+  if (update.priority !== undefined && update.priority !== DEFAULT_RULE_PRIORITY) {
+    changes.push("priority");
+  }
+  if (update.isActive === false) {
+    changes.push("isActive");
+  }
+  if (update.activeFrom !== undefined && update.activeFrom !== null) {
+    changes.push("activeFrom");
+  }
+  if (update.activeUntil !== undefined && update.activeUntil !== null) {
+    changes.push("activeUntil");
+  }
+  return changes;
 }
 
 /* ------------------------------------------------------------------------------------------------

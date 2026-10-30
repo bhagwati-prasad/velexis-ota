@@ -206,6 +206,33 @@ describe("SDK clients", () => {
     expect(request?.headers.get("X-Velexis-Environment")).toBe("live");
   });
 
+  it("[FIX-W34-OTA AC2] gives the SDK the caller's maxRetries, and leaves the SDK's default when there is none", async () => {
+    const accessToken = staffAccessToken("retries", Date.now(), 900);
+    // `Retry-After: 0`: each retry the client allows goes out at once instead of after the back-off.
+    api.on("GET /v1/console/bookings", () =>
+      apiError("SERVICE_UNAVAILABLE", 503, {}, { "Retry-After": "0" }),
+    );
+    const sentWith = async (maxRetries: number | undefined): Promise<number> => {
+      const before = api.requests.length;
+      const client = createConsoleClient(
+        {
+          accessToken,
+          environment: "test",
+          incoming: new Headers(),
+          ...(maxRetries === undefined ? {} : { maxRetries }),
+        },
+        { fetch: api.fetch },
+      );
+      await expect(client.bookings.list({ limit: 5 })).rejects.toMatchObject({ status: 503 });
+      return api.requests.length - before;
+    };
+
+    expect(await sentWith(0)).toBe(1);
+    expect(await sentWith(1)).toBe(2);
+    // The SDK's default: 2 retries.
+    expect(await sentWith(undefined)).toBe(3);
+  });
+
   it("logs one line per response with method, path, status, request id and duration, never a body or a token", async () => {
     const lines: string[] = [];
     const logger = createLogger({

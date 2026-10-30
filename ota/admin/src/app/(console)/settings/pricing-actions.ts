@@ -23,7 +23,8 @@
 //   (`withNextActionKey`): a final `4xx` the API stored under the key brings a new one, everything else keeps it.
 // - **Update** sends only the fields the form changed (pricing-rules.ts `updateBodyOf`, against the rule the page
 //   rendered), with `ifMatch` = the version the page displayed; a form sent unchanged makes no call. The default rule's
-//   form has no scope fields, so its catch-all scope is never sent.
+//   form has no scope, priority, active or window inputs (they stay as seeded, OADR-0005 point 3 revised 2026-10-30,
+//   FIX-W34-OTA): the action reads them from the rendered rule and never sends them, whatever a forged POST carries.
 // - **Delete** sends `ifMatch` = the displayed version and, after a success, goes to the list. The default rule is
 //   never offered for deletion; the API refuses it anyway (`409 CONFLICT`, `default_rule`).
 //
@@ -51,6 +52,7 @@ import {
   RULE_MESSAGES,
   RULE_PATHS,
   feeInputOf,
+  isDefaultRuleForm,
   markupInputOf,
   parseOriginal,
   ruleBodyOfForm,
@@ -59,6 +61,8 @@ import {
   ruleFormSchema,
   rulePath,
   updateBodyOf,
+  withDefaultRuleValues,
+  withoutDefaultRuleFields,
   type PricingRule,
   type RuleActionState,
   type RuleKind,
@@ -81,7 +85,8 @@ const STRINGS = Object.freeze({
     markup: "This markup rule no longer exists. Go back to the list of markup rules.",
     fee: "This fee rule no longer exists. Go back to the list of fee rules.",
   } satisfies Record<RuleKind, string>,
-  defaultRuleScope: "The default rule matches every offer: its scope cannot be narrowed.",
+  defaultRuleUpdate:
+    "The default rule always matches every offer: its scope stays empty, it stays active with no validity window, and its priority stays 1000. Change its percentage instead.",
   defaultRuleDelete:
     "The default rule cannot be deleted: it is the catch-all that every offer matches. Change its percentage instead.",
   busy: "This rule is still being saved. Send the same form again in a moment.",
@@ -152,7 +157,7 @@ function failureOf(kind: RuleKind, operation: Operation, error: unknown): Action
   if (apiError.code === "CONFLICT" && reason === "default_rule") {
     state = {
       ...state,
-      message: operation === "delete" ? STRINGS.defaultRuleDelete : STRINGS.defaultRuleScope,
+      message: operation === "delete" ? STRINGS.defaultRuleDelete : STRINGS.defaultRuleUpdate,
     };
   } else if (apiError.code === "CONFLICT" && reason === "idempotency_key_in_use") {
     state = { ...state, message: STRINGS.busy };
@@ -237,13 +242,19 @@ async function updateRule(kind: RuleKind, form: FormData): Promise<RuleActionSta
   if (ruleId === undefined || version === undefined || original === undefined) {
     return staleForm();
   }
-  const parsed = ruleFormSchema(kind).safeParse(ruleFormInput(kind, form));
+  const { console: con, staff: profile } = staff.context;
+  const timeZone = profile.tenant.timeZone;
+  // The default rule's form has no inputs for what stays fixed: those values are the rendered rule's, never sent.
+  const defaultRule = isDefaultRuleForm(kind, form);
+  const input = ruleFormInput(kind, form);
+  const parsed = ruleFormSchema(kind).safeParse(
+    defaultRule ? withDefaultRuleValues(input, original, timeZone) : input,
+  );
   if (!parsed.success) {
     return invalid(parsed.error);
   }
-  const { console: con, staff: profile } = staff.context;
-  const timeZone = profile.tenant.timeZone;
-  const changes = updateBodyOf(ruleBodyOfForm(kind, parsed.data, timeZone), original, timeZone);
+  const body = updateBodyOf(ruleBodyOfForm(kind, parsed.data, timeZone), original, timeZone);
+  const changes = defaultRule ? withoutDefaultRuleFields(body) : body;
   if (Object.keys(changes).length === 0) {
     return { ok: true, message: STRINGS.unchanged };
   }

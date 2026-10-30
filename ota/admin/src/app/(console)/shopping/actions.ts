@@ -3,6 +3,13 @@
 // SDK's console namespace with the client `requireStaff` hands back (the staff token of the request, the service key,
 // the environment of the switch, the end-user headers).
 //
+// The two searches send each request once: their client has `maxRetries: 0` (`SHOPPING_SEARCH_RETRIES`, a client-level
+// SDK option), so a search that timed out at Amadeus (`504 SUPPLIER_TIMEOUT` after the API's 30 s) or met a `503` or
+// `429` is not sent to Amadeus again behind the staff member's back: they read "Search again" and decide (lead decision
+// (2d) of 2026-10-30, FIX-W34-OTA). The SDK would otherwise retry these POSTs (`x-idempotent-by-design`) twice, up to
+// three Amadeus searches and minutes of waiting for one click. The upsell and the quote of one offer, and every other
+// action of the admin, keep the SDK's default retries.
+//
 //   searchOffers         console.amadeus.searchFlightOffers          Flight Offers Search POST
 //   searchAvailability   console.amadeus.searchFlightAvailabilities  Flight Availabilities Search (seats per class)
 //   upsellOffer          console.amadeus.upsellAirOffers             Branded Fares Upsell of one offer
@@ -51,7 +58,7 @@ import {
   isVelexisErrorLike,
   type VelexisErrorLike,
 } from "@/lib/errors";
-import { requireStaff, type StaffContext } from "@/lib/session";
+import { requireStaff, type StaffClientOptions, type StaffContext } from "@/lib/session";
 
 // ---- What the page sends and gets ------------------------------------------------------------------------------------
 
@@ -160,6 +167,8 @@ const OFFER_MAX_CHARACTERS = 200_000;
 const SHOPPING_TIMEOUT_MS = 60_000;
 /** The most Amadeus issues a failure lists. */
 const MAX_ISSUES = 10;
+/** The automatic retries of the searches' client: none, so a timed-out search reaches Amadeus once (FIX-W34-OTA). */
+const SHOPPING_SEARCH_RETRIES = 0;
 
 const CABINS = ["ECONOMY", "PREMIUM_ECONOMY", "BUSINESS", "FIRST"] as const;
 
@@ -582,10 +591,15 @@ function staleOffer(): ShoppingFailure {
   return { ok: false, code: "VALIDATION_FAILED", message: STRINGS.staleOffer };
 }
 
-/** The staff context of an action, or the state of its refusal (a missing permission, a refused session). */
-async function shopper(): Promise<{ readonly context: StaffContext } | { readonly state: ShoppingFailure }> {
+/**
+ * The staff context of an action, or the state of its refusal (a missing permission, a refused session); `options`
+ * builds its console client (the searches: `maxRetries: 0`).
+ */
+async function shopper(
+  options: StaffClientOptions = {},
+): Promise<{ readonly context: StaffContext } | { readonly state: ShoppingFailure }> {
   try {
-    return { context: await requireStaff("amadeus:read") };
+    return { context: await requireStaff("amadeus:read", options) };
   } catch (error) {
     return { state: { ...fromVelexisError(error), ok: false } };
   }
@@ -595,10 +609,11 @@ async function shopper(): Promise<{ readonly context: StaffContext } | { readonl
 
 /**
  * "Search" of the offers tab: Flight Offers Search POST (`console.amadeus.searchFlightOffers`) for the form's trip,
- * travellers, cabin, non-stop, airlines and currency, from the GDS, at most 50 offers. Net prices.
+ * travellers, cabin, non-stop, airlines and currency, from the GDS, at most 50 offers. Net prices. Sent once (no
+ * automatic retry).
  */
 export async function searchOffers(form: OfferSearchForm): Promise<OffersState> {
-  const staff = await shopper();
+  const staff = await shopper({ maxRetries: SHOPPING_SEARCH_RETRIES });
   if ("state" in staff) {
     return staff.state;
   }
@@ -618,10 +633,10 @@ export async function searchOffers(form: OfferSearchForm): Promise<OffersState> 
 
 /**
  * "Search" of the seat availability tab: Flight Availabilities Search (`console.amadeus.searchFlightAvailabilities`),
- * the open booking classes and their seats on the flights of one day, from the GDS.
+ * the open booking classes and their seats on the flights of one day, from the GDS. Sent once (no automatic retry).
  */
 export async function searchAvailability(form: AvailabilitySearchForm): Promise<AvailabilityState> {
-  const staff = await shopper();
+  const staff = await shopper({ maxRetries: SHOPPING_SEARCH_RETRIES });
   if ("state" in staff) {
     return staff.state;
   }

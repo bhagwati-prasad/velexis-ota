@@ -32,6 +32,8 @@ import {
   feeRuleProblems,
   feeRuleWarnings,
   feeStateOfInput,
+  DEFAULT_RULE_PRIORITY,
+  defaultRuleChanges,
   isCatchAllScope,
   markupColumnsOf,
   markupRuleProblems,
@@ -40,8 +42,10 @@ import {
   ruleEtagOf,
   scopeOf,
   type MarkupRuleState,
+  type MarkupRuleUpdate,
 } from "./pricing-rules.mapper";
-import { PricingRulesService } from "./pricing-rules.service";
+import { DEFAULT_RULE_CONFLICT_MESSAGE, PricingRulesService } from "./pricing-rules.service";
+import { DEFAULT_MARKUP_RULE } from "../provisioning/seeds/markup-rules.seed";
 
 let checker: ResponseChecker;
 
@@ -252,6 +256,38 @@ describe("the rows as MarkupRule and FeeRule", () => {
     expect(isCatchAllScope({ carriers: [], cabins: [], minNet: null, maxNet: null })).toBe(true);
     expect(isCatchAllScope({ carriers: ["AF"] })).toBe(false);
     expect(isCatchAllScope({ minNet: "100.00" })).toBe(false);
+  });
+
+  it("names the fields an update would change of the default rule's catch-all: scope, priority, isActive, the window [FIX-W34-OTA AC3]", () => {
+    // The seeded priority is the one the default rule keeps.
+    expect(DEFAULT_RULE_PRIORITY).toBe(DEFAULT_MARKUP_RULE.priority);
+    expect(
+      defaultRuleChanges({
+        scope: { carriers: ["AF"] },
+        priority: 10,
+        isActive: false,
+        activeFrom: "2027-01-01T00:00:00.000Z",
+        activeUntil: "2027-02-01T00:00:00.000Z",
+      }),
+    ).toEqual(["scope", "priority", "isActive", "activeFrom", "activeUntil"]);
+    expect(defaultRuleChanges({ priority: 1001 })).toEqual(["priority"]);
+    expect(defaultRuleChanges({ activeUntil: "2027-02-01T00:00:00.000Z" })).toEqual(["activeUntil"]);
+    // The values it has, and every other field, change nothing of it.
+    expect(
+      defaultRuleChanges({
+        scope: { carriers: [], minNet: null },
+        priority: 1000,
+        isActive: true,
+        activeFrom: null,
+        activeUntil: null,
+        percentage: "7.0000",
+        calculation: "fixed",
+        fixed: { amount: "5.00", currency: "EUR" },
+        name: "Everything else",
+        stackable: true,
+      }),
+    ).toEqual([]);
+    expect(defaultRuleChanges({})).toEqual([]);
   });
 });
 
@@ -813,7 +849,10 @@ describe("PricingRulesService", () => {
     expect([h.rules.markup.find((stored) => stored.id === row.id)?.version, h.records]).toEqual([1, []]);
   });
 
-  it("keeps the default rule's catch-all scope: a narrowing scope is 409 default_rule, other fields may change [OBE-069 AC2]", async () => {
+  // Until FIX-W34-OTA this test also moved the default rule to priority 2000, which OBE-069 allowed; lead decision (2e)
+  // of 2026-10-30 (OADR-0005 point 3, revised) fixes its priority at 1000, so that change is now one of the refusals
+  // of the test after this one, and the allowed changes here are the percentage and a catch-all scope.
+  it("keeps the default rule's catch-all scope: a narrowing scope is 409 default_rule, its percentage may change [OBE-069 AC2]", async () => {
     const etag = ruleEtagOf(defaultRule.version);
 
     expect(
@@ -821,12 +860,84 @@ describe("PricingRulesService", () => {
     ).toEqual(["CONFLICT", { reason: "default_rule" }, []]);
     const saved = await h.service.updateMarkupRule(
       defaultRule.id,
-      { percentage: "2.0000", priority: 2000, scope: { carriers: [], minNet: null } },
+      { percentage: "2.0000", scope: { carriers: [], minNet: null } },
       etag,
     );
 
-    expect(saved).toMatchObject({ percentage: "2.0000", priority: 2000, isDefault: true, scope: {} });
+    expect(saved).toMatchObject({ percentage: "2.0000", priority: 1000, isDefault: true, scope: {} });
     expect(h.rules.markup.find((row) => row.id === defaultRule.id)?.scope).toEqual({});
+  });
+
+  it("refuses to switch the default rule off, give it a window or move its priority: 409 default_rule naming what stays fixed [FIX-W34-OTA AC3]", async () => {
+    const etag = ruleEtagOf(defaultRule.version);
+    const refused: MarkupRuleUpdate[] = [
+      { isActive: false },
+      { activeFrom: "2027-01-01T00:00:00.000Z" },
+      { activeUntil: "2027-01-01T00:00:00.000Z" },
+      { activeFrom: "2026-12-01T00:00:00.000Z", activeUntil: "2027-01-01T00:00:00.000Z" },
+      { priority: 2000 },
+      { priority: 999 },
+      // An allowed field does not carry a refused one through.
+      { percentage: "3.0000", isActive: false },
+    ];
+
+    for (const update of refused) {
+      const error = await h.service.updateMarkupRule(defaultRule.id, update, etag).then(
+        () => undefined,
+        (reason: unknown) => reason,
+      );
+      expect([update, error]).toEqual([update, expect.any(AppError)]);
+      const conflict = error as AppError;
+      expect([update, conflict.code, conflict.details]).toEqual([
+        update,
+        "CONFLICT",
+        { reason: "default_rule" },
+      ]);
+      expect(conflict.message).toBe(DEFAULT_RULE_CONFLICT_MESSAGE);
+    }
+    // The message names every fixed part: the scope, the active flag, the window and the priority.
+    expect(DEFAULT_RULE_CONFLICT_MESSAGE).toMatch(
+      /deleted.*scope stays empty.*stays active.*no validity window.*1000/,
+    );
+    // Nothing was written or audited.
+    expect([h.rules.markup.find((row) => row.id === defaultRule.id), h.records]).toEqual([defaultRule, []]);
+  });
+
+  it("takes the default rule's fixed values sent as they are, and a change of its percentage [FIX-W34-OTA AC3]", async () => {
+    const saved = await h.service.updateMarkupRule(
+      defaultRule.id,
+      {
+        percentage: "1.5000",
+        isActive: true,
+        activeFrom: null,
+        activeUntil: null,
+        priority: 1000,
+        scope: {},
+      },
+      ruleEtagOf(defaultRule.version),
+    );
+
+    expect(saved).toMatchObject({
+      isDefault: true,
+      percentage: "1.5000",
+      isActive: true,
+      activeFrom: null,
+      activeUntil: null,
+      priority: 1000,
+      scope: {},
+      version: 2,
+    });
+    expect(h.records.map((record) => record.action)).toEqual(["settings.markupRules.update"]);
+    // Another rule may still be switched off, dated and moved.
+    const row = markupRow();
+    h.rules.markup.push(row);
+    expect(
+      await h.service.updateMarkupRule(
+        row.id,
+        { isActive: false, activeFrom: "2027-01-01T00:00:00.000Z", priority: 2000 },
+        '"1"',
+      ),
+    ).toMatchObject({ isActive: false, activeFrom: "2027-01-01T00:00:00.000Z", priority: 2000 });
   });
 
   it("refuses to delete the default rule with 409 default_rule, and deletes another one with its audit row [OBE-069 AC2]", async () => {

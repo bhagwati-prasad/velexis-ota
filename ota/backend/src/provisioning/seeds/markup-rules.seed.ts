@@ -1,6 +1,7 @@
 // The default markup rule of a new tenant (OADR-0007 item 4, tenant provisioning flow §2 step 5): one active
 // catch-all rule at 0 %, priority 1000, flagged `is_default`. OTAs set real markups in the OTA admin; the default
-// rule cannot be deleted or narrowed there, so a tenant has exactly one.
+// rule cannot be deleted, narrowed, switched off, dated or moved from priority 1000 there (OADR-0005 point 3, revised
+// 2026-10-30), so a tenant has exactly one and it always matches.
 import { newId } from "../../common/ids";
 import type { TenantSeedDb } from "./index";
 
