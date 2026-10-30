@@ -1,8 +1,8 @@
 // checkout.createPayment, checkout.getPayment and checkout.updatePayment (createCheckoutPayment, getPayment,
 // updatePayment; `x-scope: both`; OBE-038; ota/docs/flows/checkout-stripe.md §2 steps 3–4, OADR-0010 points 1–3, 7,
-// 8, ADR-0011 (A)). Card payments on Stripe in `velexis` mode through the PaymentGateway; every provider write carries
-// its idempotency key (payment-gateway.ts) and no transaction stays open across a Stripe or Amadeus call
-// (architecture §4).
+// 8, ADR-0011 (A)). Card payments on Stripe through the PaymentGateway, in the account mode of the tenant's connection
+// (`velexis`; `connect_standard` and `api_keys` since OBE-077); every provider write carries its idempotency key
+// (payment-gateway.ts) and no transaction stays open across a Stripe or Amadeus call (architecture §4).
 //
 // createPayment {method: "card", termsAccepted: true, card?}:
 //   1. checks without data: `card` and `airline_card` (below) are taken in this release (the wallets and PayPal: `403
@@ -17,17 +17,19 @@
 //      accepted (`422 UNPROCESSABLE`) and its fee is quoted (card-fees.ts; Amadeus between transactions);
 //   3. one transaction locks the checkout (a checkout changed since step 2 starts again), cancels the checkout's
 //      payments that are not confirmed yet (`requires_payment_method`, `requires_action`), inserts the `payments` row
-//      (`requires_payment_method`, `capture_method = manual`, the checkout total with the card fee and its lines with
-//      their refundable flags, `card_fee_lines`: lead decision (2) of 2026-10-23, second batch, the hint) with
-//      its `payment_events` row, and sets the checkout `payment_pending`, `terms_accepted_at`, the card fee and the
-//      total, and its expiry 15 minutes later (`expires_at + 15 min` on the first payment, at least `now + 15 min`
-//      on a later one). A checkout an airline-card payment had switched to the airline's price gets its selling price
-//      back (`pricing_mode = markup_rules`, checkout/pricing-mode.ts: the priced offer's selling total and the extras'
-//      selling prices, the card fee with the OTA's own `payment_card` fees). The transaction **commits before** the
-//      PaymentIntent exists (OADR-0010 point 2), so a webhook always finds
-//      the row through `metadata.payment_id`. A row left by an earlier attempt whose Stripe call failed (no
-//      PaymentIntent, same amounts and hint) is used again instead, so its `pi:create:<pay_id>` key is sent again and
-//      a PaymentIntent Stripe did create for the lost answer is the one that comes back;
+//      (`requires_payment_method`, `capture_method = manual`, the account it is created on as its connection snapshot,
+//      `metadata.connection` (OBE-077: every later Stripe call for it is made there, whatever mode the OTA switches
+//      to), the checkout total with the card fee and its lines with their refundable flags, `card_fee_lines`: lead
+//      decision (2) of 2026-10-23, second batch, the hint) with its `payment_events` row, and sets the checkout
+//      `payment_pending`, `terms_accepted_at`, the card fee and the total, and its expiry 15 minutes later (`expires_at
+//      + 15 min` on the first payment, at least `now + 15 min` on a later one). A checkout an airline-card payment had
+//      switched to the airline's price gets its selling price back (`pricing_mode = markup_rules`,
+//      checkout/pricing-mode.ts: the priced offer's selling total and the extras' selling prices, the card fee with the
+//      OTA's own `payment_card` fees). The transaction **commits before** the PaymentIntent exists (OADR-0010 point 2),
+//      so a webhook always finds the row through `metadata.payment_id`. A row left by an earlier attempt whose Stripe
+//      call failed (no PaymentIntent, same amounts and hint, same account) is used again instead, so its
+//      `pi:create:<pay_id>` key is sent again and a PaymentIntent Stripe did create for the lost answer is the one that
+//      comes back;
 //   4. the gateway creates the PaymentIntent (`pi:create:<pay_id>`); a Stripe failure is `502 PAYMENT_PROVIDER_ERROR`
 //      (nothing charged; the idempotency interceptor releases the request's key, so the same key can be sent again).
 //      A 5xx that Stripe keeps as the answer of `pi:create:<pay_id>` makes the row `failed` instead (that key would
@@ -118,6 +120,10 @@ import { CardFees, type CardFeePlan, type CardFeeQuote, type CardHint } from "./
 import {
   failureKeptForKey,
   PAYMENT_GATEWAY,
+  paymentAccountOf,
+  paymentMetadataFor,
+  recordedPaymentAccount,
+  samePaymentAccount,
   type GatewayAccount,
   type GatewayContext,
   type GatewayPayment,
@@ -597,6 +603,8 @@ export class PaymentsService {
         row.provider === "stripe" &&
         row.method === "card" &&
         row.providerConnectionId === account.connectionId &&
+        // On the account the tenant's connection names now (OBE-077): after a switch, a new payment on the new one.
+        samePaymentAccount(recordedPaymentAccount(row.metadata), paymentAccountOf(account)) &&
         row.currency === checkout.currency &&
         new Money(row.amount).equals(total) &&
         new Money(row.cardFeeAmount).equals(fee) &&
@@ -638,7 +646,8 @@ export class PaymentsService {
           version: null,
         }),
         next_action: JSON.stringify(nextActionOf("requires_payment_method")),
-        metadata: JSON.stringify({}),
+        // The account the payment is created on (its connection snapshot, OBE-077): every later call for it goes there.
+        metadata: JSON.stringify(paymentMetadataFor(account)),
         version: 1,
         created_at: now,
         updated_at: now,
@@ -1322,6 +1331,7 @@ export class PaymentsService {
       amount: new Money(row.amount).toFixed(minorUnits),
       minorUnits,
       version: row.version,
+      account: recordedPaymentAccount(row.metadata),
     };
   }
 
@@ -1351,13 +1361,18 @@ export class PaymentsService {
     );
   }
 
-  /** The publishable key for a payment's front end: the current account's, when it is the payment's connection. */
+  /**
+   * The publishable key for a payment's front end: the current account's, when it is the payment's connection and the
+   * account the payment was created on (OBE-077).
+   */
   private async publishableKeyOf(ctx: GatewayContext, row: PaymentRow): Promise<string | null> {
     if (row.provider !== "stripe") {
       return null;
     }
     const account = await this.gateway.findAccount(ctx);
-    return account !== null && account.connectionId === row.providerConnectionId
+    return account !== null &&
+      account.connectionId === row.providerConnectionId &&
+      samePaymentAccount(recordedPaymentAccount(row.metadata), paymentAccountOf(account))
       ? account.publishableKey
       : null;
   }

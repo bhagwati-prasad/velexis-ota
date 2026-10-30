@@ -5,6 +5,9 @@
 // inert `AirlineCardGateway`. Provider secrets never leave the gateway: what it hands back holds ids, amounts, the
 // card's brand and last 4, and the PaymentIntent's client secret for the browser (never stored, never logged).
 //
+// Since OBE-077 a payment carries the account it was created on (GatewayPaymentAccount, its connection snapshot in
+// `payments.metadata`), so the calls for an existing payment never follow a later switch of the tenant's account mode.
+//
 // Amounts cross the interface as decimal strings with the currency's minor units (conventions §1); the gateway turns
 // them into the provider's integer minor units and back. Every write carries an idempotency key of OADR-0010 point 3,
 // built here (`idempotencyKeys`), so the SDK's single network retry and the jobs' retries can never charge twice.
@@ -20,6 +23,88 @@ export interface GatewayContext {
 
 /** The account modes of ADR-0011 (A). */
 export type GatewayAccountMode = "velexis" | "connect_standard" | "api_keys";
+
+/** The account modes, in the order of GatewayAccountMode. */
+export const GATEWAY_ACCOUNT_MODES: readonly GatewayAccountMode[] = Object.freeze([
+  "velexis",
+  "connect_standard",
+  "api_keys",
+]);
+
+/**
+ * The provider account a payment was created on: its connection snapshot (PADR-0011 point 7; OBE-077). The platform
+ * updates a tenant's connection row in place when the OTA switches mode, so `provider_connection_id` alone does not say
+ * where a PaymentIntent lives: the mode and the OTA's account are recorded with the payment when its row is inserted
+ * (`payments.metadata.connection`, `paymentMetadataFor`), and every later call for the payment (an update, a read, a
+ * capture, a void, a refund) is made on that account, whatever the tenant's connection says by then. A switch never
+ * moves a payment; it only decides where new ones go.
+ */
+export interface GatewayPaymentAccount {
+  readonly accountMode: GatewayAccountMode;
+  /** The OTA's own Stripe account (`acct_…`) in `connect_standard` and `api_keys` mode; `null` in `velexis` mode. */
+  readonly accountReference: string | null;
+}
+
+/** The snapshot of a payment without one: written before OBE-077, when `velexis` was the only mode served (M3, M4). */
+export const VELEXIS_PAYMENT_ACCOUNT: GatewayPaymentAccount = Object.freeze({
+  accountMode: "velexis",
+  accountReference: null,
+});
+
+/** `acct_` and letters and digits, as the platform's CHECK `payment_provider_connections_mode_ck` writes it. */
+export const ACCOUNT_REFERENCE = /^acct_[A-Za-z0-9]+$/;
+
+/** The snapshot of the account a new payment is created on. */
+export function paymentAccountOf(
+  account: Pick<GatewayAccount, "accountMode" | "accountReference">,
+): GatewayPaymentAccount {
+  return Object.freeze({
+    accountMode: account.accountMode,
+    accountReference: account.accountMode === "velexis" ? null : account.accountReference,
+  });
+}
+
+/** Whether two snapshots name the same account (`null`: a payment without one, which is `velexis`). */
+export function samePaymentAccount(
+  left: GatewayPaymentAccount | null,
+  right: GatewayPaymentAccount | null,
+): boolean {
+  const a = left ?? VELEXIS_PAYMENT_ACCOUNT;
+  const b = right ?? VELEXIS_PAYMENT_ACCOUNT;
+  return a.accountMode === b.accountMode && a.accountReference === b.accountReference;
+}
+
+/** `payments.metadata` of a new Stripe payment: its connection snapshot (no secret: a mode and an account id). */
+export function paymentMetadataFor(account: Pick<GatewayAccount, "accountMode" | "accountReference">): {
+  readonly connection: GatewayPaymentAccount;
+} {
+  return { connection: paymentAccountOf(account) };
+}
+
+/**
+ * The connection snapshot of a stored payment (`payments.metadata`, as `paymentMetadataFor` wrote it), or `null` when
+ * there is none: a payment written before OBE-077 (`velexis`), an airline-card payment, or a value this code did not
+ * write.
+ */
+export function recordedPaymentAccount(metadata: unknown): GatewayPaymentAccount | null {
+  if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) {
+    return null;
+  }
+  const connection: unknown = (metadata as Record<string, unknown>)["connection"];
+  if (typeof connection !== "object" || connection === null || Array.isArray(connection)) {
+    return null;
+  }
+  const { accountMode, accountReference } = connection as Record<string, unknown>;
+  if (!GATEWAY_ACCOUNT_MODES.includes(accountMode as GatewayAccountMode)) {
+    return null;
+  }
+  if (accountMode === "velexis") {
+    return accountReference === null ? VELEXIS_PAYMENT_ACCOUNT : null;
+  }
+  return typeof accountReference === "string" && ACCOUNT_REFERENCE.test(accountReference)
+    ? Object.freeze({ accountMode: accountMode as GatewayAccountMode, accountReference })
+    : null;
+}
 
 /** The payment methods a gateway can take through `createSession` (PaymentCreateRequest.method). */
 export type GatewayMethod = "card" | "apple_pay" | "google_pay" | "paypal";
@@ -37,6 +122,12 @@ export interface GatewayAccount {
   readonly publishableKey: string;
   /** The OTA's `acct_…` for Stripe.js `stripeAccount` (`connect_standard`), else `null`. */
   readonly accountId: string | null;
+  /**
+   * The OTA's own Stripe account (`acct_…`, `account_reference`) in `connect_standard` and `api_keys` mode, else
+   * `null`: what a new payment records (`paymentAccountOf`). Only `connect_standard`'s reaches the browser
+   * (`accountId`).
+   */
+  readonly accountReference: string | null;
   /** The card statement descriptor suffix (`velexis` mode), else `null`. */
   readonly statementDescriptor: string | null;
   /** The methods the account takes now, in the order of GatewayMethod. */
@@ -70,6 +161,11 @@ export interface GatewayPayment {
   readonly minorUnits: number;
   /** `payments.version`: the key of an amount update (`pi:update:<pay_id>:<version>`). */
   readonly version: number;
+  /**
+   * The account the payment was created on (`recordedPaymentAccount(row.metadata)`), or `null` for a payment written
+   * before the snapshot (`velexis`): every call for the payment is made on it.
+   */
+  readonly account: GatewayPaymentAccount | null;
 }
 
 /** What a new session needs besides the payment. */
@@ -137,6 +233,8 @@ export interface GatewayRefund {
   readonly currency: string;
   readonly amount: string;
   readonly minorUnits: number;
+  /** The account of the refunded payment (GatewayPayment.account): the refund is made where the payment lives. */
+  readonly account: GatewayPaymentAccount | null;
 }
 
 /** The provider's view of a refund. */
@@ -180,17 +278,22 @@ export function failureKeptForKey(error: unknown): boolean {
 export type CapturePurpose = "booking" | "cancellation";
 
 /**
- * The payment gateway. Every method resolves the tenant's account first (`account`, `424
- * PAYMENT_PROVIDER_NOT_CONFIGURED` when it cannot serve), and maps every provider failure to `502
- * PAYMENT_PROVIDER_ERROR` (nothing charged) whose cause is a `GatewayCallFailure`: the call can be sent again with the
- * same idempotency key, unless the provider keeps the failure for that key.
+ * The payment gateway. Every method resolves the account it calls first (`424 PAYMENT_PROVIDER_NOT_CONFIGURED` when it
+ * cannot serve): the tenant's current account for `findAccount`, `account` and a new session, the payment's recorded
+ * account (GatewayPayment.account) for every call on an existing payment (OBE-077). It maps every provider failure to
+ * `502 PAYMENT_PROVIDER_ERROR` (nothing charged) whose cause is a `GatewayCallFailure`: the call can be sent again with
+ * the same idempotency key, unless the provider keeps the failure for that key.
  */
 export interface PaymentGateway {
   /** The account of the tenant's environment, or `null` when none can take payments (storefront.get). */
   findAccount(ctx: GatewayContext): Promise<GatewayAccount | null>;
   /** The account of the tenant's environment; `424 PAYMENT_PROVIDER_NOT_CONFIGURED` when none can take payments. */
   account(ctx: GatewayContext): Promise<GatewayAccount>;
-  /** Creates the provider payment (Stripe: a PaymentIntent with manual capture), idempotency `pi:create:<pay_id>`. */
+  /**
+   * Creates the provider payment (Stripe: a PaymentIntent with manual capture), idempotency `pi:create:<pay_id>`, on
+   * the tenant's current account, which must be the one the payment recorded (`424` otherwise: the connection changed
+   * between the row and the call).
+   */
   createSession(
     ctx: GatewayContext,
     payment: GatewayPayment,

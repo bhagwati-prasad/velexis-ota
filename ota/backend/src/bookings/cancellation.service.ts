@@ -222,6 +222,7 @@ import { storefrontUrl } from "../notifications/renderer";
 import { AIRLINE_PROVIDER } from "../payments/airline-card/airline-card.gateway";
 import {
   PAYMENT_GATEWAY,
+  recordedPaymentAccount,
   type GatewayContext,
   type GatewayPayment,
   type GatewayState,
@@ -1645,6 +1646,7 @@ export class CancellationRecorder {
         amount: new Money(row.amount).toFixed(minorUnits),
         minorUnits,
         version: row.version,
+        account: recordedPaymentAccount(row.metadata),
       };
       const state = await this.gateway.void(ctx, gatewayPayment);
       return await this.tx.run(async (trx) => {
@@ -1715,6 +1717,7 @@ export class CancellationRecorder {
         amount: new Money(payment.amount).toFixed(minorUnits),
         minorUnits,
         version: payment.version,
+        account: recordedPaymentAccount(payment.metadata),
       };
       const state = await this.gateway.capture(ctx, gatewayPayment, capture.amount, "cancellation");
       if (state.status === "captured") {

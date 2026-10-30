@@ -2394,7 +2394,8 @@ The platform turns on own Stripe, own Amadeus credentials, custom domains and go
   - `pnpm contracts:lint` is clean; the SDK contract test still passes (the change is additive).
 - **Verify:** `pnpm contracts:lint && pnpm contracts:generate && pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-sdk test`
 
-### OBE-077 · Serve Connect Standard and API-key modes in the Stripe gateway
+### OBE-077 · Serve Connect Standard and API-key modes in the Stripe gateway ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M5
 - **Depends on:** OBE-076, OBE-039

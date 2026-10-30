@@ -24,14 +24,21 @@
 // tenant key and STOREFRONT_BASE_DOMAIN, its storefront sub-domain as `primaryUrl` and `domains`; verified custom
 // domains (M5) are not read yet; plan-gated features are not gated yet (no plan data is read in M2).
 //
-// Payment (api-changes §4, OADR-0010 point 1; OBE-038). The cached part carries the settings' side of
+// Payment (api-changes §4, OADR-0010 point 1; OBE-038, OBE-077). The cached part carries the settings' side of
 // StorefrontPaymentConfig (card brands, 3-D Secure, merchant country) with the OTA's name as `merchantName`, and no
 // method. `storefrontFor` completes it per request with the account the payment gateway serves for the tenant's
-// environment (read through the 60-second connection cache, so a platform change shows without waiting for this
-// cache): in `velexis` mode the Velexis publishable key of the environment, `merchantName` "Velexis on behalf of <OTA
-// name>", the connection's statement descriptor suffix and its methods (`card`); without an account that can take
-// payments the section stays without a method (`supportedMethods: []`, an empty `publishableKey`), and
-// checkout.createPayment answers `424 PAYMENT_PROVIDER_NOT_CONFIGURED`. No secret key is ever part of it.
+// environment (read through the 60-second connection cache, so a platform change, a mode switch included, shows without
+// waiting for this cache), the same code for the three account modes (`paymentConfigFor`; OF-12 AC1):
+//
+//   accountMode        publishableKey             accountId   merchantName                   statementDescriptor
+//   velexis            Velexis's (environment)    null        "Velexis on behalf of <OTA>"   the connection's suffix
+//   connect_standard   Velexis's (environment)    acct_…      the OTA's name                 null
+//   api_keys           the connection's own       null        the OTA's name                 null
+//
+// with the connection's methods (`card`). Without an account that can take payments the section stays without a method
+// (`supportedMethods: []`, an empty `publishableKey`), and checkout.createPayment answers `424
+// PAYMENT_PROVIDER_NOT_CONFIGURED`. No secret key is ever part of it: the gateway hands over the public side of the
+// account only (StorefrontPaymentAccount), and an `api_keys` connection's key is not even decrypted for it.
 //
 // Airline card (api-changes §4, OADR-0004 point 1, OADR-0017 point 7; OBE-050). The cache entry keeps only the tenant's
 // setting for its environment (`airlineCardEnabled`, from `airline_card_enabled_<env>`). `storefrontFor` decides per
@@ -145,7 +152,10 @@ const ACCOUNT_METHODS: readonly Payment["supportedMethods"][number][] = ["card"]
 export interface StorefrontPaymentAccount {
   readonly provider: "stripe";
   readonly accountMode: Payment["accountMode"];
-  /** The publishable key of the environment (Velexis's in `velexis` and `connect_standard` mode). */
+  /**
+   * The publishable key of the environment: Velexis's in `velexis` and `connect_standard` mode, the OTA's own in
+   * `api_keys` mode.
+   */
   readonly publishableKey: string;
   /** `acct_…` in `connect_standard` mode, else `null`. */
   readonly accountId: string | null;
@@ -160,7 +170,8 @@ export const VELEXIS_MERCHANT_PREFIX = "Velexis on behalf of";
 
 /**
  * The payment section for one request: the cached part (the OTA's name as `merchantName`, no method) completed with the
- * account and the airline card of the caller (`airlineCardFor`), see the file header.
+ * account and the airline card of the caller (`airlineCardFor`), see the file header: only `velexis` mode names Velexis
+ * as the merchant and shows a statement descriptor, only `connect_standard` gives Stripe.js an `accountId`.
  */
 export function paymentConfigFor(
   base: StorefrontBase["payment"],

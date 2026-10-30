@@ -321,8 +321,10 @@ export type PaymentCaptureMode = (typeof PAYMENT_CAPTURE_MODES)[number];
 /**
  * A tenant's default payment connection of one environment (`platform.payment_provider_connections`, OADR-0010 point
  * 1), as far as the payment gateway relies on it (OBE-038): plain and JSON-safe, so the `conn:payment:` cache stores it
- * as it is. The secret columns (`secret_ciphertext`, `webhook_secret_ciphertext`, which only the `api_keys` mode of M5
- * fills) are never selected; the `velexis` mode uses Velexis's keys from the environment file.
+ * as it is. The `velexis` and `connect_standard` modes use Velexis's keys from the environment file; the
+ * `api_keys` mode's secret key stays the platform's envelope ciphertext, as base64 text (`secretCiphertext`), which
+ * only the Stripe gateway decrypts, in memory, for one call (OBE-077), as the Amadeus client secret of
+ * `PlatformAmadeusConnection`. The webhook signing secret (`webhook_secret_ciphertext`) is not selected.
  */
 export interface PlatformPaymentConnection {
   /** `ppc_` + ULID. */
@@ -341,6 +343,11 @@ export interface PlatformPaymentConnection {
   readonly status: PaymentConnectionStatus;
   /** The card statement descriptor suffix with the OTA's brand (`velexis` mode), or `null`. */
   readonly statementDescriptorSuffix: string | null;
+  /**
+   * base64 of `secret_ciphertext` (`api_keys` mode only, else `null`): the OTA's secret or restricted key, encrypted by
+   * the platform for `platform.payment_provider_connections.secret_ciphertext:<id>`.
+   */
+  readonly secretCiphertext: string | null;
 }
 
 /** The columns of `platform.payment_provider_connections` that `PlatformPaymentConnection` maps. */
@@ -356,6 +363,7 @@ const PAYMENT_CONNECTION_COLUMNS = [
   "capture_mode",
   "status",
   "statement_descriptor_suffix",
+  "secret_ciphertext",
 ] as const;
 
 type PaymentConnectionRow = Pick<
@@ -645,8 +653,9 @@ export class PlatformReadRepository {
   /**
    * The tenant's default payment connection of `environment` (`platform.payment_provider_connections`, `is_default`:
    * one per tenant and environment, `payment_provider_connections_default_uq`), whatever its provider, mode and status,
-   * or `null` when there is none: those are the payment gateway's checks (OBE-038). The secret columns are not read. A
-   * value that cannot be a tenant id or an environment is unknown without a query.
+   * or `null` when there is none: those are the payment gateway's checks (OBE-038). The secret key's ciphertext is read
+   * as base64 text and never decrypted here (OBE-077); the webhook signing secret is not read. A value that cannot be a
+   * tenant id or an environment is unknown without a query.
    */
   async paymentConnection(
     tenantId: string,
@@ -878,7 +887,8 @@ function toPlatformAmadeusAccount(row: AmadeusAccountRow): PlatformAmadeusAccoun
 
 /**
  * Maps a `platform.payment_provider_connections` row. A provider, environment, mode, capture mode or status outside the
- * CHECK lists throws `UnexpectedPlatformValueError`; the method list becomes a frozen copy.
+ * CHECK lists throws `UnexpectedPlatformValueError`; the method list becomes a frozen copy, the secret key's ciphertext
+ * base64 text.
  */
 function toPlatformPaymentConnection(row: PaymentConnectionRow): PlatformPaymentConnection {
   const column = (name: string) => `platform.payment_provider_connections.${name}`;
@@ -894,6 +904,7 @@ function toPlatformPaymentConnection(row: PaymentConnectionRow): PlatformPayment
     captureMode: oneOf(row.capture_mode, PAYMENT_CAPTURE_MODES, column("capture_mode"), row.id),
     status: oneOf(row.status, PAYMENT_CONNECTION_STATUSES, column("status"), row.id),
     statementDescriptorSuffix: row.statement_descriptor_suffix,
+    secretCiphertext: row.secret_ciphertext === null ? null : row.secret_ciphertext.toString("base64"),
   });
 }
 

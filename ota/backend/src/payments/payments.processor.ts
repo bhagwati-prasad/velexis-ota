@@ -105,6 +105,7 @@ import { TenantContext } from "../tenancy/tenant-context";
 import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
 import {
   PAYMENT_GATEWAY,
+  recordedPaymentAccount,
   type GatewayContext,
   type GatewayPayment,
   type GatewayRefundState,
@@ -1094,6 +1095,8 @@ export class PaymentJobsHandler {
         currency: row.currency,
         amount: new Money(row.amount).toFixed(minorUnits),
         minorUnits,
+        // Where the payment lives (OBE-077): the refund is made on that account.
+        account: recordedPaymentAccount(payment.metadata),
       });
     } catch (error) {
       return await this.afterRefundFailure(claim, attempt, error);
@@ -1318,6 +1321,7 @@ export class PaymentJobsHandler {
       amount: new Money(payment.amount).toFixed(minorUnits),
       minorUnits,
       version: payment.version,
+      account: recordedPaymentAccount(payment.metadata),
     };
   }
 

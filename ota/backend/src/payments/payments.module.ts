@@ -1,6 +1,7 @@
 // The payments context (ota/docs/architecture.md §2.1 and §5.1, OADR-0010, ADR-0011 (A) and (D); OBE-038): the
-// PaymentGateway with `StripeGateway` (`velexis` mode in M3), and the payment steps of the checkout,
-// checkout.createPayment, checkout.getPayment and checkout.updatePayment, on the tenant's `payments` and
+// PaymentGateway with `StripeGateway` (`velexis` mode in M3; `connect_standard` and `api_keys` since OBE-077, whose
+// key is decrypted with STRIPE_KEY_PROVIDER, provided wherever the Stripe clients are), and the payment steps of the
+// checkout, checkout.createPayment, checkout.getPayment and checkout.updatePayment, on the tenant's `payments` and
 // `payment_events` through the tenancy module's `TenantTx`.
 //
 // Three modules:
@@ -55,7 +56,7 @@ import { PaymentsService } from "./payments.service";
 import { RefundsSweep } from "./refunds-sweep.processor";
 import { RefundsRepository } from "./refunds.repository";
 import { StripeEventHandler, StripeEventsProcessor } from "./stripe-events.processor";
-import { StripeClientFactory } from "./stripe/stripe-client.factory";
+import { StripeClientFactory, stripeKeyProvider } from "./stripe/stripe-client.factory";
 import { StripeGateway } from "./stripe/stripe.gateway";
 import { StripeVelexisWebhookController } from "./webhooks/stripe-velexis-webhook.controller";
 import { WebhookReceiverService } from "./webhooks/webhook-receiver.service";
@@ -95,6 +96,8 @@ export class PaymentsModule {}
 @Module({
   imports: [TenancyModule.forWorker(), QueuesModule],
   providers: [
+    // The KEKs that decrypt an `api_keys` connection's key (OBE-077).
+    stripeKeyProvider,
     StripeClientFactory,
     PaymentsRepository,
     StripeEventHandler,

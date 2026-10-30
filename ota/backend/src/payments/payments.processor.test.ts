@@ -775,6 +775,32 @@ describe("PaymentJobsHandler", () => {
     expect(gateway.refresh).not.toHaveBeenCalled();
   });
 
+  it("voids and refunds on the account the payment recorded, whatever the tenant's connection says now (OBE-077)", async () => {
+    const account = { accountMode: "api_keys", accountReference: "acct_1PaymentsOwnKeys00000" } as const;
+    const recorded = { metadata: { connection: account } };
+    const voiding = handler({ payment: paymentRow(recorded) });
+    voiding.gateway.void.mockRejectedValue(stripeFailure(null));
+    const refunding = handler({
+      payment: paymentRow({ ...recorded, status: "captured", amountCaptured: "452.10" }),
+      refund: refundRow(),
+    });
+    refunding.gateway.refund.mockRejectedValue(stripeFailure(400, "charge_already_refunded"));
+
+    await expect(voiding.instance.run(PAYMENT_JOB.void, PAYMENT_ID, ATTEMPT)).rejects.toThrow(
+      /could not void/,
+    );
+    expect(await refunding.instance.run(PAYMENT_JOB.refundSubmit, REFUND_ID, ATTEMPT)).toBe("failed");
+
+    expect(voiding.gateway.void).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      expect.objectContaining({ id: PAYMENT_ID, account }),
+    );
+    expect(refunding.gateway.refund).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      expect.objectContaining({ id: REFUND_ID, paymentId: PAYMENT_ID, account }),
+    );
+  });
+
   it("reads the PaymentIntent again after a 5xx Stripe kept for the key, and records the void it finds", async () => {
     const { instance, gateway, payments, alerts } = handler({ payment: paymentRow() });
     gateway.void.mockRejectedValue(stripeFailure(500));
@@ -928,6 +954,8 @@ describe("PaymentJobsHandler", () => {
         currency: "EUR",
         amount: "100.00",
         minorUnits: 2,
+        // The account the payment recorded (OBE-077): none on this row, so the Velexis account.
+        account: null,
       },
     );
     // The claim (version 1 → 2) is what fails: a row another job took over meanwhile is left alone.

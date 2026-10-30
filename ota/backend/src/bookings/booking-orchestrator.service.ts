@@ -183,6 +183,7 @@ import { AIRLINE_CARD_METHOD, AIRLINE_PROVIDER } from "../payments/airline-card/
 import type { SensitiveCard } from "../payments/airline-card/sensitive-card";
 import {
   PAYMENT_GATEWAY,
+  recordedPaymentAccount,
   type GatewayContext,
   type GatewayPayment,
   type GatewayState,
@@ -2797,6 +2798,7 @@ export class BookingOrchestrator {
       amount: new Money(row.amount).toFixed(minorUnits),
       minorUnits,
       version: row.version,
+      account: recordedPaymentAccount(row.metadata),
     };
   }
 

@@ -52,6 +52,10 @@ Every table belongs to exactly one module, which owns its repository. Other modu
 - **Platform** (read-only, cached 60 s, invalidated by `vx:invalidate`): `tenants`, `tenant_domains`, `api_keys`, `tenant_memberships`, `accounts` (identity and MFA columns), `plans`, `supplier_connections`, `payment_provider_connections`, `amadeus_accounts`, `amadeus_offices`. The columns the OTA relies on are listed in [platform architecture §6.2](../../platform/docs/architecture.md#62-platform-tables-the-ota-backend-reads).
 - **Reference** (read through the `search_path`): `airports`, `cities`, `airlines`, `countries`, `currencies`, `time_zones`, `aircraft`. Time zones convert Amadeus local times to UTC for `first_departure_at`, `last_arrival_at` and `ticketing_deadline_at`.
 
+### 2.2 The provider account a payment was created on (OBE-077)
+
+The platform updates a tenant's `payment_provider_connections` row in place when the OTA changes its Stripe account mode ([PADR-0011](../../platform/docs/adr/0011-stripe-connect-standard-and-api-key-connections.md) point 1), so `payments.provider_connection_id` alone does not say where a PaymentIntent lives. checkout.createPayment therefore records the account with the Stripe payment row it inserts, in the existing `payments.metadata` column (no migration): `{"connection": {"accountMode": "velexis" | "connect_standard" | "api_keys", "accountReference": "acct_…" | null}}`, a mode and an account id, never a key. Every later Stripe call for the payment (the payment steps, checkout.complete, the payments queue, cancellations, the reconciliation, the console) is made on that account (`recordedPaymentAccount`, `src/payments/payment-gateway.ts`; PADR-0011 point 7): a mode switch never moves a payment. The console shows that mode as the payment's `providerConnection.accountMode`. Payments written before OBE-077 have `{}` and are `velexis` ones, the only mode served before (the console shows their connection's mode); airline-card payments keep `{}`.
+
 ## 3. Every delta of `0002` and why
 
 ### 3.1 Payments: the airline-card method
@@ -176,6 +180,8 @@ Envelope encryption of [ADR-0010](../../docs/mvp/adr/0010-secrets-envelope-encry
 | `notifications.secret_payload_ciphertext` | Links with tokens, guest booking tokens | `identity`, `bookings` | `notifications` (then purged) |
 
 No card data is encrypted anywhere, because none is stored.
+
+The OTA backend also decrypts two platform ciphertexts it reads (never writes), in memory, for one call, and caches them only as ciphertext: the Amadeus client secrets (`platform.amadeus_accounts`, `platform.supplier_connections.client_secret_ciphertext`; `amadeus`, OBE-017) and, since OBE-077, the OTA's own Stripe secret key of an `api_keys` connection (`platform.payment_provider_connections.secret_ciphertext`, associated data `platform.payment_provider_connections.secret_ciphertext:<ppc_id>`; `payments`, `src/payments/stripe/stripe-client.factory.ts`).
 
 ## 5. Status values and MVP restrictions
 
