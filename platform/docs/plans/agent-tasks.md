@@ -1357,7 +1357,8 @@ The OTA group builds the OTA admin and the console in M4. The platform issues th
   - Office selects offer only the connection's offices; saving shows the new values; a stale version shows the reload message [PF-53 AC1].
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-019 · Write the console SSO journey and cross-backend test
+### PFE-019 · Write the console SSO journey and cross-backend test ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M4
 - **Depends on:** PFE-017, PFE-014
