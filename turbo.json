@@ -133,7 +133,9 @@
         "$TURBO_ROOT$/deploy/env/ota-admin.env.example",
         "$TURBO_ROOT$/deploy/scripts/pack-release.sh",
         "$TURBO_ROOT$/deploy/systemd/velexis-ota-admin.service",
-        "$TURBO_ROOT$/ota/docs/scope.md"
+        "$TURBO_ROOT$/ota/docs/scope.md",
+        "$TURBO_ROOT$/ota/frontend/src/lib/theme.js",
+        "$TURBO_ROOT$/ota/frontend/src/lib/url.js"
       ],
       "outputs": ["coverage/**"]
     },

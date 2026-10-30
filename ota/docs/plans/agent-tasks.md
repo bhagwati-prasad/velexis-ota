@@ -2289,7 +2289,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - Server-action tests assert the payloads for create, update and delete.
 - **Verify:** `pnpm --filter @velexis/ota-admin test`
 
-### OAD-014 · Build storefront settings and assets
+### OAD-014 · Build storefront settings and assets ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-admin
 - **Milestone:** M4
 - **Depends on:** OAD-013, OBE-070, OBE-071
