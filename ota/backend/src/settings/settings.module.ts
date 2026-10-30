@@ -10,9 +10,10 @@
 // the StorageAdapter of ADR-0017 (documentStorageProvider: STORAGE_DRIVER and STORAGE_DIR, as the documents module
 // builds it), with the idempotency hooks of the upload; their public image URL getPublicAsset is the storefront
 // context's (StorefrontModule: storefront/public-assets.controller.ts and public-assets.service.ts), since the
-// dependency is one way, settings → storefront (lead decision (2a) of 2026-10-30, FIX-W34-OTA). Content pages
-// (OBE-072) join here. The console audit (StaffActionsWriter) is global (console.module.ts). API only; the worker
-// never imports it.
+// dependency is one way, settings → storefront (lead decision (2a) of 2026-10-30, FIX-W34-OTA). Since OBE-072: the
+// content pages (console.settings.pages.*, pages.service.ts), whose bodies are checked with the storefront context's
+// Markdown-subset parser and whose public caches its PublicPagesService names. The console audit (StaffActionsWriter)
+// is global (console.module.ts). API only; the worker never imports it.
 import { Module } from "@nestjs/common";
 import { documentStorageProvider } from "../documents/documents.module";
 import { PricingModule } from "../pricing/pricing.module";
@@ -22,6 +23,8 @@ import { AssetsController } from "./assets.controller";
 import { AssetsService, AssetUploadIdempotencyHooks } from "./assets.service";
 import { FeeRulesController } from "./fee-rules.controller";
 import { MarkupRulesController } from "./markup-rules.controller";
+import { PagesController } from "./pages.controller";
+import { PagesService } from "./pages.service";
 import { PricingRulesService } from "./pricing-rules.service";
 import { StorefrontSettingsController } from "./storefront-settings.controller";
 import { StorefrontSettingsService } from "./storefront-settings.service";
@@ -35,12 +38,14 @@ import { TemplateSettingsService } from "./templates.service";
     MarkupRulesController,
     FeeRulesController,
     NotificationTemplatesController,
+    PagesController,
     AssetsController,
   ],
   providers: [
     StorefrontSettingsService,
     PricingRulesService,
     TemplateSettingsService,
+    PagesService,
     AssetsService,
     AssetUploadIdempotencyHooks,
     documentStorageProvider,

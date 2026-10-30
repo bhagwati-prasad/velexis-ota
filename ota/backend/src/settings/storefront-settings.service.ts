@@ -23,8 +23,9 @@
 //      `sf:<locale>` for every locale the settings supported before or support now (the only entries storefront.get
 //      ever writes, storefront.service.ts), so the next storefront.get reads the row. A Redis that does not answer is
 //      logged (`storefront_settings.cache_not_deleted`) and the answer stands: the entries expire within their
-//      5 minutes, as the hosted storefront's own `sessionStorage` copy does. The content pages' cache (OBE-072) joins
-//      this deletion with its key.
+//      5 minutes, as the hosted storefront's own `sessionStorage` copy does. The content pages' caches of the same
+//      locales and environments, `t:<tenantId>:<env>:pages:<locale>` (OBE-072, storefront/public-pages.service.ts
+//      `pageCacheKeys`), go in the same deletion: which page a locale serves follows the default and supported locales.
 //
 // The rules of step 2 (`details.reason` in brackets), each checked when a section it reads is sent, on the settings
 // with the sent sections replaced:
@@ -62,6 +63,7 @@ import { REDIS_CLIENT } from "../common/redis/redis.module";
 import type { ApiConfig } from "../config";
 import { consoleAction, StaffActionsWriter } from "../console/staff-actions.writer";
 import { STOREFRONT_SETTINGS_ID } from "../provisioning/seeds/storefront-settings.seed";
+import { pageCacheKeys } from "../storefront/public-pages.service";
 import { canonicalLocale } from "../storefront/storefront.mapper";
 import { StorefrontRepository, type StorefrontSettingsEditRow } from "../storefront/storefront.repository";
 import { DEFAULT_ENTRY_LOCALE } from "../storefront/storefront.service";
@@ -372,9 +374,9 @@ function cachedLocales(row: StorefrontSettingsEditRow): string[] {
 const ENVIRONMENTS: readonly KeyEnvironment[] = ["test", "live"];
 
 /**
- * The storefront.get entries of both environments for the locales of `rows` (see the file header, step 5). The tenant
- * id is checked by the first key; a locale that cannot be a key part is left out, because storefront.service.ts never
- * caches under it.
+ * The storefront.get entries and the content pages' caches of both environments for the locales of `rows` (see the
+ * file header, step 5). The tenant id is checked by the first key; a locale that cannot be a key part is left out,
+ * because storefront.service.ts and public-pages.service.ts never cache under it.
  */
 export function storefrontCacheKeys(
   tenantId: string,
@@ -383,6 +385,11 @@ export function storefrontCacheKeys(
   const locales = [...new Set(rows.flatMap(cachedLocales))].filter(
     (locale) => locale !== DEFAULT_ENTRY_LOCALE,
   );
+  return [...storefrontEntryKeys(tenantId, locales), ...pageCacheKeys(tenantId, locales)];
+}
+
+/** The storefront.get entries of both environments: `sf:und` and the locales'. */
+function storefrontEntryKeys(tenantId: string, locales: readonly string[]): RedisKeyName[] {
   return ENVIRONMENTS.flatMap((environment) => [
     redisKeys.sf(tenantId, environment, DEFAULT_ENTRY_LOCALE).key,
     ...locales.flatMap((locale): RedisKeyName[] => {

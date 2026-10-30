@@ -121,6 +121,8 @@ StorefrontPage:
 
 The body is a **Markdown subset**: headings 2–4, paragraphs, bold, italic, bullet and numbered lists, links (`https:`, `mailto:`, `tel:` and relative `/p/<slug>`), and images that reference a `page_image` asset. Anything else (HTML, tables, code, other schemes) is refused with `422 UNPROCESSABLE` and `details.line`. One page per `(slug, locale)` (`409 CONFLICT`). A page referenced by `legal.links` cannot be deleted (`409 CONFLICT`).
 
+Since OBE-072 (2026-10-30): one parser in the backend (`ota/backend/src/storefront/markdown-subset.parser.ts`) checks a body on save and builds storefront.getPage's blocks; besides the refusals of StorefrontPageMarkdown it refuses `+ ` bullets and `1) ` numbers (write `- ` or `1. `), setext headings (`===` or `---` under text), empty headings and items, link titles, links without text and control characters, always with the line they start on, and nests bold, italic and links at most 8 deep. Unmatched `*`, `_` and brackets stay text, as do entities such as `&amp;` (never decoded). A title is stored trimmed (a blank one, or one with a control character, is `400 VALIDATION_FAILED` at `/title`), the locale as the settings write it. The checks of create run in the order of its description: locale, Markdown, images.
+
 ### 2.5 Storefront assets (`storefront_assets`, new table)
 
 | operationId | Method and path | `x-sdk-method` | Permission |
@@ -187,6 +189,7 @@ Not a payment operation: the OTA's own subscription state, which the platform's 
 - Published pages of the request locale (`Accept-Language`, falling back to the default locale). The list returns `{slug, title, kind, showInFooter, sortOrder}`.
 - `getPage` returns `{slug, locale, title, kind, blocks[], updatedAt}`. `blocks` is the Markdown subset parsed **on the server** into a small JSON tree (`heading`, `paragraph`, `list`, `image`, with inline `text`, `strong`, `em`, `link`), so the storefront renders it with `createElement` and `textContent` and never with `innerHTML` ([`conventions.md` §4](../../docs/mvp/conventions.md#4-vanilla-storefront-otafrontend)).
 - Cached like `storefront.get` (5 minutes per tenant, environment and locale). Errors: `404 NOT_FOUND`, `403 TENANT_SUSPENDED`.
+- Since OBE-072 (2026-10-30): the cache is the hash `t:<tenantId>:<env>:pages:<locale>` beside storefront.get's `sf:` entries (field `list`, and `page:<slug>` per page read; [`architecture.md`](architecture.md) §7, [OADR-0012](adr/0012-storefront-settings-assets-and-pages.md) point 7 note of that day). Every console page change and every storefront settings change deletes it for every supported locale in both environments, so a change shows at once on the API and within the storefront's own 5-minute copy.
 
 ### 4.2 Assets
 

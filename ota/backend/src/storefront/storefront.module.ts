@@ -1,7 +1,9 @@
 // The storefront context (ota/docs/architecture.md §2.1, OBE-016): `storefront.get`, the bootstrap configuration of
 // the hosted storefront and of storefronts built with the SDK, from the tenant's `storefront_settings` through the
 // tenancy module's `TenantTx`, cached in Redis per tenant, environment and locale (OADR-0012 point 7). The content
-// pages join in M4 (OBE-072). The public image URL getPublicAsset (OBE-071): PublicAssetsController over
+// pages (OBE-072): storefront.listPages and storefront.getPage (PublicPagesController over PublicPagesService, which
+// reads `storefront_pages` through `TenantTx`, parses the bodies with markdown-subset.parser.ts and caches them per
+// tenant, environment and locale). The public image URL getPublicAsset (OBE-071): PublicAssetsController over
 // PublicAssetsService, which reads the asset rows through this module's repository and the files through the
 // StorageAdapter of ADR-0017 (the documents module's `documentStorageProvider`, as the settings context builds it for
 // the uploads). The payment section's account comes from the payment gateway (PaymentGatewayModule, OBE-038), and so
@@ -16,18 +18,21 @@ import { PaymentGatewayModule } from "../payments/payments.module";
 import { TenancyModule } from "../tenancy/tenancy.module";
 import { PublicAssetsController } from "./public-assets.controller";
 import { PublicAssetsService } from "./public-assets.service";
+import { PublicPagesController } from "./public-pages.controller";
+import { PublicPagesService } from "./public-pages.service";
 import { StorefrontController } from "./storefront.controller";
 import { StorefrontRepository } from "./storefront.repository";
 import { StorefrontService } from "./storefront.service";
 
 @Module({
   imports: [TenancyModule.forApi(), PaymentGatewayModule],
-  controllers: [StorefrontController, PublicAssetsController],
+  controllers: [StorefrontController, PublicAssetsController, PublicPagesController],
   providers: [
     StorefrontService,
     StorefrontRepository,
     CookieWriter,
     PublicAssetsService,
+    PublicPagesService,
     documentStorageProvider,
   ],
   exports: [StorefrontRepository],

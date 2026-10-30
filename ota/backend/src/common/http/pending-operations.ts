@@ -15,9 +15,6 @@ export type PendingTask = `OBE-${number}` | "deferred";
 export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, PendingTask>>> = Object.freeze({
   // Storefront
   resolveStorefrontHost: "deferred",
-  // Storefront content (OBE-091): the published pages (the public images: OBE-071)
-  listStorefrontPages: "OBE-072",
-  getStorefrontPage: "OBE-072",
   // Customer account and saved travellers (account.get, account.update and account.delete: OBE-035)
   getAccountPreferences: "deferred",
   updateAccountPreferences: "deferred",
@@ -41,12 +38,6 @@ export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, Pending
   consoleAmadeusIssueFlightOrder: "deferred",
   consoleAmadeusCancelFlightOrder: "deferred",
   consoleAmadeusPatchFlightOrder: "deferred",
-  // Console settings (OBE-091): content pages (the storefront images: OBE-071)
-  consoleListStorefrontPages: "OBE-072",
-  consoleCreateStorefrontPage: "OBE-072",
-  consoleGetStorefrontPage: "OBE-072",
-  consoleUpdateStorefrontPage: "OBE-072",
-  consoleDeleteStorefrontPage: "OBE-072",
   // Stripe webhooks of the Connect and API-key modes (OBE-090 documents them in M4; served from M5)
   receiveStripeConnectWebhook: "OBE-078",
   receiveStripeConnectionWebhook: "OBE-078",

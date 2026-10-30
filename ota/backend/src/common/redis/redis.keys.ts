@@ -63,7 +63,7 @@ const DAY = 24 * HOUR;
 export const PLATFORM_CACHE_TTL_SECONDS = MINUTE;
 /** A cached "not found" for a host, tenant key or API key prefix (OADR-0009 point 4). */
 export const NEGATIVE_CACHE_TTL_SECONDS = 10;
-/** The caller-independent part of `storefront.get` (OADR-0012 point 7). */
+/** The caller-independent part of `storefront.get` and the content pages (OADR-0012 point 7). */
 export const STOREFRONT_CACHE_TTL_SECONDS = 5 * MINUTE;
 /** Single flight of identical concurrent searches (OADR-0002 point 2). */
 export const SEARCH_SINGLE_FLIGHT_TTL_SECONDS = 30;
@@ -428,6 +428,14 @@ export const redisKeys = Object.freeze({
   /** `t:<tenantId>:<env>:sf:<locale>`: the caller-independent part of `storefront.get` (OADR-0012 point 7). */
   sf: tenantBuilder("sf", "t:<tenantId>:<env>:sf:<locale>", (locale: string) => ({
     segments: ["sf", part("sf", "locale", "locale", locale)],
+    ttlSeconds: STOREFRONT_CACHE_TTL_SECONDS,
+  })),
+  /**
+   * `t:<tenantId>:<env>:pages:<locale>`: the published content pages of one storefront locale (OADR-0012 point 7,
+   * OBE-072), a hash of the page list and each page's blocks, deleted on every page or settings change.
+   */
+  pages: tenantBuilder("pages", "t:<tenantId>:<env>:pages:<locale>", (locale: string) => ({
+    segments: ["pages", part("pages", "locale", "locale", locale)],
     ttlSeconds: STOREFRONT_CACHE_TTL_SECONDS,
   })),
   /** `t:<tenantId>:<env>:search:<sha256>`: single flight of identical searches (normalised criteria hash). */

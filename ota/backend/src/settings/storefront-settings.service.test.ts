@@ -659,20 +659,26 @@ describe("the rules of an update", () => {
   });
 });
 
+/** The storefront.get entries and the content pages' caches of `locales` in both environments (OBE-072). */
+const cacheKeysOf = (locales: readonly string[]): string[] =>
+  ["test", "live"]
+    .flatMap((environment) => [
+      `t:${TENANT_ID}:${environment}:sf:und`,
+      ...locales.flatMap((locale) => [
+        `t:${TENANT_ID}:${environment}:sf:${locale}`,
+        `t:${TENANT_ID}:${environment}:pages:${locale}`,
+      ]),
+    ])
+    .sort();
+
 describe("the storefront.get entries a change deletes", () => {
-  it("are sf:und and every locale before and after, in both environments", () => {
+  it("are sf:und and every locale before and after, in both environments, with the content pages' caches of those locales [OBE-072]", () => {
     const keys = storefrontCacheKeys(TENANT_ID, [
       seededRow({ defaultLocale: "en", supportedLocales: ["en", "fr-fr"] }),
       seededRow({ defaultLocale: "en", supportedLocales: ["en", "de"] }),
     ]);
 
-    expect([...keys].sort()).toEqual(
-      ["test", "live"]
-        .flatMap((environment) =>
-          ["und", "en", "fr-FR", "de"].map((locale) => `t:${TENANT_ID}:${environment}:sf:${locale}`),
-        )
-        .sort(),
-    );
+    expect([...keys].sort()).toEqual(cacheKeysOf(["en", "fr-FR", "de"]));
   });
 });
 
@@ -871,13 +877,7 @@ describe("StorefrontSettingsService", () => {
       },
     ]);
     expect(h.del).toHaveBeenCalledTimes(1);
-    expect([...(h.del.mock.calls[0] as string[])].sort()).toEqual(
-      ["test", "live"]
-        .flatMap((environment) =>
-          ["und", "en", "fr"].map((locale) => `t:${TENANT_ID}:${environment}:sf:${locale}`),
-        )
-        .sort(),
-    );
+    expect([...(h.del.mock.calls[0] as string[])].sort()).toEqual(cacheKeysOf(["en", "fr"]));
   });
 
   it("takes If-Match quoted, weak or bare, and answers a stale one 412 without writing", async () => {
@@ -955,8 +955,9 @@ describe("StorefrontSettingsService", () => {
     );
 
     expect(result.version).toBe(2);
+    // sf:und, sf:en and the content pages' pages:en (OBE-072), in both environments.
     expect(offline.warn).toHaveBeenCalledWith(
-      { tenantId: TENANT_ID, keys: 4 },
+      { tenantId: TENANT_ID, keys: 6 },
       "storefront_settings.cache_not_deleted",
     );
   });

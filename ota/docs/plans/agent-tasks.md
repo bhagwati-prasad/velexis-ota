@@ -1955,7 +1955,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - Deleting a logo in use answers 409.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- settings && pnpm --filter @velexis/ota-backend test:int settings`
 
-### OBE-072 · Implement content pages with the Markdown-subset parser and the public page endpoints
+### OBE-072 · Implement content pages with the Markdown-subset parser and the public page endpoints ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M4
 - **Depends on:** OBE-071

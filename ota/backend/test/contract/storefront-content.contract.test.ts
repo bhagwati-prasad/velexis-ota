@@ -468,7 +468,7 @@ describe("the 11 operations of OBE-091 (api-changes part 2 §2.4, §2.5, §4)", 
   it("lists the 11 operations in pending-operations.ts with OBE-071 and OBE-072 until those are done [OBE-091 AC1]", () => {
     // A task that implements its operations removes their entries (pending-operations.ts); route parity
     // (route-parity.contract.test.ts) then requires their handlers.
-    const implemented: ReadonlySet<Expected["task"]> = new Set<Expected["task"]>(["OBE-071"]);
+    const implemented: ReadonlySet<Expected["task"]> = new Set<Expected["task"]>(["OBE-071", "OBE-072"]);
     for (const { operationId, task } of OBE_091_OPERATIONS) {
       expect([operationId, PENDING_OPERATIONS[operationId as keyof typeof PENDING_OPERATIONS]]).toEqual([
         operationId,
