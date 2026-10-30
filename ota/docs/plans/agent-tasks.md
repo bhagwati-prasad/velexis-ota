@@ -2008,7 +2008,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - Resume lets staff sign in again; both events validate against PBE-004's schemas.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- provisioning && pnpm --filter @velexis/ota-backend test:int provisioning`
 
-### OBE-075 · Prove the permission matrix, staff audit and office isolation across console operations
+### OBE-075 · Prove the permission matrix, staff audit and office isolation across console operations ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M4
 - **Depends on:** OBE-063, OBE-064, OBE-065, OBE-066, OBE-067, OBE-068, OBE-069, OBE-070, OBE-071, OBE-072, OBE-073

@@ -542,6 +542,49 @@ describe("pending operations", () => {
     }
   });
 
+  // The M4 exit (api-changes-console-and-internal.md §6, scope.md §3): every operation of M0 to M4 has its handler, so
+  // the allow-list holds the deferred operations of scope §3, which answer 501 for the whole MVP, and the two webhooks
+  // of the Connect and API-key modes, which OBE-090 documented in M4 and OBE-078 serves in M5. It shrinks to the
+  // deferred ones in M5. (ADR-0006's follow-up expects an empty list once all 96 operations are implemented, which the
+  // MVP's 19 deferred operations never are.)
+  it("[OBE-075 AC2] holds only the 19 deferred operations and the two M5 webhooks at the M4 exit", () => {
+    const deferred = otaOperations
+      .filter((operation) => operation.milestone === "deferred")
+      .map((operation) => operation.operationId);
+    const m5Webhooks = ["receiveStripeConnectWebhook", "receiveStripeConnectionWebhook"];
+
+    expect(deferred).toHaveLength(19);
+    expect(Object.keys(PENDING_OPERATIONS)).toHaveLength(21);
+    expect(Object.keys(PENDING_OPERATIONS).sort()).toEqual([...deferred, ...m5Webhooks].sort());
+    for (const operationId of deferred) {
+      expect([operationId, PENDING_OPERATIONS[operationId]]).toEqual([operationId, "deferred"]);
+    }
+    for (const operationId of m5Webhooks) {
+      const operation = otaOperations.find((entry) => entry.operationId === operationId);
+      expect([operationId, operation?.milestone, operation?.internal]).toEqual([operationId, "M5", true]);
+      expect([operationId, PENDING_OPERATIONS[operationId as OtaOperationId]]).toEqual([
+        operationId,
+        "OBE-078",
+      ]);
+    }
+    // No operation of M0 to M4 is pending: each has a handler of its own on its route.
+    const served = otaOperations.filter((operation) => /^M[0-4]$/.test(operation.milestone ?? ""));
+    expect(served).toHaveLength(otaOperations.length - 21);
+    expect(served.filter((operation) => Object.hasOwn(PENDING_OPERATIONS, operation.operationId))).toEqual(
+      [],
+    );
+    const handled = new Set(
+      routes
+        .filter((route) => route.pending === undefined)
+        .map((route) => routeKey(route.method, route.path)),
+    );
+    expect(
+      served
+        .filter((operation) => !handled.has(routeKey(operation.method, operation.path)))
+        .map((operation) => operation.operationId),
+    ).toEqual([]);
+  });
+
   it("registers a literal segment before a parameter in the same place", () => {
     expect(toRoutePath("/v1/bookings/{bookingId}/documents/{documentId}")).toBe(
       "/v1/bookings/:bookingId/documents/:documentId",

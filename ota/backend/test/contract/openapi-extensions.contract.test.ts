@@ -11,9 +11,9 @@
 // counts asserted here (77 MVP, 19 deferred, 63 customer-scope) never change when later spec tasks add operations.
 // The rules that hold for every operation (an x-milestone, the edge alternatives of customer-scope operations, the
 // CSRF header on state-changing ones, the environment header on console ones) run on the whole working document;
-// later spec tasks add assertions for their own operations by operationId, never totals (OBE-075 checks the M4 totals
-// once). `pnpm contracts:lint` (X-007) and the generators' own tests (X-008, X-009) cover the lint and the
-// determinism of the generated files.
+// later spec tasks add assertions for their own operations by operationId, never totals: OBE-075 checks the M4 totals
+// of api-changes-console-and-internal.md §6 once ("the M4 totals" below). `pnpm contracts:lint` (X-007) and the
+// generators' own tests (X-008, X-009) cover the lint and the determinism of the generated files.
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -1565,6 +1565,119 @@ describe("downloadFile and the document download URLs (api-changes-console-and-i
     for (const operationId of [DOWNLOAD_FILE, "listBookingDocuments", "getBookingDocumentDownloadUrl"]) {
       expect([operationId, operationId in PENDING_OPERATIONS]).toEqual([operationId, false]);
     }
+  });
+});
+
+// ---- OBE-075: the M4 totals (api-changes-console-and-internal.md §6), asserted once ------------------------------
+
+/** The groups of §6's table, each with the operations the MVP adds to it. */
+type AddedGroup =
+  | "airline card"
+  | "markup rules, fee rules"
+  | "storefront settings"
+  | "pages, assets"
+  | "templates"
+  | "console payments"
+  | "public pages"
+  | "public asset, file download"
+  | "health, webhooks";
+
+/** The group of §6's table an added operation belongs to, by its `x-sdk-method` (or the extension that replaces it). */
+function addedGroup(spec: Json): AddedGroup | "unknown" {
+  const method = spec["x-sdk-method"];
+  if (typeof method !== "string") {
+    if (spec["x-sdk-exclude"] === true) {
+      return "public asset, file download";
+    }
+    return spec["x-internal"] === true ? "health, webhooks" : "unknown";
+  }
+  const groups: ReadonlyArray<readonly [RegExp, AddedGroup]> = [
+    [/^checkout\.completeWithAirlineCard$/, "airline card"],
+    [/^console\.settings\.(markupRules|feeRules)\./, "markup rules, fee rules"],
+    [/^console\.settings\.storefront\./, "storefront settings"],
+    [/^console\.settings\.(pages|assets)\./, "pages, assets"],
+    [/^console\.settings\.templates\./, "templates"],
+    [/^console\.payments\./, "console payments"],
+    [/^storefront\.(listPages|getPage)$/, "public pages"],
+  ];
+  return groups.find(([pattern]) => pattern.test(method))?.[1] ?? "unknown";
+}
+
+describe("the M4 totals (api-changes-console-and-internal §6)", () => {
+  it("[OBE-075 AC2] counts 135 operations, 128 of them with an x-sdk-method: the 96 of the design and the 39 the MVP adds", () => {
+    const hasSdkMethod = ({ spec }: Operation): boolean => typeof spec["x-sdk-method"] === "string";
+    const original = new Set(frozenOperations.map(({ operationId }) => operationId));
+    const added = workingOperations.filter(({ operationId }) => !original.has(operationId));
+
+    expect(workingOperations).toHaveLength(135);
+    expect(workingOperations.filter(hasSdkMethod)).toHaveLength(128);
+    // 96 + 39 operations, 96 + 32 SDK methods: every original operation is still there with its SDK method.
+    expect(frozenOperations.filter(hasSdkMethod)).toHaveLength(96);
+    for (const { operationId, spec } of frozenOperations) {
+      expect([operationId, operation(operationId).spec["x-sdk-method"]]).toEqual([
+        operationId,
+        spec["x-sdk-method"],
+      ]);
+    }
+    expect(added).toHaveLength(39);
+    expect(added.filter(hasSdkMethod)).toHaveLength(32);
+    // Each SDK method names one operation (the SDK's parity check maps one method to one operation).
+    const methods = workingOperations.filter(hasSdkMethod).map(({ spec }) => String(spec["x-sdk-method"]));
+    expect(new Set(methods).size).toBe(128);
+    // The seven without one: the two public plain URLs (x-sdk-exclude) and the five internal endpoints (x-internal).
+    const withoutMethod = workingOperations.filter((op) => !hasSdkMethod(op));
+    expect(
+      withoutMethod
+        .map(({ operationId, spec }) => [
+          operationId,
+          spec["x-sdk-exclude"] === true ? "x-sdk-exclude" : spec["x-internal"] === true ? "x-internal" : "?",
+        ])
+        .sort(),
+    ).toEqual(
+      [
+        ["getPublicAsset", "x-sdk-exclude"],
+        ["downloadFile", "x-sdk-exclude"],
+        ["healthLive", "x-internal"],
+        ["healthReady", "x-internal"],
+        ["receiveStripeVelexisWebhook", "x-internal"],
+        ["receiveStripeConnectWebhook", "x-internal"],
+        ["receiveStripeConnectionWebhook", "x-internal"],
+      ].sort(),
+    );
+    // The operations index that route parity and the SDK's checks read has the same totals.
+    expect(otaOperations).toHaveLength(135);
+    expect(otaOperations.filter(({ sdkMethod }) => sdkMethod !== null)).toHaveLength(128);
+  });
+
+  it("[OBE-075 AC2] groups the 39 added operations as §6's table does, by milestone, and keeps 19 operations deferred", () => {
+    const original = new Set(frozenOperations.map(({ operationId }) => operationId));
+    const added = workingOperations.filter(({ operationId }) => !original.has(operationId));
+    const groups: Record<string, number> = {};
+    const milestones: Record<string, number> = {};
+    for (const { spec } of added) {
+      const group = addedGroup(spec);
+      groups[group] = (groups[group] ?? 0) + 1;
+      milestones[String(spec["x-milestone"])] = (milestones[String(spec["x-milestone"])] ?? 0) + 1;
+    }
+
+    expect(groups).toEqual({
+      "airline card": 1,
+      "markup rules, fee rules": 10,
+      "storefront settings": 2,
+      "pages, assets": 8,
+      templates: 5,
+      "console payments": 4,
+      "public pages": 2,
+      "public asset, file download": 2,
+      "health, webhooks": 5,
+    });
+    // M3: the airline card, the Velexis webhook and the file download; M4: the 25 settings operations, the 4 console
+    // payments and the 3 public ones; M0: health; M5: the two webhooks OBE-090 documented ahead of their handler.
+    expect(milestones).toEqual({ M0: 2, M3: 3, M4: 32, M5: 2 });
+    const deferred = workingOperations.filter(({ spec }) => spec["x-milestone"] === "deferred");
+    expect(deferred).toHaveLength(19);
+    // Every deferred operation is one of the design's: the MVP adds none.
+    expect(deferred.filter(({ operationId }) => !original.has(operationId))).toEqual([]);
   });
 });
 
