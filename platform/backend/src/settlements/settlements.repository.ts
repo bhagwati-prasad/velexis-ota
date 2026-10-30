@@ -8,8 +8,10 @@
 // at once make one row), `deleteLines` empties a draft, `insertLines` writes its lines with `ON CONFLICT
 // (balance_transaction_id) DO NOTHING` (a balance transaction already on another statement, an approved or paid one
 // above all, is skipped: PADR-0003 item 8), `unabsorbedCarryForwards` reads the earlier `carried_forward` balances
-// the draft absorbs (those no earlier open draft absorbs already), and `writeTotals` stores what settlement-formula.ts
-// computed from the lines. Nothing here changes a statement that is not a draft.
+// the draft absorbs (those no earlier open draft absorbs already: the earliest later open draft absorbs a balance,
+// PADR-0003 item 7 and its note of 2026-10-30), and `writeTotals` stores what settlement-formula.ts computed from the
+// lines. `carryForwardKeys` finds the tenants and currencies whose only open item is such a balance, so the month gets
+// a draft for them too (FIX-W36-PLATFORM). Nothing here changes a statement that is not a draft.
 //
 // It also reads, read only, what a statement needs from other tables: the tenant and the settlement fee of its plan
 // (`platform.tenants`, `platform.plans`), and the exponent of each currency (`reference.currencies`, architecture
@@ -140,6 +142,63 @@ export class SettlementsRepository {
       query = query.where("tenant_id", "=", tenantId);
     }
     return query.orderBy("tenant_id").orderBy("currency").execute();
+  }
+
+  /**
+   * The tenant and currency of every carried-forward balance in `environment` (of `tenantId` only, when given) that
+   * the draft of the month starting at `periodStart` would absorb (`unabsorbedCarryForwards`: earlier, not absorbed,
+   * no open draft between) while that month has no statement yet that is not `void`, and whose balances sum to
+   * something other than zero: a tenant whose only open item is such a balance gets a draft holding the
+   * `carry_forward` line (FIX-W36-PLATFORM, lead decision (2g) of 2026-10-30). Sorted by tenant and currency.
+   */
+  async carryForwardKeys(
+    environment: SettlementEnvironment,
+    periodStart: Date,
+    tenantId?: string,
+  ): Promise<Array<{ readonly tenant_id: string; readonly currency: string }>> {
+    let query = this.db
+      .selectFrom("platform.settlements as carried")
+      .select(["carried.tenant_id", "carried.currency"])
+      .where("carried.environment", "=", environment)
+      .where("carried.status", "=", "carried_forward" satisfies SettlementStatus)
+      .where("carried.carried_to_id", "is", null)
+      .where("carried.period_start", "<", periodStart)
+      .where(({ exists, not, selectFrom }) =>
+        not(
+          exists(
+            selectFrom("platform.settlements as open_draft")
+              .select("open_draft.id")
+              .whereRef("open_draft.tenant_id", "=", "carried.tenant_id")
+              .whereRef("open_draft.environment", "=", "carried.environment")
+              .whereRef("open_draft.currency", "=", "carried.currency")
+              .where("open_draft.status", "=", "draft" satisfies SettlementStatus)
+              .whereRef("open_draft.period_start", ">", "carried.period_start")
+              .where("open_draft.period_start", "<", periodStart),
+          ),
+        ),
+      )
+      .where(({ exists, not, selectFrom }) =>
+        not(
+          exists(
+            selectFrom("platform.settlements as this_month")
+              .select("this_month.id")
+              .whereRef("this_month.tenant_id", "=", "carried.tenant_id")
+              .whereRef("this_month.environment", "=", "carried.environment")
+              .whereRef("this_month.currency", "=", "carried.currency")
+              .where("this_month.period_start", "=", periodStart)
+              .where("this_month.status", "<>", "void" satisfies SettlementStatus),
+          ),
+        ),
+      );
+    if (tenantId !== undefined) {
+      query = query.where("carried.tenant_id", "=", tenantId);
+    }
+    return query
+      .groupBy(["carried.tenant_id", "carried.currency"])
+      .having((eb) => eb(eb.fn.sum("carried.net_amount"), "<>", 0))
+      .orderBy("carried.tenant_id")
+      .orderBy("carried.currency")
+      .execute();
   }
 
   /** The statement of `key` that is not `void`, locked for the rest of `trx` (`FOR UPDATE`); `undefined` without one. */

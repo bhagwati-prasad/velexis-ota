@@ -395,12 +395,15 @@ describe("the generation of a month's drafts (flow §F items 2 and 3)", () => {
       tenantId: null,
       transactions: 11,
       ignored: 1,
+      unknownCategory: 0,
       withoutTenant: 1,
       unknownTenant: 1,
       otherTenants: 0,
       alreadySettled: 0,
       lines: 8,
-      rebuilt: 3,
+      // A EUR, A USD, B EUR, and A GBP for its carried-forward balance alone (FIX-W36-PLATFORM).
+      rebuilt: 4,
+      carryForwardOnly: 1,
       untouched: 0,
     });
     const eur = await octoberOf(a.id, "EUR");
@@ -468,18 +471,32 @@ describe("the generation of a month's drafts (flow §F items 2 and 3)", () => {
       net_amount: "394.05",
       velexis_fees_amount: "0.00",
     });
-    // No GBP draft: A had no GBP transaction in October; its GBP and live balances wait for a month that has some.
+    // A had no GBP transaction in October: its GBP draft holds the carried-forward balance alone (FIX-W36-PLATFORM,
+    // lead decision (2g)). The live balance is another environment's and waits for a live run.
     expect((await statementsOf(a.id)).map((row) => [row["currency"], row["status"]])).toEqual([
       ["EUR", "carried_forward"],
       ["EUR", "carried_forward"],
       ["EUR", "draft"],
       ["GBP", "carried_forward"],
+      ["GBP", "draft"],
       ["USD", "draft"],
+    ]);
+    const gbp = await octoberOf(a.id, "GBP");
+    expect(gbp).toMatchObject({ status: "draft", line_count: 1, fee_bps: 150, carried_to_id: null });
+    expect(totalsOf(gbp)).toEqual({
+      ...Object.fromEntries(TOTAL_COLUMNS.map((column) => [column, "0.00"])),
+      adjustments_amount: "-7.00",
+      net_amount: "-7.00",
+    });
+    expect((await linesOf(gbp["id"])).map((line) => [line["line_type"], line["amount"]])).toEqual([
+      ["carry_forward", "-7.00"],
     ]);
 
     const audit = await auditOf("settlement.generated", [a.id, b.id]);
     const usd = await octoberOf(a.id, "USD");
-    expect(audit.map((row) => row["target_id"]).sort()).toEqual([eur["id"], bEur["id"], usd["id"]].sort());
+    expect(audit.map((row) => row["target_id"]).sort()).toEqual(
+      [eur["id"], bEur["id"], usd["id"], gbp["id"]].sort(),
+    );
     expect(audit.find((row) => row["target_id"] === eur["id"])).toMatchObject({
       actor_type: "system",
       actor_account_id: null,
@@ -692,6 +709,134 @@ describe("the generation of a month's drafts (flow §F items 2 and 3)", () => {
     expect(await linesOf(emptied["id"])).toEqual([]);
   });
 });
+
+describe("FIX-W36-PLATFORM: carried-forward balances alone, and categories the generator does not know (lead decision (2g))", () => {
+  /** A `carried_forward` statement of `tenant` for September 2026 in EUR (test), net `net`. */
+  const septemberCarried = (tenant: PlatformRow<"tenants">, net: string) =>
+    insertSettlement(pool, tenant, {
+      environment: "test",
+      period_start: new Date("2026-09-01T00:00:00Z"),
+      period_end: new Date("2026-10-01T00:00:00Z"),
+      status: "carried_forward",
+      refunds_amount: net.replace("-", ""),
+      net_amount: net,
+    });
+
+  it("[FIX-W36-PLATFORM AC2] gives a tenant whose only open item is a carried-forward balance a draft holding that line, once", async () => {
+    const { a, b } = await twoTenants();
+    putOctober(a.id, b.id);
+    const quiet = await insertTenant(pool, { plan_code: feePlan });
+    const evened = await insertTenant(pool);
+    const september = await septemberCarried(quiet, "-30.00");
+    // A balance that sums to zero opens no draft.
+    await septemberCarried(evened, "0.00");
+
+    // A run for another tenant leaves the quiet one alone.
+    const forB = await generator.generate({ periodStart: new Date(OCTOBER), tenantId: b.id });
+    expect(forB).toMatchObject({ rebuilt: 1, carryForwardOnly: 0 });
+    expect((await statementsOf(quiet.id)).map((row) => row["status"])).toEqual(["carried_forward"]);
+
+    const result = await generator.generate({ periodStart: new Date(OCTOBER) });
+
+    expect(result).toMatchObject({ rebuilt: 4, carryForwardOnly: 1, untouched: 0, lines: 8 });
+    const draft = await octoberOf(quiet.id, "EUR");
+    expect(draft).toMatchObject({
+      status: "draft",
+      fee_bps: 150,
+      line_count: 1,
+      version: 1,
+      generated_at: NOW,
+      carried_to_id: null,
+    });
+    expect(totalsOf(draft)).toEqual({
+      ...Object.fromEntries(TOTAL_COLUMNS.map((column) => [column, "0.00"])),
+      adjustments_amount: "-30.00",
+      net_amount: "-30.00",
+    });
+    expect(await linesOf(draft["id"])).toEqual([
+      expect.objectContaining({
+        line_type: "carry_forward",
+        balance_transaction_id: null,
+        amount: "-30.00",
+        stripe_fee: "0.00",
+        occurred_at: new Date(OCTOBER),
+        description: `Balance carried forward from 2026-09 (${september.id})`,
+      }),
+    ]);
+    expect(await auditOf("settlement.generated", [quiet.id])).toEqual([
+      expect.objectContaining({ target_id: draft["id"], tenant_id: quiet.id }),
+    ]);
+    expect((await statementsOf(evened.id)).map((row) => row["status"])).toEqual(["carried_forward"]);
+
+    // A second run rebuilds the same draft (the balance is not counted twice) and opens no other.
+    t.clock.set(new Date(NOW.getTime() + 60_000));
+    const again = await generator.generate({ periodStart: new Date(OCTOBER) });
+    expect(again).toMatchObject({ rebuilt: 4, carryForwardOnly: 0 });
+    expect(
+      (await statementsOf(quiet.id)).map((row) => [row["status"], row["line_count"], row["net_amount"]]),
+    ).toEqual([
+      ["carried_forward", 0, "-30.00"],
+      ["draft", 1, "-30.00"],
+    ]);
+
+    // November: the open October draft absorbs the balance (the earliest later open draft, PADR-0003 item 7 and its
+    // note of 2026-10-30), so November opens no draft of its own for it.
+    const november = await generator.generate({ periodStart: new Date("2026-11-01T00:00:00Z") });
+    expect(november).toMatchObject({ rebuilt: 0, carryForwardOnly: 0 });
+    expect(await statementsOf(quiet.id)).toHaveLength(2);
+  });
+
+  it("[FIX-W36-PLATFORM AC2] skips a category it does not know with one warning line of its type and id, and settles a failed refund as a positive refund line", async () => {
+    const { a, b } = await twoTenants();
+    putOctober(a.id, b.id);
+    stripe.put(
+      {
+        ...txn("txn_odd", "other_adjustment", 4_321, 0, "ch_A1", onDay(21)),
+        type: "adjustment",
+      } as FakeStripeObject,
+      txn("txn_rfA1", "refund_failure", 20_000, 0, "re_A1", onDay(22)),
+    );
+    const warningsBefore = unknownCategoryLines().length;
+
+    const result = await generator.generate({ periodStart: new Date(OCTOBER) });
+
+    expect(result).toMatchObject({ transactions: 13, ignored: 1, unknownCategory: 1, lines: 9 });
+    const warnings = unknownCategoryLines().slice(warningsBefore);
+    expect(warnings).toEqual([
+      expect.objectContaining({
+        level: 40,
+        periodStart: OCTOBER,
+        balanceTransactionId: "txn_odd",
+        type: "adjustment",
+        reportingCategory: "other_adjustment",
+      }),
+    ]);
+    // Its type and id only: no amount, source, charge or metadata of the transaction.
+    expect(JSON.stringify(warnings)).not.toMatch(/4321|43\.21|ch_A1|pay_A1|velexis_tenant_id/);
+    const eur = await octoberOf(a.id, "EUR");
+    expect(
+      (await linesOf(eur["id"]))
+        .filter((line) => line["line_type"] === "refund")
+        .map((line) => line["amount"]),
+    ).toEqual(["-200.00", "200.00"]);
+    // The failed refund gives the refund back, and the unknown category is on no line.
+    expect(totalsOf(eur)).toMatchObject({ refunds_amount: "0.00" });
+    const { rows } = await pool.query(
+      "SELECT count(*)::int AS n FROM platform.settlement_lines WHERE balance_transaction_id = 'txn_odd'",
+    );
+    expect(rows[0]).toEqual({ n: 0 });
+  });
+});
+
+/**
+ * The `settlement.unknown_category` lines logged so far, from either sink (nestjs-pino keeps one root logger per
+ * process, as failureLines says).
+ */
+function unknownCategoryLines(): Row[] {
+  return [...t.logs.lines, ...workerLogs.lines].filter(
+    (line) => line["msg"] === "settlement.unknown_category",
+  );
+}
 
 // ---- The job -----------------------------------------------------------------------------------------------------
 

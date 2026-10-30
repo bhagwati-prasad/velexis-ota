@@ -1332,7 +1332,7 @@ export interface paths {
          * Start connecting the OTA's own Stripe account with Connect Standard
          * @description Owners and admins start connecting the OTA's own Stripe account through Stripe Connect Standard OAuth (M5, PADR-0011), with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without MFA) and `FEATURE_OWN_STRIPE` on (`403 FEATURE_DISABLED`). The OTA must be `active` (`409 TENANT_NOT_ACTIVE`, PADR-0014 item 5).
          *
-         *     The API creates a 256-bit random `state`, keeps `{tenantId, accountId, membershipId}` under the Redis key `stripe:oauth:<sha256 of the state>` for 10 minutes, and answers Stripe's authorize URL: `https://connect.stripe.com/oauth/authorize` with `response_type=code`, `client_id` (`STRIPE_CONNECT_CLIENT_ID`), `scope=read_write`, the `state`, `redirect_uri` (`<PUBLIC_PORTAL_URL>/connect/stripe/callback`) and a prefilled `stripe_user[email]`. The portal sends the browser there with a `303`; Stripe sends it back to the portal's callback page, which calls `completeStripeConnect`. The URL holds the single-use state, so the answer is `no-store`. `503 SERVICE_UNAVAILABLE` while Redis is down, because the state lives only there. One connected account serves both environments: the test connection is switched at once, the live one too when the OTA is live, otherwise at go-live.
+         *     The API creates a 256-bit random `state`, keeps `{tenantId, accountId, membershipId}` under the Redis key `stripe:oauth:<sha256 of the state>` for 10 minutes, and answers Stripe's authorize URL: `https://connect.stripe.com/oauth/authorize` with `response_type=code`, `client_id` (`STRIPE_CONNECT_CLIENT_ID`), `scope=read_write`, the `state`, `redirect_uri` (`<PUBLIC_PORTAL_URL>/connect/stripe/callback`) and `stripe_user[email]` prefilled with the caller's own address (the owner or admin who is sent to Stripe). The portal sends the browser there with a `303`; Stripe sends it back to the portal's callback page, which calls `completeStripeConnect`. The URL holds the single-use state, so the answer is `no-store`. `503 SERVICE_UNAVAILABLE` while Redis is down, because the state lives only there. One connected account serves both environments: the test connection is switched at once, the live one too when the OTA is live, otherwise at go-live.
          */
         post: operations["startStripeConnect"];
         delete?: never;
@@ -1352,10 +1352,10 @@ export interface paths {
         put?: never;
         /**
          * Finish connecting the OTA's own Stripe account
-         * @description The portal's callback page (`/connect/stripe/callback`, signed-in user) posts what Stripe sent back (M5, PADR-0011); the OTA is the one of the state, so the path names none. The API takes the state with `GETDEL`, so it works once: an unknown, expired or used state, or one that another account started, answers `400 CONNECT_STATE_INVALID`. The account that started must still be an owner or admin of the OTA (`403 FORBIDDEN`), and the OTA must be `active` (`409 TENANT_NOT_ACTIVE`).
+         * @description The portal's callback page (`/connect/stripe/callback`, signed-in user) posts what Stripe sent back (M5, PADR-0011), while `FEATURE_OWN_STRIPE` is on (`403 FEATURE_DISABLED`, as for `startStripeConnect`; the state is not taken then); the OTA is the one of the state, so the path names none. The API takes the state with `GETDEL`, so it works once: an unknown, expired or used state, or one that another account started, answers `400 CONNECT_STATE_INVALID`. The account that started must still be an owner or admin of the OTA (`403 FORBIDDEN`), and the OTA must be `active` (`409 TENANT_NOT_ACTIVE`). A callback never re-enables a payment connection a platform admin disabled (`adminSetConnectionStatus`): while one of the OTA's payment connections is `disabled` without a Stripe disconnection (`disconnectedAt` empty), it answers `409 CONFLICT` with `details.reason = connection_disabled` before Stripe is asked anything (whether a code or an error came back), and writes nothing; a connection an admin disables while the code is being exchanged gets the same answer and nothing is written either. A connection disabled because the OTA disconnected Velexis in Stripe can be connected again.
          *
          *     - `{state, error}`: Stripe reported an error and nothing changes: `422 UNPROCESSABLE` with `details.reason = access_denied` when the person declined, `oauth_error` for any other error.
-         *     - `{state, code}`: the code is exchanged with `stripe.oauth.token` using Velexis's secret key. Only the connected account id (`acct_…`) and `livemode` are kept; the access and refresh tokens Stripe returns are discarded, because charges use Velexis's key with `Stripe-Account`. `livemode` must match the deployment (live in production, test elsewhere; `422 UNPROCESSABLE`, `details.reason = livemode_mismatch`), and an account connected to another OTA answers `409 STRIPE_ACCOUNT_ALREADY_CONNECTED`. The account's `charges_enabled`, `payouts_enabled` and `details_submitted` are read from Stripe. A Stripe failure answers `502 PROVIDER_ERROR`.
+         *     - `{state, code}`: the code is exchanged with `stripe.oauth.token` using Velexis's secret key. Only the connected account id (`acct_…`) and `livemode` are kept; the access and refresh tokens Stripe returns are discarded, because charges use Velexis's key with `Stripe-Account`. A code Stripe refuses (`invalid_grant`: unknown, expired or used) answers `422 UNPROCESSABLE` with `details.reason = oauth_error`, never Stripe's message. `livemode` must match the deployment (live in production, test elsewhere): otherwise Velexis is disconnected from that account again (`stripe.oauth.deauthorize`, best effort: a failure is logged without any token, and an account an OTA's connection holds is left connected) and the answer is `422 UNPROCESSABLE`, `details.reason = livemode_mismatch`. An account connected to another OTA answers `409 STRIPE_ACCOUNT_ALREADY_CONNECTED`. The account's `charges_enabled`, `payouts_enabled` and `details_submitted` are read from Stripe. Any other Stripe failure answers `502 PROVIDER_ERROR`.
          *
          *     **Effect**, in one transaction: the test payment connection becomes `connect_standard` with the account id, no publishable key and no secrets, the account's capabilities, `connectedAt`, and `active` when charges are enabled (`pending` otherwise, until `account.updated` says so); the live connection the same when the OTA is live, otherwise go-live creates it in this mode. Writes the audit row `payments.connect_connected` and, after commit, publishes `connection` invalidations. Existing payments stay on the account they were taken with. `code` and `state` are write-only: never logged and never answered. `503 SERVICE_UNAVAILABLE` while Redis is down, because the state lives only there.
          */
@@ -1566,7 +1566,7 @@ export interface paths {
          * Set or replace the OTA's payout account
          * @description Owners set or replace the bank account where Velexis pays the OTA's settlements (M5, `velexis` mode, PADR-0003 item 10), with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without MFA) and `FEATURE_SETTLEMENTS` on (`403 FEATURE_DISABLED`). `scheme: iban` takes an IBAN (spaces and lower case allowed; the service removes the spaces, upper-cases it and checks the mod-97 checksum) and an optional BIC; `scheme: local` takes an account number and a routing number (sort code, ABA or bank code). A wrong checksum answers `400 VALIDATION_FAILED` with a field error on `/iban` that never holds the value.
          *
-         *     The bank identifiers are stored envelope-encrypted as one JSON value; only `last4`, the last 4 characters of the IBAN or account number, is kept in clear. Every change sets the status back to `pending_review` until a platform admin verifies it, writes the audit row `payout_account.updated` without the numbers and e-mails ops (`ops.alert`). The stored account typed again is no change (lead decision (2i) of 2026-10-30): when the holder (trimmed), country, currency, scheme and identifiers, normalised as above, are the stored ones, the answer is the current account as it is (the same `200`, version and status: a verified account stays verified), and nothing is written, audited or e-mailed. `iban`, `bic`, `accountNumber` and `routingNumber` are write-only: never logged and never answered, so the answer is the masked account.
+         *     The bank identifiers are stored envelope-encrypted as one JSON value; only `last4`, the last 4 characters of the IBAN or account number, is kept in clear. Every change sets the status back to `pending_review` until a platform admin verifies it, writes the audit row `payout_account.updated` without the numbers and e-mails ops (`ops.alert`). The stored account typed again is no change (lead decision (2i) of 2026-10-30): when the holder (trimmed), country, currency, scheme and identifiers, normalised as above, are the stored ones, the answer is the current account as it is (the same `200`, version and status: a verified account stays verified, a pending one keeps waiting), and nothing is written, audited or e-mailed. A `rejected` account typed again is the exception (lead decision (2a) of 2026-10-30): the owner asks for a new review, so it is saved as a change is (the next version, back in `pending_review` with the review note cleared, the audit row and the `ops.alert` e-mail). `iban`, `bic`, `accountNumber` and `routingNumber` are write-only: never logged and never answered, so the answer is the masked account.
          */
         put: operations["setPayoutAccount"];
         post?: never;
@@ -9513,8 +9513,17 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthenticated"];
-            403: components["responses"]["TenantRoleForbidden"];
-            /** @description The Stripe account is connected to another OTA, or the OTA is not active. Possible codes: STRIPE_ACCOUNT_ALREADY_CONNECTED, TENANT_NOT_ACTIVE. */
+            /** @description The e-mail address is not verified, the account that started is no longer an owner or admin of the OTA, or own Stripe accounts are off. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED. */
+            403: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The Stripe account is connected to another OTA, the OTA is not active, or a platform admin disabled the payment connection (`details.reason = connection_disabled`). Possible codes: STRIPE_ACCOUNT_ALREADY_CONNECTED, TENANT_NOT_ACTIVE, CONFLICT. */
             409: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -9524,7 +9533,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description The person declined on Stripe, Stripe reported another error, or the account's mode does not match the deployment (`details.reason`). Possible codes: UNPROCESSABLE. */
+            /** @description The person declined on Stripe, Stripe reported another error or refused the code (`invalid_grant`), or the account's mode does not match the deployment (`details.reason`). Possible codes: UNPROCESSABLE. */
             422: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];

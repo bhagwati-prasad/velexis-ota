@@ -17,8 +17,10 @@
 //   net          gross − refunds − disputes − stripe_fees − velexis_fees + adjustments
 //
 // Every Stripe fee of a line is counted once: in `disputes` for the dispute lines (PADR-0003 item 5 and the column's
-// comment count the dispute fee there), in `stripe_fees` for the others, so `net` is the sum of the lines' amounts less
-// their Stripe fees and the Velexis fee, and the CSV of the lines reconciles with the statement.
+// comment count the dispute fee there; the note of 2026-10-30 on item 5, lead decision (2g) carried out by
+// FIX-W36-PLATFORM, says `stripe_fees` never counts it again), in `stripe_fees` for the others, so `net` is the sum of
+// the lines' amounts less their Stripe fees and the Velexis fee, and the CSV of the lines reconciles with the
+// statement.
 import { Decimal } from "decimal.js";
 
 /**

@@ -208,8 +208,8 @@ describe("FakeStripe (test/support/fake-stripe.ts)", () => {
     expect((await api.prices.retrieve("price_test_growth_month")).id).toBe("price_test_growth_month");
     expect(stripe.calls).toHaveLength(3);
     // The nine calls of billing, the settlements' balance transactions, charges and PaymentIntents (PBE-059),
-    // and the Connect OAuth's code exchange and account read (PBE-055).
-    expect(FAKE_STRIPE_METHODS).toHaveLength(14);
+    // and the Connect OAuth's code exchange and account read (PBE-055) and deauthorisation (FIX-W36-PLATFORM).
+    expect(FAKE_STRIPE_METHODS).toHaveLength(15);
 
     expect(() => stripe.notConfigured().api()).toThrow(StripeNotConfiguredError);
     expect(stripe.isConfigured()).toBe(false);
@@ -329,5 +329,31 @@ describe("FakeStripe (test/support/fake-stripe.ts)", () => {
       "acct_TestConnect1",
       "acct_Missing",
     ]);
+  });
+
+  it("[FIX-W36-PLATFORM AC3] deauthorises a connected account with an idempotency key, and fails as queued", async () => {
+    const stripe = new FakeStripe();
+    const api = stripe.api();
+    const params = { client_id: "ca_TestConnectClient", stripe_user_id: "acct_TestConnect1" };
+    const options = { idempotencyKey: idempotencyKey("connect_deauthorize", "b".repeat(64)) };
+
+    await expect(api.oauth.deauthorize(params)).rejects.toThrow(/without an idempotency key/);
+    await expect(
+      api.oauth.deauthorize({ stripe_user_id: "acct_TestConnect1" } as never, options),
+    ).rejects.toThrow(/client_id and stripe_user_id/);
+    expect(await api.oauth.deauthorize(params, options)).toMatchObject({
+      stripe_user_id: "acct_TestConnect1",
+    });
+    stripe.failNext("oauth.deauthorize", FakeStripe.apiError(503));
+    await expect(api.oauth.deauthorize(params, options)).rejects.toBeInstanceOf(Stripe.errors.StripeAPIError);
+
+    expect(stripe.deauthorized).toEqual(["acct_TestConnect1"]);
+    expect(stripe.callsOf("oauth.deauthorize").map((call) => [call.params, call.idempotencyKey])).toEqual([
+      [params, undefined],
+      [{ stripe_user_id: "acct_TestConnect1" }, options.idempotencyKey],
+      [params, options.idempotencyKey],
+      [params, options.idempotencyKey],
+    ]);
+    expect(stripe.reset().deauthorized).toEqual([]);
   });
 });

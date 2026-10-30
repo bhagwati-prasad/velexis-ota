@@ -988,10 +988,41 @@ describe("finance members", () => {
 // ---- The rows ----------------------------------------------------------------------------------------------------------
 
 describe("the rows of the lists", () => {
-  it("adds and removes monitored queues, at most 20, each row with its own legend and remove button", async () => {
+  /** The queues the connection already monitors: all but two, so the form reaches the limit in two clicks. */
+  const stored = MONITORED_QUEUES_MAX - 2;
+
+  /**
+   * The page opened with those queues is the setup of the test, not what it checks, so it has the budget of the
+   * file's warm-up hook (rendering the page with its rows takes a few hundred milliseconds idle, seconds on a busy
+   * runner). Adding the rows by clicks instead (nineteen of them, each rendering every row again, with a role query
+   * each) once took the test past its own five seconds (FIX-W36-PLATFORM, lead decision (2j)); the two clicks left
+   * still add the rows the limit stops.
+   */
+  beforeEach(async () => {
+    routes({
+      [`GET ${AMADEUS_PATH}`]: () =>
+        json(
+          {
+            data: [
+              testConnection({
+                monitoredQueues: Array.from({ length: stored }, (_, index) => ({
+                  officeId: NICE,
+                  queueId: index + 1,
+                  category: 0,
+                })),
+              }),
+            ],
+          },
+          200,
+        ),
+    });
     await openAmadeus();
+  }, WARM_UP_TIMEOUT_MS);
+
+  it("adds and removes monitored queues, at most 20, each row with its own legend and remove button", () => {
     const add = () => within(form()).getByRole("button", { name: STRINGS.addQueue });
-    for (let count = 1; count < MONITORED_QUEUES_MAX; count += 1) {
+    expect(queueRows()).toHaveLength(stored);
+    for (let count = stored; count < MONITORED_QUEUES_MAX; count += 1) {
       click(add());
     }
     expect(queueRows()).toHaveLength(MONITORED_QUEUES_MAX);

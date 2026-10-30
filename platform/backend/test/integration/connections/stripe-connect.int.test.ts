@@ -10,7 +10,13 @@
 //   changes nothing; the code is exchanged once; a code of the other mode answers `livemode_mismatch` (a test-mode code
 //   in a live deployment too: the last describe starts the API with `APP_ENV=production`); an account another OTA holds
 //   answers `409`; the test connection (and the live one of a live OTA) becomes `connect_standard` with the `acct_…`,
-//   the capabilities and no key or secret, audited, and `vx:invalidate {type: "connection"}` follows the commit.
+//   the capabilities and no key or secret, audited, and `vx:invalidate {type: "connection"}` follows the commit;
+// - FIX-W36-PLATFORM (lead decision (2h) of 2026-10-30): `stripe_user[email]` is the caller's address; a code Stripe
+//   refuses (`invalid_grant`) answers `422 oauth_error`; the callback answers `403 FEATURE_DISABLED` while the switch
+//   is off, before it takes the state; a connection an admin disabled (`adminSetConnectionStatus`) answers `409
+//   CONFLICT connection_disabled` with nothing asked or written, while a deauthorised one connects again; a code of the
+//   other mode deauthorises its account (best effort, a failure only logged; an account an OTA holds left connected)
+//   before `422 livemode_mismatch`.
 //
 // The milestone switch is a stand-in this file turns on (as payout-accounts.int.test.ts does). Every answer is checked
 // against the platform document. The application logs at `trace`, so "no code, state or OAuth token in a log line",
@@ -32,6 +38,7 @@ import {
   type Feature,
   type FeatureConfig,
 } from "../../../src/common/features";
+import Stripe from "stripe";
 import { StripeClient } from "../../../src/common/stripe/stripe.client";
 import { TENANT_ROLES, type TenantRole } from "../../../src/memberships/tenant-roles";
 import {
@@ -51,6 +58,7 @@ const EVENT_WAIT_MS = 2_000;
 const FAMILY = testId("asn", 55);
 // Documentation addresses (RFC 5737) only.
 const PERSON_IP = "203.0.113.55";
+const ADMIN_IP = "198.51.100.55";
 /** The Stripe settings of the application: the development values of `.env.example`. */
 const STRIPE_ENV = Object.freeze({
   STRIPE_SECRET_KEY: "sk_test_replace_me",
@@ -202,6 +210,20 @@ class Harness {
     return state;
   }
 
+  /** The headers of a platform admin's call (a `platform_admin` token of a new admin account). */
+  async admin(): Promise<Record<string, string>> {
+    const account = await insertAccount(this.pool, { is_platform_admin: true, mfa_enabled: true });
+    const { token } = await this.tokens.sign({
+      aud: "platform_admin",
+      sub: account.id,
+      sid: FAMILY,
+      ev: true,
+      amr: ["pwd", "otp"],
+      mfa_at: Math.floor(this.t.clock.now().getTime() / 1000),
+    });
+    return { Authorization: `Bearer ${token}`, ...this.t.bffHeaders(ADMIN_IP) };
+  }
+
   /** `completeStripeConnect` by `who` with `body`. */
   async complete(f: Fixture, who: Who, body: Record<string, unknown>): Promise<Response> {
     return this.t.http
@@ -270,6 +292,11 @@ function errorOf(res: Response): { code: string; details?: Record<string, unknow
 
 const outcomeOf = (res: Response): string =>
   res.status < 400 ? String(res.status) : `${res.status} ${errorOf(res).code}`;
+
+/** The lines `h`'s application logged with `msg` for the OTA `tenantId`. */
+function logsOf(h: Harness, msg: string, tenantId: string): Array<Record<string, unknown>> {
+  return h.t.logs.withMessage(msg).filter((line) => line["tenantId"] === tenantId);
+}
 
 /** Asserts that no log line of `h`'s application holds a code, a state or an OAuth token of this file. */
 function expectNoSecretLogged(h: Harness): void {
@@ -673,6 +700,184 @@ describe("Stripe Connect Standard in a test deployment", () => {
       },
     });
     await h.connectionEvent(f.tenant.id);
+  });
+
+  it("[FIX-W36-PLATFORM AC3] prefills stripe_user[email] with the caller's own address, an admin's for an admin", async () => {
+    const f = await h.fixture();
+
+    for (const who of ["owner", "admin"] as const) {
+      const res = await h.start(f, who);
+      expect(outcomeOf(res), who).toBe("200");
+      const url = new URL((res.body as { authorizeUrl: string }).authorizeUrl);
+      secrets.push(url.searchParams.get("state") ?? "");
+      expect([who, url.searchParams.get("stripe_user[email]")]).toEqual([who, person(f, who).email]);
+    }
+    expect(person(f, "admin").email).not.toBe(person(f, "owner").email);
+  });
+
+  it("[FIX-W36-PLATFORM AC3] answers invalid_grant from oauth.token 422 oauth_error, as the document says, and writes nothing", async () => {
+    h.stripe.reset();
+    const f = await h.fixture();
+    const accountId = newAccountId();
+    h.account(accountId);
+    const code = h.grant(accountId);
+    // Stripe refuses the code (here: expired); its description names the code and is never answered.
+    h.stripe.failNext(
+      "oauth.token",
+      new Stripe.errors.StripeInvalidGrantError({
+        type: "invalid_grant",
+        message: `This authorization code has expired: ${code}`,
+        statusCode: 400,
+      }),
+    );
+
+    const res = await h.complete(f, "owner", { state: await h.started(f), code });
+
+    expect([outcomeOf(res), errorOf(res).details]).toEqual(["422 UNPROCESSABLE", { reason: "oauth_error" }]);
+    expectResponseToMatch("completeStripeConnect", res, { document: "platform" });
+    expect(JSON.stringify(res.body)).not.toContain(code);
+    expect(h.stripe.callsOf("oauth.token")).toHaveLength(1);
+    expect(h.stripe.callsOf("accounts.retrieve")).toEqual([]);
+    expect(h.stripe.callsOf("oauth.deauthorize")).toEqual([]);
+    expect(await h.connections(f.tenant.id)).toEqual([f.connection]);
+    expect(await h.audit(f.tenant.id)).toEqual([]);
+  });
+
+  it("[FIX-W36-PLATFORM AC3] refuses the callback 403 FEATURE_DISABLED while own_stripe is off, before it takes the state", async () => {
+    const f = await h.fixture();
+    const accountId = newAccountId();
+    h.account(accountId);
+    const code = h.grant(accountId);
+    const state = await h.started(f);
+    const callsBefore = h.stripe.calls.length;
+    h.switches.on.delete("own_stripe");
+
+    const off = await h.complete(f, "owner", { state, code });
+
+    expect([outcomeOf(off), errorOf(off).details]).toEqual([
+      "403 FEATURE_DISABLED",
+      { feature: "own_stripe" },
+    ]);
+    expectResponseToMatch("completeStripeConnect", off, { document: "platform" });
+    expect(h.stripe.calls.slice(callsBefore)).toEqual([]);
+    expect(await h.connections(f.tenant.id)).toEqual([f.connection]);
+    expect(await h.audit(f.tenant.id)).toEqual([]);
+    // The guard answered before the handler: the state is still there, and works once the switch is on again.
+    expect(await h.keys.exists(`stripe:oauth:${sha256Hex(state)}`)).toBe(1);
+    h.switches.on.add("own_stripe");
+    expect(outcomeOf(await h.complete(f, "owner", { state, code }))).toBe("200");
+  });
+
+  it("[FIX-W36-PLATFORM AC3] never re-enables a connection an admin disabled: 409 CONFLICT connection_disabled, nothing asked or written", async () => {
+    const f = await h.fixture();
+    const reason = "Card testing seen on this OTA's checkout.";
+    const disabled = await h.t.http
+      .post(`/v1/admin/tenants/${f.tenant.id}/connections/payment/test/status`)
+      .set(await h.admin())
+      .send({ status: "disabled", reason });
+    expect(outcomeOf(disabled)).toBe("200");
+    const [before] = await h.connections(f.tenant.id);
+    expect(before).toMatchObject({ status: "disabled", disconnected_at: null, account_mode: "velexis" });
+    const accountId = newAccountId();
+    h.account(accountId);
+    const state = await h.started(f);
+    const code = h.grant(accountId);
+    const callsBefore = h.stripe.calls.length;
+
+    const res = await h.complete(f, "owner", { state, code });
+
+    expect([outcomeOf(res), errorOf(res).details]).toEqual([
+      "409 CONFLICT",
+      { reason: "connection_disabled" },
+    ]);
+    expectResponseToMatch("completeStripeConnect", res, { document: "platform" });
+    expect(h.stripe.calls.slice(callsBefore)).toEqual([]);
+    expect(await h.connections(f.tenant.id)).toEqual([before]);
+    expect(await h.audit(f.tenant.id)).toEqual([]);
+    // The state is spent like any other refused callback.
+    expect(outcomeOf(await h.complete(f, "owner", { state, code }))).toBe("400 CONNECT_STATE_INVALID");
+
+    // A connection disabled because the OTA disconnected Velexis in Stripe (disconnected_at) connects again.
+    await h.pool.query(
+      "UPDATE platform.payment_provider_connections SET account_mode = 'connect_standard', " +
+        "account_reference = 'acct_1QTestPbe055Gone', disconnected_at = $2 WHERE id = $1",
+      [f.connection.id, new Date("2026-10-20T08:00:00Z")],
+    );
+    const reconnected = await h.complete(f, "owner", { state: await h.started(f), code: h.grant(accountId) });
+    expect(outcomeOf(reconnected)).toBe("200");
+    expect(await h.connections(f.tenant.id)).toEqual([
+      expect.objectContaining({
+        account_mode: "connect_standard",
+        account_reference: accountId,
+        status: "active",
+        disconnected_at: null,
+      }),
+    ]);
+  });
+
+  it("[FIX-W36-PLATFORM AC3] deauthorises the account of a live-mode code before answering livemode_mismatch; a failure is only logged", async () => {
+    h.stripe.reset();
+    const f = await h.fixture();
+    const accountId = newAccountId();
+    const before = await h.connections(f.tenant.id);
+    let state = await h.started(f);
+
+    const mismatch = await h.complete(f, "owner", { state, code: h.grant(accountId, true) });
+
+    expect([outcomeOf(mismatch), errorOf(mismatch).details]).toEqual([
+      "422 UNPROCESSABLE",
+      { reason: "livemode_mismatch" },
+    ]);
+    expectResponseToMatch("completeStripeConnect", mismatch, { document: "platform" });
+    expect(h.stripe.callsOf("oauth.deauthorize")).toEqual([
+      {
+        method: "oauth.deauthorize",
+        id: undefined,
+        params: { client_id: "ca_replace_me", stripe_user_id: accountId },
+        idempotencyKey: `connect_deauthorize:${sha256Hex(state)}`,
+      },
+    ]);
+    expect(h.stripe.deauthorized).toEqual([accountId]);
+    expect(logsOf(h, "stripe_connect.deauthorized", f.tenant.id)).toEqual([
+      expect.objectContaining({ tenantId: f.tenant.id, stripeAccount: accountId }),
+    ]);
+
+    // Stripe refuses the deauthorisation: the same answer, a warning line with Stripe's type, status and code only.
+    h.stripe.failNext("oauth.deauthorize", FakeStripe.apiError(503));
+    state = await h.started(f);
+    const failed = await h.complete(f, "owner", { state, code: h.grant(accountId, true) });
+    expect([outcomeOf(failed), errorOf(failed).details]).toEqual([
+      "422 UNPROCESSABLE",
+      { reason: "livemode_mismatch" },
+    ]);
+    const warnings = logsOf(h, "stripe_connect.deauthorize_failed", f.tenant.id);
+    expect(warnings).toEqual([
+      expect.objectContaining({
+        level: 40,
+        tenantId: f.tenant.id,
+        stripeAccount: accountId,
+        failure: "api_error 503",
+      }),
+    ]);
+    expect(JSON.stringify(warnings)).not.toContain("Fake Stripe answered");
+    expect(h.stripe.callsOf("accounts.retrieve")).toEqual([]);
+    expect(await h.connections(f.tenant.id)).toEqual(before);
+    expect(await h.audit(f.tenant.id)).toEqual([]);
+
+    // An account another OTA's connection holds is left connected: deauthorising it would cut that OTA off.
+    const other = await h.fixture();
+    const taken = newAccountId();
+    h.account(taken);
+    expect(
+      outcomeOf(await h.complete(other, "owner", { state: await h.started(other), code: h.grant(taken) })),
+    ).toBe("200");
+    h.stripe.reset();
+    const held = await h.complete(f, "owner", { state: await h.started(f), code: h.grant(taken, true) });
+    expect(errorOf(held).details).toEqual({ reason: "livemode_mismatch" });
+    expect(h.stripe.callsOf("oauth.deauthorize")).toEqual([]);
+    expect(logsOf(h, "stripe_connect.deauthorize_skipped", f.tenant.id)).toEqual([
+      expect.objectContaining({ tenantId: f.tenant.id, stripeAccount: taken }),
+    ]);
   });
 });
 

@@ -42,6 +42,8 @@
 //   so a test can look for them where they must never be). A code it does not hold, or one exchanged already, throws
 //   the SDK's `StripeInvalidGrantError` (400 `invalid_grant`) with Stripe's message, which names the code. The
 //   connected account itself is an `account` object put with `put`, read with `accounts.retrieve(id)`.
+//   `oauth.deauthorize` (FIX-W36-PLATFORM) needs an idempotency key, `client_id` and `stripe_user_id`, records the
+//   account in `deauthorized`, and answers Stripe's `{stripe_user_id}`; a queued failure is thrown first, as always.
 // - `notConfigured()` makes `api()` throw StripeNotConfiguredError, as the application does without STRIPE_SECRET_KEY.
 import { randomBytes } from "node:crypto";
 import Stripe from "stripe";
@@ -53,8 +55,9 @@ import {
 
 /** The calls of StripeApi, as `<resource>.<method>`. */
 export const FAKE_STRIPE_METHODS = Object.freeze([
-  // Connect Standard (PBE-055).
+  // Connect Standard (PBE-055; the deauthorisation since FIX-W36-PLATFORM).
   "oauth.token",
+  "oauth.deauthorize",
   "accounts.retrieve",
   "customers.create",
   "customers.retrieve",
@@ -173,6 +176,8 @@ export class FakeStripe extends StripeClient {
   private readonly failures = new Map<FakeStripeMethod, QueuedFailure[]>();
   private readonly byIdempotencyKey = new Map<string, KeyRecord>();
   private readonly connectCodes = new Map<string, ConnectCode>();
+  /** The `acct_…` ids `oauth.deauthorize` disconnected, in order. */
+  readonly deauthorized: string[] = [];
   private sequence = 0;
   private configured = true;
   private readonly resources: StripeApi;
@@ -183,6 +188,8 @@ export class FakeStripe extends StripeClient {
       oauth: {
         token: (params: unknown, options?: unknown) =>
           settle(() => this.oauthTokenNow(params, options)) as Promise<Stripe.OAuthToken>,
+        deauthorize: (params: unknown, options?: unknown) =>
+          settle(() => this.oauthDeauthorizeNow(params, options)) as Promise<Stripe.OAuthDeauthorization>,
       },
       accounts: {
         // The SDK also retrieves the platform's own account without an id; the platform always names the account.
@@ -359,6 +366,7 @@ export class FakeStripe extends StripeClient {
     this.failures.clear();
     this.byIdempotencyKey.clear();
     this.connectCodes.clear();
+    this.deauthorized.length = 0;
     this.configured = true;
     return this;
   }
@@ -396,6 +404,27 @@ export class FakeStripe extends StripeClient {
       stripe_user_id: granted.stripeUserId,
       token_type: "bearer",
     });
+  }
+
+  /** `oauth.deauthorize`: disconnects the platform from an account (file header). */
+  private oauthDeauthorizeNow(
+    params: unknown,
+    options: unknown,
+  ): Stripe.Response<Stripe.OAuthDeauthorization> {
+    this.record("oauth.deauthorize", undefined, params, options);
+    const key = isRecord(options) ? options["idempotencyKey"] : undefined;
+    if (typeof key !== "string" || key.length === 0) {
+      throw new Error(
+        "FakeStripe: oauth.deauthorize without an idempotency key (every POST needs one, architecture §7)",
+      );
+    }
+    const query = isRecord(params) ? params : {};
+    const account = query["stripe_user_id"];
+    if (typeof query["client_id"] !== "string" || typeof account !== "string") {
+      throw new Error("FakeStripe: oauth.deauthorize needs client_id and stripe_user_id");
+    }
+    this.deauthorized.push(account);
+    return this.response<Stripe.OAuthDeauthorization>({ stripe_user_id: account });
   }
 
   /**

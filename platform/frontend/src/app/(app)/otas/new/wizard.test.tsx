@@ -539,10 +539,13 @@ describe("/otas/new: KeyAvailabilityField and checkKeyAvailability", () => {
     }, OPEN_WIZARD_TIMEOUT_MS);
 
     it("[PFE-008 AC1] shows that a typed key is taken without submitting, after one check once typing pauses [PF-10 AC1]", async () => {
+      // The field is found once: a label query walks the wizard's some 850 options on every call, which made the
+      // keystrokes slow on a loaded runner (FIX-W36-PLATFORM, lead decision (2j)). React keeps the same element.
+      const keyField = control(WIZARD_STRINGS.keyLabel);
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
         for (const typed of ["nor", "nord", "nordi", "nordic"]) {
-          type(WIZARD_STRINGS.keyLabel, typed);
+          fireEvent.change(keyField, { target: { value: typed } });
           await act(async () => {
             await vi.advanceTimersByTimeAsync(KEY_CHECK_DELAY_MS - 100);
           });
@@ -696,79 +699,208 @@ describe("/otas/new: the wizard and the createOta action", () => {
       await openWizard();
     }, OPEN_WIZARD_TIMEOUT_MS);
 
-    it("[PFE-008 AC2] two quick submits send the same Idempotency-Key, the one the page made, and lead to one OTA [PF-10 AC2]", async () => {
-      let failFirst: ((error: Error) => void) | undefined;
-      routes({
-        "POST /v1/tenants": () =>
-          calls("POST", "/v1/tenants").length === 1
-            ? new Promise<Response>((_resolve, reject) => {
-                failFirst = reject;
-              })
-            : json(tenantCreated(), 202),
+    describe("on the review step, step 1 filled with the defaults", () => {
+      /**
+       * Filling step 1 and moving to the review (a re-render per typed value, the live key check through the action,
+       * two steps) is the setup of these tests, not what they check: here it has the budget of a wizard hook, so the
+       * test bodies hold only the submit and its answer (FIX-W36-PLATFORM, lead decision (2j): three of them took over
+       * two seconds on a loaded runner). Each test's own routes are set after it: the review asks the API nothing more
+       * than the key check, which the default routes answer.
+       */
+      beforeEach(async () => {
+        await goToReview();
+      }, OPEN_WIZARD_TIMEOUT_MS);
+
+      it("[PFE-008 AC2] two quick submits send the same Idempotency-Key, the one the page made, and lead to one OTA [PF-10 AC2]", async () => {
+        let failFirst: ((error: Error) => void) | undefined;
+        routes({
+          "POST /v1/tenants": () =>
+            calls("POST", "/v1/tenants").length === 1
+              ? new Promise<Response>((_resolve, reject) => {
+                  failFirst = reject;
+                })
+              : json(tenantCreated(), 202),
+        });
+        const key = idempotencyKey();
+        expect(key).toMatch(UUID_V4);
+        expect(
+          within(document.querySelector("dl") as HTMLElement).getByText("acme.ota.example.com"),
+        ).toBeTruthy();
+
+        // A double click: two submits of the form before React has disabled the button, the second while the first
+        // is still on its way.
+        const form = screen
+          .getByRole("button", { name: WIZARD_STRINGS.submit })
+          .closest("form") as HTMLFormElement;
+        fireEvent.submit(form);
+        fireEvent.submit(form);
+        await waitFor(() => expect(calls("POST", "/v1/tenants")).toHaveLength(1), ACTION_WAIT);
+        // The first never got an answer (the connection dropped); the queued second goes out with the same key.
+        failFirst?.(new TypeError("fetch failed: socket hang up"));
+
+        expect(await redirectedTo()).toBe(`/otas/${TENANT_ID}/setup`);
+        const posts = calls("POST", "/v1/tenants");
+        expect(posts).toHaveLength(2);
+        expect(posts.map((post) => post.headers.get("idempotency-key"))).toEqual([key, key]);
+        const bodies = await Promise.all(posts.map((post) => post.json()));
+        expect(bodies[0]).toEqual({
+          name: "Acme Travel",
+          key: "acme",
+          countryCode: "NO",
+          defaultCurrency: "EUR",
+          timeZone: "Europe/Oslo",
+          planCode: "early_access",
+        });
+        expect(bodies[1]).toEqual(bodies[0]);
+        for (const post of posts) {
+          expect(post.headers.get("authorization")).toBe(`Bearer ${ACCESS_TOKEN}`);
+          expect(post.headers.get(END_USER_IP_HEADER)).toBe("203.0.113.7");
+          expect(post.headers.get(BFF_KEY_HEADER)).toBe(settings.PLATFORM_BFF_KEY);
+        }
       });
-      const key = idempotencyKey();
-      expect(key).toMatch(UUID_V4);
-      await goToReview();
-      expect(
-        within(document.querySelector("dl") as HTMLElement).getByText("acme.ota.example.com"),
-      ).toBeTruthy();
 
-      // A double click: two submits of the form before React has disabled the button, the second while the first
-      // is still on its way.
-      const form = screen
-        .getByRole("button", { name: WIZARD_STRINGS.submit })
-        .closest("form") as HTMLFormElement;
-      fireEvent.submit(form);
-      fireEvent.submit(form);
-      await waitFor(() => expect(calls("POST", "/v1/tenants")).toHaveLength(1), ACTION_WAIT);
-      // The first never got an answer (the connection dropped); the queued second goes out with the same key.
-      failFirst?.(new TypeError("fetch failed: socket hang up"));
+      it("[PFE-008 AC2] keeps one Idempotency-Key per opened wizard: every submit repeats it, a new opening makes a new one [PF-10 AC2]", async () => {
+        routes({ "POST /v1/tenants": () => json(tenantCreated(), 202) });
+        const first = idempotencyKey();
 
-      expect(await redirectedTo()).toBe(`/otas/${TENANT_ID}/setup`);
-      const posts = calls("POST", "/v1/tenants");
-      expect(posts).toHaveLength(2);
-      expect(posts.map((post) => post.headers.get("idempotency-key"))).toEqual([key, key]);
-      const bodies = await Promise.all(posts.map((post) => post.json()));
-      expect(bodies[0]).toEqual({
-        name: "Acme Travel",
-        key: "acme",
-        countryCode: "NO",
-        defaultCurrency: "EUR",
-        timeZone: "Europe/Oslo",
-        planCode: "early_access",
+        // Submits of the same wizard, however many, carry the same key and land on the same OTA (the API replays it).
+        const formData = wizardFormData();
+        const outcomes = await Promise.allSettled([createOta(IDLE, formData), createOta(IDLE, formData)]);
+        expect(
+          outcomes.map((outcome) => (outcome.status === "rejected" ? String(outcome.reason) : "")),
+        ).toEqual([
+          `Error: NEXT_REDIRECT /otas/${TENANT_ID}/setup`,
+          `Error: NEXT_REDIRECT /otas/${TENANT_ID}/setup`,
+        ]);
+        expect(calls("POST", "/v1/tenants").map((post) => post.headers.get("idempotency-key"))).toEqual([
+          first,
+          first,
+        ]);
+        cleanup();
+
+        await openWizard();
+        const second = idempotencyKey();
+        expect(second).toMatch(UUID_V4);
+        expect(second).not.toBe(first);
       });
-      expect(bodies[1]).toEqual(bodies[0]);
-      for (const post of posts) {
-        expect(post.headers.get("authorization")).toBe(`Bearer ${ACCESS_TOKEN}`);
-        expect(post.headers.get(END_USER_IP_HEADER)).toBe("203.0.113.7");
-        expect(post.headers.get(BFF_KEY_HEADER)).toBe(settings.PLATFORM_BFF_KEY);
-      }
-    });
 
-    it("[PFE-008 AC2] keeps one Idempotency-Key per opened wizard: every submit repeats it, a new opening makes a new one [PF-10 AC2]", async () => {
-      routes({ "POST /v1/tenants": () => json(tenantCreated(), 202) });
-      const first = idempotencyKey();
-      await goToReview();
+      it("[PFE-008 AC4] shows the tenant-limit message on the review and stays there [PF-10 AC4]", async () => {
+        routes({
+          "POST /v1/tenants": () =>
+            apiError("UNPROCESSABLE", 422, { details: { reason: "tenant_limit", limit: 3 } }),
+        });
+        press(WIZARD_STRINGS.submit);
 
-      // Submits of the same wizard, however many, carry the same key and land on the same OTA (the API replays it).
-      const formData = wizardFormData();
-      const outcomes = await Promise.allSettled([createOta(IDLE, formData), createOta(IDLE, formData)]);
-      expect(
-        outcomes.map((outcome) => (outcome.status === "rejected" ? String(outcome.reason) : "")),
-      ).toEqual([
-        `Error: NEXT_REDIRECT /otas/${TENANT_ID}/setup`,
-        `Error: NEXT_REDIRECT /otas/${TENANT_ID}/setup`,
-      ]);
-      expect(calls("POST", "/v1/tenants").map((post) => post.headers.get("idempotency-key"))).toEqual([
-        first,
-        first,
-      ]);
-      cleanup();
+        const summary = await screen.findByRole("alert", {}, ACTION_WAIT);
+        expect(within(summary).getByRole("listitem").textContent).toBe(WIZARD_STRINGS.tenantLimit(3));
+        expect(summary.textContent).toContain("You already own 3 OTAs");
+        expect(summary.textContent).not.toContain("The API's own text");
+        await waitFor(() => expect(document.activeElement).toBe(summary), ACTION_WAIT);
+        expect(currentStep()).toBe(WIZARD_STEP_LABELS.review);
+        expect(navigation.redirect).not.toHaveBeenCalled();
 
-      await openWizard();
-      const second = idempotencyKey();
-      expect(second).toMatch(UUID_V4);
-      expect(second).not.toBe(first);
+        // Without a usable limit the message still says what happened; another UNPROCESSABLE is not the tenant limit.
+        routes({
+          "POST /v1/tenants": () => apiError("UNPROCESSABLE", 422, { details: { reason: "tenant_limit" } }),
+        });
+        expect((await createOta(IDLE, wizardFormData())).message).toBe(WIZARD_STRINGS.tenantLimit(undefined));
+        routes({
+          "POST /v1/tenants": () => apiError("UNPROCESSABLE", 422, { details: { reason: "other" } }),
+        });
+        expect((await createOta(IDLE, wizardFormData())).message).toBe(ERROR_MESSAGES.UNPROCESSABLE);
+      });
+
+      it("returns to step 1 with the message at the key when the key was taken meanwhile (TENANT_KEY_UNAVAILABLE)", async () => {
+        routes({ "POST /v1/tenants": () => apiError("TENANT_KEY_UNAVAILABLE", 409) });
+        press(WIZARD_STRINGS.submit);
+
+        await waitFor(() => expect(currentStep()).toBe(WIZARD_STEP_LABELS.details), ACTION_WAIT);
+        expect(descriptionsOf(control(WIZARD_STRINGS.keyLabel))).toContain(WIZARD_STRINGS.keyUnavailable);
+        const summary = screen.getByRole("alert");
+        expect(within(summary).getByRole("link", { name: WIZARD_STRINGS.keyUnavailable })).toBeTruthy();
+        await waitFor(() => expect(document.activeElement).toBe(summary), ACTION_WAIT);
+        // The person's details stay.
+        expect(control(WIZARD_STRINGS.nameLabel).value).toBe("Acme Travel");
+        expect(control(WIZARD_STRINGS.countryLabel).value).toBe("NO");
+
+        // The refused key cannot go on again, although its live check had said it was free.
+        press(WIZARD_STRINGS.next);
+        expect(currentStep()).toBe(WIZARD_STEP_LABELS.details);
+        expect(descriptionsOf(control(WIZARD_STRINGS.keyLabel))).toContain(WIZARD_STRINGS.keyUnavailable);
+
+        // A new key drops the old message at the field and gets its own live check, so the person sees it is free.
+        await typeKey("acmetours");
+        await waitFor(() => expect(keyStatus().textContent).toBe(WIZARD_STRINGS.keyAvailable), ACTION_WAIT);
+        expect(control(WIZARD_STRINGS.keyLabel).getAttribute("aria-invalid")).toBeNull();
+        expect(descriptionsOf(control(WIZARD_STRINGS.keyLabel))).not.toContain(WIZARD_STRINGS.keyUnavailable);
+        press(WIZARD_STRINGS.next);
+        expect(currentStep()).toBe(WIZARD_STEP_LABELS.plan);
+        expect(calls("POST", "/v1/tenants")).toHaveLength(1);
+      });
+
+      it("moves between the steps with Back and Change, keeps the values, and focuses each step's heading", () => {
+        expect(document.activeElement).toBe(stepHeading());
+
+        fireEvent.click(
+          screen.getByRole("button", { name: `${WIZARD_STRINGS.change} ${WIZARD_STEP_LABELS.details}` }),
+        );
+        expect(currentStep()).toBe(WIZARD_STEP_LABELS.details);
+        expect(document.activeElement).toBe(stepHeading());
+        expect(control(WIZARD_STRINGS.nameLabel).value).toBe("Acme Travel");
+        expect(control(WIZARD_STRINGS.keyLabel).value).toBe("acme");
+        expect(screen.queryByRole("button", { name: WIZARD_STRINGS.back })).toBeNull();
+
+        press(WIZARD_STRINGS.next);
+        fireEvent.click(screen.getByRole("button", { name: WIZARD_STRINGS.back }));
+        expect(currentStep()).toBe(WIZARD_STEP_LABELS.details);
+        press(WIZARD_STRINGS.next);
+        press(WIZARD_STRINGS.next);
+        fireEvent.click(
+          screen.getByRole("button", { name: `${WIZARD_STRINGS.change} ${WIZARD_STEP_LABELS.plan}` }),
+        );
+        expect(currentStep()).toBe(WIZARD_STEP_LABELS.plan);
+        expect(calls("POST", "/v1/tenants")).toHaveLength(0);
+      });
+
+      it("maps the API's field errors to the portal's messages on their step, and ends a dead session", async () => {
+        routes({
+          "POST /v1/tenants": () =>
+            apiError("VALIDATION_FAILED", 400, {
+              fieldErrors: [
+                { path: "/countryCode", code: "unknown" },
+                { path: "/timeZone", code: "unknown" },
+              ],
+            }),
+        });
+        press(WIZARD_STRINGS.submit);
+
+        await waitFor(() => expect(currentStep()).toBe(WIZARD_STEP_LABELS.details), ACTION_WAIT);
+        expect(descriptionsOf(control(WIZARD_STRINGS.countryLabel))).toContain(WIZARD_STRINGS.countryUnknown);
+        expect(descriptionsOf(control(WIZARD_STRINGS.timeZoneLabel))).toContain(
+          WIZARD_STRINGS.timeZoneUnknown,
+        );
+        expect(screen.getByRole("alert").textContent).not.toContain("The API's own field text");
+
+        const formData = wizardFormData();
+        routes({ "POST /v1/tenants": () => apiError("UNAUTHENTICATED", 401) });
+        await expect(createOta(IDLE, formData)).rejects.toThrow("NEXT_REDIRECT /sign-in?next=%2Fotas%2Fnew");
+        routes({ "POST /v1/tenants": () => apiError("EMAIL_NOT_VERIFIED", 403) });
+        await expect(createOta(IDLE, formData)).rejects.toThrow("NEXT_REDIRECT /verify-pending");
+        routes({ "POST /v1/tenants": () => apiError("IDEMPOTENCY_KEY_REUSED", 409) });
+        expect(await createOta(IDLE, formData)).toMatchObject({
+          code: "IDEMPOTENCY_KEY_REUSED",
+          step: "review",
+          message: ERROR_MESSAGES.IDEMPOTENCY_KEY_REUSED,
+        });
+        fetchMock.mockRejectedValue(new TypeError("fetch failed: connect ECONNREFUSED 127.0.0.1:3100"));
+        expect((await createOta(IDLE, formData)).message).toBe(ERROR_MESSAGES.SERVICE_UNAVAILABLE);
+
+        // Without the wizard's key the action does not call the API: such a submit would not be safe to repeat.
+        fetchMock.mockClear();
+        formData.delete("idempotencyKey");
+        expect(await createOta(IDLE, formData)).toMatchObject({ message: WIZARD_STRINGS.formExpired });
+        expect(fetchMock).not.toHaveBeenCalled();
+      });
     });
 
     it("[PFE-008 AC3] offers only early_access before M5, preselected, whatever else listPlans answers [PF-10 AC3]", async () => {
@@ -788,124 +920,6 @@ describe("/otas/new: the wizard and the createOta action", () => {
       press(WIZARD_STRINGS.next);
       expect(currentStep()).toBe(WIZARD_STEP_LABELS.review);
       expect(within(document.querySelector("dl") as HTMLElement).getByText(EARLY_ACCESS.name)).toBeTruthy();
-    });
-
-    it("[PFE-008 AC4] shows the tenant-limit message on the review and stays there [PF-10 AC4]", async () => {
-      routes({
-        "POST /v1/tenants": () =>
-          apiError("UNPROCESSABLE", 422, { details: { reason: "tenant_limit", limit: 3 } }),
-      });
-      await goToReview();
-      press(WIZARD_STRINGS.submit);
-
-      const summary = await screen.findByRole("alert", {}, ACTION_WAIT);
-      expect(within(summary).getByRole("listitem").textContent).toBe(WIZARD_STRINGS.tenantLimit(3));
-      expect(summary.textContent).toContain("You already own 3 OTAs");
-      expect(summary.textContent).not.toContain("The API's own text");
-      await waitFor(() => expect(document.activeElement).toBe(summary), ACTION_WAIT);
-      expect(currentStep()).toBe(WIZARD_STEP_LABELS.review);
-      expect(navigation.redirect).not.toHaveBeenCalled();
-
-      // Without a usable limit the message still says what happened; another UNPROCESSABLE is not the tenant limit.
-      routes({
-        "POST /v1/tenants": () => apiError("UNPROCESSABLE", 422, { details: { reason: "tenant_limit" } }),
-      });
-      expect((await createOta(IDLE, wizardFormData())).message).toBe(WIZARD_STRINGS.tenantLimit(undefined));
-      routes({ "POST /v1/tenants": () => apiError("UNPROCESSABLE", 422, { details: { reason: "other" } }) });
-      expect((await createOta(IDLE, wizardFormData())).message).toBe(ERROR_MESSAGES.UNPROCESSABLE);
-    });
-
-    it("returns to step 1 with the message at the key when the key was taken meanwhile (TENANT_KEY_UNAVAILABLE)", async () => {
-      routes({ "POST /v1/tenants": () => apiError("TENANT_KEY_UNAVAILABLE", 409) });
-      await goToReview();
-      press(WIZARD_STRINGS.submit);
-
-      await waitFor(() => expect(currentStep()).toBe(WIZARD_STEP_LABELS.details), ACTION_WAIT);
-      expect(descriptionsOf(control(WIZARD_STRINGS.keyLabel))).toContain(WIZARD_STRINGS.keyUnavailable);
-      const summary = screen.getByRole("alert");
-      expect(within(summary).getByRole("link", { name: WIZARD_STRINGS.keyUnavailable })).toBeTruthy();
-      await waitFor(() => expect(document.activeElement).toBe(summary), ACTION_WAIT);
-      // The person's details stay.
-      expect(control(WIZARD_STRINGS.nameLabel).value).toBe("Acme Travel");
-      expect(control(WIZARD_STRINGS.countryLabel).value).toBe("NO");
-
-      // The refused key cannot go on again, although its live check had said it was free.
-      press(WIZARD_STRINGS.next);
-      expect(currentStep()).toBe(WIZARD_STEP_LABELS.details);
-      expect(descriptionsOf(control(WIZARD_STRINGS.keyLabel))).toContain(WIZARD_STRINGS.keyUnavailable);
-
-      // A new key drops the old message at the field and gets its own live check, so the person sees it is free.
-      await typeKey("acmetours");
-      await waitFor(() => expect(keyStatus().textContent).toBe(WIZARD_STRINGS.keyAvailable), ACTION_WAIT);
-      expect(control(WIZARD_STRINGS.keyLabel).getAttribute("aria-invalid")).toBeNull();
-      expect(descriptionsOf(control(WIZARD_STRINGS.keyLabel))).not.toContain(WIZARD_STRINGS.keyUnavailable);
-      press(WIZARD_STRINGS.next);
-      expect(currentStep()).toBe(WIZARD_STEP_LABELS.plan);
-      expect(calls("POST", "/v1/tenants")).toHaveLength(1);
-    });
-
-    it("moves between the steps with Back and Change, keeps the values, and focuses each step's heading", async () => {
-      await goToReview();
-      expect(document.activeElement).toBe(stepHeading());
-
-      fireEvent.click(
-        screen.getByRole("button", { name: `${WIZARD_STRINGS.change} ${WIZARD_STEP_LABELS.details}` }),
-      );
-      expect(currentStep()).toBe(WIZARD_STEP_LABELS.details);
-      expect(document.activeElement).toBe(stepHeading());
-      expect(control(WIZARD_STRINGS.nameLabel).value).toBe("Acme Travel");
-      expect(control(WIZARD_STRINGS.keyLabel).value).toBe("acme");
-      expect(screen.queryByRole("button", { name: WIZARD_STRINGS.back })).toBeNull();
-
-      press(WIZARD_STRINGS.next);
-      fireEvent.click(screen.getByRole("button", { name: WIZARD_STRINGS.back }));
-      expect(currentStep()).toBe(WIZARD_STEP_LABELS.details);
-      press(WIZARD_STRINGS.next);
-      press(WIZARD_STRINGS.next);
-      fireEvent.click(
-        screen.getByRole("button", { name: `${WIZARD_STRINGS.change} ${WIZARD_STEP_LABELS.plan}` }),
-      );
-      expect(currentStep()).toBe(WIZARD_STEP_LABELS.plan);
-      expect(calls("POST", "/v1/tenants")).toHaveLength(0);
-    });
-
-    it("maps the API's field errors to the portal's messages on their step, and ends a dead session", async () => {
-      routes({
-        "POST /v1/tenants": () =>
-          apiError("VALIDATION_FAILED", 400, {
-            fieldErrors: [
-              { path: "/countryCode", code: "unknown" },
-              { path: "/timeZone", code: "unknown" },
-            ],
-          }),
-      });
-      await goToReview();
-      press(WIZARD_STRINGS.submit);
-
-      await waitFor(() => expect(currentStep()).toBe(WIZARD_STEP_LABELS.details), ACTION_WAIT);
-      expect(descriptionsOf(control(WIZARD_STRINGS.countryLabel))).toContain(WIZARD_STRINGS.countryUnknown);
-      expect(descriptionsOf(control(WIZARD_STRINGS.timeZoneLabel))).toContain(WIZARD_STRINGS.timeZoneUnknown);
-      expect(screen.getByRole("alert").textContent).not.toContain("The API's own field text");
-
-      const formData = wizardFormData();
-      routes({ "POST /v1/tenants": () => apiError("UNAUTHENTICATED", 401) });
-      await expect(createOta(IDLE, formData)).rejects.toThrow("NEXT_REDIRECT /sign-in?next=%2Fotas%2Fnew");
-      routes({ "POST /v1/tenants": () => apiError("EMAIL_NOT_VERIFIED", 403) });
-      await expect(createOta(IDLE, formData)).rejects.toThrow("NEXT_REDIRECT /verify-pending");
-      routes({ "POST /v1/tenants": () => apiError("IDEMPOTENCY_KEY_REUSED", 409) });
-      expect(await createOta(IDLE, formData)).toMatchObject({
-        code: "IDEMPOTENCY_KEY_REUSED",
-        step: "review",
-        message: ERROR_MESSAGES.IDEMPOTENCY_KEY_REUSED,
-      });
-      fetchMock.mockRejectedValue(new TypeError("fetch failed: connect ECONNREFUSED 127.0.0.1:3100"));
-      expect((await createOta(IDLE, formData)).message).toBe(ERROR_MESSAGES.SERVICE_UNAVAILABLE);
-
-      // Without the wizard's key the action does not call the API: such a submit would not be safe to repeat.
-      fetchMock.mockClear();
-      formData.delete("idempotencyKey");
-      expect(await createOta(IDLE, formData)).toMatchObject({ message: WIZARD_STRINGS.formExpired });
-      expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it("offers the countries, active currencies and time zones of the reference data the API checks against", () => {

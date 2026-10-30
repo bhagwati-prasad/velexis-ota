@@ -224,7 +224,13 @@ async function invalidationOf(accountId: string): Promise<InvalidationEvent> {
 
 beforeAll(async () => {
   t = await createTestApp({
-    env: { LOG_LEVEL: "trace", FEATURE_CUSTOM_DOMAINS: "true", FEATURE_SETTLEMENTS: "true" },
+    env: {
+      LOG_LEVEL: "trace",
+      FEATURE_CUSTOM_DOMAINS: "true",
+      FEATURE_SETTLEMENTS: "true",
+      // Settlements need the Stripe key since FIX-W36-PLATFORM: the development value of `.env.example`.
+      STRIPE_SECRET_KEY: "sk_test_replace_me",
+    },
   });
   pool = t.app.get<PlatformPool>(PLATFORM_POOL);
   tokens = t.app.get(TokenService);

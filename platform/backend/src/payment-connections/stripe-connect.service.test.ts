@@ -15,6 +15,7 @@ import { isAppError } from "@velexis/errors";
 import { FakeClock } from "@velexis/testing";
 import type { Redis } from "ioredis";
 import type { PinoLogger } from "nestjs-pino";
+import Stripe from "stripe";
 import { describe, expect, it } from "vitest";
 import { FakeStripe, type FakeConnectTokens } from "../../test/support/fake-stripe";
 import type { AuditRepository, AuditRowInsert } from "../audit/audit.repository";
@@ -137,6 +138,10 @@ class Harness {
   readonly elsewhere = new Map<string, string>();
   /** A unique violation the next write throws (another OTA committed the account meanwhile). */
   conflictOnWrite = false;
+  /** Runs when the transaction reads the tenant: what another request commits just before the switch locks the rows. */
+  beforeSwitch: ((trx: Trx) => void) | undefined;
+  /** Set to make `connectedElsewhere` fail (the database). */
+  elsewhereDown: Error | undefined;
   readonly rows = new Map<PaymentEnvironment, PaymentConnectionView>([["test", rowOf("test")]]);
   readonly clock = new FakeClock("2026-10-30T09:15:00Z");
   readonly stripe = new FakeStripe();
@@ -146,6 +151,7 @@ class Harness {
   readonly audit: AuditRowInsert[] = [];
   readonly events: unknown[] = [];
   readonly warnings: Array<{ object: Record<string, unknown>; message: string }> = [];
+  readonly infos: Array<{ object: Record<string, unknown>; message: string }> = [];
   /** Set to make every Redis command fail. */
   redisDown: Error | undefined;
   readonly service: StripeConnectService;
@@ -164,9 +170,14 @@ class Harness {
         const { membership_id, role, tenant_status } = this.starter;
         return Promise.resolve({ membership_id, role, tenant_status });
       },
-      tenantForShare: (_trx: Trx, tenantId: string) =>
-        Promise.resolve(tenantId === TENANT ? this.tenant : undefined),
+      tenantForShare: (trx: Trx, tenantId: string) => {
+        this.beforeSwitch?.(trx);
+        return Promise.resolve(tenantId === TENANT ? this.tenant : undefined);
+      },
       connectedElsewhere: (accountReference: string, tenantId: string) => {
+        if (this.elsewhereDown !== undefined) {
+          return Promise.reject(this.elsewhereDown);
+        }
         const holder = this.elsewhere.get(accountReference);
         return Promise.resolve(holder !== undefined && holder !== tenantId ? holder : undefined);
       },
@@ -272,6 +283,9 @@ class Harness {
     const logger = {
       warn: (object: Record<string, unknown>, message: string) => {
         this.warnings.push({ object, message });
+      },
+      info: (object: Record<string, unknown>, message: string) => {
+        this.infos.push({ object, message });
       },
     };
     this.service = new StripeConnectService(
@@ -829,6 +843,178 @@ describe("StripeConnectService.complete", () => {
       code: "PROVIDER_ERROR",
       details: { provider: "stripe" },
     });
+    expect([h.rows.get("test")?.account_mode, h.audit, h.events]).toEqual(["velexis", [], []]);
+  });
+
+  it("[FIX-W36-PLATFORM AC3] answers 409 CONFLICT connection_disabled for a connection an admin disabled, before Stripe, and writes nothing", async () => {
+    const h = new Harness();
+    h.tenant = { status: "active", storefront_environment: "live" };
+    const disabled = { status: "disabled", disconnected_at: null };
+    for (const environment of ["test", "live"] as const) {
+      h.rows.set("test", rowOf("test"));
+      h.rows.delete("live");
+      h.rows.set(environment, rowOf(environment, disabled));
+      h.granted();
+      const before = structuredClone([...h.rows]);
+      const state = await h.started();
+
+      expect(await outcome(() => h.service.complete(OWNER, { state, code: CODE })), environment).toEqual({
+        code: "CONFLICT",
+        details: { reason: "connection_disabled" },
+      });
+      // A declined callback for it answers the same: nothing to connect while an admin keeps it off.
+      const declined = await h.started();
+      expect(
+        await outcome(() => h.service.complete(OWNER, { state: declined, error: "access_denied" })),
+        environment,
+      ).toEqual({ code: "CONFLICT", details: { reason: "connection_disabled" } });
+      expect([...h.rows], environment).toEqual(before);
+    }
+    expect(h.stripe.calls).toEqual([]);
+    expect([h.audit, h.events]).toEqual([[], []]);
+
+    // A connection disabled because the OTA disconnected Velexis in Stripe (disconnected_at) connects again.
+    h.rows.set(
+      "test",
+      rowOf("test", { status: "disabled", disconnected_at: new Date("2026-10-20T08:00:00Z") }),
+    );
+    h.rows.delete("live");
+    h.tenant = { status: "active", storefront_environment: "test" };
+    const state = await h.started();
+    expect(await outcome(() => h.service.complete(OWNER, { state, code: CODE }))).toEqual({ code: "ok" });
+    expect(h.rows.get("test")).toMatchObject({
+      account_mode: "connect_standard",
+      status: "active",
+      disconnected_at: null,
+    });
+  });
+
+  it("[FIX-W36-PLATFORM AC3] answers 409 connection_disabled when an admin disables the connection during the exchange, and rolls back", async () => {
+    const h = new Harness();
+    h.granted();
+    const state = await h.started();
+    h.beforeSwitch = (trx) => {
+      const row = trx.rows.get("test");
+      if (row !== undefined) {
+        trx.rows.set("test", { ...row, status: "disabled" });
+      }
+    };
+
+    expect(await outcome(() => h.service.complete(OWNER, { state, code: CODE }))).toEqual({
+      code: "CONFLICT",
+      details: { reason: "connection_disabled" },
+    });
+    // The transaction rolled back: the stored row is the one before, no audit row, no event.
+    expect(h.rows.get("test")).toEqual(rowOf("test"));
+    expect([h.audit, h.events]).toEqual([[], []]);
+  });
+
+  it("[FIX-W36-PLATFORM AC3] deauthorises the account of a code of the other mode before answering livemode_mismatch, best effort", async () => {
+    const h = new Harness();
+    const tokens = h.granted(true);
+    let state = await h.started();
+
+    expect(await outcome(() => h.service.complete(OWNER, { state, code: CODE }))).toEqual({
+      code: "UNPROCESSABLE",
+      details: { reason: "livemode_mismatch" },
+    });
+    expect(h.stripe.callsOf("oauth.deauthorize")).toEqual([
+      {
+        method: "oauth.deauthorize",
+        id: undefined,
+        params: { client_id: CLIENT_ID, stripe_user_id: ACCOUNT },
+        idempotencyKey: `connect_deauthorize:${sha256Hex(state)}`,
+      },
+    ]);
+    expect(h.stripe.deauthorized).toEqual([ACCOUNT]);
+    expect(h.infos).toEqual([
+      { object: { tenantId: TENANT, stripeAccount: ACCOUNT }, message: "stripe_connect.deauthorized" },
+    ]);
+    // The exchange comes first, the deauthorisation after it; the account is never read and nothing is written.
+    expect(h.stripe.calls.map((call) => call.method)).toEqual(["oauth.token", "oauth.deauthorize"]);
+    expect([h.rows.get("test")?.account_mode, h.audit, h.events]).toEqual(["velexis", [], []]);
+
+    // A failed deauthorisation is logged (Stripe's type, status and code only) and the answer stays the same.
+    h.stripe.failNext("oauth.deauthorize", FakeStripe.apiError(400, "invalid_client"));
+    h.granted(true);
+    state = await h.started();
+    expect(await outcome(() => h.service.complete(OWNER, { state, code: CODE }))).toEqual({
+      code: "UNPROCESSABLE",
+      details: { reason: "livemode_mismatch" },
+    });
+    expect(h.warnings).toEqual([
+      {
+        object: {
+          tenantId: TENANT,
+          stripeAccount: ACCOUNT,
+          failure: "invalid_request_error 400 (invalid_client)",
+        },
+        message: "stripe_connect.deauthorize_failed",
+      },
+    ]);
+    const logged = JSON.stringify([h.warnings, h.infos]);
+    for (const secret of [tokens.accessToken, tokens.refreshToken, tokens.publishableKey, CODE, state]) {
+      expect(logged).not.toContain(secret);
+    }
+    expect(logged).not.toContain("Fake Stripe answered");
+  });
+
+  it("[FIX-W36-PLATFORM AC3] leaves connected an account of the other mode that an OTA's connection holds", async () => {
+    const h = new Harness();
+    // Another OTA holds the account: deauthorising it would cut that OTA off.
+    h.elsewhere.set(ACCOUNT, OTHER_TENANT);
+    h.granted(true);
+    let state = await h.started();
+    expect(await outcome(() => h.service.complete(OWNER, { state, code: CODE }))).toEqual({
+      code: "UNPROCESSABLE",
+      details: { reason: "livemode_mismatch" },
+    });
+    // This OTA's own connection holds it.
+    h.elsewhere.clear();
+    h.rows.set("test", rowOf("test", { account_mode: "connect_standard", account_reference: ACCOUNT }));
+    h.granted(true);
+    state = await h.started();
+    expect(await outcome(() => h.service.complete(OWNER, { state, code: CODE }))).toEqual({
+      code: "UNPROCESSABLE",
+      details: { reason: "livemode_mismatch" },
+    });
+    // Who holds it cannot be read: it is left connected too.
+    h.rows.set("test", rowOf("test"));
+    h.elsewhereDown = new Error("Connection terminated unexpectedly");
+    h.granted(true);
+    state = await h.started();
+    expect(await outcome(() => h.service.complete(OWNER, { state, code: CODE }))).toEqual({
+      code: "UNPROCESSABLE",
+      details: { reason: "livemode_mismatch" },
+    });
+
+    expect(h.stripe.callsOf("oauth.deauthorize")).toEqual([]);
+    expect(h.warnings.map((warning) => [warning.message, warning.object["failure"]])).toEqual([
+      ["stripe_connect.deauthorize_skipped", undefined],
+      ["stripe_connect.deauthorize_skipped", undefined],
+      ["stripe_connect.deauthorize_skipped", "Error"],
+    ]);
+  });
+
+  it("[FIX-W36-PLATFORM AC3] answers invalid_grant from oauth.token 422 oauth_error, whatever Stripe's description says", async () => {
+    const h = new Harness();
+    h.granted();
+    h.stripe.failNext(
+      "oauth.token",
+      new Stripe.errors.StripeInvalidGrantError({
+        type: "invalid_grant",
+        message: `This authorization code has expired: ${CODE}`,
+        statusCode: 400,
+      }),
+    );
+    const state = await h.started();
+
+    expect(await outcome(() => h.service.complete(OWNER, { state, code: CODE }))).toEqual({
+      code: "UNPROCESSABLE",
+      details: { reason: "oauth_error" },
+    });
+    expect(h.stripe.callsOf("oauth.deauthorize")).toEqual([]);
+    expect(h.stripe.callsOf("accounts.retrieve")).toEqual([]);
     expect([h.rows.get("test")?.account_mode, h.audit, h.events]).toEqual(["velexis", [], []]);
   });
 

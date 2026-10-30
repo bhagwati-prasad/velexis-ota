@@ -9,7 +9,9 @@
 //   `Cache-Control: no-store`, set before the service runs (its refusals carry it too).
 // - `completeStripeConnect` (`POST /v1/payment-connections/stripe-connect/callback`): the portal's callback page posts
 //   what Stripe sent back for the signed-in account; the OTA is the state's, so the path names none and no tenant guard
-//   runs: the service checks the state's account, the membership and the OTA. The answer is the OTA and its
+//   runs: the service checks the state's account, the membership, the OTA and its connections. The operation is
+//   `x-feature: own_stripe` too (FIX-W36-PLATFORM, lead decision (2h) of 2026-10-30), so FeatureGuard answers `403
+//   FEATURE_DISABLED` while the switch is off, before the handler takes the state. The answer is the OTA and its
 //   connections as `listPaymentConnections` maps them. `code` and `state` are write-only: nothing here logs the body.
 import { Controller, HttpCode, Post, Res } from "@nestjs/common";
 import type { components } from "@velexis/api-types/platform";

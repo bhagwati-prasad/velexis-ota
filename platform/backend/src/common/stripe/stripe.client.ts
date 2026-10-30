@@ -69,8 +69,9 @@ export function idempotencyKey(purpose: string, rowId: string): string {
  */
 export interface StripeApi {
   // Connect Standard (Stripe payments flow §C, PBE-055): the OAuth code exchange (a POST with its idempotency key; the
-  // tokens it answers are discarded) and the connected account's capabilities.
-  readonly oauth: Pick<Stripe.OAuthResource, "token">;
+  // tokens it answers are discarded), the deauthorisation of an account the callback refuses for its mode
+  // (FIX-W36-PLATFORM; a POST with its idempotency key), and the connected account's capabilities.
+  readonly oauth: Pick<Stripe.OAuthResource, "token" | "deauthorize">;
   readonly accounts: Pick<Stripe.AccountsResource, "retrieve">;
   readonly customers: Pick<Stripe.CustomersResource, "create" | "retrieve" | "search">;
   readonly checkout: { readonly sessions: Pick<Stripe.Checkout.SessionsResource, "create" | "retrieve"> };

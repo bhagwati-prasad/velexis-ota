@@ -7,7 +7,11 @@
 //    `created` is in the month (`[periodStart, periodEnd)`, UTC) are listed page by page (`limit` 100, `starting_after`,
 //    `expand: ["data.source"]`). The `reporting_category` says what a transaction is: `charge`, `refund`,
 //    `refund_failure` (a refund that failed and came back: a positive `refund` line), `dispute` and
-//    `dispute_reversal` are settled; every other category (payouts, Stripe's own fees, transfers, …) is not. The tenant
+//    `dispute_reversal` are settled. The categories of Velexis's own money (`UNSETTLED_CATEGORIES`: payouts, Stripe's
+//    own fees and their tax, transfers, top-ups, …) are skipped without a word. Every other category is one this
+//    generator does not know: it is skipped too, and the run logs one warning line per such transaction with its type
+//    and id only (`settlement.unknown_category`: never an amount, a source or metadata), so a category Stripe adds is
+//    looked at instead of disappearing (FIX-W36-PLATFORM, lead decision (2g) of 2026-10-30). The tenant
 //    is `metadata.velexis_tenant_id` of the charge, or of its PaymentIntent when the charge lacks it; a refund and a
 //    dispute resolve through their charge (retrieved when the expansion left an id, each charge and PaymentIntent at
 //    most once per run). A transaction without a tenant (Velexis's own subscription income, a payment made outside
@@ -15,17 +19,21 @@
 //    named the tenant, by value; never card data (nothing of the card is read).
 // 2. **The statements** (`groupStatements`): one per tenant and balance currency (PADR-0003 item 4), in the
 //    environment of the deployment (`live` with `APP_ENV=production`, else `test`: item 1), plus every draft of the
-//    month that already exists (rebuilt even when no transaction belongs to it any more). With `tenantId`, the other
-//    tenants are left alone. A transaction of a tenant the platform does not know is skipped.
+//    month that already exists (rebuilt even when no transaction belongs to it any more), plus one for each tenant
+//    and currency whose only open item is a carried-forward balance this month's draft absorbs
+//    (`carryForwardKeys`: the draft then holds just that `carry_forward` line, FIX-W36-PLATFORM, lead decision (2g);
+//    a balance that sums to zero opens no draft). With `tenantId`, the other tenants are left alone. A transaction of
+//    a tenant the platform does not know is skipped.
 // 3. **One transaction per statement** (`rebuild`), after every Stripe call (no transaction is open during one): the
 //    statement of the key is locked or created as a draft; one that is `approved`, `paid` or `carried_forward` is
 //    never touched (item 8). A draft is rebuilt from scratch: its lines are deleted (a manual adjustment too, as the
 //    contract says), one line per balance transaction is inserted (a transaction already on another statement is
 //    skipped by the unique key), a `carry_forward` line adds the net of the earlier `carried_forward` statements not
-//    yet absorbed (item 7: the next draft absorbs a balance, so one that an earlier open draft of the same tenant,
-//    environment and currency absorbs is left to it and never counted twice), and the totals come from
-//    settlement-formula.ts with `fee_bps` copied from the tenant's plan now. A rebuilt draft gets a new version (an
-//    admin's `If-Match` from before fails) and an audit row `settlement.generated` (actor `system`).
+//    yet absorbed (item 7 and its note of 2026-10-30: the earliest later open draft of the same tenant, environment
+//    and currency absorbs a balance, so one that an earlier open draft absorbs is left to it and never counted
+//    twice), and the totals come from settlement-formula.ts with `fee_bps` copied from the tenant's plan now (a
+//    dispute fee counted once, in `disputes`). A rebuilt draft gets a new version (an admin's `If-Match` from before
+//    fails) and an audit row `settlement.generated` (actor `system`).
 //
 // Running it twice over the same Stripe data gives the same drafts: the same statements and totals, and the same lines
 // (with new line ids). A failure (Stripe down, the database) fails the job, BullMQ tries again (ADR-0009), and the next
@@ -129,6 +137,56 @@ export const SETTLED_CATEGORIES: Readonly<Record<string, SettledCategory>> = Obj
   dispute_reversal: { lineType: "dispute_reversal", description: "Dispute won: amount reinstated" },
 });
 
+/**
+ * The reporting categories of Velexis's own money on its Stripe balance, never a tenant's payment (PADR-0003 item 3:
+ * payouts, Stripe's own fees and the tax on them, transfers, top-ups, Connect and reserve movements, contributions):
+ * skipped without a word. Any category in neither list is skipped with a warning (file header, step 1).
+ */
+export const UNSETTLED_CATEGORIES: ReadonlySet<string> = new Set([
+  "payout",
+  "payout_reversal",
+  "fee",
+  "tax",
+  "transfer",
+  "transfer_reversal",
+  "topup",
+  "topup_reversal",
+  "platform_earning",
+  "platform_earning_refund",
+  "connect_collection_transfer",
+  "connect_reserved_funds",
+  "risk_reserved_funds",
+  "contribution",
+  "climate_order_purchase",
+  "climate_order_refund",
+]);
+
+/** A short lower-case Stripe identifier (a type or a category), safe to log as it is. */
+const STRIPE_IDENTIFIER = /^[a-z_]{1,64}$/;
+/** A Stripe object id (`txn_…`), safe to log as it is. */
+const STRIPE_OBJECT_ID = /^[A-Za-z0-9_]{1,255}$/;
+
+/** A balance transaction of a category this generator does not know: what the warning names, and nothing else. */
+export interface UnknownCategoryTransaction {
+  /** `txn_…`, or `unreadable` when Stripe sent something of another shape. */
+  readonly id: string;
+  /** The transaction's `type` (`adjustment`, …), or `unreadable`. */
+  readonly type: string;
+  /** Its `reporting_category`, or `unreadable`. */
+  readonly reportingCategory: string;
+}
+
+/** What the warning of an unknown category may name: the type and the id, each only in Stripe's own shape. */
+function unknownCategoryOf(txn: Stripe.BalanceTransaction): UnknownCategoryTransaction {
+  const readable = (value: unknown, pattern: RegExp): string =>
+    typeof value === "string" && pattern.test(value) ? value : "unreadable";
+  return {
+    id: readable(txn.id, STRIPE_OBJECT_ID),
+    type: readable(txn.type, STRIPE_IDENTIFIER),
+    reportingCategory: readable(txn.reporting_category, STRIPE_IDENTIFIER),
+  };
+}
+
 /** A `ten_` id as the platform writes it. */
 const TENANT_ID = /^ten_[0-9A-HJKMNP-TV-Z]{26}$/;
 /** What a tenant id taken by value from Stripe metadata may look like (`pay_…`, `chk_…`). */
@@ -163,8 +221,10 @@ export interface TenantTransaction {
 export interface CollectedTransactions {
   /** Every balance transaction listed. */
   readonly listed: number;
-  /** Transactions of a category that is not settled. */
+  /** Transactions of Velexis's own money (`UNSETTLED_CATEGORIES`). */
   readonly ignored: number;
+  /** Transactions of a category this generator does not know, skipped (the run warns about each). */
+  readonly unknownCategories: UnknownCategoryTransaction[];
   /** Settled categories without a tenant in the metadata. */
   readonly withoutTenant: number;
   readonly transactions: TenantTransaction[];
@@ -275,14 +335,19 @@ async function sourceFacts(
   return undefined;
 }
 
-/** The tenant transaction of `txn`, `"ignored"` for a category that is not settled, `"no_tenant"` without a tenant. */
+/**
+ * The tenant transaction of `txn`; `"ignored"` for a category of Velexis's own money, `"unknown"` for a category this
+ * generator does not know, `"no_tenant"` without a tenant.
+ */
 async function resolveTransaction(
   txn: Stripe.BalanceTransaction,
   objects: StripeObjects,
-): Promise<TenantTransaction | "ignored" | "no_tenant"> {
-  const category = SETTLED_CATEGORIES[txn.reporting_category];
+): Promise<TenantTransaction | "ignored" | "unknown" | "no_tenant"> {
+  const category = Object.hasOwn(SETTLED_CATEGORIES, txn.reporting_category)
+    ? SETTLED_CATEGORIES[txn.reporting_category]
+    : undefined;
   if (category === undefined) {
-    return "ignored";
+    return UNSETTLED_CATEGORIES.has(txn.reporting_category) ? "ignored" : "unknown";
   }
   const source = await sourceFacts(txn.source, objects);
   if (source === undefined) {
@@ -332,6 +397,7 @@ export async function collectTransactions(
 ): Promise<CollectedTransactions> {
   const objects = new StripeObjects(stripe);
   const transactions: TenantTransaction[] = [];
+  const unknownCategories: UnknownCategoryTransaction[] = [];
   let listed = 0;
   let ignored = 0;
   let withoutTenant = 0;
@@ -348,6 +414,8 @@ export async function collectTransactions(
       const resolved = await resolveTransaction(txn, objects);
       if (resolved === "ignored") {
         ignored += 1;
+      } else if (resolved === "unknown") {
+        unknownCategories.push(unknownCategoryOf(txn));
       } else if (resolved === "no_tenant") {
         withoutTenant += 1;
       } else {
@@ -360,7 +428,7 @@ export async function collectTransactions(
     }
     startingAfter = last.id;
   }
-  return { listed, ignored, withoutTenant, transactions };
+  return { listed, ignored, unknownCategories, withoutTenant, transactions };
 }
 
 // ---- Statements -------------------------------------------------------------------------------------------------
@@ -406,12 +474,13 @@ export interface StatementPlan {
 }
 
 /**
- * The statements of `transactions` (one per tenant and balance currency), plus an empty one for each of
- * `existingDrafts` that no transaction names, sorted by tenant and currency.
+ * The statements of `transactions` (one per tenant and balance currency), plus one without transaction lines for each
+ * of `otherKeys` that no transaction names (an existing draft of the month, or a tenant and currency whose only open
+ * item is a carried-forward balance), sorted by tenant and currency.
  */
 export function groupStatements(
   transactions: readonly TenantTransaction[],
-  existingDrafts: ReadonlyArray<{ readonly tenant_id: string; readonly currency: string }>,
+  otherKeys: ReadonlyArray<{ readonly tenant_id: string; readonly currency: string }>,
   minorUnitsOf: MinorUnitsOf,
 ): StatementPlan[] {
   const plans = new Map<string, StatementPlan>();
@@ -428,8 +497,8 @@ export function groupStatements(
   for (const txn of oldestFirst) {
     planOf(txn.tenantId, txn.currency).lines.push(transactionLine(txn, minorUnitsOf));
   }
-  for (const draft of existingDrafts) {
-    planOf(draft.tenant_id, draft.currency.trim());
+  for (const key of otherKeys) {
+    planOf(key.tenant_id, key.currency.trim());
   }
   return [...plans.values()].sort(
     (a, b) => a.tenantId.localeCompare(b.tenantId) || a.currency.localeCompare(b.currency),
@@ -487,8 +556,10 @@ export interface SettlementGenerationResult {
   readonly tenantId: string | null;
   /** Balance transactions listed. */
   readonly transactions: number;
-  /** Of a category that is not settled. */
+  /** Of a category of Velexis's own money. */
   readonly ignored: number;
+  /** Of a category the generator does not know: skipped, each with a warning line. */
+  readonly unknownCategory: number;
   /** Without a tenant. */
   readonly withoutTenant: number;
   /** Of a tenant the platform does not know. */
@@ -501,6 +572,11 @@ export interface SettlementGenerationResult {
   readonly lines: number;
   /** Drafts created or rebuilt. */
   readonly rebuilt: number;
+  /**
+   * Of `rebuilt`: drafts this run opened for a tenant and currency whose only open item was a carried-forward balance
+   * (`carryForwardKeys`). A later run of the month rebuilds such a draft as an existing one and does not count it here.
+   */
+  readonly carryForwardOnly: number;
   /** Approved, paid or carried-forward statements left as they are. */
   readonly untouched: number;
 }
@@ -538,12 +614,27 @@ export class SettlementGenerator {
       input.tenantId === undefined
         ? collected.transactions
         : collected.transactions.filter((txn) => txn.tenantId === input.tenantId);
+    for (const unknown of collected.unknownCategories) {
+      // One line per transaction, its type and id only: never an amount, a source or metadata.
+      this.logger.warn(
+        {
+          periodStart: period.start.toISOString(),
+          balanceTransactionId: unknown.id,
+          type: unknown.type,
+          reportingCategory: unknown.reportingCategory,
+        },
+        "settlement.unknown_category",
+      );
+    }
     const drafts = await this.repository.draftKeys(this.environment, period.start, input.tenantId);
+    // A tenant and currency whose only open item is a carried-forward balance gets a draft too (file header, step 2).
+    const carried = await this.repository.carryForwardKeys(this.environment, period.start, input.tenantId);
+    const otherKeys = [...drafts, ...carried];
     const feeBps = await this.repository.feeBpsOfTenants([
-      ...new Set([...inScope.map((txn) => txn.tenantId), ...drafts.map((draft) => draft.tenant_id)]),
+      ...new Set([...inScope.map((txn) => txn.tenantId), ...otherKeys.map((key) => key.tenant_id)]),
     ]);
     const known = inScope.filter((txn) => feeBps.has(txn.tenantId));
-    const currencies = new Set<string>(drafts.map((draft) => draft.currency.trim()));
+    const currencies = new Set<string>(otherKeys.map((key) => key.currency.trim()));
     for (const txn of known) {
       currencies.add(txn.currency);
       if (txn.originalCurrency !== null) {
@@ -559,11 +650,13 @@ export class SettlementGenerator {
       return exponent;
     };
 
+    const carriedOnly = new Set(carried.map((key) => `${key.tenant_id} ${key.currency.trim()}`));
     let lines = 0;
     let alreadySettled = 0;
     let rebuilt = 0;
+    let carryForwardOnly = 0;
     let untouched = 0;
-    for (const plan of groupStatements(known, drafts, minorUnitsOf)) {
+    for (const plan of groupStatements(known, otherKeys, minorUnitsOf)) {
       const outcome = await this.rebuild(
         plan,
         period,
@@ -577,6 +670,9 @@ export class SettlementGenerator {
         rebuilt += 1;
         lines += outcome.lines;
         alreadySettled += outcome.alreadySettled;
+        if (plan.lines.length === 0 && carriedOnly.has(`${plan.tenantId} ${plan.currency}`)) {
+          carryForwardOnly += 1;
+        }
       }
     }
     const result: SettlementGenerationResult = {
@@ -585,12 +681,14 @@ export class SettlementGenerator {
       tenantId: input.tenantId ?? null,
       transactions: collected.listed,
       ignored: collected.ignored,
+      unknownCategory: collected.unknownCategories.length,
       withoutTenant: collected.withoutTenant,
       unknownTenant: inScope.length - known.length,
       otherTenants: collected.transactions.length - inScope.length,
       alreadySettled,
       lines,
       rebuilt,
+      carryForwardOnly,
       untouched,
     };
     this.logger.info({ ...result }, "settlement.generated");

@@ -387,8 +387,61 @@ describe("collectTransactions and groupStatements (flow §F items 2 and 3)", () 
     expect(await collectTransactions(stripe.api(), PERIOD)).toEqual({
       listed: 4,
       ignored: 0,
+      unknownCategories: [],
       withoutTenant: 4,
       transactions: [],
+    });
+  });
+
+  it("[FIX-W36-PLATFORM AC2] settles a failed refund as a positive refund line, skips Velexis's own money silently and names any other category by its type and id only", async () => {
+    stripe.put(
+      charge("ch_A1", 100_000, { metadata: velexis(TENANT_A, "pay_A1", "chk_A1"), intent: "pi_A1" }),
+      refund("re_A1", "ch_A1", 20_000),
+      payout("po_1"),
+      txn("txn_A1", "charge", 100_000, 1_475, "ch_A1", onDay(2)),
+      txn("txn_reA1", "refund", -20_000, 0, "re_A1", onDay(3)),
+      // The refund failed and Stripe put the money back on the balance.
+      txn("txn_rfA1", "refund_failure", 20_000, 0, "re_A1", onDay(4)),
+      // Velexis's own money: a payout, Stripe's fee and the tax on it.
+      txn("txn_po1", "payout", -100_000, 0, "po_1", onDay(5)),
+      txn("txn_fee", "fee", -500, 0, "po_1", onDay(5, 13)),
+      txn("txn_tax", "tax", -100, 0, "po_1", onDay(5, 14)),
+      // Categories this generator does not know, one of them on the tenant's own charge: skipped, never guessed.
+      stripeObject({
+        ...txn("txn_pcr", "partial_capture_reversal", -5_000, 0, "ch_A1", onDay(6)),
+        type: "adjustment",
+      }),
+      stripeObject({ ...txn("txn_odd", "other_adjustment", 777, 0, "ch_A1", onDay(7)), type: "adjustment" }),
+      // A prototype key of a plain object is no category either.
+      stripeObject({
+        ...txn("txn_proto", "toString", 123, 0, "ch_A1", onDay(8)),
+        type: "Not a Stripe type!",
+      }),
+    );
+
+    const collected = await collectTransactions(stripe.api(), PERIOD);
+    const [eur] = groupStatements(collected.transactions, [], minorUnitsOf);
+
+    expect(collected).toMatchObject({ listed: 9, ignored: 3, withoutTenant: 0 });
+    // Newest first, as Stripe lists them; the type and the id only, a type of another shape left unread.
+    expect(collected.unknownCategories).toEqual([
+      { id: "txn_proto", type: "unreadable", reportingCategory: "unreadable" },
+      { id: "txn_odd", type: "adjustment", reportingCategory: "other_adjustment" },
+      { id: "txn_pcr", type: "adjustment", reportingCategory: "partial_capture_reversal" },
+    ]);
+    expect(JSON.stringify(collected.unknownCategories)).not.toMatch(/5000|777|123|ch_A1|pay_A1/);
+    expect(
+      eur?.lines.map((line) => [line.line_type, line.balance_transaction_id, line.amount, line.description]),
+    ).toEqual([
+      ["charge", "txn_A1", "1000.00", "Card payment captured"],
+      ["refund", "txn_reA1", "-200.00", "Refund to the customer"],
+      ["refund", "txn_rfA1", "200.00", "Failed refund returned"],
+    ]);
+    // The failed refund gives the refund back: no refund is left on the statement.
+    expect(settlementTotals(eur?.lines ?? [], { feeBps: 0, decimals: 2 })).toMatchObject({
+      gross_amount: "1000.00",
+      refunds_amount: "0.00",
+      net_amount: "985.25",
     });
   });
 

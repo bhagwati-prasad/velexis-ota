@@ -17,10 +17,13 @@
 //   (FIX-W35-PLATFORM, lead decision (2i) of 2026-10-30): when the holder (trimmed), country, currency, scheme and the
 //   identifiers after the save's normalisation (iban.ts) are the stored ones, the stored copy being decrypted in the
 //   transaction, in memory only, and compared there, the answer is the current account as it is (same version, status
-//   and review: a verified account stays verified), with no write, no audit row and no e-mail. A stored copy that
-//   cannot be decrypted is replaced as a change. The tenant may be in any state its members see: settlements of a
-//   suspended OTA are still paid (PADR-0014 item 5 makes API keys, domains and connections read-only, not the payout
-//   account).
+//   and review: a verified account stays verified, a pending one keeps waiting), with no write, no audit row and no
+//   e-mail. A **rejected** account typed again is the exception (FIX-W36-PLATFORM, lead decision (2a) of 2026-10-30):
+//   the owner asks for a new review of the same account, so it is saved as a change is (the next version back in
+//   `pending_review` with the review cleared, the `payout_account.updated` audit row and the `ops.alert` e-mail, which
+//   says the bank details are the ones reviewed before). A stored copy that cannot be decrypted is replaced as a
+//   change. The tenant may be in any state its members see: settlements of a suspended OTA are still paid (PADR-0014
+//   item 5 makes API keys, domains and connections read-only, not the payout account).
 // - `reveal` (`adminRevealPayoutAccount`, MFA step-up, **reason**): the request validation trims the reason before it
 //   counts its 5–500 characters, as it does every admin reason (FIX-W35-PLATFORM: `400 VALIDATION_FAILED` on
 //   `/reason` otherwise, so five spaces are no reason); in one transaction the row is read `FOR SHARE`, its bank
@@ -267,10 +270,12 @@ export class PayoutAccountsService {
       }
       const stored = await this.accounts.lockWithDetailsForTenant(trx, tenantId);
       const typed = { accountHolderName, countryCode: body.countryCode, currency: body.currency };
-      if (stored !== undefined && (await this.isStoredAccount(stored, typed, bank))) {
+      const unchanged = stored !== undefined && (await this.isStoredAccount(stored, typed, bank));
+      if (unchanged && stored.status !== "rejected") {
         // The owner typed the stored account again: nothing changes, nobody is told (lead decision (2i)).
         return viewOf(stored);
       }
+      // A change, or the rejected account typed again: a new review is asked for (lead decision (2a)).
       const before = stored === undefined ? undefined : viewOf(stored);
       const after = await this.accounts.upsert(trx, {
         tenantId,
@@ -295,7 +300,7 @@ export class PayoutAccountsService {
         after: auditedFields(after),
         details: { version: after.version },
       });
-      await this.alertOps(trx, tenantId, tenant, after);
+      await this.alertOps(trx, tenantId, tenant, after, unchanged);
       return after;
     });
   }
@@ -413,17 +418,24 @@ export class PayoutAccountsService {
     return sameBankDetails(details, bank.details);
   }
 
-  /** Queues the `ops.alert` of a new or changed payout account: who, never a number. */
+  /**
+   * Queues the `ops.alert` of a new or changed payout account, or of a rejected one the owner sent again unchanged
+   * (`resubmitted`): who, never a number.
+   */
   private async alertOps(
     trx: PlatformTransaction,
     tenantId: string,
     tenant: TenantLabel,
     account: PayoutAccountView,
+    resubmitted: boolean,
   ): Promise<void> {
+    const what = resubmitted
+      ? "asked for a new review of the rejected payout account, with the same bank details"
+      : "set a new payout account";
     await this.outbox.queueOpsAlert(trx, {
       title: `Payout account to review: ${tenant.name} (${tenant.key})`,
       message:
-        `The owner of ${tenant.name} (${tenant.key}, ${tenantId}) set a new payout account ` +
+        `The owner of ${tenant.name} (${tenant.key}, ${tenantId}) ${what} ` +
         `(${account.scheme} account in ${account.country_code}, ${account.currency}; version ${account.version}).\n` +
         "It stays pending review until a platform admin verifies it: open the OTA's payout account in the platform " +
         "admin, check the holder name against the OTA's legal name, then verify or reject it.",

@@ -5,7 +5,8 @@
 // - the portal: owners set the account with a TOTP step-up while `FEATURE_SETTLEMENTS` is on; a wrong IBAN checksum
 //   answers `400 VALIDATION_FAILED` without the value; a valid IBAN is stored envelope-encrypted (bound to the row),
 //   answered masked (`last4`), audited without numbers and announced to ops; owners and finance members read it masked;
-//   the stored account typed again changes nothing, while one changed field is a change (FIX-W35-PLATFORM);
+//   the stored account typed again changes nothing, while one changed field is a change (FIX-W35-PLATFORM), except a
+//   rejected account typed again, which goes back to review (FIX-W36-PLATFORM);
 // - the platform admin: the masked view, the reveal (a reason and a step-up, `no-store`, one audit row with the reason
 //   and no number) and the review (`If-Match`, the owners e-mailed `payouts.reviewed`).
 //
@@ -14,6 +15,7 @@
 // bank number in a log line", checked after every test, covers every level; the e-mails are rendered with the
 // worker's templates to check what a person would read. The bank numbers are documentation examples (an ISO 13616 IBAN, the OpenAPI document's
 // examples), test values only.
+import { isDeepStrictEqual } from "node:util";
 import { expectResponseToMatch } from "@velexis/testing";
 import type { Response } from "supertest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -628,6 +630,107 @@ describe("setPayoutAccount and getPayoutAccount (portal)", () => {
     });
     expect(await auditOf(f.tenant.id, "payout_account.updated")).toHaveLength(changes.length + 2);
     expect(await emailsOf(f.tenant.id, "ops.alert")).toHaveLength(changes.length + 2);
+  });
+
+  it("[FIX-W36-PLATFORM AC1] the stored account typed again: pending_review and verified change nothing, rejected goes back to pending_review with an audit row and an ops alert", async () => {
+    const note = "The holder name does not match the OTA's legal name.";
+    // The same account as the save normalises it: the holder trimmed, the IBAN without spaces, the BIC upper-cased.
+    const again = ibanBody({ accountHolderName: " Agency Travel AS  ", iban: IBAN, bic: "WESTGB2L" });
+    const outcomes: Array<[string, unknown]> = [];
+    for (const status of ["pending_review", "verified", "rejected"] as const) {
+      const f = await fixture();
+      expect(outcomeOf(await setAccount(f, ibanBody())), status).toBe("200");
+      if (status !== "pending_review") {
+        const decision = status === "verified" ? { decision: status } : { decision: status, note };
+        expect(outcomeOf(await review(f.tenant.id, '"1"', decision)), status).toBe("200");
+      }
+      const current = await t.http.get(path(f)).set(await portal(f, "owner", false));
+      const storedBefore = await storedRow(f.tenant.id);
+      t.clock.advance(60_000);
+
+      const res = await setAccount(f, again);
+
+      expect(outcomeOf(res), status).toBe("200");
+      expectResponseToMatch("setPayoutAccount", res, { document: "platform" });
+      const audit = await auditOf(f.tenant.id, "payout_account.updated");
+      const alerts = await emailsOf(f.tenant.id, "ops.alert");
+      outcomes.push([
+        status,
+        {
+          answer: isDeepStrictEqual(res.body, current.body) ? "same" : (res.body as unknown),
+          unchanged: isDeepStrictEqual(await storedRow(f.tenant.id), storedBefore),
+          auditRows: audit.length,
+          alerts: alerts.length,
+        },
+      ]);
+      if (status !== "rejected") {
+        expect(res.body, status).toEqual(current.body);
+        expect(res.headers["etag"], status).toBe(
+          `"${String((current.body as { version: number }).version)}"`,
+        );
+        continue;
+      }
+      // The rejected account asks for a new review: the next version, back in pending_review with the review
+      // cleared and the same bank details stored again (a new envelope of the same identifiers).
+      expect(res.body).toEqual({
+        ...(current.body as Record<string, unknown>),
+        status: "pending_review",
+        reviewNote: null,
+        updatedAt: t.clock.now().toISOString(),
+        version: 3,
+      });
+      expect(res.headers["etag"]).toBe('"3"');
+      const row = await storedRow(f.tenant.id);
+      expect(row).toMatchObject({
+        status: "pending_review",
+        review_note: null,
+        reviewed_by_account_id: null,
+        reviewed_at: null,
+        updated_by_account_id: person(f, "owner").id,
+        version: 3,
+      });
+      await expect(
+        envelope.decryptJson(row?.bank_details_ciphertext ?? Buffer.alloc(0), bankDetailsPlace(f.tenant.id)),
+      ).resolves.toEqual({ iban: IBAN, bic: "WESTGB2L" });
+      // A change audit row like any other (the masked fields only), and a second ops alert for the new version.
+      expect(audit.map((entry) => entry["details"])).toEqual([
+        expect.objectContaining({ version: 1 }),
+        {
+          version: 3,
+          before: expect.objectContaining({ last4: "5432", status: "rejected" }) as unknown,
+          after: expect.objectContaining({ last4: "5432", status: "pending_review" }) as unknown,
+        },
+      ]);
+      expectNoBankNumber(JSON.stringify(audit));
+      const alert = rendered(alerts[1] as OutboxRow);
+      expect(alert).toContain(`Payout account to review: ${f.tenant.name} (${f.tenant.key})`);
+      expect(alert).toContain(
+        "asked for a new review of the rejected payout account, with the same bank details",
+      );
+      expect(alert).toContain("version 3");
+      expectNoBankNumber(alert);
+      // The admin reviews the new version as any other.
+      const verified = await review(f.tenant.id, '"3"', { decision: "verified" });
+      expect([outcomeOf(verified), verified.body]).toEqual([
+        "200",
+        expect.objectContaining({ status: "verified", version: 4 }),
+      ]);
+    }
+
+    expect(outcomes).toEqual([
+      ["pending_review", { answer: "same", unchanged: true, auditRows: 1, alerts: 1 }],
+      ["verified", { answer: "same", unchanged: true, auditRows: 1, alerts: 1 }],
+      [
+        "rejected",
+        {
+          answer: expect.objectContaining({ status: "pending_review", version: 3 }) as unknown,
+          unchanged: false,
+          auditRows: 2,
+          alerts: 2,
+        },
+      ],
+    ]);
+    expectLogsWithoutBankNumbers("PUT", "/v1/tenants/:tenantId/payout-account", [200]);
   });
 
   it("needs a step-up, MFA, the settlements switch and the owner role, and writes nothing otherwise", async () => {

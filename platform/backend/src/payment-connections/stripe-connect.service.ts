@@ -16,7 +16,9 @@
 //    `stripe_user[email]`, the caller's address: the person who is sent to Stripe, an owner or an admin) and when the
 //    state expires. The controller sends it `no-store`: the URL holds the single-use state.
 //
-// `complete` (`completeStripeConnect`, any signed-in portal account; the OTA is the state's), in this order:
+// `complete` (`completeStripeConnect`, any signed-in portal account; the OTA is the state's; `FEATURE_OWN_STRIPE` by
+// the operation's `x-feature`, so FeatureGuard answers `403 FEATURE_DISABLED` before the handler and the state is not
+// taken, as for `start`: FIX-W36-PLATFORM, lead decision (2h) of 2026-10-30), in this order:
 //
 // 1. `GETDEL` of the state's key: an unknown, expired or used state answers `400 CONNECT_STATE_INVALID`, and so does a
 //    state another account started (logged as `stripe_connect.state_account_mismatch`, without the state); the state
@@ -24,27 +26,40 @@
 // 2. the starting account must still hold the active membership that started it (the state's `membershipId`), as an
 //    owner or admin (`403 FORBIDDEN`), and the OTA must be `active` (`409 TENANT_NOT_ACTIVE`); the account itself is
 //    not read (`connectMember`);
-// 3. `{state, error}` (the person declined, or Stripe reported another error) changes nothing: `422 UNPROCESSABLE` with
+// 3. a callback never re-enables a connection a platform admin disabled (`adminSetConnectionStatus`): while one of
+//    the OTA's connections is `disabled` without a Stripe disconnection (`disabledByAdmin`: `disconnected_at` empty;
+//    a deauthorised one may be connected again), the answer is `409 CONFLICT` with `details.reason`
+//    `connection_disabled`, before Stripe is asked anything, and nothing is written (FIX-W36-PLATFORM, lead decision
+//    (2h)); step 9 checks it again on the locked rows;
+// 4. `{state, error}` (the person declined, or Stripe reported another error) changes nothing: `422 UNPROCESSABLE` with
 //    `details.reason` `access_denied`, or `oauth_error` for any other error; Stripe's description is never echoed;
-// 4. `stripe.oauth.token({grant_type: "authorization_code", code})` with Velexis's secret key and the idempotency key
+// 5. `stripe.oauth.token({grant_type: "authorization_code", code})` with Velexis's secret key and the idempotency key
 //    `connect_oauth:<sha256 of the state>` (one exchange per state, architecture §7). Only `stripe_user_id` and
 //    `livemode` are kept: the access and refresh tokens and the publishable key of the answer are discarded at once,
 //    never stored, logged or answered (PADR-0011 item 2). A code Stripe refuses (`invalid_grant`: unknown, expired,
 //    used, or of the other mode) answers `422 UNPROCESSABLE` with `oauth_error` (the 422 of the document: "Stripe
 //    reported another error"); any other failure, or an answer without an `acct_…`, `502 PROVIDER_ERROR`;
-// 5. `livemode` must be the deployment's (`APP_ENV=production` is live): else `422 UNPROCESSABLE`, `livemode_mismatch`;
-// 6. an `acct_…` that another OTA's `connect_standard` connection holds answers `409 STRIPE_ACCOUNT_ALREADY_CONNECTED`
+// 6. `livemode` must be the deployment's (`APP_ENV=production` is live): else Velexis is disconnected from that
+//    account again with `stripe.oauth.deauthorize({client_id, stripe_user_id})` (idempotency key
+//    `connect_deauthorize:<sha256 of the state>`), best effort: a failure is logged as
+//    `stripe_connect.deauthorize_failed` with Stripe's type, status and code only (never a token or Stripe's
+//    message) and changes nothing, and an account that an OTA's `connect_standard` connection holds is not
+//    deauthorised (`stripe_connect.deauthorize_skipped`: that would cut the OTA off). Then `422 UNPROCESSABLE`,
+//    `livemode_mismatch` (FIX-W36-PLATFORM, lead decision (2h));
+// 7. an `acct_…` that another OTA's `connect_standard` connection holds answers `409 STRIPE_ACCOUNT_ALREADY_CONNECTED`
 //    (one account per OTA: Connect events are routed by `event.account`);
-// 7. `stripe.accounts.retrieve(acct_…)` for `charges_enabled`, `payouts_enabled` and `details_submitted` (`502` when it
+// 8. `stripe.accounts.retrieve(acct_…)` for `charges_enabled`, `payouts_enabled` and `details_submitted` (`502` when it
 //    fails);
-// 8. one transaction (`runInTransaction`): the tenant `FOR SHARE` (`409 TENANT_NOT_ACTIVE` when it stopped being
-//    `active`), the duplicate check again, then the **test** connection, locked, becomes `connect_standard` with the
-//    `acct_…`, no publishable key, no secrets, the capabilities, `connected_at`, and `active` when charges are enabled
-//    (`pending` otherwise), `version + 1`; the **live** connection the same when the OTA is live (go-live creates it in
-//    this mode otherwise). A connection that is missing is inserted in this mode. Each connection writes one audit row
-//    `payments.connect_connected` (mode, account and status before and after, the capabilities, the environment), and
-//    `{type: "connection", tenantId}` is published after the commit. Another OTA connecting the same account at the
-//    same moment loses on `payment_provider_connections_connect_uq` and answers `409` too.
+// 9. one transaction (`runInTransaction`): the tenant `FOR SHARE` (`409 TENANT_NOT_ACTIVE` when it stopped being
+//    `active`), the duplicate check again, then the **test** connection, locked (`409 CONFLICT`,
+//    `connection_disabled`, and the transaction rolls back, when an admin disabled it meanwhile), becomes
+//    `connect_standard` with the `acct_…`, no publishable key, no secrets, the capabilities, `connected_at`, and
+//    `active` when charges are enabled (`pending` otherwise), `version + 1`; the **live** connection the same when the
+//    OTA is live (go-live creates it in this mode otherwise). A connection that is missing is inserted in this mode.
+//    Each connection writes one audit row `payments.connect_connected` (mode, account and status before and after,
+//    the capabilities, the environment), and `{type: "connection", tenantId}` is published after the commit. Another
+//    OTA connecting the same account at the same moment loses on `payment_provider_connections_connect_uq` and
+//    answers `409` too.
 //
 // The answer is the OTA's connections after the switch, `test` first, read without the ciphertexts. No transaction is
 // open during a Stripe call. Stripe's errors reach the logs only as StripeConnectFailure (operation, type, status and
@@ -189,7 +204,7 @@ export function oauthErrorReason(error: string): "access_denied" | "oauth_error"
 }
 
 /** The Stripe calls of the Connect OAuth. */
-export type StripeConnectOperation = "oauth.token" | "accounts.retrieve";
+export type StripeConnectOperation = "oauth.token" | "oauth.deauthorize" | "accounts.retrieve";
 
 /** A Stripe call of the Connect OAuth that failed, or answered something unusable. */
 export class StripeConnectFailure extends Error {
@@ -275,6 +290,26 @@ function isConnectAccountConflict(error: unknown): boolean {
 }
 
 const alreadyConnected = (): AppError => new AppError("STRIPE_ACCOUNT_ALREADY_CONNECTED");
+
+/**
+ * True for a connection a platform admin disabled (`adminSetConnectionStatus`): `disabled` without a Stripe
+ * disconnection. A connection disabled because the OTA deauthorised Velexis in Stripe has `disconnected_at` and may be
+ * connected again (flows/stripe-payments-account.md §C item 5).
+ */
+export function disabledByAdmin(row: Pick<PaymentConnectionView, "status" | "disconnected_at">): boolean {
+  return row.status === "disabled" && row.disconnected_at === null;
+}
+
+/** `409 CONFLICT`, `connection_disabled`: a callback never re-enables a connection an admin disabled. */
+const connectionDisabled = (): AppError =>
+  new AppError("CONFLICT", { details: { reason: "connection_disabled" } });
+
+/** What the code exchange kept of Stripe's answer: the connected account and its mode, never a token. */
+interface ConnectGrant {
+  readonly accountReference: string;
+  /** Stripe's `livemode`, as answered: only the deployment's own boolean matches it. */
+  readonly livemode: unknown;
+}
 
 @Injectable()
 export class StripeConnectService {
@@ -366,10 +401,18 @@ export class StripeConnectService {
     if (member.tenant_status !== "active") {
       throw new AppError("TENANT_NOT_ACTIVE", { details: { status: member.tenant_status } });
     }
+    const current = await this.connections.listForTenant(tenantId);
+    if (current.some(disabledByAdmin)) {
+      throw connectionDisabled();
+    }
     if ("error" in body) {
       throw new AppError("UNPROCESSABLE", { details: { reason: oauthErrorReason(body.error) } });
     }
-    const accountReference = await this.exchange(body.code, stateDigest);
+    const { accountReference, livemode } = await this.exchange(body.code, stateDigest);
+    if (livemode !== this.live) {
+      await this.deauthorize(tenantId, accountReference, stateDigest, current);
+      throw new AppError("UNPROCESSABLE", { details: { reason: "livemode_mismatch" } });
+    }
     if ((await this.connections.connectedElsewhere(accountReference, tenantId)) !== undefined) {
       throw alreadyConnected();
     }
@@ -397,10 +440,10 @@ export class StripeConnectService {
   }
 
   /**
-   * Exchanges the authorisation code (step 4 of the file header) and answers the connected `acct_…` when its mode is
-   * the deployment's. The tokens of Stripe's answer are not kept: only two fields are read from it.
+   * Exchanges the authorisation code (step 5 of the file header) and answers the connected `acct_…` and its mode. The
+   * tokens of Stripe's answer are not kept: only two fields are read from it.
    */
-  private async exchange(code: string, stateDigest: string): Promise<string> {
+  private async exchange(code: string, stateDigest: string): Promise<ConnectGrant> {
     let grant: { readonly stripeUserId: unknown; readonly livemode: unknown };
     try {
       const answer = await this.stripe
@@ -416,13 +459,64 @@ export class StripeConnectService {
     if (typeof grant.stripeUserId !== "string" || !STRIPE_ACCOUNT_ID.test(grant.stripeUserId)) {
       throw connectProviderError(new StripeConnectFailure("oauth.token", "the answer has no acct_ id"));
     }
-    if (grant.livemode !== this.live) {
-      throw new AppError("UNPROCESSABLE", { details: { reason: "livemode_mismatch" } });
-    }
-    return grant.stripeUserId;
+    return { accountReference: grant.stripeUserId, livemode: grant.livemode };
   }
 
-  /** The connected account's capabilities (step 7 of the file header). */
+  /**
+   * Step 6 of the file header: disconnects Velexis from the account of a code of the other mode, best effort. Never
+   * throws: a refusal or failure is logged (Stripe's type, status and code only) and the callback answers its `422`.
+   * An account that an OTA's `connect_standard` connection holds (`current` are the OTA's own connections) is left
+   * connected.
+   */
+  private async deauthorize(
+    tenantId: string,
+    accountReference: string,
+    stateDigest: string,
+    current: readonly PaymentConnectionView[],
+  ): Promise<void> {
+    const fields = { tenantId, stripeAccount: accountReference };
+    try {
+      const held =
+        current.some(
+          (row) => row.account_mode === "connect_standard" && row.account_reference === accountReference,
+        ) || (await this.connections.connectedElsewhere(accountReference, tenantId)) !== undefined;
+      if (held) {
+        this.logger.warn(fields, "stripe_connect.deauthorize_skipped");
+        return;
+      }
+    } catch (error) {
+      // Without knowing who holds the account, it is left connected.
+      this.logger.warn(
+        { ...fields, failure: error instanceof Error ? error.name : "Error" },
+        "stripe_connect.deauthorize_skipped",
+      );
+      return;
+    }
+    if (this.clientId === undefined) {
+      // FEATURE_OWN_STRIPE requires it (config.ts), so only a configuration bug gets here.
+      this.logger.warn(
+        { ...fields, failure: "STRIPE_CONNECT_CLIENT_ID is not set" },
+        "stripe_connect.deauthorize_failed",
+      );
+      return;
+    }
+    try {
+      await this.stripe
+        .api()
+        .oauth.deauthorize(
+          { client_id: this.clientId, stripe_user_id: accountReference },
+          { idempotencyKey: idempotencyKey("connect_deauthorize", stateDigest) },
+        );
+      this.logger.info(fields, "stripe_connect.deauthorized");
+    } catch (error) {
+      this.logger.warn(
+        { ...fields, failure: stripeConnectFailureOf("oauth.deauthorize", error).summary },
+        "stripe_connect.deauthorize_failed",
+      );
+    }
+  }
+
+  /** The connected account's capabilities (step 8 of the file header). */
   private async capabilitiesOf(accountReference: string): Promise<ConnectCapabilities> {
     try {
       return connectCapabilitiesOf(await this.stripe.api().accounts.retrieve(accountReference));
@@ -431,7 +525,7 @@ export class StripeConnectService {
     }
   }
 
-  /** Step 8 of the file header: the switch of the OTA's connections, in one transaction. */
+  /** Step 9 of the file header: the switch of the OTA's connections, in one transaction. */
   private async apply(
     tenantId: string,
     accountId: string,
@@ -451,6 +545,15 @@ export class StripeConnectService {
       }
       const environments: readonly PaymentEnvironment[] =
         tenant.storefront_environment === "live" ? ["test", "live"] : ["test"];
+      const locked = new Map<PaymentEnvironment, PaymentConnectionView | undefined>();
+      for (const environment of environments) {
+        const row = await this.connections.lockForTenant(trx, tenantId, environment);
+        if (row !== undefined && disabledByAdmin(row)) {
+          // An admin disabled it after the check of step 3: nothing is written (the transaction rolls back).
+          throw connectionDisabled();
+        }
+        locked.set(environment, row);
+      }
       const now = this.clock.now();
       const write = {
         accountReference,
@@ -461,7 +564,7 @@ export class StripeConnectService {
       };
       let suffix: string | null = null;
       for (const environment of environments) {
-        const current = await this.connections.lockForTenant(trx, tenantId, environment);
+        const current = locked.get(environment);
         const updated: PaymentConnectionView =
           current === undefined
             ? await this.connections.insertConnectStandard(trx, {

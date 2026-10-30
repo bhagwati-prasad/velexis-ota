@@ -166,6 +166,40 @@ describe("settlementTotals", () => {
     expect(satisfiesNetCheck(totals)).toBe(true);
   });
 
+  it("[FIX-W36-PLATFORM AC2] counts a dispute fee once: in disputes, never again in the Stripe fees (PADR-0003 item 5, note of 2026-10-30)", () => {
+    // A lost dispute alone: Stripe withdraws 300.00 and its 15.00 dispute fee (balance transaction net −315.00).
+    const lost = settlementTotals([line("dispute", "-300.00", "15.00")], { feeBps: 150, decimals: 2 });
+
+    expect(lost).toMatchObject({
+      disputes_amount: "315.00",
+      stripe_fees_amount: "0.00",
+      velexis_fees_amount: "0.00",
+      net_amount: "-315.00",
+    });
+    expect(satisfiesNetCheck(lost)).toBe(true);
+
+    // With a charge: its processing fee is a Stripe fee, the dispute fee is not; the net is what Stripe's balance
+    // moved (the lines' amounts less their fees) less the Velexis fee.
+    const lines = [line("charge", "300.00", "4.65"), line("dispute", "-300.00", "15.00")];
+    const withCharge = settlementTotals(lines, { feeBps: 0, decimals: 2 });
+    expect(withCharge).toMatchObject({
+      gross_amount: "300.00",
+      disputes_amount: "315.00",
+      stripe_fees_amount: "4.65",
+      net_amount: "-19.65",
+    });
+    const moved = lines.reduce((sum, each) => sum.plus(each.amount).minus(each.stripe_fee), money("0"));
+    expect(money(withCharge.net_amount).eq(moved)).toBe(true);
+
+    // Won: the reinstatement brings the amount back, and a dispute fee Stripe returns (a negative fee) too.
+    const won = settlementTotals([...lines, line("dispute_reversal", "300.00", "-15.00")], {
+      feeBps: 0,
+      decimals: 2,
+    });
+    expect(won).toMatchObject({ disputes_amount: "0.00", stripe_fees_amount: "4.65", net_amount: "295.35" });
+    expect(satisfiesNetCheck(won)).toBe(true);
+  });
+
   it("is all zeros for a statement without lines", () => {
     expect(settlementTotals([], { feeBps: 150, decimals: 2 })).toEqual({
       gross_amount: "0.00",

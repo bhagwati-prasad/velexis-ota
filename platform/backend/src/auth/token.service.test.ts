@@ -14,7 +14,7 @@ import {
   UnsecuredJWT,
   type JWTPayload,
 } from "jose";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestJwtKeyFile, writeTestKeyFile } from "../../test/support/jwt-key";
 import { PlatformOpenApi } from "../common/http/openapi-validation.interceptor";
 import type { PlatformBackendConfig } from "../config";
@@ -140,13 +140,26 @@ describe("TokenService.sign", () => {
     await expect(service().sign(input as AccessTokenInput)).rejects.toThrow(TypeError);
   });
 
-  it("takes any SessionFamilyId of the platform document as sid, which is opaque", async () => {
+  /** The platform document's `SessionFamilyId`, read in the hook below. */
+  let schema: { pattern: string; maxLength: number; examples: string[] };
+
+  /**
+   * The budget of reading the platform document: `PlatformOpenApi.load()` parses some 20 000 lines of YAML on its first
+   * call in a worker, under a second idle but several seconds next to the other packages' tests on a loaded runner
+   * (FIX-W36-PLATFORM, lead decision (2j)). The hook only stops if it hangs; the test body keeps the default budget.
+   */
+  const DOCUMENT_LOAD_TIMEOUT_MS = 30_000;
+
+  beforeAll(() => {
     const document = PlatformOpenApi.load().document as {
       components: {
         schemas: { SessionFamilyId: { pattern: string; maxLength: number; examples: string[] } };
       };
     };
-    const schema = document.components.schemas.SessionFamilyId;
+    schema = document.components.schemas.SessionFamilyId;
+  }, DOCUMENT_LOAD_TIMEOUT_MS);
+
+  it("takes any SessionFamilyId of the platform document as sid, which is opaque", async () => {
     const tokens = service();
 
     // The check of TokenService is the schema's, so every familyId that listSessions answers can be a sid.

@@ -865,6 +865,8 @@ const SLICE_PBE041_FEATURES = {
   requestLiveAmadeus: "live_switch",
   submitAmadeusCredentials: "own_amadeus",
   startStripeConnect: "own_stripe",
+  // The callback refuses too while the switch is off (FIX-W36-PLATFORM, lead decision (2h) of 2026-10-30).
+  completeStripeConnect: "own_stripe",
   submitStripeApiKeys: "own_stripe",
   setPayoutAccount: "settlements",
   createCheckoutSession: "stripe_billing",
@@ -3473,10 +3475,17 @@ describe("the M5 portal slice: go-live, domains, own credentials, payments, sett
     ]) {
       expect([body, check(body).length > 0]).toEqual([body, true]);
     }
-    // Both outcomes of the inventory: the declined case and the mode mismatch name their reason.
+    // The outcomes of the inventory: the declined case, another Stripe error or a code Stripe refuses
+    // (FIX-W36-PLATFORM), and the mode mismatch name their reason.
     expect(
       errorExamples("completeStripeConnect", "422").map((error) => objectAt(error, "details")["reason"]),
-    ).toEqual(["access_denied", "livemode_mismatch"]);
+    ).toEqual(["access_denied", "oauth_error", "livemode_mismatch"]);
+    // A connection a platform admin disabled is never re-enabled by a callback (FIX-W36-PLATFORM).
+    expect(
+      errorExamples("completeStripeConnect", "409")
+        .filter((error) => error["code"] === "CONFLICT")
+        .map((error) => objectAt(error, "details")["reason"]),
+    ).toEqual(["connection_disabled"]);
     const completed = jsonMedia(successOf("completeStripeConnect", "200"))?.["schema"];
     expect(resolve(platform, completed)).toMatchObject({
       required: ["tenantId", "connections"],
