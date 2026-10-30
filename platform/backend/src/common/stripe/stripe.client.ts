@@ -62,8 +62,10 @@ export function idempotencyKey(purpose: string, rowId: string): string {
 }
 
 /**
- * The Stripe calls the platform makes (subscription-billing flow §A, §B, §D, §F): the SDK's own method types, so the
- * real client is a StripeApi as it is and the fake of a test implements exactly these.
+ * The Stripe calls the platform makes (subscription-billing flow §A, §B, §D, §F; the settlements of the Stripe
+ * payments flow §F: the balance transactions, and the charges and PaymentIntents their tenant is read from, PBE-059):
+ * the SDK's own method types, so the real client is a StripeApi as it is and the fake of a test implements exactly
+ * these.
  */
 export interface StripeApi {
   readonly customers: Pick<Stripe.CustomersResource, "create" | "retrieve" | "search">;
@@ -72,6 +74,9 @@ export interface StripeApi {
   readonly subscriptions: Pick<Stripe.SubscriptionsResource, "retrieve">;
   readonly invoices: Pick<Stripe.InvoicesResource, "retrieve">;
   readonly prices: Pick<Stripe.PricesResource, "retrieve">;
+  readonly balanceTransactions: Pick<Stripe.BalanceTransactionsResource, "list">;
+  readonly charges: Pick<Stripe.ChargesResource, "retrieve">;
+  readonly paymentIntents: Pick<Stripe.PaymentIntentsResource, "retrieve">;
 }
 
 /** The options every SDK client is created with (exported for the client's test). */

@@ -154,6 +154,44 @@ describe("FakeStripe (test/support/fake-stripe.ts)", () => {
     ]);
   });
 
+  it("[PBE-059] lists the balance transactions of a time range newest first, a page at a time, the source expanded on request", async () => {
+    const created = (n: number) => 1_790_000_000 + n;
+    const stripe = new FakeStripe().put({ id: "ch_test_1", object: "charge" });
+    for (const n of [1, 2, 3, 4]) {
+      stripe.put({
+        id: `txn_test${n}`,
+        object: "balance_transaction",
+        created: created(n),
+        source: "ch_test_1",
+      } as never);
+    }
+    // Outside the range, and another object type with a `created`.
+    stripe.put(
+      { id: "txn_test9", object: "balance_transaction", created: created(9), source: "ch_test_1" } as never,
+      { id: "po_test_1", object: "payout", created: created(2) } as never,
+    );
+    const api = stripe.api();
+    const range = { gte: created(1), lt: created(9) };
+
+    const first = await api.balanceTransactions.list({ created: range, limit: 3, expand: ["data.source"] });
+    expect(first.data.map((txn) => txn.id)).toEqual(["txn_test4", "txn_test3", "txn_test2"]);
+    expect(first.has_more).toBe(true);
+    expect(first.data[0]?.source).toEqual({ id: "ch_test_1", object: "charge" });
+    const second = await api.balanceTransactions.list({
+      created: range,
+      limit: 3,
+      starting_after: "txn_test2",
+    });
+    expect(second.data.map((txn) => [txn.id, txn.source])).toEqual([["txn_test1", "ch_test_1"]]);
+    expect(second.has_more).toBe(false);
+    expect((await api.balanceTransactions.list()).data).toHaveLength(5);
+    await expect(api.balanceTransactions.list({ starting_after: "txn_missing" })).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    await expect(api.balanceTransactions.list({ limit: 101 })).rejects.toMatchObject({ statusCode: 400 });
+    expect(stripe.callsOf("balanceTransactions.list")).toHaveLength(5);
+  });
+
   it("throws the failures queued for a method, one per call, and can play an unconfigured client", async () => {
     const stripe = new FakeStripe()
       .put({ id: "price_test_growth_month", object: "price" })
@@ -169,7 +207,8 @@ describe("FakeStripe (test/support/fake-stripe.ts)", () => {
     );
     expect((await api.prices.retrieve("price_test_growth_month")).id).toBe("price_test_growth_month");
     expect(stripe.calls).toHaveLength(3);
-    expect(FAKE_STRIPE_METHODS).toHaveLength(9);
+    // The nine calls of billing, and the settlements' balance transactions, charges and PaymentIntents (PBE-059).
+    expect(FAKE_STRIPE_METHODS).toHaveLength(12);
 
     expect(() => stripe.notConfigured().api()).toThrow(StripeNotConfiguredError);
     expect(stripe.isConfigured()).toBe(false);

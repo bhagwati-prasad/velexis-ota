@@ -22,6 +22,11 @@
 // - **Search** (`customers.search`) answers the stored Customers whose `metadata.velexis_tenant_id` is the one of the
 //   query `metadata['velexis_tenant_id']:'<id>'`, the only query the platform sends (any other throws), as a
 //   `search_result` page. Unlike Stripe's search, whose index may lag up to a minute, it sees a Customer at once.
+// - **List** (`balanceTransactions.list`, PBE-059) answers the stored balance transactions whose `created` is in
+//   `params.created` (`gt`, `gte`, `lt`, `lte`), newest first as Stripe lists them (equal times in the order they were
+//   put), one page of `limit` (10 by default, at most 100) after `starting_after`, with `has_more`; an unknown
+//   `starting_after` throws the SDK's 404. `expand: ["data.source"]` replaces each transaction's `source` id by the
+//   stored object. The SDK's promise also pages through the results; the platform reads one page at a time.
 // - **Failures** queued with `failNext(method, error)` are thrown by the next calls of that method, one each, before
 //   anything else happens; the call is still recorded. For a create, `failNext(method, error, options)` plays what
 //   Stripe does with an idempotency key on a failure: `created` makes (and keeps) the object before the error is
@@ -50,7 +55,14 @@ export const FAKE_STRIPE_METHODS = Object.freeze([
   "subscriptions.retrieve",
   "invoices.retrieve",
   "prices.retrieve",
+  "balanceTransactions.list",
+  "charges.retrieve",
+  "paymentIntents.retrieve",
 ] as const);
+
+/** The default and the highest `limit` of a Stripe list call. */
+export const STRIPE_LIST_DEFAULT_LIMIT = 10;
+export const STRIPE_LIST_MAX_LIMIT = 100;
 
 /** One call of StripeApi. */
 export type FakeStripeMethod = (typeof FAKE_STRIPE_METHODS)[number];
@@ -185,6 +197,21 @@ export class FakeStripe extends StripeClient {
       prices: {
         retrieve: (id: string, params?: unknown) =>
           this.retrieve<Stripe.Price>("prices.retrieve", "price", id, params),
+      },
+      balanceTransactions: {
+        // The SDK's promise also pages through the results; the platform reads one page at a time.
+        list: (params?: unknown, options?: unknown) =>
+          settle(() =>
+            this.listBalanceTransactionsNow(params, options),
+          ) as unknown as Stripe.ApiListPromise<Stripe.BalanceTransaction>,
+      },
+      charges: {
+        retrieve: (id: string, params?: unknown) =>
+          this.retrieve<Stripe.Charge>("charges.retrieve", "charge", id, params),
+      },
+      paymentIntents: {
+        retrieve: (id: string, params?: unknown) =>
+          this.retrieve<Stripe.PaymentIntent>("paymentIntents.retrieve", "payment_intent", id, params),
       },
     };
   }
@@ -361,6 +388,64 @@ export class FakeStripe extends StripeClient {
       url: "/v1/customers/search",
       has_more: false,
       next_page: null,
+      data,
+    });
+  }
+
+  /** `balanceTransactions.list`: one page of the stored balance transactions (file header). */
+  private listBalanceTransactionsNow(
+    params: unknown,
+    options: unknown,
+  ): Stripe.ApiList<Stripe.BalanceTransaction> {
+    this.record("balanceTransactions.list", undefined, params, options);
+    const query = isRecord(params) ? params : {};
+    const created = isRecord(query["created"]) ? query["created"] : {};
+    const bound = (name: string): number | undefined => {
+      const value = created[name];
+      return typeof value === "number" ? value : undefined;
+    };
+    const [gt, gte, lt, lte] = [bound("gt"), bound("gte"), bound("lt"), bound("lte")];
+    const limit = typeof query["limit"] === "number" ? query["limit"] : STRIPE_LIST_DEFAULT_LIMIT;
+    if (!Number.isInteger(limit) || limit < 1 || limit > STRIPE_LIST_MAX_LIMIT) {
+      throw FakeStripe.apiError(400, "parameter_invalid_integer");
+    }
+    const all = [...this.objects.values()]
+      .filter((object) => {
+        const time = object["created"];
+        return (
+          object["object"] === "balance_transaction" &&
+          typeof time === "number" &&
+          (gt === undefined || time > gt) &&
+          (gte === undefined || time >= gte) &&
+          (lt === undefined || time < lt) &&
+          (lte === undefined || time <= lte)
+        );
+      })
+      // Newest first; Array.prototype.sort is stable, so equal times keep the order they were put in.
+      .sort((a, b) => (b["created"] as number) - (a["created"] as number));
+    let start = 0;
+    const after = query["starting_after"];
+    if (typeof after === "string") {
+      const index = all.findIndex((object) => object["id"] === after);
+      if (index < 0) {
+        throw FakeStripe.apiError(404, "resource_missing");
+      }
+      start = index + 1;
+    }
+    const expand = Array.isArray(query["expand"]) ? query["expand"] : [];
+    const data = all.slice(start, start + limit).map((object) => {
+      const answer = structuredClone(object);
+      const source = answer["source"];
+      const expanded = typeof source === "string" ? this.objects.get(source) : undefined;
+      if (expand.includes("data.source") && expanded !== undefined) {
+        answer["source"] = structuredClone(expanded);
+      }
+      return answer;
+    });
+    return this.response<Stripe.ApiList<Stripe.BalanceTransaction>>({
+      object: "list",
+      url: "/v1/balance_transactions",
+      has_more: start + limit < all.length,
       data,
     });
   }

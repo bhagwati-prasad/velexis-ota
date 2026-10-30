@@ -1685,7 +1685,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - Revealing in the admin needs a reason and a step-up and writes an audit row; review sets the status and e-mails the owner [PF-64 AC2].
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int settlements`
 
-### PBE-059 · Generate monthly settlement drafts from Stripe balance transactions
+### PBE-059 · Generate monthly settlement drafts from Stripe balance transactions ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-043, PBE-058
