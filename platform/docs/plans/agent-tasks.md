@@ -1669,6 +1669,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - Valid keys (mocked `/v1/account`) switch the row to `api_keys` with re-encrypted secrets; a live key on the test environment answers `VALIDATION_FAILED` [PF-62 AC1].
   - Switching back clears every secret and reference; live without a verified payout account answers 422.
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int connections`
+- **Note:** 2026-10-30 (lead decision (2i) of the third batch, recorded by FIX-W36-OTA): step 2's re-encrypted secret key must be sealed with the associated data `platform.payment_provider_connections.secret_ciphertext:<ppc_id>` (`aadFor("platform", "payment_provider_connections", "secret_ciphertext", <ppc_id>)` of `@velexis/crypto`, the row's own id), because the OTA backend opens it with exactly that associated data (OBE-077: `connectionSecretAad` in `ota/backend/src/payments/stripe/stripe-client.factory.ts`); a key sealed with any other associated data answers the OTA's payments `424 PAYMENT_PROVIDER_NOT_CONFIGURED` (`connection_secret_unreadable`).
 
 ### PBE-058 · Implement payout accounts ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)

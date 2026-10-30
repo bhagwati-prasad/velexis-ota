@@ -891,6 +891,111 @@ describe("existing payments keep the account they were created on (OBE-077 step 
     }
   });
 
+  // Lead decision (2i) of 2026-10-30, third batch: the OTA connected (Connect Standard) the very account its own keys
+  // belonged to. Before, its api_keys payments answered 424 from then on (their key was no longer stored).
+  const MOVED = [
+    {
+      name: "connect_standard on the payment's account (active)",
+      next: () => ({ ...rows.connect_standard(), accountReference: OWN_ACCOUNT }),
+      expected: [`Bearer ${SECRET_KEY}`, OWN_ACCOUNT] as const,
+    },
+    {
+      name: "connect_standard on the payment's account (disabled: the account is still the OTA's)",
+      next: () => ({ ...rows.connect_standard(), accountReference: OWN_ACCOUNT, status: "disabled" }),
+      expected: [`Bearer ${SECRET_KEY}`, OWN_ACCOUNT] as const,
+    },
+    {
+      name: "api_keys on the payment's account",
+      next: () => rows.api_keys(),
+      expected: [`Bearer ${OTA_SECRET_KEY}`, undefined] as const,
+    },
+    {
+      name: "connect_standard on another account",
+      next: () => rows.connect_standard(),
+      expected: "payment_account_unavailable",
+    },
+    {
+      name: "connect_standard on the payment's account, of another environment",
+      next: () => ({ ...rows.connect_standard(), accountReference: OWN_ACCOUNT, environment: "live" }),
+      expected: "payment_account_unavailable",
+    },
+    {
+      name: "connect_standard on the payment's account, of another tenant",
+      next: () => ({
+        ...rows.connect_standard(),
+        accountReference: OWN_ACCOUNT,
+        tenantId: "ten_01JA4CG3S8W1Z4C7F0H3L6P9T9",
+      }),
+      expected: "payment_account_unavailable",
+    },
+    { name: "velexis", next: () => rows.velexis(), expected: "payment_account_unavailable" },
+    { name: "no connection", next: () => null, expected: "payment_account_unavailable" },
+  ] as const;
+
+  it.each(MOVED)(
+    "[FIX-W36-OTA AC6] captures, voids and refunds an api_keys payment after a switch to $name",
+    async ({ next, expected }) => {
+      row = await rows.api_keys();
+      const gateway = gatewayWith(velexisKeys);
+      const own = await authorised(gateway);
+      expect(own.account).toEqual({ accountMode: "api_keys", accountReference: OWN_ACCOUNT });
+      // The api_keys row is sealed with the test KEKs (asynchronous); the others are plain rows.
+      row = (await next()) as PlatformPaymentConnection | null;
+      stripe.reset();
+      const calls = [
+        () => gateway.capture(CTX, own, "1414.06"),
+        () =>
+          gateway.refund(CTX, {
+            id: "rfd_01JA4CF2R7V0Y3B6D9G2K5N8Q1",
+            paymentId: own.id,
+            providerPaymentId: own.providerPaymentId,
+            currency: "EUR",
+            amount: "100.00",
+            minorUnits: 2,
+            account: own.account,
+          }),
+        () => gateway.void(CTX, own),
+      ];
+
+      if (typeof expected === "string") {
+        for (const run of calls) {
+          const error = await appErrorOf(run());
+          expect([error.code, error.status, (error.cause as PaymentAccountUnusableError).reason]).toEqual([
+            "PAYMENT_PROVIDER_NOT_CONFIGURED",
+            424,
+            expected,
+          ]);
+        }
+        expect(stripe.requests).toEqual([]);
+        return;
+      }
+      for (const run of calls) {
+        await run();
+      }
+      expect(stripe.requests.map((request) => `${request.method} ${request.path}`)).toEqual([
+        `POST /v1/payment_intents/${own.providerPaymentId}/capture`,
+        "POST /v1/refunds",
+        `POST /v1/payment_intents/${own.providerPaymentId}/cancel`,
+      ]);
+      expect(stripe.requests.map(credentialsOf)).toEqual([expected, expected, expected]);
+    },
+  );
+
+  it("[FIX-W36-OTA AC6] answers 424 no_velexis_keys for a payment moved to Connect when the environment has no Velexis keys", async () => {
+    row = await rows.api_keys();
+    const own = await authorised(gatewayWith(velexisKeys));
+    row = { ...rows.connect_standard(), accountReference: OWN_ACCOUNT };
+    stripe.reset();
+
+    const error = await appErrorOf(gatewayWith({}).capture(CTX, own, "1414.06"));
+
+    expect([error.code, (error.cause as PaymentAccountUnusableError).reason]).toEqual([
+      "PAYMENT_PROVIDER_NOT_CONFIGURED",
+      "no_velexis_keys",
+    ]);
+    expect(stripe.requests).toEqual([]);
+  });
+
   it("refuses a new session whose row recorded another account than the connection names now", async () => {
     const gateway = gatewayWith(velexisKeys);
     const draft = payment({ account: paymentAccountOf(await gateway.account(CTX)) });

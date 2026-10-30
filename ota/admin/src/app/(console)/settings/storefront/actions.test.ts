@@ -992,7 +992,9 @@ describe("/settings/storefront", () => {
     },
   );
 
-  it("[FIX-W35-OTA AC5] keeps the live airline card box off, and says why, while the API's liveAvailable is false", async () => {
+  // The live box's three states (lead decision (2b) of 2026-10-30, third batch): off with the switch off (disabled: it
+  // cannot be turned on), the switch on (usable both ways), and on with the switch off (usable, to turn it off).
+  it("[FIX-W35-OTA AC5] [FIX-W36-OTA AC1] keeps the live airline card box off, and says why, while the API's liveAvailable is false", async () => {
     signedIn("owner");
     // An answer from before the field counts as off too.
     for (const airlineCard of [
@@ -1012,7 +1014,7 @@ describe("/settings/storefront", () => {
     }
   });
 
-  it("[FIX-W35-OTA AC5] offers the live airline card box only while the API's liveAvailable is true", async () => {
+  it("[FIX-W35-OTA AC5] [FIX-W36-OTA AC1] offers the live airline card box both ways while the API's liveAvailable is true", async () => {
     signedIn("owner");
     serveSettings({
       ...storefrontSettings(),
@@ -1036,7 +1038,9 @@ describe("/settings/storefront", () => {
     expect(page.textContent).toContain(SECTION_STRINGS.liveOn);
   });
 
-  it("[FIX-W35-OTA AC5] keeps a live card that is on while the switch is off as saved: disabled, explained, sent back on", async () => {
+  // Before 2026-10-30 (third batch) this state rendered the box disabled with a hidden field sending the saved `true`, so
+  // staff could not turn the live card off; lead decision (2b) keeps the box usable for turning it off.
+  it("[FIX-W36-OTA AC1] keeps the live box usable while the switch is off and the saved value is on: explained, sent back on when left ticked", async () => {
     signedIn("owner");
     serveSettings({
       ...storefrontSettings(),
@@ -1046,14 +1050,39 @@ describe("/settings/storefront", () => {
 
     const page = await renderPage();
 
-    const live = page.querySelector('input[name="airlineCard.enabledLive"]');
-    expect(live?.hasAttribute("disabled")).toBe(true);
-    expect(live?.hasAttribute("checked")).toBe(true);
+    const live = page.querySelectorAll('input[name="airlineCard.enabledLive"]');
+    // One box, no hidden copy of the saved value.
+    expect(live).toHaveLength(1);
+    expect(live[0]?.getAttribute("type")).toBe("checkbox");
+    expect(live[0]?.hasAttribute("disabled")).toBe(false);
+    expect(live[0]?.hasAttribute("checked")).toBe(true);
     expect(page.textContent).toContain(SECTION_STRINGS.liveKept);
-    // The disabled box posts nothing; the hidden field sends the saved `true`, which the API keeps (lead decision (2e)).
+    // Left ticked, the box sends the saved `true`, which the API keeps (lead decision (2e) of the second batch).
     const state = await run(saveAirlineCard, formDataOf(sectionForm(page, "airlineCard")));
     expect(state).toMatchObject({ ok: true });
     expect(only(`PATCH ${SETTINGS}`).body).toEqual({ airlineCard: { enabledTest: true, enabledLive: true } });
+  });
+
+  it("[FIX-W36-OTA AC1] turns a live card that is on while the switch is off off when staff untick the box", async () => {
+    signedIn("owner");
+    serveSettings({
+      ...storefrontSettings(),
+      airlineCard: { enabledTest: true, enabledLive: true, liveAvailable: false },
+    });
+    serveUpdate();
+
+    const page = await renderPage();
+
+    const live = page.querySelector<HTMLInputElement>('input[name="airlineCard.enabledLive"]');
+    expect(live).not.toBeNull();
+    (live as HTMLInputElement).checked = false;
+    const posted = formDataOf(sectionForm(page, "airlineCard"));
+    expect(posted.getAll("airlineCard.enabledLive")).toEqual([]);
+    const state = await run(saveAirlineCard, posted);
+    expect(state).toMatchObject({ ok: true });
+    expect(only(`PATCH ${SETTINGS}`).body).toEqual({
+      airlineCard: { enabledTest: true, enabledLive: false },
+    });
   });
 
   it("[OAD-014] posts every form as the page renders it to its action: each section is sent back unchanged", async () => {

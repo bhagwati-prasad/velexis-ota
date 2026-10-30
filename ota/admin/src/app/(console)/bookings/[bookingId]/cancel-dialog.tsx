@@ -8,8 +8,9 @@
 // The dialog says what will happen before anything is sent (`CancelPlan` of action-rules.ts):
 // - at Amadeus, as the API decides it (console.bookings.get's `cancellationMode`, by its own clock in the OTA's
 //   storefront time zone; FIX-W35-OTA): the order is released (nothing ticketed), the tickets voided (all issued today,
-//   in the OTA's time zone), or, for tickets of an earlier day, a request that Amadeus will most likely refuse, which
-//   the airline then handles; without a mode in the answer no step is named;
+//   in the OTA's time zone), or, for tickets of an earlier day, no DELETE: the API records a request to the airline and
+//   the booking stays as it is, with no money moved (lead decision (2c) of 2026-10-30, third batch, FIX-W36-OTA);
+//   without a mode in the answer no step is named;
 // - to the money, per refund mode: a captured Stripe payment refunds nothing, everything still refundable or an amount;
 //   an authorisation is released whole, released in part (the rest captured) or captured whole; an airline card and a
 //   booking without payment are never refunded here (the airline refunds its card).
@@ -53,7 +54,7 @@ export const CANCEL_STRINGS = Object.freeze({
     release: "Nothing is ticketed: Amadeus cancels the order and releases the seats.",
     void: "The tickets were issued today: Amadeus voids them while the void window is open (until midnight, the OTA's time).",
     request_only:
-      "The tickets were issued before today: Amadeus will most likely refuse to void them. Then the cancellation has to be requested from the airline (refund or exchange outside the console).",
+      "A ticket was issued before today (or at an unknown time): Amadeus is not asked to void the tickets. The booking records a request to the airline and stays as it is, and no money moves now: cancel it with the airline, resync the booking, then refund from the payment.",
   } satisfies Record<CancelSupplierStep, string>,
   reasonCode: "Reason category",
   money: "The money",

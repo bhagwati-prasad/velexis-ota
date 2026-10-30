@@ -1393,9 +1393,11 @@ describe("console.bookings.resync", () => {
     // The claim is the booking's column since FIX-W27-SYNC, never an event.
     expect(events).not.toContain("booking.sync_requested");
     const actions = await staffActionsOf(bookingId);
+    // The throttled call writes no row, only a log line: OADR-0011 point 8 (2026-10-21) for every 429, applied to the
+    // 429s of a use case by lead decision (2d) of 2026-10-30, third batch (FIX-W36-OTA AC3). Before, the audit
+    // interceptor recorded it as `bookings.resync` `failed`.
     expect(actions.map((action) => [action.action, action.outcome])).toEqual([
       ["booking.resync", "succeeded"],
-      ["bookings.resync", "failed"],
     ]);
     // The audit's before is the booking before the refresh, its after the booking the answer shows.
     expect([actions[0]?.before, actions[0]?.after]).toEqual([

@@ -962,7 +962,8 @@ export function cancellationOf(input: CancellationInput): Cancellation | null {
         status: "pending",
         requestedAt: requestedAt ?? new Date(0).toISOString(),
         cancelledAt: null,
-        cancelledBy: "customer",
+        // A staff member's request to the airline says so (console.bookings.cancel in `request_only`, FIX-W36-OTA).
+        cancelledBy: data["cancelledBy"] === "staff" ? "staff" : "customer",
         reasonCode: reasonOf(data["reasonCode"], "other"),
         comment: text(data["comment"]) ?? null,
         ticketsVoided: false,

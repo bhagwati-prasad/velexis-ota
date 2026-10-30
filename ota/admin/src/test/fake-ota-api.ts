@@ -123,6 +123,7 @@ function consoleTenant(): ConsoleStaffProfile["tenant"] {
     defaultCurrency: "EUR",
     defaultLocale: "en",
     timeZone: "Europe/Oslo",
+    storefrontUrl: "https://demo.ota.example.com",
     supplier: {
       connected: true,
       officeIds: ["OSLN12345"],

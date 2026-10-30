@@ -135,9 +135,39 @@ export function pagePath(pageId: string): string {
   return `${PAGES_PATH}/${pageId}`;
 }
 
-/** Where the storefront shows a page: `/p/<slug>` on its host (the admin knows no storefront host). */
+/** Where the storefront shows a page: `/p/<slug>` on its host. */
 export function storefrontPathOf(slug: string): string {
   return `/p/${slug}`;
+}
+
+/**
+ * The address of a page on the OTA's storefront, `<storefrontUrl>/p/<slug>`, for "View on storefront" (lead decision
+ * (2f) of 2026-10-30, third batch, FIX-W36-OTA): `storefrontUrl` is the storefront origin console.auth.me answers
+ * (`ConsoleTenant.storefrontUrl`: `https://<key>.<STOREFRONT_BASE_DOMAIN>`, the primary custom domain once OBE-080
+ * resolves them). `undefined`, so no link is made, for a profile without it (an answer from before the field), a value
+ * that is not an `http(s)` origin, or a slug that is not one.
+ */
+export function storefrontPageUrlOf(storefrontUrl: string | undefined, slug: string): string | undefined {
+  if (storefrontUrl === undefined || !SLUG_PATTERN.test(slug)) {
+    return undefined;
+  }
+  let origin: URL;
+  try {
+    origin = new URL(storefrontUrl);
+  } catch {
+    return undefined;
+  }
+  if (
+    (origin.protocol !== "https:" && origin.protocol !== "http:") ||
+    origin.username !== "" ||
+    origin.password !== "" ||
+    !["", "/"].includes(origin.pathname) ||
+    origin.search !== "" ||
+    origin.hash !== ""
+  ) {
+    return undefined;
+  }
+  return `${origin.origin}${storefrontPathOf(slug)}`;
 }
 
 /** The limits of StorefrontPageInput. */

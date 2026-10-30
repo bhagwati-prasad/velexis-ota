@@ -126,10 +126,13 @@
 //   before and after. The idempotency interceptor serialises a double submit of one key: the second request replays the
 //   first answer, so the payment is captured and the order issued once.
 // - `cancel` (`bookings:cancel`, `If-Match`, `Idempotency-Key`): CancellationService.cancelByStaff (see its file
-//   header: the refresh, the claim, the DELETE, the record and money steps of OBE-049 with `refund.mode`, the flag
-//   and the worker's check of a DELETE without an answer), whose record step's transaction writes the `booking.cancel`
-//   staff action; the answer is the booking, with ORDER_GONE_WARNING when Amadeus no longer had the order. The
-//   same-key replays of its `504` are answered from the booking (ConsoleCancelBookingIdempotencyHooks).
+//   header: the refresh, the step by the quote's cancellation-mode rule in `storefront_settings.time_zone`, the claim,
+//   the DELETE of `release` and `void`, the record and money steps of OBE-049 with `refund.mode`, the flag and the
+//   worker's check of a DELETE without an answer, or the request to the airline of `request_only` without a DELETE:
+//   lead decision (2c) of 2026-10-30, third batch, FIX-W36-OTA), whose record step's (or request's) transaction writes
+//   the `booking.cancel` staff action with the mode; the answer is the booking, with ORDER_GONE_WARNING when Amadeus no
+//   longer had the order and STAFF_REQUEST_ONLY_WARNING for a request. The same-key replays of its `504` are answered
+//   from the booking (ConsoleCancelBookingIdempotencyHooks).
 import { Injectable } from "@nestjs/common";
 import type { components, operations } from "@velexis/api-types";
 import type { Insertable, TenantDatabase, Updateable } from "@velexis/db";
@@ -172,6 +175,7 @@ import {
   bookingBusy,
   CancellationService,
   ORDER_GONE_WARNING,
+  STAFF_REQUEST_ONLY_WARNING,
   type StaffCancelRecord,
 } from "../bookings/cancellation.service";
 import { CustomerBookingsService } from "../bookings/customer-bookings.service";
@@ -2494,12 +2498,20 @@ export class ConsoleBookingActionsService {
       (trx, record) => this.recordCancel(trx, bookingId, record),
     );
     const booking = await this.consoleBookings.get(bookingId, { refresh: false });
-    return outcome.orderNotFound
-      ? { ...booking, warnings: [...(booking.warnings ?? []), { ...ORDER_GONE_WARNING }] }
-      : booking;
+    const warning = outcome.orderNotFound
+      ? ORDER_GONE_WARNING
+      : outcome.requested
+        ? STAFF_REQUEST_ONLY_WARNING
+        : undefined;
+    return warning === undefined
+      ? booking
+      : { ...booking, warnings: [...(booking.warnings ?? []), { ...warning }] };
   }
 
-  /** The `booking.cancel` staff action, in the record step's transaction (redacted before and after). */
+  /**
+   * The `booking.cancel` staff action, in the record step's transaction, or the request's of `request_only` (redacted
+   * before and after; `mode` the step the cancellation took, FIX-W36-OTA).
+   */
   private async recordCancel(
     trx: TenantTransaction,
     bookingId: string,
@@ -2518,7 +2530,9 @@ export class ConsoleBookingActionsService {
         amountPaid: record.before.amountPaid,
       },
       after: {
-        status: "cancelled",
+        // A request to the airline leaves the booking as it was (FIX-W36-OTA).
+        status: record.cause === "request_only" ? record.before.status : "cancelled",
+        mode: ask.mode,
         reasonCode: ask.reasonCode,
         cause: record.cause,
         ticketsVoided: record.ticketsVoided,

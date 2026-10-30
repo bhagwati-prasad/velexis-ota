@@ -386,6 +386,26 @@ describe("cancelBooking", () => {
     expect(nextCache.revalidatePath).toHaveBeenCalledWith(`/bookings/${BOOKING_ID}`);
   });
 
+  it("[FIX-W36-OTA AC2] says that a request to the airline was recorded, with the API's warning, when the booking stands", async () => {
+    signedIn();
+    const detail =
+      "A ticket was issued before today (or at an unknown time): Amadeus was not asked to void the tickets and the booking was not cancelled. Cancel it with the airline, resync the booking, then refund from the payment; no money moved.";
+    api.on(CANCEL, () =>
+      bookingAnswer({
+        status: "ticketed",
+        warnings: [{ title: "CANCELLATION REQUESTED FROM THE AIRLINE", detail }],
+      }),
+    );
+
+    const state = await cancelBooking(INITIAL_ACTION_STATE, cancelForm(randomUUID()));
+
+    expect(state).toEqual({
+      ok: true,
+      message: `Cancellation requested from the airline: the booking is not cancelled yet. ${detail}`,
+    });
+    expect(nextCache.revalidatePath).toHaveBeenCalledWith(`/bookings/${BOOKING_ID}`);
+  });
+
   it("sends modes none and full without an amount, even when one was typed before the mode changed", async () => {
     signedIn();
     api.on(CANCEL, () => bookingAnswer({ status: "cancelled" }));

@@ -14,13 +14,14 @@
 //   one someone else changed) starts again from the saved values (`key`), while the others keep what was typed.
 // - Staff without `settings:write` (agents, finance, viewers) see every section read only: the fields disabled, no
 //   "Save" (the actions refuse them anyway).
-// - The airline card in live: the box is offered only while the API's `airlineCard.liveAvailable` (its
-//   `AIRLINE_CARD_ENABLED` switch) is true, and otherwise says why (the platform turns the airline card on after its
-//   security review; lead decision (2d) of 2026-10-30, second batch, FIX-W35-OTA; before, the switch could not be read
-//   here and the box was offered only to turn off a live card already on). A live card that is on while the switch is off
-//   (it went off after the card was turned on) stays as saved: the disabled box posts nothing, so a hidden field sends
-//   the saved `true`, which the API keeps (lead decision (2e): it refuses only turning the live card on, `403
-//   FEATURE_DISABLED`, shown on the box).
+// - The airline card in live: the box is offered for turning it on only while the API's `airlineCard.liveAvailable`
+//   (its `AIRLINE_CARD_ENABLED` switch) is true, and otherwise says why (the platform turns the airline card on after
+//   its security review; lead decision (2d) of 2026-10-30, second batch, FIX-W35-OTA). A live card that is on while the
+//   switch is off (it went off after the card was turned on) keeps its box usable, with the reason, so staff can turn
+//   it off: left ticked it posts the saved `true`, which the API keeps, and unticked it posts nothing, which saves
+//   `false` (lead decision (2b) of 2026-10-30, third batch, FIX-W36-OTA; before, the box was disabled and a hidden
+//   field sent the saved `true`, so the card could not be turned off). The API refuses only turning the live card on
+//   (`403 FEATURE_DISABLED`, shown on the box; lead decision (2e) of the second batch).
 //
 // Every input has `autoComplete="off"`; nothing here asks for a card.
 import type { StorefrontSettings } from "@velexis/ota-sdk";
@@ -196,7 +197,7 @@ export const SECTION_STRINGS = Object.freeze({
   liveOn: "On in live: untick to stop offering it.",
   liveAvailable: "The platform has turned the airline card on: tick to offer it in live too.",
   liveKept:
-    "On in live as saved, but the platform has the airline card switched off, so the live storefront does not offer it; saving keeps it as it is.",
+    "On in live as saved, but the platform has the airline card switched off, so the live storefront does not offer it. Untick to turn it off; it can be turned on again only after the platform turns the airline card on.",
   // Legal
   termsVersion: "Terms version",
   privacyVersion: "Privacy policy version",
@@ -746,7 +747,10 @@ function liveHintOf(liveAvailable: boolean, liveOn: boolean): string {
   return liveOn ? SECTION_STRINGS.liveKept : SECTION_STRINGS.liveOff;
 }
 
-/** The airline card per environment; live is offered only while the API can turn it on (see the module comment). */
+/**
+ * The airline card per environment; live can be turned on only while the API can turn it on, and turned off whenever it
+ * is on (see the module comment).
+ */
 function AirlineCardFields({
   airlineCard,
   state,
@@ -759,6 +763,8 @@ function AirlineCardFields({
   const liveOn = airlineCard.enabledLive;
   // The API's switch, read-only (FIX-W35-OTA); an answer without it counts as off.
   const liveAvailable = airlineCard.liveAvailable === true;
+  // Disabled only for turning it on while the switch is off: a stored `true` can always be unticked (FIX-W36-OTA).
+  const liveDisabled = !liveAvailable && !liveOn;
   return (
     <>
       <p
@@ -781,14 +787,10 @@ function AirlineCardFields({
             name="airlineCard.enabledLive"
             value="true"
             defaultChecked={liveOn}
-            disabled={!liveAvailable}
+            disabled={liveDisabled}
             className="size-4 accent-primary"
             {...describedBy(`${id}-hint`, `${id}-error`, liveError)}
           />
-          {/* A disabled box posts nothing: the saved `true` goes with the section, so a save keeps it. */}
-          {!liveAvailable && liveOn ? (
-            <input type="hidden" name="airlineCard.enabledLive" value="true" />
-          ) : null}
           <Label htmlFor={id}>{SECTION_STRINGS.enabledLive}</Label>
         </div>
         <p id={`${id}-hint`} className={MUTED} data-live-available={liveAvailable ? "true" : "false"}>

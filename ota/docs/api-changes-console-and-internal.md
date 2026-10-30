@@ -177,6 +177,17 @@ Not a payment operation: the OTA's own subscription state, which the platform's 
 - **Additive** ([ADR-0006](../../docs/mvp/adr/0006-contract-first-openapi.md) Workflow step 1, [`../backend/openapi/README.md`](../backend/openapi/README.md) §4): the field is optional, so an answer without it stays valid and means no banner; the OTA admin treats a missing field like `null`. The frozen contract in `docs/velexis-sdk/` does not have it and is not edited: its SDK types and the SDK's own both resolve `ConsoleTenant` through the generated `@velexis/api-types`, so the SDK contract test sees the optional field on both sides and passes unchanged.
 - **Tasks**: OBE-076 (this spec, M5), OBE-082 (sign-in, refresh and `console.auth.me` fill it from the cached tenant row), OAD-018 (the banner in the OTA admin, with a link to the portal's billing page). The sign-in and profile examples show `billingNotice: null`.
 
+### 3.2 The storefront origin in the console session (M4, FIX-W36-OTA)
+
+Lead decision (2f) of 2026-10-30, third batch: the OTA admin links a published content page on the storefront ("View on storefront", `<storefrontUrl>/p/<slug>`), and it knows no storefront host of its own ([OADR-0018](adr/0018-ota-admin-consumes-the-sdk-server-side.md): it reads through the SDK only), so the console session carries it. One field, no new operation, parameter or error code:
+
+| Schema | Field | Value | Answered by |
+|---|---|---|---|
+| `ConsoleTenant` | `storefrontUrl`: optional, read-only, `format: uri` | The OTA's storefront origin for the console's environment, without a trailing slash: `https://<key>.<STOREFRONT_BASE_DOMAIN>` (its sub-domain, [ADR-0018](../../docs/mvp/adr/0018-hosted-storefront-custom-domains.md)), and the primary custom domain once OBE-080 resolves them | `ConsoleStaffSession.tenant` (`console.auth.signIn`, `console.auth.refresh`) and `ConsoleStaffProfile.tenant` (`console.auth.me`) |
+
+- **Source**: the tenant key and the process's `STOREFRONT_BASE_DOMAIN`, the origin the e-mails' links use (`storefrontUrl` of `notifications/renderer.ts`); no Amadeus or platform call beyond the tenant row the answer already reads.
+- **Additive** ([`../backend/openapi/README.md`](../backend/openapi/README.md) §4): optional, so an answer an `Idempotency-Key` replays from before the field stays valid; the OTA admin then makes no link. The frozen contract in `docs/velexis-sdk/` is not edited (both sides of the SDK contract test resolve `ConsoleTenant` through the generated `@velexis/api-types`). The sign-in and profile examples show `https://acme.ota.example.com`.
+
 ## 4. Public storefront pages and assets
 
 ### 4.1 Pages

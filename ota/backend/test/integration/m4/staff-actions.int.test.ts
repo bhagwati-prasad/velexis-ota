@@ -4,7 +4,9 @@
 // (a permission denial, a request validation refusal, and the idempotency refusals: a missing and a reused
 // `Idempotency-Key`) writes exactly one `staff_actions` row, with redacted before and after; every successful audited
 // read (customer view, PNR lookup, order retrieve, the eight raw Amadeus reads) writes exactly one; every other
-// successful read writes none, and a `429 RATE_LIMITED` writes none (a `rate_limit.exceeded` log line only).
+// successful read writes none, and a `429 RATE_LIMITED` writes none (a `rate_limit.exceeded` log line only). Since
+// lead decision (2d) of 2026-10-30 (third batch, FIX-W36-OTA) a `429` raised inside a console use case writes none
+// either (the console's resync throttle, an empty Amadeus bucket): a `staff_actions.rate_limited` log line only.
 //
 // The file clones the @velexis/testing template (tenant_alpha provisioned) and writes alpha's platform rows as the
 // platform does: an OTA in test on the Velexis test Amadeus account (the stub) with an office of its own, its Velexis
@@ -2315,6 +2317,42 @@ beforeAll(async () => {
   );
 }, CALLS_TIMEOUT_MS);
 
+// A 429 raised inside a console use case (lead decision (2d) of 2026-10-30, third batch, FIX-W36-OTA; OADR-0011
+// point 8 as decided on 2026-10-21 says it of every 429): the console's resync throttle of a booking synchronised a
+// moment ago (10 s), and an empty Amadeus tenant bucket in front of a raw order read. Before, the audit interceptor
+// recorded both `failed`. Kept apart from `calls`, whose table covers every console operation once per kind.
+const useCaseLimited: Array<{ readonly operationId: OtaOperationId; readonly res: Response }> = [];
+let useCaseLimitedLines: Array<Record<string, unknown>> = [];
+let firstResync: Response | undefined;
+beforeAll(async () => {
+  const booking = await seedBooking(await newStubOrder());
+  // The first resync synchronises the booking (its own `booking.resync` row); the second is within the 10 s.
+  firstResync = await owner.send("post", `${BOOKINGS}/${booking}/resync`, { body: {} });
+  useCaseLimited.push({
+    operationId: "consoleResyncBooking",
+    res: await owner.send("post", `${BOOKINGS}/${booking}/resync`, { body: {} }),
+  });
+  // The tenant's Amadeus bucket emptied until 10 minutes from now: the read is refused before any Amadeus call.
+  const order = await newStubOrder();
+  const bucket = redisKeys.amadeusTenantBucket(alphaId, "test").key;
+  await redis.client.hset(bucket, { tokens: "0", at: String(Date.now() + 10 * MINUTE) });
+  try {
+    stub.clearRequests();
+    useCaseLimited.push({
+      operationId: "consoleAmadeusGetFlightOrder",
+      res: await owner.send("get", `${RAW}/v1/booking/flight-orders/${order.id}`),
+    });
+    expect(stub.requests().filter((entry) => entry.operation === "getFlightOrder")).toEqual([]);
+  } finally {
+    await redis.client.del(bucket);
+  }
+  useCaseLimitedLines = api.sink
+    .records()
+    .filter(
+      (line) => line["msg"] === "staff_actions.rate_limited" && line["staffId"] === owner.member.staffId,
+    );
+}, CALLS_TIMEOUT_MS);
+
 // The rows every call wrote.
 beforeAll(async () => {
   allRows = (await inTenant((trx) =>
@@ -2525,6 +2563,35 @@ describe("staff_actions rows (OADR-0011 point 8 as decided on 2026-10-21)", () =
     expect(
       allRows.filter((row) => row["staff_id"] === session.member.staffId).map((row) => row["action"]),
     ).toEqual(["staff.sign_in"]);
+  });
+});
+
+describe("a 429 inside a console use case (lead decision (2d) of 2026-10-30, third batch)", () => {
+  it("[FIX-W36-OTA AC3] writes no row for the resync throttle's 429 nor for an empty Amadeus bucket's, only a log line each", () => {
+    expect(answerOf(firstResync as Response)).toEqual([200, undefined]);
+    expect(rowsOf(firstResync as Response).map((row) => [row["action"], row["outcome"]])).toEqual([
+      ["booking.resync", "succeeded"],
+    ]);
+    expect(useCaseLimited.map((entry) => entry.operationId)).toEqual([
+      "consoleResyncBooking",
+      "consoleAmadeusGetFlightOrder",
+    ]);
+    for (const entry of useCaseLimited) {
+      expect([entry.operationId, ...answerOf(entry.res)]).toEqual([entry.operationId, 429, "RATE_LIMITED"]);
+      expectResponseToMatch(entry.operationId, entry.res);
+      expect(entry.res.headers["retry-after"]).toMatch(/^\d+$/);
+      expect([entry.operationId, rowsOf(entry.res)]).toEqual([entry.operationId, []]);
+    }
+    expect(useCaseLimitedLines.map((line) => line["operationId"])).toEqual([
+      "consoleResyncBooking",
+      "consoleAmadeusGetFlightOrder",
+    ]);
+    for (const line of useCaseLimitedLines) {
+      expect(line).toMatchObject({ code: "RATE_LIMITED", staffId: owner.member.staffId });
+      // Never an address, an e-mail or a value of the request.
+      expect(Object.keys(line)).not.toContain("ip");
+      expect(JSON.stringify(line)).not.toContain(owner.member.email);
+    }
   });
 });
 

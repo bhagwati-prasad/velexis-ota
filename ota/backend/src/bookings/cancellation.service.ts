@@ -159,8 +159,17 @@
 //
 // **A staff cancellation** (`cancelByStaff`, console.bookings.cancel, OBE-063; the document's consoleCancelBooking,
 // flow console-operations.md §2 "Cancel", change-and-cancel.md §3 step 6): the same claim, DELETE, record step, money
-// step, unknown outcome and worker's check, with what the staff decide instead of the quote. No self-service window and
-// no quote: the checks are the booking of the environment, `409 BOOKING_ALREADY_CANCELLED`, `412`, an Amadeus order
+// step, unknown outcome and worker's check, with what the staff decide instead of the quote. Its step is the mode of
+// the quote's rule (cancellation-mode.ts `supplierModeOf` over the stored tickets, refreshed first, in
+// `storefront_settings.time_zone`; the `cancellationMode` console.bookings.get shows): `release` and `void` send the
+// DELETE; `request_only` (a ticket issued before today, or at an unknown time) sends none and records, in the claim's
+// transaction, a request to the airline as a customer's `request_only` does (`recordRequest`: `version + 1`,
+// `booking.cancellation_requested` with `cancelledBy: staff`, the traveller's e-mail unless `notifyCustomer: false`,
+// the staff alert), with the console's staff action (`audit`, cause `request_only`); no money moves (the estimate's
+// refund is 0, as a customer's request: the staff refund from the payment once the airline cancelled), and the
+// console answers the booking with STAFF_REQUEST_ONLY_WARNING (lead decision (2c) of 2026-10-30, third batch,
+// FIX-W36-OTA; before, the DELETE was sent in every mode, as `void` when a ticket held a seat). No self-service window
+// and no quote: the checks are the booking of the environment, `409 BOOKING_ALREADY_CANCELLED`, `412`, an Amadeus order
 // (`409 BOOKING_NOT_MODIFIABLE`), no undecided cancellation and no other cancellation's fresh claim (`details.reason =
 // "pending"`, the latter since FIX-W32-OTA; a customer's request waiting for the staff is what the staff finish here),
 // no fresh ticketing claim of a staff issuance or of the ticketing job
@@ -168,8 +177,8 @@
 // bookings.cancel answers too since FIX-W30-OTA) and no segment departed (`details.reason = "flown"`, after the GET
 // that refreshes the order and its ticket states through the customer refresh, without its throttle; the departure
 // rule of `cancelDepartureReasonOf` without the self-service window, which the console's canCancel shows).
-// `refund.mode` gives the amount that goes back (`staffRefundOf`, the estimate's `estimatedRefund`, so the money step
-// and the worker's check read it as they read a customer's): `none` (and no
+// `refund.mode` gives the amount that goes back of a `release` or `void` (`staffRefundOf`, the estimate's
+// `estimatedRefund`, so the money step and the worker's check read it as they read a customer's): `none` (and no
 // `refund` for a captured payment) nothing, `full` what can still be refunded, `amount` that amount (`422
 // UNPROCESSABLE` above it, `amount_exceeds_captured` or `amount_exceeds_authorized`). An authorisation follows lead
 // decision (1) of 2026-10-23, second batch, as a customer's cancellation: the amount that does not go back is captured,
@@ -282,11 +291,14 @@ import {
   refundEstimateOf,
   refundLinesOf,
   SETTLED_TICKET_STATUSES,
+  supplierModeOf,
   type CancellationMode,
   type EstimatePayment,
   type LineTraveler,
   type NotAllowedReason,
   type RefundEstimate,
+  type SupplierMode,
+  type SupplierModeInput,
 } from "./cancellation-mode";
 import {
   CANCELLATION_EVENTS,
@@ -1145,6 +1157,36 @@ export function authorisationSettlementOf(
     : { kind: "void" };
 }
 
+/** What `staffStepOf` reads: the booking's tickets, the OTA's day and the estimate of `refund.mode`. */
+export interface StaffStepInput extends SupplierModeInput {
+  /** `staffRefundOf`'s estimate of the request's `refund`. */
+  readonly estimate: RefundEstimate;
+  readonly minorUnits: number;
+}
+
+/**
+ * The step of a staff cancellation and the estimate its money step reads (lead decision (2c) of 2026-10-30, third
+ * batch; see the file header): the mode of the quote's rule over the stored tickets in the OTA's time zone
+ * (`supplierModeOf`, console.bookings.get's `cancellationMode`), `release` and `void` with the estimate of
+ * `refund.mode`, `request_only` (no DELETE, a request to the airline) with a refund of 0, as a customer's request: no
+ * money moves until the airline cancelled.
+ */
+export function staffStepOf(input: StaffStepInput): {
+  readonly mode: SupplierMode;
+  readonly estimate: RefundEstimate;
+} {
+  const { mode } = supplierModeOf(input);
+  if (mode !== "request_only") {
+    return { mode, estimate: input.estimate };
+  }
+  // A request's estimate, as refundEstimateOf gives a customer's: what was paid, nothing back, nothing kept yet.
+  const zero = new Money(0).toFixed(input.minorUnits);
+  return {
+    mode,
+    estimate: { amountPaid: input.estimate.amountPaid, estimatedRefund: zero, penalty: zero, otaFee: zero },
+  };
+}
+
 /** What `recordCancelled` did. */
 export type RecordedCancellation =
   | { readonly kind: "cancelled"; readonly money: RecordedMoney; readonly ticketsVoided: boolean }
@@ -1484,6 +1526,8 @@ export class CancellationRecorder {
       data: {
         mode: ask.mode,
         cause,
+        // A staff member's request (console.bookings.cancel in `request_only` mode, FIX-W36-OTA); never their text.
+        ...(ask.staff === undefined ? {} : { cancelledBy: "staff" }),
         reasonCode: ask.reasonCode,
         ...(ask.comment === null ? {} : { comment: ask.comment }),
         requestedAt: ask.requestedAt.toISOString(),
@@ -1496,18 +1540,21 @@ export class CancellationRecorder {
       requestId: tenant.requestId,
       now,
     });
-    await this.travellerEmail(trx, tenant, booking, children, "booking.cancellation_requested", {
-      dedupeKey: `booking.cancellation_requested:${booking.id}:v${booking.version + 1}`,
-    });
+    if (ask.staff?.notifyCustomer !== false) {
+      await this.travellerEmail(trx, tenant, booking, children, "booking.cancellation_requested", {
+        dedupeKey: `booking.cancellation_requested:${booking.id}:v${booking.version + 1}`,
+      });
+    }
     const why =
       cause === "request_only"
         ? "it is ticketed outside the void window"
         : cause === "refused"
           ? `the airline refused the cancellation (${supplierCode ?? "SUPPLIER_REJECTED"})`
           : "Amadeus no longer returns its order: check the office";
+    const who = ask.staff === undefined ? "The customer" : "A staff member";
     await this.staffAlert(trx, booking, `cancellation_requested_v${booking.version + 1}`, {
       reason:
-        `The customer asked to cancel this booking (${ask.reasonCode}) and ${why}. Cancel it at the airline and ` +
+        `${who} asked to cancel this booking (${ask.reasonCode}) and ${why}. Cancel it at the airline and ` +
         "refund the selling amount less the penalties from the console.",
     });
     this.logger.info({ bookingId: booking.id, mode: ask.mode, cause }, "bookings.cancellation_requested");
@@ -2035,13 +2082,20 @@ export interface StaffCancelRecord {
   readonly ask: CancellationAsk;
   readonly money: RecordedMoney;
   readonly ticketsVoided: boolean;
-  /** `deleted`: Amadeus cancelled the order; `order_not_found`: Amadeus no longer had it. */
-  readonly cause: "deleted" | "order_not_found";
+  /**
+   * `deleted`: Amadeus cancelled the order; `order_not_found`: Amadeus no longer had it; `request_only`: no DELETE was
+   * sent, the booking records a request to the airline (FIX-W36-OTA; nothing cancelled, no money moved).
+   */
+  readonly cause: "deleted" | "order_not_found" | "request_only";
 }
 
-/** What console.bookings.cancel answers with the booking: an order Amadeus no longer had is a warning. */
+/**
+ * What console.bookings.cancel answers with the booking: an order Amadeus no longer had, and a request to the airline
+ * instead of a DELETE (`request_only`, FIX-W36-OTA), are warnings.
+ */
 export interface StaffCancelOutcome {
   readonly orderNotFound: boolean;
+  readonly requested: boolean;
 }
 
 /** The warning of a staff cancellation whose order Amadeus no longer had (the booking was cancelled locally). */
@@ -2050,6 +2104,18 @@ export const ORDER_GONE_WARNING: Warning = Object.freeze({
   detail:
     "Amadeus no longer has this order (cancelled at the airline or purged): the booking was cancelled in Velexis " +
     "and its money settled as asked. Check the office if the order should still exist.",
+});
+
+/**
+ * The warning of a staff cancellation in `request_only` mode (lead decision (2c) of 2026-10-30, third batch): no DELETE
+ * was sent, the booking records a request to the airline and stays as it is.
+ */
+export const STAFF_REQUEST_ONLY_WARNING: Warning = Object.freeze({
+  title: "CANCELLATION REQUESTED FROM THE AIRLINE",
+  detail:
+    "A ticket was issued before today (or at an unknown time): Amadeus was not asked to void the tickets and the " +
+    "booking was not cancelled. Cancel it with the airline, resync the booking, then refund from the payment; no " +
+    "money moved.",
 });
 
 /** What the claim of a staff cancellation read. */
@@ -2549,20 +2615,49 @@ export class CancellationService {
     } catch (error) {
       throw unsentAnswer(error);
     }
-    // 3. The claim: the checks again under the booking's lock, then `version + 1` and the claim's marker.
+    const ctenant = this.cancellationTenant(tenant);
+    const beforeOf = (checked: StaffClaim): StaffCancelRecord["before"] => ({
+      status: checked.booking.status,
+      version: checked.booking.version,
+      amountPaid: checked.booking.amountPaid,
+      refundMode: checked.ask.staff?.refundMode ?? "default",
+    });
+    // 3. The claim: the checks again under the booking's lock, then `version + 1` and the claim's marker; in
+    // `request_only` mode the request to the airline instead, with the staff action, and no DELETE (FIX-W36-OTA).
     const claim = await this.tx.run(async (trx) => {
       const checked = await this.staffCheck(trx, tenant, bookingId, ifMatch, request, requestedAt, true);
+      if (checked.ask.mode === "request_only") {
+        await this.recorder.recordRequest(
+          trx,
+          ctenant,
+          checked.booking,
+          checked.ask,
+          "request_only",
+          null,
+          null,
+        );
+        await audit(trx, {
+          before: beforeOf(checked),
+          ask: checked.ask,
+          money: {
+            refundStatus: requestRefundStatus(checked.ask.estimate),
+            refund: null,
+            voidPayment: null,
+            capture: null,
+          },
+          ticketsVoided: false,
+          cause: "request_only",
+        });
+        return { kind: "requested" as const };
+      }
       const claimedAt = this.clock.now();
       await this.repository.claim(trx, bookingId, claimedAt);
-      return { ...checked, claimedAt };
+      return { kind: "claimed" as const, ...checked, claimedAt };
     });
-    const ctenant = this.cancellationTenant(tenant);
-    const before = {
-      status: claim.booking.status,
-      version: claim.booking.version,
-      amountPaid: claim.booking.amountPaid,
-      refundMode: claim.ask.staff?.refundMode ?? "default",
-    };
+    if (claim.kind === "requested") {
+      return { orderNotFound: false, requested: true };
+    }
+    const before = beforeOf(claim);
     // 4. Flight Order Management DELETE, no transaction open.
     let outcome: DeleteOutcome;
     let failure: unknown;
@@ -2586,7 +2681,7 @@ export class CancellationService {
           claimedAt: claim.claimedAt,
           audit,
         });
-        return { orderNotFound: cause === "order_not_found" };
+        return { orderNotFound: cause === "order_not_found", requested: false };
       }
       case "refused":
         // The staff asked: nothing is handed to them as a request. The airline's refusal, with its supplier issue.
@@ -2683,16 +2778,25 @@ export class CancellationService {
       minorUnits,
       rows.some((row) => row.provider === AIRLINE_PROVIDER),
     );
-    const holdsSeats = children.tickets.some((ticket) => !SETTLED_TICKET_STATUSES.has(ticket.status));
+    // The step by the quote's rule, in the OTA's time zone (lead decision (2c) of 2026-10-30, third batch): `release`
+    // and `void` send the DELETE, `request_only` a request to the airline (see the file header).
+    const settings = await this.repository.settings(trx);
+    const step = staffStepOf({
+      ticketingStatus: booking.ticketingStatus,
+      tickets: children.tickets,
+      timeZone: settings?.timeZone ?? "UTC",
+      now: this.clock.now(),
+      estimate: refund.estimate,
+      minorUnits,
+    });
     return {
       booking,
       orderId: booking.amadeusOrderId,
       ask: {
-        // What the DELETE does: voids the tickets that hold a seat, else releases the seats.
-        mode: holdsSeats ? "void" : "release",
+        mode: step.mode,
         reasonCode: request.reasonCode,
         comment: null,
-        estimate: refund.estimate,
+        estimate: step.estimate,
         currency: booking.currency,
         actor: tenant.actor,
         requestedAt,
@@ -2716,7 +2820,7 @@ export class CancellationService {
     ask: CancellationAsk,
     before: StaffCancelRecord["before"],
     via: {
-      readonly cause: StaffCancelRecord["cause"];
+      readonly cause: Exclude<StaffCancelRecord["cause"], "request_only">;
       readonly supplierRequestId: string | null;
       /** The claim whose outcome this is. */
       readonly claimedAt: Date;

@@ -146,7 +146,9 @@ const STRINGS = Object.freeze({
   issueRecorded: (status: string) =>
     `The issuance was recorded: ticketing is now ${status.replaceAll("_", " ")}.`,
   cancelled: "Booking cancelled.",
-  cancelPending: "Cancellation sent: Amadeus's answer is not known yet. Reload the page in a moment.",
+  // The API answers a booking that is not cancelled only for a request to the airline (`request_only`, no DELETE:
+  // lead decision (2c) of 2026-10-30, third batch, FIX-W36-OTA); its warning says what to do next.
+  cancelPending: "Cancellation requested from the airline: the booking is not cancelled yet.",
   resynced: (count: number) =>
     count === 0
       ? "Synchronised with Amadeus: nothing changed."

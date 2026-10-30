@@ -13,8 +13,10 @@
 //   the storefront settings' (`console.settings.storefront.get`, the default first); when they cannot be read the form
 //   takes a typed code and says so. The form carries the idempotency key rendered here, once per render.
 //
-// The admin knows no storefront host (no setting or answer of the contract carries one), so a published page names its
-// address on the storefront (`/p/<slug>`) instead of linking it.
+// A page names its address on the storefront (`/p/<slug>`), and a published one links it, "View on storefront", with
+// the storefront origin console.auth.me answers (`ConsoleTenant.storefrontUrl`, `<storefrontUrl>/p/<slug>`; lead
+// decision (2f) of 2026-10-30, third batch, FIX-W36-OTA): a draft, and a profile without the origin (an answer from
+// before the field), get no link.
 //
 // Next.js hides a server component's error from `error.tsx` in production, so the codes the console can answer are
 // handled here, on the server (routes.md §1, OAD-004): an expired access token goes to `/auth/refresh?next=` this
@@ -42,6 +44,7 @@ import {
   SETTINGS_WRITE,
   pageKindLabel,
   pagePath,
+  storefrontPageUrlOf,
   storefrontPathOf,
 } from "../../content-rules";
 import { DeletePageDialog, PageForm } from "../page-form";
@@ -62,6 +65,8 @@ const PAGE_STRINGS = Object.freeze({
   version: (version: number, updated: string) => `Version ${version}, last changed ${updated}.`,
   address: "Address on the storefront",
   addressNote: "on your storefront's domain",
+  viewOnStorefront: "View on storefront",
+  opensInNewTab: " (opens in a new tab)",
   published: "Published. The storefront shows a change within 5 minutes.",
   publishedSince: (since: string) =>
     `Published since ${since}. The storefront shows a change within 5 minutes.`,
@@ -267,6 +272,9 @@ export default async function ContentPagePage({ params }: Readonly<{ params: Pro
 
   const timeZone = staff.tenant.timeZone;
   const canWrite = can(staff, WRITE_PERMISSION);
+  const storefrontHref = page.isPublished
+    ? storefrontPageUrlOf(staff.tenant.storefrontUrl, page.slug)
+    : undefined;
   return (
     <div className="grid gap-6">
       <div className="grid gap-2">
@@ -286,6 +294,21 @@ export default async function ContentPagePage({ params }: Readonly<{ params: Pro
         <p className="text-sm">
           {PAGE_STRINGS.address}: <code>{storefrontPathOf(page.slug)}</code>{" "}
           <span className="text-muted-foreground">{PAGE_STRINGS.addressNote}</span>
+          {storefrontHref === undefined ? null : (
+            <>
+              {" "}
+              <a
+                href={storefrontHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={LINK_CLASS}
+                data-storefront-link=""
+              >
+                {PAGE_STRINGS.viewOnStorefront}
+                <span className="sr-only">{PAGE_STRINGS.opensInNewTab}</span>
+              </a>
+            </>
+          )}
         </p>
         <p className="text-sm text-muted-foreground">
           {PAGE_STRINGS.version(page.version, formatInstant(page.updatedAt, timeZone))}

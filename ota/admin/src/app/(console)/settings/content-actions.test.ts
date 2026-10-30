@@ -53,7 +53,14 @@ import {
   TENANT_COOKIE,
 } from "@/lib/session";
 
-import { lineExcerpt, lineRange, pageListQueryOf, templateProblemsOf, templateRefOf } from "./content-rules";
+import {
+  lineExcerpt,
+  lineRange,
+  pageListQueryOf,
+  storefrontPageUrlOf,
+  templateProblemsOf,
+  templateRefOf,
+} from "./content-rules";
 import ContentPagePage from "./pages/[pageId]/page";
 import { createPage, deletePage, updatePage } from "./pages/actions";
 import ContentPagesPage from "./pages/page";
@@ -852,6 +859,29 @@ describe("content rules", () => {
     expect(lineRange("a\r\nb", 2)).toEqual({ start: 2, end: 3 });
   });
 
+  it("[FIX-W36-OTA AC5] links a page on the storefront origin console.auth.me answers, and nothing else", () => {
+    expect(storefrontPageUrlOf("https://demo.ota.example.com", "baggage-faq")).toBe(
+      "https://demo.ota.example.com/p/baggage-faq",
+    );
+    // A custom domain (OBE-080) and a trailing slash are the same origin.
+    expect(storefrontPageUrlOf("https://www.acmetravel.com/", "terms")).toBe(
+      "https://www.acmetravel.com/p/terms",
+    );
+    for (const origin of [
+      undefined,
+      "",
+      "not a url",
+      "javascript:alert(1)",
+      "ftp://demo.ota.example.com",
+      "https://user:secret@demo.ota.example.com",
+      "https://demo.ota.example.com/shop",
+      "https://demo.ota.example.com?x=1",
+    ]) {
+      expect([origin, storefrontPageUrlOf(origin, "baggage-faq")]).toEqual([origin, undefined]);
+    }
+    expect(storefrontPageUrlOf("https://demo.ota.example.com", "../admin")).toBeUndefined();
+  });
+
   it("reads TEMPLATE_INVALID's problems defensively and checks a template's address", () => {
     expect(templateProblemsOf({ errors: "not a list" })).toEqual([]);
     expect(templateProblemsOf({ errors: [{ part: "subject", line: 0, message: " x " }, null] })).toEqual([
@@ -917,6 +947,36 @@ describe("/settings/pages", () => {
     );
   });
 
+  it("[FIX-W36-OTA AC5] links each published page 'View on storefront' with the storefront origin, never a draft", async () => {
+    signedIn("viewer");
+    api.on(`GET ${PAGES}`, () =>
+      listAnswer([
+        storefrontPage(),
+        storefrontPage({ id: NEW_PAGE_ID, slug: "conditions", isPublished: false, publishedAt: null }),
+      ]),
+    );
+
+    const page = await pagesList();
+
+    const [published, draft] = [...page.querySelectorAll("tr[data-page]")];
+    const link = published?.querySelector<HTMLAnchorElement>("a[data-storefront-link]");
+    expect(link?.getAttribute("href")).toBe("https://demo.ota.example.com/p/baggage-faq");
+    expect(link?.getAttribute("target")).toBe("_blank");
+    expect(link?.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(link?.textContent).toBe("View on storefront: Baggage FAQ (en), opens in a new tab");
+    expect(draft?.querySelector("a[data-storefront-link]")).toBeNull();
+
+    // A profile without the field (an answer from before it): the address only, no link.
+    api.on(ME, () => {
+      const profile = staffProfile({ role: "viewer" });
+      const { storefrontUrl: _omitted, ...tenant } = profile.tenant;
+      return Response.json({ ...profile, tenant });
+    });
+    const without = await pagesList();
+    expect(without.querySelector("a[data-storefront-link]")).toBeNull();
+    expect(without.querySelector("tr[data-page]")?.textContent).toContain("/p/baggage-faq");
+  });
+
   it("shows the list read only to the other roles, and never sends a link the API would refuse", async () => {
     signedIn("viewer");
     api.on(`GET ${PAGES}`, () => listAnswer([storefrontPage()]));
@@ -973,6 +1033,25 @@ describe("/settings/pages/[pageId]", () => {
       showInFooter: true,
       sortOrder: 20,
     });
+  });
+
+  it("[FIX-W36-OTA AC5] links a published page 'View on storefront', and not a draft", async () => {
+    signedIn("owner");
+    api.on(`GET ${PAGES}/${PAGE_ID}`, () => pageAnswer(storefrontPage()));
+
+    const published = await contentPage(PAGE_ID);
+
+    const link = published.querySelector<HTMLAnchorElement>("a[data-storefront-link]");
+    expect(link?.getAttribute("href")).toBe("https://demo.ota.example.com/p/baggage-faq");
+    expect(link?.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(link?.textContent).toBe("View on storefront (opens in a new tab)");
+
+    api.on(`GET ${PAGES}/${PAGE_ID}`, () =>
+      pageAnswer(storefrontPage({ isPublished: false, publishedAt: null })),
+    );
+    const draft = await contentPage(PAGE_ID);
+    expect(draft.querySelector("a[data-storefront-link]")).toBeNull();
+    expect(draft.textContent).toContain("/p/baggage-faq");
   });
 
   it("shows the page read only to a viewer, its body as written", async () => {

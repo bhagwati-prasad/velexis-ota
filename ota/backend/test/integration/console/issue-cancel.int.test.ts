@@ -54,6 +54,7 @@ import {
   CANCELLATION_CHECK_JOB,
   CancellationRecorder,
   ORDER_GONE_WARNING,
+  STAFF_REQUEST_ONLY_WARNING,
 } from "../../../src/bookings/cancellation.service";
 import { buildCreateOrderRequest } from "../../../src/bookings/order-request.builder";
 import { newId } from "../../../src/common/ids";
@@ -400,6 +401,8 @@ interface BookingSeed {
   readonly ticketingStatus?: string;
   /** A ticketed booking (an e-ticket issued an hour ago), for a cancellation that voids it. */
   readonly ticketed?: boolean;
+  /** When a ticketed booking's e-ticket was issued (an hour ago by default: today in the tenant's midday zone). */
+  readonly ticketsIssuedAt?: Date;
   /** The departure, relative to now (10 days by default); the flight lasts 2 hours. */
   readonly departInMs?: number;
 }
@@ -427,6 +430,7 @@ async function seedBooking(prefix: string, seed: BookingSeed = {}): Promise<Seed
   const contact = records(order["contacts"])[0] ?? {};
   const contactName = (contact["addresseeName"] ?? {}) as JsonObject;
   const ticketed = seed.ticketed === true;
+  const issuedAt = seed.ticketsIssuedAt ?? new Date(now - HOUR);
   await inTenant(async (trx) => {
     await trx
       .insertInto("bookings")
@@ -437,7 +441,7 @@ async function seedBooking(prefix: string, seed: BookingSeed = {}): Promise<Seed
         channel: "storefront",
         status: ticketed ? "ticketed" : "confirmed",
         ticketing_status: ticketed ? "issued" : (seed.ticketingStatus ?? "manual_review"),
-        issued_at: ticketed ? new Date(now - HOUR) : null,
+        issued_at: ticketed ? issuedAt : null,
         amadeus_order_id: order["id"] as string,
         record_locator: recordLocator,
         origin_system_code: "GDS",
@@ -544,12 +548,25 @@ async function seedBooking(prefix: string, seed: BookingSeed = {}): Promise<Seed
           status: "ISSUED",
           segment_ids: ["3"],
           validating_carrier: "IB",
-          issued_at: new Date(now - HOUR),
+          issued_at: issuedAt,
         })
         .execute();
     }
   });
   return { id, orderId: order["id"] as string, email };
+}
+
+/**
+ * A fixed-offset zone (`Etc/GMT±N`) whose wall clock reads 12:xx now (FIX-W36-OTA). The staff cancellation decides its
+ * step by the tickets' day in `storefront_settings.time_zone` (lead decision (2c) of 2026-10-30, third batch), so the
+ * file gives tenant alpha this zone: an e-ticket issued an hour ago is of today there, and the day ends hours after
+ * the file has run, whatever the time of the run (a zone of the OTA's choice would make the void a request for an hour
+ * after its midnight).
+ */
+function middayTimeZone(now: Date): string {
+  const eastOfUtc = 12 - now.getUTCHours(); // -11 … +12 hours
+  // `Etc/GMT-3` is three hours east of UTC (the POSIX sign).
+  return eastOfUtc === 0 ? "Etc/GMT" : `Etc/GMT${eastOfUtc > 0 ? "-" : "+"}${String(Math.abs(eastOfUtc))}`;
 }
 
 /** A fresh Stripe-shaped id of this run (`pi_test_…`). */
@@ -896,9 +913,13 @@ beforeAll(async () => {
     },
   });
   alphaId = await insertTenant(await insertAmadeusAccount());
-  await inTenant((trx) =>
-    seedStorefrontSettings(trx, { name: "Alpha Travel", defaultCurrency: "EUR", defaultLocale: "en" }),
-  );
+  await inTenant(async (trx) => {
+    await seedStorefrontSettings(trx, { name: "Alpha Travel", defaultCurrency: "EUR", defaultLocale: "en" });
+    await trx
+      .updateTable("storefront_settings")
+      .set({ time_zone: middayTimeZone(new Date()) })
+      .execute();
+  });
   api = await createTestApp({
     database: db,
     redis,
@@ -1587,6 +1608,157 @@ describe("console.bookings.cancel", () => {
     ).toMatchObject({
       cause: "order_not_found",
     });
+  });
+});
+
+// Lead decision (2c) of 2026-10-30, third batch: the staff cancellation takes the step of the quote's rule, the one
+// console.bookings.get's `cancellationMode` shows (before, it sent the DELETE in every mode, as `void` when a ticket
+// held a seat). The tenant's zone is the file's midday zone (`middayTimeZone`).
+describe("console.bookings.cancel by the cancellation-mode rule (FIX-W36-OTA)", () => {
+  /** console.bookings.get's `cancellationMode.mode` of the booking, and its ETag. */
+  async function shownMode(session: AdminSession, bookingId: string): Promise<[unknown, string]> {
+    const res = await session.get(`${BOOKINGS}/${bookingId}`);
+    expect(answer(res)).toEqual([200, undefined]);
+    return [res.body.cancellationMode?.mode, res.headers["etag"] as string];
+  }
+
+  it("[FIX-W36-OTA AC2] releases a booking without issued tickets with one DELETE, and records the step", async () => {
+    const owner = await staff("owner");
+    const booking = await seedBooking("mode.release");
+    const payment = await seedPayment(booking.id, "authorized");
+    const [mode, etag] = await shownMode(owner, booking.id);
+    expect(mode).toBe("release");
+    stub.clearRequests();
+
+    const res = await owner.cancel(booking.id, etag, { reasonCode: "duplicate", reason: "Booked twice" });
+
+    expect(answer(res)).toEqual([200, undefined]);
+    expectResponseToMatch("consoleCancelBooking", res);
+    expect(res.body).toMatchObject({ status: "cancelled", cancellation: { ticketsVoided: false } });
+    expect(amadeusCalls("cancelFlightOrder").map((call) => call.status)).toEqual([204]);
+    expect(await paymentRow(payment.id)).toMatchObject({ status: "canceled" });
+    expect((await staffActionsOf(booking.id))[0]).toMatchObject({
+      action: "booking.cancel",
+      outcome: "succeeded",
+      after: { status: "cancelled", mode: "release", cause: "deleted", ticketsVoided: false },
+    });
+  });
+
+  it("[FIX-W36-OTA AC2] voids tickets issued today in the OTA's time zone with one DELETE, and records the step", async () => {
+    const owner = await staff("owner");
+    const booking = await seedBooking("mode.void", { ticketed: true });
+    await seedPayment(booking.id, "captured");
+    const [mode, etag] = await shownMode(owner, booking.id);
+    expect(mode).toBe("void");
+    stub.clearRequests();
+
+    const res = await owner.cancel(booking.id, etag, {
+      reasonCode: "customer_request",
+      reason: "Cancelled the day of booking",
+      refund: { mode: "none" },
+    });
+
+    expect(answer(res)).toEqual([200, undefined]);
+    expectResponseToMatch("consoleCancelBooking", res);
+    expect(res.body).toMatchObject({ status: "cancelled", cancellation: { ticketsVoided: true } });
+    expect(amadeusCalls("cancelFlightOrder").map((call) => call.status)).toEqual([204]);
+    expect((await ticketsOf(booking.id)).map((ticket) => ticket.status)).toEqual(["VOID"]);
+    expect((await staffActionsOf(booking.id))[0]).toMatchObject({
+      action: "booking.cancel",
+      outcome: "succeeded",
+      after: { status: "cancelled", mode: "void", cause: "deleted", ticketsVoided: true },
+    });
+  });
+
+  it("[FIX-W36-OTA AC2] asks Amadeus nothing for tickets of an earlier day: a request to the airline, no money moved", async () => {
+    const agent = await staff("agent");
+    const twoDaysAgo = new Date(Date.now() - 2 * DAY);
+    const booking = await seedBooking("mode.request", { ticketed: true, ticketsIssuedAt: twoDaysAgo });
+    const payment = await seedPayment(booking.id, "captured");
+    const [mode, etag] = await shownMode(agent, booking.id);
+    expect(mode).toBe("request_only");
+    const versionBefore = (await bookingRow(booking.id)).version;
+    stripe.reset();
+    stub.clearRequests();
+    const body = {
+      reasonCode: "customer_request",
+      reason: "Customer called; tickets of the day before yesterday",
+      refund: { mode: "full" },
+    };
+
+    const res = await agent.cancel(booking.id, etag, body);
+
+    expect(answer(res)).toEqual([200, undefined]);
+    expectResponseToMatch("consoleCancelBooking", res);
+    // The booking stands, with the request pending for the staff and the warning that no DELETE was sent.
+    expect(res.body).toMatchObject({
+      status: "ticketed",
+      warnings: expect.arrayContaining([STAFF_REQUEST_ONLY_WARNING]),
+      cancellation: {
+        status: "pending",
+        cancelledBy: "staff",
+        reasonCode: "customer_request",
+        estimatedRefund: { amount: "0.00", currency: "EUR" },
+        refund: null,
+        refundStatus: "manual_review",
+      },
+    });
+    // The order read again (the refresh), never deleted; no Stripe call, no refund, the payment as it was.
+    expect(amadeusCalls("cancelFlightOrder")).toEqual([]);
+    expect(await stubOrderStatus(booking.orderId)).toBe(200);
+    expect(stripeRequestsAbout(payment.intentId)).toEqual([]);
+    expect(await refundsOf(booking.id)).toEqual([]);
+    expect(await paymentRow(payment.id)).toMatchObject({ status: "captured" });
+    expect(await bookingRow(booking.id)).toMatchObject({
+      status: "ticketed",
+      cancelled_by: null,
+      version: versionBefore + 1,
+    });
+    expect((await ticketsOf(booking.id)).map((ticket) => ticket.status)).toEqual(["ISSUED"]);
+    // The request as the customer path records it, by the staff member, without their text.
+    const events = await eventsOf(booking.id);
+    expect(events.filter((event) => event.type === "booking.cancellation_requested")).toEqual([
+      expect.objectContaining({
+        actor_type: "staff",
+        actor_id: agent.member.staffId,
+        visible_to_customer: true,
+        data: expect.objectContaining({ mode: "request_only", cause: "request_only", cancelledBy: "staff" }),
+      }),
+    ]);
+    expect(events.map((event) => event.type)).not.toContain("booking.cancelled");
+    expect(JSON.stringify(events)).not.toContain(body.reason);
+    expect(await notificationsOf(booking.id)).toEqual([
+      "booking.cancellation_requested",
+      "staff.manual_review",
+    ]);
+    const actions = await staffActionsOf(booking.id);
+    expect(actions.map((action) => [action.action, action.outcome])).toEqual([
+      ["booking.cancel", "succeeded"],
+    ]);
+    expect(actions[0]).toMatchObject({
+      reason: body.reason,
+      before: { status: "ticketed", version: versionBefore },
+      after: {
+        status: "ticketed",
+        mode: "request_only",
+        cause: "request_only",
+        ticketsVoided: false,
+        refundMode: "full",
+        refund: { amount: "0.00", currency: "EUR" },
+        refundStatus: "manual_review",
+      },
+    });
+
+    // notifyCustomer false: the staff alert only, no e-mail to the traveller.
+    const quiet = await seedBooking("mode.request.quiet", { ticketed: true, ticketsIssuedAt: twoDaysAgo });
+    const quietRes = await agent.cancel(quiet.id, (await shownMode(agent, quiet.id))[1], {
+      reasonCode: "other",
+      reason: "No e-mail for this one",
+      notifyCustomer: false,
+    });
+    expect(answer(quietRes)).toEqual([200, undefined]);
+    expect(await notificationsOf(quiet.id)).toEqual(["staff.manual_review"]);
+    expect(amadeusCalls("cancelFlightOrder")).toEqual([]);
   });
 });
 

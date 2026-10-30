@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (contracts first, locations), lead architect (tooling and checks)
+**Revisions:** 2026-10-30 (lead decision (2e) of the third batch, recorded by FIX-W36-OTA): a dated note under the Follow-ups says that the 19 operations with `x-milestone: deferred` keep answering `501` by design after M4, so the route parity allow-list holds them, and the M5 webhooks until they are built.
 
 ## Context
 
@@ -68,6 +69,7 @@ Webhook receivers and internal endpoints (Stripe webhooks, the Caddy `ask` endpo
 
 - M0 moves the OTA document to `ota/backend/openapi/`, sets up `@velexis/api-types` and the CI checks. M1 creates the platform document.
 - Decided during planning; revisit the `501` allow-list approach once all 96 operations are implemented (end of M4). The allow-list then becomes empty and the parity check strict.
+- *Note (2026-10-30, lead decision (2e) of the third batch, recorded by FIX-W36-OTA).* The allow-list does not become empty at the end of M4. The 19 operations of the OTA document with `x-milestone: deferred` (scope §3: what the MVP leaves out, such as the account preferences and data exports and `resolveStorefrontHost`) keep answering `501 NOT_IMPLEMENTED` by design after M4, as every listed route does (`401` without a credential, `501` with one). The route parity check's allow-list (`ota/backend/src/common/http/pending-operations.ts`, entries `"deferred"`) therefore holds them, together with the M5 Stripe webhooks of OBE-078 (`receiveStripeConnectWebhook`, `receiveStripeConnectionWebhook`) until those are built. The check stays as strict as this point asks for everything else: every other operation has its handler, every handler has its operation, and a deferred operation leaves the list only in the task that implements it.
 
 ## Alternatives considered
 

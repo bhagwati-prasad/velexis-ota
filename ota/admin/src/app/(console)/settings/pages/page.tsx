@@ -7,7 +7,9 @@
 // `published` (`true` the published pages,
 // `false` the drafts; none: every page) and `cursor` (the `page.nextCursor` of the previous page, which "Next page"
 // sets and "First page" drops). A link with a value the API would refuse is never sent: the page says so, with a link
-// to every page. Each row: the title (a link to the page), its address on the storefront (`/p/<slug>`), the language,
+// to every page. Each row: the title (a link to the page), its address on the storefront (`/p/<slug>`, and for a
+// published page "View on storefront", a link to `<storefrontUrl>/p/<slug>` with the storefront origin
+// console.auth.me answers: lead decision (2f) of 2026-10-30, third batch, FIX-W36-OTA; none without it), the language,
 // the kind, published (since when) or draft, listed in the footer, the footer order and the last change in the OTA's
 // time zone.
 //
@@ -55,6 +57,7 @@ import {
   pageListHref,
   pageListQueryOf,
   pagePath,
+  storefrontPageUrlOf,
   storefrontPathOf,
   type PageListQuery,
 } from "../content-rules";
@@ -93,6 +96,8 @@ const PAGE_STRINGS = Object.freeze({
   draftBadge: "Draft",
   inFooter: "Listed",
   notInFooter: "Not listed",
+  viewOnStorefront: "View on storefront",
+  viewOnStorefrontContext: (title: string, locale: string) => `: ${title} (${locale}), opens in a new tab`,
   empty: "No page matches these filters.",
   emptyAll:
     "No page yet. Create the terms and the privacy policy first, then link them in the storefront settings.",
@@ -185,10 +190,13 @@ function PagesTable({
   pages,
   filtered,
   timeZone,
+  storefrontUrl,
 }: {
   readonly pages: readonly StorefrontPage[];
   readonly filtered: boolean;
   readonly timeZone: string;
+  /** `ConsoleTenant.storefrontUrl`: the storefront origin, when console.auth.me answered it. */
+  readonly storefrontUrl: string | undefined;
 }) {
   const columns = Object.values(PAGE_STRINGS.columns);
   return (
@@ -222,7 +230,10 @@ function PagesTable({
                 </Link>
               </TableCell>
               <TableCell>
-                <code className="text-xs">{storefrontPathOf(page.slug)}</code>
+                <div className="grid gap-0.5">
+                  <code className="text-xs">{storefrontPathOf(page.slug)}</code>
+                  <ViewOnStorefront page={page} storefrontUrl={storefrontUrl} />
+                </div>
               </TableCell>
               <TableCell>{page.locale}</TableCell>
               <TableCell>{pageKindLabel(page.kind)}</TableCell>
@@ -248,6 +259,26 @@ function PagesTable({
         )}
       </TableBody>
     </Table>
+  );
+}
+
+/** "View on storefront" of a published page, when the storefront origin is known (see the file header). */
+function ViewOnStorefront({
+  page,
+  storefrontUrl,
+}: {
+  readonly page: StorefrontPage;
+  readonly storefrontUrl: string | undefined;
+}) {
+  const href = page.isPublished ? storefrontPageUrlOf(storefrontUrl, page.slug) : undefined;
+  if (href === undefined) {
+    return null;
+  }
+  return (
+    <a href={href} target="_blank" rel="noopener noreferrer" className={LINK_CLASS} data-storefront-link="">
+      {PAGE_STRINGS.viewOnStorefront}
+      <span className="sr-only">{PAGE_STRINGS.viewOnStorefrontContext(page.title, page.locale)}</span>
+    </a>
   );
 }
 
@@ -391,6 +422,7 @@ export default async function ContentPagesPage({
         pages={pages}
         filtered={list.locale !== undefined || list.published !== undefined}
         timeZone={request.staff.tenant.timeZone}
+        storefrontUrl={request.staff.tenant.storefrontUrl}
       />
       <Paging list={list} nextCursor={nextCursor} />
     </PageShell>
