@@ -62,6 +62,7 @@ import type { TenantTransaction } from "../../../src/tenancy/tenant-tx";
 import { createWorkerApp, createWorkerLogger, WorkerModule } from "../../../src/worker.module";
 import { buildOrderRequestInput, buildOrderTraveler } from "../../builders/bookings";
 import { newApiKey, testApiCredentials, testKeyProvider, testWorkerVariables } from "../../helpers/api-env";
+import { journeyAmadeusLimitsModule } from "../../helpers/amadeus-limits";
 import { MemorySink } from "../../helpers/log-sink";
 import { useNextApplicationLoggerOutsideRequests } from "../../helpers/nest-pino";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
@@ -498,7 +499,8 @@ beforeAll(async () => {
   ]);
   ({ key: automationKey, id: automationKeyId } = await issueAutomationKey());
 
-  api = await createTestApp({ database: db, redis });
+  // Its imports, queue reads and polls call Amadeus for one tenant one after the other (helpers/amadeus-limits.ts).
+  api = await createTestApp({ database: db, redis, imports: [journeyAmadeusLimitsModule()] });
   const config = loadWorkerConfig({
     ...testWorkerVariables(),
     APP_ENV: "test",
@@ -507,7 +509,10 @@ beforeAll(async () => {
     REDIS_URL: redis.url,
   });
   @Module({
-    imports: [WorkerModule.forRoot(config, { logger: createWorkerLogger(config, workerSink) })],
+    imports: [
+      journeyAmadeusLimitsModule(),
+      WorkerModule.forRoot(config, { logger: createWorkerLogger(config, workerSink) }),
+    ],
   })
   class WorkerRootModule {}
   useNextApplicationLoggerOutsideRequests();

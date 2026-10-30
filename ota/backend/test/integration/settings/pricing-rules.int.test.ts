@@ -42,6 +42,7 @@ import { Money } from "../../../src/pricing/pricing.types";
 import { seedDefaultMarkupRule } from "../../../src/provisioning/seeds/markup-rules.seed";
 import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefront-settings.seed";
 import type { OtaPool } from "../../../src/tenancy/tenancy.module";
+import { journeyAmadeusLimitsModule } from "../../helpers/amadeus-limits";
 import { newApiKey, testApiCredentials, testKeyProvider } from "../../helpers/api-env";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
 import { createTestApp, type TestApp } from "../../support/create-test-app";
@@ -449,7 +450,13 @@ beforeAll(async () => {
     )
   ).id;
   stub = await startAmadeusStub({ credentials: { clientId, clientSecret: secret } });
-  api = await createTestApp({ database: db, redis, env: { AMADEUS_BASE_URL_TEST: stub.url } });
+  api = await createTestApp({
+    database: db,
+    redis,
+    env: { AMADEUS_BASE_URL_TEST: stub.url },
+    // Its journeys search and price for one tenant one after the other (helpers/amadeus-limits.ts).
+    imports: [journeyAmadeusLimitsModule()],
+  });
   // The first sign-in, read, write, search and pricing of a process open the pools' connections and warm the token,
   // validation and pricing code; done once here, so that no test pays for it.
   const warmUp = await signIn(alphaId, "owner");

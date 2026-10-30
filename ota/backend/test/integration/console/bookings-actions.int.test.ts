@@ -54,6 +54,7 @@ import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefro
 import type { OtaPool } from "../../../src/tenancy/tenancy.module";
 import type { TenantTransaction } from "../../../src/tenancy/tenant-tx";
 import { buildOrderRequestInput, buildStoredPassport, pricedFlightOffer } from "../../builders/bookings";
+import { journeyAmadeusLimitsModule } from "../../helpers/amadeus-limits";
 import { newApiKey, testApiCredentials, testKeyProvider } from "../../helpers/api-env";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
 import { createTestApp, type TestApp } from "../../support/create-test-app";
@@ -738,7 +739,13 @@ beforeAll(async () => {
       clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout),
     },
   });
-  api = await createTestApp({ database: db, redis, env: { AMADEUS_BASE_URL_TEST: stub.url } });
+  api = await createTestApp({
+    database: db,
+    redis,
+    env: { AMADEUS_BASE_URL_TEST: stub.url },
+    // Its staff actions read and change orders of one tenant one after the other (helpers/amadeus-limits.ts).
+    imports: [journeyAmadeusLimitsModule()],
+  });
   // The first sign-in and console calls of a process open the pools' connections and warm the token, validation and
   // Amadeus code; done once here, so that no test pays for it.
   const warmUp = await staffSession("owner");

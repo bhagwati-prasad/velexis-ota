@@ -49,6 +49,7 @@ import {
   testApiCredentials,
   testKeyProvider,
 } from "../../helpers/api-env";
+import { journeyAmadeusLimitsModule } from "../../helpers/amadeus-limits";
 import { startFakeStripe, stripeEndpointModule, type FakeStripe } from "../../helpers/fake-stripe";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
 import { createTestApp, type TestApp } from "../../support/create-test-app";
@@ -529,7 +530,8 @@ beforeAll(async () => {
   api = await createTestApp({
     database: db,
     redis,
-    imports: [stripeEndpointModule(stripe.endpoint)],
+    // Its journeys book and complete for one tenant one after the other (helpers/amadeus-limits.ts).
+    imports: [stripeEndpointModule(stripe.endpoint), journeyAmadeusLimitsModule()],
     env: {
       AMADEUS_BASE_URL_TEST: stub.url,
       STRIPE_SECRET_KEY_TEST: STRIPE_SECRET_KEY,
