@@ -25,6 +25,11 @@
 //   await openConsoleFromPortal(page, owned.ota.id);                 // portal → "Open console" → /bookings
 //   await waitPastMidnight(await bookingDayTimeZones(owned));       // never book in the 3 minutes before its midnight
 //
+// The OTA admin's settings and payments journeys of OAD-017 add (the very end):
+//
+//   await serveStorefrontOf(context, owned.storefrontHost);  // the preview's pages show the journey's own OTA
+//   await forgetStorefrontCopies(page);                      // the tab's own 5-minute copies of the storefront
+//
 // Tenant data goes through `tenantTx` of @velexis/db as velexis_ota_app, the OTA backend's own role, never through
 // schema-qualified SQL or a session-level search_path (ADR-0004). The platform row of the suspended OTA is written as
 // velexis_migrator, as the OTA backend's development seed writes the demo OTA's (ota/backend/README.md §5): the platform
@@ -1380,4 +1385,134 @@ export async function waitPastMidnight(timeZones: readonly string[]): Promise<vo
       })
       .toBe(true);
   }
+}
+
+// ---- A journey's own OTA on the storefront preview (OAD-017) --------------------------------------------------------
+//
+// The previews serve the hosts of the demo OTA and of the two suspended OTAs only (support/stack.ts), and their proxy
+// replaces the browser's `X-Velexis-Host` with their own. A journey that changes its own OTA's settings in the OTA admin
+// and then looks at that OTA's storefront in the browser (settings-effects.e2e.ts, payments.e2e.ts) therefore answers
+// the storefront page's `/api/*` requests itself: `serveStorefrontOf` routes them, in that journey's browser context
+// only, to the OTA API with the edge headers Caddy adds in front of the OTA's own host (the development
+// VELEXIS_EDGE_SECRET, `X-Velexis-Host` and `Origin` of that host), as the preview's proxy does for the demo OTA's. The
+// pages, scripts and headers (the CSP among them) stay the preview's: the one build serves every OTA (OADR-0015), and
+// the OTA it shows is the one its `/api/*` answers name. The browser's own request headers (its `X-Forwarded-For`, the
+// SDK's `X-CSRF-Token`, `Idempotency-Key`) and the context's cookies go with each request, and the answer's cookies
+// come back to the context, so the storefront's cookie mode works as behind Caddy. Like the preview's proxy, the
+// answers lose the `Cross-Origin-Opener-Policy` the API's helmet adds (OADR-0017 point 3).
+
+/** The OTA API request that stands for a storefront page's `/api/*` request `requestUrl`, as the edge of `host`. */
+export interface EdgeRequest {
+  readonly url: string;
+  /** The edge headers Caddy adds in front of `host`; they replace the browser's own copies. */
+  readonly headers: Readonly<Record<string, string>>;
+}
+
+/**
+ * The OTA API request of the storefront preview's `/api/*` request `requestUrl` for the OTA of `host`: the path
+ * without `/api` and the query on `baseUrl` (default OTA_API_URL), with the edge headers of `host`. Refuses an address
+ * that is not the preview's `/api/*` (only those are routed). The secret is never part of an error.
+ */
+export function edgeRequestOf(
+  requestUrl: string,
+  host: string,
+  edgeSecret: string,
+  baseUrl: string = OTA_API_URL,
+): EdgeRequest {
+  const url = new URL(requestUrl);
+  if (url.origin !== STOREFRONT_URL || !url.pathname.startsWith("/api/")) {
+    throw new TypeError(`${url.origin}${url.pathname} is not an /api/ address of the storefront preview`);
+  }
+  if (!/^[a-z0-9.-]+$/.test(host)) {
+    throw new TypeError("not a storefront host");
+  }
+  return {
+    url: `${baseUrl}${url.pathname.slice("/api".length)}${url.search}`,
+    headers: { "x-velexis-edge": edgeSecret, "x-velexis-host": host, origin: `https://${host}` },
+  };
+}
+
+/**
+ * The response headers that do not come back to the page: the one the storefront preview's proxy drops from the OTA
+ * API's answers, and those that describe the body as it was sent (`route.fetch` hands it over decoded; the fulfilled
+ * answer gets its own length).
+ */
+const PREVIEW_DROPPED_HEADERS: readonly string[] = Object.freeze([
+  "cross-origin-opener-policy",
+  "content-encoding",
+  "content-length",
+  "transfer-encoding",
+]);
+
+/** What `serveStorefrontOf` needs of a browser context (a Playwright `BrowserContext`). */
+export type RoutedContext = Pick<BrowserContext, "route">;
+
+/** What `serveStorefrontOf` needs besides the context and the host; the defaults are the stack's. */
+export interface ServeStorefrontOptions {
+  /** VELEXIS_EDGE_SECRET (default: the development value of ota/backend/.env.example that the stack's API gets). */
+  readonly edgeSecret?: string;
+  /** The OTA API (default OTA_API_URL). */
+  readonly baseUrl?: string;
+}
+
+/**
+ * Makes the storefront preview of STOREFRONT_URL show the OTA of `host` in `context`: every `/api/*` request of its
+ * pages goes to the OTA API as the storefront edge of `host` (`edgeRequestOf`, with the stack's development edge
+ * secret), the browser's headers and the context's cookies with it, and its answer comes back as it is, without the
+ * headers the preview's proxy drops. For a journey's own OTA, whose host no preview serves; never for the demo OTA.
+ */
+export async function serveStorefrontOf(
+  context: RoutedContext,
+  host: string,
+  options: ServeStorefrontOptions = {},
+): Promise<void> {
+  const secret = options.edgeSecret ?? stackEdgeSecret();
+  const baseUrl = options.baseUrl ?? OTA_API_URL;
+  await context.route(`${STOREFRONT_URL}/api/**`, async (route) => {
+    const request = route.request();
+    const target = edgeRequestOf(request.url(), host, secret, baseUrl);
+    const response = await route.fetch({
+      url: target.url,
+      // A connection per request: a kept-alive socket that the API closes as idle just when the next request reuses it
+      // answers that request with a reset (ECONNRESET), which a browser behind Caddy never sees.
+      headers: { ...request.headers(), ...target.headers, connection: "close" },
+      maxRedirects: 0,
+      // The airline's answers at completion take the SDK's 90 s at most; the stub answers at once.
+      timeout: 90_000,
+    });
+    const headers = Object.fromEntries(
+      Object.entries(response.headers()).filter(
+        ([name]) => !PREVIEW_DROPPED_HEADERS.includes(name.toLowerCase()),
+      ),
+    );
+    await route.fulfill({ response, headers });
+  });
+}
+
+/**
+ * The storefront's own 5-minute copies in a tab's `sessionStorage` (OADR-0012 point 7, OADR-0015 point 7): storefront.get
+ * (`CONFIG_STORAGE_KEY` of ota/frontend/src/lib/config-cache.js) and the footer's content pages (`PAGES_STORAGE_KEY` of
+ * ota/frontend/src/components/footer.js). test/ota.test.ts compares them with those files.
+ */
+export const STOREFRONT_SESSION_COPIES = Object.freeze([
+  "vx.storefront.config",
+  "vx.storefront.pages",
+] as const);
+
+/** What `forgetStorefrontCopies` needs of a page: running a function with an argument in its document. */
+export interface StorageEvaluator {
+  evaluate<R, A>(pageFunction: (arg: A) => R, arg: A): Promise<R>;
+}
+
+/**
+ * Forgets the storefront's 5-minute copies in the tab `page` (which shows a storefront page) by their keys, as the
+ * storefront itself forgets its configuration (`clearCachedConfig`): its next page asks the OTA API again. Nothing
+ * else of the tab's storage is touched.
+ */
+export async function forgetStorefrontCopies(page: StorageEvaluator): Promise<void> {
+  await page.evaluate((keys: readonly string[]) => {
+    for (const key of keys) {
+      window.sessionStorage.removeItem(key);
+    }
+  }, STOREFRONT_SESSION_COPIES);
 }

@@ -63,7 +63,8 @@ export function projectsFor(options: ProjectOptions): Project[] {
     // The OTA admin's journeys (OAD-016, ota/admin/README.md §12): the built OTA admin's standalone server, which the
     // stack starts with the OTA API only with E2E_WITH_OTA=1, so without it the project does not exist and
     // `--project=ota-admin` fails at once. Staff arrive by the portal's single sign-on, as on the VM. A journey that
-    // needs Stripe over the network (tagged `@stripe`) never runs here.
+    // needs Stripe over the network (tagged `@stripe`: payments.e2e.ts, OAD-017) never runs here, but in
+    // `storefront-stripe`.
     projects.push({
       name: "ota-admin",
       testMatch: ["specs/ota-admin/**/*.e2e.ts"],
@@ -87,10 +88,12 @@ export function projectsFor(options: ProjectOptions): Project[] {
     // Nightly only (OFE-017): the storefront's journeys tagged `@stripe`, with Stripe.js, the Payment Element and
     // 3-D Secure in Stripe's test mode over the network, and the Stripe CLI forwarder of the stack (support/stripe.ts)
     // that the OTA's test keys turn on. Without both E2E_WITH_OTA=1 and E2E_STRIPE=1 the project does not exist, so
-    // `--project=storefront-stripe` fails instead of running without Stripe.
+    // `--project=storefront-stripe` fails instead of running without Stripe. The OTA admin's payments journey (OAD-017:
+    // a payment of the storefront captured and refunded in the console, the refund completed by Stripe's webhook)
+    // needs the same stack, so it runs here too; it opens the OTA admin by its whole address.
     projects.push({
       name: "storefront-stripe",
-      testMatch: ["specs/storefront/**/*.e2e.ts"],
+      testMatch: ["specs/storefront/**/*.e2e.ts", "specs/ota-admin/payments.e2e.ts"],
       grep: tag(PROJECT_TAGS.stripe),
       use: { ...desktopChrome, baseURL: STOREFRONT_URL },
     });

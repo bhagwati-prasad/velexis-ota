@@ -1,8 +1,10 @@
-// The pure helpers of support/ota.ts (OFE-008, OFE-019, OAD-016). The database and Redis helpers run in the storefront
+// The pure helpers of support/ota.ts (OFE-008, OFE-019, OAD-016, OAD-017). The database and Redis helpers run in the storefront
 // journeys (specs/storefront/search.e2e.ts, account-bookings.e2e.ts, keyboard-checkout.e2e.ts) and the OTA admin's
 // (specs/ota-admin/), against the stack's own database; the API clients, the booking seed and the stub order run here
 // against a fake browser context, a fake API and a fake `fetch`.
 import { createPublicKey, generateKeyPairSync, sign, verify } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ACCESS_TOKEN_TTL_SECONDS,
@@ -14,8 +16,10 @@ import {
   DEMO_TENANT_SCHEMA,
   departureDate,
   EdgeApi,
+  edgeRequestOf,
   errorCodeOf,
   EXPIRED_TOKEN_AGE_SECONDS,
+  forgetStorefrontCopies,
   MIDNIGHT_GUARD_MS,
   MIDNIGHT_WAIT_BUDGET_MS,
   msUntilPastMidnight,
@@ -24,9 +28,11 @@ import {
   offerDepartingIn,
   scriptReadableCookieNames,
   searchIdOf,
+  serveStorefrontOf,
   setCookieValue,
   shiftLocal,
   STAFF_COOKIES,
+  STOREFRONT_SESSION_COPIES,
   storefrontHostOf,
   StorefrontApi,
   StorefrontApiError,
@@ -34,10 +40,12 @@ import {
   type ApiMethod,
   type DocumentEvaluator,
   type FetchLike,
+  type RoutedContext,
   type SeedApi,
+  type StorageEvaluator,
   type StorefrontApiContext,
 } from "../support/ota";
-import { AMADEUS_STUB_URL, OTA_API_URL, STOREFRONT_URL } from "../support/stack";
+import { AMADEUS_STUB_URL, OTA_API_URL, REPO_ROOT, STOREFRONT_URL } from "../support/stack";
 import { CSRF_COOKIE } from "../support/storefront-guards";
 
 describe("searchIdOf", () => {
@@ -840,5 +848,166 @@ describe("msUntilPastMidnight", () => {
     );
     expect(MIDNIGHT_WAIT_BUDGET_MS).toBeGreaterThan(MIDNIGHT_GUARD_MS + PAST_MIDNIGHT_MS);
     expect(MIDNIGHT_WAIT_BUDGET_MS).toBeLessThanOrEqual(200_000);
+  });
+});
+
+describe("edgeRequestOf", () => {
+  const HOST = "sfx0a1b2c3d4e.ota.example.com";
+
+  it("sends a storefront page's /api/ request to the OTA API as the edge of the OTA's host [OAD-017 AC1]", () => {
+    expect(
+      edgeRequestOf(`${STOREFRONT_URL}/api/v1/flight-searches?limit=5`, HOST, "edge-test-secret"),
+    ).toEqual({
+      url: `${OTA_API_URL}/v1/flight-searches?limit=5`,
+      headers: { "x-velexis-edge": "edge-test-secret", "x-velexis-host": HOST, origin: `https://${HOST}` },
+    });
+    expect(edgeRequestOf(`${STOREFRONT_URL}/api/v1/storefront`, HOST, "s", "http://127.0.0.1:4999").url).toBe(
+      "http://127.0.0.1:4999/v1/storefront",
+    );
+  });
+
+  it("refuses an address that is not the preview's /api/, or a host that is not one, never naming the secret [OAD-017 AC1]", () => {
+    for (const address of [
+      `${STOREFRONT_URL}/search.html`,
+      `${STOREFRONT_URL}/apiv1/storefront`,
+      `${OTA_API_URL}/api/v1/storefront`,
+    ]) {
+      expect(() => edgeRequestOf(address, HOST, "edge-test-secret")).toThrow(TypeError);
+    }
+    expect(() =>
+      edgeRequestOf(`${STOREFRONT_URL}/api/v1/storefront`, "evil.example/x", "edge-test-secret"),
+    ).toThrow("not a storefront host");
+    let refusal = "";
+    try {
+      edgeRequestOf(`${STOREFRONT_URL}/checkout.html`, HOST, "edge-test-secret");
+    } catch (error) {
+      refusal = String(error);
+    }
+    expect(refusal).toContain("is not an /api/ address of the storefront preview");
+    expect(refusal).not.toContain("edge-test-secret");
+  });
+});
+
+describe("serveStorefrontOf", () => {
+  const HOST = "pay0a1b2c3d4e.ota.example.com";
+
+  /** A context that keeps the route handler, and a route whose fetch and fulfil are recorded. */
+  function fakeRouting() {
+    let pattern = "";
+    let handler: ((route: unknown) => Promise<void>) | undefined;
+    const context = {
+      route: async (url: string, routeHandler: (route: unknown) => Promise<void>) => {
+        pattern = url;
+        handler = routeHandler;
+      },
+    } as unknown as RoutedContext;
+    const fetched: Record<string, unknown>[] = [];
+    const fulfilled: Record<string, unknown>[] = [];
+    const answer = {
+      headers: () => ({
+        "content-type": "application/json",
+        "content-length": "42",
+        "set-cookie": "__Host-vx_csrf=abc; Path=/; Secure; SameSite=Lax",
+        "cross-origin-opener-policy": "same-origin",
+        "cache-control": "no-store",
+      }),
+    };
+    const route = (url: string, headers: Record<string, string>) => ({
+      request: () => ({ url: () => url, headers: () => headers }),
+      fetch: async (options: Record<string, unknown>) => {
+        fetched.push(options);
+        return answer;
+      },
+      fulfill: async (options: Record<string, unknown>) => {
+        fulfilled.push(options);
+      },
+    });
+    return {
+      context,
+      fetched,
+      fulfilled,
+      answer,
+      pattern: () => pattern,
+      handle: async (url: string, headers: Record<string, string>) => {
+        if (handler === undefined) {
+          throw new Error("no route was registered");
+        }
+        await handler(route(url, headers));
+      },
+    };
+  }
+
+  it("answers the preview's /api/ requests from the OTA API as the OTA's edge, the browser's headers kept [OAD-017 AC1]", async () => {
+    const routing = fakeRouting();
+    await serveStorefrontOf(routing.context, HOST, { edgeSecret: "edge-test-secret", baseUrl: OTA_API_URL });
+    expect(routing.pattern()).toBe(`${STOREFRONT_URL}/api/**`);
+
+    await routing.handle(`${STOREFRONT_URL}/api/v1/flight-searches`, {
+      accept: "application/json",
+      "x-csrf-token": "abc",
+      "idempotency-key": "4a7c4f9e-0000-4000-8000-000000000001",
+      "x-forwarded-for": "198.18.9.9",
+      // The browser cannot choose the OTA: the edge's own headers replace any of the same name.
+      "x-velexis-host": "demo.ota.example.com",
+      origin: STOREFRONT_URL,
+    });
+    expect(routing.fetched).toEqual([
+      expect.objectContaining({
+        url: `${OTA_API_URL}/v1/flight-searches`,
+        maxRedirects: 0,
+        headers: {
+          accept: "application/json",
+          "x-csrf-token": "abc",
+          "idempotency-key": "4a7c4f9e-0000-4000-8000-000000000001",
+          "x-forwarded-for": "198.18.9.9",
+          "x-velexis-edge": "edge-test-secret",
+          "x-velexis-host": HOST,
+          origin: `https://${HOST}`,
+          connection: "close",
+        },
+      }),
+    ]);
+    // The answer as it came, its cookies included, without what the preview's proxy drops or the body's old length.
+    expect(routing.fulfilled).toEqual([
+      {
+        response: routing.answer,
+        headers: {
+          "content-type": "application/json",
+          "set-cookie": "__Host-vx_csrf=abc; Path=/; Secure; SameSite=Lax",
+          "cache-control": "no-store",
+        },
+      },
+    ]);
+  });
+});
+
+describe("STOREFRONT_SESSION_COPIES and forgetStorefrontCopies", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("are the storefront's own sessionStorage keys of storefront.get and of the footer's pages [OAD-017 AC1]", () => {
+    const source = (path: string): string => readFileSync(resolve(REPO_ROOT, path), "utf8");
+    const config = /export const CONFIG_STORAGE_KEY = "([^"]+)";/.exec(
+      source("ota/frontend/src/lib/config-cache.js"),
+    )?.[1];
+    const pages = /export const PAGES_STORAGE_KEY = "([^"]+)";/.exec(
+      source("ota/frontend/src/components/footer.js"),
+    )?.[1];
+    expect([...STOREFRONT_SESSION_COPIES]).toEqual([config, pages]);
+  });
+
+  it("removes those two keys of the tab's sessionStorage and nothing else [OAD-017 AC1]", async () => {
+    const stored = new Map<string, string>([
+      ["vx.storefront.config", "{}"],
+      ["vx.storefront.pages", "{}"],
+      ["vx.storefront.currency", "EUR"],
+    ]);
+    vi.stubGlobal("window", { sessionStorage: { removeItem: (key: string) => stored.delete(key) } });
+    const page: StorageEvaluator = {
+      evaluate: async <R, A>(pageFunction: (arg: A) => R, arg: A): Promise<R> => pageFunction(arg),
+    };
+    await forgetStorefrontCopies(page);
+    expect([...stored.keys()]).toEqual(["vx.storefront.currency"]);
   });
 });

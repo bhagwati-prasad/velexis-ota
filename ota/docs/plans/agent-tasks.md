@@ -2341,7 +2341,8 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
 - **Verify:** `pnpm --filter @velexis/ota-admin build && E2E_WITH_OTA=1 pnpm test:e2e -- --project=ota-admin specs/ota-admin/sso-bookings.e2e.ts specs/ota-admin/pnr-import.e2e.ts`
 - **Note:** 2026-10-30 (lead decision (1j), recorded by FIX-W34-OTA): for an airline-card booking, step 2's "cancel with a full refund" is the airline's void of the tickets issued today: the airline charged the traveller's card, so no money goes back through Velexis (`refund_via_airline`, the dialog offers "No refund from the console" alone), and the void reverses the airline's whole charge, which the journey checks as the payment's `airline.void_expected` event and no refund row (OADR-0004 and OADR-0018 point 8 over the plan text). Lead decision (2g) of the same day: the journey's `beforeAll` never books in the 3 minutes before midnight in the time zones that decide "today" (it waits until 00:00:05 of the new day, within its hook budget), so the cancel step's void of today's tickets never straddles midnight (tools/e2e/README.md, OTA admin journeys).
 
-### OAD-017 · Write the payments, settings and permissions journeys
+### OAD-017 · Write the payments, settings and permissions journeys ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-admin
 - **Milestone:** M4
 - **Depends on:** OAD-016, OAD-011, OAD-015, OFE-020
