@@ -14,7 +14,11 @@
 // and the OTA's state (`connectStarter`, `connectMember`, `tenantForShare`: the tenant, the membership and, for the
 // start only, the account, read only, as the operations' `x-platform-tables` say), finds an account connected to
 // another OTA (`connectedElsewhere`), and switches a locked row, or inserts a missing one, to `connect_standard` with
-// the OTA's `acct_…` and no key or secret (`applyConnectStandard`, `insertConnectStandard`).
+// the OTA's `acct_…` and no key or secret (`applyConnectStandard`, `insertConnectStandard`). The Connect account events
+// (PBE-056, flows/stripe-payments-account.md §C item 5, PADR-0011 item 3) find the `connect_standard` rows of one
+// `acct_…` (`connectRowsOfAccount`, and `lockConnectRowsOfAccount` in the write's transaction), refresh their
+// capabilities and status (`refreshConnectAccount`), disable them with `disconnected_at` (`disconnectConnect`), and
+// read the OTA's name and key and its active owners for the owners' e-mail (`tenantLabel`, `activeOwners`, read only).
 import { Inject, Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -123,6 +127,29 @@ export interface ConnectTenant {
   readonly status: string;
   /** `live` once the OTA went live: its live connection is switched too. */
   readonly storefront_environment: string;
+}
+
+/** What `account.updated` refreshes on a Connect connection (PBE-056). */
+export interface ConnectAccountRefresh {
+  readonly capabilities: ConnectCapabilities;
+  /** The status after the event (`active` or `pending` for a connection in one of those; else the one it has). */
+  readonly status: string;
+  readonly now: Date;
+}
+
+/** The OTA's name and key for the owners' e-mails, with what says whether its members still see it. */
+export interface PaymentConnectionTenantLabel {
+  readonly name: string;
+  readonly key: string;
+  readonly status: string;
+  readonly deleted_at: Date | null;
+}
+
+/** An active owner of an OTA: a recipient of the owners' e-mails. */
+export interface PaymentConnectionOwner {
+  readonly account_id: string;
+  readonly email: string;
+  readonly full_name: string;
 }
 
 @Injectable()
@@ -384,6 +411,115 @@ export class PaymentConnectionsRepository {
       })
       .returning(PAYMENT_CONNECTION_VIEW_COLUMNS)
       .executeTakeFirstOrThrow();
+  }
+
+  /**
+   * The `connect_standard` Stripe connections that hold `accountReference` (every OTA's, every environment), `test`
+   * first, read on `db` without the ciphertexts. One `acct_…` per OTA and environment
+   * (`payment_provider_connections_connect_uq`), so at most the test and the live connection of one OTA in practice.
+   */
+  async connectRowsOfAccount(
+    accountReference: string,
+    db: PlatformDb | PlatformTransaction = this.db,
+  ): Promise<PaymentConnectionView[]> {
+    return this.connectRowsQuery(db, accountReference).execute();
+  }
+
+  /**
+   * The rows of `connectRowsOfAccount`, locked for the rest of `trx` (`FOR UPDATE`), `test` before `live` as
+   * `lockForTenant` takes them, so a Connect callback of the same OTA never waits for them in the other order.
+   */
+  async lockConnectRowsOfAccount(
+    trx: PlatformTransaction,
+    accountReference: string,
+  ): Promise<PaymentConnectionView[]> {
+    return this.connectRowsQuery(trx, accountReference).forUpdate().execute();
+  }
+
+  /**
+   * Writes what `account.updated` re-fetched on a connection locked by `lockConnectRowsOfAccount`, in `trx`: the
+   * capabilities and the status, `version + 1`. The mode, the account and `connected_at` stay as they are; the row comes
+   * back without the ciphertexts.
+   */
+  async refreshConnectAccount(
+    trx: PlatformTransaction,
+    id: string,
+    refresh: ConnectAccountRefresh,
+  ): Promise<PaymentConnectionView> {
+    return trx
+      .updateTable("platform.payment_provider_connections")
+      .set((eb) => ({
+        capabilities: JSON.stringify(refresh.capabilities),
+        status: refresh.status,
+        version: eb("version", "+", 1),
+        updated_at: refresh.now,
+      }))
+      .where("id", "=", id)
+      .returning(PAYMENT_CONNECTION_VIEW_COLUMNS)
+      .executeTakeFirstOrThrow();
+  }
+
+  /**
+   * Disables a connection locked by `lockConnectRowsOfAccount` because the OTA deauthorised Velexis in Stripe
+   * (`account.application.deauthorized`), in `trx`: `status = 'disabled'`, `disconnected_at`, `version + 1`. The mode
+   * stays `connect_standard` and the account reference stays (no fallback to `velexis`, PADR-0011 item 4); the row comes
+   * back without the ciphertexts.
+   */
+  async disconnectConnect(trx: PlatformTransaction, id: string, now: Date): Promise<PaymentConnectionView> {
+    return trx
+      .updateTable("platform.payment_provider_connections")
+      .set((eb) => ({
+        status: "disabled",
+        disconnected_at: now,
+        version: eb("version", "+", 1),
+        updated_at: now,
+      }))
+      .where("id", "=", id)
+      .returning(PAYMENT_CONNECTION_VIEW_COLUMNS)
+      .executeTakeFirstOrThrow();
+  }
+
+  /** The name, key, status and deletion time of the tenant `tenantId`, read on `db`; `undefined` without one. */
+  async tenantLabel(
+    tenantId: string,
+    db: PlatformDb | PlatformTransaction = this.db,
+  ): Promise<PaymentConnectionTenantLabel | undefined> {
+    return db
+      .selectFrom("platform.tenants")
+      .select(["name", "key", "status", "deleted_at"])
+      .where("id", "=", tenantId)
+      .executeTakeFirst();
+  }
+
+  /**
+   * The active owners of `tenantId`, oldest membership first, with their e-mail address and name (read only), in
+   * `trx`. An account that is disabled or deleted is left out.
+   */
+  async activeOwners(trx: PlatformTransaction, tenantId: string): Promise<PaymentConnectionOwner[]> {
+    return trx
+      .selectFrom("platform.tenant_memberships as m")
+      .innerJoin("platform.accounts as a", "a.id", "m.account_id")
+      .select(["m.account_id", "a.email", "a.full_name"])
+      .where("m.tenant_id", "=", tenantId)
+      .where("m.role", "=", "owner")
+      .where("m.status", "=", "active")
+      .where("a.status", "not in", ["disabled", "deleted"])
+      .where("a.deleted_at", "is", null)
+      .orderBy("m.created_at")
+      .orderBy("m.id")
+      .execute();
+  }
+
+  /** The query of `connectRowsOfAccount`: the `connect_standard` rows of the account, `test` first. */
+  private connectRowsQuery(db: PlatformDb | PlatformTransaction, accountReference: string) {
+    return db
+      .selectFrom("platform.payment_provider_connections")
+      .select(PAYMENT_CONNECTION_VIEW_COLUMNS)
+      .where("provider", "=", STRIPE_PROVIDER)
+      .where("account_mode", "=", "connect_standard")
+      .where("account_reference", "=", accountReference)
+      .orderBy(sql`environment = 'live'`)
+      .orderBy("id");
   }
 
   /** The query of `connectMember`: the active membership of the account in a tenant its members may see. */

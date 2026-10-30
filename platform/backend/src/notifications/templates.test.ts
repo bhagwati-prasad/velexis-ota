@@ -104,6 +104,15 @@ const SAMPLES: Readonly<Record<EmailTemplateKey, EmailVariables>> = {
     },
     secretData: {},
   },
+  "connection.stripe_disconnected": {
+    data: {
+      fullName: "Ana Lima",
+      tenantName: "Acme Travel",
+      tenantKey: "acme",
+      paymentsUrl: "https://platform.example.com/otas/ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/payments",
+    },
+    secretData: {},
+  },
 };
 
 const templates = EmailTemplates.load();
@@ -154,6 +163,8 @@ describe("e-mail templates", () => {
         // M5: the payout account review (PBE-058) and the paid settlement (PBE-060).
         "payouts.reviewed",
         "settlement.paid",
+        // M5: a Connect deauthorisation (PBE-056).
+        "connection.stripe_disconnected",
       ].sort(),
     );
     for (const key of EMAIL_TEMPLATE_KEYS) {

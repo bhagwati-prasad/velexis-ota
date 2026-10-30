@@ -35,6 +35,8 @@ export const EMAIL_TEMPLATE_KEYS = [
   "payouts.reviewed",
   // M5: a settlement statement paid by bank transfer (PBE-060, adminMarkSettlementPaid; PADR-0013 item 5).
   "settlement.paid",
+  // M5: the OTA disconnected Velexis in Stripe (PBE-056, `account.application.deauthorized`).
+  "connection.stripe_disconnected",
 ] as const;
 
 /** A key of EMAIL_TEMPLATE_KEYS. */
@@ -113,6 +115,10 @@ export const EMAIL_TEMPLATES: Readonly<Record<EmailTemplateKey, EmailTemplateDef
       "payoutReference",
       "statementUrl",
     ],
+  ),
+  "connection.stripe_disconnected": definition(
+    "The OTA disconnected Velexis from its Stripe account in Stripe (Connect deauthorisation, to the owners)",
+    ["fullName", "tenantName", "tenantKey", "paymentsUrl"],
   ),
 });
 

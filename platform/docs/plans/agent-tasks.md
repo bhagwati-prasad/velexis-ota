@@ -1638,7 +1638,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int connections`
 - **Note (2026-10-30, lead decision (2h), FIX-W36-PLATFORM):** step 1's authorize URL carries the caller's own address in `stripe_user[email]` (the owner or admin who starts it), not necessarily an owner's. The callback also refuses while `F:own_stripe` is off, answers `invalid_grant` `422 oauth_error`, never re-enables a connection a platform admin disabled (`409 CONFLICT`, `connection_disabled`, nothing written), and deauthorises the account of a `livemode` mismatch (best effort) before answering it ([PADR-0011](../adr/0011-stripe-connect-standard-and-api-key-connections.md) item 2 note).
 
-### PBE-056 · Process Connect account events
+### PBE-056 · Process Connect account events ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-055
