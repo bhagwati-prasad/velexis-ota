@@ -2482,7 +2482,8 @@ The platform turns on own Stripe, own Amadeus credentials, custom domains and go
   - A test booking is not visible from the live storefront nor in the live console view.
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int tenancy`
 
-### OBE-082 · Expose the billing notice to the console
+### OBE-082 · Expose the billing notice to the console ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M5
 - **Depends on:** OBE-076, OBE-059

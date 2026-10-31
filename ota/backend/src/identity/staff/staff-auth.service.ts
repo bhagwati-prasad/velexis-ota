@@ -52,6 +52,14 @@
 // Permissions follow the role matrix of scope §1.3 (`ROLE_PERMISSIONS`); `environments` is `["test"]`, or
 // `["test", "live"]` for a live tenant (`storefront_environment = live`) and a role other than `viewer` (point 5).
 //
+// The tenant of the three answers also carries `billingNotice` (OBE-082; ota/docs/api-changes-console-and-internal.md
+// §3.1, ADR-0013 point 7): the platform's billing banner, `platform.tenants.billing_notice` (`past_due`,
+// `trial_ending`, else `null`) as the tenant row holds it. console.auth.me and console.auth.refresh read that row
+// through the 60 s cache (`tenant:<id>`), which the platform's `tenant` invalidation deletes, so the call after the
+// invalidation shows the change; the sign-in answers from the row it has just read past the cache for its status
+// check, never older than the cached one. The value is per tenant (the same in both environments) and never refuses
+// anything: a subscription that ends suspends the tenant instead (`403 TENANT_SUSPENDED`).
+//
 // The platform's `account_sessions`, `last_login_at` and `last_active_at`, which the contract's descriptions mention,
 // are never written: the OTA backend never writes a platform table (ADR-0003, OADR-0011 point 2). No token is logged.
 import { Injectable } from "@nestjs/common";
@@ -176,6 +184,8 @@ export function toConsoleTenant(
       defaultOfficeId: connection?.defaultOfficeId ?? null,
       queuingOfficeId: connection?.queuingOfficeId ?? null,
     },
+    // The platform's billing banner of the tenant row (see the file header); `null` when there is none.
+    billingNotice: tenant.billingNotice,
   };
 }
 

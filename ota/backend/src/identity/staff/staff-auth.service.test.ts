@@ -1249,3 +1249,48 @@ describe("StaffAuthService", () => {
     });
   });
 });
+
+describe("the billing notice (OBE-082)", () => {
+  it("[OBE-082 AC1] answers the tenant row's billing_notice as tenant.billingNotice, the same in both environments", () => {
+    for (const notice of ["past_due", "trial_ending", null] as const) {
+      for (const environment of ["test", "live"] as const) {
+        const tenant = toConsoleTenant(
+          tenantRow({ billingNotice: notice }),
+          "UTC",
+          environment,
+          null,
+          "ota.example.com",
+        );
+        // Always present: `null` says "no banner" as plainly as a missing field would (api-changes part 2 §3.1).
+        expect([notice, environment, "billingNotice" in tenant, tenant.billingNotice]).toEqual([
+          notice,
+          environment,
+          true,
+          notice,
+        ]);
+      }
+    }
+  });
+
+  it("[OBE-082 AC1] carries the notice in the sign-in, the refresh and console.auth.me", async () => {
+    const { service, sessions, tenant } = serviceHarness();
+    tenant.value = tenantRow({ billingNotice: "past_due" });
+    sessions.grant = grantFor();
+
+    const signedIn = await service.signIn(signInInput());
+    const refreshed = await service.refresh(newRefreshToken(FAMILY_ID).token);
+    const profile = await service.me({ family: family(), member: member() });
+    tenant.value = tenantRow({ billingNotice: "trial_ending" });
+    const later = await service.me({ family: family(), member: member() });
+    tenant.value = tenantRow({ billingNotice: null });
+    const cleared = await service.me({ family: family(), member: member() });
+
+    expect([
+      signedIn.tenant.billingNotice,
+      refreshed.tenant.billingNotice,
+      profile.tenant.billingNotice,
+      later.tenant.billingNotice,
+      cleared.tenant.billingNotice,
+    ]).toEqual(["past_due", "past_due", "past_due", "trial_ending", null]);
+  });
+});
