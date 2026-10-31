@@ -1829,7 +1829,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - Switching back asks for confirmation and a step-up.
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-025 · Build the payout account and settlements pages
+### PFE-025 · Build the payout account and settlements pages ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M5
 - **Depends on:** PFE-013, PBE-060

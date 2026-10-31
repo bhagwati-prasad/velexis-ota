@@ -224,6 +224,7 @@ export const STATUS_LABELS = Object.freeze({
     carried_forward: "Carried forward",
     void: "Void",
   },
+  payoutAccount: { pending_review: "Pending review", verified: "Verified", rejected: "Rejected" },
 });
 
 // ---- Sign-up and e-mail verification (PFE-005) ---------------------------------------------------------------
@@ -1521,6 +1522,166 @@ export const DESCRIPTOR_STRINGS = Object.freeze({
     "This payment connection is not there any more, or you are not a member of this OTA any more. Reload the page.",
   formExpired: "This form has expired. Reload the page and try again.",
   rateLimited: "Too many changes in a short time. Wait a minute, then try again.",
+});
+
+// ---- Payout account and settlements (PFE-025) ------------------------------------------------------------------
+
+/**
+ * `/otas/[tenantId]/payments/payout-account` (PFE-025; flows/stripe-payments-account.md §B; PF-64): the masked payout
+ * account with its review status, and the owners' form behind a step-up (`setPayoutAccount`).
+ */
+export const PAYOUT_ACCOUNT_STRINGS = Object.freeze({
+  title: "Payout account",
+  intro:
+    "The bank account Velexis transfers your monthly settlements to: the card payments Velexis takes for your OTA on its own Stripe account.",
+  currentTitle: "Your payout account",
+  none: "This OTA has no payout account yet. Velexis needs one, verified, before it can pay a settlement, and before an OTA that uses Velexis payments can go live.",
+  unavailableTitle: "The payout account could not be loaded",
+  holder: "Account holder",
+  country: "Bank country",
+  currency: "Currency",
+  scheme: "Account type",
+  schemes: Object.freeze({ iban: "IBAN", local: "Local account number" }) as Readonly<Record<string, string>>,
+  number: "Account number",
+  /** Read before the masked number: "Ending in 7947". */
+  endingIn: "Ending in ",
+  /** The dots shown before the last 4 characters (hidden from screen readers). */
+  maskDots: "•••• ",
+  status: "Review status",
+  updatedAt: "Last changed",
+  /** What each review status means for the OTA. */
+  statusExplanations: Object.freeze({
+    pending_review:
+      "Velexis checks this account before it pays a settlement to it. The owners get an e-mail with the outcome.",
+    verified: "Velexis pays your settlements to this account.",
+    rejected:
+      "Velexis cannot pay settlements to this account. Read the reviewer's note, then enter the account again.",
+  }) as Readonly<Record<string, string>>,
+  reviewNote: "Reviewer's note",
+  /** Finance members read the account, without the form. */
+  roleNote: "Only owners can change the payout account.",
+  // The form (owners).
+  formTitleAdd: "Add a payout account",
+  formTitleChange: "Change the payout account",
+  formIntro:
+    "Saving asks for a code from your authenticator app. The account then goes back to pending review: Velexis pays settlements only to an account it has verified. Saving a rejected account again asks for a new review too, even with the same details.",
+  holderLabel: "Account holder",
+  holderHint: "The legal name on the bank account, as your bank has it.",
+  countryLabel: "Bank country",
+  countryHint: "The country of the bank that holds the account.",
+  countryPlaceholder: "Choose a country",
+  currencyLabel: "Currency",
+  currencyHint: "The currency the account is held in.",
+  currencyPlaceholder: "Choose a currency",
+  schemeLegend: "How the bank identifies the account",
+  schemeIban: "An IBAN",
+  schemeIbanHint: "An international bank account number, with the bank's BIC if you have it.",
+  schemeLocal: "A local account number",
+  schemeLocalHint: "An account number and the bank's routing number (sort code, ABA or bank code).",
+  ibanLabel: "IBAN",
+  ibanHint:
+    "Spaces are fine. Velexis never shows the full number again, so enter it in full each time you save.",
+  bicLabel: "BIC (optional)",
+  bicHint: "The bank's SWIFT code: 8 or 11 letters and digits.",
+  accountNumberLabel: "Account number",
+  accountNumberHint: "Velexis never shows the full number again, so enter it in full each time you save.",
+  routingNumberLabel: "Routing number",
+  routingNumberHint: "The sort code, ABA routing number or bank code of the bank.",
+  submit: "Save the payout account",
+  submitting: "Saving…",
+  /** After a save, by the review status the API answered. */
+  savedPending:
+    "The payout account is saved and pending review. Velexis checks it before the next payout and e-mails the owners the outcome.",
+  savedVerified: "These are the details Velexis already verified, so nothing changed.",
+  /** One message per rule a field breaks (the action's checks and the API's field errors). */
+  problems: Object.freeze({
+    holderRequired: "Enter the legal name on the bank account.",
+    holderTooLong: "Use at most 200 characters for the account holder.",
+    country: "Choose the bank's country from the list.",
+    currency: "Choose the account's currency from the list.",
+    scheme: "Choose IBAN or a local account number.",
+    ibanRequired: "Enter the IBAN.",
+    ibanFormat:
+      "Enter the IBAN as two letters, two check digits and 11 to 30 letters or digits. Spaces are fine.",
+    ibanChecksum: "Check the IBAN: its check digits do not match. Copy it again from your bank's documents.",
+    bicFormat: "Enter the BIC as 8 or 11 letters and digits, or leave it empty.",
+    accountNumberRequired: "Enter the account number.",
+    accountNumberFormat:
+      "Enter the account number with at least 4 letters or digits (4 to 34 characters; spaces and hyphens are fine).",
+    routingNumberRequired: "Enter the routing number.",
+    routingNumberFormat:
+      "Enter the routing number with 3 to 20 letters, digits, spaces or hyphens, starting with a letter or a digit.",
+  }),
+  stepUpCancelled: "The payout account was not saved: saving it needs a code from your authenticator app.",
+  mfaRequired:
+    "Saving the payout account needs a code from your authenticator app: turn on two-factor authentication first.",
+  mfaLink: "Set up two-factor authentication",
+  featureDisabled: "Payout accounts can be set once Velexis settlements are available for your OTA.",
+  forbidden: "Only owners can change the payout account. Reload the page to see what your role allows.",
+  removed: "You are not a member of this OTA any more.",
+  formExpired: "This form has expired. Reload the page and try again.",
+  rateLimited: "Too many changes in a short time. Wait a minute, then try again.",
+  reload: "Reload the page",
+});
+
+/**
+ * `/otas/[tenantId]/payments/settlements` and a statement's page (PFE-025; flows/stripe-payments-account.md §F; PF-63):
+ * the statements Velexis approved, their totals and the CSV of their lines.
+ */
+export const SETTLEMENTS_STRINGS = Object.freeze({
+  title: "Settlements",
+  intro:
+    "The monthly statements of the card payments Velexis took for your OTA on its own Stripe account, once Velexis has approved them. Velexis transfers each approved statement to your payout account.",
+  payoutLink: "See the payout account",
+  unavailableTitle: "The statements could not be loaded",
+  empty:
+    "No statement yet. At the start of each month Velexis prepares one for the payments it took in the month before.",
+  caption: "Settlement statements, newest first",
+  period: "Period",
+  currency: "Currency",
+  status: "Status",
+  net: "Net amount",
+  paidOn: "Paid on",
+  /** The paid date of an approved statement, not transferred yet. */
+  notPaidYet: "Not yet",
+  /** The paid date of a carried-forward statement: nothing is transferred. */
+  noTransfer: "No transfer",
+  /** Statements cover calendar months in UTC; their periods and paid dates are shown in UTC. */
+  periodNote: "Periods are calendar months in UTC, and dates are shown in UTC.",
+  // A statement's page.
+  backToList: "All statements",
+  statementTitle: (period: string, currency: string) => `Statement for ${period}, ${currency}`,
+  /** What each status means for the OTA. */
+  statusExplanations: Object.freeze({
+    approved: "Velexis approved this statement and transfers the net amount to your payout account.",
+    paid: "Velexis transferred the net amount of this statement to your payout account.",
+    carried_forward:
+      "The net amount of this statement was zero or less, so nothing is transferred: the next statement takes it into account.",
+  }) as Readonly<Record<string, string>>,
+  summaryLabel: "About this statement",
+  payoutReference: "Bank transfer reference",
+  feeRate: "Velexis fee rate",
+  notSet: "Not set",
+  totalsCaption: "How the net amount is made up",
+  item: "Item",
+  amount: "Amount",
+  gross: "Card payments captured",
+  refunds: "Refunds (subtracted)",
+  disputes: "Disputes (subtracted)",
+  stripeFees: "Stripe fees (subtracted)",
+  velexisFees: (rate: string) => `Velexis fee, ${rate} of the payments net of refunds (subtracted)`,
+  adjustments: "Adjustments and balances carried from earlier statements (added)",
+  formula: "Net amount = card payments − refunds − disputes − Stripe fees − Velexis fee + adjustments.",
+  linesTitle: "Lines",
+  lineCount: (count: number) => counted(count, "line", "lines"),
+  linesIntro:
+    "Every payment, refund, dispute, adjustment and carried balance of the statement, to reconcile it with your bookings.",
+  download: "Download the lines as CSV",
+  notesTitle: "Notes from Velexis",
+  // The CSV route handler's answers when there is no file (plain text, the portal's words).
+  csvNotFound: "This statement does not exist, or you cannot see it.",
+  csvForbidden: "Your role in this OTA does not include settlements.",
+  csvFailed: (message: string) => `The lines could not be downloaded. ${message}`,
 });
 
 /** `/otas/[tenantId]/billing` (PF-75; plans, Checkout and invoices with PFE-021). */

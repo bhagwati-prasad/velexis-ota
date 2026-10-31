@@ -23,6 +23,8 @@ interface StatusesByKind {
   membership: Schemas["Member"]["status"];
   invitation: Schemas["Invitation"]["status"];
   settlement: "draft" | "approved" | "paid" | "carried_forward" | "void";
+  /** The review status of the payout account (PFE-025). */
+  payoutAccount: Schemas["PayoutAccountStatus"];
 }
 
 /** What a badge is about: tenant, job, connection, domain, settlement and the other statuses of the portal. */
@@ -66,6 +68,7 @@ const TONES: { readonly [Kind in StatusKind]: Readonly<Record<StatusOf<Kind>, To
     carried_forward: "neutral",
     void: "neutral",
   },
+  payoutAccount: { pending_review: "warning", verified: "success", rejected: "danger" },
 };
 
 /** Every status of every kind has a label (a new status in the document fails the type check until it has one). */
