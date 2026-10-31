@@ -36,7 +36,8 @@ let refusals: TlsAskNegativeCache;
 let customPlanCode: string;
 
 beforeAll(async () => {
-  t = await createTestApp({ env: { FEATURE_CUSTOM_DOMAINS: "true" } });
+  // The switch needs the storefront's IPv4 address since PBE-049: the placeholder of `.env.example`.
+  t = await createTestApp({ env: { FEATURE_CUSTOM_DOMAINS: "true", STOREFRONT_IPV4: "203.0.113.10" } });
   pool = t.app.get<PlatformPool>(PLATFORM_POOL);
   refusals = t.app.get(TlsAskNegativeCache);
   customPlanCode = (await insertPlan(pool, { limits: { customDomains: 1, staffSeats: 5, apiKeys: 10 } }))

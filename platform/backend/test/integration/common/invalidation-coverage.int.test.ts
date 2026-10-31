@@ -7,9 +7,11 @@
 // file's rows, each once. A mutation added to the table later fails its row until it publishes its event.
 //
 // What the table does not hold, and where it is proven instead:
-// - `domain` events come with the custom domains of M5 (PBE-049 to PBE-051): their operations are still pending
-//   (test/contract/pending-operations.ts), and the guard test below fails once one of them is bound, so its row is
-//   added with it.
+// - `domain` events of the custom domain operations of M5 that are still pending (test/contract/pending-operations.ts:
+//   checkDomain, the admin's re-check and removal, PBE-050 and PBE-051): the guard test below fails once one of them
+//   is bound without its row. makeDomainPrimary and removeDomain have theirs since PBE-049; addDomain writes a
+//   pending domain, which neither the OTA backend nor TLS `ask` serves, so it publishes nothing (architecture §6.3:
+//   verified, failed, removed, primary changed) and has no row.
 // - Changes the platform worker makes, not a request: provisioning's post-steps (post-steps.int.test.ts) and its
 //   failure handler (failure-handler.test.ts), billing sync of Stripe subscriptions (billing-events.int.test.ts), the
 //   verification job of a shared Amadeus account (amadeus-accounts.int.test.ts), and the developer's commands
@@ -54,6 +56,7 @@ import {
   insertPlan,
   insertRow,
   insertSupplierConnection,
+  insertTenantDomain,
   PLACEHOLDER_CIPHERTEXT,
   PLACEHOLDER_KEK_ID,
   type AccountRow,
@@ -79,9 +82,8 @@ const ADMIN_IP = "198.51.100.37";
 const REASON = "Invalidation coverage of the platform's mutations (PBE-036).";
 /** The new password of the password rows: a test value that meets the rules of PasswordPolicy. */
 const NEW_PASSWORD = "Southern-Cross-Lagoon-2027";
-/** The custom domain operations of M5 whose rows publish `domain` (PBE-049 to PBE-051). */
+/** The custom domain operations of M5 whose rows publish `domain` (PBE-049 to PBE-051); addDomain publishes nothing. */
 const DOMAIN_OPERATIONS: readonly PlatformOperationId[] = [
-  "addDomain",
   "removeDomain",
   "checkDomain",
   "makeDomainPrimary",
@@ -940,6 +942,55 @@ const COVERAGE: readonly CoverageRow[] = [
     },
   },
 
+  // ---- domain: verified, failed, removed, primary changed ---------------------------------------------------------
+  {
+    change: "primary domain changed (both hosts)",
+    operationId: "makeDomainPrimary",
+    publishes: ["domain"],
+    async arrange() {
+      const owner = await person();
+      const { tenant, domain: subdomain } = await ota({ members: [[owner, "owner"]] });
+      const custom = await insertTenantDomain(pool, tenant, {
+        id: ids.new("dom"),
+        hostname: mine(`cov-${randomBytes(6).toString("hex")}.example.net`),
+        kind: "custom",
+        verification_token: "vx-verify-K7Q4M2XP9TRWH5ZDB3NV8QKE1MZT6RYC",
+      });
+      const headers = await portal(owner.id);
+      return {
+        send: () => t.http.post(`/v1/tenants/${tenant.id}/domains/${custom.id}/make-primary`).set(headers),
+        status: 200,
+        events: [
+          { v: 1, type: "domain", hostname: mine(subdomain.hostname) },
+          { v: 1, type: "domain", hostname: custom.hostname },
+        ],
+      };
+    },
+  },
+  {
+    change: "custom domain removed",
+    operationId: "removeDomain",
+    publishes: ["domain"],
+    async arrange() {
+      const owner = await person();
+      const { tenant } = await ota({ members: [[owner, "owner"]] });
+      const custom = await insertTenantDomain(pool, tenant, {
+        id: ids.new("dom"),
+        hostname: mine(`cov-${randomBytes(6).toString("hex")}.example.net`),
+        kind: "custom",
+        verification_status: "pending",
+        verified_at: null,
+        verification_token: "vx-verify-K7Q4M2XP9TRWH5ZDB3NV8QKE1MZT6RYC",
+      });
+      const headers = await portal(owner.id);
+      return {
+        send: () => t.http.delete(`/v1/tenants/${tenant.id}/domains/${custom.id}`).set(headers),
+        status: 204,
+        events: [{ v: 1, type: "domain", hostname: custom.hostname }],
+      };
+    },
+  },
+
   // ---- plan: limits or features --------------------------------------------------------------------------------
   {
     change: "plan limits change",
@@ -1009,8 +1060,9 @@ describe("the invalidation coverage table", () => {
   for (const { change, operationId, publishes, arrange } of COVERAGE) {
     it(`[PBE-036 AC1] ${change} (${operationId}) publishes exactly its ${publishes.join(" and ")} event`, async () => {
       const mutation = await arrange();
-      // The row is consistent: its events are of the types it names.
-      expect(mutation.events.map(({ type }) => type).sort()).toEqual([...publishes].sort());
+      // The row is consistent: its events are of the types it names (a type may come more than once, as `domain`
+      // for both hosts of a primary change).
+      expect([...new Set(mutation.events.map(({ type }) => type))].sort()).toEqual([...publishes].sort());
 
       const observed = await observe(mutation.send);
 
@@ -1020,12 +1072,15 @@ describe("the invalidation coverage table", () => {
     });
   }
 
-  it("[PBE-036 AC1] covers every invalidation type; `domain` waits for the custom domain operations of M5, which are still pending", () => {
+  it("[PBE-036 AC1] covers every invalidation type, and every bound custom domain operation of M5 has its row", () => {
     const covered = new Set<InvalidationType>(COVERAGE.flatMap(({ publishes }) => publishes));
-    expect(INVALIDATION_TYPES.filter((type) => !covered.has(type))).toEqual(["domain"]);
-    // Once one of them is bound, its row (and the `domain` event) belongs in the table.
+    expect(INVALIDATION_TYPES.filter((type) => !covered.has(type))).toEqual([]);
+    // Once one of the pending ones is bound, its row (and its `domain` events) belongs in the table.
     const pending = new Set<string>(PENDING_OPERATIONS.map(({ operationId }) => operationId));
-    expect(DOMAIN_OPERATIONS.filter((operationId) => !pending.has(operationId))).toEqual([]);
+    const rows = new Set<string>(COVERAGE.map(({ operationId }) => operationId));
+    expect(
+      DOMAIN_OPERATIONS.filter((operationId) => !pending.has(operationId) && !rows.has(operationId)),
+    ).toEqual([]);
   });
 
   it("[PBE-036 AC1] a row whose mutation publishes nothing fails, and so does one that publishes more than its events", async () => {

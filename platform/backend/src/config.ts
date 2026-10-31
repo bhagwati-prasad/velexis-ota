@@ -2,7 +2,7 @@
 // (dist/worker.js) and the CLI (dist/cli.js), validated by @velexis/config before anything else starts. A missing or
 // invalid variable stops the process with one ConfigError that names every variable and never a value
 // (conventions §8). Later tasks extend the schema.
-import { isIP } from "node:net";
+import { isIP, isIPv6 } from "node:net";
 import { resolve } from "node:path";
 import type { DynamicModule } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
@@ -92,6 +92,27 @@ export const MAIL_FROM_PATTERN = new RegExp(
  */
 export const STOREFRONT_BASE_DOMAIN_PATTERN =
   /^(?=.{1,222}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/** An IPv4 address in dotted-decimal form: four numbers of 0–255 without leading zeros (STOREFRONT_IPV4). */
+export const IPV4_ADDRESS_PATTERN =
+  /^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$/;
+
+/**
+ * The characters an IPv6 address may have (hexadecimal digits, colons, and the dots of an embedded IPv4 address), at
+ * most 45 of them: no zone index (`%eth0`), no brackets, no prefix length. `storefrontAddressProblems` checks the
+ * address itself with `isIPv6`.
+ */
+export const IPV6_ADDRESS_CHARACTERS = /^[0-9A-Fa-f:.]{2,45}$/;
+
+/**
+ * The storefront addresses each milestone switch needs (PBE-049, PADR-0004 item 2): a custom domain at a zone apex
+ * cannot have a CNAME, so its owner points an `A` record at STOREFRONT_IPV4, which must be set while
+ * FEATURE_CUSTOM_DOMAINS is on. STOREFRONT_IPV6 stays optional: a VM has an IPv6 address only where its provider offers
+ * one (docs/mvp/deployment-single-vm.md §1), and without it no `AAAA` record is shown.
+ */
+export const STOREFRONT_ADDRESS_SWITCH_VARIABLES = Object.freeze({
+  FEATURE_CUSTOM_DOMAINS: Object.freeze(["STOREFRONT_IPV4"] as const),
+});
 
 /**
  * A secret or restricted API key of the Velexis Stripe account (`sk_test_…`, `sk_live_…`, `rk_test_…`, `rk_live_…`).
@@ -200,6 +221,16 @@ export const PLATFORM_BACKEND_CONFIG_SCHEMA = {
    * default: a wrong domain in production would hand out hosts Velexis does not serve.
    */
   STOREFRONT_BASE_DOMAIN: env.string({ pattern: STOREFRONT_BASE_DOMAIN_PATTERN }),
+  /**
+   * The VM's public IPv4 and IPv6 addresses, where Caddy serves the storefronts (PBE-049, PADR-0004 item 2): the
+   * routing records of a custom domain at a zone apex, which cannot have a CNAME, are `A <host> → STOREFRONT_IPV4` and
+   * `AAAA <host> → STOREFRONT_IPV6`; `addDomain` and `listDomains` show them next to the CNAME, and the DNS
+   * verification accepts A/AAAA records only among them. STOREFRONT_IPV4 is required while FEATURE_CUSTOM_DOMAINS is
+   * on (STOREFRONT_ADDRESS_SWITCH_VARIABLES); STOREFRONT_IPV6 is optional (no `AAAA` record without it). The API reads
+   * them; the worker validates them too, because both read `platform-backend.env`.
+   */
+  STOREFRONT_IPV4: env.string({ optional: true, pattern: IPV4_ADDRESS_PATTERN }),
+  STOREFRONT_IPV6: env.string({ optional: true, pattern: IPV6_ADDRESS_CHARACTERS }),
   /**
    * The OTAs that are not `failed` one account may own (platform/docs/scope.md PF-10 AC4): beyond it createTenant
    * answers `422 UNPROCESSABLE` with `details.reason = "tenant_limit"`.
@@ -334,11 +365,44 @@ function stripeProblems(source: EnvSource | undefined): ConfigProblem[] {
 }
 
 /**
+ * The storefront address rules that a schema entry cannot express: STOREFRONT_IPV6 must be an IPv6 address (its
+ * pattern only checks the characters), and a variable of STOREFRONT_ADDRESS_SWITCH_VARIABLES must be set while its
+ * switch is on. A variable that is invalid on its own is reported by the schema, not here.
+ */
+function storefrontAddressProblems(source: EnvSource | undefined): ConfigProblem[] {
+  const problems: ConfigProblem[] = [];
+  const ipv6 = validValues(
+    { STOREFRONT_IPV6: PLATFORM_BACKEND_CONFIG_SCHEMA.STOREFRONT_IPV6 },
+    source,
+  )?.STOREFRONT_IPV6;
+  if (ipv6 !== undefined && !isIPv6(ipv6)) {
+    problems.push({ variable: "STOREFRONT_IPV6", reason: "must be an IPv6 address" });
+  }
+  const customDomains = validValues(
+    { FEATURE_CUSTOM_DOMAINS: PLATFORM_BACKEND_CONFIG_SCHEMA.FEATURE_CUSTOM_DOMAINS },
+    source,
+  )?.FEATURE_CUSTOM_DOMAINS;
+  if (customDomains === true) {
+    for (const variable of STOREFRONT_ADDRESS_SWITCH_VARIABLES.FEATURE_CUSTOM_DOMAINS) {
+      const value = validValues({ [variable]: PLATFORM_BACKEND_CONFIG_SCHEMA[variable] }, source);
+      if (value !== undefined && value[variable] === undefined) {
+        problems.push({ variable, reason: "is required while FEATURE_CUSTOM_DOMAINS is on" });
+      }
+    }
+  }
+  return problems;
+}
+
+/**
  * Validates the configuration in `source` (default: the process environment) and returns it deep-frozen. Throws one
  * `ConfigError` that names every invalid variable and the reason, never a value.
  */
 export function parseConfig(source?: EnvSource): PlatformBackendConfig {
-  const problems = [...trustProxyProblems(source), ...stripeProblems(source)];
+  const problems = [
+    ...trustProxyProblems(source),
+    ...stripeProblems(source),
+    ...storefrontAddressProblems(source),
+  ];
   try {
     const config = defineConfig(PLATFORM_BACKEND_CONFIG_SCHEMA, source);
     if (problems.length === 0) {

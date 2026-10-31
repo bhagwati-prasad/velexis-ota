@@ -17,6 +17,7 @@ import {
   parseConfig,
   PLATFORM_BACKEND_CONFIG_SCHEMA,
   PLATFORM_PROCESSES,
+  STOREFRONT_ADDRESS_SWITCH_VARIABLES,
   STRIPE_SWITCH_VARIABLES,
 } from "./config";
 
@@ -102,6 +103,15 @@ const STRIPE_TEST_VALUES = {
   STRIPE_CONNECT_CLIENT_ID: "ca_dummy",
   STRIPE_CONNECT_WEBHOOK_SECRET: "whsec_dummy_connect",
 } as const satisfies Record<(typeof STRIPE_VARIABLES)[number], string>;
+
+/** The storefront addresses PBE-049 adds, right after STOREFRONT_BASE_DOMAIN in the schema. */
+const STOREFRONT_ADDRESS_VARIABLES = ["STOREFRONT_IPV4", "STOREFRONT_IPV6"] as const;
+
+/** The placeholder storefront addresses of the app's .env.example (documentation addresses, RFC 5737 and RFC 3849). */
+const STOREFRONT_ADDRESSES = {
+  STOREFRONT_IPV4: "203.0.113.10",
+  STOREFRONT_IPV6: "2001:db8::10",
+} as const satisfies Record<(typeof STOREFRONT_ADDRESS_VARIABLES)[number], string>;
 
 /** Where `pnpm dev:keys` puts the development key, and where provision-vm.sh puts the key on the VM. */
 const DEV_JWT_KEY_FILE = "./.local/keys/platform-jwt-ed25519.pem";
@@ -454,6 +464,7 @@ describe("parseConfig", () => {
       ...MAIL_AND_KEY_VARIABLES,
       OTA_ADMIN_URL,
       "STOREFRONT_BASE_DOMAIN",
+      ...STOREFRONT_ADDRESS_VARIABLES,
       "MAX_TENANTS_PER_ACCOUNT",
       ...Object.values(FEATURE_VARIABLES),
       ...STRIPE_VARIABLES,
@@ -722,8 +733,12 @@ describe("parseConfig: Stripe (PBE-043)", () => {
     }
     expect(parseConfig({ ...REQUIRED, ...STRIPE_TEST_VALUES })).toMatchObject(STRIPE_TEST_VALUES);
     // The other switches need no Stripe variable.
+    // (FEATURE_CUSTOM_DOMAINS needs STOREFRONT_IPV4 since PBE-049.)
     for (const feature of ["FEATURE_OWN_AMADEUS", "FEATURE_CUSTOM_DOMAINS", "FEATURE_LIVE_SWITCH"] as const) {
-      expect(parseConfig({ ...REQUIRED, [feature]: "true" }).STRIPE_SECRET_KEY, feature).toBeUndefined();
+      expect(
+        parseConfig({ ...REQUIRED, ...STOREFRONT_ADDRESSES, [feature]: "true" }).STRIPE_SECRET_KEY,
+        feature,
+      ).toBeUndefined();
     }
   });
 
@@ -855,6 +870,100 @@ describe("parseConfig: Stripe (PBE-043)", () => {
             .STRIPE_SECRET_KEY,
           file,
         ).toMatch(/^sk_test_/);
+      }
+    }
+  });
+});
+
+describe("parseConfig: the storefront addresses (PBE-049)", () => {
+  it("[PBE-049] leaves STOREFRONT_IPV4 and STOREFRONT_IPV6 optional while FEATURE_CUSTOM_DOMAINS is off", () => {
+    const config = parseConfig(REQUIRED);
+
+    expect([config.STOREFRONT_IPV4, config.STOREFRONT_IPV6]).toEqual([undefined, undefined]);
+    expect(parseConfig({ ...REQUIRED, ...STOREFRONT_ADDRESSES })).toMatchObject(STOREFRONT_ADDRESSES);
+    // An empty value counts as unset (the VM template's until M5).
+    expect(
+      parseConfig({ ...REQUIRED, STOREFRONT_IPV4: "", STOREFRONT_IPV6: "" }).STOREFRONT_IPV4,
+    ).toBeUndefined();
+  });
+
+  it("[PBE-049] requires STOREFRONT_IPV4 with FEATURE_CUSTOM_DOMAINS on, naming the switch; STOREFRONT_IPV6 stays optional", () => {
+    expect(STOREFRONT_ADDRESS_SWITCH_VARIABLES.FEATURE_CUSTOM_DOMAINS).toEqual(["STOREFRONT_IPV4"]);
+    expect(configError({ ...REQUIRED, FEATURE_CUSTOM_DOMAINS: "true" }).problems).toEqual([
+      { variable: "STOREFRONT_IPV4", reason: "is required while FEATURE_CUSTOM_DOMAINS is on" },
+    ]);
+    const ipv4Only = parseConfig({
+      ...REQUIRED,
+      FEATURE_CUSTOM_DOMAINS: "true",
+      STOREFRONT_IPV4: STOREFRONT_ADDRESSES.STOREFRONT_IPV4,
+    });
+    expect([ipv4Only.FEATURE_CUSTOM_DOMAINS, ipv4Only.STOREFRONT_IPV4, ipv4Only.STOREFRONT_IPV6]).toEqual([
+      true,
+      "203.0.113.10",
+      undefined,
+    ]);
+    // The other switches need no storefront address.
+    for (const feature of ["FEATURE_OWN_AMADEUS", "FEATURE_LIVE_SWITCH"] as const) {
+      expect(parseConfig({ ...REQUIRED, [feature]: "true" }).STOREFRONT_IPV4, feature).toBeUndefined();
+    }
+  });
+
+  it("[PBE-049] accepts IPv4 and IPv6 addresses in their usual forms", () => {
+    for (const ipv4 of ["203.0.113.10", "0.0.0.0", "255.255.255.255", "198.51.100.7"]) {
+      expect(parseConfig({ ...REQUIRED, STOREFRONT_IPV4: ipv4 }).STOREFRONT_IPV4, ipv4).toBe(ipv4);
+    }
+    for (const ipv6 of ["2001:db8::10", "2001:DB8:0:0:0:0:0:10", "::1", "::ffff:203.0.113.10"]) {
+      expect(parseConfig({ ...REQUIRED, STOREFRONT_IPV6: ipv6 }).STOREFRONT_IPV6, ipv6).toBe(ipv6);
+    }
+  });
+
+  it("[PBE-049] refuses values that are no addresses of their family, without echoing them", () => {
+    for (const ipv4 of ["203.0.113", "203.0.113.256", "203.0.113.010", "2001:db8::10", "ota.example.com"]) {
+      const error = configError({ ...REQUIRED, FEATURE_CUSTOM_DOMAINS: "true", STOREFRONT_IPV4: ipv4 });
+      expect(
+        error.problems.map(({ variable }) => variable),
+        ipv4,
+      ).toEqual(["STOREFRONT_IPV4"]);
+      expect(error.message).not.toContain(ipv4.trim());
+    }
+    for (const ipv6 of [
+      "2001:db8:::10",
+      "2001:db8::10%eth0",
+      "[2001:db8::10]",
+      "2001:db8::/64",
+      "12345::",
+      "203.0.113.10",
+      "fe80::g",
+    ]) {
+      const error = configError({ ...REQUIRED, STOREFRONT_IPV6: ipv6 });
+      expect(
+        error.problems.map(({ variable }) => variable),
+        ipv6,
+      ).toEqual(["STOREFRONT_IPV6"]);
+      expect(error.message).not.toContain(ipv6);
+    }
+  });
+
+  it("[PBE-049] declares both addresses in every env template: placeholders locally, empty on the VM", () => {
+    for (const file of [
+      ".env.example",
+      "platform/backend/.env.example",
+      "deploy/env/platform-backend.env.example",
+    ]) {
+      const values = readEnvFile(join(REPO_ROOT, file));
+      const addresses = pick(values, STOREFRONT_ADDRESS_VARIABLES);
+      expect(
+        STOREFRONT_ADDRESS_VARIABLES.filter((variable) => values[variable] === undefined),
+        file,
+      ).toEqual([]);
+      if (file.startsWith("deploy/")) {
+        // The VM's own addresses replace them before FEATURE_CUSTOM_DOMAINS is turned on (M5).
+        expect(Object.values(addresses), file).toEqual(["", ""]);
+      } else {
+        expect(addresses, file).toEqual(STOREFRONT_ADDRESSES);
+        expect(
+          parseConfig({ ...REQUIRED, ...addresses, FEATURE_CUSTOM_DOMAINS: "true" }).STOREFRONT_IPV4,
+        ).toBe(STOREFRONT_ADDRESSES.STOREFRONT_IPV4);
       }
     }
   });

@@ -1522,7 +1522,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - Resync updates a drifted row; reprocessing a failed event after linking its price processes it [PF-89].
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int admin`
 
-### PBE-049 · Implement custom domain add, primary and removal
+### PBE-049 · Implement custom domain add, primary and removal ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-041, PBE-027

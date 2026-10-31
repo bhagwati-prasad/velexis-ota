@@ -485,6 +485,7 @@ Every Node app reads its configuration through `@velexis/config`, which validate
 | `PUBLIC_OTA_ADMIN_URL` | ✓ | ✓ | | worker | ✓ | | `https://admin.ota.example.com` (OTA worker: the links of staff alert e-mails) |
 | `PUBLIC_OTA_API_URL` | | | | ✓ | | | `https://api.ota.example.com` |
 | `STOREFRONT_BASE_DOMAIN` | ✓ | ✓ | | ✓ | | | `ota.example.com` |
+| `STOREFRONT_IPV4`, `STOREFRONT_IPV6` | ✓ | | | | | | The VM's public addresses (M5): the `A`/`AAAA` records of a custom domain at a zone apex, shown to owners and checked by DNS verification ([PADR-0004](../../platform/docs/adr/0004-custom-domain-verification.md)). `STOREFRONT_IPV4` is required when `FEATURE_CUSTOM_DOMAINS` is on; `STOREFRONT_IPV6` is optional (no `AAAA` record without it) |
 | `PLATFORM_API_URL` | | ✓ | ✓ | | | | `http://127.0.0.1:3100` |
 | `OTA_API_URL` | | | | | ✓ | | `http://127.0.0.1:4000` |
 | `OTA_ADMIN_SERVICE_KEY` | | | | API | ✓ | | First-party service credential ([ADR-0008](adr/0008-identity-accounts-customers-sessions.md)): the OTA admin's `X-Api-Key`, accepted by the OTA API only on a direct loopback connection ([OADR-0009](../../ota/docs/adr/0009-caller-and-tenant-resolution.md) rule 1.2) |

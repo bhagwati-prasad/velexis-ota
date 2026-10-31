@@ -35,7 +35,7 @@ import { PLATFORM_DB, type PlatformDb } from "../common/database";
 import { InvalidationPublisher, runInTransaction } from "../common/redis/invalidation.publisher";
 import type { PlatformBackendConfig } from "../config";
 import { DomainsRepository } from "../domains/domains.repository";
-import { toDomain } from "../domains/domains.service";
+import { storefrontAddressesOf, toDomain, type StorefrontAddresses } from "../domains/domains.service";
 import { InvitationsRepository } from "../memberships/invitations.repository";
 import { toInvitation } from "../memberships/invitations.service";
 import { toMember } from "../memberships/members.service";
@@ -118,6 +118,7 @@ function isShownStatus(status: string): status is TenantStatus {
 @Injectable()
 export class AdminTenantsService {
   private readonly baseDomain: string;
+  private readonly storefrontAddresses: StorefrontAddresses;
 
   constructor(
     private readonly tenants: TenantsRepository,
@@ -135,6 +136,7 @@ export class AdminTenantsService {
     config: ConfigService<PlatformBackendConfig, true>,
   ) {
     this.baseDomain = config.get("STOREFRONT_BASE_DOMAIN", { infer: true });
+    this.storefrontAddresses = storefrontAddressesOf(config);
   }
 
   /** adminListTenants: one page of OTAs, newest first, with the filters of the query. */
@@ -187,7 +189,7 @@ export class AdminTenantsService {
       subscription: subscription === undefined ? null : toSubscription(subscription),
       amadeusConnections: amadeusConnections.map(toAmadeusConnection),
       paymentConnections: paymentConnections.map(toPaymentConnection),
-      domains: domains.map((domain) => toDomain(domain, this.baseDomain)),
+      domains: domains.map((domain) => toDomain(domain, this.baseDomain, this.storefrontAddresses)),
       recentJobs: jobs.map(toAdminProvisioningJob),
       recentAudit: auditRows.map(toAuditEntry),
     };

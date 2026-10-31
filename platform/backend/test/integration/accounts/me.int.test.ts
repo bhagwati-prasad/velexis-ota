@@ -227,6 +227,8 @@ beforeAll(async () => {
     env: {
       LOG_LEVEL: "trace",
       FEATURE_CUSTOM_DOMAINS: "true",
+      // Custom domains need the storefront's IPv4 address since PBE-049: the placeholder of `.env.example`.
+      STOREFRONT_IPV4: "203.0.113.10",
       FEATURE_SETTLEMENTS: "true",
       // Settlements need the Stripe key since FIX-W36-PLATFORM: the development value of `.env.example`.
       STRIPE_SECRET_KEY: "sk_test_replace_me",
