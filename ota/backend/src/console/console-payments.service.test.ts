@@ -391,7 +391,7 @@ function harness(initial: PaymentRow) {
     new IdGenerator(clock),
     logger as unknown as PinoLogger,
   );
-  return { service, tx, payments, refunds, gateway, queue, audit, logger, isOpen: () => open };
+  return { service, tx, payments, refunds, platform, gateway, queue, audit, logger, isOpen: () => open };
 }
 
 beforeEach(() => {
@@ -515,6 +515,63 @@ describe("ConsolePaymentsService.capture", () => {
     const bug = harness(paymentRow());
     bug.gateway.capture.mockRejectedValue(new TypeError("not a Stripe failure"));
     await expect(bug.service.capture(PAYMENT_ID, '"3"', body)).rejects.toThrow(TypeError);
+  });
+});
+
+describe("the account a payment was created on (OBE-077, PADR-0011 point 7)", () => {
+  const CONNECT_ACCOUNT = "acct_1ConsoleConnect000000";
+  /** A payment created on the OTA's connected account, as checkout.createPayment records it. */
+  const connected = (patch: Partial<PaymentRow> = {}) =>
+    paymentRow({
+      metadata: { connection: { accountMode: "connect_standard", accountReference: CONNECT_ACCOUNT } },
+      ...patch,
+    });
+
+  it("shows the mode the payment recorded, whatever the connection's mode is now, and reads it again there", async () => {
+    const h = harness(connected());
+    // The OTA went back to the Velexis account since: the connection row was updated in place.
+    h.platform.paymentConnectionModes.mockResolvedValue(
+      new Map([[paymentRow().providerConnectionId, "velexis"]]),
+    );
+    h.gateway.refresh.mockResolvedValue(state());
+
+    const payment = await h.service.get(PAYMENT_ID, { refresh: true });
+
+    expect(payment.providerConnection).toEqual({ accountMode: "connect_standard" });
+    expect(h.platform.paymentConnectionModes).not.toHaveBeenCalled();
+    expect(h.gateway.refresh).toHaveBeenCalledWith(
+      expect.objectContaining({ tenantId: TENANT.tenantId }),
+      expect.objectContaining({
+        id: PAYMENT_ID,
+        account: { accountMode: "connect_standard", accountReference: CONNECT_ACCOUNT },
+      }),
+    );
+  });
+
+  it("captures on the recorded account, and shows a payment without a record with its connection's mode", async () => {
+    const h = harness(connected());
+    h.gateway.capture.mockResolvedValue(
+      state({ status: "captured", amountCapturable: "0.00", amountReceived: "452.10" }),
+    );
+
+    await h.service.capture(PAYMENT_ID, '"3"', { reason: "Manual review passed" });
+
+    expect(h.gateway.capture).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        account: { accountMode: "connect_standard", accountReference: CONNECT_ACCOUNT },
+      }),
+      "452.10",
+    );
+    // Written before OBE-077 (`{}`): a velexis payment, shown with what its connection says.
+    const legacy = harness(paymentRow({ metadata: {} }));
+    const connectionId = paymentRow().providerConnectionId ?? "";
+    legacy.platform.paymentConnectionModes.mockResolvedValue(new Map([[connectionId, "velexis"]]));
+
+    const read = await legacy.service.get(PAYMENT_ID, { refresh: false });
+
+    expect(read.providerConnection).toEqual({ accountMode: "velexis" });
+    expect(legacy.platform.paymentConnectionModes).toHaveBeenCalledWith(TENANT.tenantId, [connectionId]);
   });
 });
 

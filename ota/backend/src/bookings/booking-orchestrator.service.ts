@@ -65,6 +65,12 @@
 //      captures the booking's total with the request's key once after a process that stopped before the capture.
 //   5. Issue. `issue_after_payment` after a capture: Flight Order Issue, then the tickets (T4). A failure leaves the
 //      booking `confirmed` with `ticketing_status = failed` and the next attempt 5 minutes later (OBE-044 retries).
+//      The claim (T3) locks the booking `FOR UPDATE` and, like the ticketing job's claim and console.bookings.issue,
+//      leaves it alone while a cancellation holds it (lead decision (1a) of 2026-10-28, FIX-W32-OTA; cancellation-state.ts
+//      `cancellationHoldOf`: a customer's or staff cancellation whose claim committed between the confirmation and this
+//      step, its DELETE in flight, or a DELETE without an answer still undecided): no Flight Order Issue is sent, the
+//      issuance is made due now (`PaymentsRepository.requestIssuanceAfterPayment`) and the answer is the `201` of the
+//      confirmed booking; the ticketing job skips it while the hold lasts and issues it once nothing holds it.
 //
 // The answer is `201` CheckoutCompletion: the booking in customer scope (order-recorder.ts `toBooking`), the Amadeus
 // warnings of pricing, create and issue and ours, and for a guest booking (no customer) its guest token (OBE-047,
@@ -177,6 +183,7 @@ import { AIRLINE_CARD_METHOD, AIRLINE_PROVIDER } from "../payments/airline-card/
 import type { SensitiveCard } from "../payments/airline-card/sensitive-card";
 import {
   PAYMENT_GATEWAY,
+  recordedPaymentAccount,
   type GatewayContext,
   type GatewayPayment,
   type GatewayState,
@@ -204,6 +211,7 @@ import { TenantContext, type RequestTenant } from "../tenancy/tenant-context";
 import { afterCommit, TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
 import { newBookingReference } from "./booking-reference";
 import { BookingsRepository, type BookingRow, type BookingSettingsRow } from "./bookings.repository";
+import { cancellationHoldFactsOf, cancellationHoldOf } from "./cancellation-state";
 import {
   completionTokenExpiry,
   GuestAccessService,
@@ -2388,6 +2396,17 @@ export class BookingOrchestrator {
       if (booking === undefined || booking.status !== "confirmed" || booking.ticketingStatus !== "pending") {
         return undefined;
       }
+      // A cancellation holds the booking (FIX-W32-OTA, lead decision (1a) of 2026-10-28; the file header, step 5): its
+      // facts read after the lock, so a cancellation's claim (T1) that committed first is seen here, and a T1 that
+      // comes later skips the booking this transaction holds and finds the issuance's claim. The issuance is left to
+      // the ticketing job, made due now as the payments queue's safety net makes it: the job skips the booking while
+      // the hold lasts and issues it once nothing holds it (a cancellation handed to the staff, or not applied).
+      const hold = cancellationHoldOf(await cancellationHoldFactsOf(trx, booking.id), now);
+      if (hold !== undefined) {
+        await this.payments.requestIssuanceAfterPayment(trx, booking.id, now);
+        this.logger.info({ bookingId: booking.id, hold }, "bookings.issue_held_by_cancellation");
+        return undefined;
+      }
       await this.repository.updateBooking(trx, booking.id, {
         ticketing_status: "in_progress",
         ticketing_requested_at: now,
@@ -2779,6 +2798,7 @@ export class BookingOrchestrator {
       amount: new Money(row.amount).toFixed(minorUnits),
       minorUnits,
       version: row.version,
+      account: recordedPaymentAccount(row.metadata),
     };
   }
 

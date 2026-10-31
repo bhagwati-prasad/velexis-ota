@@ -103,7 +103,7 @@ sequenceDiagram
   D->>PG: migrate platform, reference, tenant fan-out (transient unit, dynamic user, velexis_migrator)
   D->>D: switch /srv/velexis/current
   D->>SD: restart workers, APIs, front ends one by one
-  D->>D: poll /health/ready; on failure restore the previous snapshot, switch back and restart (rollback)
+  D->>D: poll /health/ready, on failure restore the previous snapshot, switch back and restart (rollback)
   D-->>GH: exit 0 or 1
   GH->>VM: ssh: sudo velexis-deploy --status (smoke check: the sha is current)
 ```

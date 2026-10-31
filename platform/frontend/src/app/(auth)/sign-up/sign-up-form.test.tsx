@@ -53,6 +53,15 @@ import { termsVersion } from "@/lib/terms";
 
 // ---- Builders ------------------------------------------------------------------------------------------------
 
+/**
+ * How long a test waits for what a server action renders, and for the focus an effect moves after it: the action runs
+ * in the page and React commits its answer, then runs the effects, outside the test's own act(). Testing Library's 1 s
+ * default is enough on an idle machine, not on a loaded CI runner next to the other packages' tests (the focus check of
+ * the short password ran out once). The test's own 5 s budget is unchanged; this only lets a wait that is going to
+ * succeed finish inside it.
+ */
+const ACTION_WAIT = { timeout: 3_000 } as const;
+
 /** A password the portal accepts (the API may still refuse it); a dummy, never a real one. */
 const LONG_PASSWORD = "Northern-Lights-2026";
 
@@ -218,13 +227,17 @@ describe("/sign-up: SignUpForm and the signUp action", () => {
     submit(SIGN_UP_STRINGS.submit);
 
     const password = input(SIGN_UP_STRINGS.passwordLabel);
-    await waitFor(() => expect(descriptionsOf(password)).toContain(SIGN_UP_STRINGS.passwordTooShort));
+    await waitFor(
+      () => expect(descriptionsOf(password)).toContain(SIGN_UP_STRINGS.passwordTooShort),
+      ACTION_WAIT,
+    );
     expect(password.getAttribute("aria-invalid")).toBe("true");
     const summary = screen.getByRole("alert");
     expect(
       within(summary).getByRole("link", { name: SIGN_UP_STRINGS.passwordTooShort }).getAttribute("href"),
     ).toBe(`#${fieldId("password")}`);
-    expect(document.activeElement).toBe(summary);
+    // The summary takes the focus in an effect, which may run after the render the wait above saw.
+    await waitFor(() => expect(document.activeElement).toBe(summary), ACTION_WAIT);
     expect(api.POST).not.toHaveBeenCalled();
     // What was typed stays, except the password, which never comes back to the browser.
     expect(input(SIGN_UP_STRINGS.fullNameLabel).value).toBe("Anna Berg");
@@ -242,7 +255,10 @@ describe("/sign-up: SignUpForm and the signUp action", () => {
     submit(SIGN_UP_STRINGS.submit);
 
     const password = input(SIGN_UP_STRINGS.passwordLabel);
-    await waitFor(() => expect(descriptionsOf(password)).toContain(SIGN_UP_STRINGS.passwordTooShort));
+    await waitFor(
+      () => expect(descriptionsOf(password)).toContain(SIGN_UP_STRINGS.passwordTooShort),
+      ACTION_WAIT,
+    );
     expect(password.getAttribute("aria-invalid")).toBe("true");
     expect(password.value).toBe("");
     expect(
@@ -261,7 +277,10 @@ describe("/sign-up: SignUpForm and the signUp action", () => {
     submit(SIGN_UP_STRINGS.submit);
 
     const password = input(SIGN_UP_STRINGS.passwordLabel);
-    await waitFor(() => expect(descriptionsOf(password)).toContain(SIGN_UP_STRINGS.passwordBreached));
+    await waitFor(
+      () => expect(descriptionsOf(password)).toContain(SIGN_UP_STRINGS.passwordBreached),
+      ACTION_WAIT,
+    );
     expect(password.getAttribute("aria-invalid")).toBe("true");
     expect(password.value).toBe("");
     expect(api.POST).toHaveBeenCalledTimes(1);
@@ -283,10 +302,12 @@ describe("/sign-up: SignUpForm and the signUp action", () => {
     fillSignUp({});
     submit(SIGN_UP_STRINGS.submit);
 
-    await waitFor(() =>
-      expect(descriptionsOf(input(SIGN_UP_STRINGS.passwordLabel))).toContain(
-        ERROR_MESSAGES.PASSWORD_TOO_WEAK,
-      ),
+    await waitFor(
+      () =>
+        expect(descriptionsOf(input(SIGN_UP_STRINGS.passwordLabel))).toContain(
+          ERROR_MESSAGES.PASSWORD_TOO_WEAK,
+        ),
+      ACTION_WAIT,
     );
   });
 
@@ -302,7 +323,9 @@ describe("/sign-up: SignUpForm and the signUp action", () => {
     fillSignUp({ fullName: "  Anna Berg  ", email: " anna.berg@example.com " });
     submit(SIGN_UP_STRINGS.submit);
 
-    expect((await screen.findByRole("status")).textContent).toBe("Redirected to /sign-up/check-email");
+    expect((await screen.findByRole("status", {}, ACTION_WAIT)).textContent).toBe(
+      "Redirected to /sign-up/check-email",
+    );
     expect(navigation.redirect).toHaveBeenCalledWith("/sign-up/check-email");
     // Trimmed by the form schema, as the API compares them.
     expect(api.POST).toHaveBeenCalledWith("/v1/auth/sign-up", {
@@ -321,10 +344,12 @@ describe("/sign-up: SignUpForm and the signUp action", () => {
     fillSignUp({ fullName: " ", email: "not-an-address", password: "", terms: false });
     submit(SIGN_UP_STRINGS.submit);
 
-    await waitFor(() =>
-      expect(descriptionsOf(input(SIGN_UP_STRINGS.fullNameLabel))).toContain(
-        SIGN_UP_STRINGS.fullNameRequired,
-      ),
+    await waitFor(
+      () =>
+        expect(descriptionsOf(input(SIGN_UP_STRINGS.fullNameLabel))).toContain(
+          SIGN_UP_STRINGS.fullNameRequired,
+        ),
+      ACTION_WAIT,
     );
     expect(descriptionsOf(input(SIGN_UP_STRINGS.emailLabel))).toContain(SIGN_UP_STRINGS.emailInvalid);
     expect(descriptionsOf(input(SIGN_UP_STRINGS.passwordLabel))).toContain(SIGN_UP_STRINGS.passwordTooShort);
@@ -350,14 +375,18 @@ describe("/sign-up: SignUpForm and the signUp action", () => {
     render(<SignUpForm />);
     fillSignUp({});
     submit(SIGN_UP_STRINGS.submit);
-    await waitFor(() =>
-      expect(descriptionsOf(input(SIGN_UP_STRINGS.emailLabel))).toContain(SIGN_UP_STRINGS.emailInvalid),
+    await waitFor(
+      () => expect(descriptionsOf(input(SIGN_UP_STRINGS.emailLabel))).toContain(SIGN_UP_STRINGS.emailInvalid),
+      ACTION_WAIT,
     );
 
     api.POST.mockResolvedValueOnce(apiError("RATE_LIMITED", 429));
     fireEvent.change(input(SIGN_UP_STRINGS.passwordLabel), { target: { value: LONG_PASSWORD } });
     submit(SIGN_UP_STRINGS.submit);
-    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain(SIGN_UP_STRINGS.rateLimited));
+    await waitFor(
+      () => expect(screen.getByRole("alert").textContent).toContain(SIGN_UP_STRINGS.rateLimited),
+      ACTION_WAIT,
+    );
     expect(input(SIGN_UP_STRINGS.emailLabel).getAttribute("aria-invalid")).toBeNull();
   });
 
@@ -367,8 +396,9 @@ describe("/sign-up: SignUpForm and the signUp action", () => {
     fillSignUp({});
     submit(SIGN_UP_STRINGS.submit);
 
-    await waitFor(() =>
-      expect(screen.getByRole("alert").textContent).toContain(ERROR_MESSAGES.SERVICE_UNAVAILABLE),
+    await waitFor(
+      () => expect(screen.getByRole("alert").textContent).toContain(ERROR_MESSAGES.SERVICE_UNAVAILABLE),
+      ACTION_WAIT,
     );
   });
 
@@ -402,7 +432,9 @@ describe("'Send a new link': ResendVerificationForm and resendVerificationLink",
     });
     submit(VERIFICATION_STRINGS.resend);
 
-    expect((await screen.findByRole("status")).textContent).toBe(VERIFICATION_STRINGS.resentAnonymous);
+    expect((await screen.findByRole("status", {}, ACTION_WAIT)).textContent).toBe(
+      VERIFICATION_STRINGS.resentAnonymous,
+    );
     expect(api.POST).toHaveBeenCalledWith("/v1/auth/resend-verification", {
       body: { email: "anna.berg@example.com" },
     });
@@ -417,7 +449,9 @@ describe("'Send a new link': ResendVerificationForm and resendVerificationLink",
     });
     submit(VERIFICATION_STRINGS.resend);
 
-    expect((await screen.findByRole("alert")).textContent).toBe(VERIFICATION_STRINGS.resendRateLimited);
+    expect((await screen.findByRole("alert", {}, ACTION_WAIT)).textContent).toBe(
+      VERIFICATION_STRINGS.resendRateLimited,
+    );
     expect(input(VERIFICATION_STRINGS.resendEmailLabel).value).toBe("anna.berg@example.com");
   });
 
@@ -426,10 +460,12 @@ describe("'Send a new link': ResendVerificationForm and resendVerificationLink",
     fireEvent.change(input(VERIFICATION_STRINGS.resendEmailLabel), { target: { value: "anna" } });
     submit(VERIFICATION_STRINGS.resend);
 
-    await waitFor(() =>
-      expect(descriptionsOf(input(VERIFICATION_STRINGS.resendEmailLabel))).toContain(
-        SIGN_UP_STRINGS.emailInvalid,
-      ),
+    await waitFor(
+      () =>
+        expect(descriptionsOf(input(VERIFICATION_STRINGS.resendEmailLabel))).toContain(
+          SIGN_UP_STRINGS.emailInvalid,
+        ),
+      ACTION_WAIT,
     );
     expect(api.POST).not.toHaveBeenCalled();
   });
@@ -441,7 +477,9 @@ describe("'Send a new link': ResendVerificationForm and resendVerificationLink",
     expect(screen.queryByLabelText(VERIFICATION_STRINGS.resendEmailLabel, { exact: false })).toBeNull();
     submit(VERIFICATION_STRINGS.resend);
 
-    expect((await screen.findByRole("status")).textContent).toBe(VERIFICATION_STRINGS.resentSignedIn);
+    expect((await screen.findByRole("status", {}, ACTION_WAIT)).textContent).toBe(
+      VERIFICATION_STRINGS.resentSignedIn,
+    );
     expect(api.GET).toHaveBeenCalledWith("/v1/me");
     expect(api.POST).toHaveBeenCalledWith("/v1/auth/resend-verification", {
       body: { email: "anna.berg@example.com" },

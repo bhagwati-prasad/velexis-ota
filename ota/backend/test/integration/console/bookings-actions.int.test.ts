@@ -54,6 +54,7 @@ import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefro
 import type { OtaPool } from "../../../src/tenancy/tenancy.module";
 import type { TenantTransaction } from "../../../src/tenancy/tenant-tx";
 import { buildOrderRequestInput, buildStoredPassport, pricedFlightOffer } from "../../builders/bookings";
+import { journeyAmadeusLimitsModule } from "../../helpers/amadeus-limits";
 import { newApiKey, testApiCredentials, testKeyProvider } from "../../helpers/api-env";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
 import { createTestApp, type TestApp } from "../../support/create-test-app";
@@ -738,7 +739,13 @@ beforeAll(async () => {
       clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout),
     },
   });
-  api = await createTestApp({ database: db, redis, env: { AMADEUS_BASE_URL_TEST: stub.url } });
+  api = await createTestApp({
+    database: db,
+    redis,
+    env: { AMADEUS_BASE_URL_TEST: stub.url },
+    // Its staff actions read and change orders of one tenant one after the other (helpers/amadeus-limits.ts).
+    imports: [journeyAmadeusLimitsModule()],
+  });
   // The first sign-in and console calls of a process open the pools' connections and warm the token, validation and
   // Amadeus code; done once here, so that no test pays for it.
   const warmUp = await staffSession("owner");
@@ -1386,9 +1393,11 @@ describe("console.bookings.resync", () => {
     // The claim is the booking's column since FIX-W27-SYNC, never an event.
     expect(events).not.toContain("booking.sync_requested");
     const actions = await staffActionsOf(bookingId);
+    // The throttled call writes no row, only a log line: OADR-0011 point 8 (2026-10-21) for every 429, applied to the
+    // 429s of a use case by lead decision (2d) of 2026-10-30, third batch (FIX-W36-OTA AC3). Before, the audit
+    // interceptor recorded it as `bookings.resync` `failed`.
     expect(actions.map((action) => [action.action, action.outcome])).toEqual([
       ["booking.resync", "succeeded"],
-      ["bookings.resync", "failed"],
     ]);
     // The audit's before is the booking before the refresh, its after the booking the answer shows.
     expect([actions[0]?.before, actions[0]?.after]).toEqual([

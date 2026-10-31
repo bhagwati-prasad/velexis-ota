@@ -72,14 +72,16 @@ flowchart TB
   settings --> pricing
   settings --> storefront
   jobs --> bookings
+  jobs --> checkout
   jobs --> shopping
   jobs --> notifications
+  jobs --> console
   provisioning --> tenancy
   amadeus --> tenancy
   payments --> tenancy
 ```
 
-Rules: controllers call one service method; services own transactions; only `amadeus`, `payments` (gateways), `notifications` (mailer) and `documents` (storage) talk to the outside ([`conventions.md` §2](../../docs/mvp/conventions.md#rules)). Arrows never point from `amadeus` or `payments` back to business modules.
+Rules: controllers call one service method; services own transactions; only `amadeus`, `payments` (gateways), `notifications` (mailer) and `documents` (storage) talk to the outside ([`conventions.md` §2](../../docs/mvp/conventions.md#rules)). Arrows never point from `amadeus` or `payments` back to business modules, nor from `storefront` to `settings`: the settings context edits what the storefront reads, and the storefront's public reads (`getPublicAsset`, the content pages) have services of their own in `src/storefront` (lead decision (2a) of 2026-10-30, FIX-W34-OTA; a source scan, `src/storefront/module-direction.test.ts`, guards it).
 
 ## 3. Request pipeline
 
@@ -142,7 +144,7 @@ The OTA backend signs with its own Ed25519 key (`JWT_PRIVATE_KEY_FILE`) and `kid
 | Amadeus Enterprise | `amadeus` | 12 operations over `fetch`; credentials per connection (Velexis shared account office or OTA-owned); encrypted token cache; token buckets per credential set and per tenant; per-operation timeouts; retries only for reads and token requests | [OADR-0001](adr/0001-amadeus-client-design.md), [`flows/amadeus-connection-and-tokens.md`](flows/amadeus-connection-and-tokens.md) |
 | Stripe | `payments` | PaymentIntents with manual capture; account modes `velexis` (M3), `connect_standard`, `api_keys` (M5); webhooks verified on the raw body, stored as `payment_events`, processed in `ota-stripe-events` | [OADR-0010](adr/0010-stripe-gateway-and-payment-webhooks.md), [ADR-0011](../../docs/mvp/adr/0011-payments-stripe-and-airline-card.md) |
 | SMTP | `notifications` | Nodemailer from the worker only; Mailpit in development | [ADR-0017](../../docs/mvp/adr/0017-email-documents-storage.md) |
-| Storage | `documents`, `settings` | `StorageAdapter` (local disk), keys `tenant_<key>/…`, HMAC-signed URLs for documents, immutable public URLs for storefront assets | [OADR-0012](adr/0012-storefront-settings-assets-and-pages.md), [OADR-0013](adr/0013-notifications-and-booking-documents.md) |
+| Storage | `documents`, `settings`, `storefront` (reads the assets) | `StorageAdapter` (local disk), keys `tenant_<key>/…`, HMAC-signed URLs for documents, immutable public URLs for storefront assets | [OADR-0012](adr/0012-storefront-settings-assets-and-pages.md), [OADR-0013](adr/0013-notifications-and-booking-documents.md) |
 | Platform backend | `tenancy`, `provisioning`, `identity` | No HTTP. Read-only tables, `vx:invalidate`, `ota-tenant-ops` / `platform-tenant-events`, `ptk:*`, `staffdeny:acct:*`, `apikey:used:*` | [platform architecture §6](../../platform/docs/architecture.md#6-integration-with-the-ota-backend) |
 
 ### 5.1 The payment gateway
@@ -184,7 +186,7 @@ BullMQ prefix `vx`, defaults of [ADR-0009](../../docs/mvp/adr/0009-background-jo
 | `notifications.sweep` | 1 min | `notify` for tenants with due outbox rows | M3 |
 | `refunds.sweep` | 5 min | `refund.submit` for the refunds still `pending` and never claimed 5 minutes after their request, an enqueue lost after the commit (100 per job, a full batch continuing with the next), with the producers' job id `refund-submit-<rfd_id>`, so a refund whose job BullMQ holds and will still run gets no second one, and one whose job finished without claiming it (failed for good before its claim, or completed without one) is queued again under the same id once its finished job is removed (FIX-W28-FOLLOWUPS); never one being sent, sent or released after an unknown outcome (FIX-W27-FOLLOWUPS, `payments/refunds-sweep.processor.ts`) | M3 |
 | `offers.purge` | 15 min | Delete expired searches, offers, upsells, priced offers not referenced by a checkout | M2 |
-| `queues.poll` | 15 min | Queue List for each monitored queue of active tenants (paused while suspended) | M4 |
+| `queues.poll` | 15 min | Queue List for each monitored queue (`supplier_connections.monitored_queues`, test and live) of active tenants (paused while suspended), one `queue_snapshots` row per queue, 5 queues per job; a connection that timed out or was unavailable is not read again in the job, its other queues skipped and logged (OBE-065, FIX-W32-OTA, `console/queue-poller.processor.ts`) | M4 |
 | `payments.authorisation_watch` | 06:15 daily | Alert staff about authorised, uncaptured payments older than 5 days | M3 |
 | `retention.daily` | 03:35 daily | `supplier_requests` > 90 d, `queue_snapshots` > 30 d, `idempotency_keys` expired, sessions, reset and booking tokens expired | M3 |
 
@@ -201,6 +203,7 @@ Shared keys follow the [cross-cutting table](../../docs/mvp/architecture.md#redi
 | `amadeus:badcred:<credId>` | 5 min | Credentials refused by Amadeus: calls answer `424` without retrying the token request |
 | `rl:amadeus:cred:<credId>:<env>`, `rl:amadeus:ten:<tenantId>:<env>` | 2 s | Token buckets |
 | `t:<tenantId>:<env>:sf:<locale>` | 5 min | Caller-independent part of `storefront.get` (asset ids, airline-card flag); asset URLs and `airline_card` are added per request for the caller ([OADR-0012](adr/0012-storefront-settings-assets-and-pages.md) point 7). One entry per supported locale; the default locale's entry is `sf:und` and carries the supported locales that `Accept-Language` is matched against (OBE-016) |
+| `t:<tenantId>:<env>:pages:<locale>` | 5 min | The published content pages of one supported locale (OBE-072, [OADR-0012](adr/0012-storefront-settings-assets-and-pages.md) point 7): a hash with the field `list` (storefront.listPages, each slug with the locale it serves, the default locale's as fallback) and a field `page:<slug>` per page read since (its blocks, images as asset ids; the URLs are added per request for the caller). The list fill writes `DEL`, `HSET list`, `EXPIRE` in one `MULTI`; a page field is added with `EXPIRE … NX`, so the hash keeps its list's expiry; only slugs of published pages get a field. Deleted for every supported locale in both environments on each console page change and storefront settings change |
 | `t:<tenantId>:<env>:search:<sha256>` | 30 s | Single flight for identical concurrent searches |
 | `t:<tenantId>:<env>:cxq:<bookingId>` | 10 min | Cancellation quote (the contract text calls it `cxq:{bookingId}`; the OTA keeps it under the tenant prefix) |
 | `t:<tenantId>:<env>:ac:chk:<checkoutId>` | 2 h | Airline-card attempts of one checkout (max 3; a declined card counts, OBE-051) |

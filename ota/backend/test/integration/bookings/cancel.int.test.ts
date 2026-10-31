@@ -63,6 +63,7 @@ import {
   CancellationRecorder,
   REQUEST_ONLY_WARNING,
 } from "../../../src/bookings/cancellation.service";
+import { CustomerBookingsService } from "../../../src/bookings/customer-bookings.service";
 import { newBookingToken } from "../../../src/bookings/guest-access.service";
 import { buildCreateOrderRequest } from "../../../src/bookings/order-request.builder";
 import { bookingTokenHash } from "../../../src/common/auth/booking-access.guard";
@@ -82,6 +83,7 @@ import {
 import { Money } from "../../../src/pricing/pricing.types";
 import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefront-settings.seed";
 import { ReconcileProcessor, RECONCILE_SCAN_JOB } from "../../../src/bookings/reconcile.processor";
+import { ticketingJob } from "../../../src/bookings/ticketing.processor";
 import { minuteBucket, tenantJob } from "../../../src/jobs/fan-out";
 import type { OtaPool } from "../../../src/tenancy/tenancy.module";
 import type { TenantTransaction } from "../../../src/tenancy/tenant-tx";
@@ -707,6 +709,44 @@ function nextDeleteWith(scenario: string) {
 
 const amadeusCalls = (operation: string) => stub.requests().filter((entry) => entry.operation === operation);
 
+const claimedAtOf = async (bookingId: string): Promise<Date | null> =>
+  (
+    await inTenant((trx) =>
+      trx
+        .selectFrom("bookings")
+        .select("cancellation_claimed_at")
+        .where("id", "=", bookingId)
+        .executeTakeFirstOrThrow(),
+    )
+  ).cancellation_claimed_at;
+
+/**
+ * The API's next Flight Order Management DELETE held by a barrier: `reached` resolves once the claim (T1) committed
+ * and the DELETE is about to leave; `pass()` lets it go to the stub with `scenario` (none: the stub's own answer).
+ */
+function holdNextDelete(scenario?: string) {
+  const client = api.app.get(AmadeusClient, { strict: false });
+  const cancelOrder = client.cancelFlightOrder.bind(client);
+  let reach = (): void => undefined;
+  const reached = new Promise<void>((resolveReach) => {
+    reach = resolveReach;
+  });
+  let pass = (): void => undefined;
+  const passed = new Promise<void>((resolvePass) => {
+    pass = resolvePass;
+  });
+  const spy = vi.spyOn(client, "cancelFlightOrder").mockImplementationOnce(async (context, req, options) => {
+    reach();
+    await passed;
+    return await cancelOrder(
+      scenario === undefined ? context : { ...context, stubScenario: scenario },
+      req,
+      options,
+    );
+  });
+  return { reached, pass, spy };
+}
+
 // ---- What a scenario reads -----------------------------------------------------------------------------------------
 
 const bookingRow = (bookingId: string) =>
@@ -864,6 +904,7 @@ beforeAll(async () => {
     ["quoteBookingCancellation", [200]],
     ["cancelBooking", [200, 202, 403, 409, 412, 502, 504]],
     ["listBookingEvents", [200]],
+    ["getBooking", [200]],
   ] as const) {
     for (const status of statuses) {
       checker.check(operationId, { status, body: {} });
@@ -1441,6 +1482,8 @@ describe("the safety net of a cancellation's capture or void after the commit (F
   /** What one cancellation of a booking paid by an authorisation left, and its safety net's run. */
   interface Netted {
     readonly booking: SeededBooking;
+    /** The customer who cancelled (`cus_…`). */
+    readonly customerId: string;
     readonly payment: { readonly id: string; readonly intentId: string | null };
     readonly res: Response;
     /** The Stripe calls of the request (none after a crash before the call). */
@@ -1509,7 +1552,19 @@ describe("the safety net of a cancellation's capture or void after the commit (F
     const after = await request(api.server)
       .get(`/v1/bookings/${booking.id}`)
       .set(credentialHeaders(credential));
-    return { booking, payment, res, requestCalls, paymentBefore, net, netRemoved, again, calls, after };
+    return {
+      booking,
+      customerId: customer.id,
+      payment,
+      res,
+      requestCalls,
+      paymentBefore,
+      net,
+      netRemoved,
+      again,
+      calls,
+      after,
+    };
   }
 
   const keptNet = (paymentId: string): string => `capture-retry-cancellation-${paymentId}`;
@@ -1582,6 +1637,20 @@ describe("the safety net of a cancellation's capture or void after the commit (F
       refund: { amount: { amount: REFUND, currency: "EUR" }, status: "succeeded" },
       refundStatus: "succeeded",
     });
+  });
+
+  it("[FIX-W30-OTA AC7] records the release of the safety net's capture as asked for by the customer who cancelled", async () => {
+    // The capture retry recorded the release (not the request, which stopped before Stripe): it names the requester
+    // the cancellation's own record names, as the request's release does on the normal path.
+    for (const netted of [crashed, normal]) {
+      expect(await refundsOf(netted.booking.id)).toEqual([
+        expect.objectContaining({
+          status: "succeeded",
+          requested_by_type: "customer",
+          requested_by_id: netted.customerId,
+        }),
+      ]);
+    }
   });
 
   it("[FIX-W29-OTA AC3] voids once on the normal path and after a crash, through the void's own safety net", async () => {
@@ -2269,15 +2338,21 @@ describe("two cancellations at once with different keys (two tabs)", () => {
 
   it("[OBE-049 AC1] sends one DELETE and asks for one refund; the other request is refused", async () => {
     expect(answers.filter((res) => res.status === 200)).toHaveLength(1);
-    // The other one met the claim (503, nothing kept for its key), its moved version (412) or the cancelled booking,
-    // whichever it reached first.
-    const others = answers.filter((res) => res.status !== 200).map(answer);
+    // The other one met the claim (503, nothing kept for its key), its moved version (412), the claim's fresh marker
+    // (409 `pending`: its checks without a lock read the version before the first claim committed and the marker after
+    // it, FIX-W32-OTA, lead decision (1b) of 2026-10-28) or the cancelled booking, whichever it reached first.
+    const refused = answers.filter((res) => res.status !== 200);
+    const others = refused.map(answer);
     expect(others).toHaveLength(1);
     expect([
       [503, "SERVICE_UNAVAILABLE"],
       [412, "PRECONDITION_FAILED"],
+      [409, "BOOKING_NOT_MODIFIABLE"],
       [409, "BOOKING_ALREADY_CANCELLED"],
     ]).toContainEqual(others[0]);
+    if (others[0]?.[1] === "BOOKING_NOT_MODIFIABLE") {
+      expect(refused[0]?.body.error.details).toMatchObject({ reason: "pending" });
+    }
     for (const res of answers) {
       expectResponseToMatch("cancelBooking", res);
     }
@@ -2533,6 +2608,167 @@ describe("refusals that change nothing", () => {
   });
 });
 
+describe("one departure rule for canCancel and the cancellation (FIX-W30-OTA)", () => {
+  it("[FIX-W30-OTA AC3] shows canCancel false for a booking whose first flight departed but did not land, and refuses its cancellation with flown", async () => {
+    // Its flight left an hour ago and lands in an hour.
+    const booking = await seedBooking("cancel.departed", { customerId: null, departInMs: -HOUR });
+    const guest = { kind: "key", bookingToken: await guestToken(booking.id) } as const;
+    await seedPayment(booking.id, "captured");
+
+    const read = await request(api.server).get(`/v1/bookings/${booking.id}`).set(credentialHeaders(guest));
+    expect(answer(read)).toEqual([200, undefined]);
+    expectResponseToMatch("getBooking", read);
+    expect(read.body.allowedActions).toMatchObject({
+      canCancel: false,
+      // Not landed: the contacts can still change.
+      canModifyContacts: true,
+      reasons: { canCancel: "flown" },
+    });
+    const quoted = await quote(booking.id, guest);
+    expect(quoted.body).toMatchObject({ mode: "not_allowed", notAllowedReason: "flown", cancellable: false });
+    stub.clearRequests();
+    const res = await cancel(
+      booking.id,
+      guest,
+      String(read.headers["etag"]),
+      cancellation(quoted.body.estimatedRefund),
+    );
+
+    expect(answer(res)).toEqual([409, "BOOKING_NOT_MODIFIABLE"]);
+    expectResponseToMatch("cancelBooking", res);
+    expect(res.body.error.details).toEqual({ reason: "flown", action: "canCancel" });
+    expect(amadeusCalls("cancelFlightOrder")).toEqual([]);
+    expect(await bookingRow(booking.id)).toMatchObject({ status: "confirmed" });
+  });
+});
+
+describe("a customer's cancellation while the tickets are being issued (FIX-W30-OTA)", () => {
+  /** What the scenario of the ticketing job held at Flight Order Issue left. */
+  let held: {
+    readonly booking: SeededBooking;
+    readonly payment: { readonly id: string; readonly intentId: string | null };
+    /** The booking row when the cancellation was refused: the issuance's claim. */
+    readonly claimed: Awaited<ReturnType<typeof bookingRow>>;
+    readonly refused: Response;
+    readonly deletes: number;
+    readonly stripeCalls: number;
+    readonly issuance: Job;
+  };
+
+  // The ticketing job claims the booking (`in_progress`, committed) and waits at Flight Order Issue, held by a barrier
+  // on the worker's Amadeus client, while the customer reads the booking, quotes and cancels it; then the barrier
+  // opens and the issuance ends. No timing between the two is assumed.
+  beforeAll(async () => {
+    const customer = await newCustomer();
+    const credential: Credential = { kind: "key", customerToken: customer.token };
+    const booking = await seedBooking("cancel.issuing", { customerId: customer.id });
+    const payment = await seedPayment(booking.id, "captured");
+    // Due for an issuance now (a retry whose time has come).
+    await inTenant((trx) =>
+      trx
+        .updateTable("bookings")
+        .set({ ticketing_next_attempt_at: new Date(Date.now() - MINUTE) })
+        .where("id", "=", booking.id)
+        .execute(),
+    );
+    const client = worker.get(AmadeusClient, { strict: false });
+    const issue = client.issueFlightOrder.bind(client);
+    let reached = false;
+    let pass = (): void => undefined;
+    const passed = new Promise<void>((resolvePass) => {
+      pass = resolvePass;
+    });
+    const spy = vi.spyOn(client, "issueFlightOrder").mockImplementationOnce(async (context, req, options) => {
+      reached = true;
+      await passed;
+      return await issue(context, req, options);
+    });
+    const ticketingQueue = worker.get<Queue>(getQueueToken(OTA_QUEUE.ticketing), { strict: false });
+    const job = ticketingJob(alphaId, booking.id, minuteBucket(new Date()));
+    try {
+      await ticketingQueue.add(job.name, job.data, job.opts);
+      await waitFor("the issuance to reach Flight Order Issue", () =>
+        Promise.resolve(reached ? true : undefined),
+      );
+      const quoted = await quote(booking.id, credential);
+      // The claim moved the booking's version: the customer cancels with the ETag they read now.
+      const read = await request(api.server)
+        .get(`/v1/bookings/${booking.id}`)
+        .set(credentialHeaders(credential));
+      stub.clearRequests();
+      stripe.reset();
+      const refused = await cancel(
+        booking.id,
+        credential,
+        String(read.headers["etag"]),
+        cancellation(quoted.body.estimatedRefund),
+      );
+      const deletes = amadeusCalls("cancelFlightOrder").length;
+      const stripeCalls = stripeRequestsAbout(payment.intentId ?? "").length;
+      const claimed = await bookingRow(booking.id);
+      pass();
+      const issuance = await finished(ticketingQueue, job.opts.jobId);
+      held = { booking, payment, claimed, refused, deletes, stripeCalls, issuance };
+    } finally {
+      pass();
+      spy.mockRestore();
+    }
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W30-OTA AC2] answers the staff cancellation's 409 ticketing_in_progress: no DELETE racing the issuance, no money moved", async () => {
+    expect(held.claimed).toMatchObject({ status: "confirmed", ticketing_status: "in_progress" });
+    expect(answer(held.refused)).toEqual([409, "BOOKING_NOT_MODIFIABLE"]);
+    expectResponseToMatch("cancelBooking", held.refused);
+    expect(held.refused.body.error.details).toEqual({ reason: "ticketing_in_progress" });
+    expect(held.deletes).toBe(0);
+    expect(held.stripeCalls).toBe(0);
+    expect(await refundsOf(held.booking.id)).toEqual([]);
+    expect((await eventsOf(held.booking.id)).map((event) => event.type)).not.toContain("booking.cancelled");
+  });
+
+  it("[FIX-W30-OTA AC2] lets the issuance end undisturbed: the booking is ticketed and still cancellable once it ended", async () => {
+    expect(held.issuance.returnvalue).toMatchObject({ outcome: "ticketed" });
+    expect(await bookingRow(held.booking.id)).toMatchObject({
+      status: "ticketed",
+      ticketing_status: "issued",
+    });
+    expect(await stubOrderStatus(held.booking.orderId)).toBe(200);
+    const read = await request(api.server)
+      .get(`/v1/bookings/${held.booking.id}`)
+      .set(credentialHeaders({ kind: "key", bookingToken: await guestToken(held.booking.id) }));
+    expect(read.body.allowedActions).toMatchObject({ canCancel: true });
+  });
+
+  it("[FIX-W30-OTA AC2] refuses while a staff issuance's claim is fresh, and cancels once the claim is abandoned (5 minutes)", async () => {
+    const booking = await seedBooking("cancel.claimed", { customerId: null });
+    const guest = { kind: "key", bookingToken: await guestToken(booking.id) } as const;
+    const payment = await seedPayment(booking.id, "captured");
+    const claimAt = (at: Date) =>
+      inTenant((trx) =>
+        trx
+          .updateTable("bookings")
+          .set({ ticketing_status: "in_progress", ticketing_last_attempt_at: at })
+          .where("id", "=", booking.id)
+          .execute(),
+      );
+    await claimAt(new Date());
+    const quoted = await quote(booking.id, guest);
+    stub.clearRequests();
+    stripe.reset();
+
+    const refused = await cancel(booking.id, guest, '"1"', cancellation(quoted.body.estimatedRefund));
+    expect(answer(refused)).toEqual([409, "BOOKING_NOT_MODIFIABLE"]);
+    expect(refused.body.error.details).toEqual({ reason: "ticketing_in_progress" });
+    expect(stub.requests().filter((entry) => entry.operation === "cancelFlightOrder")).toEqual([]);
+    expect(stripeRequestsAbout(payment.intentId ?? "")).toEqual([]);
+
+    await claimAt(new Date(Date.now() - 6 * MINUTE));
+    const cancelled = await cancel(booking.id, guest, '"1"', cancellation(quoted.body.estimatedRefund));
+    expect(answer(cancelled)).toEqual([200, undefined]);
+    expect(amadeusCalls("cancelFlightOrder").map((call) => call.status)).toEqual([204]);
+  });
+});
+
 describe("a DELETE without an answer whose check was never queued", () => {
   let booking: SeededBooking;
   let deadline: number;
@@ -2741,4 +2977,409 @@ describe("a DELETE without an answer whose later check was lost", () => {
         .map((event) => event.type),
     ).toEqual(["booking.cancelled"]);
   });
+});
+
+describe("the ticketing job while a customer's cancellation is undecided (FIX-W31-OTA)", () => {
+  let ticketingQueue: Queue;
+  /** The minute buckets of this block's ticketing jobs: far from the scenarios above, one per run. */
+  let bucket = minuteBucket(new Date()) + 10_000;
+
+  /** Runs one ticketing attempt of the booking in the worker and answers how it ended (the job's return value). */
+  async function runTicketing(bookingId: string): Promise<JsonObject> {
+    bucket += 1;
+    const job = ticketingJob(alphaId, bookingId, bucket);
+    await ticketingQueue.add(job.name, job.data, job.opts);
+    const done = await finished(ticketingQueue, job.opts.jobId);
+    expect(await done.getState()).toBe("completed");
+    return done.returnvalue as JsonObject;
+  }
+
+  /** A customer's booking paid by Stripe whose issuance retry is due now (the ticketing job would claim it). */
+  async function dueBooking(prefix: string): Promise<{ booking: SeededBooking; credential: Credential }> {
+    const customer = await newCustomer();
+    const booking = await seedBooking(prefix, { customerId: customer.id });
+    await seedPayment(booking.id, "captured");
+    await inTenant((trx) =>
+      trx
+        .updateTable("bookings")
+        .set({
+          ticketing_status: "failed",
+          ticketing_attempts: 1,
+          ticketing_error_code: "TICKETING_FAILED",
+          ticketing_next_attempt_at: new Date(Date.now() - MINUTE),
+        })
+        .where("id", "=", booking.id)
+        .execute(),
+    );
+    return { booking, credential: { kind: "key", customerToken: customer.token } };
+  }
+
+  beforeAll(() => {
+    ticketingQueue = worker.get<Queue>(getQueueToken(OTA_QUEUE.ticketing), { strict: false });
+  });
+
+  it("[FIX-W31-OTA AC1] skips the booking while the customer's DELETE is in flight, then claims it as before once the airline's refusal made it a request", async () => {
+    const { booking, credential } = await dueBooking("cancel.hold_request");
+    const quoted = await quote(booking.id, credential);
+    stub.clearRequests();
+    const held = holdNextDelete("cancel-refused");
+    let skipped: JsonObject;
+    let claimedWhileHeld: Date | null;
+    let cancelled: Response;
+    try {
+      const cancelling = cancel(
+        booking.id,
+        credential,
+        '"1"',
+        cancellation(quoted.body.estimatedRefund),
+      ).then((res) => res);
+      await held.reached;
+      // T1 committed, the DELETE has not left: the ticketing job leaves the booking alone, nothing goes to Amadeus.
+      claimedWhileHeld = await claimedAtOf(booking.id);
+      skipped = await runTicketing(booking.id);
+      held.pass();
+      cancelled = await cancelling;
+    } finally {
+      held.pass();
+      held.spy.mockRestore();
+    }
+
+    expect(claimedWhileHeld).toBeInstanceOf(Date);
+    expect(skipped).toMatchObject({ outcome: "skipped", reason: "cancellation_pending" });
+    expect(amadeusCalls("issueFlightOrder")).toEqual([]);
+    expect(amadeusCalls("getFlightOrder").map((call) => call.status)).toEqual([]);
+    // The airline refused the DELETE: a request for the staff (202), the order live, the claim's marker cleared.
+    expect(answer(cancelled)).toEqual([202, undefined]);
+    expectResponseToMatch("cancelBooking", cancelled);
+    expect(await claimedAtOf(booking.id)).toBeNull();
+    // The ticketing job claims the booking as before and issues the live order.
+    expect(await runTicketing(booking.id)).toMatchObject({ outcome: "ticketed", via: "issue" });
+    expect(await bookingRow(booking.id)).toMatchObject({ status: "ticketed", ticketing_status: "issued" });
+  });
+
+  it("[FIX-W31-OTA AC1] skips it while a DELETE without an answer is undecided, then claims it as before once the worker found the order active", async () => {
+    const { booking, credential } = await dueBooking("cancel.hold_not_applied");
+    const quoted = await quote(booking.id, credential);
+    const spy = nextDeleteWith("timeout-lost");
+    const timedOut = await cancel(booking.id, credential, '"1"', cancellation(quoted.body.estimatedRefund));
+    spy.mockRestore();
+    expect(answer(timedOut)).toEqual([504, "SUPPLIER_TIMEOUT"]);
+    // The flag took over from the claim's marker in its transaction.
+    expect(await claimedAtOf(booking.id)).toBeNull();
+    stub.clearRequests();
+
+    expect(await runTicketing(booking.id)).toMatchObject({
+      outcome: "skipped",
+      reason: "cancellation_pending",
+    });
+    expect(amadeusCalls("issueFlightOrder")).toEqual([]);
+
+    const check = await runCheck(booking.id);
+    expect(check.returnvalue).toMatchObject({ outcome: "not_applied" });
+    expect(await runTicketing(booking.id)).toMatchObject({ outcome: "ticketed", via: "issue" });
+  });
+
+  it("[FIX-W31-OTA AC1] skips it while a DELETE without an answer is undecided, and as a cancelled booking once the worker found the order gone", async () => {
+    const { booking, credential } = await dueBooking("cancel.hold_cancelled");
+    const quoted = await quote(booking.id, credential);
+    const spy = nextDeleteWith("timeout");
+    const timedOut = await cancel(booking.id, credential, '"1"', cancellation(quoted.body.estimatedRefund));
+    spy.mockRestore();
+    expect(answer(timedOut)).toEqual([504, "SUPPLIER_TIMEOUT"]);
+    stub.clearRequests();
+
+    expect(await runTicketing(booking.id)).toMatchObject({
+      outcome: "skipped",
+      reason: "cancellation_pending",
+    });
+
+    const check = await runCheck(booking.id);
+    expect(check.returnvalue).toMatchObject({ outcome: "cancelled" });
+    // The worker's decision recorded the cancellation: the job skips the booking as any cancelled one, as before.
+    expect(await runTicketing(booking.id)).toMatchObject({ outcome: "skipped", reason: "not_confirmed" });
+    expect(amadeusCalls("issueFlightOrder")).toEqual([]);
+    expect(await claimedAtOf(booking.id)).toBeNull();
+  });
+
+  it("[FIX-W31-OTA AC1] claims it again once a cancellation's claim is abandoned (5 minutes: a request that stopped mid-DELETE)", async () => {
+    const { booking } = await dueBooking("cancel.hold_abandoned");
+    const claimAt = (at: Date) =>
+      inTenant((trx) =>
+        trx
+          .updateTable("bookings")
+          .set({ cancellation_claimed_at: at })
+          .where("id", "=", booking.id)
+          .execute(),
+      );
+    await claimAt(new Date());
+    stub.clearRequests();
+    expect(await runTicketing(booking.id)).toMatchObject({
+      outcome: "skipped",
+      reason: "cancellation_pending",
+    });
+    expect(amadeusCalls("issueFlightOrder")).toEqual([]);
+
+    await claimAt(new Date(Date.now() - 6 * MINUTE));
+    // The attempt starts with its resync (the order is live here) and issues it.
+    expect(await runTicketing(booking.id)).toMatchObject({ outcome: "ticketed", via: "issue" });
+    expect(amadeusCalls("getFlightOrder").map((call) => call.status)).toEqual([200]);
+  });
+
+  it.each([
+    { scenario: "version-conflict", prefix: "cancel.hold_conflict", answered: [409, "VERSION_CONFLICT"] },
+    { scenario: "rate-limited", prefix: "cancel.hold_unsent", answered: [503, "SUPPLIER_UNAVAILABLE"] },
+  ])(
+    "[FIX-W31-OTA AC1] claims it as before at once when the DELETE applied nothing ($scenario: the claim's marker released)",
+    async ({ scenario, prefix, answered }) => {
+      const { booking, credential } = await dueBooking(prefix);
+      const quoted = await quote(booking.id, credential);
+      const spy = nextDeleteWith(scenario);
+      const res = await cancel(booking.id, credential, '"1"', cancellation(quoted.body.estimatedRefund));
+      spy.mockRestore();
+      expect(answer(res)).toEqual(answered);
+      expectResponseToMatch("cancelBooking", res);
+      // Amadeus's 2552, or a request Amadeus refused before reading it: the order is live and nothing was recorded, so
+      // the release cleared the marker instead of leaving it to hold the ticketing claims for its 5 minutes.
+      expect(await claimedAtOf(booking.id)).toBeNull();
+      expect(await bookingRow(booking.id)).toMatchObject({ status: "confirmed", version: 2 });
+      stub.clearRequests();
+      expect(await runTicketing(booking.id)).toMatchObject({ outcome: "ticketed", via: "issue" });
+      expect(amadeusCalls("issueFlightOrder").map((call) => call.status)).toEqual([200]);
+    },
+  );
+});
+
+describe("a second cancellation while another one's DELETE is in flight (FIX-W32-OTA)", () => {
+  /** A customer's booking paid in full by Stripe, and the customer's credential. */
+  async function cancellableBooking(
+    prefix: string,
+  ): Promise<{ booking: SeededBooking; credential: Credential }> {
+    const customer = await newCustomer();
+    const booking = await seedBooking(prefix, { customerId: customer.id });
+    await seedPayment(booking.id, "captured");
+    return { booking, credential: { kind: "key", customerToken: customer.token } };
+  }
+
+  /**
+   * The next refresh of an order the API makes (bookings.cancel's quote between its checks without a lock and its
+   * claim) held by a barrier: `reached` resolves once the checks without a lock (T0) passed.
+   */
+  function holdNextRefresh() {
+    const bookings = api.app.get(CustomerBookingsService, { strict: false });
+    const refresh = bookings.refresh.bind(bookings);
+    let reach = (): void => undefined;
+    const reached = new Promise<void>((resolveReach) => {
+      reach = resolveReach;
+    });
+    let pass = (): void => undefined;
+    const passed = new Promise<void>((resolvePass) => {
+      pass = resolvePass;
+    });
+    const spy = vi.spyOn(bookings, "refresh").mockImplementationOnce(async (...args) => {
+      reach();
+      await passed;
+      return await refresh(...args);
+    });
+    return { reached, pass, spy };
+  }
+
+  it("[FIX-W32-OTA AC2] refuses a second cancellation sent with the ETag the first one's claim left: 409 pending, one DELETE", async () => {
+    const { booking, credential } = await cancellableBooking("cancel.second_in_flight");
+    const quoted = await quote(booking.id, credential);
+    stub.clearRequests();
+    const held = holdNextDelete();
+    let second: Response;
+    let first: Response;
+    try {
+      const cancelling = cancel(
+        booking.id,
+        credential,
+        '"1"',
+        cancellation(quoted.body.estimatedRefund),
+      ).then((res) => res);
+      await held.reached;
+      // The first claim (T1) committed and moved the version; another tab reloads the booking and cancels with it.
+      const { version } = await bookingRow(booking.id);
+      expect(version).toBe(2);
+      second = await cancel(
+        booking.id,
+        credential,
+        `"${version}"`,
+        cancellation(quoted.body.estimatedRefund),
+      );
+      held.pass();
+      first = await cancelling;
+    } finally {
+      held.pass();
+      held.spy.mockRestore();
+    }
+
+    expect(answer(second)).toEqual([409, "BOOKING_NOT_MODIFIABLE"]);
+    expect(second.body.error.details).toMatchObject({ reason: "pending" });
+    expectResponseToMatch("cancelBooking", second);
+    expect(answer(first)).toEqual([200, undefined]);
+    // One DELETE, one refund: the second request never reached Amadeus.
+    expect(amadeusCalls("cancelFlightOrder").map((call) => call.status)).toEqual([204]);
+    expect((await refundsOf(booking.id)).map((row) => row.amount)).toEqual([REFUND]);
+    expect(await claimedAtOf(booking.id)).toBeNull();
+  });
+
+  it("[FIX-W32-OTA AC2] refuses it again under the claim's lock when another claim's marker appeared after the checks without a lock", async () => {
+    const { booking, credential } = await cancellableBooking("cancel.second_in_t1");
+    stub.clearRequests();
+    const held = holdNextRefresh();
+    const other = new Date();
+    let res: Response;
+    try {
+      const cancelling = cancel(
+        booking.id,
+        credential,
+        '"1"',
+        cancellation({ amount: REFUND, currency: "EUR" }),
+      ).then((answered) => answered);
+      await held.reached;
+      // Another claim's marker, written while this request quotes (its version left as it was, so only the claim's
+      // own check under the lock can see it).
+      await inTenant((trx) =>
+        trx
+          .updateTable("bookings")
+          .set({ cancellation_claimed_at: other })
+          .where("id", "=", booking.id)
+          .execute(),
+      );
+      held.pass();
+      res = await cancelling;
+    } finally {
+      held.pass();
+      held.spy.mockRestore();
+    }
+
+    expect(answer(res)).toEqual([409, "BOOKING_NOT_MODIFIABLE"]);
+    expect(res.body.error.details).toMatchObject({ reason: "pending" });
+    expectResponseToMatch("cancelBooking", res);
+    expect(amadeusCalls("cancelFlightOrder")).toEqual([]);
+    // Nothing claimed: the version and the other claim's marker are as they were.
+    expect(await bookingRow(booking.id)).toMatchObject({ status: "confirmed", version: 1 });
+    expect(await claimedAtOf(booking.id)).toEqual(other);
+  });
+
+  it("[FIX-W33-OTA] [OBE-049] shows the pending refusal in the quote and in bookings.get's canCancel while another claim is fresh, and nothing once it is abandoned", async () => {
+    const { booking, credential } = await cancellableBooking("cancel.quote_while_claimed");
+    const claimAt = (at: Date) =>
+      inTenant((trx) =>
+        trx
+          .updateTable("bookings")
+          .set({ cancellation_claimed_at: at })
+          .where("id", "=", booking.id)
+          .execute(),
+      );
+    const read = () =>
+      request(api.server).get(`/v1/bookings/${booking.id}`).set(credentialHeaders(credential));
+    // Another cancellation's DELETE in flight: its claim committed and its outcome is not recorded yet.
+    await claimAt(new Date());
+
+    const quoted = await quote(booking.id, credential);
+    const got = await read();
+
+    expect(answer(quoted)).toEqual([200, undefined]);
+    expectResponseToMatch("quoteBookingCancellation", quoted);
+    expect(quoted.body).toMatchObject({ mode: "not_allowed", notAllowedReason: "pending" });
+    expect(answer(got)).toEqual([200, undefined]);
+    expect(got.body.allowedActions).toMatchObject({ canCancel: false, reasons: { canCancel: "pending" } });
+    // What both show is what bookings.cancel answers (FIX-W32-OTA): no screen offers what the cancellation refuses.
+    const refused = await cancel(booking.id, credential, '"1"', cancellation(quoted.body.estimatedRefund));
+    expect(answer(refused)).toEqual([409, "BOOKING_NOT_MODIFIABLE"]);
+    expect(refused.body.error.details).toMatchObject({ reason: "pending" });
+
+    // A claim 5 minutes old (a request that stopped mid-DELETE) holds nothing back, here either.
+    await claimAt(new Date(Date.now() - 6 * MINUTE));
+    const requoted = await quote(booking.id, credential);
+    const reread = await read();
+    expect(answer(requoted)).toEqual([200, undefined]);
+    expect(requoted.body.mode).not.toBe("not_allowed");
+    expect(reread.body.allowedActions).toMatchObject({ canCancel: true });
+    expect(reread.body.allowedActions.reasons).not.toHaveProperty("canCancel");
+  });
+
+  it("[FIX-W32-OTA AC2] lets a cancellation claim once the other claim is abandoned (5 minutes)", async () => {
+    const { booking, credential } = await cancellableBooking("cancel.second_abandoned");
+    await inTenant((trx) =>
+      trx
+        .updateTable("bookings")
+        .set({ cancellation_claimed_at: new Date(Date.now() - 6 * MINUTE) })
+        .where("id", "=", booking.id)
+        .execute(),
+    );
+    const quoted = await quote(booking.id, credential);
+    stub.clearRequests();
+    const res = await cancel(booking.id, credential, '"1"', cancellation(quoted.body.estimatedRefund));
+    expect(answer(res)).toEqual([200, undefined]);
+    expect(amadeusCalls("cancelFlightOrder").map((call) => call.status)).toEqual([204]);
+    expect(await claimedAtOf(booking.id)).toBeNull();
+  });
+
+  it.each([
+    {
+      scenario: undefined,
+      prefix: "cancel.own_marker_record",
+      answered: [200, undefined],
+      status: "cancelled",
+    },
+    {
+      scenario: "cancel-refused",
+      prefix: "cancel.own_marker_request",
+      answered: [202, undefined],
+      status: "confirmed",
+    },
+    {
+      scenario: "timeout",
+      prefix: "cancel.own_marker_flag",
+      answered: [504, "SUPPLIER_TIMEOUT"],
+      status: "confirmed",
+    },
+    {
+      scenario: "version-conflict",
+      prefix: "cancel.own_marker_release",
+      answered: [409, "VERSION_CONFLICT"],
+      status: "confirmed",
+    },
+  ])(
+    "[FIX-W32-OTA AC2] clears only its own claim's marker when its outcome is recorded ($prefix)",
+    async ({ scenario, prefix, answered, status }) => {
+      const { booking, credential } = await cancellableBooking(prefix);
+      const quoted = await quote(booking.id, credential);
+      const held = holdNextDelete(scenario);
+      // Another claim's marker, later than this one's (a claim taken while this request's DELETE was in flight).
+      const other = new Date(Date.now() + MINUTE);
+      let res: Response;
+      try {
+        const cancelling = cancel(
+          booking.id,
+          credential,
+          '"1"',
+          cancellation(quoted.body.estimatedRefund),
+        ).then((answered) => answered);
+        await held.reached;
+        expect(await claimedAtOf(booking.id)).toBeInstanceOf(Date);
+        await inTenant((trx) =>
+          trx
+            .updateTable("bookings")
+            .set({ cancellation_claimed_at: other })
+            .where("id", "=", booking.id)
+            .execute(),
+        );
+        held.pass();
+        res = await cancelling;
+      } finally {
+        held.pass();
+        held.spy.mockRestore();
+      }
+
+      expect(answer(res)).toEqual(answered);
+      expectResponseToMatch("cancelBooking", res);
+      expect((await bookingRow(booking.id)).status).toBe(status);
+      // The record, the request (its version bump), the flag and the release ended this claim only.
+      expect(await claimedAtOf(booking.id)).toEqual(other);
+    },
+  );
 });

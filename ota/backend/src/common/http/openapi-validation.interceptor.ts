@@ -1,7 +1,8 @@
 // Request validation against the OTA document (ADR-0006 "Runtime validation", architecture §3 step 6, conventions §2
 // and §6). At start-up the API parses ota/backend/openapi/velexis-ota-booking-api.openapi.yaml once and compiles, for
 // every operation, one Ajv validator per parameter location (path, query, header, cookie) and one for the JSON body
-// (a `multipart/form-data` upload has none: its handler parses the parts and checks them).
+// (a `multipart/form-data` upload has none: the body parsers read its parts on its route only, this interceptor passes
+// them on as the validated body, and its handler checks them; OBE-071).
 // The interceptor runs them for each request whose handler carries `@OpenApiOperation(...)` and answers
 // `400 VALIDATION_FAILED` with `fieldErrors` holding JSON pointers and Ajv keywords, never the rejected values (a body
 // may hold a password or a card number). Responses are not validated at run time; the tests do that
@@ -23,6 +24,7 @@ import type { Request } from "express";
 import type { Observable } from "rxjs";
 import { parse } from "yaml";
 import { APP_DIR } from "../../config";
+import { MultipartBody } from "./body-parsers";
 import { OPENAPI_OPERATION, VALIDATED_INPUT, type ValidatedInput } from "./openapi-operation.decorator";
 import { RequestContext, type OperationScope } from "./request-context";
 
@@ -57,10 +59,12 @@ export interface OperationSpec {
   readonly internal: boolean;
   readonly parameters: readonly ParameterSpec[];
   /**
-   * The `application/json` request body, when the operation has one; never a `multipart/form-data` body, which its
-   * handler parses and checks.
+   * The `application/json` request body, when the operation has one; never a `multipart/form-data` body, which the
+   * body parsers read and its handler checks.
    */
   readonly body: { readonly required: boolean; readonly schema: unknown } | undefined;
+  /** True when the request body is `multipart/form-data` (the asset upload): its parts are not validated here. */
+  readonly multipart: boolean;
 }
 
 /** The raw parts of a request the validator reads. */
@@ -73,7 +77,10 @@ export interface RawRequest {
   readonly headers: Readonly<Record<string, string | string[] | undefined>>;
   /** Cookies as cookie-parser gives them. */
   readonly cookies?: Readonly<Record<string, unknown>> | undefined;
-  /** The parsed body: JSON, a Buffer on the raw webhook routes, or `undefined` when nothing was parsed. */
+  /**
+   * The parsed body: JSON, a Buffer on the raw webhook routes, a `MultipartBody` on a multipart route, or `undefined`
+   * when nothing was parsed.
+   */
   readonly body: unknown;
   /** True when the request carries a body (`Content-Length` above 0 or `Transfer-Encoding`). */
   readonly bodySent: boolean;
@@ -318,6 +325,7 @@ export class OpenApiDocument {
           internal: operation["x-internal"] === true,
           parameters: merged,
           body: this.requestBody(operationId, operation["requestBody"]),
+          multipart: this.multipartBody(operation["requestBody"]),
         });
       }
     }
@@ -360,22 +368,28 @@ export class OpenApiDocument {
     });
   }
 
+  /** True when the only media type of a request body is `multipart/form-data` (a file upload). */
+  private multipartBody(raw: unknown): boolean {
+    if (raw === undefined) {
+      return false;
+    }
+    const body = this.resolve(raw);
+    const content = isObject(body) && isObject(body["content"]) ? body["content"] : {};
+    return Object.keys(content).length === 1 && isObject(content["multipart/form-data"]);
+  }
+
   private requestBody(operationId: string, raw: unknown): OperationSpec["body"] {
     if (raw === undefined) {
+      return undefined;
+    }
+    if (this.multipartBody(raw)) {
+      // A file upload (console.settings.assets.upload, OBE-091): no JSON body to validate here. The body parsers read
+      // its parts on its route only (body-parsers.ts), and its handler checks them against the document (OBE-071).
       return undefined;
     }
     const body = this.resolve(raw);
     const content = isObject(body) && isObject(body["content"]) ? body["content"] : {};
     const media = content["application/json"];
-    if (
-      media === undefined &&
-      Object.keys(content).length === 1 &&
-      isObject(content["multipart/form-data"])
-    ) {
-      // A file upload (console.settings.assets.upload, OBE-091): no JSON body to validate here. Its handler reads the
-      // multipart stream itself, the only route that parses one, and checks the parts against the document (OBE-071).
-      return undefined;
-    }
     if (!isObject(media) || media["schema"] === undefined) {
       throw new Error(`${this.label}: the request body of ${operationId} has no application/json schema`);
     }
@@ -478,7 +492,9 @@ export class RequestValidator {
     }
     let body: unknown = request.body;
     if (this.body === undefined) {
-      body = undefined;
+      // A multipart upload's parts, as the body parsers read them, go on to the idempotency hash and the handler, which
+      // checks them (OBE-071); nothing is kept of a body an operation does not have.
+      body = this.operation.multipart && request.body instanceof MultipartBody ? request.body : undefined;
     } else if (request.body === undefined) {
       if (this.body.required) {
         fieldErrors.push({ path: "", code: "required", message: "The request body is required" });

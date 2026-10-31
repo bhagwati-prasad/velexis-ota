@@ -18,7 +18,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import Handlebars from "handlebars";
 
-/** The template keys of M1 (PADR-0013 item 5). M5 tasks add theirs here and in `templates/`. */
+/** The template keys of M1 (PADR-0013 item 5) and of the M5 tasks, which add theirs here and in `templates/`. */
 export const EMAIL_TEMPLATE_KEYS = [
   "auth.verify_email",
   "auth.account_exists",
@@ -31,6 +31,12 @@ export const EMAIL_TEMPLATE_KEYS = [
   "tenant.suspended",
   "tenant.resumed",
   "ops.alert",
+  // M5: the review of a payout account (PBE-058, adminReviewPayoutAccount).
+  "payouts.reviewed",
+  // M5: a settlement statement paid by bank transfer (PBE-060, adminMarkSettlementPaid; PADR-0013 item 5).
+  "settlement.paid",
+  // M5: the OTA disconnected Velexis in Stripe (PBE-056, `account.application.deauthorized`).
+  "connection.stripe_disconnected",
 ] as const;
 
 /** A key of EMAIL_TEMPLATE_KEYS. */
@@ -89,6 +95,31 @@ export const EMAIL_TEMPLATES: Readonly<Record<EmailTemplateKey, EmailTemplateDef
     "title",
     "message",
   ]),
+  "payouts.reviewed": definition("A platform admin verified or rejected the payout account (to the owners)", [
+    "fullName",
+    "tenantName",
+    "tenantKey",
+    "outcome",
+    "nextStep",
+    "payoutAccountUrl",
+  ]),
+  "settlement.paid": definition(
+    "A platform admin recorded the bank transfer of a settlement statement (to the owners and finance members)",
+    [
+      "fullName",
+      "tenantName",
+      "tenantKey",
+      "period",
+      "netAmount",
+      "paidOn",
+      "payoutReference",
+      "statementUrl",
+    ],
+  ),
+  "connection.stripe_disconnected": definition(
+    "The OTA disconnected Velexis from its Stripe account in Stripe (Connect deauthorisation, to the owners)",
+    ["fullName", "tenantName", "tenantKey", "paymentsUrl"],
+  ),
 });
 
 /** Variables every template may use, filled in by the renderer from the configuration (PADR-0013 item 7). */

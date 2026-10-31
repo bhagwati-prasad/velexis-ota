@@ -1,14 +1,18 @@
 // The provisioning module of the OTA worker (OBE-005; OADR-0007, ota/docs/architecture.md §2): the `ota-tenant-ops`
-// processor, the provisioning service and the `platform-tenant-events` producer. Only WorkerModule imports it: its
+// processor, the provisioning service, the housekeeping of `tenant.suspend` and `tenant.resume` (OBE-074) and the
+// `platform-tenant-events` producer. Only WorkerModule imports it: its
 // provisioner database is built from DATABASE_PROVISIONER_URL, which only the worker's configuration has, so the
-// API process could not even build it (`ProvisionerDsnMissingError`). The read-only platform repository comes from
-// `TenancyModule.forWorker()`, the queues from QueuesModule (OBE-002), Clock from the global CommonModule.
+// API process could not even build it (`ProvisionerDsnMissingError`). The read-only platform repository, the tenant
+// context and `TenantTx` (the housekeeping's checkout expiry, as velexis_ota_app) come from
+// `TenancyModule.forWorker()`, the queues from QueuesModule (OBE-002), Clock from the global CommonModule, the Redis
+// client from the global RedisModule.
 import { Inject, Injectable, Module, type FactoryProvider, type OnApplicationShutdown } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { PinoLogger } from "nestjs-pino";
 import { QueuesModule } from "../common/queues/queues.module";
 import type { WorkerConfig } from "../config";
 import { TenancyModule } from "../tenancy/tenancy.module";
+import { HousekeepingService } from "./housekeeping.service";
 import {
   createProvisionerDatabase,
   DEFAULT_PROVISIONING_OPTIONS,
@@ -59,6 +63,7 @@ export class ProvisionerPoolCloser implements OnApplicationShutdown {
     ProvisionerPoolCloser,
     { provide: PROVISIONING_OPTIONS, useValue: DEFAULT_PROVISIONING_OPTIONS },
     ProvisioningService,
+    HousekeepingService,
     TenantEventsProducer,
     TenantOpsProcessor,
   ],

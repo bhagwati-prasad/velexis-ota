@@ -987,7 +987,8 @@ describe("/otas/[tenantId]/api-keys: creating a key", () => {
     expect(descriptionsOf(name)).toContain(API_KEYS_STRINGS.nameTooLong);
     expect(name.getAttribute("aria-invalid")).toBe("true");
     const summary = screen.getByRole("alert");
-    expect(document.activeElement).toBe(summary);
+    // The summary takes the focus in an effect, which may run after the render the wait above saw.
+    await waitFor(() => expect(document.activeElement).toBe(summary), ACTION_WAIT);
     expect(
       within(summary)
         .getAllByRole("link")

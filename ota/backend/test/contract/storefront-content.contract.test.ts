@@ -468,7 +468,7 @@ describe("the 11 operations of OBE-091 (api-changes part 2 §2.4, §2.5, §4)", 
   it("lists the 11 operations in pending-operations.ts with OBE-071 and OBE-072 until those are done [OBE-091 AC1]", () => {
     // A task that implements its operations removes their entries (pending-operations.ts); route parity
     // (route-parity.contract.test.ts) then requires their handlers.
-    const implemented: ReadonlySet<Expected["task"]> = new Set<Expected["task"]>();
+    const implemented: ReadonlySet<Expected["task"]> = new Set<Expected["task"]>(["OBE-071", "OBE-072"]);
     for (const { operationId, task } of OBE_091_OPERATIONS) {
       expect([operationId, PENDING_OPERATIONS[operationId as keyof typeof PENDING_OPERATIONS]]).toEqual([
         operationId,
@@ -499,7 +499,14 @@ describe("the 11 operations of OBE-091 (api-changes part 2 §2.4, §2.5, §4)", 
         ["listStorefrontPages", "/v1/storefront/pages?locale=en"],
         ["getStorefrontPage", "/v1/storefront/pages/terms"],
       ];
-      for (const [operationId, url] of urls) {
+      // OBE-071 serves the public asset: its route is its handler's, no longer a 501 (its answers:
+      // test/integration/settings/assets.int.test.ts).
+      const served = await request(api.server).get(`/v1/assets/acme/${ASSET_ID}.png`).set(edgeHeaders());
+      expect([served.status, (served.body as Json)["error"]]).not.toEqual([
+        501,
+        expect.objectContaining({ code: "NOT_IMPLEMENTED" }),
+      ]);
+      for (const [operationId, url] of urls.filter(([id]) => id in PENDING_OPERATIONS)) {
         const res = await request(api.server).get(url).set(edgeHeaders());
         expect([operationId, res.status, (res.body as Json)["error"]]).toEqual([
           operationId,
@@ -1018,6 +1025,8 @@ describe("storefront assets (§2.5, §4.2; OADR-0012 points 2 and 3)", () => {
       "X-Content-Type-Options",
       "Content-Security-Policy",
       "Content-Disposition",
+      // OBE-071: key callers' own sites show the absolute URL (helmet's default is same-origin).
+      "Cross-Origin-Resource-Policy",
     ]);
     const description = String(spec["description"]);
     for (const header of [
@@ -1025,6 +1034,7 @@ describe("storefront assets (§2.5, §4.2; OADR-0012 points 2 and 3)", () => {
       "`X-Content-Type-Options: nosniff`",
       "`Content-Security-Policy: default-src 'none'`",
       "`Content-Disposition: inline`",
+      "`Cross-Origin-Resource-Policy: cross-origin`",
     ]) {
       expect([header, description.replace(/\s+/g, " ").includes(header)]).toEqual([header, true]);
     }
@@ -1032,6 +1042,22 @@ describe("storefront assets (§2.5, §4.2; OADR-0012 points 2 and 3)", () => {
     expect(description).toContain("`active` or `suspended`");
     expect(objectAt(spec, "responses", "404")).toEqual({ $ref: "#/components/responses/NotFound" });
     expect(spec["x-error-codes"]).toEqual(expect.arrayContaining(["NOT_FOUND", "RATE_LIMITED"]));
+    // OBE-071: what the guards answer to a credential sent along (as downloadFile documents it) and the platform
+    // read of the path's OTA, each with its status among the responses.
+    const codes = spec["x-error-codes"] as ErrorCode[];
+    expect(codes).toEqual(
+      expect.arrayContaining([
+        "INVALID_REQUEST",
+        "INVALID_API_KEY",
+        "ORIGIN_NOT_ALLOWED",
+        "SCOPE_NOT_ALLOWED",
+        "SERVICE_UNAVAILABLE",
+      ]),
+    );
+    const responses = objectAt(spec, "responses");
+    for (const code of codes) {
+      expect([code, String(ERROR_CATALOGUE[code].status) in responses]).toEqual([code, true]);
+    }
   });
 });
 

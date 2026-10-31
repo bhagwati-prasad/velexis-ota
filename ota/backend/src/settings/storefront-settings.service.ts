@@ -3,30 +3,36 @@
 // point 2, OADR-0004 point 1): the OTA's single `storefront_settings` row, shared by the test and live environments,
 // as staff edit it (storefront-settings.mapper.ts).
 //
-// update, in order:
+// update, in order, in one transaction:
 //
-//   1. `airlineCard.enabledLive: true` while the global `AIRLINE_CARD_ENABLED` switch is off → `403 FEATURE_DISABLED`
-//      (`details.feature = "airlineCard"`): live airline-card payments wait for the M6 security review. The test
-//      environment's flag may be set at any time (storefront.get offers the method only while the switch is on).
-//   2. One transaction: the row is read `FOR UPDATE` (missing → `403 TENANT_SUSPENDED`, the tenant is not ready), its
-//      version compared with `If-Match` (`412 PRECONDITION_FAILED`), the sections sent replace their saved values,
-//      and the rules below are checked (`422 UNPROCESSABLE`, `details.reason` and `details.path`, the first refused
-//      field in the document's order). The schema already refused fonts outside the bundled list, colours that are
-//      not `#RRGGBB`, TTLs out of range and unknown enum values (`400 VALIDATION_FAILED`).
-//   3. The warnings: turning the airline card on (either flag from false to true) while an active markup or fee rule
+//   1. The row is read `FOR UPDATE` (missing → `403 TENANT_SUSPENDED`, the tenant is not ready) and its version compared
+//      with `If-Match` (`412 PRECONDITION_FAILED`).
+//   2. Turning the live airline card on (`airlineCard.enabledLive: true` sent while the stored value is `false`) while the
+//      global `AIRLINE_CARD_ENABLED` switch is off → `403 FEATURE_DISABLED` (`details.feature = "airlineCard"`): live
+//      airline-card payments wait for the M6 security review. A save that keeps a stored `true` (the switch went off
+//      after it was turned on) or sends `false` passes, so the OTA can still save its other sections and turn the live
+//      card off (lead decision (2e) of 2026-10-30, second batch, FIX-W35-OTA; before, every save that sent `true` was
+//      refused, and an OTA in that state could not save the section at all). The test environment's flag may be set at
+//      any time (storefront.get offers the method only while the switch is on, whatever is stored).
+//   3. The sections sent replace their saved values, and the rules below are checked (`422 UNPROCESSABLE`,
+//      `details.reason` and `details.path`, the first refused field in the document's order). The schema already
+//      refused fonts outside the bundled list, colours that are not `#RRGGBB`, TTLs out of range and unknown enum values
+//      (`400 VALIDATION_FAILED`).
+//   4. The warnings: turning the airline card on (either flag from false to true) while an active markup or fee rule
 //      adds an amount gives `airline_card_net_price` (OADR-0004 point 4: airline-card bookings are sold at the
 //      airline's price).
-//   4. The sections' columns are written with `version + 1`, and the `staff_actions` row (`settings.storefront.update`,
+//   5. The sections' columns are written with `version + 1`, and the `staff_actions` row (`settings.storefront.update`,
 //      target `storefront_settings`/`sfs_default`) with the sent sections before and after and the versions, through
 //      the shared redactor, in the same transaction.
-//   5. After the commit, the storefront.get entries of both environments are deleted: `t:<tenantId>:<env>:sf:und` and
+//   6. After the commit, the storefront.get entries of both environments are deleted: `t:<tenantId>:<env>:sf:und` and
 //      `sf:<locale>` for every locale the settings supported before or support now (the only entries storefront.get
 //      ever writes, storefront.service.ts), so the next storefront.get reads the row. A Redis that does not answer is
 //      logged (`storefront_settings.cache_not_deleted`) and the answer stands: the entries expire within their
-//      5 minutes, as the hosted storefront's own `sessionStorage` copy does. The content pages' cache (OBE-072) joins
-//      this deletion with its key.
+//      5 minutes, as the hosted storefront's own `sessionStorage` copy does. The content pages' caches of the same
+//      locales and environments, `t:<tenantId>:<env>:pages:<locale>` (OBE-072, storefront/public-pages.service.ts
+//      `pageCacheKeys`), go in the same deletion: which page a locale serves follows the default and supported locales.
 //
-// The rules of step 2 (`details.reason` in brackets), each checked when a section it reads is sent, on the settings
+// The rules of step 3 (`details.reason` in brackets), each checked when a section it reads is sent, on the settings
 // with the sent sections replaced:
 //
 //   brand        the time zone is one of `reference.time_zones` [unknown_time_zone]
@@ -49,7 +55,10 @@
 //                [consent_category_required]
 //
 // get answers the row (missing → `403 TENANT_SUSPENDED`). Both answer `ETag: "<version>"` and `Cache-Control:
-// private, no-store` (the controller). The settings hold no secret; the audit row holds what the sections hold.
+// private, no-store` (the controller), and `airlineCard.liveAvailable`, the switch itself (read-only: not stored, not
+// audited; a value an update sends is ignored, as the columns are written from `enabledTest` and `enabledLive` only),
+// so the OTA admin offers the live switch only while it can be turned on (lead decision (2d) of 2026-10-30, second
+// batch, FIX-W35-OTA). The settings hold no secret; the audit row holds what the sections hold.
 import { Inject, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { AppError } from "@velexis/errors";
@@ -62,6 +71,7 @@ import { REDIS_CLIENT } from "../common/redis/redis.module";
 import type { ApiConfig } from "../config";
 import { consoleAction, StaffActionsWriter } from "../console/staff-actions.writer";
 import { STOREFRONT_SETTINGS_ID } from "../provisioning/seeds/storefront-settings.seed";
+import { pageCacheKeys } from "../storefront/public-pages.service";
 import { canonicalLocale } from "../storefront/storefront.mapper";
 import { StorefrontRepository, type StorefrontSettingsEditRow } from "../storefront/storefront.repository";
 import { DEFAULT_ENTRY_LOCALE } from "../storefront/storefront.service";
@@ -70,6 +80,7 @@ import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
 import {
   auditView,
   mergeSettings,
+  withLiveAvailability,
   sectionsOf,
   toSettingsChanges,
   toStorefrontSettings,
@@ -354,6 +365,17 @@ export function airlineCardTurnedOn(before: StorefrontSettings, after: Storefron
     .map((flag) => `/airlineCard/${flag}`);
 }
 
+/**
+ * Whether `update` turns the live airline card on: `airlineCard.enabledLive: true` over a stored `false` (step 2 of the
+ * file header). Keeping a stored `true`, or sending `false`, does not.
+ */
+export function liveAirlineCardTurnedOn(
+  update: StorefrontSettingsUpdate,
+  stored: Pick<StorefrontSettingsEditRow, "airlineCardEnabledLive">,
+): boolean {
+  return update.airlineCard?.enabledLive === true && !stored.airlineCardEnabledLive;
+}
+
 /** The warning of a flag turned on while amount-adding rules are active (OADR-0004 point 4). */
 export function airlineCardWarning(path: string): SettingsWarning {
   return {
@@ -372,9 +394,9 @@ function cachedLocales(row: StorefrontSettingsEditRow): string[] {
 const ENVIRONMENTS: readonly KeyEnvironment[] = ["test", "live"];
 
 /**
- * The storefront.get entries of both environments for the locales of `rows` (see the file header, step 5). The tenant
- * id is checked by the first key; a locale that cannot be a key part is left out, because storefront.service.ts never
- * caches under it.
+ * The storefront.get entries and the content pages' caches of both environments for the locales of `rows` (see the
+ * file header, step 5). The tenant id is checked by the first key; a locale that cannot be a key part is left out,
+ * because storefront.service.ts and public-pages.service.ts never cache under it.
  */
 export function storefrontCacheKeys(
   tenantId: string,
@@ -383,6 +405,11 @@ export function storefrontCacheKeys(
   const locales = [...new Set(rows.flatMap(cachedLocales))].filter(
     (locale) => locale !== DEFAULT_ENTRY_LOCALE,
   );
+  return [...storefrontEntryKeys(tenantId, locales), ...pageCacheKeys(tenantId, locales)];
+}
+
+/** The storefront.get entries of both environments: `sf:und` and the locales'. */
+function storefrontEntryKeys(tenantId: string, locales: readonly string[]): RedisKeyName[] {
   return ENVIRONMENTS.flatMap((environment) => [
     redisKeys.sf(tenantId, environment, DEFAULT_ENTRY_LOCALE).key,
     ...locales.flatMap((locale): RedisKeyName[] => {
@@ -430,30 +457,27 @@ export class StorefrontSettingsService {
     this.airlineCardSwitch = config.get("AIRLINE_CARD_ENABLED", { infer: true });
   }
 
-  /** console.settings.storefront.get. */
+  /** console.settings.storefront.get, with the live airline card's availability (see the file header). */
   async get(): Promise<StorefrontSettings> {
     const row = await this.tx.run((trx) => this.repository.editableSettings(trx));
     if (row === undefined) {
       throw notReady();
     }
-    return toStorefrontSettings(row);
+    return withLiveAvailability(toStorefrontSettings(row), this.airlineCardSwitch);
   }
 
   /** console.settings.storefront.update with the `If-Match` of the request (see the file header). */
   async update(update: StorefrontSettingsUpdate, ifMatch: string): Promise<StorefrontSettingsUpdateResult> {
-    if (update.airlineCard?.enabledLive === true && !this.airlineCardSwitch) {
-      throw new AppError("FEATURE_DISABLED", {
-        message: "The airline card cannot be enabled in the live environment yet.",
-        details: { feature: "airlineCard" },
-      });
-    }
     const tenant = this.tenants.require();
     const outcome = await this.tx.run((trx) => this.save(trx, update, ifMatch));
     await this.deleteCaches(tenant, [outcome.before, outcome.saved]);
-    return { ...outcome.settings, warnings: outcome.warnings };
+    return {
+      ...withLiveAvailability(outcome.settings, this.airlineCardSwitch),
+      warnings: outcome.warnings,
+    };
   }
 
-  /** Steps 2 to 4 of the file header, in the update's transaction. */
+  /** Steps 1 to 5 of the file header, in the update's transaction. */
   private async save(
     trx: TenantTransaction,
     update: StorefrontSettingsUpdate,
@@ -465,6 +489,12 @@ export class StorefrontSettingsService {
     }
     if (!ifMatchSatisfied(ifMatch, row.version)) {
       throw new AppError("PRECONDITION_FAILED");
+    }
+    if (liveAirlineCardTurnedOn(update, row) && !this.airlineCardSwitch) {
+      throw new AppError("FEATURE_DISABLED", {
+        message: "The airline card cannot be enabled in the live environment yet.",
+        details: { feature: "airlineCard" },
+      });
     }
     const sections = sectionsOf(update);
     const sent = new Set(sections);

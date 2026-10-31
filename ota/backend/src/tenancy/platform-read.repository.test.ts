@@ -10,7 +10,12 @@ import {
 } from "@velexis/db";
 import { describe, expect, it, vi } from "vitest";
 import { newId } from "../common/ids";
-import { PLATFORM_READ_STATEMENT_TIMEOUT_MS, PlatformReadRepository } from "./platform-read.repository";
+import {
+  MAX_MONITORED_QUEUES,
+  parseMonitoredQueues,
+  PLATFORM_READ_STATEMENT_TIMEOUT_MS,
+  PlatformReadRepository,
+} from "./platform-read.repository";
 import { UnexpectedPlatformValueError, type PlatformTenant } from "./platform-read.types";
 
 type Pool = ReturnType<typeof createPool>;
@@ -78,6 +83,34 @@ const EXPECTED_TENANT: PlatformTenant = {
   defaultLocale: "en-GB",
   billingNotice: "past_due",
 };
+
+describe("PlatformReadRepository.tenantTimeZone (FIX-W35-OTA)", () => {
+  it("[FIX-W35-OTA AC3] reads the tenant's business time zone as tenant_time_zone, in one read-only transaction", async () => {
+    const fake = fakePool([{ tenant_time_zone: "Europe/Oslo" }]);
+    const repository = new PlatformReadRepository(createPlatformDb(fake.pool));
+
+    await expect(repository.tenantTimeZone(TENANT_ID)).resolves.toBe("Europe/Oslo");
+    expect(fake.queries).toEqual([
+      { sql: START_READ_ONLY, parameters: [] },
+      { sql: SET_STATEMENT_TIMEOUT, parameters: [String(PLATFORM_READ_STATEMENT_TIMEOUT_MS)] },
+      {
+        sql: 'select "time_zone" as "tenant_time_zone" from "platform"."tenants" where "id" = $1',
+        parameters: [TENANT_ID],
+      },
+      { sql: "commit", parameters: [] },
+    ]);
+  });
+
+  it("[FIX-W35-OTA AC3] answers null for an unknown tenant, and for a value that cannot be a tenant id without a query", async () => {
+    const fake = fakePool([]);
+    const repository = new PlatformReadRepository(createPlatformDb(fake.pool));
+
+    await expect(repository.tenantTimeZone(newId("ten"))).resolves.toBeNull();
+    const before = fake.queries.length;
+    await expect(repository.tenantTimeZone("tenant'; drop table platform.tenants; --")).resolves.toBeNull();
+    expect(fake.queries).toHaveLength(before);
+  });
+});
 
 describe("PlatformReadRepository.tenantById", () => {
   it("reads the tenant in one read-only transaction with a short statement timeout and maps the row [OBE-003 AC1]", async () => {
@@ -223,4 +256,60 @@ describe("rows the repository refuses", () => {
       });
     },
   );
+});
+
+describe("parseMonitoredQueues (OBE-065: the queue poller's list)", () => {
+  it("keeps each well-formed entry once, in order, and counts the others", () => {
+    const parsed = parseMonitoredQueues([
+      { officeId: "NCE1A0955", queueId: 50, category: 0 },
+      { officeId: "NCE1A0955", queueId: 8, category: 3 },
+      // The same queue again, then entries of other shapes and ranges.
+      { officeId: "NCE1A0955", queueId: 50, category: 0 },
+      { officeId: "nce1a0955", queueId: 1, category: 0 },
+      { officeId: "NCE1A0955", queueId: 100, category: 0 },
+      { officeId: "NCE1A0955", queueId: 1, category: 255 },
+      { officeId: "NCE1A0955", queueId: 1.5, category: 0 },
+      { officeId: "NCE1A0955", queueId: "1", category: 0 },
+      { officeId: "NCE1A0955", queueId: 1 },
+      { officeId: "NCE1A0955", queueId: 1, category: 0, max: 10 },
+      "NCE1A0955/1/0",
+      null,
+    ]);
+
+    expect(parsed).toEqual({
+      queues: [
+        { officeId: "NCE1A0955", queueId: 50, category: 0 },
+        { officeId: "NCE1A0955", queueId: 8, category: 3 },
+      ],
+      invalid: 10,
+    });
+    expect(Object.isFrozen(parsed.queues)).toBe(true);
+  });
+
+  it(`polls at most ${MAX_MONITORED_QUEUES} queues of a connection, as the platform allows`, () => {
+    const entries = Array.from({ length: MAX_MONITORED_QUEUES + 2 }, (_, queueId) => ({
+      officeId: "NCE1A0955",
+      queueId,
+      category: 0,
+    }));
+
+    const parsed = parseMonitoredQueues(entries);
+
+    expect(parsed.queues).toHaveLength(MAX_MONITORED_QUEUES);
+    expect(parsed.queues.at(-1)).toEqual({
+      officeId: "NCE1A0955",
+      queueId: MAX_MONITORED_QUEUES - 1,
+      category: 0,
+    });
+    expect(parsed.invalid).toBe(2);
+  });
+
+  it("reads an empty or missing list as no queue, and a value that is not a list as one invalid entry", () => {
+    expect(parseMonitoredQueues([])).toEqual({ queues: [], invalid: 0 });
+    expect(parseMonitoredQueues(null)).toEqual({ queues: [], invalid: 0 });
+    expect(parseMonitoredQueues({ officeId: "NCE1A0955", queueId: 50, category: 0 })).toEqual({
+      queues: [],
+      invalid: 1,
+    });
+  });
 });

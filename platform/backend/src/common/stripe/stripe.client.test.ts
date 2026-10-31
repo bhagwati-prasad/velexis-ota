@@ -154,6 +154,44 @@ describe("FakeStripe (test/support/fake-stripe.ts)", () => {
     ]);
   });
 
+  it("[PBE-059] lists the balance transactions of a time range newest first, a page at a time, the source expanded on request", async () => {
+    const created = (n: number) => 1_790_000_000 + n;
+    const stripe = new FakeStripe().put({ id: "ch_test_1", object: "charge" });
+    for (const n of [1, 2, 3, 4]) {
+      stripe.put({
+        id: `txn_test${n}`,
+        object: "balance_transaction",
+        created: created(n),
+        source: "ch_test_1",
+      } as never);
+    }
+    // Outside the range, and another object type with a `created`.
+    stripe.put(
+      { id: "txn_test9", object: "balance_transaction", created: created(9), source: "ch_test_1" } as never,
+      { id: "po_test_1", object: "payout", created: created(2) } as never,
+    );
+    const api = stripe.api();
+    const range = { gte: created(1), lt: created(9) };
+
+    const first = await api.balanceTransactions.list({ created: range, limit: 3, expand: ["data.source"] });
+    expect(first.data.map((txn) => txn.id)).toEqual(["txn_test4", "txn_test3", "txn_test2"]);
+    expect(first.has_more).toBe(true);
+    expect(first.data[0]?.source).toEqual({ id: "ch_test_1", object: "charge" });
+    const second = await api.balanceTransactions.list({
+      created: range,
+      limit: 3,
+      starting_after: "txn_test2",
+    });
+    expect(second.data.map((txn) => [txn.id, txn.source])).toEqual([["txn_test1", "ch_test_1"]]);
+    expect(second.has_more).toBe(false);
+    expect((await api.balanceTransactions.list()).data).toHaveLength(5);
+    await expect(api.balanceTransactions.list({ starting_after: "txn_missing" })).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    await expect(api.balanceTransactions.list({ limit: 101 })).rejects.toMatchObject({ statusCode: 400 });
+    expect(stripe.callsOf("balanceTransactions.list")).toHaveLength(5);
+  });
+
   it("throws the failures queued for a method, one per call, and can play an unconfigured client", async () => {
     const stripe = new FakeStripe()
       .put({ id: "price_test_growth_month", object: "price" })
@@ -169,7 +207,9 @@ describe("FakeStripe (test/support/fake-stripe.ts)", () => {
     );
     expect((await api.prices.retrieve("price_test_growth_month")).id).toBe("price_test_growth_month");
     expect(stripe.calls).toHaveLength(3);
-    expect(FAKE_STRIPE_METHODS).toHaveLength(9);
+    // The nine calls of billing, the settlements' balance transactions, charges and PaymentIntents (PBE-059),
+    // and the Connect OAuth's code exchange and account read (PBE-055) and deauthorisation (FIX-W36-PLATFORM).
+    expect(FAKE_STRIPE_METHODS).toHaveLength(15);
 
     expect(() => stripe.notConfigured().api()).toThrow(StripeNotConfiguredError);
     expect(stripe.isConfigured()).toBe(false);
@@ -225,5 +265,95 @@ describe("FakeStripe (test/support/fake-stripe.ts)", () => {
       undefined,
       undefined,
     ]);
+  });
+
+  it("[PBE-055] exchanges a Connect OAuth code once, with an idempotency key, and reads the connected account", async () => {
+    const stripe = new FakeStripe().put({
+      id: "acct_TestConnect1",
+      object: "account",
+      charges_enabled: true,
+      payouts_enabled: false,
+      details_submitted: true,
+    } as never);
+    const tokens = stripe.grantConnectCode("ac_TestCode1", {
+      stripeUserId: "acct_TestConnect1",
+      livemode: false,
+    });
+    const api = stripe.api();
+    const params = { grant_type: "authorization_code" as const, code: "ac_TestCode1" };
+    const options = { idempotencyKey: idempotencyKey("connect_oauth", "a".repeat(64)) };
+
+    await expect(api.oauth.token(params)).rejects.toThrow(/without an idempotency key/);
+    const answer = await api.oauth.token(params, options);
+    expect(answer).toMatchObject({
+      stripe_user_id: "acct_TestConnect1",
+      livemode: false,
+      scope: "read_write",
+      token_type: "bearer",
+      access_token: tokens.accessToken,
+      refresh_token: tokens.refreshToken,
+      stripe_publishable_key: tokens.publishableKey,
+    });
+    expect(new Set(Object.values(tokens)).size).toBe(3);
+    // Used once: Stripe refuses it, and its description names the code.
+    const used = api.oauth.token(params, options);
+    await expect(used).rejects.toBeInstanceOf(Stripe.errors.StripeInvalidGrantError);
+    await expect(used).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringContaining("ac_TestCode1"),
+    });
+    await expect(api.oauth.token({ ...params, code: "ac_Unknown" }, options)).rejects.toBeInstanceOf(
+      Stripe.errors.StripeInvalidGrantError,
+    );
+    await expect(
+      api.oauth.token({ grant_type: "refresh_token", refresh_token: tokens.refreshToken }, options),
+    ).rejects.toThrow(/authorization_code/);
+
+    expect(await api.accounts.retrieve("acct_TestConnect1")).toMatchObject({
+      id: "acct_TestConnect1",
+      charges_enabled: true,
+      payouts_enabled: false,
+    });
+    await expect(api.accounts.retrieve("acct_Missing")).rejects.toMatchObject({ statusCode: 404 });
+    stripe.failNext("oauth.token", FakeStripe.apiError(503));
+    stripe.grantConnectCode("ac_TestCode2", { stripeUserId: "acct_TestConnect1", livemode: true });
+    await expect(api.oauth.token({ ...params, code: "ac_TestCode2" }, options)).rejects.toBeInstanceOf(
+      Stripe.errors.StripeAPIError,
+    );
+    expect((await api.oauth.token({ ...params, code: "ac_TestCode2" }, options)).livemode).toBe(true);
+    expect(stripe.callsOf("oauth.token").map((call) => call.idempotencyKey)).toEqual([
+      undefined,
+      ...Array.from({ length: 6 }, () => options.idempotencyKey),
+    ]);
+    expect(stripe.callsOf("accounts.retrieve").map((call) => call.id)).toEqual([
+      "acct_TestConnect1",
+      "acct_Missing",
+    ]);
+  });
+
+  it("[FIX-W36-PLATFORM AC3] deauthorises a connected account with an idempotency key, and fails as queued", async () => {
+    const stripe = new FakeStripe();
+    const api = stripe.api();
+    const params = { client_id: "ca_TestConnectClient", stripe_user_id: "acct_TestConnect1" };
+    const options = { idempotencyKey: idempotencyKey("connect_deauthorize", "b".repeat(64)) };
+
+    await expect(api.oauth.deauthorize(params)).rejects.toThrow(/without an idempotency key/);
+    await expect(
+      api.oauth.deauthorize({ stripe_user_id: "acct_TestConnect1" } as never, options),
+    ).rejects.toThrow(/client_id and stripe_user_id/);
+    expect(await api.oauth.deauthorize(params, options)).toMatchObject({
+      stripe_user_id: "acct_TestConnect1",
+    });
+    stripe.failNext("oauth.deauthorize", FakeStripe.apiError(503));
+    await expect(api.oauth.deauthorize(params, options)).rejects.toBeInstanceOf(Stripe.errors.StripeAPIError);
+
+    expect(stripe.deauthorized).toEqual(["acct_TestConnect1"]);
+    expect(stripe.callsOf("oauth.deauthorize").map((call) => [call.params, call.idempotencyKey])).toEqual([
+      [params, undefined],
+      [{ stripe_user_id: "acct_TestConnect1" }, options.idempotencyKey],
+      [params, options.idempotencyKey],
+      [params, options.idempotencyKey],
+    ]);
+    expect(stripe.reset().deauthorized).toEqual([]);
   });
 });

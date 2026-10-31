@@ -71,7 +71,8 @@ function bffKey(): string {
   return key;
 }
 
-interface ApiCall {
+/** One call of the platform API (`callPlatformApi`). */
+export interface ApiCall {
   /** The operationId, for error messages. */
   readonly operation: string;
   readonly method: "GET" | "POST";
@@ -80,11 +81,17 @@ interface ApiCall {
   readonly endUserIp: string;
   readonly body?: unknown;
   readonly accessToken?: string;
+  /** Headers of the operation itself, such as `Idempotency-Key`; the PADR-0019 headers below always win. */
+  readonly headers?: Readonly<Record<string, string>>;
 }
 
-/** Calls the platform API as a first-party caller on behalf of the end user at `endUserIp` (PADR-0019). */
-async function callPlatformApi<T>(call: ApiCall): Promise<T> {
+/**
+ * Calls the platform API as a first-party caller on behalf of the end user at `endUserIp` (PADR-0019) and resolves to
+ * the JSON answer; a refusal rejects with a `PlatformApiError` (operation, status and code, never a body).
+ */
+export async function callPlatformApi<T>(call: ApiCall): Promise<T> {
   const headers: Record<string, string> = {
+    ...call.headers,
     Accept: "application/json",
     "X-Velexis-Bff-Key": bffKey(),
     "X-Velexis-End-User-IP": call.endUserIp,

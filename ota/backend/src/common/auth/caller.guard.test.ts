@@ -37,6 +37,12 @@ const SEARCH_LOCATIONS = "/v1/reference/locations?keyword=par";
  */
 const PAYMENT_UPDATE = { card: { brand: "VISA", bin: "424242" } };
 const PAYMENT_PROBE = "/__callers/payments/pay_0123456789ABCDEFGHJK";
+/**
+ * The budget of a hook that starts (or closes) a second application of this file: the module graph on the preloaded
+ * document, about half a second alone and a few seconds while every package's tests run at once. It only stops a start
+ * or a close that hangs.
+ */
+const SECOND_APP_SETUP_TIMEOUT_MS = 30_000;
 
 @Controller("__callers")
 class CallerProbe {
@@ -224,6 +230,22 @@ describe("the edge header and an API key together", () => {
 });
 
 describe("API keys (rule 1.3)", () => {
+  /** An application whose PostgreSQL cannot be reached (a loopback port where nothing listens). */
+  let down: TestApp;
+
+  // Starting a second application is one-time work of the 503 test below (FIX-W35-OTA, lead decision (2f) of
+  // 2026-10-30): its module graph on the preloaded document is about half a second alone, and above 2 s while every
+  // package's tests run at once, which the test's own 5 s used to pay. The budget only stops a start that hangs.
+  beforeAll(async () => {
+    down = await createTestApp({
+      env: { DATABASE_URL: `postgres://velexis_ota_app:dummy@127.0.0.1:${await freePort()}/velexis` },
+    });
+  }, SECOND_APP_SETUP_TIMEOUT_MS);
+
+  afterAll(async () => {
+    await down?.close();
+  }, SECOND_APP_SETUP_TIMEOUT_MS);
+
   it("puts a verified key in the request context: id, tenant, kind, environment and scopes", async () => {
     const database = spyOnDatabase();
     const row = rowOf(SECRET_KEY, { scopes: ["storefront"] });
@@ -278,20 +300,10 @@ describe("API keys (rule 1.3)", () => {
   });
 
   it("answers 503 SERVICE_UNAVAILABLE when PostgreSQL cannot be reached", async () => {
-    const down = await createTestApp({
-      env: { DATABASE_URL: `postgres://velexis_ota_app:dummy@127.0.0.1:${await freePort()}/velexis` },
-    });
-    try {
-      const res = await request(down.server)
-        .post("/v1/flight-searches")
-        .set("X-Api-Key", SECRET_KEY)
-        .send({});
+    const res = await request(down.server).post("/v1/flight-searches").set("X-Api-Key", SECRET_KEY).send({});
 
-      expect([res.status, res.body.error.code]).toEqual([503, "SERVICE_UNAVAILABLE"]);
-      expectResponseToMatch("createFlightSearch", res);
-    } finally {
-      await down.close();
-    }
+    expect([res.status, res.body.error.code]).toEqual([503, "SERVICE_UNAVAILABLE"]);
+    expectResponseToMatch("createFlightSearch", res);
   });
 });
 

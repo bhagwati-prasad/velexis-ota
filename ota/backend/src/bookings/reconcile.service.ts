@@ -107,6 +107,7 @@ import { storefrontUrl } from "../notifications/renderer";
 import type { TemplateKey } from "../notifications/templates/registry";
 import {
   PAYMENT_GATEWAY,
+  recordedPaymentAccount,
   type GatewayContext,
   type GatewayState,
   type PaymentGateway,
@@ -1596,6 +1597,7 @@ export class ReconcileService {
             amount: new Money(payment.amount).toFixed(minorUnits),
             minorUnits,
             version: payment.version,
+            account: recordedPaymentAccount(payment.metadata),
           },
           amount,
         );

@@ -21,6 +21,14 @@ export interface ActionState {
   readonly code?: string;
   readonly requestId?: string;
   readonly fieldErrors?: FieldErrors;
+  /**
+   * A new idempotency key for the form's next submission (`crypto.randomUUID()` of the server action), after a failure
+   * that used up the key the form sent: the API stored its final answer under that key (`withNextActionKey`). Absent:
+   * the next submission sends the same key again, so a retry replays the first request or waits for it (OADR-0018
+   * point 5, revisions of 2026-10-27, FIX-W31-OTA, and 2026-10-28, FIX-W32-OTA: none after `409
+   * IDEMPOTENCY_KEY_REUSED`, whose message asks for a reload). Not shown.
+   */
+  readonly nextActionKey?: string;
 }
 
 /**
@@ -28,6 +36,59 @@ export interface ActionState {
  * SDK's `idempotencyKey`). Here rather than in the dialog's client module, so the server actions' schemas can read it.
  */
 export const ACTION_KEY_FIELD = "actionKey";
+
+/** What `keepsActionKey` reads of a failed call: the shape of an SDK `VelexisError` (lib/errors.ts). */
+export interface KeyedCallFailure {
+  readonly status: number;
+  readonly code: string;
+  readonly details?: Readonly<Record<string, unknown>> | undefined;
+}
+
+/**
+ * Whether a form sends the same idempotency key again after its call failed with `failure` (OADR-0018 point 5,
+ * revision of 2026-10-27, FIX-W31-OTA, lead decision (1) of 2026-10-27). The OTA API stores a final `4xx` under the key
+ * for 24 hours (`idempotency.service.ts` `outcomeDisposition`), so a corrected resubmission with that key would only
+ * get `409 IDEMPOTENCY_KEY_REUSED`: after one, the form needs a new key. It keeps the key after `412
+ * PRECONDITION_FAILED` (the page is out of date: a reload renders a new one), after the API's transient answers that
+ * it never stores (`429`, `409 CONFLICT` with `details.reason = idempotency_key_in_use`: the first request with the
+ * key still runs), after `503`, `504` and every other `5xx`, and after a timeout or a network error (`status` 0): a
+ * retry then replays the first request's answer, waits for it, or runs it once.
+ *
+ * Revision of 2026-10-28 (FIX-W32-OTA, lead decision (1d)): it keeps the key after `409 IDEMPOTENCY_KEY_REUSED` too.
+ * The key was sent before with other values, by a request whose answer this form never saw (a timeout, a `5xx`, another
+ * tab): that request may still be running, or may have refunded or captured, so a new key could do it twice. The
+ * message asks staff to reload the page (lib/errors.ts), whose new render shows what happened and brings a new key.
+ */
+export function keepsActionKey(failure: KeyedCallFailure): boolean {
+  if (failure.code === "IDEMPOTENCY_KEY_REUSED") {
+    return true;
+  }
+  if (failure.status < 400 || failure.status >= 500) {
+    return true;
+  }
+  if (failure.status === 412 || failure.status === 429) {
+    return true;
+  }
+  return failure.code === "CONFLICT" && failure.details?.["reason"] === "idempotency_key_in_use";
+}
+
+/**
+ * `state` with a new idempotency key for the next submission (`nextActionKey`) when the call that failed with
+ * `failure` used up the key it sent (`keepsActionKey`); `state` as it is otherwise. For the failure of a call that
+ * carried the form's key only: a refusal before the call (the form's own validation, a permission) used no key.
+ */
+export function withNextActionKey(
+  state: ActionState,
+  failure: KeyedCallFailure,
+  newKey: () => string = () => crypto.randomUUID(),
+): ActionState {
+  return keepsActionKey(failure) ? state : { ...state, nextActionKey: newKey() };
+}
+
+/** The key of a form's next submission: the action's new key when its state brings one, else `current`. */
+export function actionKeyAfter(current: string, state: ActionState): string {
+  return state.nextActionKey ?? current;
+}
 /** The field of a staff action's reason (`reason` of the console operations, stored in `staff_actions.reason`). */
 export const REASON_FIELD = "reason";
 /** The shortest reason the confirmation dialog accepts (some operations' `reason` has `minLength: 3`). */

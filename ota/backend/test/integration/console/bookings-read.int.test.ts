@@ -37,7 +37,10 @@ import {
 import { startAmadeusStub, type AmadeusStub } from "@velexis/testing/amadeus";
 import request, { type Response } from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { AccountRepository } from "../../../src/account/account.repository";
+import { DELETED_ADDRESS_KEY_BYTES, deletedAddress } from "../../../src/account/account.service";
 import { newBookingReference } from "../../../src/bookings/booking-reference";
+import { localDayOf } from "../../../src/bookings/cancellation-mode";
 import { orderSegmentsOf } from "../../../src/bookings/order-diff";
 import { buildCreateOrderRequest } from "../../../src/bookings/order-request.builder";
 import { BookingTravelerDocuments, readCreatedOrder } from "../../../src/bookings/order-recorder";
@@ -1083,6 +1086,147 @@ describe("console.bookings.list: filters, sorts and pages", () => {
   });
 });
 
+describe("console.bookings.list and get of a deleted customer's booking (FIX-W32-OTA)", () => {
+  it("[FIX-W32-OTA AC5] shows the customer of a deleted account without its kept names, in the list and in the detail", async () => {
+    const agent = await staffSession(alphaId, "agent");
+    const tag = `deleted-${randomBytes(3).toString("hex")}`;
+    // A customer whose names are found nowhere else in the answer (the traveller is TESTA SAMPLE).
+    const kept = { firstName: "Gunnhild", lastName: "Vestergaard" };
+    const customerId = newId("cus");
+    const email = `${customerId.toLowerCase()}@example.com`;
+    await inTenant("tenant_alpha", (trx) =>
+      trx
+        .insertInto("customers")
+        .values({
+          id: customerId,
+          email,
+          email_verified_at: new Date(),
+          first_name: kept.firstName,
+          last_name: kept.lastName,
+        })
+        .execute(),
+    );
+    const bookingId = await seedBooking({ tags: [tag], customerId });
+    // account.delete as its repository writes it: the placeholder address; the names are kept until the erasure job.
+    await inTenant("tenant_alpha", (trx) =>
+      new AccountRepository().markDeleted(trx, {
+        customerId,
+        placeholder: deletedAddress(email, randomBytes(DELETED_ADDRESS_KEY_BYTES)),
+        now: new Date(),
+      }),
+    );
+    const stored = await inTenant("tenant_alpha", (trx) =>
+      trx
+        .selectFrom("customers")
+        .select(["status", "first_name", "last_name"])
+        .where("id", "=", customerId)
+        .executeTakeFirstOrThrow(),
+    );
+    expect(stored).toEqual({ status: "deleted", first_name: kept.firstName, last_name: kept.lastName });
+
+    const listed = await agent.get(`/v1/console/bookings?tag=${tag}`);
+    const got = await agent.get(`/v1/console/bookings/${bookingId}`);
+
+    expect(answer(listed)).toEqual([200, undefined]);
+    expectResponseToMatch("consoleListBookings", listed);
+    expect(answer(got)).toEqual([200, undefined]);
+    expectResponseToMatch("consoleGetBooking", got);
+    const placeholder = /^[0-9a-f]{64}@deleted\.invalid$/;
+    for (const customer of [(listed.body as PageBody).data[0]?.["customer"], got.body.customer]) {
+      expect(customer).toEqual({
+        id: customerId,
+        email: expect.stringMatching(placeholder) as unknown,
+        firstName: null,
+        lastName: null,
+      });
+    }
+    for (const res of [listed, got]) {
+      for (const value of [kept.firstName, kept.lastName, email]) {
+        expect(res.text).not.toContain(value);
+      }
+    }
+  });
+
+  it("[FIX-W33-OTA] [OBE-061] never shows a deleted customer's name as an actor of the timeline, while another customer's stays", async () => {
+    const agent = await staffSession(alphaId, "agent");
+    // Names found nowhere else in the answer (the traveller is TESTA SAMPLE).
+    const kept = { firstName: "Ragnhild", lastName: "Oksvold" };
+    const other = { firstName: "Sigrun", lastName: "Haldorsen" };
+    const [deletedId, otherId] = [newId("cus"), newId("cus")];
+    const email = `${deletedId.toLowerCase()}@example.com`;
+    await inTenant("tenant_alpha", (trx) =>
+      trx
+        .insertInto("customers")
+        .values([
+          {
+            id: deletedId,
+            email,
+            email_verified_at: new Date(),
+            first_name: kept.firstName,
+            last_name: kept.lastName,
+          },
+          {
+            id: otherId,
+            email: `${otherId.toLowerCase()}@example.com`,
+            email_verified_at: new Date(),
+            first_name: other.firstName,
+            last_name: other.lastName,
+          },
+        ])
+        .execute(),
+    );
+    const bookingId = await seedBooking({ customerId: deletedId });
+    // Events the customer caused before deleting the account, and one of another customer (a guest booking claimed
+    // later, say): the timeline names the actor from the customers row.
+    const byDeleted = await seedEvent(bookingId, {
+      type: "booking.contacts_updated",
+      actorType: "customer",
+      actorId: deletedId,
+      visible: true,
+      agoMs: 2 * HOUR,
+    });
+    const byOther = await seedEvent(bookingId, {
+      type: "booking.cancellation_requested",
+      actorType: "customer",
+      actorId: otherId,
+      visible: true,
+      agoMs: HOUR,
+    });
+    await inTenant("tenant_alpha", (trx) =>
+      new AccountRepository().markDeleted(trx, {
+        customerId: deletedId,
+        placeholder: deletedAddress(email, randomBytes(DELETED_ADDRESS_KEY_BYTES)),
+        now: new Date(),
+      }),
+    );
+
+    const got = await agent.get(`/v1/console/bookings/${bookingId}`);
+
+    expect(answer(got)).toEqual([200, undefined]);
+    expectResponseToMatch("consoleGetBooking", got);
+    const actors = new Map(
+      (got.body.events as JsonObject[]).map((event) => [event["id"], event["actor"] as JsonObject]),
+    );
+    expect(actors.get(byDeleted)).toEqual({
+      type: "customer",
+      id: deletedId,
+      name: null,
+      email: null,
+      role: null,
+    });
+    expect(actors.get(byOther)).toEqual({
+      type: "customer",
+      id: otherId,
+      name: `${other.firstName} ${other.lastName}`,
+      email: null,
+      role: null,
+    });
+    for (const value of [kept.firstName, kept.lastName, email]) {
+      expect(got.text).not.toContain(value);
+    }
+  });
+});
+
 describe("console.bookings.get", () => {
   it("[OBE-061 AC2] answers the console view with net amounts, markup, payments, every remark, events, notes and staff actions, which customer scope never shows", async () => {
     const agent = await staffSession(alphaId, "agent");
@@ -1497,6 +1641,76 @@ describe("console.bookings.get", () => {
       canCancel: false,
       reasons: { canCancel: "pending" },
     });
+  });
+
+  it("[FIX-W35-OTA AC1] answers the cancellation mode by the storefront's time zone, not UTC, without an Amadeus call", async () => {
+    // A zone far from UTC whose midnight is more than 5 minutes away, so the day the test computes is the API's day
+    // when it answers (Kiritimati is UTC+14, Tokyo UTC+9: their midnights are 5 hours apart, one always qualifies).
+    const zone =
+      ["Pacific/Kiritimati", "Asia/Tokyo"].find(
+        (candidate) => localDayOf(new Date(), candidate).endsAt.getTime() - Date.now() > 5 * MINUTE,
+      ) ?? "Asia/Tokyo";
+    const day = localDayOf(new Date(), zone);
+    const agent = await staffSession(alphaId, "agent");
+    /** A ticketed booking with one ticket issued at `issuedAt`. */
+    const ticketedAt = async (issuedAt: Date): Promise<string> => {
+      const id = await seedBooking({ status: "ticketed" });
+      await inTenant("tenant_alpha", (trx) =>
+        trx
+          .insertInto("booking_tickets")
+          .values({
+            id: newId("tkt"),
+            booking_id: id,
+            amadeus_traveler_id: "1",
+            document_type: "ETICKET",
+            // An Amadeus ticket number: the airline's accounting code, then 10 digits.
+            document_number: `075-${randomInt(1_000_000_000, 9_999_999_999)}`,
+            segment_ids: ["3"],
+            issued_at: issuedAt,
+          })
+          .execute(),
+      );
+      return id;
+    };
+    const today = await ticketedAt(day.startsAt);
+    const yesterday = await ticketedAt(new Date(day.startsAt.getTime() - MINUTE));
+    const unticketed = await seedBooking();
+    const cancelled = await seedBooking({ status: "cancelled", ticketingStatus: "not_applicable" });
+    const zoneOf = async (timeZone: string) =>
+      await inTenant("tenant_alpha", (trx) =>
+        trx.updateTable("storefront_settings").set({ time_zone: timeZone }).execute(),
+      );
+    stub.clearRequests();
+    await zoneOf(zone);
+    const answers: Record<string, Response> = {};
+    try {
+      for (const [name, id] of Object.entries({ today, yesterday, unticketed, cancelled })) {
+        answers[name] = await agent.get(`/v1/console/bookings/${id}`);
+      }
+    } finally {
+      await zoneOf("UTC");
+    }
+    for (const res of Object.values(answers)) {
+      expect(answer(res)).toEqual([200, undefined]);
+      expectResponseToMatch("consoleGetBooking", res);
+    }
+    // Issued at the first instant of the OTA's day: voided until the next midnight there, which is not UTC's.
+    expect(answers["today"]?.body.cancellationMode).toEqual({
+      mode: "void",
+      voidDeadlineAt: day.endsAt.toISOString(),
+    });
+    expect(day.endsAt.toISOString().endsWith("T00:00:00.000Z")).toBe(false);
+    // A minute before it: the OTA's yesterday, a request to the airline.
+    expect(answers["yesterday"]?.body.cancellationMode).toEqual({
+      mode: "request_only",
+      voidDeadlineAt: null,
+    });
+    expect(answers["unticketed"]?.body.cancellationMode).toEqual({ mode: "release", voidDeadlineAt: null });
+    // The cancellation refuses a cancelled booking: no mode, as canCancel says.
+    expect(answers["cancelled"]?.body.cancellationMode).toBeNull();
+    expect(answers["cancelled"]?.body.consoleActions).toMatchObject({ canCancel: false });
+    // From the stored tickets: no Amadeus call.
+    expect(stub.requests()).toEqual([]);
   });
 
   it("answers what each role and key may do now, and why not", async () => {

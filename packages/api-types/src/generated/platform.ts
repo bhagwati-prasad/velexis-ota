@@ -1332,7 +1332,7 @@ export interface paths {
          * Start connecting the OTA's own Stripe account with Connect Standard
          * @description Owners and admins start connecting the OTA's own Stripe account through Stripe Connect Standard OAuth (M5, PADR-0011), with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without MFA) and `FEATURE_OWN_STRIPE` on (`403 FEATURE_DISABLED`). The OTA must be `active` (`409 TENANT_NOT_ACTIVE`, PADR-0014 item 5).
          *
-         *     The API creates a 256-bit random `state`, keeps `{tenantId, accountId, membershipId}` under the Redis key `stripe:oauth:<sha256 of the state>` for 10 minutes, and answers Stripe's authorize URL: `https://connect.stripe.com/oauth/authorize` with `response_type=code`, `client_id` (`STRIPE_CONNECT_CLIENT_ID`), `scope=read_write`, the `state`, `redirect_uri` (`<PUBLIC_PORTAL_URL>/connect/stripe/callback`) and a prefilled `stripe_user[email]`. The portal sends the browser there with a `303`; Stripe sends it back to the portal's callback page, which calls `completeStripeConnect`. The URL holds the single-use state, so the answer is `no-store`. `503 SERVICE_UNAVAILABLE` while Redis is down, because the state lives only there. One connected account serves both environments: the test connection is switched at once, the live one too when the OTA is live, otherwise at go-live.
+         *     The API creates a 256-bit random `state`, keeps `{tenantId, accountId, membershipId}` under the Redis key `stripe:oauth:<sha256 of the state>` for 10 minutes, and answers Stripe's authorize URL: `https://connect.stripe.com/oauth/authorize` with `response_type=code`, `client_id` (`STRIPE_CONNECT_CLIENT_ID`), `scope=read_write`, the `state`, `redirect_uri` (`<PUBLIC_PORTAL_URL>/connect/stripe/callback`) and `stripe_user[email]` prefilled with the caller's own address (the owner or admin who is sent to Stripe). The portal sends the browser there with a `303`; Stripe sends it back to the portal's callback page, which calls `completeStripeConnect`. The URL holds the single-use state, so the answer is `no-store`. `503 SERVICE_UNAVAILABLE` while Redis is down, because the state lives only there. One connected account serves both environments: the test connection is switched at once, the live one too when the OTA is live, otherwise at go-live.
          */
         post: operations["startStripeConnect"];
         delete?: never;
@@ -1352,10 +1352,10 @@ export interface paths {
         put?: never;
         /**
          * Finish connecting the OTA's own Stripe account
-         * @description The portal's callback page (`/connect/stripe/callback`, signed-in user) posts what Stripe sent back (M5, PADR-0011); the OTA is the one of the state, so the path names none. The API takes the state with `GETDEL`, so it works once: an unknown, expired or used state, or one that another account started, answers `400 CONNECT_STATE_INVALID`. The account that started must still be an owner or admin of the OTA (`403 FORBIDDEN`), and the OTA must be `active` (`409 TENANT_NOT_ACTIVE`).
+         * @description The portal's callback page (`/connect/stripe/callback`, signed-in user) posts what Stripe sent back (M5, PADR-0011), while `FEATURE_OWN_STRIPE` is on (`403 FEATURE_DISABLED`, as for `startStripeConnect`; the state is not taken then); the OTA is the one of the state, so the path names none. The API takes the state with `GETDEL`, so it works once: an unknown, expired or used state, or one that another account started, answers `400 CONNECT_STATE_INVALID`. The account that started must still be an owner or admin of the OTA (`403 FORBIDDEN`), and the OTA must be `active` (`409 TENANT_NOT_ACTIVE`). A callback never re-enables a payment connection a platform admin disabled (`adminSetConnectionStatus`): while one of the OTA's payment connections is `disabled` without a Stripe disconnection (`disconnectedAt` empty), it answers `409 CONFLICT` with `details.reason = connection_disabled` before Stripe is asked anything (whether a code or an error came back), and writes nothing; a connection an admin disables while the code is being exchanged gets the same answer and nothing is written either. A connection disabled because the OTA disconnected Velexis in Stripe can be connected again.
          *
          *     - `{state, error}`: Stripe reported an error and nothing changes: `422 UNPROCESSABLE` with `details.reason = access_denied` when the person declined, `oauth_error` for any other error.
-         *     - `{state, code}`: the code is exchanged with `stripe.oauth.token` using Velexis's secret key. Only the connected account id (`acct_…`) and `livemode` are kept; the access and refresh tokens Stripe returns are discarded, because charges use Velexis's key with `Stripe-Account`. `livemode` must match the deployment (live in production, test elsewhere; `422 UNPROCESSABLE`, `details.reason = livemode_mismatch`), and an account connected to another OTA answers `409 STRIPE_ACCOUNT_ALREADY_CONNECTED`. The account's `charges_enabled`, `payouts_enabled` and `details_submitted` are read from Stripe. A Stripe failure answers `502 PROVIDER_ERROR`.
+         *     - `{state, code}`: the code is exchanged with `stripe.oauth.token` using Velexis's secret key. Only the connected account id (`acct_…`) and `livemode` are kept; the access and refresh tokens Stripe returns are discarded, because charges use Velexis's key with `Stripe-Account`. A code Stripe refuses (`invalid_grant`: unknown, expired or used) answers `422 UNPROCESSABLE` with `details.reason = oauth_error`, never Stripe's message. `livemode` must match the deployment (live in production, test elsewhere): otherwise Velexis is disconnected from that account again (`stripe.oauth.deauthorize`, best effort: a failure is logged without any token, and an account an OTA's connection holds is left connected) and the answer is `422 UNPROCESSABLE`, `details.reason = livemode_mismatch`. An account connected to another OTA answers `409 STRIPE_ACCOUNT_ALREADY_CONNECTED`. The account's `charges_enabled`, `payouts_enabled` and `details_submitted` are read from Stripe. Any other Stripe failure answers `502 PROVIDER_ERROR`.
          *
          *     **Effect**, in one transaction: the test payment connection becomes `connect_standard` with the account id, no publishable key and no secrets, the account's capabilities, `connectedAt`, and `active` when charges are enabled (`pending` otherwise, until `account.updated` says so); the live connection the same when the OTA is live, otherwise go-live creates it in this mode. Writes the audit row `payments.connect_connected` and, after commit, publishes `connection` invalidations. Existing payments stay on the account they were taken with. `code` and `state` are write-only: never logged and never answered. `503 SERVICE_UNAVAILABLE` while Redis is down, because the state lives only there.
          */
@@ -1566,7 +1566,7 @@ export interface paths {
          * Set or replace the OTA's payout account
          * @description Owners set or replace the bank account where Velexis pays the OTA's settlements (M5, `velexis` mode, PADR-0003 item 10), with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without MFA) and `FEATURE_SETTLEMENTS` on (`403 FEATURE_DISABLED`). `scheme: iban` takes an IBAN (spaces and lower case allowed; the service removes the spaces, upper-cases it and checks the mod-97 checksum) and an optional BIC; `scheme: local` takes an account number and a routing number (sort code, ABA or bank code). A wrong checksum answers `400 VALIDATION_FAILED` with a field error on `/iban` that never holds the value.
          *
-         *     The bank identifiers are stored envelope-encrypted as one JSON value; only `last4`, the last 4 characters of the IBAN or account number, is kept in clear. Every change sets the status back to `pending_review` until a platform admin verifies it, writes the audit row `payout_account.updated` without the numbers and e-mails ops (`ops.alert`). `iban`, `bic`, `accountNumber` and `routingNumber` are write-only: never logged and never answered, so the answer is the masked account.
+         *     The bank identifiers are stored envelope-encrypted as one JSON value; only `last4`, the last 4 characters of the IBAN or account number, is kept in clear. Every change sets the status back to `pending_review` until a platform admin verifies it, writes the audit row `payout_account.updated` without the numbers and e-mails ops (`ops.alert`). The stored account typed again is no change (lead decision (2i) of 2026-10-30): when the holder (trimmed), country, currency, scheme and identifiers, normalised as above, are the stored ones, the answer is the current account as it is (the same `200`, version and status: a verified account stays verified, a pending one keeps waiting), and nothing is written, audited or e-mailed. A `rejected` account typed again is the exception (lead decision (2a) of 2026-10-30): the owner asks for a new review, so it is saved as a change is (the next version, back in `pending_review` with the review note cleared, the audit row and the `ops.alert` e-mail). `iban`, `bic`, `accountNumber` and `routingNumber` are write-only: never logged and never answered, so the answer is the masked account.
          */
         put: operations["setPayoutAccount"];
         post?: never;
@@ -1877,7 +1877,7 @@ export interface paths {
         put?: never;
         /**
          * Suspend an OTA
-         * @description Suspends an `active` OTA (PADR-0014) for `abuse`, `request` or `admin`, with a written `reason` of 5–500 characters that the audit row keeps; `billing` suspensions are set only by billing sync. One transaction sets the status `suspended`, `suspended_at`, `suspension_reason` and a new version, inserts a `suspend` job and writes the audit row. After commit it publishes a `tenant` invalidation, so the storefront and the OTA API answer `TENANT_SUSPENDED` within 60 seconds, dispatches `tenant.suspend` to the OTA worker and e-mails the owners. Any other status answers `409 CONFLICT` (`details.reason = not_active`). Data is never deleted.
+         * @description Suspends an `active` OTA (PADR-0014) for `abuse`, `request` or `admin`, with a written `reason` of 5–500 characters after trimming that the audit row keeps; `billing` suspensions are set only by billing sync. One transaction sets the status `suspended`, `suspended_at`, `suspension_reason` and a new version, inserts a `suspend` job and writes the audit row. After commit it publishes a `tenant` invalidation, so the storefront and the OTA API answer `TENANT_SUSPENDED` within 60 seconds, dispatches `tenant.suspend` to the OTA worker and e-mails the owners. Any other status answers `409 CONFLICT` (`details.reason = not_active`). Data is never deleted.
          */
         post: operations["adminSuspendTenant"];
         delete?: never;
@@ -1903,7 +1903,7 @@ export interface paths {
         put?: never;
         /**
          * Resume a suspended OTA
-         * @description Resumes a `suspended` OTA (PADR-0014 item 4), with a written `reason` of 5–500 characters that the audit row keeps. A `billing` suspension resumes here only while the current subscription is `trialing` or `active` (billing sync also resumes it on its own when the payment arrives). One transaction sets the status `active`, clears the suspension fields, inserts a `resume` job and writes the audit row; after commit a `tenant` invalidation, the `tenant.resume` dispatch and an e-mail to the owners. `409 CONFLICT` when the OTA is not suspended (`details.reason = not_suspended`), or is suspended for billing without a `trialing` or `active` subscription (`details.reason = subscription_not_active`).
+         * @description Resumes a `suspended` OTA (PADR-0014 item 4), with a written `reason` of 5–500 characters after trimming that the audit row keeps. A `billing` suspension resumes here only while the current subscription is `trialing` or `active` (billing sync also resumes it on its own when the payment arrives). One transaction sets the status `active`, clears the suspension fields, inserts a `resume` job and writes the audit row; after commit a `tenant` invalidation, the `tenant.resume` dispatch and an e-mail to the owners. `409 CONFLICT` when the OTA is not suspended (`details.reason = not_suspended`), or is suspended for billing without a `trialing` or `active` subscription (`details.reason = subscription_not_active`).
          */
         post: operations["adminResumeTenant"];
         delete?: never;
@@ -1965,7 +1965,7 @@ export interface paths {
         put?: never;
         /**
          * Disable or re-enable a connection of an OTA
-         * @description Sets the Amadeus or payment connection of one environment to `disabled` or back to `active`, with a written `reason` of 5–500 characters that the audit row keeps. A disabled connection stops the OTA's supplier or payment calls in that environment; for example, staff disable the Amadeus connection of an abusive OTA while its paid bookings settle (PADR-0014). `404 NOT_FOUND` when the OTA has no such connection; `409 CONFLICT` when the connection cannot take the status, for example `active` on a connection that is not `disabled` (`details.reason = not_disabled`). Writes an audit row and, after commit, publishes a `connection` invalidation, so the OTA backend reloads the connection. The answer is the masked connection, as the portal lists it.
+         * @description Sets the Amadeus or payment connection of one environment to `disabled` or back to `active`, with a written `reason` of 5–500 characters after trimming that the audit row keeps. A disabled connection stops the OTA's supplier or payment calls in that environment; for example, staff disable the Amadeus connection of an abusive OTA while its paid bookings settle (PADR-0014). `404 NOT_FOUND` when the OTA has no such connection; `409 CONFLICT` when the connection cannot take the status, for example `active` on a connection that is not `disabled` (`details.reason = not_disabled`). Writes an audit row and, after commit, publishes a `connection` invalidation, so the OTA backend reloads the connection. The answer is the masked connection, as the portal lists it.
          */
         post: operations["adminSetConnectionStatus"];
         delete?: never;
@@ -2063,7 +2063,7 @@ export interface paths {
         put?: never;
         /**
          * Cancel a queued tenant job
-         * @description Cancels a `queued` job that was never dispatched or waits for its next attempt (for example a `provision` job waiting for its Checkout gate), with a written `reason` of 5–500 characters that the audit row keeps. The job becomes `canceled` and nothing more is sent to the OTA worker; the tenant status does not change. A `running` or finished job answers `409 CONFLICT` (`details.reason = not_queued`).
+         * @description Cancels a `queued` job that was never dispatched or waits for its next attempt (for example a `provision` job waiting for its Checkout gate), with a written `reason` of 5–500 characters after trimming that the audit row keeps. The job becomes `canceled` and nothing more is sent to the OTA worker; the tenant status does not change. A `running` or finished job answers `409 CONFLICT` (`details.reason = not_queued`).
          */
         post: operations["adminCancelProvisioningJob"];
         delete?: never;
@@ -2272,7 +2272,7 @@ export interface paths {
         head?: never;
         /**
          * Edit a manual subscription
-         * @description Changes a **manual** subscription (the trials before M5): its plan, its trial end, or its status (`trialing` or `canceled`), with a written `reason` of 5–500 characters that the audit row keeps. At least one change comes with the reason. A change of plan also sets `tenants.plan_code` and, after commit, publishes a `tenant` invalidation; `canceled` sets `canceled_at`. `If-Match` carries the subscription's `version`; a stale version answers `412 PRECONDITION_FAILED`.
+         * @description Changes a **manual** subscription (the trials before M5): its plan, its trial end, or its status (`trialing` or `canceled`), with a written `reason` of 5–500 characters after trimming that the audit row keeps. At least one change comes with the reason. A change of plan also sets `tenants.plan_code` and, after commit, publishes a `tenant` invalidation; `canceled` sets `canceled_at`. `If-Match` carries the subscription's `version`; a stale version answers `412 PRECONDITION_FAILED`.
          *
          *     `409 CONFLICT` when the subscription is billed by Stripe (`details.reason = stripe_billed`; Stripe subscriptions change in the Customer Portal or with `adminResyncSubscription` in M5), or when `trialing` would give the OTA a second current subscription (`details.reason = current_exists`). A `planCode` that names no active plan answers `422 UNPROCESSABLE` (`details.reason = plan_not_active`); plans that are not public are allowed.
          */
@@ -2542,7 +2542,7 @@ export interface paths {
         put?: never;
         /**
          * Return an office to the pool
-         * @description Returns an office to `available` (M5, PADR-0012 item 5): it keeps no OTA and gets `releasedAt`. This is the manual step after an OTA moved to its own Amadeus credentials, which left the Velexis office `releasing` so the OTA backend can still service the orders created through it. The admin releases it only once the OTA confirmed, from its bookings console filtered by office, that no booking with future travel remains on it: the body carries `confirmNoOpenBookings: true` and a written `reason` of 5–500 characters that the audit row keeps. There is no automatic timer.
+         * @description Returns an office to `available` (M5, PADR-0012 item 5): it keeps no OTA and gets `releasedAt`. This is the manual step after an OTA moved to its own Amadeus credentials, which left the Velexis office `releasing` so the OTA backend can still service the orders created through it. The admin releases it only once the OTA confirmed, from its bookings console filtered by office, that no booking with future travel remains on it: the body carries `confirmNoOpenBookings: true` and a written `reason` of 5–500 characters after trimming that the audit row keeps. There is no automatic timer.
          *
          *     A `releasing` office is released. An `assigned` office is released only when it backs no active `velexis` connection of its OTA (for example after the connection was disabled for abuse, PADR-0012 item 8); one that does answers `409 CONFLICT` (`details.reason = connection_active`). An `available` or `retired` office answers `409 CONFLICT` (`details.reason = not_assigned`). Writes an audit row and, after commit, publishes the `amadeus_account` invalidation.
          */
@@ -2570,7 +2570,7 @@ export interface paths {
         put?: never;
         /**
          * Retire an office
-         * @description Takes an `available` office out of use for good (`retired`, PADR-0012 item 1), with a written `reason` of 5–500 characters that the audit row keeps. An office in any other status answers `409 CONFLICT` (`details.reason = not_available`): an assigned office is released first (`adminReleaseAmadeusOffice`, M5).
+         * @description Takes an `available` office out of use for good (`retired`, PADR-0012 item 1), with a written `reason` of 5–500 characters after trimming that the audit row keeps. An office in any other status answers `409 CONFLICT` (`details.reason = not_available`): an assigned office is released first (`adminReleaseAmadeusOffice`, M5).
          */
         post: operations["adminRetireAmadeusOffice"];
         delete?: never;
@@ -2716,7 +2716,7 @@ export interface paths {
         put?: never;
         /**
          * Add a manual adjustment line to a draft
-         * @description Adds a manual `adjustment` line to a **draft** (M5, PADR-0003 item 5): a signed amount in the statement's currency (positive is owed to the OTA; another currency answers `400 VALIDATION_FAILED`), a `description` that the OTA sees on the line, and a written `reason` of 5–500 characters that the audit row keeps. The totals are recomputed in the same transaction (`adjustmentsAmount`, `netAmount`, `lineCount`) and the statement's version rises. Any other status answers `409 SETTLEMENT_STATE_INVALID`: approved, paid and carried-forward statements are immutable. A regeneration of the draft keeps no adjustment, as it rebuilds every line.
+         * @description Adds a manual `adjustment` line to a **draft** (M5, PADR-0003 item 5): a signed amount in the statement's currency (positive is owed to the OTA; another currency answers `400 VALIDATION_FAILED`), a `description` that the OTA sees on the line (stored trimmed: one of only white space answers `400 VALIDATION_FAILED`), and a written `reason` of 5–500 characters after trimming that the audit row keeps. The totals are recomputed in the same transaction (`adjustmentsAmount`, `netAmount`, `lineCount`) and the statement's version rises. Any other status answers `409 SETTLEMENT_STATE_INVALID`: approved, paid and carried-forward statements are immutable. A regeneration of the draft keeps no adjustment, as it rebuilds every line.
          */
         post: operations["adminAddSettlementAdjustment"];
         delete?: never;
@@ -2742,7 +2742,7 @@ export interface paths {
         put?: never;
         /**
          * Approve a draft
-         * @description Approves a **draft** (M5, PADR-0003 items 7 and 9) with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`; PADR-0006 item 4) and `If-Match` (a stale version answers `412 PRECONDITION_FAILED`). A positive net makes it `approved`, to be paid by bank transfer, and needs a `verified` payout account (`422 PAYOUT_ACCOUNT_REQUIRED`); a net of zero or less makes it `carried_forward`, and the next month's draft absorbs it as a `carry_forward` line. Approving also sets `carriedToId` on the earlier carried-forward statements this draft absorbed. From then on the statement is immutable and the portal shows it. Any other status answers `409 SETTLEMENT_STATE_INVALID`. Writes an audit row.
+         * @description Approves a **draft** (M5, PADR-0003 items 7 and 9) with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`; PADR-0006 item 4) and `If-Match` (a stale version answers `412 PRECONDITION_FAILED`). A positive net makes it `approved`, to be paid by bank transfer, and needs a `verified` payout account (`422 PAYOUT_ACCOUNT_REQUIRED`); a net of zero or less makes it `carried_forward`, and the next month's draft absorbs it as a `carry_forward` line. Approving also sets `carriedToId` on the earlier carried-forward statements this draft absorbed. From then on the statement is immutable and the portal shows it. Any other status answers `409 SETTLEMENT_STATE_INVALID`. A carried-forward balance is absorbed once (PADR-0003 item 7: by the earliest later open draft of the same OTA, environment and currency), so the approval checks the draft's `carry_forward` line again: when it no longer holds exactly the balances this draft absorbs now (another statement absorbed one of them since the draft was generated, or a balance was carried forward after it), the answer is `409 SETTLEMENT_STATE_INVALID` with `details.reason = carry_forward_changed` and nothing changes; generate the month again (`adminGenerateSettlements`) and approve the rebuilt draft. Writes an audit row.
          */
         post: operations["adminApproveSettlement"];
         delete?: never;
@@ -2768,7 +2768,7 @@ export interface paths {
         put?: never;
         /**
          * Record the bank transfer of an approved statement
-         * @description Records that Velexis paid an **approved** statement by bank transfer (M5, PADR-0003 items 9 and 11): the date of the transfer (`paidAt`, not in the future) and the bank's reference, with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`), `If-Match` (`412 PRECONDITION_FAILED`) and a `verified` payout account (`422 PAYOUT_ACCOUNT_REQUIRED`, PADR-0003 item 9). The statement becomes `paid`, an audit row is written, and the owners and finance members of the OTA are e-mailed (`settlements.paid`) through the outbox. Any other status answers `409 SETTLEMENT_STATE_INVALID`.
+         * @description Records that Velexis paid an **approved** statement by bank transfer (M5, PADR-0003 items 9 and 11): the date of the transfer (`paidAt`, not in the future) and the bank's reference (stored trimmed: one of only white space answers `400 VALIDATION_FAILED`), with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`), `If-Match` (`412 PRECONDITION_FAILED`) and a `verified` payout account (`422 PAYOUT_ACCOUNT_REQUIRED`, PADR-0003 item 9). The statement becomes `paid`, an audit row is written, and the active owners and finance members of the OTA are e-mailed (`settlement.paid`, PADR-0013 item 5) through the outbox. Any other status answers `409 SETTLEMENT_STATE_INVALID`.
          */
         post: operations["adminMarkSettlementPaid"];
         delete?: never;
@@ -2794,7 +2794,7 @@ export interface paths {
         put?: never;
         /**
          * Void a draft
-         * @description Voids a **draft** (M5, PADR-0003 items 8 and 9) with a written `reason` of 5–500 characters that the statement (`voidReason`) and the audit row keep: the statement becomes `void` and keeps its totals for the record, and its lines are deleted in the same transaction (`lineCount` 0), so their balance transactions can be settled again by a new draft (`adminGenerateSettlements`). Any other status answers `409 SETTLEMENT_STATE_INVALID`.
+         * @description Voids a **draft** (M5, PADR-0003 items 8 and 9) with a written `reason` of 5–500 characters after trimming that the statement (`voidReason`) and the audit row keep: the statement becomes `void` and keeps its totals for the record, and its lines are deleted in the same transaction (`lineCount` 0), so their balance transactions can be settled again by a new draft (`adminGenerateSettlements`). Any other status answers `409 SETTLEMENT_STATE_INVALID`.
          */
         post: operations["adminVoidSettlement"];
         delete?: never;
@@ -2846,7 +2846,7 @@ export interface paths {
         put?: never;
         /**
          * Reveal an OTA's bank details to pay a settlement
-         * @description Decrypts and answers the full bank identifiers of the OTA's payout account (M5, PADR-0003 item 10), so that Velexis can pay an approved statement by bank transfer: the IBAN and the BIC (when one was given) of an `iban` account, or the account and routing numbers of a `local` one. It needs a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, PADR-0006 item 4) and a written `reason` of 5–500 characters. Every reveal is a sensitive read: the audit row `payout_account.revealed` keeps the reason and never a number (PADR-0006, Audit item 2). The answer is `no-store`, never cached nor kept for a replay; the identifiers are never logged. An unknown OTA, or an OTA without a payout account, answers `404 NOT_FOUND`.
+         * @description Decrypts and answers the full bank identifiers of the OTA's payout account (M5, PADR-0003 item 10), so that Velexis can pay an approved statement by bank transfer: the IBAN and the BIC (when one was given) of an `iban` account, or the account and routing numbers of a `local` one. It needs a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, PADR-0006 item 4) and a written `reason` of 5–500 characters after trimming. Every reveal is a sensitive read: the audit row `payout_account.revealed` keeps the reason and never a number (PADR-0006, Audit item 2), the trimmed reason as `AdminReason` says. The answer is `no-store`, never cached nor kept for a replay; the identifiers are never logged. An unknown OTA, or an OTA without a payout account, answers `404 NOT_FOUND`.
          */
         post: operations["adminRevealPayoutAccount"];
         delete?: never;
@@ -2944,7 +2944,7 @@ export interface paths {
         put?: never;
         /**
          * Remove an abusive custom domain
-         * @description Removes a custom domain of any OTA in any status (M5, PF-92), for example one used for phishing, with a written `reason` of 5–500 characters that the audit row keeps: as `removeDomain` does, the row is deleted and, if it was primary, the sub-domain becomes primary again, in one transaction; after commit the `domain` invalidations are published and the cached `tlsask:<host>` answer is deleted, so neither the storefront nor the TLS gate serves the host any more. The owners are e-mailed through the outbox. The OTA's status does not matter. The sub-domain cannot be removed (`409 CONFLICT`, `details.reason = subdomain`).
+         * @description Removes a custom domain of any OTA in any status (M5, PF-92), for example one used for phishing, with a written `reason` of 5–500 characters after trimming that the audit row keeps: as `removeDomain` does, the row is deleted and, if it was primary, the sub-domain becomes primary again, in one transaction; after commit the `domain` invalidations are published and the cached `tlsask:<host>` answer is deleted, so neither the storefront nor the TLS gate serves the host any more. The owners are e-mailed through the outbox. The OTA's status does not matter. The sub-domain cannot be removed (`409 CONFLICT`, `details.reason = subdomain`).
          */
         post: operations["adminRemoveDomain"];
         delete?: never;
@@ -3016,7 +3016,7 @@ export interface paths {
         put?: never;
         /**
          * Disable an account
-         * @description Blocks an account (`disabled`), with a written `reason` of 5–500 characters that the audit row keeps. One transaction sets the status and revokes every session of the account (portal and admin); after commit it writes the cut-off `staffdeny:acct:<id>` in Redis, so the OTA admin refuses the account's staff sessions at once, and publishes an `account` invalidation. The account's sign-ins then answer `403 ACCOUNT_DISABLED`. `403 FORBIDDEN` for the caller's own account (`details.reason = self`) or the last active platform admin (`details.reason = last_admin`); `409 CONFLICT` when the account is already `disabled` or `deleted` (`details.reason = not_enabled`).
+         * @description Blocks an account (`disabled`), with a written `reason` of 5–500 characters after trimming that the audit row keeps. One transaction sets the status and revokes every session of the account (portal and admin); after commit it writes the cut-off `staffdeny:acct:<id>` in Redis, so the OTA admin refuses the account's staff sessions at once, and publishes an `account` invalidation. The account's sign-ins then answer `403 ACCOUNT_DISABLED`. `403 FORBIDDEN` for the caller's own account (`details.reason = self`) or the last active platform admin (`details.reason = last_admin`); `409 CONFLICT` when the account is already `disabled` or `deleted` (`details.reason = not_enabled`).
          */
         post: operations["adminDisableAccount"];
         delete?: never;
@@ -3042,7 +3042,7 @@ export interface paths {
         put?: never;
         /**
          * Enable a disabled account
-         * @description Unblocks a `disabled` account, with a written `reason` of 5–500 characters that the audit row keeps: the status goes back to `active`, or to `pending_verification` when the e-mail address was never verified. The revoked sessions stay revoked; the person signs in again. After commit it publishes an `account` invalidation. `409 CONFLICT` when the account is not `disabled` (`details.reason = not_disabled`).
+         * @description Unblocks a `disabled` account, with a written `reason` of 5–500 characters after trimming that the audit row keeps: the status goes back to `active`, or to `pending_verification` when the e-mail address was never verified. The revoked sessions stay revoked; the person signs in again. After commit it publishes an `account` invalidation. `409 CONFLICT` when the account is not `disabled` (`details.reason = not_disabled`).
          */
         post: operations["adminEnableAccount"];
         delete?: never;
@@ -3094,7 +3094,7 @@ export interface paths {
         put?: never;
         /**
          * Turn off the MFA of an account after an identity check
-         * @description The support case of a person who lost their authenticator, after an identity check done outside the system; the written `reason` of 5–500 characters records how, and the audit row keeps it. Needs a TOTP step-up within the last 15 minutes (PADR-0006 item 4). One transaction turns MFA off, erases the TOTP secret, deletes the recovery codes and revokes every session; after commit it writes `staffdeny:acct:<id>`, publishes an `account` invalidation and e-mails the person (`auth.mfa_changed`). A platform admin cannot be the target (`403 FORBIDDEN`, `details.reason = platform_admin`): another admin first revokes the admin rights, or the developer runs `admin:reset-mfa` on the VM (PADR-0006 item 6). `409 CONFLICT` when the account has no MFA (`details.reason = mfa_not_enabled`).
+         * @description The support case of a person who lost their authenticator, after an identity check done outside the system; the written `reason` of 5–500 characters after trimming records how, and the audit row keeps it. Needs a TOTP step-up within the last 15 minutes (PADR-0006 item 4). One transaction turns MFA off, erases the TOTP secret, deletes the recovery codes and revokes every session; after commit it writes `staffdeny:acct:<id>`, publishes an `account` invalidation and e-mails the person (`auth.mfa_changed`). A platform admin cannot be the target (`403 FORBIDDEN`, `details.reason = platform_admin`): another admin first revokes the admin rights, or the developer runs `admin:reset-mfa` on the VM (PADR-0006 item 6). `409 CONFLICT` when the account has no MFA (`details.reason = mfa_not_enabled`).
          */
         post: operations["adminResetAccountMfa"];
         delete?: never;
@@ -3118,7 +3118,7 @@ export interface paths {
         put?: never;
         /**
          * Grant platform admin rights
-         * @description Makes an existing account a platform admin, with a written `reason` of 5–500 characters that the audit row keeps. Needs a TOTP step-up within the last 15 minutes (PADR-0006 item 4). The account must be `active`, with a verified e-mail address and MFA enabled, because every admin sign-in asks for a TOTP code: otherwise `422 UNPROCESSABLE` with `details.reason` `account_not_active`, `email_not_verified` or `mfa_not_enabled`. No account with the e-mail address answers `404 NOT_FOUND`; an account that is already a platform admin answers `409 CONFLICT` (`details.reason = already_admin`). The new admin signs in on the admin host; portal sessions are unaffected.
+         * @description Makes an existing account a platform admin, with a written `reason` of 5–500 characters after trimming that the audit row keeps. Needs a TOTP step-up within the last 15 minutes (PADR-0006 item 4). The account must be `active`, with a verified e-mail address and MFA enabled, because every admin sign-in asks for a TOTP code: otherwise `422 UNPROCESSABLE` with `details.reason` `account_not_active`, `email_not_verified` or `mfa_not_enabled`. No account with the e-mail address answers `404 NOT_FOUND`; an account that is already a platform admin answers `409 CONFLICT` (`details.reason = already_admin`). The new admin signs in on the admin host; portal sessions are unaffected.
          */
         post: operations["adminGrantAdmin"];
         delete?: never;
@@ -4208,7 +4208,7 @@ export interface components {
         /** @description An Amadeus queue that the OTA backend polls into its queue snapshots. */
         AmadeusMonitoredQueue: {
             officeId: components["schemas"]["AmadeusOfficeId"];
-            /** @description Queue number. */
+            /** @description Queue number, 0–99 (Queue List `queue-id`, as the OTA document's console queue reads bound it; the OTA backend's poller skips any other value). */
             queueId: number;
             /** @description Queue category. */
             category: number;
@@ -4806,7 +4806,7 @@ export interface components {
             legalName?: components["schemas"]["LegalName"] | null;
         };
         /**
-         * @description Why a Velexis staff member takes the action (PADR-0006 item 5), kept in the `details` of the audit row.
+         * @description Why a Velexis staff member takes the action (PADR-0006 item 5), kept in the `details` of the audit row. The API trims the white space at either end first, and the 5–500 characters count after trimming: a reason of only spaces answers `400 VALIDATION_FAILED` (`minLength`), and the audit row (or the record that keeps the reason) holds the trimmed reason (lead decision (2j) of 2026-10-30).
          * @example Card testing from the storefront reported by Stripe on 2026-10-20.
          */
         AdminReason: string;
@@ -6039,7 +6039,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description The statement's status does not allow the action (`details.status`): adjustments, approval and voiding need a `draft`, marking paid an `approved` statement. Possible codes: SETTLEMENT_STATE_INVALID. */
+        /** @description The statement's status does not allow the action (`details.status`): adjustments, approval and voiding need a `draft`, marking paid an `approved` statement. An approval also answers it for a draft whose carried-forward balance is out of date (`details.reason = carry_forward_changed`: generate the month again). Possible codes: SETTLEMENT_STATE_INVALID. */
         SettlementStateInvalid: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -9513,8 +9513,17 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthenticated"];
-            403: components["responses"]["TenantRoleForbidden"];
-            /** @description The Stripe account is connected to another OTA, or the OTA is not active. Possible codes: STRIPE_ACCOUNT_ALREADY_CONNECTED, TENANT_NOT_ACTIVE. */
+            /** @description The e-mail address is not verified, the account that started is no longer an owner or admin of the OTA, or own Stripe accounts are off. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED. */
+            403: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The Stripe account is connected to another OTA, the OTA is not active, or a platform admin disabled the payment connection (`details.reason = connection_disabled`). Possible codes: STRIPE_ACCOUNT_ALREADY_CONNECTED, TENANT_NOT_ACTIVE, CONFLICT. */
             409: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -9524,7 +9533,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description The person declined on Stripe, Stripe reported another error, or the account's mode does not match the deployment (`details.reason`). Possible codes: UNPROCESSABLE. */
+            /** @description The person declined on Stripe, Stripe reported another error or refused the code (`invalid_grant`), or the account's mode does not match the deployment (`details.reason`). Possible codes: UNPROCESSABLE. */
             422: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -14319,7 +14328,7 @@ export interface operations {
         parameters: {
             query?: {
                 /**
-                 * @description Why the rights are revoked (5–500 characters), kept in the audit row. Optional: PADR-0006 item 5 does not require a reason for a revocation.
+                 * @description Why the rights are revoked (5–500 characters after trimming), kept in the audit row. Optional: PADR-0006 item 5 does not require a reason for a revocation.
                  * @example Left the support team on 2027-01-31.
                  */
                 reason?: components["schemas"]["AdminReason"];

@@ -111,7 +111,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The contract test passes, and fails when one character of the migration changes.
   - The migration applies from scratch and as an upgrade from `0001`, in one transaction.
   - The generated types contain `platform.amadeus_accounts`, `platform.email_outbox`, `platform.settlements` and `accounts.terms_version`; a second `pnpm db:codegen` gives no diff.
-- **Verify:** `pnpm db:migrate && pnpm db:codegen && git diff --exit-code packages/db/src/generated && pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- migrations`
+- **Verify:** `pnpm db:migrate && pnpm db:codegen && git diff --exit-code packages/db/src/generated && pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int migrations`
 
 ### PBE-003 · Prove the 0002 constraints and privileges with integration tests ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -128,7 +128,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 - **Acceptance:**
   - Every rule of step 2 has a passing test that checks the constraint name in the error.
   - The privilege matrix of step 3 holds on a fresh test database.
-- **Verify:** `pnpm --filter @velexis/platform-backend test:int -- migrations`
+- **Verify:** `pnpm --filter @velexis/platform-backend test:int migrations`
 
 ### PBE-004 · Define the tenant job messages and invalidation events in @velexis/api-types/jobs ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -270,7 +270,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - A test-only route with the sign-up throttler answers 429 with `Retry-After` on the sixth call from one IP within an hour.
   - Two clients sending the valid BFF key with different `X-Velexis-End-User-IP` values get separate buckets: after one of them is throttled, the other still passes [PADR-0019].
   - The registry registers no scheduler for a disabled feature.
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- common`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int common`
 
 ### PBE-010 · Add the audit module and the platform redaction paths ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -289,7 +289,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - `before` or `after` values holding `clientSecret` or `iban` are stored redacted.
   - The redaction test covers every new path.
   - `UPDATE platform.platform_audit_log` through the app role fails with a permission error.
-- **Verify:** `pnpm --filter @velexis/logger test && pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- audit`
+- **Verify:** `pnpm --filter @velexis/logger test && pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int audit`
 
 ### PBE-011 · Add the e-mail outbox, templates and the e-mail processor ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -310,7 +310,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - With SMTP unreachable the row stays `pending`, and it is sent once SMTP answers again.
   - No captured log line and no BullMQ job payload contains the token.
   - Every template renders with sample data in strict mode.
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- notifications`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int notifications`
 
 ### PBE-012 · Add token signing, auth guards and the milestone feature switches ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -354,7 +354,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - A verification token works once; a reused, unknown or 25-hour-old token (FakeClock) answers `VERIFICATION_TOKEN_INVALID` [PF-02 AC1].
   - Resend always answers 202 and sends at most 3 e-mails per hour [PF-02 AC2].
   - The stored hash starts with `$argon2id$` and no captured log contains the password or the token.
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- auth`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int auth`
 
 ### PBE-014 · Implement sign-in, lockout, refresh rotation and sign-out ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -374,7 +374,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Wrong e-mail and wrong password give identical bodies; the fifth failure locks for 15 minutes with `Retry-After` [PF-03 AC2].
   - Reusing a rotated refresh token revokes the family, so the newest token of the family fails too [PF-03 AC3].
   - Sign out everywhere revokes every family and sets `staffdeny:acct:<id>` with a TTL [PF-06 AC2].
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- auth`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int auth`
 
 ### PBE-015 · Implement TOTP MFA, recovery codes and step-up ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -395,7 +395,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Sign-in with MFA returns a challenge; a TOTP code or an unused recovery code completes it; the sixth wrong code fails with `MFA_CHALLENGE_INVALID` [PF-04 AC2].
   - Disabling needs a step-up within 15 minutes; a platform admin is refused [PF-04 AC3].
   - The TOTP secret and recovery codes never appear in a log, a queue payload or an audit row.
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- accounts`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int accounts`
 
 ### PBE-016 · Implement password reset and change, profile and session management ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -416,7 +416,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - A reset revokes every session and sets `staffdeny:acct:<id>` [PF-05 AC2].
   - The session list shows the current family, and revoking another family makes its refresh token fail [PF-06 AC1].
   - `updateMe` with a stale `If-Match` answers 412 [PF-07 AC1]; `getMe` works for an unverified account and shows all six switches.
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- auth accounts`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int auth accounts`
 
 ### PBE-017 · Implement tenant key rules, tenant reads and updates, plans and subscription reads ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -436,7 +436,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Owners and admins edit the profile with `If-Match`; the key and currency cannot be changed (not in the schema) [PF-13 AC1].
   - The pricing data lists only public active plans in `sort_order` [PF-70 AC1].
   - Every route under `/v1/tenants/{tenantId}` answers 404 to a non-member, and a `tenant` invalidation follows a profile update.
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- tenants billing`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int tenants billing`
 
 ### PBE-018 · Implement createTenant in one idempotent transaction ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -457,7 +457,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The fourth non-failed OTA of an account answers `422` with `details.reason = "tenant_limit"` [PF-10 AC4].
   - The sub-domain row is verified and primary at creation [PF-40 AC1].
   - The same `Idempotency-Key` replays the `202`; another body with that key answers 409; with Redis down the call answers 503 before writing.
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- provisioning`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int provisioning`
 
 ### PBE-019 · Implement provisioning dispatch and a fake OTA worker for tests ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -475,7 +475,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Two concurrent `dispatch` calls produce one `running` row and one BullMQ job `<jobId>-1`.
   - With the gate closed (subscription `incomplete`) nothing is dispatched.
   - The message on `ota-tenant-ops` validates against the PBE-004 schema; the fake worker's events validate too.
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- provisioning`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int provisioning`
 
 ### PBE-020 · Implement the Velexis Amadeus accounts and office pool admin endpoints ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -496,7 +496,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Bulk add of `NCE1A0955`, `nce1a0955`, `PAR1A0001` creates two offices and skips one.
   - Two concurrent assignments of one office: one succeeds, the other answers `AMADEUS_OFFICE_UNAVAILABLE`.
   - With two available test offices the daily job sends one `ops.alert` e-mail (Mailpit).
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- supplier-connections`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int supplier-connections`
 
 ### PBE-021 · Implement API keys with the generator, endpoints and usage flush ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -516,7 +516,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - A publishable key with `https://*.acme.com` or a secret key with permissions but no `console:automation` answers `VALIDATION_FAILED` [PF-30 AC2].
   - Revoke publishes `{type: "api_key", prefix}` after commit [PF-30 AC3]; roll with `24h` sets the old key's `expires_at` 24 hours ahead (FakeClock) [PF-30 AC4].
   - After a usage counter is written to Redis, the next flush updates `last_used_at` [PF-30 AC5]; revoked and expired keys do not count against the limit.
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- api-keys`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int api-keys`
 
 ### PBE-022 · Consume tenant events and run the provisioning post-steps ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -535,7 +535,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Delivering `tenant.provisioned` twice creates no duplicate row and sends one welcome e-mail; an event of an older attempt is ignored.
   - Two tenants provisioned concurrently get different offices; with an empty pool the tenant is active with a `pending_verification` connection and ops get an e-mail [PF-50 AC2].
   - A crash injected after `issue_api_keys` resumes at `activate` on retry.
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- provisioning`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int provisioning`
 
 ### PBE-023 · Add the reconciler, retries, setup progress and the one-time key reveal ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -556,7 +556,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - With a `silent` fake worker and the clock moved past the lease, the reconciler re-dispatches as attempt 2.
   - Unit test of `failure-handler.ts`: an exhausted `suspend`, `resume` or `migrate` job leaves `tenants.status` unchanged and sends only `ops.alert`; only an exhausted `provision` job of a `provisioning` tenant sets the tenant `failed`.
   - The keys are revealed once; a second reveal and a reveal after 24 hours answer 410 [PF-11 AC3].
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- provisioning`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int provisioning`
 
 ### PBE-024 · Compute the onboarding checklist ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -572,7 +572,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 - **Acceptance:**
   - Each item flips to done when its rule becomes true (one test per item), and every item has an `href` [PF-12 AC1].
   - With all switches off only the seven M1 items appear; with them on, eleven.
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- provisioning`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int provisioning`
 
 ### PBE-025 · Implement members and role rules ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -591,7 +591,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The role matrix of scope §1.2 holds for both endpoints, with a table-driven test over all role pairs [PF-21 AC1].
   - Demoting or removing the last owner answers `LAST_OWNER` [PF-21 AC2].
   - Removal publishes the `membership` invalidation the OTA admin relies on [PF-21 AC3].
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- memberships`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int memberships`
 
 ### PBE-026 · Implement invitations ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -611,7 +611,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - With `staffSeats = 3`, two members and one pending invitation, a new invitation answers `PLAN_LIMIT_REACHED` [PF-20 AC2].
   - Accepting with another verified e-mail answers `INVITATION_EMAIL_MISMATCH`; an 8-day-old link answers `INVITATION_INVALID` [PF-20 AC3].
   - After resend the old token fails and the new one works; a revoked invitation cannot be accepted [PF-20 AC4].
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- memberships`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int memberships`
 
 ### PBE-027 · Implement connection and domain reads and the TLS ask endpoint ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -632,7 +632,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - A cached answer is dropped by a `domain` invalidation within one second, and a host refused a moment before is accepted right after its domain is verified.
   - 10 000 asks for random well-formed unknown hosts create no `tlsask:` key (`SCAN` in the integration test), and the negative cache never holds more than 10 000 entries; a 300-character host answers 404 without a database query.
   - A `viewer` gets 403 on the connection lists; responses contain no field ending in `Ciphertext`.
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- domains connections`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int domains connections`
 
 ### PBE-028 · Implement admin sign-in, step-up and the admin bootstrap CLI ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -650,7 +650,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Only active admins with MFA get a challenge; TOTP is required on every sign-in; a family older than 12 hours cannot refresh [PF-80].
   - Portal and admin refresh tokens never refresh each other.
   - `admin:grant` refuses an account without MFA and grants a verified one with MFA, writing one audit row.
-- **Verify:** `pnpm --filter @velexis/platform-backend build && pnpm --filter @velexis/platform-backend test:int -- admin`
+- **Verify:** `pnpm --filter @velexis/platform-backend build && pnpm --filter @velexis/platform-backend test:int admin`
 
 ### PBE-029 · Implement the admin dashboard and tenant views ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -669,7 +669,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Searching by part of an owner's e-mail finds the tenant; pagination returns every tenant exactly once across pages [PF-81].
   - The detail response validates against the document and contains no property ending in `Ciphertext`.
   - With all switches off, the M5 dashboard counters are `null`.
-- **Verify:** `pnpm --filter @velexis/platform-backend test:int -- admin`
+- **Verify:** `pnpm --filter @velexis/platform-backend test:int admin`
 
 ### PBE-030 · Implement suspend, resume, migrate and connection status ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -691,7 +691,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - A fan-out `tenant.migrated` with `jobId: null` updates the mirror and `schema_version`.
   - Disabling the test Amadeus connection publishes `{type: "connection", tenantId}`.
   - With a `silent` fake worker, a suspend job ends `failed` after the reconciler's attempts (FakeClock past each lease) and the tenant stays `suspended`; the same holds for a resume job and an `active` tenant [PADR-0001 item 7].
-- **Verify:** `pnpm --filter @velexis/platform-backend test:int -- provisioning admin`
+- **Verify:** `pnpm --filter @velexis/platform-backend test:int provisioning admin`
 
 ### PBE-031 · Implement admin provisioning jobs and queue inspection ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -710,7 +710,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Filters return the right jobs; the detail never contains `reveal_ciphertext` [PF-83].
   - Retrying a failed provisioning job with the fake worker set to succeed activates the tenant; cancelling a running job answers 409.
   - Queue counts match jobs added in the test; retry on `ota-tenant-ops` answers 403 [PF-84].
-- **Verify:** `pnpm --filter @velexis/platform-backend test:int -- admin`
+- **Verify:** `pnpm --filter @velexis/platform-backend test:int admin`
 
 ### PBE-032 · Implement admin accounts, platform admins and the audit log ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -730,7 +730,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Granting needs an existing verified account with MFA; revoking oneself or the last admin answers 403 [PF-86].
   - Unlock, disable, enable and reset MFA each require a reason where listed, write one audit row and e-mail the account on MFA reset [PF-87].
   - Every state-changing admin endpoint of this task writes exactly one audit row with `actor_type = 'platform_admin'`.
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- admin`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int admin`
 
 ### PBE-033 · Implement admin plans and manual subscriptions ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -748,7 +748,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - Creating a plan with an existing code answers 409; changing a plan's limits publishes the `plan` invalidation.
   - An admin moves a manual trial's end date with a reason, and the audit row holds the reason [PF-75].
   - Editing a Stripe-billed subscription answers 409.
-- **Verify:** `pnpm --filter @velexis/platform-backend test:int -- admin`
+- **Verify:** `pnpm --filter @velexis/platform-backend test:int admin`
 
 ### PBE-034 · Add the daily purge and the dev:seed command ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -760,11 +760,11 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 - **Files:** `platform/backend/src/common/purge.scheduler.ts`, `platform/backend/src/common/purge.repository.ts`, `platform/backend/src/dev/dev-seed.command.ts`, `platform/backend/src/cli.ts`, `platform/backend/package.json`, `platform/backend/test/integration/common/purge.int.test.ts`, `platform/backend/test/integration/dev/dev-seed.int.test.ts`, `platform/backend/README.md`
 - **Steps:**
   1. `purge.daily` (02:50 UTC): consumed or expired `account_tokens` older than 7 days, `account_sessions` expired more than 30 days ago, `sent` outbox rows older than 30 days, `processed` `stripe_events` older than 90 days, final `credential_submissions` older than 90 days. Batches of 1 000 rows; counts logged.
-  2. `dev:seed` CLI command and `pnpm --filter @velexis/platform-backend dev:seed`: refused when `APP_ENV=production`; creates (idempotently) a platform admin `admin@example.com` with MFA and prints its `otpauth://` URI once, a Velexis test Amadeus account pointing at `AMADEUS_BASE_URL_TEST` (the stub) and verified, and 10 test offices.
+  2. `dev:seed` CLI command and `pnpm --filter @velexis/platform-backend dev:seed`: refused when `APP_ENV=production`; creates (idempotently) a platform admin `admin@example.com` with MFA and prints its `otpauth://` URI once, a Velexis test Amadeus account pointing at `AMADEUS_BASE_URL_TEST` (the stub) and verified, and 10 test offices (20 since lead decision (2f) of 2026-10-30, `DEV1A0001` to `DEV1A0020`: the lead raised it to 20 for the e2e journeys, which set up one OTA per journey on an office of this pool; FIX-W34-SHARED).
 - **Acceptance:**
   - The purge removes only rows past their retention (FakeClock) and never touches `platform_audit_log`.
   - Running `dev:seed` twice creates no duplicates; with `APP_ENV=production` it exits 1 without writing.
-- **Verify:** `pnpm --filter @velexis/platform-backend test:int -- common dev`
+- **Verify:** `pnpm --filter @velexis/platform-backend test:int common dev`
 
 ### PBE-035 · Prove provisioning end to end with the real OTA worker ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -842,8 +842,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The landing and pricing pages render without JavaScript errors and with one `h1` each.
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-005 · Build sign-up, e-mail verification and the verify-pending page
-- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: AC3, the PFE-015 end-to-end journey through Mailpit, which PFE-015 writes)
+### PFE-005 · Build sign-up, e-mail verification and the verify-pending page ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-003, PBE-013
@@ -1024,7 +1024,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The workflow file is valid (`actionlint` or GitHub's check in the PR) and runs the two projects.
 - **Verify:** `pnpm --filter @velexis/platform-backend build && pnpm --filter @velexis/platform-frontend build && pnpm --filter @velexis/platform-admin build && pnpm test:e2e -- --project=portal --project=platform-admin specs/smoke.e2e.ts`
 
-### PFE-015 · Write the portal M1 end-to-end journeys
+### PFE-015 · Write the portal M1 end-to-end journeys ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M1
 - **Depends on:** PFE-014, PFE-007, PFE-009, PFE-011, PFE-012, PFE-013, PBE-035
@@ -1183,7 +1184,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The audit filters are kept in the URL and the CSV download streams [PF-85].
 - **Verify:** `pnpm --filter @velexis/platform-admin test`
 
-### PAD-010 · Write the platform admin M1 end-to-end journeys
+### PAD-010 · Write the platform admin M1 end-to-end journeys ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-admin
 - **Milestone:** M1
 - **Depends on:** PFE-014, PFE-010, PFE-013, PAD-005, PAD-006, PAD-007, PAD-008, PAD-009
@@ -1197,13 +1199,14 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   4. `admin-audit.e2e.ts`: filter the audit log by tenant and download the CSV.
 - **Acceptance:**
   - The four specs pass locally and in the `e2e` workflow, covering PF-80 to PF-87 and PF-90 from the browser, with no serious accessibility violation.
-- **Verify:** `pnpm test:e2e -- --project=platform-admin`
+- **Verify:** `E2E_WITH_OTA=1 pnpm test:e2e -- --project=platform-admin`
 
 ## M2 — Search & price
 
 The OTA group builds tenancy, shopping and the storefront in M2. The platform proves that what it publishes (keys, domains, tenant status, invalidations) works on the OTA side.
 
-### PBE-036 · Prove invalidation coverage and API key acceptance across the backends
+### PBE-036 · Prove invalidation coverage and API key acceptance across the backends ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M2
 - **Depends on:** PBE-021, PBE-030, PBE-032, PBE-033, PBE-035
@@ -1218,9 +1221,10 @@ The OTA group builds tenancy, shopping and the storefront in M2. The platform pr
   - Every row of the coverage table publishes its event; a mutation added later without an event fails the test when added to the table.
   - A portal-created key works on the OTA API and stops working within one second of revocation [PF-30 AC3].
   - A suspension is visible on the OTA API within one second (60 seconds is the documented bound) [PF-82].
-- **Verify:** `pnpm --filter @velexis/platform-backend test:int -- invalidation-coverage && pnpm --filter @velexis/platform-backend test:xb`
+- **Verify:** `pnpm --filter @velexis/platform-backend test:int invalidation-coverage && pnpm --filter @velexis/platform-backend test:xb`
 
-### PAD-011 · Prove that a suspension reaches the storefront
+### PAD-011 · Prove that a suspension reaches the storefront ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-admin
 - **Milestone:** M2
 - **Depends on:** PAD-010, PBE-036
@@ -1266,7 +1270,7 @@ The OTA group builds checkout, Stripe payments on the Velexis account and the ai
   2. Update the row, audit `payments.descriptor_updated`, publish `connection` after commit.
 - **Acceptance:**
   - A valid suffix is saved and published as a `connection` invalidation; `"ACME*TRAVEL"` and a 23-character suffix answer `VALIDATION_FAILED`; a stale `If-Match` answers 412 [PF-60].
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- connections`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int connections`
 
 ### PFE-016 · Add the statement descriptor form to the payments page ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1302,9 +1306,10 @@ The OTA group builds the OTA admin and the console in M4. The platform issues th
   - An active member gets a token stored with a TTL of 60 seconds and `NX`, and the audit row holds no token [PF-22 AC2].
   - A suspended tenant answers `TENANT_NOT_ACTIVE` with its status; a live tenant and an account without MFA answer `MFA_REQUIRED` [PF-22 AC3].
   - The token never appears in logs or in idempotency storage.
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- memberships`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int memberships`
 
-### PBE-040 · Implement the Amadeus connection settings update
+### PBE-040 · Implement the Amadeus connection settings update ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M4
 - **Depends on:** PBE-037, PBE-027
@@ -1316,7 +1321,7 @@ The OTA group builds the OTA admin and the console in M4. The platform issues th
   2. Update with `version + 1`, audit `amadeus.settings_updated`, publish `connection` after commit.
 - **Acceptance:**
   - Saving a default office outside `office_ids` answers `VALIDATION_FAILED`; a valid change publishes `{type: "connection", tenantId}`; a stale `If-Match` answers 412 [PF-53 AC1].
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- connections`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int connections`
 
 ### PFE-017 · Build the Open console launch handler and the console picker ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1337,7 +1342,8 @@ The OTA group builds the OTA admin and the console in M4. The platform issues th
   - `/console?tenant=<id>` pre-selects that OTA.
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-018 · Add the Amadeus connection settings form
+### PFE-018 · Add the Amadeus connection settings form ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M4
 - **Depends on:** PFE-013, PBE-040
@@ -1351,7 +1357,8 @@ The OTA group builds the OTA admin and the console in M4. The platform issues th
   - Office selects offer only the connection's offices; saving shows the new values; a stale version shows the reload message [PF-53 AC1].
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-019 · Write the console SSO journey and cross-backend test
+### PFE-019 · Write the console SSO journey and cross-backend test ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M4
 - **Depends on:** PFE-017, PFE-014
@@ -1425,7 +1432,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - Each X-028 fixture signed with the test secret is stored once and enqueued once, even when delivered twice; a payload changed after signing answers 400.
   - With `FEATURE_STRIPE_BILLING=false` events are still stored and end `ignored`.
   - An event whose enqueue is lost after commit is enqueued by the sweep (FakeClock).
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- billing`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int billing`
 
 ### PBE-044 · Implement Stripe customers, Checkout and the Customer Portal session ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1445,7 +1452,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - A Stripe failure returns `checkoutUrl: null` with `checkoutError`, and `createCheckoutSession` later succeeds.
   - Owners get a Customer Portal URL; finance members get 403 [PF-72 AC1].
   - With the switch off, `createTenant` behaves as in M1 and both endpoints answer `403 FEATURE_DISABLED`.
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- billing`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int billing`
 
 ### PBE-045 · Process billing events with re-fetch and apply the status rules ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1456,7 +1463,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Read first:** platform/docs/flows/subscription-billing.md §D and §E; platform/docs/adr/0014-tenant-suspension-and-resume.md; platform/docs/scope.md PF-73, PF-74
 - **Files:** `platform/backend/src/billing/sync/handlers/checkout-session-completed.handler.ts`, `platform/backend/src/billing/sync/handlers/subscription-changed.handler.ts`, `platform/backend/src/billing/sync/status-rules.ts`, `platform/backend/src/billing/sync/status-rules.test.ts`, `platform/backend/src/billing/sync/price-to-plan.ts`, `platform/backend/src/billing/sync/stripe-events.processor.ts`, `platform/backend/test/integration/billing/billing-events.int.test.ts`
 - **Steps:**
-  1. `checkout.session.completed` (subscription mode): retrieve the session with `expand: ["subscription"]`; tenant from `client_reference_id`; upsert `billing_customers`; find the subscription row by `metadata.velexis_subscription_id`, else insert one, cancelling a different current row (manual trial) first in the same transaction; copy status, ids, price, interval, periods and trial end; map the price to a plan (`price-to-plan.ts`; an unknown price fails the event with `UNKNOWN_PRICE`) and set `tenants.plan_code`; dispatch a `queued` provision job; resume a `billing` suspension.
+  1. `checkout.session.completed` (subscription mode): retrieve the session (no `expand`); tenant from `client_reference_id`; then, under the lock of the subscription the session names (`subscription-lock.ts`, FIX-W30-PLATFORM), retrieve that subscription (`subscriptions.retrieve`); upsert `billing_customers`; find the subscription row by `provider_subscription_id`, else by `metadata.velexis_subscription_id`, else insert one, cancelling a different current row (manual trial) first in the same transaction; copy status, ids, price, interval, periods and trial end; map the price to a plan (`price-to-plan.ts`; an unknown price fails the event with `UNKNOWN_PRICE`) and set `tenants.plan_code`; dispatch a `queued` provision job; resume a `billing` suspension.
   2. `customer.subscription.created`, `.updated`, `.deleted`: retrieve the subscription, locate the row by `provider_subscription_id` (or metadata), update status, periods, `cancel_at_period_end`, `canceled_at`, price and plan, then apply `status-rules.ts`.
   3. `status-rules.ts` (flow §E): `trialing`/`active` clear `billing_notice` and resume a `billing` suspension; `past_due` and `paused` set `billing_notice = 'past_due'`; `canceled`, `unpaid`, `incomplete_expired` suspend an `active` tenant with reason `billing` (PBE-030) and e-mail the owners. Every change audits and publishes `tenant`.
   4. Handlers never trust the payload or the event order: they always re-fetch, so duplicates and reordering converge.
@@ -1464,7 +1471,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - Delivering the fixture events twice and in reverse order gives the same final rows [PF-73 AC1].
   - `checkout.session.completed` dispatches provisioning exactly once and replaces the manual row.
   - `past_due` sets the banner state [PF-74 AC1]; `unpaid` suspends with reason `billing` and a later `active` resumes it, while an `abuse` suspension is not resumed [PF-74 AC2].
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- billing`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int billing`
 
 ### PBE-046 · Sync and list invoices
 - **Component:** platform-backend
@@ -1477,10 +1484,11 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   1. `invoice.finalized`, `invoice.paid`, `invoice.payment_failed`, `invoice.voided`: retrieve the invoice; tenant from `billing_customers` or the subscription metadata; upsert `invoices` by `provider_invoice_id` with number, status, amounts (minor units converted with the currency exponent from `reference.currencies`, `decimal.js`), period, hosted and PDF URLs, dates.
   2. `invoice.payment_failed` also queues `billing.payment_failed` to the owners (new template).
   3. `listInvoices` (owner, finance), newest first.
+  4. (lead decision (2) of 2026-10-27) Each invoice handler takes the `SubscriptionSyncLock` (`src/billing/sync/subscription-lock.ts`) of the invoice's subscription, when the invoice has one, before the re-fetch whose answer it writes, and holds it until its write has committed (`confirm()` in the transaction just before the commit), as [PADR-0002](../adr/0002-stripe-billing-integration.md) item 5 (revision of 2026-10-27) says: a first retrieve may name the subscription (it never changes), then the lock, then the re-fetch under it. An invoice without a subscription is serialised by a lock keyed on its own id with the same rules, or a test shows that its upsert keeps the newest state whichever of two overlapping re-fetches commits last (the lock's Redis key, `stripeSubscriptionLock` of `src/common/redis/redis-keys.ts`, takes `sub_…` ids only: a lock on the invoice's own id needs a key of its own, outside this task's Files, so report it).
 - **Acceptance:**
   - A JPY invoice of 5000 minor units is stored as `5000` and a EUR invoice of 4900 as `49.00` [PF-73 AC2].
   - The list shows number, period, total, status and Stripe links; a payment failure e-mails the owners.
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- billing`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int billing`
 
 ### PBE-047 · Add the abandoned-Checkout and manual-trial schedulers
 - **Component:** platform-backend
@@ -1496,7 +1504,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Acceptance:**
   - A 49-hour-old abandoned Checkout fails the tenant and keeps its key reserved [PF-71 AC2].
   - With FakeClock, a manual trial gets the two notices, then `past_due`, then suspension 14 days after the end [PF-75 AC1].
-- **Verify:** `pnpm --filter @velexis/platform-backend test:int -- billing`
+- **Verify:** `pnpm --filter @velexis/platform-backend test:int billing`
 
 ### PBE-048 · Implement the admin billing endpoints
 - **Component:** platform-backend
@@ -1512,7 +1520,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Acceptance:**
   - A price of another currency produces a warning but the plan is saved [PF-88].
   - Resync updates a drifted row; reprocessing a failed event after linking its price processes it [PF-89].
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- admin`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int admin`
 
 ### PBE-049 · Implement custom domain add, primary and removal
 - **Component:** platform-backend
@@ -1529,7 +1537,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - `Travel.Acme.com.` is stored as `travel.acme.com` with both record options [PF-41 AC1]; `acme.ota.example.com`, `1.2.3.4` and `x.github.io` answer `DOMAIN_INVALID`.
   - A pending domain cannot become primary; a verified one can, and exactly one primary remains [PF-41 AC4].
   - A plan without custom domains, or the switch off, answers `FEATURE_DISABLED` [PF-41 AC5].
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- domains`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int domains`
 
 ### PBE-050 · Implement DNS verification and check now
 - **Component:** platform-backend
@@ -1545,7 +1553,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Acceptance:**
   - With a fake resolver, every error code is produced by its case and correct records verify the domain [PF-41 AC2].
   - A domain past 72 hours becomes `failed` and the owners get an e-mail; "check now" on it restarts the window.
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- domains`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int domains`
 
 ### PBE-051 · Add the TLS probe, the daily re-check and the admin domain endpoints
 - **Component:** platform-backend
@@ -1562,7 +1570,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - The probe stores `issued` and the expiry for a local test TLS server, and `failed` on a handshake error [PF-41 AC3].
   - Three failed re-checks fail the domain and move the primary flag back.
   - An admin removes an abusive domain with a reason and the owner gets an e-mail [PF-92].
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- domains admin`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int domains admin`
 
 ### PBE-052 · Add the credential submission framework
 - **Component:** platform-backend
@@ -1578,7 +1586,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Acceptance:**
   - A new submission supersedes the open one and erases its secrets.
   - After `applied` or `failed`, both secret columns are null; no secret appears in logs or job data.
-- **Verify:** `pnpm --filter @velexis/platform-backend test:int -- connections`
+- **Verify:** `pnpm --filter @velexis/platform-backend test:int connections`
 
 ### PBE-053 · Implement own Amadeus credentials
 - **Component:** platform-backend
@@ -1593,7 +1601,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Acceptance:**
   - Valid credentials against the Amadeus stub switch the connection to `tenant`, re-encrypt the secret (the connection's ciphertext differs from the submission's and decrypts with the connection's associated data) and set the old office `releasing` [PF-52 AC2].
   - Rejected credentials leave the connection unchanged and e-mail the submitter; the step-up is required [PF-52 AC1].
-- **Verify:** `pnpm --filter @velexis/platform-backend test:int -- supplier-connections`
+- **Verify:** `pnpm --filter @velexis/platform-backend test:int supplier-connections`
 
 ### PBE-054 · Implement live office requests and office release
 - **Component:** platform-backend
@@ -1609,9 +1617,10 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Acceptance:**
   - An owner requests live access, an admin assigns a live office, and the connection becomes `active` with an e-mail to the owner [PF-51 AC1].
   - A `releasing` office returns to the pool only with the confirmation and a reason [PF-90].
-- **Verify:** `pnpm --filter @velexis/platform-backend test:int -- supplier-connections`
+- **Verify:** `pnpm --filter @velexis/platform-backend test:int supplier-connections`
 
-### PBE-055 · Implement Stripe Connect Standard OAuth
+### PBE-055 · Implement Stripe Connect Standard OAuth ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-043, PBE-041
@@ -1626,9 +1635,11 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - A state is single use and bound to the account that started it [PF-61 AC1].
   - A test-mode code in a live deployment answers `livemode_mismatch`; a duplicate `acct_` answers 409.
   - The connection row holds no Stripe token or secret after connecting.
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- connections`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int connections`
+- **Note (2026-10-30, lead decision (2h), FIX-W36-PLATFORM):** step 1's authorize URL carries the caller's own address in `stripe_user[email]` (the owner or admin who starts it), not necessarily an owner's. The callback also refuses while `F:own_stripe` is off, answers `invalid_grant` `422 oauth_error`, never re-enables a connection a platform admin disabled (`409 CONFLICT`, `connection_disabled`, nothing written), and deauthorises the account of a `livemode` mismatch (best effort) before answering it ([PADR-0011](../adr/0011-stripe-connect-standard-and-api-key-connections.md) item 2 note).
 
-### PBE-056 · Process Connect account events
+### PBE-056 · Process Connect account events ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-055
@@ -1642,7 +1653,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Acceptance:**
   - A signed `account.application.deauthorized` fixture disables the row and e-mails the owners, and the mode stays `connect_standard` [PF-61 AC2].
   - `account.updated` with charges enabled turns a `pending` row `active`.
-- **Verify:** `pnpm --filter @velexis/platform-backend test:int -- connections`
+- **Verify:** `pnpm --filter @velexis/platform-backend test:int connections`
 
 ### PBE-057 · Implement Stripe API-key connections and the return to Velexis payments
 - **Component:** platform-backend
@@ -1658,9 +1669,11 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Acceptance:**
   - Valid keys (mocked `/v1/account`) switch the row to `api_keys` with re-encrypted secrets; a live key on the test environment answers `VALIDATION_FAILED` [PF-62 AC1].
   - Switching back clears every secret and reference; live without a verified payout account answers 422.
-- **Verify:** `pnpm --filter @velexis/platform-backend test:int -- connections`
+- **Verify:** `pnpm --filter @velexis/platform-backend test:int connections`
+- **Note:** 2026-10-30 (lead decision (2i) of the third batch, recorded by FIX-W36-OTA): step 2's re-encrypted secret key must be sealed with the associated data `platform.payment_provider_connections.secret_ciphertext:<ppc_id>` (`aadFor("platform", "payment_provider_connections", "secret_ciphertext", <ppc_id>)` of `@velexis/crypto`, the row's own id), because the OTA backend opens it with exactly that associated data (OBE-077: `connectionSecretAad` in `ota/backend/src/payments/stripe/stripe-client.factory.ts`); a key sealed with any other associated data answers the OTA's payments `424 PAYMENT_PROVIDER_NOT_CONFIGURED` (`connection_secret_unreadable`).
 
-### PBE-058 · Implement payout accounts
+### PBE-058 · Implement payout accounts ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-042
@@ -1674,9 +1687,10 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Acceptance:**
   - An IBAN with a wrong checksum answers `VALIDATION_FAILED`; a valid one is stored encrypted and shown as `…last4` [PF-64 AC1].
   - Revealing in the admin needs a reason and a step-up and writes an audit row; review sets the status and e-mails the owner [PF-64 AC2].
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- settlements`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int settlements`
 
-### PBE-059 · Generate monthly settlement drafts from Stripe balance transactions
+### PBE-059 · Generate monthly settlement drafts from Stripe balance transactions ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-043, PBE-058
@@ -1690,9 +1704,10 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Acceptance:**
   - Unit tests: a month with charges, a refund, a lost and a won dispute, two currencies, and a carried-forward negative balance give the expected totals [PF-63 AC1].
   - Running the generation twice gives the same drafts; an approved statement is unchanged by a re-run.
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- settlements`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int settlements`
 
-### PBE-060 · Implement the settlement review workflow and portal statements
+### PBE-060 · Implement the settlement review workflow and portal statements ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-059
@@ -1706,7 +1721,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Acceptance:**
   - Approve, mark paid and void follow the state rules, with step-up and reasons where listed [PF-91, PF-63 AC2].
   - Owners and finance get the paid e-mail; the portal lists the statement but never a draft, and the CSV has the documented columns [PF-63 AC3].
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- settlements`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int settlements`
 
 ### PBE-061 · Implement go-live and live API keys
 - **Component:** platform-backend
@@ -1722,7 +1737,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Acceptance:**
   - Each missing precondition appears in `details.missing`; with all met the tenant is live and a `tenant` invalidation is published [PF-14 AC1, AC2].
   - A live secret key without a recent step-up answers `REAUTH_REQUIRED` [PF-30 AC6].
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int -- provisioning api-keys`
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int provisioning api-keys`
 
 ### PFE-020 · Add the plan step and the Checkout hand-off to the create-OTA wizard
 - **Component:** platform-frontend
@@ -1935,7 +1950,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - The auth matrix covers 100 % of the platform operations and passes.
   - No secret pattern is found outside the allowed ciphertext columns.
   - `pending-operations.ts` is empty; the review document lists findings with task ids or "none".
-- **Verify:** `pnpm --filter @velexis/platform-backend test:int -- security && pnpm audit --audit-level high`
+- **Verify:** `pnpm --filter @velexis/platform-backend test:int security && pnpm audit --audit-level high`
 
 ### PBE-063 · Measure platform performance and memory against the VM budget
 - **Component:** platform-backend

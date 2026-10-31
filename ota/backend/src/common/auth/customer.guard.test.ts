@@ -307,6 +307,52 @@ describe("CustomerGuard", () => {
     expect([actors, customers]).toEqual([[], []]);
   });
 
+  it("answers 401 TOKEN_EXPIRED to the edge's refresh cookie without an access cookie, on required and optional operations [FIX-W33-OTA] [OBE-031]", async () => {
+    // What a browser sends once the access cookie's Max-Age of 900 s has ended: the refresh cookie alone.
+    const edge = harness({ caller: EDGE });
+    const refreshOnly = { cookies: { "__Host-vx_rt": `rt_${"A".repeat(43)}` } };
+
+    expect(await outcome(edge.guard.canActivate(execution("getSession", refreshOnly)))).toBe(
+      "401 TOKEN_EXPIRED",
+    );
+    expect(await outcome(edge.guard.canActivate(execution("createFlightSearch", refreshOnly)))).toBe(
+      "401 TOKEN_EXPIRED",
+    );
+    expect(await outcome(edge.guard.canActivate(execution("getBooking", refreshOnly)))).toBe(
+      "401 TOKEN_EXPIRED",
+    );
+    expect(edge.refusals).toEqual([
+      "access_cookie_missing",
+      "access_cookie_missing",
+      "access_cookie_missing",
+    ]);
+    // auth.signOut ends the refresh cookie's session itself; an operation without a customer never reads it.
+    expect(await outcome(edge.guard.canActivate(execution("signOut", refreshOnly)))).toBe("passed");
+    expect(await outcome(edge.guard.canActivate(execution("signIn", refreshOnly)))).toBe("passed");
+    expect([edge.actors, edge.customers, edge.expired.count]).toEqual([[], [], 0]);
+  });
+
+  it("keeps 401 UNAUTHENTICATED without either cookie, and ignores a refresh cookie of another form or a key caller's [FIX-W33-OTA] [OBE-031]", async () => {
+    const edge = harness({ caller: EDGE });
+    const key = harness();
+    const refreshOnly = { cookies: { "__Host-vx_rt": `rt_${"A".repeat(43)}` } };
+
+    expect(await outcome(edge.guard.canActivate(execution("getSession")))).toBe("401 UNAUTHENTICATED");
+    for (const value of ["", "garbage", "rt_short", `xx_${"A".repeat(43)}`]) {
+      const cookies = { cookies: { "__Host-vx_rt": value } };
+      expect(await outcome(edge.guard.canActivate(execution("getSession", cookies)))).toBe(
+        "401 UNAUTHENTICATED",
+      );
+      expect(await outcome(edge.guard.canActivate(execution("createFlightSearch", cookies)))).toBe("passed");
+    }
+    // A key caller's cookies are ignored (OADR-0006 point 1).
+    expect(await outcome(key.guard.canActivate(execution("getSession", refreshOnly)))).toBe(
+      "401 UNAUTHENTICATED",
+    );
+    expect(await outcome(key.guard.canActivate(execution("createFlightSearch", refreshOnly)))).toBe("passed");
+    expect([edge.refusals, key.refusals]).toEqual([[], []]);
+  });
+
   it("ignores cookies of a key caller and the Authorization header of the edge (OADR-0006 point 1)", async () => {
     const token = await accessToken();
     const key = harness();

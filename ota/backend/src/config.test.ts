@@ -152,6 +152,8 @@ describe("the privileged DSNs", () => {
       "STRIPE_PUBLISHABLE_KEY_TEST",
       "STRIPE_SECRET_KEY_LIVE",
       "STRIPE_SECRET_KEY_TEST",
+      "STRIPE_WEBHOOK_SECRET_CONNECT_LIVE",
+      "STRIPE_WEBHOOK_SECRET_CONNECT_TEST",
       "STRIPE_WEBHOOK_SECRET_VELEXIS_LIVE",
       "STRIPE_WEBHOOK_SECRET_VELEXIS_TEST",
       "TRUST_PROXY",
@@ -572,6 +574,47 @@ describe("the webhook signing secrets of the Velexis account (OBE-039)", () => {
         ["STRIPE_WEBHOOK_SECRET_VELEXIS_TEST"],
       ]);
       expect(error.message).not.toContain(value);
+    }
+  });
+});
+
+describe("the webhook signing secrets of the Connect endpoints (OBE-078)", () => {
+  /** Secrets of the documented shape, built at run time; none is a real secret. */
+  const fakeSecret = (body = "0123456789abcdefABCDEF"): string => `whsec_${body.repeat(2)}`;
+  const CONNECT = ["STRIPE_WEBHOOK_SECRET_CONNECT_TEST", "STRIPE_WEBHOOK_SECRET_CONNECT_LIVE"] as const;
+
+  it("are optional and read by the API only, which refuses Connect deliveries of an environment without its secret", () => {
+    const api = loadApiConfig(API_ENV);
+    expect([api.STRIPE_WEBHOOK_SECRET_CONNECT_TEST, api.STRIPE_WEBHOOK_SECRET_CONNECT_LIVE]).toEqual([
+      undefined,
+      undefined,
+    ]);
+    const worker = loadWorkerConfig({ ...WORKER_ENV, STRIPE_WEBHOOK_SECRET_CONNECT_TEST: fakeSecret() });
+    expect(worker).not.toHaveProperty("STRIPE_WEBHOOK_SECRET_CONNECT_TEST");
+  });
+
+  it("accept whsec_ secrets of letters, digits and the base64 characters, apart from the Velexis ones", () => {
+    const secrets = {
+      STRIPE_WEBHOOK_SECRET_VELEXIS_TEST: fakeSecret(),
+      STRIPE_WEBHOOK_SECRET_CONNECT_TEST: fakeSecret("Connect0123456789"),
+      STRIPE_WEBHOOK_SECRET_CONNECT_LIVE: fakeSecret("Ab+/=_-9"),
+    };
+
+    expect(loadApiConfig({ ...API_ENV, ...secrets })).toMatchObject(secrets);
+  });
+
+  it("refuse anything else, and never print it", () => {
+    for (const name of CONNECT) {
+      for (const value of [
+        `sk_test_${"0123456789abcdef".repeat(2)}`,
+        "whsec_short",
+        `whsec_${"a".repeat(20)} x`,
+      ]) {
+        const error = configErrorOf(() => loadApiConfig({ ...API_ENV, [name]: value }));
+
+        expect([value, error.problems.map((problem) => problem.variable)]).toEqual([value, [name]]);
+        expect(error.message).not.toContain(value);
+      }
     }
   });
 });

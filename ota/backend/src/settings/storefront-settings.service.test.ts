@@ -659,20 +659,26 @@ describe("the rules of an update", () => {
   });
 });
 
+/** The storefront.get entries and the content pages' caches of `locales` in both environments (OBE-072). */
+const cacheKeysOf = (locales: readonly string[]): string[] =>
+  ["test", "live"]
+    .flatMap((environment) => [
+      `t:${TENANT_ID}:${environment}:sf:und`,
+      ...locales.flatMap((locale) => [
+        `t:${TENANT_ID}:${environment}:sf:${locale}`,
+        `t:${TENANT_ID}:${environment}:pages:${locale}`,
+      ]),
+    ])
+    .sort();
+
 describe("the storefront.get entries a change deletes", () => {
-  it("are sf:und and every locale before and after, in both environments", () => {
+  it("are sf:und and every locale before and after, in both environments, with the content pages' caches of those locales [OBE-072]", () => {
     const keys = storefrontCacheKeys(TENANT_ID, [
       seededRow({ defaultLocale: "en", supportedLocales: ["en", "fr-fr"] }),
       seededRow({ defaultLocale: "en", supportedLocales: ["en", "de"] }),
     ]);
 
-    expect([...keys].sort()).toEqual(
-      ["test", "live"]
-        .flatMap((environment) =>
-          ["und", "en", "fr-FR", "de"].map((locale) => `t:${TENANT_ID}:${environment}:sf:${locale}`),
-        )
-        .sort(),
-    );
+    expect([...keys].sort()).toEqual(cacheKeysOf(["en", "fr-FR", "de"]));
   });
 });
 
@@ -871,13 +877,7 @@ describe("StorefrontSettingsService", () => {
       },
     ]);
     expect(h.del).toHaveBeenCalledTimes(1);
-    expect([...(h.del.mock.calls[0] as string[])].sort()).toEqual(
-      ["test", "live"]
-        .flatMap((environment) =>
-          ["und", "en", "fr"].map((locale) => `t:${TENANT_ID}:${environment}:sf:${locale}`),
-        )
-        .sort(),
-    );
+    expect([...(h.del.mock.calls[0] as string[])].sort()).toEqual(cacheKeysOf(["en", "fr"]));
   });
 
   it("takes If-Match quoted, weak or bare, and answers a stale one 412 without writing", async () => {
@@ -911,15 +911,66 @@ describe("StorefrontSettingsService", () => {
     expect(h.repository.row?.supportedCurrencies).toEqual(["EUR"]);
   });
 
-  it("answers enabledLive true 403 FEATURE_DISABLED while AIRLINE_CARD_ENABLED is off, before any transaction [OBE-070 AC2]", async () => {
+  it("answers turning enabledLive on 403 FEATURE_DISABLED while AIRLINE_CARD_ENABLED is off, and writes nothing [OBE-070 AC2] [FIX-W35-OTA AC6]", async () => {
     expect(
       await refusalOf(h.service.update({ airlineCard: { enabledTest: false, enabledLive: true } }, '"1"')),
     ).toEqual(["FEATURE_DISABLED", { feature: "airlineCard" }]);
-    expect(h.transactions()).toBe(0);
+    // Since FIX-W35-OTA the refusal compares with the stored flag, read in the update's transaction: nothing is
+    // written, audited or deleted.
+    expect(h.repository.calls).toEqual(["editableSettings:forUpdate"]);
+    expect(h.repository.row?.version).toBe(1);
+    expect(h.records).toEqual([]);
+    expect(h.del).not.toHaveBeenCalled();
 
     const on = harness({ airlineCardSwitch: true });
     const result = await on.service.update({ airlineCard: { enabledTest: false, enabledLive: true } }, '"1"');
-    expect(result.airlineCard).toEqual({ enabledTest: false, enabledLive: true });
+    expect(result.airlineCard).toEqual({ enabledTest: false, enabledLive: true, liveAvailable: true });
+  });
+
+  it("[FIX-W35-OTA AC6] passes a save that keeps a stored enabledLive true, or sets it false, while the switch is off", async () => {
+    // The live card was turned on while the switch was on; then the switch went off.
+    h.repository.row = { ...seededRow(), airlineCardEnabledLive: true };
+
+    const kept = await h.service.update({ airlineCard: { enabledTest: true, enabledLive: true } }, '"1"');
+    expect(kept.airlineCard).toEqual({ enabledTest: true, enabledLive: true, liveAvailable: false });
+    expect(h.repository.row?.airlineCardEnabledLive).toBe(true);
+
+    const off = await h.service.update({ airlineCard: { enabledTest: true, enabledLive: false } }, '"2"');
+    expect(off.airlineCard).toEqual({ enabledTest: true, enabledLive: false, liveAvailable: false });
+    expect(h.repository.row?.airlineCardEnabledLive).toBe(false);
+    expect(h.records).toHaveLength(2);
+
+    // Turned off, it cannot be turned on again while the switch is off.
+    expect(
+      await refusalOf(h.service.update({ airlineCard: { enabledTest: true, enabledLive: true } }, '"3"')),
+    ).toEqual(["FEATURE_DISABLED", { feature: "airlineCard" }]);
+    expect(checker.check("consoleUpdateStorefrontSettings", { status: 200, body: off })).toEqual([]);
+  });
+
+  it("[FIX-W35-OTA AC5] answers liveAvailable from the switch on get and update, and ignores a value sent", async () => {
+    expect((await h.service.get()).airlineCard).toEqual({
+      enabledTest: false,
+      enabledLive: false,
+      liveAvailable: false,
+    });
+    const on = harness({ airlineCardSwitch: true });
+    const got = await on.service.get();
+    expect(got.airlineCard.liveAvailable).toBe(true);
+    expect(checker.check("consoleGetStorefrontSettings", { status: 200, body: got })).toEqual([]);
+
+    // A client that sends the section back as get answered it: `liveAvailable` is neither stored nor audited, and the
+    // answer carries the switch, not the value sent.
+    const result = await h.service.update(
+      { airlineCard: { enabledTest: true, enabledLive: false, liveAvailable: true } },
+      '"1"',
+    );
+    expect(result.airlineCard).toEqual({ enabledTest: true, enabledLive: false, liveAvailable: false });
+    expect(h.records).toEqual([
+      expect.objectContaining({
+        before: { version: 1, airlineCard: { enabledTest: false, enabledLive: false } },
+        after: { version: 2, airlineCard: { enabledTest: true, enabledLive: false } },
+      }),
+    ]);
   });
 
   it("warns when the airline card is turned on while amount-adding rules are active, and only then", async () => {
@@ -955,8 +1006,9 @@ describe("StorefrontSettingsService", () => {
     );
 
     expect(result.version).toBe(2);
+    // sf:und, sf:en and the content pages' pages:en (OBE-072), in both environments.
     expect(offline.warn).toHaveBeenCalledWith(
-      { tenantId: TENANT_ID, keys: 4 },
+      { tenantId: TENANT_ID, keys: 6 },
       "storefront_settings.cache_not_deleted",
     );
   });

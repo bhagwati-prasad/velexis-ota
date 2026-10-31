@@ -40,6 +40,7 @@ ota/sdk/
   tsconfig.json            checkJs project (src/), noEmit
   tsconfig.build.json      declaration-only emit to dist/types/
   vitest.config.js         Node by default; cookie-mode tests opt into happy-dom; unit + contract tests
+  vitest.smoke.config.js   the smoke tests against a running OTA API (`test:smoke`, §8.1)
   turbo.json               the outputs of `generate` (route table, contract assertions) and the contract inputs of `test`
   CHANGELOG.md             kept by hand (§9)
   src/
@@ -77,7 +78,8 @@ ota/sdk/
   test/
     unit/                  Vitest, fake fetch, fake timers, happy-dom for cookie mode
     contract/              tsc project against the contract + runtime parity test
-    smoke/                 against a running OTA backend wired to the Amadeus stub
+    smoke/                 against a running OTA backend wired to the Amadeus stub (§8.1): token-mode and
+                           server-mode files, smoke-env.js (settings, reachability check, test staff session)
     fixtures/              response bodies, validated against the OpenAPI document
     helpers/fake-fetch.js  queue of canned answers; records method, URL, headers and body of every request
   docs/
@@ -221,7 +223,7 @@ The details, with the `tsconfig` files and the route-table format, are in [`docs
   2. generated per-method assertions (`methods.generated.ts`, written by `generate`): the contract's parameters must be assignable to the SDK's, and the SDK's awaited result to the contract's (explicit checks, because TypeScript compares method parameters bivariantly); additions to the contract must exist on the client;
   3. hand-written assertions (`client.contract.ts`) for `createVelexisClient`, `VelexisClient`, the options, `RequestOptions`, `Page<T>`, every error class and `isVelexisError`;
   4. **approved deviations** in `test/contract/deviations.ts`, each naming its ADR; today only the three auth responses that are `AuthSessionResult | AuthSessionInfo` because of cookie mode ([OADR-0006](../docs/adr/0006-storefront-cookie-sessions-and-csrf.md));
-  5. a runtime **parity test** (`parity.test.js`): the set of `x-sdk-method` names in the working OpenAPI document equals the set of methods on a client instance. Until the M4 exit, `test/contract/pending-namespaces.js` lists what the document already has but the SDK does not yet: whole namespaces, or single methods of an implemented namespace (for example `storefront.listPages` between OBE-091 and SDK-012), each with the SDK task that adds it. SDK-012 wrote the last pending methods, so the list is empty; SDK-013 makes the parity test refuse a non-empty one.
+  5. a runtime **parity test** (`parity.test.js`): the set of `x-sdk-method` names in the working OpenAPI document equals the set of methods on a client instance, all 128. Until the M4 exit, `test/contract/pending-namespaces.js` listed what the document already had but the SDK did not yet: whole namespaces, or single methods of an implemented namespace (for example `storefront.listPages` between OBE-091 and SDK-012), each with the SDK task that added it. SDK-012 wrote the last pending methods and emptied the list; since SDK-013 the test is strict: it fails on any entry of the list, however well-formed, and no entry excuses a missing method, so the change that adds an `x-sdk-method` to the document writes its SDK method too.
 
 The contract files under `docs/velexis-sdk/sdk/src/` are never edited; additions go to the OpenAPI document and [`docs/extensions.md`](docs/extensions.md).
 
@@ -247,15 +249,54 @@ The contract files under `docs/velexis-sdk/sdk/src/` are never edited; additions
 | Unit | `test/unit/*.test.js` | Vitest 3 with a fake `fetch` (`test/helpers/fake-fetch.js`), fake timers, `happy-dom` for cookie mode | Header building per mode, CSRF copy and re-fetch, refresh single flight, retry and back-off rules, `Retry-After`, idempotency key reuse, timeouts and abort, error mapping table, pagination, multipart upload, option validation (`TypeError` cases), `toJSON` without secrets |
 | Route table | `test/unit/operations.test.js`, then the namespace tests | Vitest | Every entry of `operations.js` matches the working document and the reviewed overrides, a sample per namespace, a fresh generator run changes nothing, and the generator refuses duplicated methods and param-name collisions; from SDK-005 the namespace tests call each method with sample parameters and check method, path, query, headers and body |
 | Contract | `test/contract/` | `tsc`, Vitest | §6: type assertions, approved deviations, runtime parity with the OpenAPI document, `VERSION` equals `package.json` |
-| Bundles | `test/unit/bundle.test.js` | Vitest, Node child processes, happy-dom | §7: `build.mjs` and `check-size.mjs` run into a scratch copy of the package (no earlier build, no stale `dist/`); the outputs, source maps and declarations, stale outputs removed, an esbuild warning failing the build; the size check passing, and failing above 25 KB; `exports` resolved by Node, for `import` and `require()`; the ESM bundle imported natively with no `fetch`, timer, global or prototype change; the IIFE run as a classic script in a happy-dom page, adding only `window.Velexis`, then making a cookie-mode call through the page's `fetch` |
-| Smoke | `test/smoke/*.smoke.test.js` | Vitest against `OTA_API_URL` | One call per namespace in token and server mode against the local OTA backend wired to the Amadeus stub, with the `dev:seed` test keys ([`../backend/README.md`](../backend/README.md)); nightly, not on every PR |
+| Bundles | `test/unit/bundle.test.js` | Vitest, Node child processes, happy-dom | §7: `build.mjs` and `check-size.mjs` run into a scratch copy of the package (no earlier build, no stale `dist/`); the outputs, source maps and declarations, stale outputs removed, an esbuild warning failing the build; the size check passing on a bundle with one method per route-table entry (SDK-013), and failing above 25 KB; `exports` resolved by Node, for `import` and `require()`; the ESM bundle imported natively with no `fetch`, timer, global or prototype change; the IIFE run as a classic script in a happy-dom page, adding only `window.Velexis`, then making a cookie-mode call through the page's `fetch` |
+| Smoke | `test/smoke/*.smoke.test.js` | Vitest (`vitest.smoke.config.js`) against `OTA_API_URL` | One call per namespace in token and server mode against the local OTA backend wired to the Amadeus stub, with the `dev:seed` test keys ([`../backend/README.md`](../backend/README.md) §5), deferred methods answering 501 included (§8.1); nightly and on demand in the e2e workflow, not on every PR |
 | End to end | `tools/e2e/specs/storefront/` | Playwright | Cookie mode through the real storefront journeys ([storefront testing](../frontend/README.md#13-testing)) |
 
 - **Fixtures** in `test/fixtures/` are response bodies validated against the working OpenAPI document with the shared Ajv helper of `@velexis/testing`, so the fake responses cannot drift from the contract.
 - **Fake fetch** (`test/helpers/fake-fetch.js`): `createFakeFetch(answers)` returns `{ fetch, requests, enqueue, remaining, lastRequest }`; tests pass `fake.fetch` as the client's `fetch` option. Answers are used in call order: a canned `{ status, headers, body, delayMs, error }` (an object body is sent as JSON), a ready `Response`, or a function of the recorded request. Every call is recorded with `method`, `url`, `path`, `searchParams`, `headers` (lower-case names), `body`, `json` (the body parsed when it is JSON), `signal` and `init`. `delayMs` runs on `setTimeout`, so fake timers drive it, and `Infinity` waits for an abort; an aborted signal rejects with its reason, as `fetch` does. `errorResponse(status, code, extra)` builds the API's error envelope with `X-Request-Id`, and `networkError()` a failed `fetch`. A call with no answer left rejects with the request named, so a test cannot pass on a missing answer. It behaves the same in Node and in happy-dom, whose `Headers` keep the caller's name case (both are tested).
-- Tests never use the real network or sleep; they follow [ADR-0015](../../docs/mvp/adr/0015-testing-strategy.md) and [conventions §10](../../docs/mvp/conventions.md#10-testing).
+- Tests never use the real network or sleep; they follow [ADR-0015](../../docs/mvp/adr/0015-testing-strategy.md) and [conventions §10](../../docs/mvp/conventions.md#10-testing). The smoke tests (§8.1) call a local OTA API and the Amadeus stub behind it, never Amadeus or Stripe.
 
-Commands (`pnpm --filter @velexis/ota-sdk <script>`): `generate` (route table and contract assertions from `ota/backend/openapi/`; CI and the contract test fail on a diff), `typecheck`, `test` (unit + contract), `test:contract` (the contract project with the `tsc` command line, after a declaration build), `test:smoke`, `build` (bundles, declarations, size check), `lint`, `clean`. SDK-014 adds `test:smoke`. `typecheck`, `build` and `test` (the contract and bundle tests emit declarations) read the types of the built `@velexis/api-types`: Turborepo builds it first; for a single package run `pnpm --filter @velexis/api-types build` once.
+Commands (`pnpm --filter @velexis/ota-sdk <script>`): `generate` (route table and contract assertions from `ota/backend/openapi/`; CI and the contract test fail on a diff), `typecheck`, `test` (unit + contract), `test:contract` (the contract project with the `tsc` command line, after a declaration build), `test:smoke` (the smoke tests against a running OTA API, §8.1; SDK-014), `build` (bundles, declarations, size check), `lint`, `clean`. `typecheck`, `build` and `test` (the contract and bundle tests emit declarations) read the types of the built `@velexis/api-types`: Turborepo builds it first; for a single package run `pnpm --filter @velexis/api-types build` once.
+
+### 8.1 Smoke tests (SDK-014)
+
+`pnpm --filter @velexis/ota-sdk test:smoke` (`vitest.smoke.config.js`, not part of `test`) runs the SDK's source against a running OTA API wired to the Amadeus stub, with the two test keys the OTA backend's `dev:seed` printed when it created them ([`../backend/README.md`](../backend/README.md) §5). The keys are given to the run, never committed or stored.
+
+| File | Client | Calls |
+|---|---|---|
+| `test/smoke/token-mode.smoke.test.js` | Token mode: `publishableKey` = the `pk_test_…` key | One call of each namespace: `storefront.get`, `reference.locations.search`, `flights.search` and `flights.price`, `checkout.create` (a guest checkout), `auth.signUp`, `account.get` and `bookings.list` with the new customer's access token, `auth.signOut`; `console.auth.me` refused (`PermissionError`, `403 SCOPE_NOT_ALLOWED`, `console_operation`); `storefront.resolve`, a deferred method: `ServerError` `501 NOT_IMPLEMENTED` |
+| `test/smoke/server-mode.smoke.test.js` | Server mode: `secretKey` = the `sk_test_…` key and `endUser` = a new visitor each run (below); the console through the OTA admin's service key (below) | The same customer journey; `account.preferences.get`, deferred: `501`; the secret key refused on `console.auth.signIn` and on a console call that carries a staff token (`storefront_key`); with a staff token minted through a test portal token: `console.auth.signIn`, `console.auth.me`, `console.bookings.list`, `console.customers.list` (it finds the customer the file signed up), `console.bookings.create`, deferred: `501`, the raw Amadeus reads that only custom consoles call ([implementation plan §7](../docs/plans/implementation-plan.md#7-operation-coverage)): `console.amadeus.getFlightOffers` and `.getQueue` against the stub with the OTA's own office, `.getFlightOrder` of an order the stub does not have (`NotFoundError`, `404 NOT_FOUND`), and the staff sign-out |
+
+Both files make every call once in their set-up hook (each request sent once, `maxRetries: 0`, a 10 s timeout) and the tests read what each call gave, so a failed call fails its own test with the SDK's error; every response must carry a request id, and no call may meet a server error but the deferred ones. Assertions never print a key, a token or a password. They also run one after the other: they sign up customers and open a staff session on the same demo OTA.
+
+**Running it again on one stack.** The API counts sign-ups per end-user IP (5 an hour, [architecture §8](../docs/architecture.md#8-rate-limits)). The server-mode clients name a new visitor each run with the SDK's `endUser` option (`X-Velexis-End-User-IP` / `-Agent`, as a server forwards its visitor: an address of the IPv6 documentation prefix `2001:db8::/32` in a random `/64`), so their sign-up never counts against the loopback address. A token-mode call counts against its connection's address, `127.0.0.1`, so one stack takes five runs an hour (fewer when the stack's storefront signed up customers from that address meanwhile); a sixth fails its sign-up with `RateLimitError` until the hour has passed or the API's Redis is emptied.
+
+**The console's staff token.** `dev:seed`'s secret key is scoped `storefront` (PADR-0005, OBE-007), which the scope guard refuses on every console operation, `console.auth.signIn` included ([`ota/backend/src/common/auth/scope.guard.ts`](../backend/src/common/auth/scope.guard.ts)); the server-mode file proves that refusal. The staff session itself is the OTA admin's way in ([OADR-0018](../docs/adr/0018-ota-admin-consumes-the-sdk-server-side.md)): a server-mode client with the stack's `OTA_ADMIN_SERVICE_KEY` (on the direct loopback connection the service key needs), `sessionKind: "staff"`, `environment: "test"` and the run's `endUser`, which the service key requires. `test/smoke/smoke-env.js` writes what the platform holds before its `createConsoleToken` (an active account with an `agent` membership of the demo OTA, the least role with `amadeus:read` ([scope §1.3](../docs/scope.md#13-staff-roles-and-permissions)), as `velexis_migrator`, like the end-to-end harness's platform rows and `dev:seed` itself), stores a portal token as that operation does (`SET ptk:<sha256> <json> EX 60 NX`, PADR-0007 item 1), signs in with it, and at the end signs out and deletes the account (its membership goes with it).
+
+**Settings** (`test/smoke/smoke-env.js`, read through `@velexis/config` from the environment, then the `.env.local` files of `ota/sdk` and the repository root, never printed):
+
+| Variable | What |
+|---|---|
+| `OTA_API_URL` | The OTA API on a direct loopback connection; default `http://127.0.0.1:4000` |
+| `SDK_SMOKE_PUBLISHABLE_KEY`, `SDK_SMOKE_SECRET_KEY` | The `pk_test_…` and `sk_test_…` keys `dev:seed` printed |
+| `OTA_ADMIN_SERVICE_KEY` | The OTA admin's service key of the same stack (the development value of `.env.example` locally) |
+| `REDIS_URL`, `DATABASE_MIGRATOR_URL` | The API's Redis and the stack's database as `velexis_migrator`: the test portal token and the test staff member's platform rows |
+
+**When the API is down** the run fails at once, before any test file, with the API's origin, the reason (`ECONNREFUSED`, or no answer within 3 s) and what to start; a missing or malformed setting is named without its value. The test staff member's PostgreSQL and Redis connections wait 5 s at most, and the clean-up (staff sign-out, then the account's deletion) has a budget of its own, so an API that stops answering mid-run leaves no test staff member behind. `test/unit/smoke-env.test.js` (part of `test`) proves the reachability check and the settings messages, the configuration's global setup included.
+
+**Locally**, with the stack of [`../backend/README.md`](../backend/README.md) §6 (the `.env.local` files, `pnpm dev:keys`, PostgreSQL, Redis, Mailpit):
+
+```bash
+pnpm db:migrate && pnpm db:seed:reference
+pnpm stub:amadeus                                      # in its own terminal: the Amadeus stub on 4900
+pnpm --filter @velexis/platform-backend dev:seed       # the Velexis test Amadeus account and its offices
+pnpm --filter @velexis/ota-backend dev:seed            # the demo OTA; keep the two keys, they are printed once
+pnpm --filter @velexis/ota-backend dev                 # in its own terminal: the OTA API on 4000
+SDK_SMOKE_PUBLISHABLE_KEY=pk_test_… SDK_SMOKE_SECRET_KEY=sk_test_… pnpm --filter @velexis/ota-sdk test:smoke
+```
+
+**Nightly and on demand** (never on a pull request), the last step of [`.github/workflows/e2e.yml`](../../.github/workflows/e2e.yml) does the same once the Playwright stacks have stopped: the `.env.local` files copied from the `.env.example` files, the job's database `velexis`, the stub, both `dev:seed` commands (the OTA's output read into the step's shell, never printed), the built API, then `test:smoke` with the two keys in its environment; the processes' output goes to `tools/e2e/test-results/sdk-smoke/`, uploaded when the step fails. The step uses the API's and the stub's fixed ports (4000, 4900), so on a shared machine it runs under the end-to-end lock, like `pnpm test:e2e`.
 
 ## 9. Versioning, publishing and what is deferred
 

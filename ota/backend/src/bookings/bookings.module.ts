@@ -67,7 +67,7 @@ import { PAYMENT_GATEWAY } from "../payments/payment-gateway";
 import { PaymentGatewayModule } from "../payments/payment-gateway.module";
 import { PaymentsRepository } from "../payments/payments.repository";
 import { RefundsRepository } from "../payments/refunds.repository";
-import { StripeClientFactory } from "../payments/stripe/stripe-client.factory";
+import { StripeClientFactory, stripeKeyProvider } from "../payments/stripe/stripe-client.factory";
 import { StripeGateway } from "../payments/stripe/stripe.gateway";
 import { PricingModule } from "../pricing/pricing.module";
 import { ShoppingModule } from "../shopping/shopping.module";
@@ -193,6 +193,7 @@ export class BookingsModule {}
     checkoutKeyProvider,
     TravelerDocuments,
     PaymentsRepository,
+    stripeKeyProvider,
     StripeClientFactory,
     StripeGateway,
     { provide: PAYMENT_GATEWAY, useExisting: StripeGateway },

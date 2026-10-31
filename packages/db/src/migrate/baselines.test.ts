@@ -116,6 +116,8 @@ describe("the baseline migrations", () => {
               ["0003_add_booking_sync_claim", "numbered", "expand", false],
               // The card fee's lines with their refundable flag (FIX-W28-CANCEL).
               ["0004_add_payment_card_fee_lines", "numbered", "expand", false],
+              // The cancellation's claim column and the calling-code CHECKs of one to three digits (FIX-W31-OTA).
+              ["0005_add_cancellation_claim_tighten_calling_codes", "numbered", "contract", false],
             ]
           : []),
       ]);

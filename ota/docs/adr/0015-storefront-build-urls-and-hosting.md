@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** OTA frontend and SDK tech lead. Decided during planning; revisit when search engines must index results or content pages without running JavaScript (prerendering or server rendering), when a second UI language is added, or when the hosted storefront needs a framework.
+**Revisions:** 2026-10-29 (lead decision (1h), recording FIX-W33-OTA): point 7, any API call that answers `403 TENANT_SUSPENDED` drops the cached `storefront.get` copy, so an open tab shows the unavailable state at its next page instead of the cached storefront for up to 5 minutes (dated note under point 7); the Consequences follow.
 
 ## Context
 
@@ -19,6 +20,8 @@ Still open: the URL scheme and how dynamic values (search, offer, checkout, book
 5. **Fixed e-mail link targets.** The backend's templates link to `/account/verify.html?token=…`, `/account/reset-password.html?token=…` and `/booking.html?id=bkg_…` on the tenant's primary storefront host. Changing one of these paths needs a backend change in the same PR.
 6. **Shared markup at build time.** Header, footer, banners and repeated items (offer card, segment, traveller form) are HTML partials and `<template>` elements in `partials/`, included by a 20-line local Vite plugin (`<!-- @include partials/… -->` in `transformIndexHtml`). Pages clone templates and fill them with `textContent`. No template engine or component library is added.
 7. **Runtime configuration cache.** Each page calls `storefront.get` once and keeps the answer in `sessionStorage` for 5 minutes (per origin, so tenants never mix), wrapped in `try/catch` so the page works without storage. Settings changes reach travellers within about 5 minutes, matching the backend cache ([OADR-0012](0012-storefront-settings-assets-and-pages.md) §7).
+
+   **2026-10-29 (lead decision (1h), FIX-W33-OTA): a suspension drops the cached copy.** A tab that holds the cached answer did not ask `storefront.get` again for up to 5 minutes, so after the OTA's suspension each of its pages rendered the cached storefront first and only its own calls failed. Now the storefront's SDK client looks at every `403` it receives (its `fetch` option, `storefrontFetch` of `src/lib/client.js`, reading a clone of the body): an answer `TENANT_SUSPENDED`, of any call, removes the cached entry (`clearCachedConfig` of `src/lib/config-cache.js`), so the tab's next page asks `storefront.get` again, which answers the suspension, and boot renders the unavailable state. Any other answer, a `403` of another code included, keeps the entry; storage that the browser refuses changes nothing, as before (`test/config.test.js`).
 8. **Fonts and images under the CSP.** The selectable fonts are woff2 files with open licences in `public/fonts/`, declared in `styles/fonts.css`; the list of names is an enum in the OpenAPI `StorefrontSettings` schema, so the admin, the backend validation and the storefront share one list (a unit test checks that `fonts.css` declares every enum value). Airline logos are **not** shown in the MVP: external images would break `img-src 'self'`, so results show the airline name and IATA code.
 9. **Payment pages are separate entries.** `/checkout.html` (data steps) loads no third-party script; `/checkout/pay-card.html` is the only page with Stripe.js (a static tag in its HTML); `/checkout/pay-airline.html` has no third-party script at all ([OADR-0017](0017-airline-card-form-isolation.md)); `/checkout/complete.html` finishes the Stripe path without Stripe.js. Each has its own entry bundle, so the payment-page script inventory of [ADR-0011](../../../docs/mvp/adr/0011-payments-stripe-and-airline-card.md) §C is short and stable.
 10. **The dev server behaves like Caddy for one tenant.** Vite proxies `/api` to the OTA API, strips `/api`, and sets `X-Velexis-Edge` (development secret), `X-Velexis-Host` (`demo.ota.example.com` by default) and `Origin: https://<that host>`, because the CSRF guard compares `Origin` with the verified host ([OADR-0006](0006-storefront-cookie-sessions-and-csrf.md)). The variables are listed in [`ota/frontend/.env.example`](../../frontend/.env.example).
@@ -33,6 +36,7 @@ Still open: the URL scheme and how dynamic values (search, offer, checkout, book
 - URLs need no router and no server logic; Caddy's existing rules serve all pages except content pages.
 - The CSP stays strict without exceptions, and the payment pages have small, known script sets.
 - Developers and tests see the same headers and rewrites as production.
+- Since 2026-10-29 a suspended OTA's open tabs show the unavailable state from their next page on, not after the cache's 5 minutes (point 7).
 
 ### Negative
 

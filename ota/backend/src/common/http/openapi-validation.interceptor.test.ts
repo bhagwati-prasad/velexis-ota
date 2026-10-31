@@ -101,6 +101,13 @@ class WebhookProbeController {
 
 let api: TestApp;
 
+/**
+ * The budget of a hook that starts (or closes) a second application of this file: the module graph on the preloaded
+ * document, about half a second alone and a few seconds while every package's tests run at once. It only stops a start
+ * or a close that hangs.
+ */
+const SECOND_APP_SETUP_TIMEOUT_MS = 30_000;
+
 // Starting the application parses and compiles the OTA document, and the first expectResponseToMatch parses it again
 // for the response checker: one-time work that takes several seconds while every package's tests run at once, so it
 // happens here, with the budget of test/helpers/openapi.ts, and not in the first test.
@@ -330,6 +337,20 @@ describe("request validation (OpenAPI interceptor)", () => {
 });
 
 describe("body parsing", () => {
+  /** An application with a JSON limit of its own for one operation (`createSavedTraveler`: 1024 bytes). */
+  let limited: TestApp;
+
+  // Starting a second application is one-time work of the per-operation limit test below (FIX-W35-OTA, lead decision
+  // (2f) of 2026-10-30): its module graph on the preloaded document is about half a second alone, and above 2 s while
+  // every package's tests run at once, which the test's own 5 s used to pay. The budget only stops a start that hangs.
+  beforeAll(async () => {
+    limited = await createTestApp({ jsonBodyLimits: { createSavedTraveler: 1024 } });
+  }, SECOND_APP_SETUP_TIMEOUT_MS);
+
+  afterAll(async () => {
+    await limited?.close();
+  }, SECOND_APP_SETUP_TIMEOUT_MS);
+
   it("refuses malformed JSON without quoting it, in the log either", async () => {
     const before = api.sink.lines.length;
 
@@ -417,25 +438,55 @@ describe("body parsing", () => {
 
   it("applies a per-operation JSON limit on every spelling of the operation's route", async () => {
     // Deferred operations, whose routes answer 501 through the MVP (the auth routes were the example until OBE-033).
-    const limited = await createTestApp({ jsonBodyLimits: { createSavedTraveler: 1024 } });
-    try {
-      const big = { ...SIGN_IN, password: "p".repeat(1100) };
-      const small = SIGN_IN;
-      // The storefront's edge credential: the pending routes answer 501 to an accepted caller (OBE-011).
-      const answers = await Promise.all([
-        request(limited.server).post("/v1/account/saved-travelers").set(edgeHeaders()).send(big),
-        request(limited.server).post("/V1/Account/Saved-Travelers/").set(edgeHeaders()).send(big),
-        request(limited.server).post("/v1/account/saved-travelers").set(edgeHeaders()).send(small),
-        // Another route keeps the default limit.
-        request(limited.server).post("/v1/account/data-exports").set(edgeHeaders()).send(big),
-      ]);
+    // `limited` is the hook's application.
+    const big = { ...SIGN_IN, password: "p".repeat(1100) };
+    const small = SIGN_IN;
+    // The storefront's edge credential: the pending routes answer 501 to an accepted caller (OBE-011).
+    const answers = await Promise.all([
+      request(limited.server).post("/v1/account/saved-travelers").set(edgeHeaders()).send(big),
+      request(limited.server).post("/V1/Account/Saved-Travelers/").set(edgeHeaders()).send(big),
+      request(limited.server).post("/v1/account/saved-travelers").set(edgeHeaders()).send(small),
+      // Another route keeps the default limit.
+      request(limited.server).post("/v1/account/data-exports").set(edgeHeaders()).send(big),
+    ]);
 
-      expect(answers.map((res) => res.status)).toEqual([400, 400, 501, 501]);
-      expect(answers[0]?.body.error.details).toEqual({ reason: "body_too_large", limitBytes: 1024 });
-      expect(answers[1]?.body.error.details).toEqual({ reason: "body_too_large", limitBytes: 1024 });
-    } finally {
-      await limited.close();
-    }
+    expect(answers.map((res) => res.status)).toEqual([400, 400, 501, 501]);
+    expect(answers[0]?.body.error.details).toEqual({ reason: "body_too_large", limitBytes: 1024 });
+    expect(answers[1]?.body.error.details).toEqual({ reason: "body_too_large", limitBytes: 1024 });
+  });
+
+  it("parses multipart/form-data on the asset upload's route only, on every spelling of it [OBE-071]", async () => {
+    // Not well-formed: the multipart parser refuses it before any guard, wherever it runs.
+    const broken = (call: request.Test): request.Test =>
+      call
+        .set("Content-Type", "multipart/form-data; boundary=velexis")
+        .send(`--velexis\r\nContent-Disposition: form-data; name="kind"\r\n\r\n${SECRET}`);
+    const asset = "/v1/console/settings/assets/ast_01JA7P4R6T8V0X2Z4B6D8F0H2K";
+
+    const answers = await Promise.all([
+      broken(request(api.server).post("/v1/console/settings/assets")),
+      broken(request(api.server).post("/V1/Console/Settings/Assets/")),
+      // A well-formed body is parsed and the guards then refuse the missing credential.
+      request(api.server).post("/v1/console/settings/assets").field("kind", "logo"),
+      // No other route parses it: an unbound route gets no body, an operation with a JSON body refuses the media
+      // type, and the asset's own delete leaves it to the guards.
+      broken(request(api.server).post("/__probe/unbound")),
+      broken(request(api.server).post("/__probe/sign-in").set("Idempotency-Key", IDEMPOTENCY_KEY)),
+      broken(request(api.server).delete(asset)),
+    ]);
+
+    expect(answers.map((res) => [res.status, res.body.error?.code, res.body.error?.details?.reason])).toEqual(
+      [
+        [400, "INVALID_REQUEST", "malformed_multipart"],
+        [400, "INVALID_REQUEST", "malformed_multipart"],
+        [401, "INVALID_API_KEY", undefined],
+        [201, undefined, undefined],
+        [400, "INVALID_REQUEST", "unsupported_media_type"],
+        [401, "INVALID_API_KEY", undefined],
+      ],
+    );
+    expect(answers[3]?.body.body).toBeUndefined();
+    expect(answers.map((res) => res.text).join("\n")).not.toContain(SECRET);
   });
 
   it("refuses a JSON limit for an operation the document does not have", async () => {

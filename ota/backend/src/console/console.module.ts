@@ -18,7 +18,21 @@
 // console.bookings.issue and cancel (console-booking-actions.service.ts), which claim a booking for its issuance with the
 // ticketing job's TicketingRepository (a plain provider, provided here again), record tickets with BookingsModule's
 // OrderRecorder, capture through ConsolePaymentsService, cancel through BookingsModule's CancellationService, and
-// answer the same-key replays of a cancellation's `504` (ConsoleCancelBookingIdempotencyHooks).
+// answer the same-key replays of a cancellation's `504` (ConsoleCancelBookingIdempotencyHooks). Since OBE-064:
+// console.bookings.findByRecordLocator and import (pnr-import.service.ts, on the bookings controller), which read the
+// connection's offices (AmadeusModule's ConnectionResolver), price an import with the tenant's markup and fee rules
+// (PricingModule's RulesRepository) and record its order with BookingsModule's repositories and OrderRecorder. Since
+// OBE-065: console.queues.list and listSnapshots (queues.controller.ts, queues.service.ts), which read queues through
+// AmadeusModule's client and keep the reads in `queue_snapshots` (queue-snapshots.repository.ts); the queue poller that
+// writes the same rows runs in the worker, where JobsModule provides it. Since OBE-066: console.customers.list and get
+// (customers.controller.ts, customers.service.ts, customers.repository.ts), which read the customers and, for their
+// statistics and recent bookings, the bookings and payments of the environment (through ConsoleBookingsRepository and
+// BookingsModule's PaymentsRepository), and console.supplierRequests.list (supplier-log.controller.ts,
+// supplier-log.repository.ts), the redacted Amadeus call log. Since OBE-067: the eight raw Amadeus reads
+// `console.amadeus.*` (raw-amadeus.controller.ts, raw-amadeus.service.ts), which call AmadeusModule's client with the
+// connection's offices, keep another office's orders out of the answer and of the tenant's supplier log (OBE-064's
+// office rule), link order reads to bookings with PnrImportRepository and keep Queue List reads as `queue_snapshots`
+// rows (QueueSnapshotsRepository); the four raw writes stay deferred (501).
 import { Global, Module } from "@nestjs/common";
 import { AmadeusModule } from "../amadeus/amadeus.module";
 import { BookingsModule } from "../bookings/bookings.module";
@@ -27,6 +41,7 @@ import { loadOpenApiDocument, OpenApiDocument } from "../common/http/openapi-val
 import { RequestContext } from "../common/http/request-context";
 import { QueuesModule } from "../common/queues/queues.module";
 import { PaymentGatewayModule } from "../payments/payment-gateway.module";
+import { PricingModule } from "../pricing/pricing.module";
 import { RefundsRepository } from "../payments/refunds.repository";
 import { TenancyModule } from "../tenancy/tenancy.module";
 import { TicketingRepository } from "../bookings/ticketing.service";
@@ -39,12 +54,37 @@ import { ConsoleBookingsRepository } from "./console-bookings.repository";
 import { ConsoleBookingsService } from "./console-bookings.service";
 import { ConsolePaymentsController } from "./console-payments.controller";
 import { ConsolePaymentsService } from "./console-payments.service";
+import { ConsoleCustomersController } from "./customers.controller";
+import { ConsoleCustomersRepository } from "./customers.repository";
+import { ConsoleCustomersService } from "./customers.service";
+import { PnrImportRepository, PnrImportService } from "./pnr-import.service";
+import { QueueSnapshotsRepository } from "./queue-snapshots.repository";
+import { QueuesController } from "./queues.controller";
+import { QueuesService } from "./queues.service";
+import { RawAmadeusController } from "./raw-amadeus.controller";
+import { RawAmadeusRepository, RawAmadeusService } from "./raw-amadeus.service";
 import { StaffActionsWriter } from "./staff-actions.writer";
+import { ConsoleSupplierLogController } from "./supplier-log.controller";
+import { SupplierLogRepository } from "./supplier-log.repository";
 
 @Global()
 @Module({
-  imports: [TenancyModule.forApi(), AmadeusModule, BookingsModule, PaymentGatewayModule, QueuesModule],
-  controllers: [ConsoleBookingsController, ConsolePaymentsController],
+  imports: [
+    TenancyModule.forApi(),
+    AmadeusModule,
+    BookingsModule,
+    PaymentGatewayModule,
+    QueuesModule,
+    PricingModule,
+  ],
+  controllers: [
+    ConsoleBookingsController,
+    ConsolePaymentsController,
+    QueuesController,
+    ConsoleCustomersController,
+    ConsoleSupplierLogController,
+    RawAmadeusController,
+  ],
   providers: [
     StaffActionsWriter,
     { provide: StaffRefusalAudit, useExisting: StaffActionsWriter },
@@ -61,6 +101,15 @@ import { StaffActionsWriter } from "./staff-actions.writer";
     TicketingRepository,
     ConsolePaymentsService,
     RefundsRepository,
+    PnrImportService,
+    PnrImportRepository,
+    QueueSnapshotsRepository,
+    QueuesService,
+    ConsoleCustomersRepository,
+    ConsoleCustomersService,
+    SupplierLogRepository,
+    RawAmadeusService,
+    RawAmadeusRepository,
   ],
   exports: [StaffActionsWriter, StaffRefusalAudit],
 })

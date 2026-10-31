@@ -24,7 +24,7 @@ import { ScopeGuard } from "./common/auth/scope.guard";
 import { StaffGuard } from "./common/auth/staff.guard";
 import { TenantGuard } from "./common/auth/tenant.guard";
 import { CommonModule } from "./common/common.module";
-import type { JsonBodyLimits } from "./common/http/body-parsers";
+import type { JsonBodyLimits, MultipartBodyLimits } from "./common/http/body-parsers";
 import { HttpModule } from "./common/http/http.module";
 import { RateLimitGuard, rateLimitModule } from "./common/http/rate-limits";
 import { requestIdOf } from "./common/http/request-context";
@@ -57,6 +57,8 @@ export interface AppModuleOptions {
   readonly logger: Logger;
   /** JSON body limits that differ from the 256 KB default, by operation (`JSON_BODY_LIMITS` of main.ts). */
   readonly jsonBodyLimits?: JsonBodyLimits | undefined;
+  /** The multipart routes and their body limits (`MULTIPART_BODY_LIMITS` of main.ts); none without it. */
+  readonly multipartBodyLimits?: MultipartBodyLimits | undefined;
 }
 
 @Module({})
@@ -87,7 +89,10 @@ export class AppModule implements NestModule {
         }),
         CommonModule,
         // helmet, cookies, body parsers, OpenAPI validation, the error filter and the 501 routes (OBE-010).
-        HttpModule.forRoot({ jsonBodyLimits: options.jsonBodyLimits }),
+        HttpModule.forRoot({
+          jsonBodyLimits: options.jsonBodyLimits,
+          multipartBodyLimits: options.multipartBodyLimits,
+        }),
         // The pool of velexis_ota_app, the platform repository and the caller classification (OBE-011); the platform
         // caches on Redis, the vx:invalidate subscriber, tenant resolution and TenantTx (OBE-012).
         TenancyModule.forApi(),

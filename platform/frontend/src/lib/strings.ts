@@ -1317,6 +1317,145 @@ export const AMADEUS_STRINGS = Object.freeze({
   unavailableTitle: "The Amadeus connections could not be loaded",
 });
 
+/**
+ * The settings of an Amadeus connection on `/otas/[tenantId]/amadeus` (PFE-018; flows/amadeus-connection.md §E; PF-53):
+ * the office defaults, the ticketing defaults of new flight orders and the monitored queues, their rules (those of the
+ * platform document's `UpdateAmadeusConnectionRequest`) and the answers of `updateAmadeusConnection`.
+ */
+export const AMADEUS_SETTINGS_STRINGS = Object.freeze({
+  /** The heading of one connection's settings: "Settings of the test connection". */
+  title: (environment: "test" | "live") =>
+    `Settings of the ${connectionEnvironmentWords(environment)} connection`,
+  intro:
+    "The offices and defaults Velexis uses for the Amadeus calls of your storefront and OTA admin in this environment.",
+  noOffices:
+    "These settings can be changed once the connection has an Amadeus office. Velexis assigns one soon.",
+  // Offices.
+  officesLegend: "Offices",
+  defaultOfficeLabel: "Default office",
+  defaultOfficeHint: "Used for flight searches and bookings that name no office.",
+  queuingOfficeLabel: "Queuing office",
+  queuingOfficeHint: "The office whose queues receive new flight orders.",
+  ownerOfficeLabel: "Owner office",
+  ownerOfficeHint: "The office that owns new flight orders.",
+  /** The first option of an office select whose value is not set, or not one of the connection's offices. */
+  officePlaceholder: "Choose an office",
+  // Ticketing defaults.
+  ticketingLegend: "Ticketing defaults of new flight orders",
+  ticketingIntro:
+    "What Amadeus does with a new flight order that is not issued at once. Orders made before a change keep their own settings.",
+  agreementLabel: "Ticketing agreement",
+  /** The ticketing agreement options, and "Not set" for none. */
+  agreementOptions: Object.freeze({
+    "": "Not set",
+    CONFIRM: "Confirm the order",
+    DELAY_TO_QUEUE: "Place the order on a queue after a delay",
+    DELAY_TO_CANCEL: "Cancel the order after a delay",
+  }) as Readonly<Record<string, string>>,
+  delayLabel: "Days before the automatic step",
+  delayHint: "0 to 999. Only the delayed agreements use it.",
+  issueLabel: "Issue tickets when the order is created",
+  /** The `issue` options, and "Not set" for none. */
+  issueOptions: Object.freeze({ "": "Not set", true: "Yes", false: "No" }) as Readonly<
+    Record<string, string>
+  >,
+  automatedTitle: "Automated processes",
+  automatedIntro:
+    "The automatic steps Amadeus applies to new orders, each with the queue and office it uses.",
+  automatedNone: "No automated process is set.",
+  /** The legend of one automated process row: "Automated process 1". */
+  automatedRow: (position: number) => `Automated process ${position}`,
+  automatedCodeLabel: "When",
+  /** The `automatedProcess` codes. */
+  automatedCodes: Object.freeze({
+    IMMEDIATE: "At once",
+    DELAYED: "After a delay",
+    ERROR: "On an error",
+  }) as Readonly<Record<string, string>>,
+  queueNumberLabel: "Queue number",
+  queueCategoryLabel: "Queue category",
+  officeLabel: "Office",
+  /** The first option of an automated process's office select: the process names no office. */
+  officeNone: "No office",
+  automatedDelayLabel: "Delay in days",
+  textLabel: "Remark",
+  addAutomated: "Add an automated process",
+  /** The visible text of a row's remove button; its name for screen readers names the row. */
+  remove: "Remove",
+  /** The name of a row's remove button: "Remove automated process 2". */
+  removeAutomated: (position: number) => `Remove automated process ${position}`,
+  // Monitored queues.
+  queuesTitle: "Monitored queues",
+  queuesIntro:
+    "The Amadeus queues your OTA admin reads into its queue lists, at most 20. Each queue is listed once.",
+  queuesNone: "No queue is monitored.",
+  /** The legend of one monitored queue row: "Queue 1". */
+  queueRow: (position: number) => `Queue ${position}`,
+  queueIdLabel: "Queue number",
+  queueIdHint: "0 to 99",
+  categoryLabel: "Category",
+  categoryHint: "0 to 254",
+  addQueue: "Add a queue",
+  /** The name of a row's remove button: "Remove queue 2". */
+  removeQueue: (position: number) => `Remove queue ${position}`,
+  queuesFull: "A connection monitors at most 20 queues. Remove one to add another.",
+  /** One message per rule a value breaks (the action's checks and the API's field errors). */
+  problems: Object.freeze({
+    office: "Choose one of this connection's offices.",
+    agreementOption: "Choose a ticketing agreement from the list.",
+    delay: "Enter a number of days from 0 to 999.",
+    issue: "Choose yes, no or not set.",
+    automatedCode: "Choose when the process runs.",
+    queueNumber: "Enter a queue number from 0 to 999, or leave it empty.",
+    queueCategory: "Enter a queue category from 0 to 999, or leave it empty.",
+    text: "Use at most 200 characters.",
+    monitoredQueueId: "Enter a queue number from 0 to 99.",
+    monitoredCategory: "Enter a category from 0 to 254.",
+    duplicate: "This queue is already in the list. Remove one of them.",
+    tooManyQueues: "Monitor at most 20 queues.",
+    /** The API refused a value by a rule the portal has no own words for. */
+    rules: "Check this value: it does not follow the rules of the setting.",
+  }),
+  submit: "Save the settings",
+  submitting: "Saving…",
+  saved: "The settings are saved. Flight searches and bookings use them within a minute.",
+  readOnlyTitle: "The settings cannot be changed right now",
+  /** Why the settings are read-only, for each OTA status but `active` (PADR-0014 item 5). */
+  readOnly: Object.freeze({
+    provisioning:
+      "Velexis is still setting up this OTA. You can change the settings once the set-up is done.",
+    suspended: "This OTA is suspended, so its Amadeus settings are read-only until it is resumed.",
+    failed: "The set-up of this OTA failed, so its Amadeus settings cannot be changed.",
+  }),
+  /** Finance members read the settings, without the form. */
+  roleNote: "Only owners and admins can change these settings.",
+  stale:
+    "Someone else changed these settings in the meantime. Reload the page to see them, then make your change again.",
+  reload: "Reload the page",
+  notActive:
+    "This OTA is not active any more, so its Amadeus settings cannot be changed. Reload the page to see why.",
+  forbidden: "Your role in this OTA does not allow changing the Amadeus settings any more. Reload the page.",
+  removed:
+    "This Amadeus connection is not there any more, or you are not a member of this OTA any more. Reload the page.",
+  formExpired: "This form has expired. Reload the page and try again.",
+  rateLimited: "Too many changes in a short time. Wait a minute, then try again.",
+  // The read-only view of finance members.
+  notSet: "Not set",
+  /** The parts of an automated process or an agreement in words, joined: "At once, queue 8, category 0". */
+  joined: (parts: readonly string[]) => parts.join(", "),
+  viewQueue: (number: string) => `queue ${number}`,
+  viewCategory: (category: string) => `category ${category}`,
+  viewOffice: (officeId: string) => `office ${officeId}`,
+  /** A stored delay (`"2D"`) in words; one of another shape as it is. */
+  viewDelay: (delay: string) => {
+    const days = /^([0-9]{1,3})D$/.exec(delay)?.[1];
+    return days === undefined ? delay : `after ${days} ${days === "1" ? "day" : "days"}`;
+  },
+  viewText: (text: string) => `remark “${text}”`,
+  monitoredCaption: (environment: "test" | "live") =>
+    `Monitored queues of the ${connectionEnvironmentWords(environment)} connection`,
+});
+
 /** `/otas/[tenantId]/payments` (PF-60; your own Stripe account with PFE-024). */
 export const PAYMENTS_STRINGS = Object.freeze({
   title: "Payments",

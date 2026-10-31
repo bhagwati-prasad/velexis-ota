@@ -57,6 +57,12 @@ const RECONCILE = "bookings.reconcile_scan";
 const SYNC = "bookings.sync_scan";
 /** The sweep of the refunds whose enqueue was lost (FIX-W27-FOLLOWUPS). */
 const REFUNDS = "refunds.sweep";
+/** The checkout expiry of OBE-056. */
+const EXPIRE = "checkouts.expire";
+/** The retention purge of OBE-056. */
+const RETENTION = "retention.daily";
+/** The queue poller of OBE-065. */
+const POLL = "queues.poll";
 const ALPHA = "ten_01JALPHA0000000000000000AA";
 const BETA = "ten_01JBETA00000000000000000BB";
 /** The 15-minute iteration of the tests: 2026-01-15T10:15:00Z (FakeClock's day). */
@@ -157,6 +163,9 @@ describe("the schedules", () => {
       RECONCILE,
       SYNC,
       REFUNDS,
+      EXPIRE,
+      RETENTION,
+      POLL,
     ]);
     expect(purgeSchedule()).toMatchObject({
       pattern: "*/15 * * * *",
@@ -198,6 +207,25 @@ describe("the schedules", () => {
       pattern: "*/5 * * * *",
       milestone: "M3",
       statuses: ["active", "suspended"],
+    });
+    // OBE-056: the checkout expiry every minute and the retention purge at 03:35 UTC every day, both for suspended
+    // tenants too (OADR-0014 point 4).
+    expect(scheduleById(EXPIRE)).toMatchObject({
+      pattern: "* * * * *",
+      milestone: "M3",
+      statuses: ["active", "suspended"],
+    });
+    expect(scheduleById(RETENTION)).toMatchObject({
+      pattern: "35 3 * * *",
+      milestone: "M3",
+      statuses: ["active", "suspended"],
+    });
+    // OBE-065: the queue poller every 15 minutes, for active tenants only: a Queue List read is new supplier activity,
+    // which a suspended OTA does not get (OADR-0014 point 4).
+    expect(scheduleById(POLL)).toMatchObject({
+      pattern: "*/15 * * * *",
+      milestone: "M4",
+      statuses: ["active"],
     });
     for (const schedule of OTA_SCHEDULES) {
       // Job ids `<task>:<tenantId>:<bucket>` and `repeat:<id>:<millis>` must keep exactly three parts.
@@ -249,9 +277,24 @@ describe("the schedules", () => {
       { pattern: "*/5 * * * *", tz: SCHEDULE_TIME_ZONE },
       { name: FAN_OUT_JOB, data: { task: REFUNDS } },
     );
+    expect(upsertJobScheduler).toHaveBeenCalledWith(
+      EXPIRE,
+      { pattern: "* * * * *", tz: SCHEDULE_TIME_ZONE },
+      { name: FAN_OUT_JOB, data: { task: EXPIRE } },
+    );
+    expect(upsertJobScheduler).toHaveBeenCalledWith(
+      RETENTION,
+      { pattern: "35 3 * * *", tz: SCHEDULE_TIME_ZONE },
+      { name: FAN_OUT_JOB, data: { task: RETENTION } },
+    );
+    expect(upsertJobScheduler).toHaveBeenCalledWith(
+      POLL,
+      { pattern: "*/15 * * * *", tz: SCHEDULE_TIME_ZONE },
+      { name: FAN_OUT_JOB, data: { task: POLL } },
+    );
     expect(removeJobScheduler).toHaveBeenCalledExactlyOnceWith("offers.legacy_sweep");
     expect(result).toEqual({
-      registered: [PURGE, SWEEP, WATCH, TICKETING, RECONCILE, SYNC, REFUNDS],
+      registered: [PURGE, SWEEP, WATCH, TICKETING, RECONCILE, SYNC, REFUNDS, EXPIRE, RETENTION, POLL],
       removed: ["offers.legacy_sweep"],
     });
   });

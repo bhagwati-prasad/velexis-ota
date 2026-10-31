@@ -433,6 +433,8 @@ describe("redaction through createLogger", () => {
       "webhookSecret",
       "iban",
       "accountNumber",
+      "bic",
+      "routingNumber",
       "recoveryCode",
       "recoveryCodes",
       "totpSecret",
@@ -626,6 +628,10 @@ const PLATFORM_KEYS = [
   "webhookSecret",
   "iban",
   "accountNumber",
+  "bic",
+  "routingNumber",
+  "routing_number",
+  "account_number",
   "recoveryCode",
   "recoveryCodes",
   "totpSecret",
@@ -734,6 +740,47 @@ describe("the platform's redaction paths (platform/docs/architecture.md §8)", (
       recoveryCodes: REDACT_CENSOR,
       invitation: { email: "jo@example.com", invitationToken: REDACT_CENSOR },
       stripe: { secretKey: REDACT_CENSOR, webhookSecret: REDACT_CENSOR },
+    });
+    expect(logged).toEqual(snapshot);
+  });
+
+  it("logs a payout account's bic and routing number, in camelCase and snake_case, at the top level and one level down as [REDACTED] [FIX-W35-PLATFORM AC2]", () => {
+    const { logger, sink } = testLogger();
+    // Test values only: a made-up IBAN, BIC, account number and routing number.
+    const iban = "XX00TEST0000111122223333";
+    const bic = "TESTXXYYZZZ";
+    const accountNumber = "000123456789";
+    const routingNumber = "000000000";
+    const logged = {
+      bic,
+      routingNumber,
+      routing_number: routingNumber,
+      account_number: accountNumber,
+      ibanAccount: { scheme: "iban", iban, bic, last4: "3333" },
+      localAccount: { scheme: "local", accountNumber, routingNumber, last4: "6789" },
+      snakeAccount: { account_number: accountNumber, routing_number: routingNumber, last4: "6789" },
+    };
+    const snapshot = structuredClone(logged);
+
+    logger.warn(logged, "platform.careless_debug");
+
+    const line = sink.lines[0] ?? "";
+    for (const value of [iban, bic, accountNumber, routingNumber]) {
+      expect(line).not.toContain(value);
+    }
+    expect(sink.records()[0]).toMatchObject({
+      bic: REDACT_CENSOR,
+      routingNumber: REDACT_CENSOR,
+      routing_number: REDACT_CENSOR,
+      account_number: REDACT_CENSOR,
+      ibanAccount: { scheme: "iban", iban: REDACT_CENSOR, bic: REDACT_CENSOR, last4: "3333" },
+      localAccount: {
+        scheme: "local",
+        accountNumber: REDACT_CENSOR,
+        routingNumber: REDACT_CENSOR,
+        last4: "6789",
+      },
+      snakeAccount: { account_number: REDACT_CENSOR, routing_number: REDACT_CENSOR, last4: "6789" },
     });
     expect(logged).toEqual(snapshot);
   });

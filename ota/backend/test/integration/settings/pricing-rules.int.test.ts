@@ -42,6 +42,7 @@ import { Money } from "../../../src/pricing/pricing.types";
 import { seedDefaultMarkupRule } from "../../../src/provisioning/seeds/markup-rules.seed";
 import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefront-settings.seed";
 import type { OtaPool } from "../../../src/tenancy/tenancy.module";
+import { journeyAmadeusLimitsModule } from "../../helpers/amadeus-limits";
 import { newApiKey, testApiCredentials, testKeyProvider } from "../../helpers/api-env";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
 import { createTestApp, type TestApp } from "../../support/create-test-app";
@@ -449,7 +450,13 @@ beforeAll(async () => {
     )
   ).id;
   stub = await startAmadeusStub({ credentials: { clientId, clientSecret: secret } });
-  api = await createTestApp({ database: db, redis, env: { AMADEUS_BASE_URL_TEST: stub.url } });
+  api = await createTestApp({
+    database: db,
+    redis,
+    env: { AMADEUS_BASE_URL_TEST: stub.url },
+    // Its journeys search and price for one tenant one after the other (helpers/amadeus-limits.ts).
+    imports: [journeyAmadeusLimitsModule()],
+  });
   // The first sign-in, read, write, search and pricing of a process open the pools' connections and warm the token,
   // validation and pricing code; done once here, so that no test pays for it.
   const warmUp = await signIn(alphaId, "owner");
@@ -621,6 +628,50 @@ describe("console.settings.markupRules", () => {
     expect(answer(raised)).toEqual([200, undefined]);
     expectResponseToMatch("consoleUpdateMarkupRule", raised);
     expect(raised.body).toMatchObject({ isDefault: true, scope: {}, percentage: "3.0000", warnings: [] });
+  });
+
+  it("[FIX-W34-OTA AC3] keeps the default rule active, undated and at priority 1000: each change answers 409 default_rule, its percentage changes", async () => {
+    const admin = await signIn(alphaId, "admin");
+    const before = await admin.get(`${MARKUP}/${alphaDefault}`);
+    const etag = before.headers["etag"] as string;
+
+    for (const update of [
+      { isActive: false },
+      { activeFrom: "2027-01-01T00:00:00.000Z" },
+      { activeUntil: "2027-01-01T00:00:00.000Z" },
+      { priority: 2000 },
+      { priority: 1, percentage: "2.0000" },
+    ]) {
+      const refused = await admin.patch(`${MARKUP}/${alphaDefault}`, update, etag);
+      expect([update, ...answer(refused)]).toEqual([update, 409, "CONFLICT"]);
+      expect([update, refused.body.error.details]).toEqual([update, { reason: "default_rule" }]);
+      expect(refused.body.error.message).toBe(
+        "The default markup rule always matches: it cannot be deleted, its scope stays empty, it stays active with " +
+          "no validity window, and its priority stays 1000.",
+      );
+      expectResponseToMatch("consoleUpdateMarkupRule", refused);
+    }
+    // Nothing changed: the same version, still active, undated, at 1000 and 0 %.
+    const unchanged = await admin.get(`${MARKUP}/${alphaDefault}`);
+    expect(unchanged.body).toEqual(before.body);
+
+    const allowed = await admin.patch(
+      `${MARKUP}/${alphaDefault}`,
+      { percentage: "1.5000", isActive: true, activeFrom: null, activeUntil: null, priority: 1000 },
+      etag,
+    );
+    expect(answer(allowed)).toEqual([200, undefined]);
+    expectResponseToMatch("consoleUpdateMarkupRule", allowed);
+    expect(allowed.body).toMatchObject({
+      isDefault: true,
+      percentage: "1.5000",
+      isActive: true,
+      activeFrom: null,
+      activeUntil: null,
+      priority: 1000,
+      scope: {},
+      version: Number(before.body.version) + 1,
+    });
   });
 
   it("creates a rule with Location and ETag, replays a retry and refuses the key with another body", async () => {

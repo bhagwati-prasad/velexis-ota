@@ -7,12 +7,21 @@
 // 3001 (platform admin), 3002 (OTA admin), 3100 (platform API) and 4000 (OTA API); ECHO_PORTS (comma-separated)
 // overrides the list. Every request gets 200 and a JSON echo of what reached the upstream:
 //
-//   {"port":4000,"method":"GET","url":"/x","headers":{"x-velexis-host":["acme.ota.localhost"],...}}
+//   {"port":4000,"method":"GET","url":"/x","bytes":0,"headers":{"x-velexis-host":["acme.ota.localhost"],...}}
 //
 // Header names are lower case and every name maps to the list of its values as received, so a header that a
-// proxy appended instead of replacing shows up as two values. Every answer carries
-// `Cross-Origin-Opener-Policy: same-origin`, as helmet adds it to every answer of both APIs, so the smoke test can
-// prove that the storefront does not pass it on to its /api/* answers (OFE-014, OADR-0017 point 3).
+// proxy appended instead of replacing shows up as two values. `bytes` is the length of the request body that arrived,
+// so the smoke test can prove that a whole upload passed Caddy's body limit (FIX-W34-SHARED, lead decision (2c) of
+// 2026-10-30). Every answer carries `Cross-Origin-Opener-Policy: same-origin`, as helmet adds it to every answer of
+// both APIs, so the smoke test can prove that the storefront does not pass it on to its /api/* answers (OFE-014,
+// OADR-0017 point 3), and the OTA API's helmet CSP `default-src 'none'; frame-ancestors 'none'` (HELMET_OPTIONS of
+// ota/backend/src/common/http/http.module.ts), so it can prove that the storefront replaces an upstream CSP.
+//
+// On the OTA API port (4000), GET /v1/assets/<tenantKey>/<assetId>.<ext> answers as getPublicAsset does (OADR-0012
+// point 3, ota/backend/src/storefront/public-assets.controller.ts): `Content-Type: image/png` and the image's own
+// headers, `Content-Security-Policy: default-src 'none'` (PUBLIC_ASSET_CSP) instead of helmet's,
+// `Cache-Control: public, max-age=31536000, immutable`, `X-Content-Type-Options: nosniff` and
+// `Cross-Origin-Resource-Policy: cross-origin`, with the same echo as its body (FIX-W34-SHARED, lead decision (2b)).
 //
 // GET /redirect answers 302 instead, with `Location: /landing?<the request's own query>` and the same echo, so the
 // smoke test can show which query values of a redirect's `Location` reach Caddy's access log (FIX-W29-SECURITY).
@@ -29,6 +38,19 @@ const HOST = "127.0.0.1";
 const ASK_PORT = 3100;
 const ASK_PATH = "/internal/tls/ask";
 const REDIRECT_PATH = "/redirect";
+const OTA_API_PORT = 4000;
+/** getPublicAsset's route as Express matches it: case-insensitive, on the path as received. */
+const PUBLIC_ASSET_PATH = /^\/v1\/assets\/[^/]+\/[^/]+\.[^/]+$/i;
+/** The CSP of the OTA API's helmet on every answer (HELMET_OPTIONS). */
+const HELMET_CSP = "default-src 'none'; frame-ancestors 'none'";
+/** The headers of getPublicAsset's answer (public-assets.controller.ts; PUBLIC_ASSET_CSP replaces helmet's CSP). */
+const PUBLIC_ASSET_HEADERS = {
+  "content-type": "image/png",
+  "content-security-policy": "default-src 'none'",
+  "cache-control": "public, max-age=31536000, immutable",
+  "x-content-type-options": "nosniff",
+  "cross-origin-resource-policy": "cross-origin",
+};
 
 const ports = (process.env.ECHO_PORTS ?? "3000,3001,3002,3100,4000")
   .split(",")
@@ -51,6 +73,7 @@ function send(res, status, body, headers = {}) {
     "content-type": "application/json",
     "content-length": Buffer.byteLength(text),
     "cross-origin-opener-policy": "same-origin",
+    "content-security-policy": HELMET_CSP,
     ...headers,
   });
   res.end(text);
@@ -58,8 +81,11 @@ function send(res, status, body, headers = {}) {
 
 function handler(port) {
   return (req, res) => {
-    // Drain the request body: the echo is about the request line and the headers only.
-    req.resume();
+    // Read the request body only to count its bytes: the echo is about the request line, the headers and its size.
+    let bytes = 0;
+    req.on("data", (chunk) => {
+      bytes += chunk.length;
+    });
     req.on("end", () => {
       const url = new URL(req.url ?? "/", "http://upstream.invalid");
       if (port === ASK_PORT && req.method === "GET" && url.pathname === ASK_PATH) {
@@ -69,9 +95,14 @@ function handler(port) {
         send(res, status, { ask: domain, allowed: status === 200 });
         return;
       }
-      const echo = { port, method: req.method, url: req.url, headers: req.headersDistinct };
+      const echo = { port, method: req.method, url: req.url, bytes, headers: req.headersDistinct };
       if (req.method === "GET" && url.pathname === REDIRECT_PATH) {
         send(res, 302, echo, { location: `/landing${url.search}` });
+        return;
+      }
+      const rawPath = (req.url ?? "/").split("?")[0] ?? "/";
+      if (port === OTA_API_PORT && req.method === "GET" && PUBLIC_ASSET_PATH.test(rawPath)) {
+        send(res, 200, echo, PUBLIC_ASSET_HEADERS);
         return;
       }
       send(res, 200, echo);

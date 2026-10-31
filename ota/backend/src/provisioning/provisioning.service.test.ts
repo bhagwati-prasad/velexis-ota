@@ -31,6 +31,7 @@ import type { PlatformReadRepository } from "../tenancy/platform-read.repository
 import type { PlatformTenant } from "../tenancy/platform-read.types";
 import { createWorkerApp, createWorkerLogger, WorkerModule } from "../worker.module";
 import { MAX_ERROR_MESSAGE_LENGTH } from "./failure-classifier";
+import type { HousekeepingService } from "./housekeeping.service";
 import { provisionerDatabaseProvider } from "./provisioning.module";
 import {
   createProvisionerDatabase,
@@ -425,7 +426,11 @@ describe("ProvisioningService", () => {
     options: ProvisioningOptions = DEFAULT_PROVISIONING_OPTIONS,
   ): ProvisioningService {
     return new ProvisioningService(
-      { tenantById: vi.fn(tenantById) } as unknown as PlatformReadRepository,
+      {
+        tenantById: vi.fn(tenantById),
+        // The platform's zone of a provisioning tenant, read before its transaction (FIX-W35-OTA).
+        tenantTimeZone: vi.fn(() => Promise.resolve("Europe/Oslo")),
+      } as unknown as PlatformReadRepository,
       { url: "postgres://nobody@127.0.0.1:1/none" } as unknown as ProvisionerDatabase,
       options,
       new FakeClock() as Clock,
@@ -643,12 +648,18 @@ describe("TenantOpsProcessor", () => {
     const log = (level: string) => (fields: Record<string, unknown>, msg: string) =>
       void lines.push({ level, fields, msg });
     const logger = { info: log("info"), warn: log("warn"), error: log("error") } as unknown as PinoLogger;
+    // The housekeeping of tenant.suspend and tenant.resume (OBE-074) has tests of its own (housekeeping.service.test.ts).
+    const housekeeping = {
+      suspend: vi.fn(() => Promise.reject(new Error("suspend is not expected"))),
+      resume: vi.fn(() => Promise.reject(new Error("resume is not expected"))),
+    };
     const processor = new TenantOpsProcessor(
       { provisionTenant, migrateTenant } as unknown as ProvisioningService,
+      housekeeping as unknown as HousekeepingService,
       new TenantEventsProducer(queue, new FakeClock() as Clock),
       logger,
     );
-    return { processor, provisionTenant, migrateTenant, added, lines };
+    return { processor, provisionTenant, migrateTenant, housekeeping, added, lines };
   }
 
   function job(
@@ -729,32 +740,23 @@ describe("TenantOpsProcessor", () => {
     expect(added).toEqual([]);
   });
 
-  it("fails the messages this release does not handle, and unknown names, as unrecoverable", async () => {
-    const { processor, provisionTenant, migrateTenant, added, lines } = processorWith(() =>
+  it("fails a name outside the queue's contract as unrecoverable, without running or publishing anything", async () => {
+    const { processor, provisionTenant, migrateTenant, housekeeping, added, lines } = processorWith(() =>
       Promise.resolve({ status: "provisioned", payload: PROVISIONED }),
     );
 
-    // tenant.migrate is handled since OBE-006 (tests below); suspend and resume come in M4–M5.
-    for (const [name, payload] of [
-      ["tenant.suspend", { reason: "billing" }],
-      ["tenant.resume", {}],
-    ] as const) {
-      await expect(processor.process(job(name, { ...provisionFixture, name, payload }))).rejects.toThrow(
-        new UnrecoverableError(`${name} is not handled by this release of the OTA worker`),
-      );
-    }
+    // Every message of the contract is handled: tenant.migrate since OBE-006 (tests below), tenant.suspend and
+    // tenant.resume since OBE-074 (housekeeping.service.test.ts).
     await expect(
       processor.process(job("tenant.delete", { ...provisionFixture, name: "tenant.delete" })),
     ).rejects.toBeInstanceOf(UnrecoverableError);
 
     expect(provisionTenant).not.toHaveBeenCalled();
     expect(migrateTenant).not.toHaveBeenCalled();
+    expect(housekeeping.suspend).not.toHaveBeenCalled();
+    expect(housekeeping.resume).not.toHaveBeenCalled();
     expect(added).toEqual([]);
-    expect(lines.map(({ level, msg }) => [level, msg])).toEqual([
-      ["error", "tenant_ops.unhandled"],
-      ["error", "tenant_ops.unhandled"],
-      ["error", "queue.job_invalid"],
-    ]);
+    expect(lines.map(({ level, msg }) => [level, msg])).toEqual([["error", "queue.job_invalid"]]);
   });
 
   const LOCK_TIMEOUT_FAILURE: TenantProvisionFailedPayload = {

@@ -109,7 +109,8 @@ export const STRIPE_CONNECT_CLIENT_ID_PATTERN = /^ca_[A-Za-z0-9_]{1,250}$/;
  * The Stripe variables each milestone switch needs (PADR-0015, README §3): they are optional while their switches are
  * off, so a deployment before M5 needs none, and required while one is on. Stripe Billing needs the account's key
  * and the billing endpoint's secret, the OTA's own Stripe (Connect Standard) the key, the OAuth client id and the
- * Connect endpoint's secret.
+ * Connect endpoint's secret, and settlements the key, with which the monthly drafts read the account's balance
+ * transactions (FIX-W36-PLATFORM, lead decision (2g) of 2026-10-30).
  */
 export const STRIPE_SWITCH_VARIABLES = Object.freeze({
   FEATURE_STRIPE_BILLING: Object.freeze(["STRIPE_SECRET_KEY", "STRIPE_BILLING_WEBHOOK_SECRET"] as const),
@@ -118,6 +119,7 @@ export const STRIPE_SWITCH_VARIABLES = Object.freeze({
     "STRIPE_CONNECT_CLIENT_ID",
     "STRIPE_CONNECT_WEBHOOK_SECRET",
   ] as const),
+  FEATURE_SETTLEMENTS: Object.freeze(["STRIPE_SECRET_KEY"] as const),
 });
 
 /**
@@ -216,8 +218,9 @@ export const PLATFORM_BACKEND_CONFIG_SCHEMA = {
   FEATURE_LIVE_SWITCH: env.bool({ default: false }),
   /**
    * The secret key of the Velexis Stripe account (ADR-0013, PADR-0002): Billing, Connect and balance transactions,
-   * through `common/stripe/stripe.client.ts` only. Required while FEATURE_STRIPE_BILLING or FEATURE_OWN_STRIPE is on
-   * (STRIPE_SWITCH_VARIABLES); a live key in production only, a test key everywhere else. A secret: never logged.
+   * through `common/stripe/stripe.client.ts` only. Required while FEATURE_STRIPE_BILLING, FEATURE_OWN_STRIPE or
+   * FEATURE_SETTLEMENTS is on (STRIPE_SWITCH_VARIABLES); a live key in production only, a test key everywhere else. A
+   * secret: never logged.
    */
   STRIPE_SECRET_KEY: env.string({ optional: true, pattern: STRIPE_SECRET_KEY_PATTERN }),
   /**
@@ -296,6 +299,7 @@ function stripeProblems(source: EnvSource | undefined): ConfigProblem[] {
     {
       FEATURE_STRIPE_BILLING: PLATFORM_BACKEND_CONFIG_SCHEMA.FEATURE_STRIPE_BILLING,
       FEATURE_OWN_STRIPE: PLATFORM_BACKEND_CONFIG_SCHEMA.FEATURE_OWN_STRIPE,
+      FEATURE_SETTLEMENTS: PLATFORM_BACKEND_CONFIG_SCHEMA.FEATURE_SETTLEMENTS,
     },
     source,
   );

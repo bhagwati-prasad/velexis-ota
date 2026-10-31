@@ -338,7 +338,12 @@ export function mount(
         `/legs/${index}/date /originDestinations/${index}/departureDateTimeRange/date`,
       );
       const previous = legs[index - 1]?.date.value ?? "";
-      leg.date.min = isIsoDate(previous) && previous > today ? previous : today;
+      const min = isIsoDate(previous) && previous > today ? previous : today;
+      // Only when it changes: Chromium rebuilds a date field's month, day and year whenever `min` is set, even to the
+      // value it has, and drops the digits being typed (date-range.js `setMin`, OFE-019; FIX-W33-OTA).
+      if (leg.date.min !== min) {
+        leg.date.min = min;
+      }
     });
     addButton.hidden = legs.length >= MAX_LEGS;
   };

@@ -44,7 +44,16 @@ import { SideNav } from "@/components/side-nav";
 import { StatusBadge } from "@/components/status-badge";
 import { StepUpDialog, useStepUpAction } from "@/components/step-up-dialog";
 import { TenantBanner } from "@/components/tenant-banner";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { ApiError } from "@/lib/api";
 import type { AccountMembership, MilestoneFeatures, TenantRole } from "@/lib/roles";
 import { ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE, type PortalSession } from "@/lib/session";
@@ -834,5 +843,109 @@ describe("DataTable", () => {
   it("says so when there is nothing to list", () => {
     render(<DataTable caption="Invoices" columns={columns} data={[]} emptyMessage="No invoices yet." />);
     expect(within(screen.getByRole("table")).getByText("No invoices yet.")).toBeTruthy();
+  });
+
+  it("[FIX-W31-PLATFORM AC4] scrolls a wide table in a container that takes the keyboard focus and shows it", () => {
+    render(<DataTable caption="Invoices" columns={columns} data={[]} />);
+
+    // axe `scrollable-region-focusable` (WCAG 2.1.1): the arrow keys scroll what the keyboard can focus (PFE-015).
+    const container = screen.getByRole("table").parentElement as HTMLElement;
+    expect(container.dataset["slot"]).toBe("table-container");
+    expect(container.getAttribute("tabindex")).toBe("0");
+    expect(container.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["overflow-x-auto", "focus-visible:ring-[3px]", "focus-visible:ring-ring/50"]),
+    );
+    container.focus();
+    expect(document.activeElement).toBe(container);
+  });
+});
+
+describe("Alert", () => {
+  it("[FIX-W31-PLATFORM AC4] colours a destructive description in the full destructive colour, never a lighter one", () => {
+    render(
+      <Alert variant="destructive">
+        <AlertTitle>The payment failed</AlertTitle>
+        <AlertDescription>Stripe refused the card.</AlertDescription>
+      </Alert>,
+    );
+
+    // text-destructive/90 on the card is 4.49:1, under the 4.5:1 of WCAG 1.4.3 (found by the PFE-015 journeys).
+    const classes = screen.getByRole("alert").className.split(/\s+/);
+    expect(classes).toContain("*:data-[slot=alert-description]:text-destructive");
+    expect(classes.filter((name) => /text-destructive\/\d+$/.test(name))).toEqual([]);
+    expect(screen.getByText("Stripe refused the card.").dataset["slot"]).toBe("alert-description");
+  });
+});
+
+describe("DropdownMenuItem", () => {
+  it("[FIX-W32-PLATFORM AC3] labels a focused destructive item in the foreground colour on its tint, never the destructive one", () => {
+    render(
+      <DropdownMenu open>
+        <DropdownMenuTrigger>Key actions</DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuItem>Edit origins</DropdownMenuItem>
+          <DropdownMenuItem variant="destructive">Revoke key</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    );
+
+    const item = within(screen.getByRole("menu")).getByRole("menuitem", { name: "Revoke key" });
+    expect(item.dataset["variant"]).toBe("destructive");
+    const classes = item.className.split(/\s+/);
+    // text-destructive on bg-destructive/10 over the popover is 4.0:1, under the 4.5:1 of WCAG 1.4.3; text-foreground
+    // there is 16.63:1. The look stays: the red label at rest (4.76:1), the tint and the red icon on focus.
+    expect(classes).toEqual(
+      expect.arrayContaining([
+        "data-[variant=destructive]:text-destructive",
+        "data-[variant=destructive]:focus:bg-destructive/10",
+        "data-[variant=destructive]:*:[svg]:!text-destructive",
+        "data-[variant=destructive]:focus:text-foreground",
+      ]),
+    );
+    expect(classes.filter((name) => /(^|:)focus:text-destructive/.test(name))).toEqual([]);
+  });
+});
+
+describe("destructive Button and Badge", () => {
+  it("darken on hover instead of fading, so their white text keeps 4.5:1", () => {
+    render(
+      <>
+        <Button variant="destructive">Reset two-factor</Button>
+        <Badge variant="destructive">Failed</Badge>
+      </>,
+    );
+
+    // bg-destructive/90 over a white page is #ea1a23: 4.49:1 for white text, under the 4.5:1 of WCAG 1.4.3 (axe found
+    // it on a hovered button in e2e run 40938272523). Mixing in 10% black is #c90008: 6.03:1; at rest 4.76:1.
+    const hover = "hover:bg-[color-mix(in_oklch,var(--destructive),black_10%)]";
+    const button = screen.getByRole("button", { name: "Reset two-factor" }).className.split(/\s+/);
+    const badge = screen.getByText("Failed").className.split(/\s+/);
+    expect(button).toContain(hover);
+    expect(badge).toContain(`[a&]:${hover}`);
+    expect([...button, ...badge].filter((name) => /hover:bg-destructive\/\d+$/.test(name))).toEqual([]);
+  });
+});
+
+describe("Tabs", () => {
+  it("[FIX-W32-PLATFORM AC3] sets the tab list's text in the foreground colour on the muted background, never the muted one", () => {
+    render(
+      <Tabs defaultValue="test">
+        <TabsList aria-label="Environments">
+          <TabsTrigger value="test">Test</TabsTrigger>
+          <TabsTrigger value="live">Live</TabsTrigger>
+        </TabsList>
+        <TabsContent value="test">The test keys.</TabsContent>
+      </Tabs>,
+    );
+
+    // text-muted-foreground on bg-muted is 4.34:1, under the 4.5:1 of WCAG 1.4.3; text-foreground there is 18.15:1.
+    const list = screen.getByRole("tablist", { name: "Environments" });
+    const classes = list.className.split(/\s+/);
+    expect(classes).toEqual(expect.arrayContaining(["bg-muted", "text-foreground"]));
+    expect(classes.filter((name) => /(^|:)text-muted-foreground$/.test(name))).toEqual([]);
+    // The triggers keep the colour they had, so the tabs look as before.
+    for (const tab of screen.getAllByRole("tab")) {
+      expect(tab.className.split(/\s+/)).toContain("text-foreground");
+    }
   });
 });

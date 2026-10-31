@@ -52,6 +52,7 @@ const SAMPLES: Readonly<Record<RedisKeyBuilderName, readonly unknown[]>> = {
   apiKeyUsed: [KEY_ID],
   throttle: ["signin", HASH, 60],
   sf: [TENANT_ID, "test", "en-GB"],
+  pages: [TENANT_ID, "live", "fr-CA"],
   search: [TENANT_ID, "live", HASH],
   cxq: [TENANT_ID, "test", BOOKING_ID],
   acChk: [TENANT_ID, "live", CHECKOUT_ID],
@@ -88,6 +89,7 @@ const EXPECTED: Readonly<Record<RedisKeyBuilderName, Omit<RedisKey, "key"> & { r
   apiKeyUsed: { key: `apikey:used:${KEY_ID}`, ttlSeconds: 86400, kind: "shared" },
   throttle: { key: `rl:signin:${HASH}`, ttlSeconds: 60, kind: "shared" },
   sf: { key: `t:${TENANT_ID}:test:sf:en-GB`, ttlSeconds: 300, kind: "tenant" },
+  pages: { key: `t:${TENANT_ID}:live:pages:fr-CA`, ttlSeconds: 300, kind: "tenant" },
   search: { key: `t:${TENANT_ID}:live:search:${HASH}`, ttlSeconds: 30, kind: "tenant" },
   cxq: { key: `t:${TENANT_ID}:test:cxq:${BOOKING_ID}`, ttlSeconds: 600, kind: "tenant" },
   acChk: { key: `t:${TENANT_ID}:live:ac:chk:${CHECKOUT_ID}`, ttlSeconds: 7200, kind: "tenant" },
@@ -100,6 +102,7 @@ const EXPECTED: Readonly<Record<RedisKeyBuilderName, Omit<RedisKey, "key"> & { r
 /** The task's list of tenant-data builders (OBE-002 step 2). */
 const TENANT_DATA_BUILDERS: readonly RedisKeyBuilderName[] = [
   "sf",
+  "pages",
   "search",
   "cxq",
   "acChk",
@@ -260,6 +263,7 @@ describe("redisKeys", () => {
       [() => redisKeys.tenant(`${TENANT_ID}:x`), /tenantId must be a tenant id/],
       [() => redisKeys.sf(TENANT_ID, "prod" as never, "en"), /redisKeys\.sf: env must be one of test, live/],
       [() => redisKeys.sf(TENANT_ID, "test", "en:GB"), /locale must be a BCP 47 locale/],
+      [() => redisKeys.pages(TENANT_ID, "live", "en GB"), /redisKeys\.pages: locale must be a BCP 47 locale/],
       [() => redisKeys.host("Book.Example.com"), /hostname must be a lower-case host name/],
       [() => redisKeys.host("192.168.0.1"), /hostname must be a lower-case host name/],
       [() => redisKeys.host("example.com."), /hostname must be a lower-case host name/],

@@ -98,6 +98,11 @@ const TENANT_MIGRATION_0004 = {
   id: "0004_add_payment_card_fee_lines",
   file: "0004_add_payment_card_fee_lines.sql",
 };
+/** Tenant migration 0005 (FIX-W31-OTA): one column of `bookings` and two CHECKs replaced, no table. */
+const TENANT_MIGRATION_0005 = {
+  id: "0005_add_cancellation_claim_tighten_calling_codes",
+  file: "0005_add_cancellation_claim_tighten_calling_codes.sql",
+};
 /** ADR-0004: the only platform.accounts columns velexis_ota_app may read, in table order. */
 const OTA_READABLE_ACCOUNT_COLUMNS = [
   "id",
@@ -492,6 +497,12 @@ describe("the baselines and the OTA read grants on PostgreSQL", () => {
         id: TENANT_MIGRATION_0004.id,
         checksum: await sha256(join(TENANT_DIR, TENANT_MIGRATION_0004.file)),
         phase: "expand",
+        status: "applied",
+      },
+      {
+        id: TENANT_MIGRATION_0005.id,
+        checksum: await sha256(join(TENANT_DIR, TENANT_MIGRATION_0005.file)),
+        phase: "contract",
         status: "applied",
       },
     ]);

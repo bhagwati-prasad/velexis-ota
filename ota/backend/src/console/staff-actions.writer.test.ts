@@ -29,6 +29,7 @@ import {
   consoleTarget,
   failureOutcome,
   isConsoleRead,
+  isRateLimitRefusal,
   StaffActionsInterceptor,
   StaffActionsWriter,
   staffActionRow,
@@ -297,8 +298,12 @@ function writerHarness(
     accessTokenExpiresAt: new Date(),
   };
   const lines: string[] = [];
+  const logged: Array<{ readonly fields: unknown; readonly msg: string }> = [];
   const logger = {
-    info: (_fields: unknown, msg: string) => lines.push(msg),
+    info: (fields: unknown, msg: string) => {
+      lines.push(msg);
+      logged.push({ fields, msg });
+    },
     error: (_fields: unknown, msg: string) => lines.push(msg),
   } as unknown as PinoLogger;
   const writer = new StaffActionsWriter(
@@ -320,7 +325,7 @@ function writerHarness(
     document,
     logger,
   );
-  return { writer, rows, lines, cls };
+  return { writer, rows, lines, logged, cls };
 }
 
 describe("StaffActionsWriter", () => {
@@ -709,6 +714,70 @@ describe("StaffActionsInterceptor", () => {
       expect(row).toMatchObject({ actor_type: "staff", before: null, after: null, reason: null });
     }
     expect(JSON.stringify(rows)).not.toContain(pasted);
+  });
+
+  // OADR-0011 point 8 as decided on 2026-10-21: a 429 is a log line, never a row; lead decision (2d) of 2026-10-30
+  // (third batch) applies it to the 429s raised inside a use case too (before, they were recorded `failed`).
+  it("[FIX-W36-OTA AC3] writes no row for a call a 429 ended inside its use case, only the log line", async () => {
+    const throttled = interceptor();
+    await expect(
+      lastValueFrom(
+        throttled.interceptor.intercept(
+          execution(Handlers.prototype.create),
+          failing(new AppError("RATE_LIMITED", { details: { retryAfterSeconds: 7 } })),
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "RATE_LIMITED" });
+    const keyId = newId("key");
+    const keyHarness = writerHarness({
+      caller: {
+        type: "key",
+        id: keyId,
+        keyId,
+        kind: "secret",
+        tenantId: newId("ten"),
+        environment: "test",
+        scopes: ["console:automation"],
+      },
+      principal: false,
+    });
+    const keyInterceptor = new StaffActionsInterceptor(
+      new Reflector(),
+      { isConsoleScope: () => true } as unknown as RequestContext,
+      keyHarness.writer,
+      { error: () => undefined } as unknown as PinoLogger,
+    );
+    await expect(
+      lastValueFrom(
+        keyInterceptor.intercept(
+          execution(Handlers.prototype.get, { bookingId: "bkg_01JA2Z9W5K7Q3M8N4P6R2T0V1E" }),
+          failing(new AppError("RATE_LIMITED")),
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "RATE_LIMITED" });
+
+    expect([...throttled.rows, ...keyHarness.rows]).toEqual([]);
+    expect(throttled.logged).toEqual([
+      {
+        msg: "staff_actions.rate_limited",
+        fields: {
+          operationId: "consoleCreateMarkupRule",
+          code: "RATE_LIMITED",
+          staffId: STAFF_ID,
+          retryAfterSeconds: 7,
+        },
+      },
+    ]);
+    expect(keyHarness.logged).toEqual([
+      {
+        msg: "staff_actions.rate_limited",
+        fields: { operationId: "consoleGetBooking", code: "RATE_LIMITED", keyId },
+      },
+    ]);
+    // Every other refusal keeps its row.
+    expect(isRateLimitRefusal(new AppError("RATE_LIMITED"))).toBe(true);
+    expect(isRateLimitRefusal(new AppError("SERVICE_UNAVAILABLE"))).toBe(false);
+    expect(isRateLimitRefusal(new Error("429"))).toBe(false);
   });
 
   it("leaves customer scope and the staff-session operations alone", async () => {

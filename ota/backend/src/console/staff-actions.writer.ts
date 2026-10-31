@@ -57,7 +57,13 @@
 // header, a key scoped `storefront`, a body the body parsers refuse: malformed JSON or too large, answered
 // `400 INVALID_REQUEST` by middleware before any guard) have no row either, nor does a call the rate limits refuse
 // (`429 RATE_LIMITED`): the rate-limit guard logs it instead (`rate_limit.exceeded` with the staff member or key, the
-// operation and the limit; rate-limits.ts), so that a client asking again and again never fills the table.
+// operation and the limit; rate-limits.ts), so that a client asking again and again never fills the table. The same
+// holds for every `429` (point 8 says it of every one): one raised inside a console use case (the console's resync
+// throttle of 10 s per booking, an empty Amadeus bucket's `RATE_LIMITED`) writes no `failed` row either, only the line
+// `staff_actions.rate_limited` (the operation, the code, the staff member or key, the `Retry-After` seconds when the
+// error has them; `rateLimitedCall`), decided in this one place (`StaffActionsInterceptor`, `isRateLimitRefusal`;
+// lead decision (2d) of 2026-10-30, third batch, FIX-W36-OTA: before, such a call was recorded `failed`). A row the
+// use case wrote on its own before the `429` (a step that committed) stays.
 //
 // The actor (`ConsoleStaffAction.actor`, `staff_actions_actor_ck`): the signed-in staff member (`staff`, `stf_…`, with
 // the account, e-mail and role of the membership as the staff guard read it), else the API key of a key-only call
@@ -350,6 +356,15 @@ export function auditedParams(
   return Object.fromEntries(Object.entries(params).filter(([name]) => !refused.has(name)));
 }
 
+/**
+ * Whether `error` is a `429` (`RATE_LIMITED` or any code the catalogue answers with 429), which a console call never
+ * records as a `staff_actions` row, only as a log line (see the file header; OADR-0011 point 8 as decided on
+ * 2026-10-21, lead decision (2d) of 2026-10-30, third batch).
+ */
+export function isRateLimitRefusal(error: unknown): error is AppError {
+  return isAppError(error) && error.status === 429;
+}
+
 /** The refusals that are denials (`outcome = denied`) rather than failures. */
 export const DENIAL_CODES: ReadonlySet<string> = new Set([
   "FORBIDDEN",
@@ -398,9 +413,10 @@ export class StaffActionsWriter implements StaffRefusalAudit {
 
   /**
    * Writes the row of `entry` in the use case's transaction `trx` (see the file header), and marks the request as
-   * audited. Throws a `TypeError` when the entry names no actor and the request has none.
+   * audited. Returns the row's id (`sact_…`, which the raw Amadeus reads answer as `call.staffActionId`). Throws a
+   * `TypeError` when the entry names no actor and the request has none.
    */
-  async record(trx: TenantTransaction, entry: StaffActionEntry): Promise<void> {
+  async record(trx: TenantTransaction, entry: StaffActionEntry): Promise<string> {
     const actor = entry.actor ?? this.requestActor();
     if (actor === undefined) {
       throw new TypeError("StaffActionsWriter.record: the request has no actor; name one in the entry");
@@ -417,14 +433,16 @@ export class StaffActionsWriter implements StaffRefusalAudit {
     if (this.cls.isActive()) {
       this.cls.set(RECORDED_KEY, true);
     }
+    return row.id;
   }
 
-  /** Writes the row of `entry` in a short transaction of its own (audited reads, denials). */
-  async recordAlone(entry: StaffActionEntry): Promise<void> {
-    await this.tx.run((trx) => this.record(trx, entry));
+  /** Writes the row of `entry` in a short transaction of its own (audited reads, denials); returns its id. */
+  async recordAlone(entry: StaffActionEntry): Promise<string> {
+    const id = await this.tx.run((trx) => this.record(trx, entry));
     if (this.cls.isActive()) {
       this.cls.set(COMMITTED_KEY, true);
     }
+    return id;
   }
 
   /** True when the current request wrote its row already (in any transaction, which may still roll back). */
@@ -465,6 +483,26 @@ export class StaffActionsWriter implements StaffRefusalAudit {
     } catch (writeError) {
       this.logger.error({ err: writeError, operationId }, "staff_actions.write_failed");
     }
+  }
+
+  /**
+   * The log line of a console call that a `429` ended (`isRateLimitRefusal`), which writes no row: the operation, the
+   * code, the staff member (`stf_…`) or the key (`key_…`), and the seconds of `Retry-After` when the error has them.
+   * Never an IP address, an e-mail address, a token or a request value.
+   */
+  rateLimitedCall(operationId: string, error: AppError): void {
+    const actor = this.requestActor();
+    const retryAfterSeconds = error.details?.["retryAfterSeconds"];
+    this.logger.info(
+      {
+        operationId,
+        code: error.code,
+        ...(actor?.type === "staff" ? { staffId: actor.staffId } : {}),
+        ...(actor?.type === "api_key" ? { keyId: actor.keyId } : {}),
+        ...(typeof retryAfterSeconds === "number" ? { retryAfterSeconds } : {}),
+      },
+      "staff_actions.rate_limited",
+    );
   }
 
   /**
@@ -539,6 +577,11 @@ export class StaffActionsInterceptor implements NestInterceptor {
       try {
         body = await lastValueFrom(next.handle(), { defaultValue: undefined });
       } catch (error) {
+        if (isRateLimitRefusal(error)) {
+          // A `429` is a log line, never a row (see the file header).
+          this.writer.rateLimitedCall(operationId, error);
+          throw error;
+        }
         await this.writer
           .recordCall(operationId, auditedParams(params, error), failureOutcome(error))
           .catch((writeError: unknown) => {

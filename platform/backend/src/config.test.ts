@@ -17,6 +17,7 @@ import {
   parseConfig,
   PLATFORM_BACKEND_CONFIG_SCHEMA,
   PLATFORM_PROCESSES,
+  STRIPE_SWITCH_VARIABLES,
 } from "./config";
 
 const REPO_ROOT = join(APP_DIR, "..", "..");
@@ -515,7 +516,7 @@ describe("parseConfig", () => {
   it("reads the six FEATURE_* switches (default false) and MAX_TENANTS_PER_ACCOUNT (default 3)", () => {
     const on = parseConfig({
       ...REQUIRED,
-      // The Stripe switches need their Stripe variables since PBE-043.
+      // The Stripe switches need their Stripe variables since PBE-043 (settlements the key since FIX-W36-PLATFORM).
       ...STRIPE_TEST_VALUES,
       FEATURE_STRIPE_BILLING: "true",
       FEATURE_OWN_STRIPE: "1",
@@ -713,15 +714,54 @@ describe("parseConfig: the OTA admin's URL (PBE-039)", () => {
 });
 
 describe("parseConfig: Stripe (PBE-043)", () => {
-  it("[PBE-043] leaves the four Stripe variables optional while Stripe Billing and the OTA's own Stripe are off", () => {
+  it("[PBE-043] leaves the four Stripe variables optional while Stripe Billing, the OTA's own Stripe and settlements are off", () => {
     const config = parseConfig(REQUIRED);
 
     for (const variable of STRIPE_VARIABLES) {
       expect(config[variable], variable).toBeUndefined();
     }
     expect(parseConfig({ ...REQUIRED, ...STRIPE_TEST_VALUES })).toMatchObject(STRIPE_TEST_VALUES);
-    // The settlements switch reads balance transactions in M5 (PBE-059 adds what it needs).
-    expect(parseConfig({ ...REQUIRED, FEATURE_SETTLEMENTS: "true" }).STRIPE_SECRET_KEY).toBeUndefined();
+    // The other switches need no Stripe variable.
+    for (const feature of ["FEATURE_OWN_AMADEUS", "FEATURE_CUSTOM_DOMAINS", "FEATURE_LIVE_SWITCH"] as const) {
+      expect(parseConfig({ ...REQUIRED, [feature]: "true" }).STRIPE_SECRET_KEY, feature).toBeUndefined();
+    }
+  });
+
+  it("[FIX-W36-PLATFORM AC2] requires the key with FEATURE_SETTLEMENTS on, and nothing else: the drafts read balance transactions with it", () => {
+    expect(STRIPE_SWITCH_VARIABLES.FEATURE_SETTLEMENTS).toEqual(["STRIPE_SECRET_KEY"]);
+    expect(configError({ ...REQUIRED, FEATURE_SETTLEMENTS: "true" }).problems).toEqual([
+      { variable: "STRIPE_SECRET_KEY", reason: "is required while FEATURE_SETTLEMENTS is on" },
+    ]);
+    const config = parseConfig({
+      ...REQUIRED,
+      FEATURE_SETTLEMENTS: "true",
+      STRIPE_SECRET_KEY: STRIPE_TEST_VALUES.STRIPE_SECRET_KEY,
+    });
+    expect([config.FEATURE_SETTLEMENTS, config.STRIPE_SECRET_KEY]).toEqual([
+      true,
+      STRIPE_TEST_VALUES.STRIPE_SECRET_KEY,
+    ]);
+    // With the other Stripe switches on too, the problem names every switch that needs the key.
+    expect(
+      configError({
+        ...REQUIRED,
+        FEATURE_STRIPE_BILLING: "true",
+        FEATURE_OWN_STRIPE: "true",
+        FEATURE_SETTLEMENTS: "true",
+      }).problems[0],
+    ).toEqual({
+      variable: "STRIPE_SECRET_KEY",
+      reason: "is required while FEATURE_STRIPE_BILLING or FEATURE_OWN_STRIPE or FEATURE_SETTLEMENTS is on",
+    });
+    // A production deployment with settlements on needs a live-mode key.
+    expect(
+      configError({
+        ...REQUIRED,
+        APP_ENV: "production",
+        FEATURE_SETTLEMENTS: "true",
+        STRIPE_SECRET_KEY: STRIPE_TEST_VALUES.STRIPE_SECRET_KEY,
+      }).problems.map((problem) => problem.variable),
+    ).toEqual(["STRIPE_SECRET_KEY"]);
   });
 
   it("[PBE-043] requires the key and the billing secret with FEATURE_STRIPE_BILLING on, naming the switch", () => {

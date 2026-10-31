@@ -23,12 +23,19 @@
 // recorded synchronisation's diff (FIX-W27-SYNC; `toSupplierSync`).
 //
 // `consoleActions` weighs the caller's permissions (the role's, or a key's own) and the booking's state; a refused
-// action names its reason (`no_permission` first). The list cursor is opaque base64url JSON: the sort key (an instant
-// in UTC with microseconds, a total, or `null` for a booking without a ticketing deadline), the id and a fingerprint of
-// the environment, filters and sort, so a cursor of other filters is refused (`400 VALIDATION_FAILED`).
+// action names its reason (`no_permission` first). `canCancel` follows the departure rule console.bookings.cancel
+// checks (`cancelDepartureReasonOf` without the self-service window, FIX-W30-OTA): `flown` once any segment departed,
+// not only once the last one landed, which `canIssue` keeps. `cancellationMode` is what that cancellation would ask
+// Amadeus for now (`consoleCancellationModeOf`: cancellation-mode.ts `supplierModeOf` over the stored tickets in the
+// OTA's `storefront_settings.time_zone`, lead decision (2a) of 2026-10-30, FIX-W35-OTA), `null` when canCancel's rule
+// refuses the booking whoever asks (`staffCancelRefusalOf`). The list cursor is opaque base64url JSON: the sort key
+// (an instant in UTC with microseconds, a total, or `null` for a booking without a ticketing deadline), the id and a
+// fingerprint of the environment, filters and sort, so a cursor of other filters is refused (`400 VALIDATION_FAILED`).
 import type { components } from "@velexis/api-types";
 import { redactPayload } from "@velexis/logger";
+import { cancelDepartureReasonOf, STAFF_CANCEL_CUTOFF_MS } from "../bookings/allowed-actions";
 import { VELEXIS_REMARK_PREFIX } from "../bookings/booking-reference";
+import { supplierModeOf, type ModeTicket } from "../bookings/cancellation-mode";
 import {
   dictionariesOf,
   FRESH_SYNC_MS,
@@ -59,6 +66,7 @@ export type ConsoleBookingPage = Schemas["ConsoleBookingPage"];
 export type ConsoleBooking = Schemas["ConsoleBooking"];
 export type ConsoleBookingSyncStatus = Schemas["ConsoleBookingSyncStatus"];
 export type ConsoleBookingActions = Schemas["ConsoleBookingActions"];
+export type ConsoleCancellationMode = Schemas["ConsoleCancellationMode"];
 type ConsoleBookingPricing = Schemas["ConsoleBookingPricing"];
 type ConsoleSupplierSync = Schemas["ConsoleSupplierSync"];
 type ConsoleSyncChange = Schemas["ConsoleSyncChange"];
@@ -193,22 +201,39 @@ export function bookingSyncStatusOf(status: ConsoleBookingSyncStatus): Booking["
   return status === "not_applicable" ? "fresh" : status;
 }
 
+/** `customers.status` of a deleted account. */
+const DELETED_CUSTOMER = "deleted";
+
+/**
+ * A customer reference without its names (`null`): a deleted account as the console shows it (ConsoleCustomerRef,
+ * "null for deleted accounts"). console.customers.get's recent bookings and console.bookings.list and get use it.
+ */
+export function withoutDeletedName(ref: ConsoleCustomerRef): ConsoleCustomerRef {
+  return { ...ref, firstName: null, lastName: null };
+}
+
 /** The owning customer, or `null` for a guest booking (or one whose customer row is gone). */
 function customerRefOf(row: {
   readonly customerId: string | null;
   readonly customerEmail: string | null;
   readonly customerFirstName: string | null;
   readonly customerLastName: string | null;
+  readonly customerStatus: string | null;
 }): ConsoleCustomerRef | null {
   if (row.customerId === null || row.customerEmail === null) {
     return null;
   }
-  return {
+  const ref: ConsoleCustomerRef = {
     id: row.customerId,
     email: row.customerEmail,
     firstName: row.customerFirstName,
     lastName: row.customerLastName,
   };
+  // A deleted account keeps its row (and, until the purge, its names) for its bookings, but its names are not shown:
+  // `null`, as the contract says of ConsoleCustomerRef (FIX-W32-OTA, lead decision (1f) of 2026-10-28; OBE-066's rule
+  // of console.customers.get's recent bookings, `withoutDeletedName`). Its address is the `…@deleted.invalid`
+  // placeholder already.
+  return row.customerStatus === DELETED_CUSTOMER ? withoutDeletedName(ref) : ref;
 }
 
 // ---- console.bookings.list -----------------------------------------------------------------------------------------
@@ -554,12 +579,84 @@ export interface ConsoleActionsInput {
   readonly amadeusOrderId: string | null;
   readonly ticketingDeadlineAt: Date | null;
   readonly lastArrivalAt: Date;
-  readonly segments: readonly { readonly isFlown: boolean }[];
+  /** The booking's segments: their departure instants and Amadeus `isFlown` (the departure rule of canCancel). */
+  readonly segments: readonly { readonly departureAt: Date; readonly isFlown: boolean }[];
   /** The last refresh claim or sync (`bookingDetails.lastRefreshAt`). */
   readonly lastRefreshAt: Date | null;
+  /**
+   * A cancellation is undecided or another one's DELETE is in flight (cancellation-state.ts
+   * `staffCancellationPendingOf`): console.bookings.cancel refuses with `pending`, canCancel shows it (FIX-W33-OTA).
+   * Absent: none.
+   */
+  readonly cancellationPending?: boolean;
   readonly now: Date;
   /** Whether the caller holds a permission (the staff member's role, or a key-only call's scopes). */
   readonly can: (permission: StaffPermission) => boolean;
+}
+
+/** Why a booking without an order cannot be acted on at Amadeus, or `undefined` when it has one. */
+function withoutOrderOf(
+  input: Pick<ConsoleActionsInput, "status" | "amadeusOrderId">,
+): ActionReason | undefined {
+  if (input.status === "pending") {
+    return "pending";
+  }
+  if (input.status === "failed") {
+    return "failed";
+  }
+  return input.amadeusOrderId === null ? "no_amadeus_order" : undefined;
+}
+
+/** Why the booking cannot be acted on at Amadeus or changed: no order, or cancelled; `undefined` when it is live. */
+function notLiveOf(input: Pick<ConsoleActionsInput, "status" | "amadeusOrderId">): ActionReason | undefined {
+  return withoutOrderOf(input) ?? (input.status === "cancelled" ? "cancelled" : undefined);
+}
+
+/** What `staffCancelRefusalOf` weighs. */
+export type StaffCancelInput = Pick<
+  ConsoleActionsInput,
+  "status" | "amadeusOrderId" | "segments" | "cancellationPending" | "now"
+>;
+
+/**
+ * Why console.bookings.cancel refuses the booking now, whoever asks (canCancel's reason without `no_permission`), or
+ * `undefined` when it accepts it: the one departure rule of every cancellation (bookings/allowed-actions.ts,
+ * FIX-W30-OTA), without the self-service window, as console.bookings.cancel checks it, after its order of checks: no
+ * order or cancelled, then an undecided cancellation or another one's DELETE in flight (`pending`, FIX-W33-OTA), then the
+ * departure rule, which without a window answers `flown` (any segment departed, not only landed) or nothing.
+ */
+export function staffCancelRefusalOf(input: StaffCancelInput): ActionReason | undefined {
+  return (
+    notLiveOf(input) ??
+    (input.cancellationPending === true ? "pending" : undefined) ??
+    (cancelDepartureReasonOf(input.segments, input.now, STAFF_CANCEL_CUTOFF_MS) === undefined
+      ? undefined
+      : "flown")
+  );
+}
+
+/** What `consoleCancellationModeOf` weighs: the cancellation's refusal and the stored tickets. */
+export interface ConsoleCancellationModeInput extends StaffCancelInput {
+  readonly ticketingStatus: string;
+  /** The booking's stored tickets (`booking_tickets`: Amadeus `documentStatus` and `issued_at`). */
+  readonly tickets: readonly ModeTicket[];
+  /** `storefront_settings.time_zone` (IANA), the OTA's day; UTC when the runtime does not know it. */
+  readonly timeZone: string;
+}
+
+/**
+ * ConsoleBookingDetails.cancellationMode (see the file header): `null` when console.bookings.cancel refuses the booking
+ * whoever asks, else the supplier mode of its stored tickets in the OTA's time zone (cancellation-mode.ts
+ * `supplierModeOf`, the rule of the customer's quote), with the end of a void window.
+ */
+export function consoleCancellationModeOf(
+  input: ConsoleCancellationModeInput,
+): ConsoleCancellationMode | null {
+  if (staffCancelRefusalOf(input) !== undefined) {
+    return null;
+  }
+  const supplier = supplierModeOf(input);
+  return { mode: supplier.mode, voidDeadlineAt: supplier.voidDeadlineAt?.toISOString() ?? null };
 }
 
 /** The console actions the caller may take on the booking now (see the file header). */
@@ -569,16 +666,7 @@ export function consoleActionsOf(input: ConsoleActionsInput): ConsoleBookingActi
   const flown =
     input.lastArrivalAt.getTime() <= now ||
     (input.segments.length > 0 && input.segments.every((segment) => segment.isFlown));
-  /** Why a booking without an order cannot be acted on at Amadeus, or `undefined` when it has one. */
-  const withoutOrder = (): ActionReason | undefined => {
-    if (input.status === "pending") {
-      return "pending";
-    }
-    if (input.status === "failed") {
-      return "failed";
-    }
-    return input.amadeusOrderId === null ? "no_amadeus_order" : undefined;
-  };
+  const withoutOrder = (): ActionReason | undefined => withoutOrderOf(input);
   const decide = (action: string, permission: StaffPermission, reason: ActionReason | undefined): boolean => {
     const refused: ActionReason | undefined = input.can(permission) ? reason : "no_permission";
     if (refused !== undefined) {
@@ -586,8 +674,7 @@ export function consoleActionsOf(input: ConsoleActionsInput): ConsoleBookingActi
     }
     return refused === undefined;
   };
-  const live = (): ActionReason | undefined =>
-    withoutOrder() ?? (input.status === "cancelled" ? "cancelled" : undefined);
+  const live = (): ActionReason | undefined => notLiveOf(input);
   const issueReason = (): ActionReason | undefined => {
     const state = live();
     if (state !== undefined) {
@@ -608,7 +695,8 @@ export function consoleActionsOf(input: ConsoleActionsInput): ConsoleBookingActi
   return {
     canIssue: decide("canIssue", "bookings:issue", issueReason()),
     canPatch: decide("canPatch", "bookings:write", live()),
-    canCancel: decide("canCancel", "bookings:cancel", live() ?? (flown ? "flown" : undefined)),
+    // console.bookings.cancel's rule (staffCancelRefusalOf): refused once any segment departed, not only landed.
+    canCancel: decide("canCancel", "bookings:cancel", staffCancelRefusalOf(input)),
     canResync: decide("canResync", "bookings:write", withoutOrder() ?? (throttled ? "throttled" : undefined)),
     canRetrieve: decide("canRetrieve", "bookings:read", withoutOrder()),
     canAddNote: decide("canAddNote", "bookings:write", undefined),
@@ -642,6 +730,8 @@ export interface ConsoleDetailsInput {
   readonly supplierRequests: readonly ConsoleSupplierRequestRow[];
   readonly staffActions: readonly ConsoleStaffActionRow[];
   readonly consoleActions: ConsoleBookingActions;
+  /** What a cancellation would ask Amadeus for now (`consoleCancellationModeOf`). */
+  readonly cancellationMode: ConsoleCancellationMode | null;
 }
 
 /** The booking in console scope: the customer-shaped `base` (see the file header) and the console-only details. */
@@ -676,6 +766,7 @@ export function toConsoleBooking(base: Booking, input: ConsoleDetailsInput): Con
     recentSupplierRequests: input.supplierRequests.map(toConsoleSupplierRequest),
     recentStaffActions: input.staffActions.map(toConsoleStaffAction),
     consoleActions: input.consoleActions,
+    cancellationMode: input.cancellationMode,
     failure: failureOf(booking.status, details),
     tags: [...details.tags],
   };

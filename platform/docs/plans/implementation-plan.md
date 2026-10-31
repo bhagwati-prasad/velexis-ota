@@ -144,7 +144,7 @@ Internal checkpoints keep this long milestone reviewable:
 | `tenant.*` message schemas and fixtures, `vx:invalidate` event types | PBE-004 |
 | Rows the OTA backend reads: tenants, sub-domains, API keys, memberships, connections, plans | PBE-018, PBE-021, PBE-022, PBE-025 |
 | `vx:invalidate` events after every cached change, `staffdeny:acct:<id>` keys | PBE-009, PBE-014, PBE-016, PBE-032 |
-| A Velexis test Amadeus account pointing at the stub and 10 offices for local development | PBE-034 (`dev:seed`) |
+| A Velexis test Amadeus account pointing at the stub and 20 offices for local development (10 until 2026-10-30: the lead raised it to 20 for the e2e journeys, FIX-W34-SHARED) | PBE-034 (`dev:seed`) |
 
 **Risks and mitigations.**
 

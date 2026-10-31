@@ -127,11 +127,11 @@ export interface paths {
          * Get an uploaded storefront image (plain image URL)
          * @description Serves an image the OTA's staff uploaded (`storefront_assets`, console.settings.assets.upload) at a plain image URL: the logo, favicon and Open Graph URLs of storefront.get, the `image` blocks of storefront.getPage and `StorefrontAsset.url` of the console point here. Not an SDK method (`x-sdk-exclude`): use the URL in `<img>`, `<link rel="icon">` or `og:image`.
          *
-         *     **No credential.** The OTA is the path's `tenantKey`, the file the one stored at upload (`tenant_<key>/assets/<sha256>.<ext>` of the StorageAdapter, never re-encoded). A credential that comes with the request is checked as on every route but does not choose the OTA: Caddy adds the edge header to every `/api/*` request of a storefront host, where the hosted storefront loads `/api/v1/assets/…` same-origin.
+         *     **No credential.** The OTA is the path's `tenantKey`, the file the one stored at upload (`tenant_<key>/assets/<sha256>.<ext>` of the StorageAdapter, never re-encoded). A credential that comes with the request is checked as on every route (a wrong key is `401 INVALID_API_KEY`, a publishable key from an origin it does not list `403 ORIGIN_NOT_ALLOWED`, the edge header beside a key `400 INVALID_REQUEST`, and `X-Velexis-Scope: console` the scope rules' `403 SCOPE_NOT_ALLOWED`) but neither chooses nor refuses the OTA: Caddy adds the edge header to every `/api/*` request of a storefront host, where the hosted storefront loads `/api/v1/assets/…` same-origin, also on a suspended OTA's maintenance page. `503 SERVICE_UNAVAILABLE` when the platform's tenants cannot be read.
          *
          *     **Availability.** Served while the OTA is `active` or `suspended` (a suspended storefront still shows its logo on its maintenance page). An unknown OTA, an OTA in any other status, an unknown asset and an `ext` other than the asset's answer `404 NOT_FOUND`. A deleted asset answers `404` from then on; browsers and caches may still show their copy for its cache lifetime.
          *
-         *     **Headers.** `Content-Type` is the type sniffed at upload; `Cache-Control: public, max-age=31536000, immutable` (an id never changes content: a new image is a new asset), `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'` and `Content-Disposition: inline`, so a file opened directly runs nothing (no SVG is ever stored; OADR-0012 points 2 and 3). Rate limit 120 per minute per IP. No Amadeus call.
+         *     **Headers.** `Content-Type` is the type sniffed at upload; `Cache-Control: public, max-age=31536000, immutable` (an id never changes content: a new image is a new asset), `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'` and `Content-Disposition: inline`, so a file opened directly runs nothing (no SVG is ever stored; OADR-0012 points 2 and 3), and `Cross-Origin-Resource-Policy: cross-origin`, so a key caller's own site can show the absolute URL. The bytes are checked against the SHA-256 stored at upload before they are sent. Rate limit 120 per minute per IP, counted with the document downloads (downloadFile). No Amadeus call.
          */
         get: operations["getPublicAsset"];
         put?: never;
@@ -435,7 +435,7 @@ export interface paths {
          *
          *     **Marketing consent.** Changing `marketingConsent` updates `customers` and appends a `customer_consents` event (source `account`).
          *
-         *     **Fields not changed here.** Password (`auth.changePassword`), preferences (`account.preferences.update`), travellers (`account.savedTravelers.*`). Null clears `phone`/`dateOfBirth`; `phone` needs `countryCallingCode` (1–4 digits, a leading `+` is dropped) and `number` (1–15 digits), and `deviceType` is not kept. A date of birth in the future is refused (`400 VALIDATION_FAILED`). **Amadeus.** None.
+         *     **Fields not changed here.** Password (`auth.changePassword`), preferences (`account.preferences.update`), travellers (`account.savedTravelers.*`). Null clears `phone`/`dateOfBirth`; `phone` needs `countryCallingCode` (1–3 digits, a leading `+` is dropped) and `number` (1–15 digits), and `deviceType` is not kept. A date of birth in the future is refused (`400 VALIDATION_FAILED`). **Amadeus.** None.
          */
         patch: operations["updateAccount"];
         trace?: never;
@@ -1081,7 +1081,7 @@ export interface paths {
          * Open a checkout from a priced offer
          * @description Opens a checkout (`chk_…`) for a priced offer (`prc_…` from flights.price). No Amadeus call: everything comes from the stored priced offer.
          *
-         *     **Who.** Signed-in customers (customer token) or guests (publishable/secret key only) when `storefront_settings.guest_checkout_enabled`; otherwise guests get `401 UNAUTHENTICATED` (sign in first). When `require_email_verification` is on, unverified customers get `403 EMAIL_NOT_VERIFIED`. Staff may open a checkout for a customer from the console (staff token, `channel: console`). A priced offer created by a signed-in customer can only be checked out by that customer (`404` otherwise).
+         *     **Who.** Signed-in customers (customer token) or guests (publishable/secret key only) when `storefront_settings.guest_checkout_enabled`; otherwise guests get `401 UNAUTHENTICATED` (sign in first). When `require_email_verification` is on, unverified customers get `403 EMAIL_NOT_VERIFIED`. A customer whose account was deleted or disabled is `401 UNAUTHENTICATED`, also when the deletion commits while the checkout is opened. Staff may open a checkout for a customer from the console (staff token, `channel: console`): the checkout is the priced offer's customer's, or a guest checkout when no customer priced it; when that customer's account was deleted or disabled (also while the checkout is opened) the console gets `409 CONFLICT` with `details.reason` `customer_deleted` or `customer_disabled` and nothing is written (FIX-W30-OTA). A priced offer created by a signed-in customer can only be checked out by that customer (`404` otherwise).
          *
          *     **Environment.** The priced offer must belong to the calling key's environment (`priced_offers.environment = <key environment>`): a priced offer of the other environment answers `404 NOT_FOUND`, and the checkout is created with that environment (`checkouts.environment`). Every later step of the checkout and its payments checks the same predicate.
          *
@@ -1519,7 +1519,7 @@ export interface paths {
          *
          *     **Amadeus call.** **Flight Order Management** `GET /v1/booking/flight-orders/{id}?fareRules=refunds` (getFlightOrder) → per flight offer `fareRules.rules[]` with REFUND / CANCELLATION categories, `notApplicable`, `maxPenaltyAmount`, `isChargeable` and `refundingPreview` (farePaid, fareUsed, fareRefund, totalRefund, cancellationPenalty, totalTax per ticket). The response also refreshes the stored order (`order_snapshot`, tickets).
          *
-         *     **Computation (NestJS `CancellationQuoteService`).** `mode`: `release` when nothing is ticketed (order cancelled, authorisation voided or payment refunded in full minus non-refundable OTA fees); `void` when every ticket was issued today in the office time zone (`voidDeadlineAt`); `refund` when the fare rules allow a refund (refund = selling amount paid − airline penalty converted from `cancellationPenalty`/`maxPenaltyAmount` − OTA cancellation fee from `fee_rules`; markup refund per storefront policy); `request_only` when the airline gives no refund preview but taxes are refundable (the OTA processes it, booking `Cancellation.status = pending`); `not_allowed` (flown, cancelled, pending, too close to departure, or self-service cancellation disabled in storefront settings). Customer scope never sees Amadeus net amounts: `refundEstimate` and `lines` are selling-currency estimates.
+         *     **Computation (NestJS `CancellationQuoteService`).** `mode`: `release` when nothing is ticketed (order cancelled, authorisation voided or payment refunded in full minus non-refundable OTA fees); `void` when every ticket was issued today in the office time zone (`voidDeadlineAt`); `refund` when the fare rules allow a refund (refund = selling amount paid − airline penalty converted from `cancellationPenalty`/`maxPenaltyAmount` − OTA cancellation fee from `fee_rules`; markup refund per storefront policy); `request_only` when the airline gives no refund preview but taxes are refundable (the OTA processes it, booking `Cancellation.status = pending`); `not_allowed` (flown, cancelled, pending, too close to departure, or self-service cancellation disabled in storefront settings). `pending` is the refusal bookings.cancel answers while another cancellation is in progress: an earlier one undecided or waiting for the staff, or another cancellation's Flight Order Management DELETE in flight (claimed less than 5 minutes ago). Customer scope never sees Amadeus net amounts: `refundEstimate` and `lines` are selling-currency estimates.
          *
          *     **Cache.** The quote is cached in Redis (`cxq:{bookingId}`, 10 minutes, `expiresAt`) and reused by bookings.cancel to check `expectedRefund`.
          *
@@ -1550,7 +1550,7 @@ export interface paths {
          * @description Self-service cancellation. Call bookings.quoteCancellation first and pass its `estimatedRefund` as `expectedRefund`, with the customer's `reasonCode` (CancellationReason) and optional free-text `comment`.
          *
          *     **Flow (NestJS `CancelBookingUseCase`, booking row locked).**
-         *     1. Preconditions: booking of the key's environment (`bookings.environment = <key environment>`, otherwise `404`); `allowedActions.canCancel` (`409 BOOKING_NOT_MODIFIABLE` with `details.reason`; `409 BOOKING_ALREADY_CANCELLED`; `403 FEATURE_DISABLED` when the storefront disabled self-service cancellation). `If-Match` (booking ETag) required → `412 PRECONDITION_FAILED` when stale.
+         *     1. Preconditions: booking of the key's environment (`bookings.environment = <key environment>`, otherwise `404`); `allowedActions.canCancel` (`409 BOOKING_NOT_MODIFIABLE` with `details.reason`, `flown` once a segment departed and `too_close_to_departure` 3 hours or less before the first departure, the one rule bookings.get shows; `409 BOOKING_ALREADY_CANCELLED`; `403 FEATURE_DISABLED` when the storefront disabled self-service cancellation); no other cancellation in progress (an earlier one whose outcome is undecided or that waits for the staff, or another cancellation whose Flight Order Management DELETE is in flight, claimed less than 5 minutes ago: `409 BOOKING_NOT_MODIFIABLE` with `details.reason = pending`, checked again when the booking row is claimed, as console.bookings.cancel answers, so a second DELETE is never sent); no issuance in progress (a fresh ticketing claim of the ticketing job or of a staff issuance: `409 BOOKING_NOT_MODIFIABLE` with `details.reason = ticketing_in_progress`, as console.bookings.cancel answers, and nothing is sent to Amadeus). `If-Match` (booking ETag) required → `412 PRECONDITION_FAILED` when stale.
          *     2. Recompute the quote (Redis `cxq:{bookingId}` if still valid, else **Flight Order Management** `GET …?fareRules=refunds`, getFlightOrder). If it differs from `expectedRefund`, or `expectedRefund` was left out → `409 REFUND_AMOUNT_CHANGED` (`details.expectedRefund`, `null` when it was left out, and `details.newRefund`), nothing cancelled: money moves only for an amount the customer saw. The booking row is then claimed; a booking another claim or writer holds at that moment answers `503 SERVICE_UNAVAILABLE` with `Retry-After` (nothing sent, nothing kept for the `Idempotency-Key`: the same key can be sent again).
          *     3. Modes `release` / `void` / `refund`: **Flight Order Management** `DELETE /v1/booking/flight-orders/{id}` (cancelFlightOrder) → `204`: the airline segments are cancelled (and same-day tickets voided). Then `bookings.status = cancelled`, `cancelled_at`, `cancelled_by = customer`, segments `CANCELLED`, tickets `VOID` (void window) — refunded tickets are set `REFUNDED` once the refund is confirmed. Amadeus 409 2552 → `409 VERSION_CONFLICT`; Amadeus refusing the cancellation (e.g. ticketed outside the void window), or no longer having the order (`404`: cancelled or purged outside Velexis), → the request is handed to the OTA's staff (`202`, `Cancellation.status = pending`; nothing is refunded until the staff check it).
          *     4. Mode `request_only`: no Amadeus call; `Cancellation.status = pending`, `booking.cancellation_requested` event, staff notified (they finish it from the console). Answers `202`.
@@ -1879,7 +1879,7 @@ export interface paths {
         };
         /**
          * Current staff member, tenant and permissions
-         * @description Returns the signed-in staff member (`platform.tenant_memberships` + `platform.accounts`), the OTA (`platform.tenants` in the environment of this request, with the Amadeus offices of that environment's connection from `platform.supplier_connections` — never credentials), the permissions derived from the role, the current staff session (kept in Redis, not a portal session; OADR-0011 point 2) and the environments the staff member may open, read on every call. Use it in the console layout to render navigation and hide actions the role cannot perform.
+         * @description Returns the signed-in staff member (`platform.tenant_memberships` + `platform.accounts`), the OTA (`platform.tenants` in the environment of this request, with the Amadeus offices of that environment's connection from `platform.supplier_connections` — never credentials), the permissions derived from the role, the current staff session (kept in Redis, not a portal session; OADR-0011 point 2) and the environments the staff member may open, read on every call. Use it in the console layout to render navigation and hide actions the role cannot perform, and to show the platform's billing banner from `tenant.billingNotice` (`past_due`, `trial_ending`; `null` or absent: none).
          *
          *     **Role → permissions** (StaffPermission). `owner`, `admin`: all permissions. `agent`: `bookings:read`, `bookings:write`, `bookings:issue`, `bookings:cancel`, `customers:read`, `queues:read`, `supplier_requests:read`, `amadeus:read`, `payments:read`, `payments:capture`, `settings:read`. `finance`: `bookings:read`, `customers:read`, `supplier_requests:read`, `payments:read`, `payments:capture`, `payments:refund`, `settings:read`. `viewer`: `bookings:read`, `customers:read`, `payments:read`, `settings:read`. `amadeus:write` (raw create/patch/issue/cancel) and `settings:write` are limited to `owner` and `admin`. `me` always needs a staff token. Console calls **without** a staff token are automation calls: they are accepted only from a secret key whose scopes include `console:automation`, act with exactly the permissions listed in the key's scopes (never every permission) and are attributed to the API key (`actor.type = api_key`); otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`). See ConsoleApiKeyScope.
          *
@@ -1951,7 +1951,7 @@ export interface paths {
         };
         /**
          * Get a booking with full console detail
-         * @description Returns the booking as the customer sees it (`Booking`: itineraries, travellers, contacts, ancillaries, tickets, payments, refunds, documents, totals, ticketing, fare conditions) **plus** console-only data: environment, Amadeus order id, queuing/owner office, net prices and markup (`pricing`: Amadeus grandTotal, markup rule applied, service fees, selling total, margin), derived `paymentStatus`, supplier sync state (`supplierSync`: last sync, last error, drift detected by the last sync), ticketing agreement, automated processes, redacted forms of payment, commissions, forms of identification, every remark (incl. CONFIDENTIAL / BACKOFFICE staff remarks), internal notes, the last 20 Amadeus calls for this booking (`recentSupplierRequests`, redacted, no bodies), the last 20 staff actions, the full event timeline (incl. events hidden from the customer), the actions the caller may perform now (`consoleActions`) and the failure reason of failed bookings. In console scope `amadeus.order` is the verbatim supplier order (net amounts; card numbers redacted by Velexis before storage).
+         * @description Returns the booking as the customer sees it (`Booking`: itineraries, travellers, contacts, ancillaries, tickets, payments, refunds, documents, totals, ticketing, fare conditions) **plus** console-only data: environment, Amadeus order id, queuing/owner office, net prices and markup (`pricing`: Amadeus grandTotal, markup rule applied, service fees, selling total, margin), derived `paymentStatus`, supplier sync state (`supplierSync`: last sync, last error, drift detected by the last sync), ticketing agreement, automated processes, redacted forms of payment, commissions, forms of identification, every remark (incl. CONFIDENTIAL / BACKOFFICE staff remarks), internal notes, the last 20 Amadeus calls for this booking (`recentSupplierRequests`, redacted, no bodies), the last 20 staff actions, the full event timeline (incl. events hidden from the customer), the actions the caller may perform now (`consoleActions`), what a cancellation would ask Amadeus for now (`cancellationMode`: `release`, `void` with `voidDeadlineAt`, or `request_only`, decided from the stored tickets' issue times in `storefront_settings.time_zone` by the rule of bookings.quoteCancellation's `mode`; `null` when the booking cannot be cancelled) and the failure reason of failed bookings. In console scope `amadeus.order` is the verbatim supplier order (net amounts; card numbers redacted by Velexis before storage).
          *
          *     **Refresh.** Without `refresh` the data comes from the tenant tables (`bookings.order_snapshot`). `refresh=true` first calls Amadeus **Flight Order Management GET** `/v1/booking/flight-orders/{id}` (getFlightOrder) with `include` / `fareRules` passed through, applies the result exactly like console.bookings.resync (status, segments, tickets, schedule changes; `booking_events booking.synced`) and returns it; staff refreshes are throttled to one per 10 s per booking (`supplierSync.status = throttled`). `fareRules` populates `fareRules` (rebooking/refund eligibility). A booking without Amadeus order (`failed`, or `pending` after a create timeout) ignores `refresh`.
          *
@@ -2027,9 +2027,9 @@ export interface paths {
          * Cancel a booking (Flight Order Management DELETE)
          * @description Cancels the booking's Amadeus order on behalf of the OTA.
          *
-         *     **Steps.** (1) **Flight Order Management GET** (getFlightOrder) refreshes the order to verify nothing is flown and to record ticket states. (2) **Flight Order Management DELETE** `/v1/booking/flight-orders/{id}` (cancelFlightOrder) — Amadeus answers 204; unissued orders are cancelled, issued tickets are voided by Amadeus when still voidable; otherwise Amadeus refuses (`422 SUPPLIER_REJECTED` with `error.supplier`) and the cancellation must be handled with the airline (refund/exchange outside this API). (3) Persist: `bookings.status = cancelled`, `cancelled_at`, `cancelled_by = staff`, `cancel_reason` (reasonCode + reason), segments/tickets updated, `version` + 1; `booking_events` `booking.cancelled` (visible to the customer), `staff_actions` `booking.cancel` (before/after, reason), `supplier_requests` for both calls. (4) Money: an uncaptured authorisation is voided; for captured payments `refund.mode` decides — `none` (default for console/imported bookings), `full` (the captured amount minus nothing), `amount` (`refund.amount` ≤ captured, else `422 UNPROCESSABLE`) — refunds are created at the PSP (`refunds`, `payment_events`) asynchronously; `refunds.reason` is mapped from `reasonCode` (`no_payment`, `ticketing_deadline`, `airline_request` → `booking_cancelled`; the other codes unchanged, matching the refunds.reason CHECK) and `refunds.reason_note` = `reason`. (5) The customer is notified unless `notifyCustomer=false`.
+         *     **Steps.** (1) **Flight Order Management GET** (getFlightOrder) refreshes the order to verify nothing is flown and to record ticket states. (2) The step follows the cancellation mode of bookings.quoteCancellation, which `ConsoleBookingDetails.cancellationMode` shows, from the stored tickets and their issue times in the OTA's time zone (`storefront_settings.time_zone`): in `release` (no ticket holds a seat) and `void` (every ticket that holds a seat was issued today) **Flight Order Management DELETE** `/v1/booking/flight-orders/{id}` (cancelFlightOrder) — Amadeus answers 204; unissued orders are cancelled, issued tickets are voided by Amadeus when still voidable; otherwise Amadeus refuses (`422 SUPPLIER_REJECTED` with `error.supplier`) and the cancellation must be handled with the airline (refund/exchange outside this API). In `request_only` (a ticket issued before today or at an unknown time, or a ticketed state without stored tickets) no DELETE is sent and Amadeus is not asked to void: the booking records a request to the airline as bookings.cancel does (`booking_events` `booking.cancellation_requested`, a staff alert, the traveller's e-mail unless `notifyCustomer=false`, `staff_actions` `booking.cancel` with the mode), stays as it is (`version` + 1, its `cancellation` `pending`), moves no money and answers `200` with a warning; the staff cancel it with the airline, resync it and refund it from the payment (2026-10-30, lead decision (2c), third batch; before, the DELETE was sent in every mode). (3) Persist (`release` and `void`): `bookings.status = cancelled`, `cancelled_at`, `cancelled_by = staff`, `cancel_reason` (reasonCode + reason), segments/tickets updated, `version` + 1; `booking_events` `booking.cancelled` (visible to the customer), `staff_actions` `booking.cancel` (before/after with the mode, reason), `supplier_requests` for both calls. (4) Money: an uncaptured authorisation is voided; for captured payments `refund.mode` decides — `none` (default for console/imported bookings), `full` (the captured amount minus nothing), `amount` (`refund.amount` ≤ captured, else `422 UNPROCESSABLE`) — refunds are created at the PSP (`refunds`, `payment_events`) asynchronously; `refunds.reason` is mapped from `reasonCode` (`no_payment`, `ticketing_deadline`, `airline_request` → `booking_cancelled`; the other codes unchanged, matching the refunds.reason CHECK) and `refunds.reason_note` = `reason`. (5) The customer is notified unless `notifyCustomer=false`.
          *
-         *     **Preconditions.** `If-Match`; not already cancelled (`409 BOOKING_ALREADY_CANCELLED`); has an Amadeus order (`409 BOOKING_NOT_MODIFIABLE` for failed/pending); no flown segment (`409 BOOKING_NOT_MODIFIABLE`, `details.reason = flown`). Permission `bookings:cancel`. Unlike bookings.cancel (customer scope) there is no self-service window or cancellation-quote requirement.
+         *     **Preconditions.** `If-Match`; not already cancelled (`409 BOOKING_ALREADY_CANCELLED`); has an Amadeus order (`409 BOOKING_NOT_MODIFIABLE` for failed/pending); no segment departed, flown or past its departure time (`409 BOOKING_NOT_MODIFIABLE`, `details.reason = flown`; `consoleActions.canCancel` follows the same rule); no other cancellation in progress (a cancellation whose outcome is undecided, or another cancellation, the customer's or the staff's, whose Flight Order Management DELETE is in flight, claimed less than 5 minutes ago: `409 BOOKING_NOT_MODIFIABLE`, `details.reason = pending`, checked again when the booking row is claimed, so a second DELETE is never sent; a customer's request waiting for the staff is finished here); no issuance in progress (a fresh ticketing claim of the ticketing job or of a staff issuance: `409 BOOKING_NOT_MODIFIABLE`, `details.reason = ticketing_in_progress`). Permission `bookings:cancel`. Unlike bookings.cancel (customer scope) there is no self-service window or cancellation-quote requirement.
          *
          *     **Idempotency.** Required; a retry returns the stored result. A timeout (`504`) leaves the booking unchanged locally: resync, then retry with the same key.
          *
@@ -2103,7 +2103,7 @@ export interface paths {
          * Look up a PNR by record locator
          * @description PNR lookup: calls **Get Flight Order By Record Locator** `GET /v1/booking/flight-orders/by-reference?reference=&originSystemCode=&include=` (getFlightOrder) with the OTA's Amadeus connection and returns every matching flight order verbatim, each wrapped with a normalised summary (record locators, travellers, segments, ticket numbers, last ticketing date, grand total) and the link to this OTA's tables: `bookingId` / `bookingReference` / `bookingStatus` when the order is already attached (matched on `bookings.amadeus_order_id` and `booking_associated_records`), `importable = true` otherwise (→ console.bookings.import). `include=bags` adds Amadeus `included.bags` (extra bag options).
          *
-         *     The PNR may belong to any office the OTA's credentials can read (e.g. created in a GDS terminal); no tenant booking data is changed — use console.bookings.resync for attached bookings. Amadeus 400 (477 INVALID FORMAT, 572 INVALID OPTION, 4926) → `422 SUPPLIER_REJECTED`; no order → `404 NOT_FOUND` (`error.supplier` set). Not cached (PNR contents change); Next.js `cache: "no-store"`.
+         *     The PNR may have been created outside Velexis (e.g. in a GDS terminal), but only orders of the OTA's own offices are answered (OF-09, ADR-0012 office isolation): an order whose owner office (its queuing office when Amadeus gives no owner office) is not one of the offices of the OTA's supplier connection is left out (and `included` and `dictionaries`, which describe every order Amadeus answered, are `null` then), and when no order is left the answer is `403 OFFICE_NOT_ALLOWED`; the order data of another office is not kept in the OTA's `supplier_requests` either. No tenant booking data is changed — use console.bookings.resync for attached bookings. Amadeus 400 (477 INVALID FORMAT, 572 INVALID OPTION, 4926) → `422 SUPPLIER_REJECTED`; no order → `404 NOT_FOUND` (`error.supplier` set). Not cached (PNR contents change); Next.js `cache: "no-store"`.
          *
          *     Audited: `staff_actions` (`pnr.lookup`, record locator) and `supplier_requests` (redacted). Permission `bookings:read` for owner, admin, agent (PII of PNRs outside the OTA's bookings).
          *
@@ -2131,9 +2131,11 @@ export interface paths {
          * Import an existing Amadeus order as a booking
          * @description Attaches an Amadeus flight order that was created outside Velexis (GDS terminal, another tool, or console.amadeus.createFlightOrders) to this OTA's tables so it appears in the booking list, can be managed with console.bookings.*, and — when `customerId` is given — in the customer's "My trips".
          *
-         *     **Amadeus.** **Get Flight Order By Record Locator** (`reference`, `originSystemCode`, `include=bags`) finds the order; with several matches pass `flightOrderId` (otherwise `422 UNPROCESSABLE`, `details.flightOrderIds`). Then **Flight Order Management GET** (getFlightOrder, `include=bags`) loads the complete order (by-reference responses may be partial).
+         *     **Amadeus.** **Get Flight Order By Record Locator** (`reference`, `originSystemCode`, `include=bags`) finds the order; with several matches pass `flightOrderId` (otherwise `422 UNPROCESSABLE`, `details.flightOrderIds`). Then **Flight Order Management GET** (getFlightOrder, `include=bags`) loads the complete order (by-reference responses may be partial). Only orders of the OTA's own offices are imported (OF-09, ADR-0012 office isolation): an order whose owner office (its queuing office when Amadeus gives no owner office) is not one of the offices of the OTA's supplier connection answers `403 OFFICE_NOT_ALLOWED`, before the Management GET and before anything is written. A known record locator is refused before Amadeus is called.
          *
-         *     **Persist.** Already attached (`bookings.amadeus_order_id`) → `409 ORDER_ALREADY_IMPORTED`. Otherwise one transaction writes `bookings` (channel `import`, new Velexis reference, `created_by_staff_id`, environment of the key, status from segments/tickets: `ticketed`, `partially_ticketed`, `confirmed` or `cancelled`, `ticketing_deadline_at` from lastTicketingDate / ticketingAgreement in the office time zone, net amounts from `price.grandTotal`, selling amounts per `pricing` — `markup_rules` default, `net`, or `override`), `booking_associated_records`, `booking_travelers` (documents encrypted), `booking_contacts`, `booking_segments`, `booking_ancillaries`, `booking_remarks`, `booking_tickets`, `booking_events` (`booking.imported`), `booking_access_tokens` (guest import), `staff_actions` (`booking.import`), `supplier_requests`. `contact_email` comes from `contactEmail`, the order contacts, the first traveller's contact or the customer (`422 UNPROCESSABLE` when none). No payment is recorded (`paymentStatus = not_applicable`); no e-mail is sent unless `sendConfirmation=true`.
+         *     **Customer.** `customerId` must name a customer of this OTA (`404 NOT_FOUND`); a customer who deleted their account or was disabled answers `409 CONFLICT` with `details.reason` `customer_deleted` or `customer_disabled`.
+         *
+         *     **Persist.** Already attached (`bookings.amadeus_order_id`) → `409 ORDER_ALREADY_IMPORTED`. Otherwise one transaction writes `bookings` (channel `import`, new Velexis reference, `created_by_staff_id`, environment of the key, status from segments/tickets: `ticketed`, `partially_ticketed`, `confirmed` or `cancelled`, `ticketing_deadline_at` from lastTicketingDate / ticketingAgreement in the office time zone, net amounts from `price.grandTotal`, selling amounts per `pricing` — `markup_rules` default, `net`, or `override`), `booking_associated_records`, `booking_travelers` (documents encrypted), `booking_contacts`, `booking_segments`, `booking_ancillaries`, `booking_remarks`, `booking_tickets`, `booking_events` (`booking.imported`), `booking_access_tokens` (guest import), `staff_actions` (`booking.import`), `supplier_requests`. `contact_email` comes from `contactEmail`, the order contacts, the first traveller's contact or the customer (`422 UNPROCESSABLE` when none). No payment is recorded (`paymentStatus = not_applicable`); no e-mail is sent unless `sendConfirmation=true`. An order without tickets is imported with `ticketing.status = manual_review` (nothing was paid through Velexis, so the ticketing job leaves it to the staff: console.bookings.issue). In the MVP the order's booked services stay in its price (`pricing.netServices`) without `booking_ancillaries` rows, as for every booking, and a guest import issues no booking access token: the guest reaches the booking through bookings.lookup (reference and last name).
          *
          *     **Idempotency.** Required; retries return the stored `201`. Permission `bookings:write`.
          *
@@ -2275,7 +2277,7 @@ export interface paths {
         };
         /**
          * List the Amadeus call log
-         * @description Lists `supplier_requests` (newest first): every Amadeus call made for this OTA in the key's environment — customer flows (search, pricing, checkout, bookings sync), console operations, raw pass-through calls and background jobs — with operation, Amadeus API and operationId, method, path, office, HTTP status, classified outcome, Amadeus error codes, latency, Amadeus correlation id (`ama-request-id`, quote it to Amadeus support), the Velexis `X-Request-Id`, and the related booking/search/staff. `includeBodies=true` adds the redacted request and response bodies (card numbers, CVV, document numbers, e-mails and phones masked before storage; bodies above 256 KB truncated; `limit` ≤ 20 then).
+         * @description Lists `supplier_requests` (newest first): every Amadeus call made for this OTA in the key's environment — customer flows (search, pricing, checkout, bookings sync), console operations, raw pass-through calls and background jobs — with operation, Amadeus API and operationId, method, path, office, HTTP status, classified outcome, Amadeus error codes, latency, Amadeus correlation id (`ama-request-id`, quote it to Amadeus support), the Velexis `X-Request-Id`, and the related booking/search/staff. `includeBodies=true` adds the redacted request and response bodies (card numbers, CVV, document numbers, e-mails and phones masked before storage; bodies above 64 KB truncated; `limit` ≤ 20 then).
          *
          *     Filters: `bookingId`, `searchId`, `amadeusApi`, `amadeusOperationId`, `outcome`, `httpStatus`, `errorCode` (Amadeus code, e.g. 4926), `staffId`, `requestId`, `correlationId`, `createdFrom`/`createdTo`. Retention 90 days. No Amadeus call. Permission `supplier_requests:read` (owner, admin, agent, finance).
          *
@@ -2309,7 +2311,7 @@ export interface paths {
          * Raw Flight Offers Search (POST)
          * @description **Raw pass-through** of Amadeus **Flight Offers Search** `POST /v2/shopping/flight-offers` (searchFlightOffers). `amadeus` is the complete getFlightOffersQuery — `currencyCode`, `originDestinations` (id, originLocationCode, destinationLocationCode, originRadius, destinationRadius, alternativeOriginsCodes, alternativeDestinationsCodes, departureDateTimeRange / arrivalDateTimeRange with date, time, dateWindow, timeWindow, includedConnectionPoints, excludedConnectionPoints), `travelers` (id, travelerType, associatedAdultId, fareOptions, loyaltyPrograms), `sources` (GDS, LTC, PYTON, EAC, NDC) and `searchCriteria` (excludeAllotments, addOneWayOffers, maxFlightOffers, maxPrice, allowAlternativeFareOptions, oneFlightOfferPerDay, additionalInformation, pricingOptions, flightFilters incl. carrier, cabin and connection restrictions) — forwarded verbatim with `X-HTTP-Method-Override: GET`.
          *
-         *     **Behaviour common to console.amadeus.*.** NestJS authenticates with the OTA's Amadeus connection of the key's environment (OAuth2 client credentials from platform.supplier_connections, token cached in Redis until 60 s before expiry) and adds nothing else to the Amadeus request; the verbatim Amadeus response is returned in `amadeus` with `call` (supplier request id, office, status, latency, correlation id). Amadeus 4xx → `422 SUPPLIER_REJECTED` (verbatim `errors[]` in `details.errors`), 5xx → `502 SUPPLIER_ERROR`, unavailable → `503`, timeout (30 s for shopping, 60 s for orders) → `504`. Every call writes `supplier_requests` (redacted; `bookingId` links it to a booking) and `staff_actions` (`amadeus.<operationId>`, `reason`). Prices are **net supplier prices** (no markup) and are never shown to customers. Raw results are not stored in flight_offers: to sell an offer to a customer use flights.search / flights.price; to book a raw offer either price it with flights.price (`amadeusFlightOffers`, console scope → `prc_…`) and book it with console.bookings.create (markup, tables, notifications), or stay raw with console.amadeus.quoteAirOffers then console.amadeus.createFlightOrders. Permission `amadeus:read`; raw access can be disabled per OTA (`403 FEATURE_DISABLED`). Rate limit 30 calls/min per staff member.
+         *     **Behaviour common to console.amadeus.*.** NestJS authenticates with the OTA's Amadeus connection of the key's environment (OAuth2 client credentials from platform.supplier_connections, token cached in Redis until 60 s before expiry) and adds nothing else to the Amadeus request; the verbatim Amadeus response is returned in `amadeus` with `call` (supplier request id, office, status, latency, correlation id). Amadeus 4xx → `422 SUPPLIER_REJECTED` (verbatim `errors[]` in `details.errors`), 5xx → `502 SUPPLIER_ERROR`, unavailable → `503`, timeout (30 s for shopping, 60 s for orders) → `504`. Every call writes `supplier_requests` (redacted; `bookingId` links it to a booking) and `staff_actions` (`amadeus.<operationId>`, `reason`). Prices are **net supplier prices** (no markup) and are never shown to customers. Raw results are not stored in flight_offers: to sell an offer to a customer use flights.search / flights.price; to book a raw offer either price it with flights.price (`amadeusFlightOffers`, console scope → `prc_…`) and book it with console.bookings.create (markup, tables, notifications), or stay raw with console.amadeus.quoteAirOffers then console.amadeus.createFlightOrders. Permission `amadeus:read`. Rate limit: the console's, 600 requests per minute per staff session or key.
          *
          *     **Idempotent by design**: a search has no side effect at Amadeus; retries are safe without `Idempotency-Key`.
          *
@@ -2447,7 +2449,7 @@ export interface paths {
         };
         /**
          * Raw Flight Order Management GET
-         * @description **Raw pass-through** of Amadeus **Flight Order Management** `GET /v1/booking/flight-orders/{flight-orderId}` (getFlightOrder) for any order the OTA's credentials can read (attached to a booking or not), with `include=bags` and `fareRules=rebooks|refunds` forwarded. Returns the verbatim response (`meta`, `warnings`, `data` order, `included.bags`, `dictionaries`) in `amadeus`, plus `bookingId` when the order is attached to a booking of this OTA (the booking is **not** modified; use console.bookings.retrieve / resync for attached bookings). Amadeus 404 → `404 NOT_FOUND`. Common raw behaviour as for console.amadeus.searchFlightOffers. Permission `amadeus:read`. Not cached.
+         * @description **Raw pass-through** of Amadeus **Flight Order Management** `GET /v1/booking/flight-orders/{flight-orderId}` (getFlightOrder) for any order the OTA's credentials can read (attached to a booking or not), with `include=bags` and `fareRules=rebooks|refunds` forwarded. Returns the verbatim response (`meta`, `warnings`, `data` order, `included.bags`, `dictionaries`) in `amadeus`, plus `bookingId` when the order is attached to a booking of this OTA (the booking is **not** modified; use console.bookings.retrieve / resync for attached bookings). Amadeus 404 → `404 NOT_FOUND`. Office isolation on the shared Amadeus account: the order is answered only when the office that holds it is one of the offices of the OTA's supplier connection (its `ownerOfficeId`, or its `queuingOfficeId` when Amadeus gives no owner office); another office's order answers `403 OFFICE_NOT_ALLOWED`, and the OTA's `supplier_requests` row of the call keeps only its id. Common raw behaviour as for console.amadeus.searchFlightOffers. Permission `amadeus:read`. Not cached.
          *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
@@ -2483,7 +2485,7 @@ export interface paths {
         };
         /**
          * Raw Get Flight Order By Record Locator
-         * @description **Raw pass-through** of Amadeus **Get Flight Order By Record Locator** `GET /v1/booking/flight-orders/by-reference` (getFlightOrder) with `reference` (Amadeus or other-airline record locator; for codeshares the operating PNR), `originSystemCode` (GDS) and `include=bags` forwarded verbatim. Returns the verbatim response (`meta`, `warnings`, `data` = array of flight orders, `included.bags`, `dictionaries`) in `amadeus`, plus `matches` linking each order to a booking of this OTA when attached. For the normalised lookup + import flow use console.bookings.findByRecordLocator / console.bookings.import. Amadeus 400 (477, 572, 4926, 32171) → `422 SUPPLIER_REJECTED`; no order → `404 NOT_FOUND`. Common raw behaviour as for console.amadeus.searchFlightOffers. Permission `amadeus:read`.
+         * @description **Raw pass-through** of Amadeus **Get Flight Order By Record Locator** `GET /v1/booking/flight-orders/by-reference` (getFlightOrder) with `reference` (Amadeus or other-airline record locator; for codeshares the operating PNR), `originSystemCode` (GDS) and `include=bags` forwarded verbatim. Returns the verbatim response (`meta`, `warnings`, `data` = array of flight orders, `included.bags`, `dictionaries`) in `amadeus`, plus `matches` linking each order to a booking of this OTA when attached. For the normalised lookup + import flow use console.bookings.findByRecordLocator / console.bookings.import. Amadeus 400 (477, 572, 4926, 32171) → `422 SUPPLIER_REJECTED`; no order → `404 NOT_FOUND`. Office isolation on the shared Amadeus account: only orders held by one of the OTA's offices are answered (the order's `ownerOfficeId`, or its `queuingOfficeId` when Amadeus gives no owner office); another office's orders are left out of `data`, `matches` and the OTA's `supplier_requests` row of the call (which keeps their id only), and `included` and `dictionaries`, which describe every order Amadeus answered, are left out when any order was; no order left → `403 OFFICE_NOT_ALLOWED`. Common raw behaviour as for console.amadeus.searchFlightOffers. Permission `amadeus:read`.
          *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
@@ -2527,7 +2529,7 @@ export interface paths {
         };
         /**
          * List the markup rules
-         * @description Lists the markup rules of the OTA (`markup_rules`), which turn Amadeus net prices into selling prices, in the order the pricing engine evaluates them: `priority` ascending, then `id`. Cursor pagination. `active=true` lists only enabled rules (`isActive`), `active=false` only disabled ones, no `active` every rule. The seeded default rule (`isDefault`, scope `{}`, priority 1000) is one of them; it cannot be deleted.
+         * @description Lists the markup rules of the OTA (`markup_rules`), which turn Amadeus net prices into selling prices, in the order the pricing engine evaluates them: `priority` ascending, then `id`. Cursor pagination. `active=true` lists only enabled rules (`isActive`), `active=false` only disabled ones, no `active` every rule. The seeded default rule (`isDefault`, scope `{}`, priority 1000, active, no validity window) is one of them; it cannot be deleted and always matches.
          *
          *     Settings are shared by the test and live environments (one set of rules per OTA), so `X-Velexis-Environment` changes nothing here. No Amadeus call. Permission `settings:read`. Not audited per call.
          *
@@ -2585,7 +2587,7 @@ export interface paths {
          * Update a markup rule
          * @description Changes any subset of a markup rule's fields (`MarkupRuleUpdate`); fields not sent keep their value, `null` clears a nullable one, and `scope` is replaced as a whole. The changed rule must still satisfy the rules of console.settings.markupRules.create (the values of its `calculation`, one currency, `activeUntil` after `activeFrom`), else `400 VALIDATION_FAILED`.
          *
-         *     **Default rule.** The seeded default rule (`isDefault`) keeps its catch-all scope: a `scope` that is not empty (`{}`) answers `409 CONFLICT` with `details.reason = "default_rule"`; its percentage, priority and the other fields may change.
+         *     **Default rule.** The seeded default rule (`isDefault`) always matches and catches every offer no other rule takes (OADR-0005 point 3, revised 2026-10-30): it keeps its catch-all scope, stays active, has no validity window and keeps priority 1000. A `scope` that is not empty (`{}`), `isActive: false`, an `activeFrom` or `activeUntil` other than `null`, or a `priority` other than 1000 answers `409 CONFLICT` with `details.reason = "default_rule"`, whose message names what stays fixed; the same values sent unchanged (`scope: {}`, `isActive: true`, `activeFrom: null`, `activeUntil: null`, `priority: 1000`) are accepted. Its name, description, calculation, percentage, fixed amount, unit, caps and `stackable` may change.
          *
          *     **Preconditions.** `If-Match` = the `ETag` of the rule (`412 PRECONDITION_FAILED` when stale). The answer has the new `version` and `ETag`, and can carry `warnings` like create. Changes apply to the next search; stored offers keep their prices (OADR-0005). No Amadeus call. Permission `settings:write`; `staff_actions` records the rule before and after.
          *
@@ -2677,7 +2679,7 @@ export interface paths {
         };
         /**
          * Get the storefront settings
-         * @description Returns the OTA's storefront settings as staff edit them (`storefront_settings`, one row per OTA shared by the test and live environments): brand, branding (asset ids of `storefront_assets`, colours, fonts from the bundled list, corner radius), locales, currencies, markets, features, policies, the airline card per environment, legal versions and links, support, SEO, consent and operations. storefront.get derives the public configuration from them.
+         * @description Returns the OTA's storefront settings as staff edit them (`storefront_settings`, one row per OTA shared by the test and live environments): brand, branding (asset ids of `storefront_assets`, colours, fonts from the bundled list, corner radius), locales, currencies, markets, features, policies, the airline card per environment, legal versions and links, support, SEO, consent and operations. storefront.get derives the public configuration from them. `airlineCard.liveAvailable` (read-only) is the API's global `AIRLINE_CARD_ENABLED` switch: the live airline card can be turned on only while it is true, so the OTA admin offers that switch only then (lead decision (2d) of 2026-10-30, FIX-W35-OTA).
          *
          *     `ETag` = `"<version>"`: pass it as `If-Match` to console.settings.storefront.update. No Amadeus call. Permission `settings:read`. Not audited per call.
          *
@@ -2693,7 +2695,7 @@ export interface paths {
          * Update the storefront settings
          * @description Changes the storefront settings section by section (`StorefrontSettingsUpdate`): each top-level section sent (`brand`, `branding`, `locales`, …) replaces that section as a whole, sections not sent keep their value.
          *
-         *     **Validation.** Beyond the schema (a font outside the bundled list fails it: `400 VALIDATION_FAILED`): currencies must be active currencies of `reference.currencies` with at most 2 minor units (the precision of stored amounts, as flights.search requires) and the time zone must exist in `reference.time_zones`; every `supported` list contains its `default`; markets use supported currencies and locales; asset ids must name an asset of the right kind (`logo`, `logo_dark`, `logo_square`, `favicon`, `og_image`); a legal link's `pageSlug` must name a page of `storefront_pages`; `policies.paymentTiming` other than `authorize_before_booking` is refused in the MVP. These answer `422 UNPROCESSABLE` with `details.reason` and `details.path` (the JSON pointer of the refused field). Setting `airlineCard.enabledLive` to true answers `403 FEATURE_DISABLED` (`details.feature = "airlineCard"`) while the global `AIRLINE_CARD_ENABLED` switch is off. The rules are checked for the sections sent, against the saved settings with those sections replaced (so a market is checked against the currencies and locales it will have), and the first refused field is answered. `details.reason` is one of `unknown_time_zone`, `asset_not_found`, `asset_kind`, `default_not_supported` (a `supported` list without its `default`), `unknown_currency` (not an active currency of `reference.currencies`), `currency_not_supported` (a currency with more than 2 minor units, such as KWD), `unknown_country`, `duplicate_market`, `market_not_listed` (`markets.default`), `market_currency_not_supported`, `market_locale_not_supported`, `page_not_found`, `payment_timing_not_supported`, `duplicate_consent_category` and `consent_category_required` (only `necessary` may be required).
+         *     **Validation.** Beyond the schema (a font outside the bundled list fails it: `400 VALIDATION_FAILED`): currencies must be active currencies of `reference.currencies` with at most 2 minor units (the precision of stored amounts, as flights.search requires) and the time zone must exist in `reference.time_zones`; every `supported` list contains its `default`; markets use supported currencies and locales; asset ids must name an asset of the right kind (`logo`, `logo_dark`, `logo_square`, `favicon`, `og_image`); a legal link's `pageSlug` must name a page of `storefront_pages`; `policies.paymentTiming` other than `authorize_before_booking` is refused in the MVP. These answer `422 UNPROCESSABLE` with `details.reason` and `details.path` (the JSON pointer of the refused field). Turning `airlineCard.enabledLive` on (from a stored `false` to `true`) answers `403 FEATURE_DISABLED` (`details.feature = "airlineCard"`) while the global `AIRLINE_CARD_ENABLED` switch is off; a save that keeps a stored `true` or sends `false` passes, so an OTA whose live airline card was on when the switch went off can still save its other sections, and turn it off (lead decision (2e) of 2026-10-30, FIX-W35-OTA). `airlineCard.liveAvailable` is read-only: the answer carries the switch, and a value sent is ignored. The rules are checked for the sections sent, against the saved settings with those sections replaced (so a market is checked against the currencies and locales it will have), and the first refused field is answered. `details.reason` is one of `unknown_time_zone`, `asset_not_found`, `asset_kind`, `default_not_supported` (a `supported` list without its `default`), `unknown_currency` (not an active currency of `reference.currencies`), `currency_not_supported` (a currency with more than 2 minor units, such as KWD), `unknown_country`, `duplicate_market`, `market_not_listed` (`markets.default`), `market_currency_not_supported`, `market_locale_not_supported`, `page_not_found`, `payment_timing_not_supported`, `duplicate_consent_category` and `consent_category_required` (only `necessary` may be required).
          *
          *     **Warnings.** Turning the airline card on (in either environment) while active markup or fee rules that add an amount exist answers `200` with a `warnings` entry (`airline_card_net_price`, `path` the flag turned on): airline-card bookings are sold at the airline's price, without markup or fees (OADR-0004). A rule adds an amount when it is active, has not ended (`activeUntil`) and has a percentage, a fixed amount or a minimum other than zero, so the default rule at 0 % alone gives no warning.
          *
@@ -2725,7 +2727,7 @@ export interface paths {
          * Create a content page
          * @description Creates a content page of the hosted storefront (OADR-0012 point 5). `slug`, `locale` and `title` are required; omitted fields take their defaults: `kind` `content`, an empty `bodyMarkdown`, `isPublished` and `showInFooter` false, `sortOrder` 100. One page per slug and locale: a translation is another page with the same slug in another locale.
          *
-         *     **Validation.** Beyond the schema: `locale` must be one of the storefront settings' `locales.supported` (`details.reason = "locale_not_supported"`), and the body must keep to the Markdown subset of StorefrontPageMarkdown: anything else answers `details.reason = "markdown_not_allowed"` with the 1-based `details.line` of the first refused line, and an image of an asset that does not exist or is not a `page_image` answers `asset_not_found` or `asset_kind`, with its `details.line`. These answer `422 UNPROCESSABLE` and nothing is saved. A page of the same slug and locale answers `409 CONFLICT` (`details.reason = "page_exists"`).
+         *     **Validation.** Beyond the schema: the title is stored trimmed, and a title that is blank once trimmed or holds a control character answers `400 VALIDATION_FAILED` at `/title`. Then, in this order: `locale` must be one of the storefront settings' `locales.supported` (`details.reason = "locale_not_supported"`), the body must keep to the Markdown subset of StorefrontPageMarkdown (with its stricter cases: `+ ` bullets, `1) ` numbers, setext headings, empty headings and list items, link titles, links without text, control characters and inline nesting deeper than 8): anything else answers `details.reason = "markdown_not_allowed"` with the 1-based `details.line` the refused construct starts on, and an image of an asset that does not exist or is not a `page_image` answers `asset_not_found` or `asset_kind`, with its `details.line`. These answer `422 UNPROCESSABLE` and nothing is saved. A page of the same slug and locale answers `409 CONFLICT` (`details.reason = "page_exists"`).
          *
          *     **Effect.** The answer is the page with `version` 1 and its `ETag`. A page created published gets `publishedAt` and is served by storefront.getPage at once: the page caches of both environments are deleted.
          *
@@ -2771,7 +2773,7 @@ export interface paths {
         head?: never;
         /**
          * Update a content page
-         * @description Changes any subset of a page's fields (`StorefrontPageUpdate`: `kind`, `title`, `bodyMarkdown`, `isPublished`, `showInFooter`, `sortOrder`); fields not sent keep their value. `slug` and `locale` are fixed at creation, as they make the page's address and the target of legal links: to move a page, create it under the new slug and delete the old one. A body is checked as in console.settings.pages.create (`422 UNPROCESSABLE`: `markdown_not_allowed` with `details.line`, `asset_not_found`, `asset_kind`).
+         * @description Changes any subset of a page's fields (`StorefrontPageUpdate`: `kind`, `title`, `bodyMarkdown`, `isPublished`, `showInFooter`, `sortOrder`); fields not sent keep their value. `slug` and `locale` are fixed at creation, as they make the page's address and the target of legal links: to move a page, create it under the new slug and delete the old one. A title and a body are checked as in console.settings.pages.create: the title stored trimmed (blank once trimmed, or with a control character: `400 VALIDATION_FAILED` at `/title`), the body within the Markdown subset and its stricter cases (`422 UNPROCESSABLE`: `markdown_not_allowed` with `details.line`, `asset_not_found`, `asset_kind`).
          *
          *     **Publishing.** `isPublished: true` puts the page on the storefront (the first time also sets `publishedAt`); `false` takes it off (storefront.getPage answers `404`) and keeps it as a draft. A page that a legal link names may be unpublished; the link then leads to the storefront's not-found page until it is published again.
          *
@@ -2801,17 +2803,19 @@ export interface paths {
         put?: never;
         /**
          * Upload a storefront image
-         * @description Uploads an image as `multipart/form-data` (StorefrontAssetUpload): the parts `file` (the image) and `kind` (what it is for), and optionally `fileName` (the name shown in the console; by default the file part's own file name). A missing, empty or unknown part answers `400 VALIDATION_FAILED`. The server reads the type from the file's first bytes, never from the declared `Content-Type` or the file name, and the dimensions from the file header (OADR-0012 point 2), then refuses with `422 ASSET_INVALID` and `details.reason`:
+         * @description Uploads an image as `multipart/form-data` (StorefrontAssetUpload): the parts `file` (the image) and `kind` (what it is for), and optionally `fileName` (the name shown in the console; by default the file part's own file name). A missing, empty, repeated or unknown part, a `file` part that is no file and a `kind` or `fileName` part that is one answer `400 VALIDATION_FAILED` (`fieldErrors` at `/file`, `/kind`, `/fileName` or `/<part name>`); a body that is not `multipart/form-data`, or not well-formed, answers `400 INVALID_REQUEST` (`details.reason` `unsupported_media_type` or `malformed_multipart`). The multipart body is parsed on this route only. The server reads the type from the file's first bytes, never from the declared `Content-Type` or the file name, and the dimensions from the file header (OADR-0012 point 2), then refuses with `422 ASSET_INVALID` and `details.reason`, in this order:
          *
+         *     - `size`: more than 1 MB (1 048 576 bytes), and any request body larger than 1 MB and 16 KB (1 064 960 bytes, room for the other parts), which is not read further;
          *     - `type`: anything but PNG, JPEG or WebP, or ICO for the kind `favicon` (no SVG, no CSS), and a file whose header cannot be read;
-         *     - `size`: more than 1 MB (1 048 576 bytes);
          *     - `dimensions`: a logo (`logo`, `logo_dark`, `logo_square`) larger than 2000 × 2000 pixels.
          *
          *     **Effect.** The file is stored unchanged under `tenant_<key>/assets/<sha256>.<ext>` of the StorageAdapter (it is not re-encoded, so metadata such as EXIF stays in it; the OTA admin tells staff) and an immutable `storefront_assets` row is written: a new image is always a new asset, with a new id and URL. The answer is the asset with its public `url`. Reference it from the storefront settings (`branding.logoAssetId` and the other `…AssetId` fields of its kind, console.settings.storefront.update) or, for a `page_image`, from a page body (`![alt text](ast_…)`).
          *
+         *     **The same file again.** The storage key is the file's SHA-256, and one asset holds one file: the same bytes uploaded again for the same kind answer that asset (`201`, its id, URL and `createdAt`; no second row), and for another kind `409 CONFLICT` with `details.reason = "asset_exists"`, `details.assetId` and `details.kind` (the asset the file already is). Delete that asset first, or upload a different file.
+         *
          *     **Idempotency.** `Idempotency-Key` required (`idempotency_keys`, 24 h): a retry with the same key, file and parts returns the stored asset; the same key with another upload → `409 IDEMPOTENCY_KEY_REUSED`.
          *
-         *     No Amadeus call. Permission `settings:write`; `staff_actions` records the new asset's metadata, never the file.
+         *     No Amadeus call. Permission `settings:write`; `staff_actions` records the asset's metadata, never the file.
          *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
@@ -2855,7 +2859,7 @@ export interface paths {
         };
         /**
          * List the notification templates
-         * @description Lists the **effective** e-mail template of every template key the code knows, for every locale of the storefront settings' `locales.supported`: the OTA's own row of `notification_templates` when it exists (`customised: true`), otherwise the code default (`customised: false`; the English default where the code has none for the locale), each with the variables its key allows. Ordered by key, then locale; not paginated. OADR-0013 point 3.
+         * @description Lists the **effective** e-mail template of every template key the code knows, for every locale of the storefront settings' `locales.supported`: the OTA's row of `notification_templates` of exactly that locale when it exists, active or not; otherwise the active row of the locale's language (`en` for `en-GB`), which e-mails in that locale use, marked `inheritedFrom` with its locale (`version` and `updatedAt` null: the locale has no row of its own); otherwise the code default (the English default where the code has none for the locale). `customised` is false for the code default and for a row provisioning seeded from it until the OTA edits it. Each comes with the variables its key allows. Ordered by key, then locale; not paginated. OADR-0013 point 3.
          *
          *     No Amadeus call. Permission `settings:read`. Not audited per call.
          *
@@ -2879,18 +2883,18 @@ export interface paths {
         };
         /**
          * Get a notification template
-         * @description Returns the effective template of one key, channel and locale: the OTA's row when it exists (`customised: true`, with `ETag` = `"<version>"` to pass as `If-Match` to console.settings.templates.put), otherwise the code default (`customised: false`, `version` null, no `ETag`; the English default where the code has none for the locale). `variables` lists what the key's templates may use. No Amadeus call. Permission `settings:read`. Not audited per call.
+         * @description Returns the effective template of one key, channel and locale: the OTA's row of exactly that locale when it exists, active or not (with `ETag` = `"<version>"` to pass as `If-Match` to console.settings.templates.put; `customised: false` while it is the row provisioning seeded from the code default, `true` once the OTA edited it); otherwise the active row of the locale's language (`en` for `en-GB`), which e-mails in that locale use (`inheritedFrom` its locale, `version` null, no `ETag`: a put creates the locale's own row, without `If-Match`); otherwise the code default (`customised: false`, `version` null, no `ETag`; the English default where the code has none for the locale). `variables` lists what the key's templates may use. No Amadeus call. Permission `settings:read`. Not audited per call.
          *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
         get: operations["consoleGetNotificationTemplate"];
         /**
          * Create or replace a notification template
-         * @description Creates or replaces the OTA's template of one key, channel and locale (upsert of `notification_templates`). `If-Match` is required when the OTA already has a row for them (its `ETag`; missing or stale → `412 PRECONDITION_FAILED`) and must be absent when it has none.
+         * @description Creates or replaces the OTA's template of one key, channel and locale (upsert of `notification_templates`): the row of exactly that locale, never the row of its language that an inherited template shows. `If-Match` is required when the OTA already has a row for them, the row provisioning seeded included (its `ETag`; missing or stale → `412 PRECONDITION_FAILED`), and must be absent when it has none.
          *
          *     **Compilation.** The server compiles `subject`, `bodyHtml` and `bodyText` with Handlebars in strict mode and checks every variable against the key's allow-list (`variables`): a template that does not compile or uses another variable answers `422 TEMPLATE_INVALID` with `details.errors[{part, line, message}]`, and nothing is saved. A locale outside the storefront settings' `locales.supported` answers `422 UNPROCESSABLE` (`details.reason = "locale_not_supported"`).
          *
-         *     The answer is the saved template (`customised: true`, new `version` and `ETag`); e-mails rendered from then on use it (OADR-0013 point 3). `isActive: false` keeps the row but sends the default. No Amadeus call. Permission `settings:write`; `staff_actions` records the template before and after.
+         *     The answer is the saved template (`customised: true`, `inheritedFrom` null, new `version` and `ETag`); e-mails rendered from then on use it (OADR-0013 point 3). `isActive: false` keeps the row, and e-mails use the active row of the locale's language, else the default. No Amadeus call. Permission `settings:write`; `staff_actions` records the template before and after.
          *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
@@ -2913,7 +2917,7 @@ export interface paths {
         put?: never;
         /**
          * Preview a notification template
-         * @description Renders a template without saving or sending anything: the effective template of the key, channel and locale, or the `subject`, `bodyHtml` and `bodyText` given in the body (a draft), with the template's sample data, or with `variables` when given. Compiled exactly like console.settings.templates.put (strict mode, the key's allow-list): a draft that does not compile answers `422 TEMPLATE_INVALID` with `details.errors`.
+         * @description Renders a template without saving or sending anything: the effective template of the key, channel and locale (as console.settings.templates.get shows it, an inherited one included), or the `subject`, `bodyHtml` and `bodyText` given in the body (a draft), with the template's sample data, or with `variables` when given. Compiled exactly like console.settings.templates.put (strict mode, the key's allow-list): a draft that does not compile answers `422 TEMPLATE_INVALID` with `details.errors`.
          *
          *     The answer is `{subject, html, text}`. Show `html` only in a sandboxed `iframe` without scripts (the OTA admin does). Safe to repeat (`x-idempotent-by-design`): nothing is stored. No Amadeus call. Permission `settings:read`. Not audited per call.
          *
@@ -2937,7 +2941,7 @@ export interface paths {
         put?: never;
         /**
          * Reset a notification template to the default
-         * @description Deletes the OTA's template of one key, channel and locale, so the code default applies again (OADR-0013 point 3), and returns that default (`customised: false`). Safe to repeat (`x-idempotent-by-design`): without a row it changes nothing and returns the default. No Amadeus call. Permission `settings:write`; `staff_actions` records the deleted template.
+         * @description Deletes the OTA's template of one key, channel and locale (the row of exactly that locale, the one provisioning seeded included), so the template e-mails used before it applies again (OADR-0013 point 3): the active row of the locale's language (`inheritedFrom`), else the code default (`customised: false`), which it returns. Safe to repeat (`x-idempotent-by-design`): without a row it changes nothing and returns that template. No Amadeus call. Permission `settings:write`; `staff_actions` records the deleted template.
          *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
@@ -3167,7 +3171,7 @@ export interface paths {
          *
          *     **Local only.** Caddy blocks `/health/ready` publicly (and `/api/health/ready` on the storefront hosts). The API answers it without a credential only on a direct loopback connection (the socket peer is loopback and neither `X-Forwarded-For` nor `X-Forwarded-Host` is present, OADR-0009 rule 1.2); any other request without a credential answers `401 INVALID_API_KEY`, and a credential sent anyway is checked as on every route, with the answers healthLive lists (`400`, `401`, `403 ORIGIN_NOT_ALLOWED`, and `503 SERVICE_UNAVAILABLE` with the error envelope instead of the readiness body when the key cannot be looked up). Never cached (`Cache-Control: no-store`) and never logged per request.
          *
-         *     **Worker.** The worker serves the same paths and answers on `127.0.0.1:HEALTH_PORT` (no Nest pipeline). From OBE-025 (M2) its readiness also reports the BullMQ queues in `queues`: per queue the waiting jobs, the age of the oldest one and the jobs failed in the last hour. Old jobs do not make it unready: the on-VM check decides the alert threshold.
+         *     **Worker.** The worker serves the same paths and answers on `127.0.0.1:HEALTH_PORT` (no Nest pipeline). From OBE-025 (M2) its readiness also reports the BullMQ queues in `queues`: per queue the waiting jobs, the age of the oldest one and the jobs failed in the last hour. Old jobs do not make it unready: the on-VM check decides the alert threshold. The queues are read in parallel with the checks, within 1 second: when Redis refuses or does not answer them in time, `queues` is left out (the queue part is unknown) and the answer is not delayed.
          */
         get: operations["healthReady"];
         put?: never;
@@ -5470,7 +5474,7 @@ export interface components {
         /** @description phone information (Amadeus definition, merged from: FlightAvailabilitiesSearch, FlightOffersPrice, FlightCreateOrders, FlightOrderIssue, GetFlightOrderByRecordLocator, FlightOrderManagement) */
         AmadeusPhone: {
             deviceType?: components["schemas"]["AmadeusPhoneDeviceType"];
-            /** @description Country calling code of the phone number, as defined by the International Communication Union. Examples - "1" for US, "371" for Latvia. */
+            /** @description Country calling code of the phone number, as defined by the International Communication Union. Examples - "1" for US, "371" for Latvia. Velexis: one to three digits of an ITU country calling code, optionally with a leading `+` (`1`, `+1`, `44`, `371`), sent to Amadeus as given. Amadeus's own pattern `[0-9+]{2,5}` refused the `1` of the United States, Canada and the rest of North America (lead decision (1) of 2026-10-26, FIX-W30-OTA, OADR-0003 follow-ups); anything else, such as letters or four digits, is `400 VALIDATION_FAILED` on the field. */
             countryCallingCode?: string;
             /** @description Phone number. Composed of digits only. The number of digits depends on the country. */
             number?: string;
@@ -10006,7 +10010,7 @@ export interface components {
         };
         /** @description Self-service actions available to this caller now (status, flown segments, ticketing state, storefront settings). */
         BookingAllowedActions: {
-            /** @description bookings.cancel (self-service cancellation enabled, nothing flown, not cancelled, more than 3 h before the first remaining departure, an Amadeus order, and no earlier cancellation undecided or waiting for the staff: reason `pending`). */
+            /** @description bookings.cancel (self-service cancellation enabled, nothing departed (no segment flown or past its departure time: reason `flown`), not cancelled, more than 3 h before the first departure (reason `too_close_to_departure`), an Amadeus order, and no earlier cancellation undecided or waiting for the staff, nor another cancellation whose Flight Order Management DELETE is in flight: reason `pending`). bookings.cancel refuses on the same rule. */
             canCancel: boolean;
             /** @description bookings.update contacts. */
             canModifyContacts: boolean;
@@ -10825,6 +10829,11 @@ export interface components {
             defaultLocale: string;
             /** @description Business time zone (reports, ticketing deadlines). */
             timeZone: string;
+            /**
+             * Format: uri
+             * @description The OTA's storefront origin for the console's environment, without a trailing slash: `https://<key>.<STOREFRONT_BASE_DOMAIN>`, the OTA's storefront sub-domain (ADR-0018), and the OTA's primary custom domain once custom domains are resolved (OBE-080). The OTA admin links a published content page as `<storefrontUrl>/p/<slug>`. Answered by console.auth.signIn, refresh and me (lead decision (2f) of 2026-10-30, third batch, FIX-W36-OTA); optional, so an answer an `Idempotency-Key` replays from before the field validates (it has none).
+             */
+            readonly storefrontUrl?: string;
             /** @description Amadeus connection of this environment (platform.supplier_connections; credentials are never returned). */
             supplier: {
                 /** @description An active Amadeus connection exists (otherwise supplier calls fail with SUPPLIER_NOT_CONFIGURED). */
@@ -10836,8 +10845,13 @@ export interface components {
                 /** @description Default queuingOfficeId sent at create-order. */
                 queuingOfficeId: string | null;
             };
+            /**
+             * @description The platform's billing banner for this OTA (`platform.tenants.billing_notice`, kept by the platform's billing sync, ADR-0013): `past_due` while a subscription payment has failed or the subscription is paused, `trial_ending` before a trial ends; `null` when there is none. The OTA admin shows it as a banner with a link to the portal's billing page. It never blocks the console: when a subscription ends (`canceled`, `unpaid`), the platform suspends the OTA instead (`403 TENANT_SUSPENDED`). Read from the cached tenant row, which a `tenant` invalidation refreshes; the same in both environments. Optional (added in M5, OBE-076): an answer without it means no banner.
+             * @enum {string|null}
+             */
+            billingNotice?: "past_due" | "trial_ending" | null;
         };
-        /** @description Result of console sign-in and refresh: the tokens of the staff session (`Session.subject.type = staff`, `roles` = the membership's role), the staff member, the OTA in the environment of the request, the role's permissions and the environments the staff member may open. */
+        /** @description Result of console sign-in and refresh: the tokens of the staff session (`Session.subject.type = staff`, `roles` = the membership's role), the staff member, the OTA in the environment of the request (with the platform's billing banner in `tenant.billingNotice`), the role's permissions and the environments the staff member may open. */
         ConsoleStaffSession: {
             /** @description Tokens. `accessToken` is a 15-minute staff JWT with the claims `typ` (`staff`), `sub` (`stf_…`), `tid`, `roles` and `sid` (the session, `asn_…`), and no environment claim; `refreshToken` is opaque and rotating; `refreshTokenExpiresAt` is the session's absolute end, 12 hours after sign-in, which refreshing never moves (OADR-0011 point 2). Store both in httpOnly cookies; never expose them to client components. */
             session: components["schemas"]["Session"];
@@ -11040,6 +11054,8 @@ export interface components {
             recentStaffActions: components["schemas"]["ConsoleStaffAction"][];
             /** @description What the caller may do now. */
             consoleActions: components["schemas"]["ConsoleBookingActions"];
+            /** @description What console.bookings.cancel does now (a DELETE that releases the seats or voids the tickets, or a request to the airline without a DELETE: lead decision (2c) of 2026-10-30, third batch), decided by the API's own clock: the cancellation mode of the booking's stored tickets and their issue times in the OTA's time zone (`storefront_settings.time_zone`), by the rule of bookings.quoteCancellation's `mode` and in its zone, without an Amadeus call. `null` when console.bookings.cancel refuses the booking (`consoleActions.canCancel` false for a reason other than `no_permission`: no Amadeus order, cancelled, a cancellation `pending`, a segment `flown`). Read-only and optional: an answer an `Idempotency-Key` replays from before the field existed has none (lead decision (2a) of 2026-10-30, FIX-W35-OTA). */
+            cancellationMode?: components["schemas"]["ConsoleCancellationMode"] | null;
             /** @description Why the booking failed (status failed), else null. */
             failure: null | {
                 /** @description Public error code. */
@@ -11141,9 +11157,9 @@ export interface components {
             brand?: components["schemas"]["AmadeusCreditCardBrand"] | null;
             /** @description Last four digits. */
             last4?: string | null;
-            /** @description Card holder. */
+            /** @description Card holder. Always `null` for bookings written since 2026-10-24: stored copies of a card keep its brand and last 4 only (FIX-W29-SECURITY, OADR-0004), and the copies of older bookings are scrubbed by the one-off `tenants:scrub-card-copies` command (FIX-W30-OTA). */
             holder?: string | null;
-            /** @description YYYY-MM. */
+            /** @description YYYY-MM. Always `null` for bookings written since 2026-10-24, as `holder` (FIX-W29-SECURITY, OADR-0004; older copies scrubbed by `tenants:scrub-card-copies`, FIX-W30-OTA). */
             expiryDate?: string | null;
             /** @description Other method (ACCOUNT, CHECK, CASH, NONREFUNDABLE, PYTON). */
             method?: components["schemas"]["AmadeusOtherPaymentMethod"] | null;
@@ -11293,7 +11309,7 @@ export interface components {
             staffId: string | null;
             /** @description PII/card data stripped. */
             redacted: boolean;
-            /** @description Bodies truncated to 256 KB. */
+            /** @description Bodies truncated to 64 KB. */
             truncated: boolean;
             /**
              * Format: date-time
@@ -11315,7 +11331,7 @@ export interface components {
             canIssue: boolean;
             /** @description console.bookings.patch. */
             canPatch: boolean;
-            /** @description console.bookings.cancel. */
+            /** @description console.bookings.cancel (`bookings:cancel`, an Amadeus order, not cancelled, no cancellation undecided nor another cancellation whose Flight Order Management DELETE is in flight: reason `pending`, and no segment departed: reason `flown`). console.bookings.cancel refuses on the same rule. */
             canCancel: boolean;
             /** @description console.bookings.resync. */
             canResync: boolean;
@@ -11327,6 +11343,19 @@ export interface components {
             reasons: {
                 [key: string]: "no_permission" | "cancelled" | "failed" | "pending" | "no_amadeus_order" | "already_ticketed" | "flown" | "deadline_passed" | "throttled";
             };
+        };
+        /** @description The cancellation mode of a booking in console scope (`ConsoleBookingDetails.cancellationMode`): what console.bookings.cancel does to the booking's tickets now, by the rule of bookings.quoteCancellation's `mode` without the customer's refusals (no self-service switch, no 3-hour window); console.bookings.cancel decides its step by the same rule (2026-10-30, lead decision (2c), third batch). The OTA admin's cancel dialog shows it instead of deciding the step itself. */
+        ConsoleCancellationMode: {
+            /**
+             * @description `release` no ticket holds a seat (none stored, or every stored ticket `VOID` or `REFUNDED`, and the ticketing state does not say `issued` or `partially_issued`): Amadeus cancels the order and releases the seats; `void` every ticket that holds a seat was issued today in the OTA's time zone: Amadeus voids them until `voidDeadlineAt`; `request_only` anything else (a ticket of an earlier day or of an unknown issue time, or a ticketed state without stored tickets): console.bookings.cancel sends no DELETE and records a request to the airline, which handles the cancellation.
+             * @enum {string}
+             */
+            mode: "release" | "void" | "request_only";
+            /**
+             * Format: date-time
+             * @description In `void` mode the next midnight in the OTA's time zone (`storefront_settings.time_zone`, UTC when the runtime does not know it), when the void window closes; else null.
+             */
+            voidDeadlineAt: string | null;
         };
         /** @description `error.details` of `504 SUPPLIER_TIMEOUT` from console.bookings.create: Amadeus did not answer Flight Create Orders in time, so the order may exist. The `pending` booking that was kept is identified here — open it (console.bookings.get) and never book again with a new Idempotency-Key. Same-key retries replay these details (`replayed: true`) until the reconciliation job decides. */
         ConsoleBookingTimeoutDetails: {
@@ -12367,7 +12396,7 @@ export interface components {
             priority: number;
             /** @description Adds to the base rule instead of competing with it. */
             stackable: boolean;
-            /** @description The seeded catch-all rule; it cannot be deleted and its scope stays `{}`. */
+            /** @description The seeded catch-all rule; it cannot be deleted, its scope stays `{}`, it stays active with no validity window and its priority stays 1000. */
             isDefault: boolean;
             /** @description Enabled flag. */
             isActive: boolean;
@@ -12765,12 +12794,14 @@ export interface components {
             /** @description Lifetime of an open checkout. */
             checkoutTtlMinutes: number;
         };
-        /** @description The airline-card payment method per environment (`airline_card_enabled_test`, `_live`; ADR-0011, OADR-0004). It also needs the global `AIRLINE_CARD_ENABLED` switch; `enabledLive` can be set to true only after the M6 security review turns the switch on. */
+        /** @description The airline-card payment method per environment (`airline_card_enabled_test`, `_live`; ADR-0011, OADR-0004). It also needs the global `AIRLINE_CARD_ENABLED` switch; `enabledLive` can be turned on only while that switch is on, after the M6 security review (a stored `true` is kept when the switch goes off: lead decision (2e) of 2026-10-30). */
         StorefrontSettingsAirlineCard: {
             /** @description Offered in the test environment. */
             enabledTest: boolean;
             /** @description Offered in the live environment. */
             enabledLive: boolean;
+            /** @description Read-only: the API's global `AIRLINE_CARD_ENABLED` switch, without which `enabledLive` cannot be turned on. console.settings.storefront.get and update always answer it; a value sent in an update is ignored (lead decision (2d) of 2026-10-30, FIX-W35-OTA). */
+            readonly liveAvailable?: boolean;
         };
         /**
          * @description What a legal link is for.
@@ -12944,7 +12975,7 @@ export interface components {
          * @example baggage-faq
          */
         StorefrontPageSlug: string;
-        /** @description A page body in the Markdown subset of OADR-0012 point 5, at most 50 000 characters. Blocks are separated by blank lines: headings `##`, `###` and `####` (levels 2 to 4; the page title is the level 1), paragraphs (the lines of one paragraph are joined with a space), bullet lists (`- ` or `* `) and numbered lists (`1. `; the first number is the list's start), one level deep, and an image alone on its line, `![alt text](ast_…)` with an alt text of at most 300 characters, which names a `page_image` asset of the OTA. Inside headings, paragraphs and list items: `**bold**` or `__bold__`, `*italic*` or `_italic_`, and links `[text](href)` to an `https:`, `mailto:` or `tel:` URL of at most 2048 characters or a relative `/p/<slug>`; a backslash escapes a Markdown character. Anything else is refused with `422 UNPROCESSABLE` (`details.reason = "markdown_not_allowed"` and the 1-based `details.line`): HTML, tables, code, block quotes, rules, headings of level 1, 5 or 6, nested lists, images inside text, reference links, a longer alt text or URL, and other URLs (`http:`, `javascript:`, `data:`, other relative paths). storefront.getPage serves the body parsed into blocks (StorefrontPageBlock), whose `alt` and `href` keep these limits. */
+        /** @description A page body in the Markdown subset of OADR-0012 point 5, at most 50 000 characters. Blocks are separated by blank lines: headings `##`, `###` and `####` (levels 2 to 4; the page title is the level 1), paragraphs (the lines of one paragraph are joined with a space), bullet lists (`- ` or `* `) and numbered lists (`1. `; the first number is the list's start), one level deep, and an image alone on its line, `![alt text](ast_…)` with an alt text of at most 300 characters, which names a `page_image` asset of the OTA. Inside headings, paragraphs and list items: `**bold**` or `__bold__`, `*italic*` or `_italic_`, and links `[text](href)` to an `https:`, `mailto:` or `tel:` URL of at most 2048 characters or a relative `/p/<slug>`; a backslash escapes a Markdown character. Anything else is refused with `422 UNPROCESSABLE` (`details.reason = "markdown_not_allowed"` and the 1-based `details.line` the refused construct starts on): HTML, tables, code, block quotes, rules, headings of level 1, 5 or 6, nested lists, images inside text, reference links, a longer alt text or URL, and other URLs (`http:`, `javascript:`, `data:`, other relative paths); and, stricter than CommonMark, `+ ` bullets and `1) ` numbers (write `- ` or `1. `), setext headings (`===` or `---` under a line of text), empty headings and empty list items, link titles (`[text](href "title")`), links without text, control characters, and bold, italic and links nested more than 8 deep. An unmatched `*`, `_` or bracket stays text, and an entity such as `&amp;` is kept as written (never decoded). storefront.getPage serves the body parsed into blocks (StorefrontPageBlock), whose `alt` and `href` keep these limits. */
         StorefrontPageMarkdown: string;
         /** @description A content page of the hosted storefront as staff edit it: a row of `storefront_pages`, one per slug and locale, shared by the test and live environments (OADR-0012 point 5). Once published, storefront.listPages lists it and storefront.getPage serves it as blocks. */
         StorefrontPage: {
@@ -12985,7 +13016,7 @@ export interface components {
             slug: components["schemas"]["StorefrontPageSlug"];
             locale: components["schemas"]["LocaleCode"];
             kind?: components["schemas"]["StorefrontPageKind"];
-            /** @description Page title. */
+            /** @description Page title, stored trimmed; blank once trimmed, or with a control character, it answers `400 VALIDATION_FAILED` at `/title`. */
             title: string;
             bodyMarkdown?: components["schemas"]["StorefrontPageMarkdown"];
             /** @description Publish the page at once (default false). */
@@ -12998,7 +13029,7 @@ export interface components {
         /** @description Body of console.settings.pages.update: any subset of the page's writable fields; fields not sent keep their value. `slug` and `locale` are fixed at creation (the page's address `/p/<slug>` and the target of legal links). */
         StorefrontPageUpdate: {
             kind?: components["schemas"]["StorefrontPageKind"];
-            /** @description Page title. */
+            /** @description Page title, stored trimmed; blank once trimmed, or with a control character, it answers `400 VALIDATION_FAILED` at `/title`. */
             title?: string;
             bodyMarkdown?: components["schemas"]["StorefrontPageMarkdown"];
             /** @description Publish the page (true) or take it off the storefront as a draft (false). */
@@ -13220,7 +13251,7 @@ export interface components {
             /** @description What the variable holds. */
             description: string;
         };
-        /** @description The effective template of a key, channel and locale: the OTA's row of `notification_templates` (`customised: true`) or the code default (`customised: false`). Templates are Handlebars, compiled in strict mode with the key's variable allow-list (OADR-0013 point 3). */
+        /** @description The effective template of a key, channel and locale: the OTA's row of `notification_templates` of exactly that locale, else the active row of its language that e-mails in the locale use (`inheritedFrom`), else the code default (`customised: false`). Templates are Handlebars, compiled in strict mode with the key's variable allow-list (OADR-0013 point 3). */
         NotificationTemplate: {
             key: components["schemas"]["NotificationTemplateKey"];
             channel: components["schemas"]["NotificationChannel"];
@@ -13233,15 +13264,17 @@ export interface components {
             bodyText: string;
             /** @description The variables templates of this key may use (the allow-list), with descriptions. */
             variables: components["schemas"]["NotificationTemplateVariable"][];
-            /** @description The OTA has its own row; false for the code default. */
+            /** @description The template shown is the OTA's own edit: false for the code default and for a row provisioning seeded from it, until the OTA edits that row (such a row still has its `version` and `ETag`: a put needs `If-Match`). */
             customised: boolean;
-            /** @description When false the OTA's row is kept but the default is sent. */
+            /** @description The locale of the row shown when the asked locale has no row of its own and e-mails in it use the active row of its language (`en` for `en-GB`); `version` and `updatedAt` are then null, and a put creates the locale's own row. Null for the locale's own row and for the code default. */
+            inheritedFrom: components["schemas"]["LocaleCode"] | null;
+            /** @description When false the OTA's row is kept, and e-mails use the active row of the locale's language, else the default. */
             isActive: boolean;
-            /** @description Optimistic-locking counter of the OTA's row (`ETag` `"<version>"`); null for the code default. */
+            /** @description Optimistic-locking counter of the locale's own row (`ETag` `"<version>"`); null for the code default and for an inherited template. */
             version: number | null;
             /**
              * Format: date-time
-             * @description Last change of the OTA's row; null for the code default.
+             * @description Last change of the locale's own row; null for the code default and for an inherited template.
              */
             updatedAt: string | null;
         };
@@ -13460,7 +13493,7 @@ export interface components {
                 /** @description Redis (`PING`). */
                 redis: components["schemas"]["HealthDependencyStatus"];
             };
-            /** @description The worker's health port only, from OBE-025 (M2): every OTA queue by name (`ota-payments`, `ota-stripe-events`, …). The API's readiness has no `queues`. */
+            /** @description The worker's health port only, from OBE-025 (M2): every OTA queue by name (`ota-payments`, `ota-stripe-events`, …). The API's readiness has no `queues`; the worker's has none while the queues are unknown (Redis did not answer them within 1 second). */
             queues?: {
                 [key: string]: components["schemas"]["HealthQueue"];
             };
@@ -15679,7 +15712,7 @@ export interface components {
                 "application/json": components["schemas"]["ConsoleBooking"];
             };
         };
-        /** @description The settings change conflicts with the current state. Possible codes: CONFLICT (`details.reason`, such as `default_rule`: the seeded default markup rule cannot be deleted or narrowed), IDEMPOTENCY_KEY_REUSED. */
+        /** @description The settings change conflicts with the current state. Possible codes: CONFLICT (`details.reason`, such as `default_rule`: the seeded default markup rule always matches, so it cannot be deleted, narrowed, switched off, given a validity window or moved from priority 1000), IDEMPOTENCY_KEY_REUSED. */
         SettingsConflict: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -15699,7 +15732,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description The caller may not change the storefront settings this way. Possible codes: FORBIDDEN (the role lacks `settings:write`, details.requiredPermission), SCOPE_NOT_ALLOWED, TENANT_SUSPENDED, STAFF_MEMBERSHIP_INACTIVE, ENVIRONMENT_NOT_ALLOWED, FEATURE_DISABLED (`details.feature = "airlineCard"`: the airline card cannot be enabled in live while the global switch is off). */
+        /** @description The caller may not change the storefront settings this way. Possible codes: FORBIDDEN (the role lacks `settings:write`, details.requiredPermission), SCOPE_NOT_ALLOWED, TENANT_SUSPENDED, STAFF_MEMBERSHIP_INACTIVE, ENVIRONMENT_NOT_ALLOWED, FEATURE_DISABLED (`details.feature = "airlineCard"`: the airline card cannot be turned on in live, from a stored `false` to `true`, while the global switch is off). */
         StorefrontSettingsForbidden: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -15729,7 +15762,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description The asset change conflicts with the OTA's settings or pages. Possible codes: CONFLICT (`details.reason = "asset_in_use"`: the storefront settings reference the asset, `details.settingsPaths`, or a page shows it, `details.pageIds`), IDEMPOTENCY_KEY_REUSED. */
+        /** @description The asset change conflicts with the OTA's settings, pages or assets. Possible codes: CONFLICT (delete: `details.reason = "asset_in_use"`, the storefront settings reference the asset, `details.settingsPaths`, or a page shows it, `details.pageIds`; upload: `details.reason = "asset_exists"`, the same file is already the asset `details.assetId` of the kind `details.kind`), IDEMPOTENCY_KEY_REUSED. */
         StorefrontAssetConflict: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -16521,6 +16554,8 @@ export interface operations {
                     "Content-Security-Policy"?: string;
                     /** @description `inline`. */
                     "Content-Disposition"?: string;
+                    /** @description `cross-origin`: the image may be shown by any site. */
+                    "Cross-Origin-Resource-Policy"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -16532,9 +16567,11 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     signUp: {
@@ -25545,7 +25582,7 @@ export interface operations {
                      *         "amadeusApi": "QueueList",
                      *         "amadeusOperationId": "GET/office/queues/{queue-id}",
                      *         "httpMethod": "GET",
-                     *         "path": "/office/queues/50?max=5&category=0&officeId=NCE1A0950",
+                     *         "path": "/v1/office/queues/50?max=5&category=0&officeId=NCE1A0950",
                      *         "httpStatus": 200,
                      *         "durationMs": 980,
                      *         "correlationId": "0005K2DL5V4YZT",

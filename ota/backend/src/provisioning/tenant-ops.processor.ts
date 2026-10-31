@@ -1,15 +1,19 @@
-// The consumer of `ota-tenant-ops` (OBE-005, OBE-006; OADR-0007 items 1, 5 and 6, PADR-0001 item 4, tenant
-// provisioning flow §1–§3 and §5). It runs in the worker only (WorkerModule imports ProvisioningModule; the API never
-// does), with the queue's concurrency of 2 and the retention of ADR-0009. Every job is validated first
-// (`validateTenantOpsJob`, OBE-002): a name that is not a message of the queue, or a payload outside its contract,
-// fails at once as `UnrecoverableError`. Then it dispatches on the name:
+// The consumer of `ota-tenant-ops` (OBE-005, OBE-006, OBE-074; OADR-0007 items 1, 5, 6 and 8, PADR-0001 item 4,
+// PADR-0014 items 3, 4 and 7, tenant provisioning flow §1–§3 and §5). It runs in the worker only (WorkerModule
+// imports ProvisioningModule; the API never does), with the queue's concurrency of 2 and the retention of ADR-0009.
+// Every job is validated first (`validateTenantOpsJob`, OBE-002): a name that is not a message of the queue, or a
+// payload outside its contract, fails at once as `UnrecoverableError`. Then it dispatches on the name:
 //
 // - `tenant.provision`: `ProvisioningService.provisionTenant`, then `tenant.provisioned` or
 //   `tenant.provision_failed`;
 // - `tenant.migrate`: `ProvisioningService.migrateTenant(tenantId, targetVersion)`, then `tenant.migrated` or
 //   `tenant.migration_failed`;
-// - `tenant.suspend`, `tenant.resume`: not handled by this release (M4–M5); they fail as unrecoverable, and the
-//   platform's reconciler counts the job as failed (PADR-0001 item 7).
+// - `tenant.suspend`: `HousekeepingService.suspend` (the staff cut-off, the expiry of open checkouts and their voids),
+//   then `tenant.suspended`; `tenant.resume`: `HousekeepingService.resume` (the cut-off removed), then
+//   `tenant.resumed`. Both are answered also when the message no longer matches the tenant's status (a no-op,
+//   PADR-0014 item 7). A failure of the housekeeping (PostgreSQL, Redis) is thrown back to BullMQ, which tries the
+//   message again (the platform dispatches with `attempts: 3`); there is no failure event for these messages, so a
+//   job that fails for good is the platform reconciler's (PADR-0001 item 7).
 //
 // Results are published after the transaction ended. A failure is reported once per dispatch attempt
 // (failure-classifier.ts): a non-retryable one at once, and the job then fails with `UnrecoverableError`, so BullMQ
@@ -23,23 +27,26 @@ import type {
   TenantMigrateJob,
   TenantOpsJob,
   TenantProvisionJob,
+  TenantResumeJob,
+  TenantSuspendJob,
 } from "@velexis/api-types/jobs";
 import { UnrecoverableError, type Job } from "bullmq";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { validateTenantOpsJob } from "../common/queues/job-validation";
 import { OTA_QUEUE, otaWorkerOptions } from "../common/queues/queue-names";
+import { HousekeepingService, type ResumeOutcome, type SuspendOutcome } from "./housekeeping.service";
 import { ProvisioningService } from "./provisioning.service";
 import { dispatchAttempt, TenantEventsProducer, type TenantEventSource } from "./tenant-events.producer";
 
-/** What a completed job returns (stored by BullMQ with the job): names and versions only. */
-export interface TenantOpsJobResult {
-  readonly event: "tenant.provisioned" | "tenant.migrated";
-  readonly schemaName: string;
-  readonly schemaVersion: string;
-}
-
-/** The message names of `ota-tenant-ops` this release does not handle yet. */
-export type UnhandledTenantOpsJobName = Exclude<TenantOpsJob["name"], "tenant.provision" | "tenant.migrate">;
+/** What a completed job returns (stored by BullMQ with the job): names, versions and counts only. */
+export type TenantOpsJobResult =
+  | {
+      readonly event: "tenant.provisioned" | "tenant.migrated";
+      readonly schemaName: string;
+      readonly schemaVersion: string;
+    }
+  | { readonly event: "tenant.suspended"; readonly outcome: SuspendOutcome }
+  | { readonly event: "tenant.resumed"; readonly outcome: ResumeOutcome };
 
 /** The parts of a BullMQ job that say whether BullMQ tries it again after a failure. */
 export type JobTries = Pick<Job, "attemptsMade"> & { readonly opts: Pick<Job["opts"], "attempts"> };
@@ -63,6 +70,16 @@ function retryError(error: TenantJobError, cause: unknown): Error {
   return cause instanceof Error ? cause : new Error(`${error.code}: ${error.message}`);
 }
 
+/** The code of a thrown error for a log line: its `code` (a SQLSTATE, an `AppError` code) or its name; never more. */
+function errorCodeOf(error: unknown): string {
+  const code: unknown =
+    typeof error === "object" && error !== null ? (error as { code?: unknown }).code : undefined;
+  if (typeof code === "string" && code.length <= 64) {
+    return code;
+  }
+  return error instanceof Error ? error.name : "UNKNOWN";
+}
+
 @Processor(OTA_QUEUE.tenantOps, otaWorkerOptions(OTA_QUEUE.tenantOps))
 export class TenantOpsProcessor extends WorkerHost {
   /** The message of the last worker error logged, so a Redis outage is logged once, not on every reconnection. */
@@ -70,6 +87,7 @@ export class TenantOpsProcessor extends WorkerHost {
 
   constructor(
     private readonly provisioning: ProvisioningService,
+    private readonly housekeeping: HousekeepingService,
     private readonly events: TenantEventsProducer,
     @InjectPinoLogger(TenantOpsProcessor.name) private readonly logger: PinoLogger,
   ) {
@@ -84,8 +102,9 @@ export class TenantOpsProcessor extends WorkerHost {
       case "tenant.migrate":
         return this.migrate(job, message);
       case "tenant.suspend":
+        return this.suspend(job, message);
       case "tenant.resume":
-        throw this.unhandled(job, message.name);
+        return this.resume(job, message);
     }
   }
 
@@ -148,6 +167,44 @@ export class TenantOpsProcessor extends WorkerHost {
     );
   }
 
+  /** `tenant.suspend`: the housekeeping, then `tenant.suspended`, also for a no-op. */
+  private async suspend(job: Job, message: TenantSuspendJob): Promise<TenantOpsJobResult> {
+    const source = this.source(job, message);
+    const context = { ...this.context(job, message), reason: message.payload.reason };
+    const outcome = await this.housekeep(context, "tenant_ops.suspend_failed", () =>
+      this.housekeeping.suspend(this.request(job, message)),
+    );
+    await this.events.suspended(source);
+    this.logger.info({ ...context, ...outcome }, "tenant_ops.suspended");
+    return { event: "tenant.suspended", outcome };
+  }
+
+  /** `tenant.resume`: the housekeeping, then `tenant.resumed`, also for a no-op. */
+  private async resume(job: Job, message: TenantResumeJob): Promise<TenantOpsJobResult> {
+    const source = this.source(job, message);
+    const context = this.context(job, message);
+    const outcome = await this.housekeep(context, "tenant_ops.resume_failed", () =>
+      this.housekeeping.resume(this.request(job, message)),
+    );
+    await this.events.resumed(source);
+    this.logger.info({ ...context, ...outcome }, "tenant_ops.resumed");
+    return { event: "tenant.resumed", outcome };
+  }
+
+  /** Runs a housekeeping step; a failure is logged with its code (never the error) and thrown back to BullMQ. */
+  private async housekeep<T>(
+    context: Record<string, unknown>,
+    logMessage: string,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await run();
+    } catch (error) {
+      this.logger.warn({ ...context, code: errorCodeOf(error) }, logMessage);
+      throw error;
+    }
+  }
+
   /**
    * Reports a failed run, or hands it back to BullMQ: a retryable failure with tries left is thrown as it is, for
    * BullMQ to retry; otherwise the failure event is published, and the job fails with the run's error (retryable, on
@@ -184,8 +241,8 @@ export class TenantOpsProcessor extends WorkerHost {
     return { queue: job.queueName, jobId: job.id, tenantId: message.tenantId, requestId: message.requestId };
   }
 
-  private unhandled(job: Job, name: UnhandledTenantOpsJobName): UnrecoverableError {
-    this.logger.error({ queue: job.queueName, jobId: job.id, jobName: name }, "tenant_ops.unhandled");
-    return new UnrecoverableError(`${name} is not handled by this release of the OTA worker`);
+  /** The housekeeping's request: the tenant, and the BullMQ job id (else the message's job id) as request id. */
+  private request(job: Job, message: TenantOpsJob): { tenantId: string; requestId: string } {
+    return { tenantId: message.tenantId, requestId: job.id ?? message.jobId };
   }
 }

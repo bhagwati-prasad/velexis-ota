@@ -108,7 +108,8 @@ describe("createTestDatabase", () => {
     // Every set was applied by the real runner: its ledger records the baseline (and the repeatable OTA grants), the
     // platform set the MVP deltas of its migration 0002 (PBE-002) and the Stripe Customer attempts of 0003
     // (FIX-W29-PLATFORM), and the tenant schemas those of theirs (OBE-008) and the booking sync's claim column of 0003
-    // (FIX-W27-SYNC) and the card fee's lines of 0004 (FIX-W28-CANCEL).
+    // (FIX-W27-SYNC), the card fee's lines of 0004 (FIX-W28-CANCEL) and the cancellation's claim column and calling-code
+    // CHECKs of 0005 (FIX-W31-OTA).
     const ledgers: Record<string, string[]> = {
       platform: [
         "0001_baseline",
@@ -122,12 +123,14 @@ describe("createTestDatabase", () => {
         "0002_add_mvp_tenant_deltas",
         "0003_add_booking_sync_claim",
         "0004_add_payment_card_fee_lines",
+        "0005_add_cancellation_claim_tighten_calling_codes",
       ],
       tenant_beta: [
         "0001_baseline",
         "0002_add_mvp_tenant_deltas",
         "0003_add_booking_sync_claim",
         "0004_add_payment_card_fee_lines",
+        "0005_add_cancellation_claim_tighten_calling_codes",
       ],
     };
     for (const [schema, ids] of Object.entries(ledgers)) {

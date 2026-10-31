@@ -48,10 +48,11 @@ const DML = ["SELECT", "INSERT", "UPDATE", "DELETE"];
 /** SQLSTATE admin_shutdown: the provisioning connection was terminated. */
 const ADMIN_SHUTDOWN = "57P01";
 /**
- * The last file of migrations/tenant: the version a new schema reaches (0004_add_payment_card_fee_lines,
- * FIX-W28-CANCEL, after 0003_add_booking_sync_claim of FIX-W27-SYNC and 0002_add_mvp_tenant_deltas of OBE-008).
+ * The last file of migrations/tenant: the version a new schema reaches (0005_add_cancellation_claim_tighten_calling_codes,
+ * FIX-W31-OTA, after 0004_add_payment_card_fee_lines of FIX-W28-CANCEL, 0003_add_booking_sync_claim of FIX-W27-SYNC and
+ * 0002_add_mvp_tenant_deltas of OBE-008).
  */
-const SCHEMA_VERSION = "0004_add_payment_card_fee_lines";
+const SCHEMA_VERSION = "0005_add_cancellation_claim_tighten_calling_codes";
 /** The tables of a complete tenant schema: the 42 of the baseline and the 2 that migration 0002 adds (OBE-008). */
 const TENANT_TABLE_COUNT = 44;
 
@@ -121,6 +122,7 @@ interface TenantRow {
   readonly status?: string;
   readonly default_currency?: string;
   readonly default_locale?: string;
+  readonly time_zone?: string;
 }
 
 /** Inserts a tenant as the platform does (velexis_migrator) and returns its id; its schema is `tenant_<key>`. */
@@ -314,6 +316,7 @@ describe("tenant.provision on ota-tenant-ops", () => {
       name: "Acme Travel",
       default_currency: "GBP",
       default_locale: "en-GB",
+      time_zone: "Europe/London",
     });
     const message = provisionMessage(tenantId);
 
@@ -354,7 +357,8 @@ describe("tenant.provision on ota-tenant-ops", () => {
       ).rows,
     ).toEqual([{ usage: true, platform: false }]);
 
-    // Seeds: the settings row from the tenant's name, currency and locale, and the default markup rule.
+    // Seeds: the settings row from the tenant's name, currency, locale and time zone (the platform's, FIX-W35-OTA),
+    // and the default markup rule.
     const seeds = await seedsOf("tenant_acme");
     expect(seeds.settings).toEqual([
       expect.objectContaining({
@@ -362,6 +366,7 @@ describe("tenant.provision on ota-tenant-ops", () => {
         brand_name: "Acme Travel",
         default_currency: "GBP",
         default_locale: "en-GB",
+        time_zone: "Europe/London",
         ticketing_policy: "issue_after_payment",
         payment_timing: "authorize_before_booking",
       }),
@@ -552,8 +557,8 @@ describe("tenant.provision on ota-tenant-ops", () => {
     const message = provisionMessage(tenantId);
     const seen: Array<{ settings: string | null; seeded: boolean }> = [];
     const seedDefaults = service.seedDefaults.bind(service);
-    vi.spyOn(service, "seedDefaults").mockImplementationOnce(async (trx, tenant) => {
-      const seeded = await seedDefaults(trx, tenant);
+    vi.spyOn(service, "seedDefaults").mockImplementationOnce(async (trx, tenant, timeZone) => {
+      const seeded = await seedDefaults(trx, tenant, timeZone);
       const { rows } = await sql<{ settings: string | null }>`
         SELECT to_regclass('storefront_settings')::text AS settings`.execute(trx);
       seen.push({ settings: rows[0]?.settings ?? null, seeded: seeded.storefrontSettings });
@@ -611,9 +616,11 @@ describe("tenant.provision on ota-tenant-ops", () => {
     expect(await catalogHash("tenant_foxtrot")).toBe(await catalogHash("tenant_golf"));
   });
 
-  it("fails a message this release does not handle as unrecoverable, without an event", async () => {
+  it("fails a message outside the queue's contract as unrecoverable, without an event", async () => {
     const tenantId = await insertTenant({ key: "hotel", name: "Hotel Hops", status: "active" });
-    const message = { ...provisionMessage(tenantId), name: "tenant.resume" as const };
+    // Every message of the contract is handled since OBE-074 (tenant.suspend and tenant.resume:
+    // suspend-resume.int.test.ts); a name the contract does not have is refused at once.
+    const message = { ...provisionMessage(tenantId), name: "tenant.delete" as const };
 
     const outcome = await dispatch(message, 1);
 

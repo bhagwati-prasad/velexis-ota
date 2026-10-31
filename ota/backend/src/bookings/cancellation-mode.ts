@@ -5,8 +5,9 @@
 // Modes, the first that applies:
 //
 //   not_allowed    the booking's `canCancel` is false (allowed-actions.ts, the same rule the storefront shows):
-//                  `cancelled`, `flown` (a segment flown or departed), `too_close_to_departure` (3 hours or less
-//                  before the first remaining departure), `disabled_by_ota` (self-service cancellation off in the
+//                  `cancelled`, `flown` (a segment flown or departed, even while a later flight has not landed) and
+//                  `too_close_to_departure` (3 hours or less before the first departure), both from the one departure
+//                  rule `cancelDepartureReasonOf` (FIX-W30-OTA), `disabled_by_ota` (self-service cancellation off in the
 //                  storefront settings), and `pending` for a booking that is not live (`pending`, `failed`) or has no
 //                  Amadeus order yet
 //   release        nothing is ticketed: no ticket that still holds a seat (every stored ticket `VOID` or `REFUNDED`,
@@ -17,6 +18,11 @@
 //   request_only   anything else: a ticket issued before today (outside the void window), a ticket whose issue time
 //                  is unknown, or a ticketing state `issued`/`partially_issued` without stored tickets. The MVP has no
 //                  automatic airline refund: the request goes to the staff
+//
+// The last three rows read the stored tickets alone (`supplierModeOf`, no Amadeus call): console.bookings.get answers
+// them as `cancellationMode` for a booking console.bookings.cancel accepts (console-bookings.mapper.ts
+// `consoleCancellationModeOf`), so the OTA admin's cancel dialog and the API decide a same-day void by one clock, the
+// OTA's `storefront_settings.time_zone` (lead decision (2a) of 2026-10-30, FIX-W35-OTA).
 //
 // Refund estimate (release and void): what the money step gives back of the booking's payment.
 //
@@ -36,6 +42,7 @@
 // `request_only` and `not_allowed` estimate 0: the staff decide the refund of a request (flow §3 step 6). Every amount
 // has the currency's minor units; the airline penalty of release and void is 0.
 import type { components } from "@velexis/api-types";
+import { knownTimeZoneOr } from "../common/time-zones";
 import { Money, type MoneyValue } from "../pricing/pricing.types";
 import { distribute } from "../shopping/offers.mapper";
 import { allowedActionsOf, type ActionSegment } from "./allowed-actions";
@@ -123,11 +130,40 @@ export function cancellationModeOf(input: CancellationModeInput): CancellationMo
   if (input.amadeusOrderId === null) {
     return { mode: "not_allowed", notAllowedReason: "pending", voidDeadlineAt: null };
   }
+  const supplier = supplierModeOf(input);
+  return { mode: supplier.mode, notAllowedReason: null, voidDeadlineAt: supplier.voidDeadlineAt };
+}
+
+/** The modes of a booking that may be cancelled: what Flight Order Management DELETE is expected to do. */
+export type SupplierMode = Exclude<CancellationMode, "not_allowed">;
+
+/** What `supplierModeOf` reads of a booking. */
+export interface SupplierModeInput {
+  readonly ticketingStatus: string;
+  readonly tickets: readonly ModeTicket[];
+  /** `storefront_settings.time_zone` (IANA); UTC when it is not one the runtime knows. */
+  readonly timeZone: string;
+  readonly now: Date;
+}
+
+/** The supplier mode and the end of the void window. */
+export interface SupplierModeResult {
+  readonly mode: SupplierMode;
+  /** In `void` mode the next midnight in the OTA's time zone, the end of the void window; else `null`. */
+  readonly voidDeadlineAt: Date | null;
+}
+
+/**
+ * The mode of a cancellation of a booking that may be cancelled, from its stored tickets alone (the `release`, `void`
+ * and `request_only` rows of the file header; no Amadeus call, no refusal): cancellationModeOf's after its refusals, and
+ * console.bookings.get's `cancellationMode` after console.bookings.cancel's.
+ */
+export function supplierModeOf(input: SupplierModeInput): SupplierModeResult {
   const live = input.tickets.filter((ticket) => !SETTLED_TICKET_STATUSES.has(ticket.status));
   if (live.length === 0) {
     return TICKETED_STATES.has(input.ticketingStatus)
-      ? { mode: "request_only", notAllowedReason: null, voidDeadlineAt: null }
-      : { mode: "release", notAllowedReason: null, voidDeadlineAt: null };
+      ? { mode: "request_only", voidDeadlineAt: null }
+      : { mode: "release", voidDeadlineAt: null };
   }
   const day = localDayOf(input.now, input.timeZone);
   const issuedToday = live.every(
@@ -137,8 +173,8 @@ export function cancellationModeOf(input: CancellationModeInput): CancellationMo
       ticket.issuedAt.getTime() < day.endsAt.getTime(),
   );
   return issuedToday
-    ? { mode: "void", notAllowedReason: null, voidDeadlineAt: day.endsAt }
-    : { mode: "request_only", notAllowedReason: null, voidDeadlineAt: null };
+    ? { mode: "void", voidDeadlineAt: day.endsAt }
+    : { mode: "request_only", voidDeadlineAt: null };
 }
 
 // ---- The OTA's day -----------------------------------------------------------------------------------------------
@@ -149,16 +185,6 @@ export interface LocalDay {
   readonly date: string;
   readonly startsAt: Date;
   readonly endsAt: Date;
-}
-
-/** The zone, or UTC when the runtime does not know it. */
-function knownZone(timeZone: string): string {
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone });
-    return timeZone;
-  } catch {
-    return "UTC";
-  }
 }
 
 /** The wall clock of `at` in `timeZone` as the epoch milliseconds of the same wall clock in UTC (whole seconds). */
@@ -194,7 +220,7 @@ function instantOfWallClock(wall: number, timeZone: string): Date {
 
 /** The day of `at` in `timeZone` (UTC when unknown), with its bounds (see LocalDay). */
 export function localDayOf(at: Date, timeZone: string): LocalDay {
-  const zone = knownZone(timeZone);
+  const zone = knownTimeZoneOr(timeZone);
   const wall = new Date(wallClockMs(at, zone));
   const midnight = Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate());
   const next = Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate() + 1);

@@ -39,6 +39,7 @@ import {
 } from "./payments.processor";
 import type { PaymentRow, PaymentsRepository } from "./payments.repository";
 import {
+  cancellationRequesterOf,
   isRefundAmount,
   REFUND_CLAIM_LEASE_MS,
   refundableAmount,
@@ -247,6 +248,37 @@ describe("the safety nets of a capture or a void after a commit (FIX-W29-OTA)", 
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("the requester of a cancellation's refunds and release (FIX-W30-OTA)", () => {
+  it("[FIX-W30-OTA AC7] is the cancellation's real requester: the customer, the staff member or the system", () => {
+    const customer = { type: "customer", id: "cus_01JBREQUESTER0000000000001" };
+    const staff = { type: "staff", id: "stf_01JBREQUESTER0000000000001" };
+    expect(cancellationRequesterOf("customer", customer)).toEqual(customer);
+    expect(cancellationRequesterOf("customer", { type: "guest", id: null })).toEqual({
+      type: "customer",
+      id: null,
+    });
+    expect(cancellationRequesterOf("staff", staff)).toEqual(staff);
+    // A console key cancels for the staff: its staff action names the key, the refund no staff member.
+    expect(
+      cancellationRequesterOf("staff", { type: "api_key", id: "key_01JBREQUESTER000000000001" }),
+    ).toEqual({
+      type: "staff",
+      id: null,
+    });
+    // An event without `cancelledBy`: the actor's type decides.
+    expect(cancellationRequesterOf(undefined, staff)).toEqual(staff);
+    expect(cancellationRequesterOf(undefined, customer)).toEqual(customer);
+    expect(cancellationRequesterOf(undefined, { type: "system", id: null })).toEqual({
+      type: "system",
+      id: null,
+    });
+    expect(cancellationRequesterOf("airline", { type: "supplier", id: null })).toEqual({
+      type: "system",
+      id: null,
+    });
   });
 });
 
@@ -743,6 +775,32 @@ describe("PaymentJobsHandler", () => {
     expect(gateway.refresh).not.toHaveBeenCalled();
   });
 
+  it("voids and refunds on the account the payment recorded, whatever the tenant's connection says now (OBE-077)", async () => {
+    const account = { accountMode: "api_keys", accountReference: "acct_1PaymentsOwnKeys00000" } as const;
+    const recorded = { metadata: { connection: account } };
+    const voiding = handler({ payment: paymentRow(recorded) });
+    voiding.gateway.void.mockRejectedValue(stripeFailure(null));
+    const refunding = handler({
+      payment: paymentRow({ ...recorded, status: "captured", amountCaptured: "452.10" }),
+      refund: refundRow(),
+    });
+    refunding.gateway.refund.mockRejectedValue(stripeFailure(400, "charge_already_refunded"));
+
+    await expect(voiding.instance.run(PAYMENT_JOB.void, PAYMENT_ID, ATTEMPT)).rejects.toThrow(
+      /could not void/,
+    );
+    expect(await refunding.instance.run(PAYMENT_JOB.refundSubmit, REFUND_ID, ATTEMPT)).toBe("failed");
+
+    expect(voiding.gateway.void).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      expect.objectContaining({ id: PAYMENT_ID, account }),
+    );
+    expect(refunding.gateway.refund).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      expect.objectContaining({ id: REFUND_ID, paymentId: PAYMENT_ID, account }),
+    );
+  });
+
   it("reads the PaymentIntent again after a 5xx Stripe kept for the key, and records the void it finds", async () => {
     const { instance, gateway, payments, alerts } = handler({ payment: paymentRow() });
     gateway.void.mockRejectedValue(stripeFailure(500));
@@ -896,6 +954,8 @@ describe("PaymentJobsHandler", () => {
         currency: "EUR",
         amount: "100.00",
         minorUnits: 2,
+        // The account the payment recorded (OBE-077): none on this row, so the Velexis account.
+        account: null,
       },
     );
     // The claim (version 1 → 2) is what fails: a row another job took over meanwhile is left alone.

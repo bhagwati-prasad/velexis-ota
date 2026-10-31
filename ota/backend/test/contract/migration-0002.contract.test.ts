@@ -193,12 +193,13 @@ describe("tenant migration 0002 and its document", () => {
 
   it("is read by the runner as the second tenant file: expand, in one transaction, with its SHA-256", async () => {
     const files = await readMigrationFiles(MIGRATIONS_DIR, "tenant");
-    // The files after it (0003 of FIX-W27-SYNC, 0004 of FIX-W28-CANCEL) come later in the set.
+    // The files after it (0003 of FIX-W27-SYNC, 0004 of FIX-W28-CANCEL, 0005 of FIX-W31-OTA) come later in the set.
     expect(files.numbered.map((file) => file.file)).toEqual([
       "0001_baseline.sql",
       MIGRATION_FILE,
       "0003_add_booking_sync_claim.sql",
       "0004_add_payment_card_fee_lines.sql",
+      "0005_add_cancellation_claim_tighten_calling_codes.sql",
     ]);
     expect(files.repeatable).toEqual([]);
     expect(files.numbered[1]).toMatchObject({

@@ -6,9 +6,9 @@
 // A record is identified by `(scope, key)` (`idempotency_keys_scope_key_uq`): the scope is
 // `<environment>:<principal>:<operationId>`, the key the client's `Idempotency-Key`. Its `status` is `processing`
 // while a request holds its lease (`locked_until`), then `completed` (a 2xx answer) or `failed` (a final error);
-// transient outcomes delete it. `locked_until` doubles as the holder's token: an outcome is written only by the
-// request whose lease is still the record's, so a request that lost its lease to a retry never overwrites the
-// retry's outcome.
+// transient outcomes delete it. `locked_until` doubles as the holder's token: an outcome is written, and the lease
+// renewed while the handler runs (`extendLease`, FIX-W30-OTA), only by the request whose lease is still the record's,
+// so a request that lost its lease to a retry never overwrites the retry's outcome nor renews its lease.
 import { Injectable } from "@nestjs/common";
 import type { Selectable, TenantDatabase, Transaction } from "@velexis/db";
 
@@ -112,6 +112,29 @@ export class IdempotencyRepository {
       .where("id", "=", id)
       .where("status", "=", "processing")
       .execute();
+  }
+
+  /**
+   * Renews the lease of the request that holds `lease` while its handler runs (FIX-W30-OTA): the record's
+   * `locked_until` becomes `next`, which is the holder's token from then on. Resolves to `false` when the record is no
+   * longer that request's (its lease ran out and a waiting request took it over, or the record is gone), and nothing is
+   * written then: a lost lease is never renewed by the request that lost it.
+   */
+  async extendLease(
+    trx: TenantTransaction,
+    id: string,
+    lease: Date,
+    next: Date,
+    now: Date,
+  ): Promise<boolean> {
+    const result = await trx
+      .updateTable("idempotency_keys")
+      .set({ locked_until: next, updated_at: now })
+      .where("id", "=", id)
+      .where("status", "=", "processing")
+      .where("locked_until", "=", lease)
+      .executeTakeFirst();
+    return result.numUpdatedRows > 0n;
   }
 
   /**

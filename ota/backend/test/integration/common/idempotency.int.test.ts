@@ -22,6 +22,7 @@ import {
   type Selectable,
   type TenantDatabase,
   type TenantDb,
+  type Transaction,
 } from "@velexis/db";
 import { AppError } from "@velexis/errors";
 import { createTestDatabase, useRedis, type TestDatabase, type TestRedis } from "@velexis/testing";
@@ -615,5 +616,78 @@ describe("hooks of later tasks", () => {
       resource_type: "booking",
       resource_id: BOOKING_ID,
     });
+  });
+});
+
+describe("the lease of a request in flight (FIX-W30-OTA)", () => {
+  it("[FIX-W30-OTA AC4] is renewed only with the holder's lease: a lease taken over or an answered record is never renewed", async () => {
+    const repository = api.app.get(IdempotencyRepository, { strict: false });
+    const inAlpha = <T>(run: (trx: Transaction<TenantDatabase>) => Promise<T>): Promise<T> =>
+      tenantTx(tenants, "tenant_alpha", run);
+    const now = new Date();
+    const lease = new Date(now.getTime() + 120_000);
+    const id = newId("idk");
+    const key = newKey();
+    // A record in flight as a claim inserts it.
+    expect(
+      await inAlpha((trx) =>
+        repository.insertProcessing(trx, {
+          id,
+          scope: "test:edge-0123456789abcdef:lookupBooking",
+          key,
+          requestMethod: "POST",
+          requestPath: "/__idempotency/lookup",
+          requestHash: "0".repeat(64),
+          lockedUntil: lease,
+          expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
+          now,
+        }),
+      ),
+    ).toBe(true);
+
+    const renewedAt = new Date(now.getTime() + 30_000);
+    const renewed = new Date(renewedAt.getTime() + 120_000);
+    expect(await inAlpha((trx) => repository.extendLease(trx, id, lease, renewed, renewedAt))).toBe(true);
+    expect(await onlyRecordOf(key)).toMatchObject({
+      status: "processing",
+      locked_until: renewed,
+      updated_at: renewedAt,
+    });
+    // The old lease is not the token any more: a request that lost it renews nothing.
+    expect(
+      await inAlpha((trx) => repository.extendLease(trx, id, lease, new Date(renewed.getTime() + 1), now)),
+    ).toBe(false);
+    // A waiting request took it over (its lease ran out): the holder's next renewal finds another lease.
+    const takenOver = new Date(renewed.getTime() + 5_000);
+    await inAlpha((trx) => repository.renewLease(trx, id, takenOver, now));
+    expect(
+      await inAlpha((trx) =>
+        repository.extendLease(trx, id, renewed, new Date(renewed.getTime() + 30_000), now),
+      ),
+    ).toBe(false);
+    expect((await onlyRecordOf(key)).locked_until).toEqual(takenOver);
+    // Once the answer is stored, nothing renews the record.
+    expect(
+      await inAlpha((trx) =>
+        repository.complete(trx, id, takenOver, {
+          status: "completed",
+          responseStatus: 200,
+          responseHeaders: null,
+          responseBody: { bookingId: BOOKING_ID },
+          responseCiphertext: null,
+          encryptionKeyId: null,
+          resourceType: null,
+          resourceId: null,
+          expiresAt: new Date(now.getTime() + 24 * 60 * 60 * 1000),
+          now,
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      await inAlpha((trx) =>
+        repository.extendLease(trx, id, takenOver, new Date(takenOver.getTime() + 1), now),
+      ),
+    ).toBe(false);
+    expect(await onlyRecordOf(key)).toMatchObject({ status: "completed", locked_until: null });
   });
 });

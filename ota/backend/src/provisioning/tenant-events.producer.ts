@@ -1,8 +1,8 @@
-// The OTA worker's reports on `platform-tenant-events` (OBE-005, OBE-006 for `tenant.migrate`; OADR-0007 item 5,
-// PADR-0001 items 4–5, platform architecture §6.1). Each event answers one `ota-tenant-ops` message: same `jobId` and
-// `tenantId`, the message's `requestId` for log correlation, and `requestedAt` from the injected Clock. It is
-// validated with `validateJob` of `@velexis/api-types/jobs` before `queue.add`, so a malformed event is a bug here
-// and never reaches the platform.
+// The OTA worker's reports on `platform-tenant-events` (OBE-005, OBE-006 for `tenant.migrate`, OBE-074 for
+// `tenant.suspend` and `tenant.resume`; OADR-0007 items 5 and 8, PADR-0001 items 4–5, platform architecture §6.1).
+// Each event answers one `ota-tenant-ops` message: same `jobId` and `tenantId`, the message's `requestId` for log
+// correlation, and `requestedAt` from the injected Clock. It is validated with `validateJob` of
+// `@velexis/api-types/jobs` before `queue.add`, so a malformed event is a bug here and never reaches the platform.
 //
 // BullMQ job id: the dispatch attempt's id `<jobId>-<attempt>` (`bullmqJobId`), the id the message itself came
 // with. The platform reads the attempt from it and ignores events of older attempts (PADR-0001 item 5), and a
@@ -25,6 +25,8 @@ import {
   type TenantProvisionedPayload,
   type TenantProvisionFailedEvent,
   type TenantProvisionFailedPayload,
+  type TenantResumedEvent,
+  type TenantSuspendedEvent,
 } from "@velexis/api-types/jobs";
 import type { JobsOptions, Queue } from "bullmq";
 import { Clock } from "../common/clock";
@@ -85,6 +87,16 @@ export class TenantEventsProducer {
     payload: TenantMigrationFailedPayload,
   ): Promise<TenantMigrationFailedEvent> {
     return this.publish({ ...this.envelope(source), name: "tenant.migration_failed", payload }, source);
+  }
+
+  /** Publishes `tenant.suspended`: the suspension's housekeeping is done, or was a no-op; the job succeeds. */
+  async suspended(source: TenantEventSource): Promise<TenantSuspendedEvent> {
+    return this.publish({ ...this.envelope(source), name: "tenant.suspended", payload: {} }, source);
+  }
+
+  /** Publishes `tenant.resumed`: the resumption's housekeeping is done, or was a no-op; the job succeeds. */
+  async resumed(source: TenantEventSource): Promise<TenantResumedEvent> {
+    return this.publish({ ...this.envelope(source), name: "tenant.resumed", payload: {} }, source);
   }
 
   private envelope(source: TenantEventSource) {

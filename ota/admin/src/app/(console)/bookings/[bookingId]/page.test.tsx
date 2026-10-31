@@ -1715,3 +1715,178 @@ describe("/bookings/[bookingId]", () => {
     expect(api.sent(GET(BOOKING_ID))).toHaveLength(0);
   });
 });
+
+// ---- The actions (OAD-008) ------------------------------------------------------------------------------------------
+
+/** `console.auth.me` answers a staff member of `role`. */
+function staffOf(role: "owner" | "agent" | "finance" | "viewer"): void {
+  api.on("GET /v1/console/auth/me", () => Response.json(staffProfile({ role })));
+}
+
+/** The names of the buttons in `scope`. */
+function buttonsOf(scope: HTMLElement): string[] {
+  return within(scope)
+    .queryAllByRole("button")
+    .map((button) => button.textContent ?? "");
+}
+
+/** The action bar under the header, or `null` when the page offers none. */
+function actionBar(page: HTMLElement): HTMLElement | null {
+  return within(page).queryByRole("region", { name: "Booking actions" });
+}
+
+describe("/bookings/[bookingId] actions (OAD-008)", () => {
+  it("offers an agent issue, cancel and resync of an airline-card booking in review, the issue highlighted", async () => {
+    bookingAnswers(airlineCardBooking());
+
+    const page = await renderTab(AIRLINE_BOOKING_ID, "overview");
+
+    const bar = actionBar(page);
+    expect(bar).not.toBeNull();
+    expect(buttonsOf(bar as HTMLElement)).toEqual([
+      "Issue tickets",
+      "Cancel the booking",
+      "Resync from Amadeus",
+    ]);
+    const issue = within(bar as HTMLElement).getByRole("button", { name: "Issue tickets" });
+    expect(issue.getAttribute("data-urgent")).toBe("true");
+    expect(issue.getAttribute("aria-haspopup")).toBe("dialog");
+    // The dialogs open in the browser: nothing of a card is rendered with the page.
+    expect(page.querySelectorAll("input:not([type=hidden]), select, textarea")).toHaveLength(0);
+  });
+
+  it("puts the order's edits on the travellers tab and the note form, with its own key, on the timeline", async () => {
+    bookingAnswers(ticketedBooking());
+
+    const travellers = await renderTab(BOOKING_ID, "travellers");
+    const edits = region(travellers, "Edit the Amadeus order");
+    expect(buttonsOf(edits)).toEqual([
+      "Edit ANNA BERG",
+      "Edit LEO BERG",
+      "Edit the standard contact",
+      "Add a remark",
+      "Change the ticketing agreement",
+    ]);
+    // Already ticketed (`canIssue: false`): no issue; cancel and resync stay.
+    expect(buttonsOf(actionBar(travellers) as HTMLElement)).toEqual([
+      "Cancel the booking",
+      "Resync from Amadeus",
+    ]);
+
+    const keys: string[] = [];
+    for (let render = 0; render < 2; render += 1) {
+      const timeline = await renderTab(BOOKING_ID, "timeline");
+      const form = within(timeline).getByRole("form", { name: "Add a note" });
+      expect(form.querySelector<HTMLInputElement>('input[name="bookingId"]')?.value).toBe(BOOKING_ID);
+      keys.push(form.querySelector<HTMLInputElement>('input[name="actionKey"]')?.value ?? "");
+      expect(within(timeline).queryByRole("region", { name: "Edit the Amadeus order" })).toBeNull();
+    }
+    // A fresh idempotency key with every render of the page.
+    expect(keys.every((key) => /^[0-9a-f-]{36}$/.test(key))).toBe(true);
+    expect(new Set(keys).size).toBe(2);
+  });
+
+  it("offers a viewer nothing, and hides issue and cancel while the outcome is unknown", async () => {
+    staffOf("viewer");
+    bookingAnswers(airlineCardBooking());
+    let page = await renderTab(AIRLINE_BOOKING_ID, "travellers");
+    expect(actionBar(page)).toBeNull();
+    expect(within(page).queryByRole("region", { name: "Edit the Amadeus order" })).toBeNull();
+    page = await renderTab(AIRLINE_BOOKING_ID, "timeline");
+    expect(within(page).queryByRole("form", { name: "Add a note" })).toBeNull();
+
+    staffOf("owner");
+    bookingAnswers({ ...airlineCardBooking(), status: "pending" });
+    page = await renderTab(AIRLINE_BOOKING_ID, "overview");
+    expect(buttonsOf(actionBar(page) as HTMLElement)).toEqual(["Resync from Amadeus"]);
+  });
+
+  it("offers a refund of a captured Stripe payment with payments:refund only, and nothing for the airline card", async () => {
+    staffOf("owner");
+    bookingAnswers(ticketedBooking());
+    api.on(PAYMENT(STRIPE_PAYMENT_ID), () => Response.json(stripePayment()));
+    let page = await renderTab(BOOKING_ID, "payments");
+    let payment = within(region(page, "Payments")).getByRole("article", {
+      name: `Payment ${STRIPE_PAYMENT_ID}`,
+    });
+    expect(buttonsOf(payment)).toEqual(["Refund"]);
+
+    staffOf("agent");
+    page = await renderTab(BOOKING_ID, "payments");
+    payment = within(region(page, "Payments")).getByRole("article", { name: `Payment ${STRIPE_PAYMENT_ID}` });
+    expect(buttonsOf(payment)).toEqual([]);
+
+    staffOf("owner");
+    bookingAnswers(airlineCardBooking());
+    api.on(PAYMENT(AIRLINE_PAYMENT_ID), () => Response.json(airlinePayment()));
+    page = await renderTab(AIRLINE_BOOKING_ID, "payments");
+    payment = within(region(page, "Payments")).getByRole("article", {
+      name: `Payment ${AIRLINE_PAYMENT_ID}`,
+    });
+    expect(buttonsOf(payment)).toEqual([]);
+  });
+
+  it("[FIX-W32-OTA AC7] offers no refund while the refunds still on their way to Stripe take what is left, as the API counts it", async () => {
+    staffOf("owner");
+    bookingAnswers(ticketedBooking());
+    const payment = stripePayment();
+    const inFlight = (id: string, amount: string, status: "pending" | "processing") => ({
+      ...(payment.refunds[0] as ConsolePayment["refunds"][number]),
+      id,
+      amount: eur(amount),
+      status,
+      processedAt: null,
+      providerRefundId: null,
+    });
+    // Captured 1,414.06, refunded 100.00, and 1,314.06 asked for but not finished at Stripe: nothing left to refund.
+    api.on(PAYMENT(STRIPE_PAYMENT_ID), () =>
+      Response.json({
+        ...payment,
+        refunds: [
+          ...payment.refunds,
+          inFlight("rfd_01JA6B2C4D6E8F0G2H4J6K8M1P", "1300.00", "pending"),
+          inFlight("rfd_01JA6B2C4D6E8F0G2H4J6K8M2Q", "14.06", "processing"),
+        ],
+      }),
+    );
+
+    const page = await renderTab(BOOKING_ID, "payments");
+
+    const card = within(region(page, "Payments")).getByRole("article", {
+      name: `Payment ${STRIPE_PAYMENT_ID}`,
+    });
+    expect(buttonsOf(card)).toEqual([]);
+  });
+
+  it("offers a capture of an authorised Stripe payment to a role with payments:capture", async () => {
+    staffOf("finance");
+    const [summary] = ticketedBooking().payments;
+    const authorized = {
+      ...(summary as ConsoleBooking["payments"][number]),
+      status: "authorized" as const,
+      amountCaptured: eur("0.00"),
+      capturedAt: null,
+    };
+    bookingAnswers(
+      ticketedBooking({ status: "confirmed", payments: [authorized], paymentStatus: "authorized" }),
+    );
+    api.on(PAYMENT(STRIPE_PAYMENT_ID), () =>
+      Response.json({
+        ...stripePayment(),
+        ...authorized,
+        amountRefunded: eur("0.00"),
+        refunds: [],
+        version: 2,
+      }),
+    );
+
+    const page = await renderTab(BOOKING_ID, "payments");
+
+    const payment = within(region(page, "Payments")).getByRole("article", {
+      name: `Payment ${STRIPE_PAYMENT_ID}`,
+    });
+    expect(buttonsOf(payment)).toEqual(["Capture"]);
+    // Finance changes no booking: no issue, cancel or resync.
+    expect(actionBar(page)).toBeNull();
+  });
+});

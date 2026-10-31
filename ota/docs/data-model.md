@@ -21,7 +21,8 @@ Related: [db README](../../docs/velexis-sdk/db/README.md) (tenancy design), [ADR
 | `0002_add_mvp_tenant_deltas.sql` | All MVP deltas below, phase `expand` | M2, one task, before the first shopping endpoint |
 | `0003_add_booking_sync_claim.sql` | `bookings.sync_claimed_at` and `bookings.sync_changes` (§3.7), phase `expand` | M3 (FIX-W27-SYNC, lead decision (3) of 2026-10-23) |
 | `0004_add_payment_card_fee_lines.sql` | `payments.card_fee_lines` (§3.8), phase `expand` | M3 (FIX-W28-CANCEL, lead decision (2) of 2026-10-23, second batch) |
-| `0005_…` and later | Changes found during M3–M6 | When needed |
+| `0005_add_cancellation_claim_tighten_calling_codes.sql` | `bookings.cancellation_claimed_at` and the calling-code CHECKs of `customers` and `saved_travelers` narrowed to one to three digits (§3.9), phase `contract` | M3 (FIX-W31-OTA, lead decision (1) of 2026-10-27) |
+| `0006_…` and later | Changes found during M3–M6 | When needed |
 
 One file for all MVP deltas avoids number clashes between agents working in parallel; the columns used only in M3 or M4 are nullable or have safe defaults, so they cost nothing earlier. The cross-cutting [schema delta table](../../docs/mvp/architecture.md#schema-deltas-named-by-the-cross-cutting-adrs) lists `payments.provider` adding `airline` under M3; shipping it in `0002` during M2 meets that milestone early, as the platform plan does with its own `0002`. Rules for every tenant migration ([`conventions.md` §9](../../docs/mvp/conventions.md#9-database-migrations)): unqualified names, no `search_path`, no other schema except `reference` by value, `text` + `CHECK` statuses, `COMMENT ON` for every new table and column, CHECK lists extended with `NOT VALID` then `VALIDATE`, and the code works with schema versions N-1 and N. New tables need no `GRANT`: provisioning sets default privileges for `velexis_ota_app` in each schema ([OADR-0007](adr/0007-tenant-migration-runner-and-provisioning-worker.md)).
 
@@ -50,6 +51,10 @@ Every table belongs to exactly one module, which owns its repository. Other modu
 
 - **Platform** (read-only, cached 60 s, invalidated by `vx:invalidate`): `tenants`, `tenant_domains`, `api_keys`, `tenant_memberships`, `accounts` (identity and MFA columns), `plans`, `supplier_connections`, `payment_provider_connections`, `amadeus_accounts`, `amadeus_offices`. The columns the OTA relies on are listed in [platform architecture §6.2](../../platform/docs/architecture.md#62-platform-tables-the-ota-backend-reads).
 - **Reference** (read through the `search_path`): `airports`, `cities`, `airlines`, `countries`, `currencies`, `time_zones`, `aircraft`. Time zones convert Amadeus local times to UTC for `first_departure_at`, `last_arrival_at` and `ticketing_deadline_at`.
+
+### 2.2 The provider account a payment was created on (OBE-077)
+
+The platform updates a tenant's `payment_provider_connections` row in place when the OTA changes its Stripe account mode ([PADR-0011](../../platform/docs/adr/0011-stripe-connect-standard-and-api-key-connections.md) point 1), so `payments.provider_connection_id` alone does not say where a PaymentIntent lives. checkout.createPayment therefore records the account with the Stripe payment row it inserts, in the existing `payments.metadata` column (no migration): `{"connection": {"accountMode": "velexis" | "connect_standard" | "api_keys", "accountReference": "acct_…" | null}}`, a mode and an account id, never a key. Every later Stripe call for the payment (the payment steps, checkout.complete, the payments queue, cancellations, the reconciliation, the console) is made on that account (`recordedPaymentAccount`, `src/payments/payment-gateway.ts`; PADR-0011 point 7): a mode switch never moves a payment. The console shows that mode as the payment's `providerConnection.accountMode`. Payments written before OBE-077 have `{}` and are `velexis` ones, the only mode served before (the console shows their connection's mode); airline-card payments keep `{}`.
 
 ## 3. Every delta of `0002` and why
 
@@ -154,6 +159,15 @@ erDiagram
 |---|---|
 | `payments.card_fee_lines jsonb NOT NULL DEFAULT '[]'` with `payments_card_fee_lines_ck` (an array) | The lines of `card_fee_amount` when the fee was quoted (checkout.createPayment, checkout.updatePayment): `[{source, ruleId, amount, refundable}]`, the Amadeus credit-card fee (`source: amadeus`, never refundable) and each OTA `payment_card` fee rule (`source: fee_rule`, its rule's `refundable` flag at that moment). A cancellation keeps the card fee unless its line is refundable; the rule can change or be deleted after the payment, so the flag travels with the payment. Payments written before the column keep an empty list, which counts as nothing refundable (no backfill: conventions §9). |
 
+### 3.9 The deltas of `0005`: a cancellation's claim and the stored calling codes
+
+`ota/backend/migrations/tenant/0005_add_cancellation_claim_tighten_calling_codes.sql` (FIX-W31-OTA, lead decision (1) of 2026-10-27; [OADR-0014](adr/0014-per-tenant-workers-and-schedulers.md) point 6, [OADR-0003](adr/0003-booking-orchestration-and-supplier-timeout-recovery.md) follow-up of 2026-10-26). Phase `contract`: it narrows two CHECKs, which the code of the previous release already respects (it stores one to three digits since FIX-W30-OTA), and adds a nullable column the previous release does not write.
+
+| Change | Why |
+|---|---|
+| `bookings.cancellation_claimed_at timestamptz` (nullable) | The claim of a cancellation (T1 of bookings.cancel and console.bookings.cancel) for its Flight Order Management DELETE: written by the claim, cleared by every outcome step (the cancellation recorded, a request for the staff, the flag of a DELETE without an answer, the release of a DELETE that applied nothing), each its own claim's value only since FIX-W32-OTA. While it is less than 5 minutes old, the ticketing job skips the booking, console.bookings.issue refuses it and checkout.complete's own issuance leaves it to the job (FIX-W32-OTA), so no Flight Order Issue goes to an order being deleted, and bookings.cancel and console.bookings.cancel refuse a second cancellation (`409 BOOKING_NOT_MODIFIABLE`, `pending`, FIX-W32-OTA), so no second DELETE is sent; older, it is a request that stopped mid-DELETE and holds nothing back. No backfill (conventions §9): a cancellation in flight during the upgrade is not held, as before the column. |
+| `customers_phone_country_code_check` → `customers_phone_country_code_ck`, `saved_travelers_phone_country_code_check` → `saved_travelers_phone_country_code_ck`: `phone_country_code ~ '^[0-9]{1,3}$'` instead of the baseline's `'^[0-9]{1,4}$'` | An ITU-T E.164 country calling code has one to three digits, and the API takes one to three since FIX-W30-OTA (`AmadeusPhone.countryCallingCode` `^\+?[0-9]{1,3}$`; account.update stores the digits without the `+`, the only writer of `customers.phone_country_code`; saved travellers have no writer in the MVP), so the database now holds what the API accepts. The migration first counts, per table, the rows a new CHECK would refuse; any such row stops it with an exception naming the table, the column and the count (`customers.phone_country_code: 2 row(s) hold a calling code of more than three digits; …`), the schema's transaction rolls back, and nothing is rewritten: the rows are corrected by hand, then the migration runs again. The new CHECK is added `NOT VALID`, the old one dropped, then the new one validated. The emergency contacts (`emergency_contact` of `saved_travelers`, `checkout_travelers` and `booking_travelers`) are `jsonb` without a CHECK, and the `reference.countries.calling_code` CHECK (`^[0-9]{1,4}$`, the platform's reference schema) is unchanged: the vendored snapshot holds the leading country code of every country (`1` for the NANP countries, never an area code such as `1268`), and the storefront offers no calling code from it (the traveller types one). |
+
 ## 4. Encrypted columns
 
 Envelope encryption of [ADR-0010](../../docs/mvp/adr/0010-secrets-envelope-encryption.md), associated data `"tenant_<key>.<table>.<column>:<row id>"`, so a ciphertext copied to another row or tenant does not decrypt.
@@ -166,6 +180,8 @@ Envelope encryption of [ADR-0010](../../docs/mvp/adr/0010-secrets-envelope-encry
 | `notifications.secret_payload_ciphertext` | Links with tokens, guest booking tokens | `identity`, `bookings` | `notifications` (then purged) |
 
 No card data is encrypted anywhere, because none is stored.
+
+The OTA backend also decrypts two platform ciphertexts it reads (never writes), in memory, for one call, and caches them only as ciphertext: the Amadeus client secrets (`platform.amadeus_accounts`, `platform.supplier_connections.client_secret_ciphertext`; `amadeus`, OBE-017) and, since OBE-077, the OTA's own Stripe secret key of an `api_keys` connection (`platform.payment_provider_connections.secret_ciphertext`, associated data `platform.payment_provider_connections.secret_ciphertext:<ppc_id>`; `payments`, `src/payments/stripe/stripe-client.factory.ts`).
 
 ## 5. Status values and MVP restrictions
 
@@ -192,3 +208,5 @@ The status machines are those of [db README §2.1](../../docs/velexis-sdk/db/REA
 | Expired customer sessions, reset tokens, booking access tokens | Until expiry + 7 days | `retention.daily` |
 | Bookings, payments, refunds, events, documents, staff actions | Kept (financial and audit records) | Tenant deletion (post-MVP) |
 | Deleted customers | Soft-deleted at once; hard erasure within 30 days (M6 job) | db README §7 |
+
+A `supplier_requests` row that `retention.daily` deletes is unlinked from the booking events (and queue snapshots) that named it: their `supplier_request_id` becomes `NULL` (the baseline's `ON DELETE SET NULL`), and the events stay (accepted as built, lead decision (3) of 2026-10-27).

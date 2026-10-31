@@ -33,12 +33,13 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   // bound (the Amadeus accounts and offices since PBE-020, the accounts, platform admins and audit since PBE-032, the
   // plans and subscriptions since PBE-033).
 
-  // PBE-037: the M4 Amadeus settings (createConsoleToken is bound since PBE-039, updatePaymentConnection since PBE-038).
-  { operationId: "updateAmadeusConnection", task: "PBE-040" },
+  // PBE-037: the M3–M4 connection updates and the console token are all bound (updatePaymentConnection since PBE-038,
+  // createConsoleToken since PBE-039, updateAmadeusConnection since PBE-040).
 
   // PBE-041: the M5 tenant resources (go-live, custom domains, own Amadeus credentials, Stripe Connect and API keys,
   // the payout account and settlements, and invoices). createCheckoutSession and createCustomerPortalSession are bound
-  // since PBE-044.
+  // since PBE-044, getPayoutAccount and setPayoutAccount since PBE-058, startStripeConnect and completeStripeConnect
+  // since PBE-055, listSettlements, getSettlement and downloadSettlementLines since PBE-060.
   { operationId: "goLive", task: "PBE-061" },
   { operationId: "addDomain", task: "PBE-049" },
   { operationId: "removeDomain", task: "PBE-049" },
@@ -47,40 +48,23 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   { operationId: "requestLiveAmadeus", task: "PBE-054" },
   { operationId: "submitAmadeusCredentials", task: "PBE-053" },
   { operationId: "getCredentialSubmission", task: "PBE-052" },
-  { operationId: "startStripeConnect", task: "PBE-055" },
-  { operationId: "completeStripeConnect", task: "PBE-055" },
   { operationId: "submitStripeApiKeys", task: "PBE-057" },
   { operationId: "useVelexisPayments", task: "PBE-057" },
   { operationId: "listInvoices", task: "PBE-046" },
-  { operationId: "getPayoutAccount", task: "PBE-058" },
-  { operationId: "setPayoutAccount", task: "PBE-058" },
-  { operationId: "listSettlements", task: "PBE-060" },
-  { operationId: "getSettlement", task: "PBE-060" },
-  { operationId: "downloadSettlementLines", task: "PBE-060" },
 
   // PBE-042: the M5 admin operations (billing, the office release, settlements and payout accounts, domains) and the
   // two Stripe webhook receivers. adminUpdatePlan, extended with the Stripe ids, stays bound by PBE-033; PBE-048
-  // implements its M5 part. receiveStripeBillingEvent is bound since PBE-043.
+  // implements its M5 part. receiveStripeBillingEvent is bound since PBE-043, the three payout account operations
+  // (adminGetPayoutAccount, adminRevealPayoutAccount, adminReviewPayoutAccount) since PBE-058, adminGenerateSettlements
+  // since PBE-059, the settlement review (list, detail, lines and their CSV, adjustments, approval, payment, void) since
+  // PBE-060, receiveStripeConnectAccountEvent since PBE-056.
   { operationId: "adminCheckPlanPrices", task: "PBE-048" },
   { operationId: "adminResyncSubscription", task: "PBE-048" },
   { operationId: "adminListInvoices", task: "PBE-048" },
   { operationId: "adminListStripeEvents", task: "PBE-048" },
   { operationId: "adminReprocessStripeEvent", task: "PBE-048" },
   { operationId: "adminReleaseAmadeusOffice", task: "PBE-054" },
-  { operationId: "adminListSettlements", task: "PBE-060" },
-  { operationId: "adminGenerateSettlements", task: "PBE-059" },
-  { operationId: "adminGetSettlement", task: "PBE-060" },
-  { operationId: "adminListSettlementLines", task: "PBE-060" },
-  { operationId: "adminDownloadSettlementLines", task: "PBE-060" },
-  { operationId: "adminAddSettlementAdjustment", task: "PBE-060" },
-  { operationId: "adminApproveSettlement", task: "PBE-060" },
-  { operationId: "adminMarkSettlementPaid", task: "PBE-060" },
-  { operationId: "adminVoidSettlement", task: "PBE-060" },
-  { operationId: "adminGetPayoutAccount", task: "PBE-058" },
-  { operationId: "adminRevealPayoutAccount", task: "PBE-058" },
-  { operationId: "adminReviewPayoutAccount", task: "PBE-058" },
   { operationId: "adminListDomains", task: "PBE-051" },
   { operationId: "adminRecheckDomain", task: "PBE-051" },
   { operationId: "adminRemoveDomain", task: "PBE-051" },
-  { operationId: "receiveStripeConnectAccountEvent", task: "PBE-056" },
 ] satisfies PendingOperation[]);

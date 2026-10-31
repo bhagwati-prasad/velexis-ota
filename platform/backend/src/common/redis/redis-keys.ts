@@ -52,6 +52,12 @@ export const IDEMPOTENCY_TTL_SECONDS = DAY;
  * (`extendKeyIfValue`, idempotency.interceptor.ts), so it ends at most 10 s after the holder stopped renewing it.
  */
 export const IDEMPOTENCY_LOCK_TTL_SECONDS = 10;
+/**
+ * The lock of one Stripe subscription's sync (FIX-W30-PLATFORM, PADR-0002 item 5 revision of 2026-10-26): held by the
+ * billing event that re-fetches and writes the subscription, renewed while it runs (`extendKeyIfValue`,
+ * billing/sync/subscription-lock.ts), so it ends at most 15 s after a worker stopped renewing it.
+ */
+export const STRIPE_SUBSCRIPTION_LOCK_TTL_SECONDS = 15;
 /** An MFA challenge of the sign-in (PADR-0008). */
 export const MFA_CHALLENGE_TTL_SECONDS = 5 * MINUTE;
 /** A pending TOTP set-up (the encrypted secret) until it is confirmed. */
@@ -91,6 +97,11 @@ const PARTS = {
     rule: "a throttler name of lower-case letters, digits and _",
   },
   tracker: { pattern: /^[A-Za-z0-9_-]{1,128}$/, rule: "a throttler tracker of letters, digits, _ and -" },
+  stripeSubscriptionId: {
+    // Stripe's `sub_…` (letters, digits and _), as billing sync accepts it (STRIPE_SUBSCRIPTION_ID).
+    pattern: /^sub_[A-Za-z0-9_]{1,250}$/,
+    rule: "a Stripe subscription id (sub_ and letters, digits or _)",
+  },
 } as const satisfies Record<string, { readonly pattern: RegExp; readonly rule: string }>;
 
 type PartName = keyof typeof PARTS;
@@ -174,6 +185,20 @@ export const redisKeys = Object.freeze({
     ],
     ttlSeconds: IDEMPOTENCY_LOCK_TTL_SECONDS,
   })),
+  /**
+   * `vx:stripe:sub:<subscriptionId>:lock`: held by the billing event that re-fetches and writes the Stripe subscription
+   * (FIX-W30-PLATFORM), so two events of one subscription never interleave their re-fetch and their write.
+   */
+  stripeSubscriptionLock: builder("vx:stripe:sub:<subscriptionId>:lock", (subscriptionId: string) => ({
+    segments: [
+      "vx",
+      "stripe",
+      "sub",
+      part("stripeSubscriptionLock", "subscriptionId", "stripeSubscriptionId", subscriptionId),
+      "lock",
+    ],
+    ttlSeconds: STRIPE_SUBSCRIPTION_LOCK_TTL_SECONDS,
+  })),
   /** `mfach:<sha256(challenge token)>`: an MFA challenge of the sign-in. */
   mfaChallenge: builder("mfach:<sha256>", (challengeSha256: string) => ({
     segments: ["mfach", part("mfaChallenge", "challengeSha256", "sha256", challengeSha256)],
@@ -237,6 +262,7 @@ export const REDIS_KEY_PREFIXES = Object.freeze([
   "staffdeny:",
   "apikey:used:",
   "vx:idem:",
+  "vx:stripe:",
   "mfach:",
   "mfasetup:",
   "mfastep:",

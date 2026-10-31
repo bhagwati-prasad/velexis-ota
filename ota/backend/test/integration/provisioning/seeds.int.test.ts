@@ -39,6 +39,8 @@ const SCHEMAS = {
   twoTemplates: "tenant_seed_two_templates",
   schemaN: "tenant_seed_schema_n",
   rolledBack: "tenant_seed_rolled_back",
+  zoneKnown: "tenant_seed_zone_known",
+  zoneUnknown: "tenant_seed_zone_unknown",
 } as const;
 /** A schema at version N-1 (the baseline only), provisioned by its test from a folder without migration 0002. */
 const SCHEMA_N_MINUS_1 = "tenant_seed_schema_n_minus_1";
@@ -331,6 +333,31 @@ describe("seedTenant", () => {
         brand_name: "Acme Travel",
       },
     ]);
+  });
+
+  it("[FIX-W35-OTA AC3] starts the settings in the platform tenant's time zone when the runtime knows it, else in UTC", async () => {
+    const known = await tenantTx(provisioner, SCHEMAS.zoneKnown, (trx) =>
+      seedTenant(trx, { ...TENANT, timeZone: "Europe/Oslo" }, { now: NOW }),
+    );
+    const unknown = await tenantTx(provisioner, SCHEMAS.zoneUnknown, (trx) =>
+      seedTenant(trx, { ...TENANT, timeZone: "Europe/Atlantis" }, { now: NOW }),
+    );
+    expect([known.storefrontSettings, unknown.storefrontSettings]).toEqual([true, true]);
+    const zoneOf = async (schema: string) =>
+      await tenantTx(
+        app,
+        schema,
+        async (trx) =>
+          (await trx.selectFrom("storefront_settings").select("time_zone").executeTakeFirstOrThrow())
+            .time_zone,
+      );
+    expect(await zoneOf(SCHEMAS.zoneKnown)).toBe("Europe/Oslo");
+    expect(await zoneOf(SCHEMAS.zoneUnknown)).toBe("UTC");
+    // Seeds never overwrite: a second run with another zone keeps the first.
+    await tenantTx(provisioner, SCHEMAS.zoneKnown, (trx) =>
+      seedTenant(trx, { ...TENANT, timeZone: "Asia/Tokyo" }, { now: LATER }),
+    );
+    expect(await zoneOf(SCHEMAS.zoneKnown)).toBe("Europe/Oslo");
   });
 
   it("runs inside the caller's transaction: a rollback leaves nothing behind", async () => {

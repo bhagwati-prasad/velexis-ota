@@ -234,6 +234,8 @@ export interface CustomerBookingSettingsRow {
   readonly ticketingPolicy: string;
   /** The `features` jsonb (`{ancillaries, brandedFareUpsell, selfServiceCancellation}`), read defensively. */
   readonly features: unknown;
+  /** `time_zone` (IANA): the OTA's day, which decides a same-day void (cancellation-mode.ts). */
+  readonly timeZone: string;
 }
 
 /** A "My trips" tab of bookings.list (`timeframe`). */
@@ -825,7 +827,7 @@ export class BookingsRepository {
   async customerSettings(trx: TenantTransaction): Promise<CustomerBookingSettingsRow | undefined> {
     return await trx
       .selectFrom("storefront_settings")
-      .select(["ticketing_policy as ticketingPolicy", "features"])
+      .select(["ticketing_policy as ticketingPolicy", "features", "time_zone as timeZone"])
       .executeTakeFirst();
   }
 

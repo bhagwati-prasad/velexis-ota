@@ -6,7 +6,9 @@
 // The task that implements an operation removes its entry in the same change; a spec task that adds an operation
 // adds one. The route-parity contract test fails when an operation has neither a handler nor an entry, when it has
 // both, when an entry names no operation, and when a task id is not a task of the plan with the operation's
-// milestone. At the M4 exit only `deferred` entries (and the two M5 webhooks of OBE-078) remain (OBE-075).
+// milestone. At the M4 exit only `deferred` entries (and the two M5 webhooks of OBE-078) remain (OBE-075); since
+// OBE-078 serves the Connect and API-key webhooks (receiveStripeConnectWebhook, receiveStripeConnectionWebhook), only
+// the `deferred` ones.
 import type { OtaOperationId } from "@velexis/api-types/operations";
 
 /** The plan task that implements an operation (`OBE-016`), or `"deferred"` for an operation outside the MVP. */
@@ -15,10 +17,6 @@ export type PendingTask = `OBE-${number}` | "deferred";
 export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, PendingTask>>> = Object.freeze({
   // Storefront
   resolveStorefrontHost: "deferred",
-  // Storefront content (OBE-091): the published pages and the public images
-  listStorefrontPages: "OBE-072",
-  getStorefrontPage: "OBE-072",
-  getPublicAsset: "OBE-071",
   // Customer account and saved travellers (account.get, account.update and account.delete: OBE-035)
   getAccountPreferences: "deferred",
   updateAccountPreferences: "deferred",
@@ -37,45 +35,11 @@ export const PENDING_OPERATIONS: Readonly<Partial<Record<OtaOperationId, Pending
   createBookingPayment: "deferred",
   // Console: bookings
   consoleCreateBooking: "deferred",
-  consoleFindBookingByRecordLocator: "OBE-064",
-  consoleImportBooking: "OBE-064",
-  // Console: queues, customers, supplier log
-  consoleListQueue: "OBE-065",
-  consoleListQueueSnapshots: "OBE-065",
-  consoleListCustomers: "OBE-066",
-  consoleGetCustomer: "OBE-066",
-  consoleListSupplierRequests: "OBE-066",
-  // Console: raw Amadeus (reads in M4, writes deferred)
-  consoleAmadeusGetFlightOffers: "OBE-067",
-  consoleAmadeusSearchFlightOffers: "OBE-067",
-  consoleAmadeusSearchFlightAvailabilities: "OBE-067",
-  consoleAmadeusUpsellAirOffers: "OBE-067",
-  consoleAmadeusQuoteAirOffers: "OBE-067",
-  consoleAmadeusGetFlightOrder: "OBE-067",
-  consoleAmadeusGetFlightOrderByReference: "OBE-067",
-  consoleAmadeusGetQueue: "OBE-067",
+  // Console: raw Amadeus writes (the eight reads: OBE-067; OADR-0011 point 7)
   consoleAmadeusCreateFlightOrders: "deferred",
   consoleAmadeusIssueFlightOrder: "deferred",
   consoleAmadeusCancelFlightOrder: "deferred",
   consoleAmadeusPatchFlightOrder: "deferred",
-  // Console settings (OBE-091): content pages and storefront images
-  consoleListStorefrontPages: "OBE-072",
-  consoleCreateStorefrontPage: "OBE-072",
-  consoleGetStorefrontPage: "OBE-072",
-  consoleUpdateStorefrontPage: "OBE-072",
-  consoleDeleteStorefrontPage: "OBE-072",
-  consoleListStorefrontAssets: "OBE-071",
-  consoleUploadStorefrontAsset: "OBE-071",
-  consoleDeleteStorefrontAsset: "OBE-071",
-  // Console settings (OBE-058): notification templates (the storefront settings: OBE-070; markup and fee rules: OBE-069)
-  consoleListNotificationTemplates: "OBE-073",
-  consoleGetNotificationTemplate: "OBE-073",
-  consolePutNotificationTemplate: "OBE-073",
-  consolePreviewNotificationTemplate: "OBE-073",
-  consoleResetNotificationTemplate: "OBE-073",
-  // Stripe webhooks of the Connect and API-key modes (OBE-090 documents them in M4; served from M5)
-  receiveStripeConnectWebhook: "OBE-078",
-  receiveStripeConnectionWebhook: "OBE-078",
 });
 
 /**

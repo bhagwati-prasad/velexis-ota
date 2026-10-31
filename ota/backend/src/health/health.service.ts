@@ -1,11 +1,14 @@
 // Liveness and readiness of an OTA backend process (ADR-0016). Both processes use this service: the API through
 // HealthController on PORT, the worker through HealthServer on HEALTH_PORT. deploy.sh polls /health/ready after every
-// restart (curl --max-time 3), so a readiness answer never takes longer than READINESS_TIMEOUT_MS.
-import { Inject, Injectable, type OnApplicationShutdown } from "@nestjs/common";
+// restart (curl --max-time 3), so a readiness answer never takes longer than READINESS_TIMEOUT_MS. The worker's
+// readiness also reports its BullMQ queues (OBE-025, queue-age.ts), within QUEUE_REPORT_TIMEOUT_MS and in parallel with
+// the probes; the queues never make it unready.
+import { Inject, Injectable, Optional, type OnApplicationShutdown } from "@nestjs/common";
 import { createPool } from "@velexis/db";
 import type { Logger } from "@velexis/logger";
 import { Redis } from "ioredis";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
+import { HEALTH_QUEUE_AGES, QUEUE_REPORT_TIMEOUT_MS, type QueueAges, type QueueAgeSource } from "./queue-age";
 
 /** The dependencies a process needs before it can serve: the names in the readiness answer. */
 export type DependencyName = "postgres" | "redis";
@@ -20,6 +23,11 @@ export interface LivenessBody {
 export interface ReadinessBody {
   readonly status: "ok" | "unavailable";
   readonly checks: Readonly<Record<DependencyName, DependencyStatus>>;
+  /**
+   * The worker's queues (OBE-025): absent in the API's answer, and in the worker's while they are unknown (Redis did
+   * not answer them within QUEUE_REPORT_TIMEOUT_MS).
+   */
+  readonly queues?: QueueAges;
 }
 
 export interface Readiness {
@@ -46,18 +54,21 @@ export const READINESS_TIMEOUT_MS = 2000;
 /** What a probe logs with: pino's call shape, so `PinoLogger` and a pino logger both fit. */
 export type ProbeLogger = Pick<Logger, "warn" | "error">;
 
+/** The outcome of `within`: the value, or `timedOut` when the promise had not settled in time. */
+type Within<T> = { readonly timedOut: false; readonly value: T } | { readonly timedOut: true };
+
 /**
- * Resolves to `true` when `promise` resolves within `ms`, to `false` when it has not settled by then, and rejects
- * when it rejects first. `Promise.race` keeps its handler on `promise`, so a rejection after the timeout is not an
- * unhandled rejection.
+ * Resolves to the value of `promise` when it resolves within `ms`, to `{timedOut: true}` when it has not settled by
+ * then, and rejects when it rejects first. `Promise.race` keeps its handler on `promise`, so a rejection after the
+ * timeout is not an unhandled rejection.
  */
-async function settlesWithin(promise: Promise<void>, ms: number): Promise<boolean> {
+async function within<T>(promise: Promise<T>, ms: number): Promise<Within<T>> {
   let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<false>((resolveTimeout) => {
-    timer = setTimeout(() => resolveTimeout(false), ms);
+  const timeout = new Promise<Within<T>>((resolveTimeout) => {
+    timer = setTimeout(() => resolveTimeout({ timedOut: true }), ms);
   });
   try {
-    return await Promise.race([promise.then(() => true), timeout]);
+    return await Promise.race([promise.then((value): Within<T> => ({ timedOut: false, value })), timeout]);
   } finally {
     clearTimeout(timer);
   }
@@ -68,6 +79,7 @@ export class HealthService implements OnApplicationShutdown {
   constructor(
     @Inject(HEALTH_PROBES) private readonly probes: readonly DependencyProbe[],
     @InjectPinoLogger(HealthService.name) private readonly logger: PinoLogger,
+    @Optional() @Inject(HEALTH_QUEUE_AGES) private readonly queueAges?: QueueAgeSource,
   ) {}
 
   /** The process is up and its event loop answers. It checks nothing else, so it answers while a dependency is down. */
@@ -75,19 +87,24 @@ export class HealthService implements OnApplicationShutdown {
     return { status: "ok" };
   }
 
-  /** Checks every dependency in parallel; a failing one makes the process not ready and is logged without values. */
+  /**
+   * Checks every dependency in parallel; a failing one makes the process not ready and is logged without values. The
+   * worker's queues are read meanwhile and added when they answered in time; they never change `ready`.
+   */
   async ready(): Promise<Readiness> {
-    const entries = await Promise.all(
-      this.probes.map(async (probe) => [probe.name, await this.checkOne(probe)] as const),
-    );
+    const [entries, queues] = await Promise.all([
+      Promise.all(this.probes.map(async (probe) => [probe.name, await this.checkOne(probe)] as const)),
+      this.readQueues(),
+    ]);
     const checks = Object.fromEntries(entries) as Record<DependencyName, DependencyStatus>;
     const ready = entries.every(([, status]) => status === "ok");
-    return { ready, body: { status: ready ? "ok" : "unavailable", checks } };
+    const status = ready ? "ok" : "unavailable";
+    return { ready, body: queues === undefined ? { status, checks } : { status, checks, queues } };
   }
 
   private async checkOne(probe: DependencyProbe): Promise<DependencyStatus> {
     try {
-      if (!(await settlesWithin(probe.check(), READINESS_TIMEOUT_MS))) {
+      if ((await within(probe.check(), READINESS_TIMEOUT_MS)).timedOut) {
         this.logger.warn({ dependency: probe.name, status: "timeout" }, "health.dependency_unavailable");
         return "timeout";
       }
@@ -102,8 +119,30 @@ export class HealthService implements OnApplicationShutdown {
     }
   }
 
+  /** The worker's queues, or `undefined` in the API and while they are unknown (logged, without job data). */
+  private async readQueues(): Promise<QueueAges | undefined> {
+    if (this.queueAges === undefined) {
+      return undefined;
+    }
+    try {
+      const outcome = await within(this.queueAges.read(), QUEUE_REPORT_TIMEOUT_MS);
+      if (outcome.timedOut) {
+        this.logger.warn({ part: "queues", status: "timeout" }, "health.queues_unknown");
+        return undefined;
+      }
+      return outcome.value;
+    } catch (error) {
+      // As for the probes: type, message, stack and code of a Redis error, never a URL or a job.
+      this.logger.warn({ part: "queues", status: "down", err: error }, "health.queues_unknown");
+      return undefined;
+    }
+  }
+
   async onApplicationShutdown(): Promise<void> {
-    await Promise.allSettled(this.probes.map((probe) => probe.close()));
+    await Promise.allSettled([
+      ...this.probes.map((probe) => probe.close()),
+      ...(this.queueAges === undefined ? [] : [this.queueAges.close()]),
+    ]);
   }
 }
 

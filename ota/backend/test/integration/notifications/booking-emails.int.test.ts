@@ -93,6 +93,12 @@ const SCENARIO_TIMEOUT_MS = 60_000;
 const MAIL_WAIT_MS = 30_000;
 /** How long a scenario waits at most for a job or a row. */
 const JOB_WAIT = { timeout: 15_000, interval: 25 } as const;
+/**
+ * How long a test waits at most for a notification row to record the send of a message already in Mailpit: the
+ * processor's update right after the SMTP answer, milliseconds locally. 3 s allows for CI load and keeps the test body
+ * within its default 5 s.
+ */
+const ROW_AFTER_SEND_WAIT = { timeout: 3_000, interval: 25 } as const;
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -715,14 +721,18 @@ describe("[FIX-W28-NOTIFY AC1] the booking.updated e-mails of a contacts change"
         expect([absent, part.includes(absent)]).toEqual([absent, false]);
       }
     }
-    // Both rows share one transaction's time: by dedupe key, `…:new` before `…:old`.
-    const rows = (await notificationsOf("alpha", booking.id))
-      .filter((row) => row.template_key === "booking.updated")
-      .sort((a, b) => (a.dedupe_key ?? "").localeCompare(b.dedupe_key ?? ""));
-    expect(rows.map((row) => [row.recipient, row.status, row.attempts])).toEqual([
-      [next, "sent", 1],
-      [previous, "sent", 1],
-    ]);
+    // Both rows share one transaction's time: by dedupe key, `…:new` before `…:old`. The processor records `sent` only
+    // after the SMTP send, so a message can be in Mailpit a moment before its row says so (FIX-W32-OTA, lead decision
+    // (1i) of 2026-10-28: this assertion was read once and failed now and then): the same assertion, waited for.
+    await vi.waitFor(async () => {
+      const rows = (await notificationsOf("alpha", booking.id))
+        .filter((row) => row.template_key === "booking.updated")
+        .sort((a, b) => (a.dedupe_key ?? "").localeCompare(b.dedupe_key ?? ""));
+      expect(rows.map((row) => [row.recipient, row.status, row.attempts])).toEqual([
+        [next, "sent", 1],
+        [previous, "sent", 1],
+      ]);
+    }, ROW_AFTER_SEND_WAIT);
   });
 });
 

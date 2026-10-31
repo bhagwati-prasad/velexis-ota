@@ -9,7 +9,9 @@
 //      is `401 UNAUTHENTICATED`; `403 EMAIL_NOT_VERIFIED` when the storefront requires a verified address), else a
 //      guest when `storefront_settings.guest_checkout_enabled` (`401 UNAUTHENTICATED` otherwise: sign in first). In
 //      console scope (a `console:automation` key now, staff tokens with OBE-059) the checkout is `channel: console`,
-//      for the priced offer's owner or as a guest checkout, whatever the guest setting;
+//      for the priced offer's owner or as a guest checkout, whatever the guest setting; an owner that is gone, deleted
+//      or disabled is `409 CONFLICT` (`details.reason` `customer_deleted` or `customer_disabled`), read before and
+//      after the insert as the customer's own (FIX-W30-OTA, lead decision (1) of 2026-10-26);
 //   2. the priced offer: of the request's environment, and when a customer priced it only that customer's (or console
 //      scope), else `404`; `410 OFFER_EXPIRED` after its `expires_at`;
 //   3. inserts `checkouts` (`open`, the priced offer's currency, `offer_amount = total_amount` = its selling total,
@@ -127,6 +129,26 @@ export function checkoutLocaleOf(
 
 const notFound = (): AppError => new AppError("NOT_FOUND", { message: "No checkout with this id." });
 
+/** A customer who may no longer act: gone, deleted or disabled (the customer path's `401 UNAUTHENTICATED`). */
+const unavailable = (row: CheckoutCustomerRow | undefined): boolean =>
+  row === undefined || row.status === "disabled" || row.status === "deleted";
+
+/**
+ * `409 CONFLICT` for a console checkout of a priced offer whose customer was deleted or disabled (FIX-W30-OTA, lead
+ * decision (1) of 2026-10-26): console scope refuses that customer as customer scope refuses the customer's own token
+ * (the CustomerAccess check of FIX-W29-SECURITY), with `details.reason` `customer_deleted` (a customer row that is
+ * gone counts as deleted) or `customer_disabled`. The staff are told why; nothing is written.
+ */
+export function consoleCustomerUnavailable(row: CheckoutCustomerRow | undefined): AppError {
+  const disabled = row?.status === "disabled";
+  return new AppError("CONFLICT", {
+    message: disabled
+      ? "The customer of this priced offer is disabled: no checkout can be opened for them."
+      : "The customer of this priced offer deleted their account: no checkout can be opened for them.",
+    details: { reason: disabled ? "customer_disabled" : "customer_deleted" },
+  });
+}
+
 /** `409 CHECKOUT_BEING_COMPLETED` with the pending booking (`CheckoutService.refuseWhileCompleting`). */
 export function checkoutBeingCompleted(bookingId: string): AppError {
   return new AppError("CHECKOUT_BEING_COMPLETED", {
@@ -177,7 +199,7 @@ export class CheckoutService {
       let customer: CheckoutCustomerRow | undefined;
       if (signedIn !== undefined) {
         customer = await this.repository.customer(trx, signedIn.customerId);
-        if (customer === undefined || customer.status === "disabled" || customer.status === "deleted") {
+        if (customer === undefined || unavailable(customer)) {
           throw new AppError("UNAUTHENTICATED");
         }
         if (settings.requireEmailVerification && customer.emailVerifiedAt === null) {
@@ -202,6 +224,13 @@ export class CheckoutService {
       }
       const checkoutId = this.ids.newId("chk");
       const customerId = consoleScope ? priced.owner : (customer?.id ?? null);
+      if (consoleScope && customerId !== null) {
+        // The console opens the checkout for the priced offer's customer: never for one who may no longer act.
+        const owner = await this.repository.customer(trx, customerId);
+        if (unavailable(owner)) {
+          throw consoleCustomerUnavailable(owner);
+        }
+      }
       await this.repository.insertCheckout(trx, {
         id: checkoutId,
         environment: tenant.environment,
@@ -230,8 +259,14 @@ export class CheckoutService {
         // own after the insert, so it sees that deletion; the deletion's own read of the open checkouts, after its
         // locks, sees every checkout inserted before it. No lock is added: the insert's FOR KEY SHARE is the only one.
         const current = await this.repository.customer(trx, customer.id);
-        if (current === undefined || current.status === "disabled" || current.status === "deleted") {
+        if (unavailable(current)) {
           throw new AppError("UNAUTHENTICATED");
+        }
+      } else if (consoleScope && customerId !== null) {
+        // The same read for the console's checkout of the priced offer's customer (FIX-W30-OTA).
+        const current = await this.repository.customer(trx, customerId);
+        if (unavailable(current)) {
+          throw consoleCustomerUnavailable(current);
         }
       }
       await this.repository.insertTravelers(

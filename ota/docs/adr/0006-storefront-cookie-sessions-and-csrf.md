@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** OTA backend tech lead. Decided during planning; revisit when a custom domain becomes primary and sessions must follow the redirect (ADR-0018 follow-up), or when the storefront moves to a framework with server rendering.
+**Revisions:** 2026-10-27 (lead decision (3), accepted as built): point 3 records that a visitor without a session gets `401` before the CSRF check on an operation that needs a customer (dated note). 2026-10-28 (lead decision (1k), recording FIX-W32-OTA): new point 10, the two first-party cookies that Stripe.js sets on the card payment page, readable by JavaScript, are accepted; the storefront guards of the journeys allow exactly these two names, from the card payment page on, in the storefront-stripe journeys only; the Consequences follow. 2026-10-29 (lead decision (1a), recording FIX-W33-OTA): point 5, an edge request to an operation that reads the customer with a refresh cookie but no access cookie (the browser drops `__Host-vx_at` when its 15 minutes end) answers `401 TOKEN_EXPIRED`, so the SDK's refresh runs and a signed-in customer is not signed out after 15 idle minutes; the access cookie keeps its 900 s (dated note under point 5); the Consequences follow.
 
 ## Context
 
@@ -21,22 +22,27 @@
    | `__Host-vx_bt` | yes | 30 days | Updated on guest booking and lookup |
 
    `SameSite=Lax` (not `Strict`) so that links from e-mails to the booking page carry the session.
-3. **CSRF check** (`CsrfGuard`) on every edge `POST`, `PUT`, `PATCH`, `DELETE`, including anonymous ones (search, checkout, lookup): `X-CSRF-Token` must equal the `__Host-vx_csrf` cookie (constant-time) **and** `Origin` (or, when absent, `Sec-Fetch-Site: same-origin`) must match `https://<X-Velexis-Host>`. Failure: `403 CSRF_TOKEN_INVALID`. GET and HEAD never change state. The CSRF value is random, not tied to the session, and is not a credential.
+3. **CSRF check** (`CsrfGuard`) on every edge `POST`, `PUT`, `PATCH`, `DELETE`, including anonymous ones (search, checkout, lookup): `X-CSRF-Token` must equal the `__Host-vx_csrf` cookie (constant-time) **and** `Origin` (or, when absent, `Sec-Fetch-Site: same-origin`) must match `https://<X-Velexis-Host>`. Failure: `403 CSRF_TOKEN_INVALID`. GET and HEAD never change state. The CSRF value is random, not tied to the session, and is not a credential. **2026-10-27 (lead decision (3), accepted as built):** the customer guard runs before `CsrfGuard`, so a visitor without a session on a state-changing operation that needs a customer (`account.update`, `account.delete`) gets `401 UNAUTHENTICATED` before the CSRF check; an anonymous write that needs no customer (search, checkout, sign-in, sign-up, lookup) is checked as above (`test/integration/m3/csrf-matrix.int.test.ts`).
 4. **Response bodies in edge mode** never contain tokens:
    - `signIn`, `refreshSession`, `changePassword` return `AuthSessionInfo` (the schema of `auth.getSession`) instead of `AuthSessionResult`; the OpenAPI response becomes `oneOf` of the two. This is a type change that [ADR-0006](../../../docs/mvp/adr/0006-contract-first-openapi.md) allows only with an ADR: **this ADR approves it**, because no external client exists before launch and token-mode callers keep receiving `AuthSessionResult` unchanged.
    - `signUp` and `resetPassword` return `session: null` (already nullable).
    - `checkout.complete`, the airline-card completion and `bookings.lookup` return `bookingToken: null` (`BookingLookupResult.bookingToken` becomes nullable, approved here as well).
 5. **Refresh.** `auth.refresh` in edge mode reads `__Host-vx_rt`; a refresh token in the body is refused. The SDK in cookie mode calls it once on `401 TOKEN_EXPIRED` and retries the original call; concurrent requests share one refresh promise in the SDK.
+
+   **2026-10-29 (lead decision (1a), FIX-W33-OTA): the refresh cookie without the access cookie is an expired session.** The browser drops `__Host-vx_at` itself when its `Max-Age` of 900 s ends (point 2), the moment its token expires, and keeps sending `__Host-vx_rt` for the rest of the family's 12 hours (30 days with `rememberMe`). The customer guard used to see no token there and answer `401 UNAUTHENTICATED` on an operation that needs a customer (a guest on an optional one), the SDK refreshes only on `TOKEN_EXPIRED`, and a signed-in customer was signed out after 15 idle minutes. Now an edge request to an operation that reads the customer, required or optional (`customerCookie` among its edge alternatives), with a refresh cookie of the contract's form (`rt_…`; the guard looks nothing up) and no access cookie answers `401 TOKEN_EXPIRED` (logged as `customer.token_refused`, reason `access_cookie_missing`), so the SDK refreshes once and retries the call. `auth.signOut` goes on as before: it ends the refresh cookie's session itself. Neither cookie still answers `401 UNAUTHENTICATED` on an operation that needs a customer and lets a guest through an optional one; key callers' cookies stay ignored (point 1). The access cookie keeps its 15 minutes. A refresh cookie that no longer opens a session (its family revoked elsewhere) costs one refused refresh, which clears both cookies (`REFRESH_TOKEN_INVALID`), after which the browser is a visitor's again (`ota/backend/src/common/auth/customer.guard.ts`; `test/integration/identity/sign-in.int.test.ts`; the account journey of OFE-019 drops the access cookie and sees the silent refresh).
 6. **Guest tokens.** `__Host-vx_bt` holds up to five `bkg_<id>.<token>` entries separated by `~`, newest first; the backend picks the entry of the requested booking. One cookie keeps the number of cookies bounded and lets the backend replace the list atomically.
 7. **Host-only sessions.** Sessions do not cross hosts (`acme.ota.example.com` vs `travel.acme.com`), which ADR-0018 accepts; the primary-domain redirect follow-up reduces it.
 8. **Development.** Browsers treat `http://localhost` as a secure context, so `__Host-` cookies work with the Vite dev server, which adds the edge headers like Caddy ([`local-development.md`](../../../docs/mvp/local-development.md)).
 9. **Tests** assert, for every auth and booking-access operation, that edge responses contain no token in the body, that cookies carry the attributes above, and that bearer mode is unchanged.
+10. **Stripe.js cookies (2026-10-28, lead decision (1k), FIX-W32-OTA).** Stripe.js, which the card payment page `/checkout/pay-card.html` loads for the Payment Element ([OADR-0015](0015-storefront-build-urls-and-hosting.md) point 9, [ADR-0011](../../../docs/mvp/adr/0011-payments-stripe-and-airline-card.md)), sets two first-party cookies on the storefront's host that JavaScript can read: `__stripe_mid` (a device id, one year) and `__stripe_sid` (a session id, 30 minutes). They feed Stripe Radar's advanced fraud signals, which stay on, and hold no session, token or credential of the storefront, the traveller or Velexis, nor card data. They are accepted as an exception to "no cookie readable by JavaScript but `__Host-vx_csrf`": the storefront guards of the end-to-end journeys (OFE-008, `tools/e2e/support/storefront-guards.ts` `STRIPE_JS_COOKIES`) allow exactly these two names, only in the storefront-stripe journeys and only from the card payment page on (that page and the pages the browser shows after it, which still carry the cookies); any other name, these two on a page before the card page, and these two in any other journey fail the journey as before. Other findings from Stripe's frames (none known yet) wait for the first nightly run of those journeys.
 
 ## Consequences
 
 ### Positive
 
 - No access, refresh or guest token is ever readable by storefront JavaScript, including third-party code that might be injected.
+- Stripe Radar keeps its advanced fraud signals on the card payment page (point 10, 2026-10-28).
+- Since 2026-10-29 a signed-in customer stays signed in across idle periods for the family's whole lifetime: the first call after the access cookie ended refreshes the session silently (point 5).
 - Anonymous POSTs (search, checkout) are CSRF-protected from the first call.
 - Token-mode clients of the contract see no change.
 
@@ -45,6 +51,8 @@
 - Two response shapes for three operations; SDK and tests must cover both.
 - `__Host-` requires `Path=/`, so the refresh cookie is sent with every storefront API request (it is httpOnly and same-site, but it travels more than strictly needed).
 - A traveller who clears cookies loses guest access and must use the lookup.
+- Since 2026-10-28 two cookies of Stripe.js are readable by the storefront's JavaScript after the card payment page (point 10): a device id and a session id that Stripe uses for fraud scoring, no credential.
+- Since 2026-10-29 a browser whose refresh cookie no longer opens a session (signed out everywhere from another device, the family revoked after a reuse) sees one call refused after a refused refresh, on an optional operation too (a search, a booking page), before it is a visitor's again (point 5).
 
 ### Follow-ups
 

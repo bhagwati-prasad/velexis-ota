@@ -9,8 +9,10 @@
 // - a missing key is `400 VALIDATION_FAILED` (`/header/Idempotency-Key`), as the validation interceptor answers it;
 // - the service claims the key (idempotency.service.ts): a stored answer is replayed with its status, its replayed
 //   headers, its cookies and its body, and the handler does not run;
-// - otherwise the handler runs once, and its answer (or the error envelope the error filter will send) is settled:
-//   stored for replays, or released when it is transient.
+// - otherwise the handler runs once, its lease renewed while it runs (`IdempotencyService.keepLease`, FIX-W30-OTA: a
+//   handler slower than the 2-minute lease keeps it, so a same-key request waits for it and never runs it twice), and
+//   its answer (or the error envelope the error filter will send) is settled once the renewals have ended: stored for
+//   replays, or released when it is transient.
 //
 // Handlers of these operations return their body (with `@Res({ passthrough: true })` at most): an answer the handler
 // wrote itself cannot be replayed, and its record is released.
@@ -155,12 +157,20 @@ export class IdempotencyInterceptor implements NestInterceptor {
       applyReplay(res, claim.response);
       return claim.response.body;
     }
+    // The lease is renewed while the handler runs (FIX-W30-OTA), and the renewals end before the outcome is settled.
+    const renewal = this.idempotency.keepLease(claim.ticket);
     let body: unknown;
+    let failure: { readonly error: unknown } | undefined;
     try {
       body = await lastValueFrom(next.handle(), { defaultValue: undefined });
     } catch (error) {
-      await this.idempotency.settle(claim.ticket, this.errorResponse(error, req, res));
-      throw error;
+      failure = { error };
+    } finally {
+      await renewal.stop();
+    }
+    if (failure !== undefined) {
+      await this.idempotency.settle(claim.ticket, this.errorResponse(failure.error, req, res));
+      throw failure.error;
     }
     if (res.headersSent) {
       this.logger.warn({ operationId }, "idempotency.answer_not_captured");

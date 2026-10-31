@@ -2,8 +2,10 @@
 // items 1 and 3): the Checkout Session's parameters, the trial on the first Stripe subscription only, the reuse of the
 // OTA's Stripe Customer, the plan rule (`PLAN_NOT_AVAILABLE`), the `CONFLICT`s, and what a Stripe failure answers and
 // leaves behind, including the attempts of the Customer creation after a failure that spent its idempotency key
-// (FIX-W29-PLATFORM; PADR-0002 item 3, revision of 2026-10-24). CheckoutService runs over the FakeStripe of
-// test/support/fake-stripe.ts and stand-ins of its repositories that record what they are asked to write.
+// (FIX-W29-PLATFORM; PADR-0002 item 3, revision of 2026-10-24), and billing's lock order in the Checkout's transaction:
+// the tenant's row before the pending row and the audit row (FIX-W31-PLATFORM; PADR-0002 item 5, revision of
+// 2026-10-27). CheckoutService runs over the FakeStripe of test/support/fake-stripe.ts and stand-ins of its repositories
+// that record what they are asked to lock and write.
 // test/integration/billing/checkout.int.test.ts runs the same rules through HTTP and PostgreSQL, with createTenant and
 // retryProvisioning.
 import type { ConfigService } from "@nestjs/config";
@@ -93,6 +95,8 @@ interface World {
   context: CustomerContext | undefined;
   current: CheckoutSubscriptionRow | undefined;
   hadStripeSubscription: boolean;
+  /** False when the tenant's row is gone (`lockTenant` finds nothing to lock). */
+  tenantExists: boolean;
   /** The attempt of the Customer creation (`billing_customer_attempts`; 0 without a row). */
   attempt: number;
   /** An error `advanceCustomerAttempt` throws (the database down), or `undefined`. */
@@ -101,6 +105,8 @@ interface World {
   readonly insertedCustomers: NewBillingCustomer[];
   readonly recorded: CheckoutSessionRecord[];
   readonly audited: AuditEntry[];
+  /** The locks and writes of the Checkout's transaction, in the order they were asked for. */
+  readonly steps: string[];
   readonly logs: Array<{ readonly line: unknown; readonly msg: unknown }>;
   readonly warnings: Array<{ readonly line: unknown; readonly msg: unknown }>;
 }
@@ -118,12 +124,14 @@ function harness(world: Partial<World> = {}): Harness {
     context: { name: "Nordic Fares AB", email: "owner@example.com" },
     current: undefined,
     hadStripeSubscription: false,
+    tenantExists: true,
     attempt: 0,
     moveFailure: undefined,
     moves: [],
     insertedCustomers: [],
     recorded: [],
     audited: [],
+    steps: [],
     logs: [],
     warnings: [],
     ...world,
@@ -157,13 +165,19 @@ function harness(world: Partial<World> = {}): Harness {
   const subscriptions = {
     findCurrentForCheckout: () => Promise.resolve(state.current),
     hasStripeSubscription: () => Promise.resolve(state.hadStripeSubscription),
+    lockTenant: (_trx: unknown, tenantId: string) => {
+      state.steps.push(`lockTenant ${tenantId}`);
+      return Promise.resolve(state.tenantExists);
+    },
     recordCheckoutSession: (_trx: unknown, record: CheckoutSessionRecord) => {
+      state.steps.push(`recordCheckoutSession ${record.id}`);
       state.recorded.push(record);
       return Promise.resolve(true);
     },
   } as unknown as SubscriptionsRepository;
   const audit = {
     record: (_trx: unknown, entry: AuditEntry) => {
+      state.steps.push(`audit ${entry.action}`);
       state.audited.push(entry);
       return Promise.resolve();
     },
@@ -458,6 +472,52 @@ describe("CheckoutService.start", () => {
     expect(error.code).toBe("PROVIDER_ERROR");
     expect(stripe.callsOf("checkout.sessions.create")).toEqual([]);
     expect(world.insertedCustomers).toEqual([]);
+  });
+
+  it("[FIX-W31-PLATFORM AC1] locks the tenant's row before it writes the pending row and the audit row, with or without a pending row", async () => {
+    // Billing's lock order (flow §D): billing sync and the admin's manual edit lock the tenant first, and the audit
+    // row's foreign key locks the tenant's row too, so the pending row may never be written before it.
+    const pending = harness();
+    await pending.service.start({
+      tenantId: TENANT,
+      accountId: ACCOUNT,
+      plan: STARTER_MONTH,
+      subscriptionId: SUBSCRIPTION,
+      requestKey: REQUEST_KEY,
+    });
+    expect(pending.world.steps).toEqual([
+      `lockTenant ${TENANT}`,
+      `recordCheckoutSession ${SUBSCRIPTION}`,
+      "audit billing.checkout_started",
+    ]);
+
+    const withoutRow = harness();
+    await withoutRow.service.start({
+      tenantId: TENANT,
+      accountId: ACCOUNT,
+      plan: STARTER_MONTH,
+      subscriptionId: null,
+      requestKey: REQUEST_KEY,
+    });
+    expect(withoutRow.world.steps).toEqual([`lockTenant ${TENANT}`, "audit billing.checkout_started"]);
+  });
+
+  it("[FIX-W31-PLATFORM AC1] writes nothing when the tenant's row is gone by the time the Session is recorded", async () => {
+    const { service, world } = harness({ tenantExists: false });
+
+    await expect(
+      service.start({
+        tenantId: TENANT,
+        accountId: ACCOUNT,
+        plan: STARTER_MONTH,
+        subscriptionId: SUBSCRIPTION,
+        requestKey: REQUEST_KEY,
+      }),
+    ).rejects.toThrow("the tenant of the Checkout does not exist");
+
+    expect(world.steps).toEqual([`lockTenant ${TENANT}`]);
+    expect(world.recorded).toEqual([]);
+    expect(world.audited).toEqual([]);
   });
 });
 

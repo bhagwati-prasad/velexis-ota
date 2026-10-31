@@ -91,6 +91,14 @@ How the page decides (OFE-015, `booking.html`, `src/pages/booking.js`, `src/comp
 | `429 RATE_LIMITED` | "Too many attempts, try again in N minutes" |
 | `400 VALIDATION_FAILED` | Field errors |
 
+How the page decides (OFE-016, `lookup.html`, `src/pages/lookup.js`):
+
+- **Who.** Everybody: a guest who lost the booking's cookie, a traveller on another device, a customer who booked as a guest. Below the form a visitor is offered sign-in to My bookings and a signed-in customer a link to My bookings (neither without customer accounts).
+- **The request.** The reference loses the spaces a copy from an e-mail may bring and goes out in capitals (the API compares it case-insensitively), the last name trimmed. `bookings.lookup({ bookingReference, lastName })` carries a new idempotency key for every submit (`crypto.randomUUID()`): the API keeps an answer under its key for 24 hours, so a corrected name with the first try's key would replay that `404` (or answer `409 IDEMPOTENCY_KEY_REUSED`); the SDK's own retries of one submit keep its key. A second submit while one runs sends nothing. Success opens `/booking.html?id=bkg_…` (only an id of the contract's pattern); the guest token is in the httpOnly `__Host-vx_bt` cookie and never in the page.
+- **One message for every mismatch.** Every `404` shows "We could not find a booking with these details" with the same hint, focuses it and marks neither field, whatever its body carries (no `fieldErrors`, `details`, message or request id of it is shown), so a wrong reference, a wrong name and both look the same. The typed values stay for a correction. Only the format checks before any request (nothing empty, a reference of 5 to 10 letters and digits, a last name of at most 60 characters) and the API's `400` mark a field, through the error summary of `lib/forms.js`.
+- **Too many attempts.** `429` says the wait of `retryAfterSeconds` ("try again in N minutes", in seconds under a minute) and disables the button until it has passed; a submit by the Enter key or a script does nothing meanwhile. Then the message goes, the button comes back and the live region says "You can try again now". A `429` without a wait says "try again later" and leaves the button on.
+- **Other failures** show the shared states: "not available right now" for `503` and connection failures, "Something went wrong" with the request id and the support address for anything else.
+
 ## 5. Authentication pages (M3)
 
 All forms keep paste and password managers working (`autocomplete="email"`, `current-password`, `new-password`). A `next` parameter is accepted only as a relative path starting with a single `/`.
@@ -142,7 +150,7 @@ How the pages decide (OFE-009, `src/pages/account-*.js`, `src/lib/session.js`):
 How the page decides (OFE-010, `src/pages/account-index.js`, `src/components/dialog.js`):
 
 - **Who gets in.** A visitor (no session from `boot()`), and a `401` of `account.get`, goes to `/account/sign-in.html?next=/account/` with `location.replace`; without customer accounts the page shows the shared "not available" state.
-- **Profile.** Save sends only the fields that differ from the profile as read (names trimmed, the phone compared without spaces, dots, hyphens and brackets, the calling code without its `+`); nothing changed sends nothing. Clearing both phone fields sends `phone: null`, clearing the date of birth `dateOfBirth: null`. The calling code goes out as `+<digits>` (the contract's `[0-9+]{2,5}` refuses a one-digit code such as `1` without it; the API drops the `+`), the device type as `MOBILE`. A blank name or half a phone number is marked before any request.
+- **Profile.** Save sends only the fields that differ from the profile as read (names trimmed, the phone compared without spaces, dots, hyphens and brackets, the calling code without its `+`); nothing changed sends nothing. Clearing both phone fields sends `phone: null`, clearing the date of birth `dateOfBirth: null`. The calling code (an optional `+` and one to three digits, the contract's `AmadeusPhone.countryCallingCode` since FIX-W30-OTA, `1` included) goes out as `+<digits>` (the API drops the `+`), the device type as `MOBILE`. A blank name or half a phone number is marked before any request.
 - **Stale version.** `412` keeps everything typed; Reload calls `account.get`, takes the new `version` and the new values of the fields the customer did not touch, and keeps the typed ones, so a second Save sends them on the new version. The e-mail change shares the version and the same Reload.
 - **E-mail.** The current address again, with no change pending, is refused on the page; with a change pending it withdraws it. The banner names the pending address ("until you open it, you sign in with …"), or the unconfirmed one; "Send the link again" calls `auth.resendVerification({ returnPath: "/account/" })` without an address (the API sends to the pending address, else the unconfirmed one).
 - **Deletion.** The native `<dialog>` takes the focus to the password field, closes on Escape and "Keep my account" (not while the request runs; a browser that closes it anyway on a repeated Escape sees it open again when the deletion fails, with the reason), forgets the password when it closes, and gives the focus back to the button that opened it. `reason` is sent only when chosen; `exportData` is never sent (the API answers `403 FEATURE_DISABLED` while exports are deferred), so the page asks the customer to write to the support address for a copy first. On success the header's account menu shows "Sign in" at once and the page goes to `/` with `location.replace`.
@@ -156,13 +164,17 @@ How the page decides (OFE-010, `src/pages/account-index.js`, `src/components/dia
 
 **SDK calls**
 
-1. `storefront.getPage({ slug })` with the slug from `location.pathname`.
-2. `lib/blocks.js` renders `blocks` (`heading`, `paragraph`, `list`, `image`, inline `text`, `strong`, `em`, `link`) with `createElement` and `textContent`; images use the same-origin asset URL; links are re-checked (`https:`, `mailto:`, `tel:`, `/p/…`).
-3. The footer of every page lists `storefront.listPages` entries with `showInFooter`, plus `config.legal.links` (external URL or page slug).
+1. `storefront.getPage({ slug })` with the slug from `location.pathname` (`/p/<slug>`, which Caddy rewrites to `p.html`; one trailing slash and upper case are accepted, as Caddy's matcher accepts them). The title is the `h1` and the document title; the article's `lang` is the page's `locale`.
+2. `lib/blocks.js` renders `blocks` (`heading`, `paragraph`, `list`, `image`, inline `text`, `strong`, `em`, `link`) with `createElement` and text nodes, never `innerHTML`; heading levels stay 2 to 4 (the title is the only `h1`). Images use the same-origin asset URL only (`/api/v1/assets/<tenantKey>/<assetId>.<ext>` of this OTA; any other image is left out). Links are re-checked (`https:`, `mailto:`, `tel:`, `/p/<slug>`, at most 2048 characters): `https:` links get `rel="noopener noreferrer"`, and a link that fails (`javascript:`, `data:`, `http:`, another path) is rendered as its plain text.
+3. The footer of every page that `boot()` starts lists `storefront.listPages` entries with `showInFooter` (in the API's order, kept in `sessionStorage` for 5 minutes like the configuration; a failure is ignored), after the legal links of `config.legal` (external URLs or the OTA's own `/p/<slug>` pages, never listed twice) and before the help centre. The link to the page being shown carries `aria-current="page"`. The airline-card page does not run `boot()` ([OADR-0017](../../docs/adr/0017-airline-card-form-isolation.md); `src/pages/checkout-pay-airline.js`): its footer keeps the partial's static links.
 
 | State | Shows |
 |---|---|
-| `404 NOT_FOUND` | The 404 page content in place (status stays 200 because the HTML is static; the page sets `noindex`) |
+| Loading | A skeleton (`aria-hidden`); the live region says "Loading" while boot reads the configuration |
+| `404 NOT_FOUND`, or a slug the API refuses | The 404 page content in place (status stays 200 because the HTML is static; the page sets `noindex`) |
+| An address without a valid slug (`/p/`, `/p.html`, `/p/a/b`) | The same 404 content, without a request |
+| `503`, connection failure, `429`, `500` | The shared inline state with Retry (`500` with the request id); its text is the document title and the live region announces it |
+| `403 TENANT_SUSPENDED`, `HOST_NOT_ALLOWED` | The shared state without Retry, its text the document title and announced |
 | Before M4 | No `/p/` links; legal links point to the OTA's external URLs from the configuration |
 
 ## 8. Not found and error pages (M2)

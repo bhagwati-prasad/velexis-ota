@@ -646,6 +646,24 @@ export const STRINGS = Object.freeze({
   "cancel.timeout": "The airline has not confirmed the cancellation yet",
   "cancel.timeoutText":
     "We are checking it and will e-mail you. You do not need to do anything, and please do not cancel again.",
+  // Guest lookup (src/pages/lookup.js, docs/pages-account.md §4). One message for every mismatch: it never says which
+  // of the reference and the name was wrong.
+  "lookup.found": "Booking found, opening it…",
+  "lookup.notFound": "We could not find a booking with these details",
+  "lookup.notFoundHint":
+    "Check the booking reference in your confirmation e-mail and the last name of a traveller, then try again.",
+  "lookup.tooManyAttempts": "Too many attempts, try again later",
+  "lookup.tooManyAttemptsSeconds": {
+    one: "Too many attempts, try again in {count} second",
+    other: "Too many attempts, try again in {count} seconds",
+  },
+  "lookup.tooManyAttemptsMinutes": {
+    one: "Too many attempts, try again in {count} minute",
+    other: "Too many attempts, try again in {count} minutes",
+  },
+  "lookup.tooManyAttemptsHint":
+    "To keep bookings safe, a booking can be looked up only a few times in a row.",
+  "lookup.canTryAgain": "You can try again now",
   // AmadeusDocumentType: the documents a traveller can show.
   "document.PASSPORT": "Passport",
   "document.IDENTITY_CARD": "ID card",
@@ -737,6 +755,9 @@ export const STRINGS = Object.freeze({
   // The payment step's own check (src/pages/checkout.js, docs/pages.md §7).
   "field.TERMS_REQUIRED":
     "Accept the terms and conditions, the privacy policy and the fare rules to continue",
+  // The lookup page's own check (src/pages/lookup.js, docs/pages-account.md §4).
+  "field.BOOKING_REFERENCE_FORMAT":
+    "Enter the reference as in your confirmation e-mail: 5 to 10 letters and digits",
 
   // Page states (lib/errors.js, ota/frontend/docs/pages.md §2 and the pages' state tables).
   "state.suspended": "This travel site is temporarily unavailable",

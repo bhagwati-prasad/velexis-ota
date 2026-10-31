@@ -24,6 +24,10 @@ import { ErrorState } from "./error-state";
 import { JsonView, formatJson } from "./json-view";
 import { Money, formatMoney } from "./money";
 import { STATUS_LABELS, StatusBadge, describeStatus } from "./status-badge";
+import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 
 /** A server action through React's action queue: quick alone, slower on a busy CI runner than one second. */
 const UI_WAIT = { timeout: 3_000 } as const;
@@ -214,6 +218,21 @@ describe("DataTable", () => {
     expect(screen.queryByRole("link", { name: "Next page" })).toBeNull();
   });
 
+  it("[FIX-W31-PLATFORM AC4] scrolls a wide table in a container that takes the keyboard focus and shows it", () => {
+    render(<DataTable caption="Bookings" columns={COLUMNS} data={[]} page={{ nextCursor: null }} />);
+
+    // axe `scrollable-region-focusable` (WCAG 2.1.1): the arrow keys scroll what the keyboard can focus, as the
+    // portal's table does since PFE-015.
+    const container = screen.getByRole("table", { name: "Bookings" }).parentElement as HTMLElement;
+    expect(container.dataset["slot"]).toBe("table-container");
+    expect(container.getAttribute("tabindex")).toBe("0");
+    expect(container.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["overflow-x-auto", "focus-visible:ring-[3px]", "focus-visible:ring-ring/50"]),
+    );
+    container.focus();
+    expect(document.activeElement).toBe(container);
+  });
+
   it("builds list URLs that keep repeated parameters and drop emptied ones", () => {
     const current = new URLSearchParams("status=confirmed&status=ticketed&q=x&cursor=c_9");
     expect(listHref("/bookings", current, { q: null, cursor: null })).toBe(
@@ -327,5 +346,78 @@ describe("EnvironmentBanner", () => {
 
     fireEvent.click(screen.getByRole("button", { name: ENVIRONMENT_STRINGS.dismiss }));
     expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
+describe("DropdownMenuItem", () => {
+  it("[FIX-W32-PLATFORM AC3] labels a focused destructive item in the foreground colour on its tint, never the destructive one", () => {
+    render(
+      <DropdownMenu open>
+        <DropdownMenuTrigger>Booking actions</DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuItem>Add a note</DropdownMenuItem>
+          <DropdownMenuItem variant="destructive">Cancel the booking</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    );
+
+    const item = within(screen.getByRole("menu")).getByRole("menuitem", { name: "Cancel the booking" });
+    expect(item.dataset["variant"]).toBe("destructive");
+    const classes = item.className.split(/\s+/);
+    // text-destructive on bg-destructive/10 over the popover is 4.0:1, under the 4.5:1 of WCAG 1.4.3; text-foreground
+    // there is 16.63:1. The look stays: the red label at rest (4.76:1), the tint and the red icon on focus.
+    expect(classes).toEqual(
+      expect.arrayContaining([
+        "data-[variant=destructive]:text-destructive",
+        "data-[variant=destructive]:focus:bg-destructive/10",
+        "data-[variant=destructive]:*:[svg]:!text-destructive",
+        "data-[variant=destructive]:focus:text-foreground",
+      ]),
+    );
+    expect(classes.filter((name) => /(^|:)focus:text-destructive/.test(name))).toEqual([]);
+  });
+});
+
+describe("destructive Button and Badge", () => {
+  it("darken on hover instead of fading, so their white text keeps 4.5:1", () => {
+    render(
+      <>
+        <Button variant="destructive">Reset two-factor</Button>
+        <Badge variant="destructive">Failed</Badge>
+      </>,
+    );
+
+    // bg-destructive/90 over a white page is #ea1a23: 4.49:1 for white text, under the 4.5:1 of WCAG 1.4.3 (axe found
+    // it on a hovered button in e2e run 40938272523). Mixing in 10% black is #c90008: 6.03:1; at rest 4.76:1.
+    const hover = "hover:bg-[color-mix(in_oklch,var(--destructive),black_10%)]";
+    const button = screen.getByRole("button", { name: "Reset two-factor" }).className.split(/\s+/);
+    const badge = screen.getByText("Failed").className.split(/\s+/);
+    expect(button).toContain(hover);
+    expect(badge).toContain(`[a&]:${hover}`);
+    expect([...button, ...badge].filter((name) => /hover:bg-destructive\/\d+$/.test(name))).toEqual([]);
+  });
+});
+
+describe("Tabs", () => {
+  it("[FIX-W32-PLATFORM AC3] sets the tab list's text in the foreground colour on the muted background, never the muted one", () => {
+    render(
+      <Tabs defaultValue="summary">
+        <TabsList aria-label="Booking sections">
+          <TabsTrigger value="summary">Summary</TabsTrigger>
+          <TabsTrigger value="payments">Payments</TabsTrigger>
+        </TabsList>
+        <TabsContent value="summary">The booking&apos;s summary.</TabsContent>
+      </Tabs>,
+    );
+
+    // text-muted-foreground on bg-muted is 4.34:1, under the 4.5:1 of WCAG 1.4.3; text-foreground there is 18.15:1.
+    const list = screen.getByRole("tablist", { name: "Booking sections" });
+    const classes = list.className.split(/\s+/);
+    expect(classes).toEqual(expect.arrayContaining(["bg-muted", "text-foreground"]));
+    expect(classes.filter((name) => /(^|:)text-muted-foreground$/.test(name))).toEqual([]);
+    // The triggers keep the colour they had, so the tabs look as before.
+    for (const tab of screen.getAllByRole("tab")) {
+      expect(tab.className.split(/\s+/)).toContain("text-foreground");
+    }
   });
 });

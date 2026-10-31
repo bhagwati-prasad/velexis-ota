@@ -9,12 +9,15 @@ function Tabs({ className, ...props }: React.ComponentProps<typeof TabsPrimitive
   return <TabsPrimitive.Root data-slot="tabs" className={cn("flex flex-col gap-2", className)} {...props} />;
 }
 
+// Not the registry's (FIX-W32-PLATFORM): the list's text is text-foreground, 18.15:1 on bg-muted, where the registry's
+// text-muted-foreground is 4.34:1, under the 4.5:1 of WCAG 1.4.3. Each TabsTrigger sets text-foreground already, so
+// the tabs look the same; text in the list outside a trigger gets the passing colour too.
 function TabsList({ className, ...props }: React.ComponentProps<typeof TabsPrimitive.List>) {
   return (
     <TabsPrimitive.List
       data-slot="tabs-list"
       className={cn(
-        "bg-muted text-muted-foreground inline-flex h-9 w-fit items-center justify-center rounded-lg p-[3px]",
+        "bg-muted text-foreground inline-flex h-9 w-fit items-center justify-center rounded-lg p-[3px]",
         className,
       )}
       {...props}

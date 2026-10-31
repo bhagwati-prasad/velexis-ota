@@ -9,8 +9,12 @@
 // OBE-024 (`tenantIdsByStatus`, for src/jobs/fan-out.ts), the default payment connection of an environment in OBE-038
 // (`paymentConnection`, for the Stripe gateway of src/payments/), a staff member's membership with its account in
 // OBE-059 (`staffMember`, for the staff sessions of src/identity/staff/), the account modes of a tenant's payment
-// connections in OBE-068 (`paymentConnectionModes`, for console.payments of src/console/), and the e-mail addresses
-// of a tenant's owners in OBE-055 (`ownerEmails`, for the staff alerts of src/notifications/staff-recipients.ts).
+// connections in OBE-068 (`paymentConnectionModes`, for console.payments of src/console/), the e-mail addresses of a
+// tenant's owners in OBE-055 (`ownerEmails`, for the staff alerts of src/notifications/staff-recipients.ts), the
+// monitored queues of a tenant's Amadeus connections in OBE-065 (`monitoredQueues`, for the queue poller of
+// src/console/queue-poller.processor.ts), and the payment connection of a connected Stripe account and a connection
+// with its webhook signing secret's ciphertext in OBE-078 (`connectPaymentConnection`, `paymentConnectionWebhook`, for
+// the Connect and `c/<ppc_id>` receivers of src/payments/webhooks/).
 import { Inject, Injectable } from "@nestjs/common";
 import {
   assertTenantSchema,
@@ -217,6 +221,86 @@ type AmadeusAccountRow = Pick<
   (typeof AMADEUS_ACCOUNT_COLUMNS)[number]
 >;
 
+/** A queue the queue poller reads (`platform.supplier_connections.monitored_queues`, the portal's list). */
+export interface PlatformMonitoredQueue {
+  /** The office whose queue is read (Queue List `officeId`). */
+  readonly officeId: string;
+  /** The queue number, 0–99 (Queue List `queue-id`). */
+  readonly queueId: number;
+  /** The category, 0–254 (Queue List `category`). */
+  readonly category: number;
+}
+
+/** The monitored queues of one of a tenant's Amadeus connections (OBE-065, `monitoredQueues`). */
+export interface PlatformMonitoredQueues {
+  /** `sc_` + ULID. */
+  readonly connectionId: string;
+  readonly environment: AmadeusEnvironment;
+  /** Only an `active` connection is polled (the connection resolver serves no other). */
+  readonly status: AmadeusCredentialStatus;
+  /** The well-formed entries of the list, each once, in the platform's order, at most MAX_MONITORED_QUEUES. */
+  readonly queues: readonly PlatformMonitoredQueue[];
+  /** Entries that are not a queue the poller can read (another shape or range), or beyond MAX_MONITORED_QUEUES. */
+  readonly invalid: number;
+}
+
+/** How many queues of one connection are polled at most: the platform document's `maxItems` of `monitoredQueues`. */
+export const MAX_MONITORED_QUEUES = 20;
+
+/** An Amadeus office id (`NCE1A0955`), as the platform document's `AmadeusOfficeId` writes it. */
+const OFFICE_ID_PATTERN = /^[A-Z0-9]{9}$/;
+/** The largest queue number and category of Queue List, as the OTA document's console parameters bound them. */
+const MAX_QUEUE_ID = 99;
+const MAX_QUEUE_CATEGORY = 254;
+
+const isIntegerIn = (value: unknown, max: number): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max;
+
+/**
+ * The queues of a `monitored_queues` value (`[{officeId, queueId, category}]`, jsonb): each well-formed entry once (an
+ * office id, a queue 0–99, a category 0–254, no other field), in order, at most MAX_MONITORED_QUEUES; everything else
+ * (a value that is not a list, an entry of another shape, a repeated or surplus entry) is counted as `invalid`.
+ */
+export function parseMonitoredQueues(value: unknown): {
+  readonly queues: readonly PlatformMonitoredQueue[];
+  readonly invalid: number;
+} {
+  if (!Array.isArray(value)) {
+    return { queues: [], invalid: value === null || value === undefined ? 0 : 1 };
+  }
+  const queues: PlatformMonitoredQueue[] = [];
+  const seen = new Set<string>();
+  let invalid = 0;
+  for (const entry of value as readonly unknown[]) {
+    const fields =
+      typeof entry === "object" && entry !== null && !Array.isArray(entry)
+        ? (entry as Record<string, unknown>)
+        : undefined;
+    const officeId = fields?.["officeId"];
+    const queueId = fields?.["queueId"];
+    const category = fields?.["category"];
+    if (
+      fields === undefined ||
+      Object.keys(fields).some((key) => key !== "officeId" && key !== "queueId" && key !== "category") ||
+      typeof officeId !== "string" ||
+      !OFFICE_ID_PATTERN.test(officeId) ||
+      !isIntegerIn(queueId, MAX_QUEUE_ID) ||
+      !isIntegerIn(category, MAX_QUEUE_CATEGORY)
+    ) {
+      invalid += 1;
+      continue;
+    }
+    const key = `${officeId}/${queueId}/${category}`;
+    if (seen.has(key) || queues.length >= MAX_MONITORED_QUEUES) {
+      invalid += 1;
+      continue;
+    }
+    seen.add(key);
+    queues.push(Object.freeze({ officeId, queueId, category }));
+  }
+  return { queues: Object.freeze(queues), invalid };
+}
+
 /** `platform.payment_provider_connections.provider` (the baseline CHECK). */
 export const PAYMENT_PROVIDERS = ["stripe", "adyen", "checkout_com", "paypal", "manual"] as const;
 export type PaymentProvider = (typeof PAYMENT_PROVIDERS)[number];
@@ -239,8 +323,10 @@ export type PaymentCaptureMode = (typeof PAYMENT_CAPTURE_MODES)[number];
 /**
  * A tenant's default payment connection of one environment (`platform.payment_provider_connections`, OADR-0010 point
  * 1), as far as the payment gateway relies on it (OBE-038): plain and JSON-safe, so the `conn:payment:` cache stores it
- * as it is. The secret columns (`secret_ciphertext`, `webhook_secret_ciphertext`, which only the `api_keys` mode of M5
- * fills) are never selected; the `velexis` mode uses Velexis's keys from the environment file.
+ * as it is. The `velexis` and `connect_standard` modes use Velexis's keys from the environment file; the
+ * `api_keys` mode's secret key stays the platform's envelope ciphertext, as base64 text (`secretCiphertext`), which
+ * only the Stripe gateway decrypts, in memory, for one call (OBE-077), as the Amadeus client secret of
+ * `PlatformAmadeusConnection`. The webhook signing secret (`webhook_secret_ciphertext`) is not selected.
  */
 export interface PlatformPaymentConnection {
   /** `ppc_` + ULID. */
@@ -259,6 +345,11 @@ export interface PlatformPaymentConnection {
   readonly status: PaymentConnectionStatus;
   /** The card statement descriptor suffix with the OTA's brand (`velexis` mode), or `null`. */
   readonly statementDescriptorSuffix: string | null;
+  /**
+   * base64 of `secret_ciphertext` (`api_keys` mode only, else `null`): the OTA's secret or restricted key, encrypted by
+   * the platform for `platform.payment_provider_connections.secret_ciphertext:<id>`.
+   */
+  readonly secretCiphertext: string | null;
 }
 
 /** The columns of `platform.payment_provider_connections` that `PlatformPaymentConnection` maps. */
@@ -274,12 +365,28 @@ const PAYMENT_CONNECTION_COLUMNS = [
   "capture_mode",
   "status",
   "statement_descriptor_suffix",
+  "secret_ciphertext",
 ] as const;
 
 type PaymentConnectionRow = Pick<
   Selectable<PlatformDatabase["platform.payment_provider_connections"]>,
   (typeof PAYMENT_CONNECTION_COLUMNS)[number]
 >;
+
+/**
+ * A payment connection with the ciphertext of its webhook signing secret (OBE-078): what the receiver of
+ * `/webhooks/stripe/c/<ppc_id>` (`api_keys` mode) checks a delivery's signature with. Read for each delivery and never
+ * cached, so the signing secret's ciphertext stays out of the `conn:payment:` cache.
+ */
+export interface PlatformPaymentConnectionWebhook {
+  readonly connection: PlatformPaymentConnection;
+  /**
+   * base64 of `webhook_secret_ciphertext` (`api_keys` mode only, else `null`): the OTA's signing secret, encrypted by
+   * the platform for `platform.payment_provider_connections.webhook_secret_ciphertext:<id>`, decrypted only by the
+   * webhook receiver.
+   */
+  readonly webhookSecretCiphertext: string | null;
+}
 
 /** `platform.tenant_memberships.role`: the console roles (scope §1.3), the contract's `StaffRole`. */
 export const STAFF_ROLES = ["owner", "admin", "agent", "finance", "viewer"] as const;
@@ -369,6 +476,8 @@ const ACCOUNT_ID_PATTERN = /^acc_[0-9A-Za-z]{1,60}$/;
 const AMADEUS_ACCOUNT_ID_PATTERN = /^ama_[0-9A-Za-z]{1,60}$/;
 /** A payment connection id (`ppc_` and a ULID). */
 const PAYMENT_CONNECTION_ID_PATTERN = /^ppc_[0-9A-Za-z]{1,60}$/;
+/** A Stripe account (`acct_` and letters and digits, the platform's CHECK `payment_provider_connections_mode_ck`). */
+const STRIPE_ACCOUNT_PATTERN = /^acct_[0-9A-Za-z]{1,255}$/;
 
 /**
  * A host name as `platform.tenant_domains.hostname` stores it (PADR-0004 item 1, the rule of `redis.keys.ts`): lower
@@ -387,6 +496,27 @@ export class PlatformReadRepository {
       trx.selectFrom("platform.tenants").select(TENANT_COLUMNS).where("id", "=", id).executeTakeFirst(),
     );
     return row === undefined ? null : toPlatformTenant(row);
+  }
+
+  /**
+   * The business time zone of the tenant with this id (`platform.tenants.time_zone`, read as `tenant_time_zone` as
+   * `staffMember` reads it; an IANA zone of `reference.time_zones`), or `null` when there is none. `PlatformTenant`
+   * does not carry it (the tenant cache stays as it is): provisioning reads it once to seed the storefront settings'
+   * `time_zone` (lead decision (2a) of 2026-10-30, FIX-W35-OTA). A value that cannot be a tenant id is unknown without
+   * a query.
+   */
+  async tenantTimeZone(id: string): Promise<string | null> {
+    if (!TENANT_ID_PATTERN.test(id)) {
+      return null;
+    }
+    const row = await this.read((trx) =>
+      trx
+        .selectFrom("platform.tenants")
+        .select("time_zone as tenant_time_zone")
+        .where("id", "=", id)
+        .executeTakeFirst(),
+    );
+    return row?.tenant_time_zone ?? null;
   }
 
   /**
@@ -509,10 +639,42 @@ export class PlatformReadRepository {
   }
 
   /**
+   * The queues the queue poller reads for tenant `tenantId` (OBE-065): one entry per Amadeus connection of the tenant
+   * (`platform.supplier_connections`, provider `amadeus`, whatever its status), test before live, with its status and
+   * the well-formed entries of its `monitored_queues` (`parseMonitoredQueues`). Nothing else of the connection is
+   * read: the calls resolve it through the connection resolver. A value that cannot be a tenant id is unknown without
+   * a query. An environment or status outside the CHECK lists throws `UnexpectedPlatformValueError`.
+   */
+  async monitoredQueues(tenantId: string): Promise<PlatformMonitoredQueues[]> {
+    if (!TENANT_ID_PATTERN.test(tenantId)) {
+      return [];
+    }
+    const rows = await this.read((trx) =>
+      trx
+        .selectFrom("platform.supplier_connections")
+        .select(["id", "environment", "status", "monitored_queues"])
+        .where("tenant_id", "=", tenantId)
+        .where("provider", "=", "amadeus")
+        .orderBy("environment", "desc")
+        .execute(),
+    );
+    const column = (name: string) => `platform.supplier_connections.${name}`;
+    return rows.map((row) =>
+      Object.freeze({
+        connectionId: row.id,
+        environment: oneOf(row.environment, AMADEUS_ENVIRONMENTS, column("environment"), row.id),
+        status: oneOf(row.status, AMADEUS_CREDENTIAL_STATUSES, column("status"), row.id),
+        ...parseMonitoredQueues(row.monitored_queues),
+      }),
+    );
+  }
+
+  /**
    * The tenant's default payment connection of `environment` (`platform.payment_provider_connections`, `is_default`:
    * one per tenant and environment, `payment_provider_connections_default_uq`), whatever its provider, mode and status,
-   * or `null` when there is none: those are the payment gateway's checks (OBE-038). The secret columns are not read. A
-   * value that cannot be a tenant id or an environment is unknown without a query.
+   * or `null` when there is none: those are the payment gateway's checks (OBE-038). The secret key's ciphertext is read
+   * as base64 text and never decrypted here (OBE-077); the webhook signing secret is not read. A value that cannot be a
+   * tenant id or an environment is unknown without a query.
    */
   async paymentConnection(
     tenantId: string,
@@ -531,6 +693,59 @@ export class PlatformReadRepository {
         .executeTakeFirst(),
     );
     return row === undefined ? null : toPlatformPaymentConnection(row);
+  }
+
+  /**
+   * The `connect_standard` Stripe connection of `environment` whose `account_reference` is `accountReference`
+   * (`payment_provider_connections_connect_uq`: at most one), whatever its tenant, default flag and status, or `null`
+   * (OBE-078): the only source of the tenant on the Connect webhook endpoint (OADR-0010 point 4). A value that cannot be
+   * a Stripe account or an environment is unknown without a query. The webhook signing secret is not read.
+   */
+  async connectPaymentConnection(
+    environment: AmadeusEnvironment,
+    accountReference: string,
+  ): Promise<PlatformPaymentConnection | null> {
+    if (!STRIPE_ACCOUNT_PATTERN.test(accountReference) || !isOneOf(environment, AMADEUS_ENVIRONMENTS)) {
+      return null;
+    }
+    const row = await this.read((trx) =>
+      trx
+        .selectFrom("platform.payment_provider_connections")
+        .select(PAYMENT_CONNECTION_COLUMNS)
+        .where("provider", "=", "stripe")
+        .where("environment", "=", environment)
+        .where("account_mode", "=", "connect_standard")
+        .where("account_reference", "=", accountReference)
+        .executeTakeFirst(),
+    );
+    return row === undefined ? null : toPlatformPaymentConnection(row);
+  }
+
+  /**
+   * Payment connection `id` with the ciphertext of its webhook signing secret (`PlatformPaymentConnectionWebhook`),
+   * whatever its tenant, provider, mode, default flag and status, or `null` (OBE-078): the only source of the tenant on
+   * the `c/<ppc_id>` webhook endpoint, whose receiver checks the mode (OADR-0010 point 4). Both ciphertexts are read as
+   * base64 text and never decrypted here. A value that cannot be a connection id is unknown without a query.
+   */
+  async paymentConnectionWebhook(id: string): Promise<PlatformPaymentConnectionWebhook | null> {
+    if (!PAYMENT_CONNECTION_ID_PATTERN.test(id)) {
+      return null;
+    }
+    const row = await this.read((trx) =>
+      trx
+        .selectFrom("platform.payment_provider_connections")
+        .select([...PAYMENT_CONNECTION_COLUMNS, "webhook_secret_ciphertext"])
+        .where("id", "=", id)
+        .executeTakeFirst(),
+    );
+    if (row === undefined) {
+      return null;
+    }
+    const { webhook_secret_ciphertext: webhookSecret, ...connection } = row;
+    return Object.freeze({
+      connection: toPlatformPaymentConnection(connection),
+      webhookSecretCiphertext: webhookSecret === null ? null : webhookSecret.toString("base64"),
+    });
   }
 
   /**
@@ -744,7 +959,8 @@ function toPlatformAmadeusAccount(row: AmadeusAccountRow): PlatformAmadeusAccoun
 
 /**
  * Maps a `platform.payment_provider_connections` row. A provider, environment, mode, capture mode or status outside the
- * CHECK lists throws `UnexpectedPlatformValueError`; the method list becomes a frozen copy.
+ * CHECK lists throws `UnexpectedPlatformValueError`; the method list becomes a frozen copy, the secret key's ciphertext
+ * base64 text.
  */
 function toPlatformPaymentConnection(row: PaymentConnectionRow): PlatformPaymentConnection {
   const column = (name: string) => `platform.payment_provider_connections.${name}`;
@@ -760,6 +976,7 @@ function toPlatformPaymentConnection(row: PaymentConnectionRow): PlatformPayment
     captureMode: oneOf(row.capture_mode, PAYMENT_CAPTURE_MODES, column("capture_mode"), row.id),
     status: oneOf(row.status, PAYMENT_CONNECTION_STATUSES, column("status"), row.id),
     statementDescriptorSuffix: row.statement_descriptor_suffix,
+    secretCiphertext: row.secret_ciphertext === null ? null : row.secret_ciphertext.toString("base64"),
   });
 }
 

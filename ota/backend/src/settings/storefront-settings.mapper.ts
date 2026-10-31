@@ -12,7 +12,9 @@
 //                features {ancillaries, brandedFareUpsell, selfServiceCancellation}
 //   policies     ticketing_policy, payment_timing, require_3ds, accepted_card_brands, require_email_verification,
 //                offer_ttl_minutes, checkout_ttl_minutes
-//   airlineCard  airline_card_enabled_test, airline_card_enabled_live
+//   airlineCard  airline_card_enabled_test, airline_card_enabled_live; `liveAvailable` (read-only) is the API's
+//                `AIRLINE_CARD_ENABLED` switch, added to the answers by the service (`withLiveAvailability`), never
+//                stored: a value an update sends is ignored (FIX-W35-OTA)
 //   legal        terms_version, privacy_version, legal_links [{kind, label, url} | {kind, label, pageSlug}]
 //   support      support_email, support_phone, support_details {hours, helpCenterUrl, emergencyPhone}
 //   seo          seo {titleTemplate, defaultTitle, defaultDescription, robots: {index, follow}}, og_image_asset_id
@@ -406,6 +408,25 @@ export function toStorefrontSettings(row: StorefrontSettingsEditRow): Storefront
     },
     version: row.version,
     updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * The settings as console.settings.storefront.get and update answer them: `airlineCard` with the read-only
+ * `liveAvailable`, the API's `AIRLINE_CARD_ENABLED` switch (lead decision (2d) of 2026-10-30, second batch,
+ * FIX-W35-OTA). The stored flags are kept as they are; nothing else changes.
+ */
+export function withLiveAvailability(
+  settings: StorefrontSettings,
+  liveAvailable: boolean,
+): StorefrontSettings {
+  return {
+    ...settings,
+    airlineCard: {
+      enabledTest: settings.airlineCard.enabledTest,
+      enabledLive: settings.airlineCard.enabledLive,
+      liveAvailable,
+    },
   };
 }
 

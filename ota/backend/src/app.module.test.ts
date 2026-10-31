@@ -6,7 +6,11 @@
 // a test whose log lines are counted gets its own application (`appPerTest`, a beforeEach hook), the others share one
 // per block (`appForBlock`, a beforeAll hook). They are closed together after the file: each close waits up to
 // BULLMQ_STARTUP_SETTLE_MS (1 s) for the queues that cannot reach their Redis, which took about 1 s of every test while
-// each test closed its own.
+// each test closed its own. The request-logging tests (lead decision (2j) of 2026-10-30, third batch, FIX-W36-OTA) keep an
+// application each, but all of them start in the block's beforeAll hook and serve their first request there
+// (`warmAppPerTest`, `warmUp`): a beforeEach hook's start counted in each test's reported time, and the first request
+// of a fresh application (Express's and Nest's first routing, the first CLS context and pino-http line) in its body,
+// 0.2 to 0.5 s idle per test and much more under load. The tests' assertions are unchanged.
 import { Body, Controller, Get, Module, Post, Req, type INestApplication } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { ClsService } from "nestjs-cls";
@@ -73,6 +77,18 @@ class ProbeController {
 const APP_START_TIMEOUT_MS = 30_000;
 
 /**
+ * The budget of a first request to a fresh application (`warmUp`) until its request line is in the sink: about 0.2 s
+ * alone, a few seconds while every package's tests run at once on a 4-CPU runner. It only stops a request that hangs.
+ */
+const WARM_UP_TIMEOUT_MS = 15_000;
+
+/**
+ * The budget of the beforeAll hook that starts and warms the request-logging block's applications one after the other
+ * (`warmAppPerTest`): about 0.3 s each alone, a few seconds each under load. It only stops a start that hangs.
+ */
+const WARM_APPS_TIMEOUT_MS = 90_000;
+
+/**
  * The budget of the hook that closes every application of the file at once: each close waits up to
  * BULLMQ_STARTUP_SETTLE_MS (1 s) for its queues, which never reach the unreachable Redis, and they wait together.
  */
@@ -105,7 +121,8 @@ function started(current: StartedApp | undefined): StartedApp {
 /**
  * Gives each test of the current block an application of its own, started in its beforeEach hook (after `prepare`,
  * which may stub the environment: Vitest unstubs it before each test's hooks), so no line of another test reaches its
- * sink.
+ * sink. With `warm`, the hook also sends the application its first request (`warmUp`), whose lines are all in the sink
+ * before the test starts counting.
  */
 function appPerTest(env: Record<string, string> = {}, prepare?: () => void): () => StartedApp {
   let current: StartedApp | undefined;
@@ -115,6 +132,60 @@ function appPerTest(env: Record<string, string> = {}, prepare?: () => void): () 
     current = await startApp(env);
   }, APP_START_TIMEOUT_MS);
   return () => started(current);
+}
+
+/**
+ * Gives each of the `count` tests of the current block an application of its own, as `appPerTest` does, but starts
+ * them all, each with its first request served (`warmUp`), in the block's beforeAll hook; each test's beforeEach hook
+ * only takes the next one. A test beyond `count` gets one started and warmed in its own beforeEach hook.
+ */
+function warmAppPerTest(count: number): () => StartedApp {
+  const ready: StartedApp[] = [];
+  let current: StartedApp | undefined;
+  beforeAll(async () => {
+    // One after the other, as the tests used to start them.
+    for (let index = 0; index < count; index += 1) {
+      ready.push(await warmStart());
+    }
+  }, WARM_APPS_TIMEOUT_MS);
+  beforeEach(
+    async () => {
+      current = undefined;
+      current = ready.shift() ?? (await warmStart());
+    },
+    // Only when the block has more tests than `count`: a start and a first request.
+    APP_START_TIMEOUT_MS + WARM_UP_TIMEOUT_MS,
+  );
+  return () => started(current);
+}
+
+/** A started application that has served its first request (`warmUp`); only the setup hooks call it. */
+async function warmStart(): Promise<StartedApp> {
+  const app = await startApp();
+  await warmUp(app);
+  return app;
+}
+
+/**
+ * The first request of a fresh application (see the file header): one probe request, then a wait until its request
+ * line is in the sink, so every line of it lies before the lines a test counts (pino-http writes the request line when
+ * the response finishes, which may come after supertest has the response).
+ */
+async function warmUp({ app, sink }: StartedApp): Promise<void> {
+  const from = sink.lines.length;
+  const response = await request(app.getHttpServer()).get("/v1/probe");
+  expect(response.status).toBe(200);
+  await vi.waitFor(
+    () => {
+      expect(
+        sink
+          .records()
+          .slice(from)
+          .filter((line) => line["msg"] === "request completed"),
+      ).toHaveLength(1);
+    },
+    { timeout: WARM_UP_TIMEOUT_MS, interval: 20 },
+  );
 }
 
 /** Gives the tests of the current block one application, started in its beforeAll hook. */
@@ -154,8 +225,9 @@ async function requestLines(sink: MemorySink, from: number, count: number): Prom
 }
 
 describe("request id and request logging", () => {
-  // Every test counts the log lines of its own requests: each has an application of its own.
-  const current = appPerTest();
+  // Every test counts the log lines of its own requests: each has an application of its own, started and warmed with
+  // the others in the block's beforeAll hook (one per test of the block).
+  const current = warmAppPerTest(6);
 
   it("logs one request line and every handler line with the requestId it returns in X-Request-Id [OBE-001 AC4]", async () => {
     const { app, sink } = current();

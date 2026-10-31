@@ -22,6 +22,7 @@ vi.mock("@/config", () => ({ getConfig: () => settings.current }));
 import { SECURITY_HEADERS } from "../next.config";
 import {
   ENVIRONMENT_COOKIE,
+  PAGE_PATH_HEADER,
   STAFF_ACCESS_TOKEN_COOKIE,
   STAFF_REFRESH_TOKEN_COOKIE,
   TENANT_COOKIE,
@@ -161,6 +162,23 @@ describe("matcher and runtime", () => {
     for (const path of ["/", "/bookings", "/sso/x", "/auth", "/auth/other", "/signed-out/x", "/SSO"]) {
       expect(isPublicPath(path), path).toBe(false);
     }
+  });
+});
+
+describe("the page's address for /auth/refresh?next= (FIX-W33-OTA)", () => {
+  it("[FIX-W33-OTA] [OAD-002] hands the page's path and query to the page, without Next.js's _rsc, over any value the browser sent", async () => {
+    const cookies = sessionCookies(900);
+
+    const page = await middleware(
+      request("/bookings?status=confirmed&_rsc=1x2y3", {
+        cookies,
+        headers: { [PAGE_PATH_HEADER]: "https://evil.example/phish" },
+      }),
+    );
+    const root = await middleware(request("/", { cookies }));
+
+    expect(forwardedHeader(page, PAGE_PATH_HEADER)).toBe("/bookings?status=confirmed");
+    expect(forwardedHeader(root, PAGE_PATH_HEADER)).toBe("/");
   });
 });
 

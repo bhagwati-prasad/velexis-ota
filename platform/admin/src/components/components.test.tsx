@@ -54,7 +54,10 @@ import { ReasonDialog, reasonLength, reasonProblem } from "@/components/reason-d
 import { REVEAL_DURATION_MS, RevealPanel } from "@/components/reveal-panel";
 import { StatusBadge } from "@/components/status-badge";
 import { StepUpDialog, useStepUpAction } from "@/components/step-up-dialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { ApiError } from "@/lib/api";
 import { ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE, type AdminSession } from "@/lib/session";
 import {
@@ -916,6 +919,82 @@ describe("DataTable", () => {
     render(<DataTable caption="Tenants" columns={columns} data={[]} page={{ nextCursor: null }} />);
     expect(within(screen.getByRole("table")).getByText(TABLE_STRINGS.empty)).toBeTruthy();
     expect(screen.queryByRole("navigation")).toBeNull();
+  });
+
+  it("[FIX-W31-PLATFORM AC4] scrolls a wide table in a container that takes the keyboard focus and shows it", () => {
+    render(<DataTable caption="Tenants" columns={columns} data={rows} getRowId={(row) => row.id} />);
+
+    // axe `scrollable-region-focusable` (WCAG 2.1.1): the arrow keys scroll what the keyboard can focus, as the
+    // portal's table does since PFE-015.
+    const container = screen.getByRole("table", { name: "Tenants" }).parentElement as HTMLElement;
+    expect(container.dataset["slot"]).toBe("table-container");
+    expect(container.getAttribute("tabindex")).toBe("0");
+    expect(container.className.split(/\s+/)).toEqual(
+      expect.arrayContaining(["overflow-x-auto", "focus-visible:ring-[3px]", "focus-visible:ring-ring/50"]),
+    );
+    container.focus();
+    expect(document.activeElement).toBe(container);
+  });
+});
+
+describe("Alert", () => {
+  it("[FIX-W31-PLATFORM AC4] colours a destructive description in the full destructive colour, never a lighter one", () => {
+    render(
+      <Alert variant="destructive">
+        <AlertTitle>The plan could not be saved</AlertTitle>
+        <AlertDescription>Try again in a moment.</AlertDescription>
+      </Alert>,
+    );
+
+    // text-destructive/90 on the card is 4.49:1, under the 4.5:1 of WCAG 1.4.3 (the portal's fix of PFE-015).
+    const classes = screen.getByRole("alert").className.split(/\s+/);
+    expect(classes).toContain("*:data-[slot=alert-description]:text-destructive");
+    expect(classes.filter((name) => /text-destructive\/\d+$/.test(name))).toEqual([]);
+    expect(screen.getByText("Try again in a moment.").dataset["slot"]).toBe("alert-description");
+  });
+});
+
+describe("destructive Button and Badge", () => {
+  it("darken on hover instead of fading, so their white text keeps 4.5:1", () => {
+    render(
+      <>
+        <Button variant="destructive">Reset two-factor</Button>
+        <Badge variant="destructive">Failed</Badge>
+      </>,
+    );
+
+    // bg-destructive/90 over a white page is #ea1a23: 4.49:1 for white text, under the 4.5:1 of WCAG 1.4.3 (axe found
+    // it on a hovered button in e2e run 40938272523). Mixing in 10% black is #c90008: 6.03:1; at rest 4.76:1.
+    const hover = "hover:bg-[color-mix(in_oklch,var(--destructive),black_10%)]";
+    const button = screen.getByRole("button", { name: "Reset two-factor" }).className.split(/\s+/);
+    const badge = screen.getByText("Failed").className.split(/\s+/);
+    expect(button).toContain(hover);
+    expect(badge).toContain(`[a&]:${hover}`);
+    expect([...button, ...badge].filter((name) => /hover:bg-destructive\/\d+$/.test(name))).toEqual([]);
+  });
+});
+
+describe("Tabs", () => {
+  it("[FIX-W32-PLATFORM AC3] sets the tab list's text in the foreground colour on the muted background, never the muted one", () => {
+    render(
+      <Tabs defaultValue="overview">
+        <TabsList aria-label="Tenant sections">
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="members">Members</TabsTrigger>
+        </TabsList>
+        <TabsContent value="overview">The OTA&apos;s fields.</TabsContent>
+      </Tabs>,
+    );
+
+    // text-muted-foreground on bg-muted is 4.34:1, under the 4.5:1 of WCAG 1.4.3; text-foreground there is 18.15:1.
+    const list = screen.getByRole("tablist", { name: "Tenant sections" });
+    const classes = list.className.split(/\s+/);
+    expect(classes).toEqual(expect.arrayContaining(["bg-muted", "text-foreground"]));
+    expect(classes.filter((name) => /(^|:)text-muted-foreground$/.test(name))).toEqual([]);
+    // The triggers keep the colour they had, so the tabs look as before.
+    for (const tab of screen.getAllByRole("tab")) {
+      expect(tab.className.split(/\s+/)).toContain("text-foreground");
+    }
   });
 });
 

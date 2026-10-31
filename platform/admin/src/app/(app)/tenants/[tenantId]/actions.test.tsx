@@ -538,6 +538,17 @@ describe("suspend and resume (PADR-0014, PF-82)", () => {
     expect(nextCache.revalidatePath).toHaveBeenCalledWith(PAGE_PATH);
   });
 
+  it("[PAD-005 AC1] the Suspend button of an OTA active again is a new element, not the Resume button restyled", () => {
+    const props = { tenantId: TENANT_ID, tenantName: "Acme Travel" } as const;
+    const { rerender } = render(<SuspendResumeForm {...props} status="suspended" suspensionReason="abuse" />);
+    const resume = screen.getByRole("button", { name: LIFECYCLE_STRINGS.resume });
+    rerender(<SuspendResumeForm {...props} status="active" suspensionReason={null} />);
+    const suspend = screen.getByRole("button", { name: LIFECYCLE_STRINGS.suspend });
+    // A restyled <button> would fade from outline to destructive through colours below 4.5:1 (`transition-all`).
+    expect(suspend).not.toBe(resume);
+    expect(resume.isConnected).toBe(false);
+  });
+
   it("[PAD-005 AC1] resuming requires a reason and shows the new status and the resume job [PF-82]", async () => {
     routes({
       [`GET ${TENANT_PATH}`]: () =>

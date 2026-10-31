@@ -15,7 +15,7 @@ import { testApiCredentials } from "../../../test/helpers/api-env";
 import type { Clock } from "../../common/clock";
 import { hashMaterialOf, type IdempotentInput } from "../../common/http/idempotency.service";
 import { IdGenerator } from "../../common/ids";
-import type { ApiConfig } from "../../config";
+import type { ApiConfig, SharedConfig } from "../../config";
 import type { PlatformCache } from "../../tenancy/platform-cache";
 import type {
   PlatformAmadeusConnection,
@@ -360,23 +360,39 @@ describe("permissions and environments", () => {
       status: "active",
     } satisfies PlatformAmadeusConnection;
 
-    expect(toConsoleTenant(tenantRow(), "Europe/Paris", "test", connection).supplier).toEqual({
+    expect(
+      toConsoleTenant(tenantRow(), "Europe/Paris", "test", connection, "ota.example.com").supplier,
+    ).toEqual({
       connected: true,
       officeIds: ["NCE1A0950"],
       defaultOfficeId: "NCE1A0950",
       queuingOfficeId: "NCE1A0950",
     });
-    expect(toConsoleTenant(tenantRow(), "UTC", "live", { ...connection, status: "disabled" })).toMatchObject({
+    expect(
+      toConsoleTenant(tenantRow(), "UTC", "live", { ...connection, status: "disabled" }, "ota.example.com"),
+    ).toMatchObject({
       environment: "live",
       timeZone: "UTC",
       supplier: { connected: false },
     });
-    expect(toConsoleTenant(tenantRow(), "UTC", "test", null).supplier).toEqual({
+    expect(toConsoleTenant(tenantRow(), "UTC", "test", null, "ota.example.com").supplier).toEqual({
       connected: false,
       officeIds: [],
       defaultOfficeId: null,
       queuingOfficeId: null,
     });
+  });
+
+  it("[FIX-W36-OTA AC5] answers the OTA's storefront origin on STOREFRONT_BASE_DOMAIN, in both environments", () => {
+    for (const environment of ["test", "live"] as const) {
+      expect(toConsoleTenant(tenantRow(), "UTC", environment, null, "ota.example.com").storefrontUrl).toBe(
+        "https://alpha.ota.example.com",
+      );
+    }
+    expect(
+      toConsoleTenant(tenantRow({ key: "beta_travel" }), "UTC", "test", null, "stage.example.net")
+        .storefrontUrl,
+    ).toBe("https://beta_travel.stage.example.net");
   });
 
   it("leaves the password and TOTP code of a password grant out of the idempotency request hash", () => {
@@ -829,6 +845,7 @@ function serviceHarness(): ServiceHarness {
     tx,
     new IdGenerator(clock as unknown as Clock),
     clock as unknown as Clock,
+    { get: () => "ota.example.com" } as unknown as ConfigService<SharedConfig, true>,
     logger,
   );
   return { service, sessions, rows, tenant, audit, lines };
@@ -1072,6 +1089,8 @@ describe("StaffAuthService", () => {
       id: TENANT_ID,
       timeZone: "Europe/Paris",
       supplier: { connected: false },
+      // FIX-W36-OTA (lead decision (2f) of 2026-10-30): the storefront origin of the OTA.
+      storefrontUrl: "https://alpha.ota.example.com",
     });
     expect(rows).toEqual([
       {
@@ -1111,6 +1130,8 @@ describe("StaffAuthService", () => {
     const rotated = await service.refresh(presented);
     expect(rotated.session.refreshToken).not.toBe(presented);
     expect(rotated.session.subject.id).toBe(STAFF_ID);
+    // FIX-W36-OTA: the refreshed session's tenant carries the storefront origin too.
+    expect(rotated.tenant.storefrontUrl).toBe("https://alpha.ota.example.com");
 
     sessions.rotation = { outcome: "reused" };
     expect((await refusal(service.refresh(presented))).answer).toBe("401 REFRESH_TOKEN_REUSED");
@@ -1208,6 +1229,11 @@ describe("StaffAuthService", () => {
       userAgent: "Mozilla/5.0 (test)",
     });
     expect(profile.staff).toMatchObject({ role: "viewer", timeZone: "Europe/Madrid", mfaEnabled: true });
-    expect(profile.tenant).toMatchObject({ key: "alpha", environment: "test", timeZone: "Europe/Paris" });
+    expect(profile.tenant).toMatchObject({
+      key: "alpha",
+      environment: "test",
+      timeZone: "Europe/Paris",
+      storefrontUrl: "https://alpha.ota.example.com",
+    });
   });
 });

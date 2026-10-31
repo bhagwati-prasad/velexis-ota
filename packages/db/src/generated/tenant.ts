@@ -242,6 +242,10 @@ export interface Bookings {
   ancillaries_amount: Generated<Numeric>;
   automated_process: Generated<Json>;
   cancel_reason: string | null;
+  /**
+   * When a cancellation claimed the booking for its Flight Order Management DELETE (bookings.cancel, console.bookings.cancel); cleared by its outcome (cancelled, a request for the staff, not applied, the flag of a DELETE without an answer). While it is less than 5 minutes old the ticketing job skips the booking and console.bookings.issue refuses it.
+   */
+  cancellation_claimed_at: Timestamp | null;
   cancelled_at: Timestamp | null;
   cancelled_by: string | null;
   card_fee_amount: Generated<Numeric>;
@@ -557,6 +561,9 @@ export interface Customers {
   marketing_consent_updated_at: Timestamp | null;
   metadata: Generated<Json>;
   pending_email: string | null;
+  /**
+   * Country calling code of the phone, one to three digits without +, as account.update stores it (Amadeus countryCallingCode).
+   */
   phone_country_code: string | null;
   phone_number: string | null;
   status: Generated<string>;
@@ -932,6 +939,9 @@ export interface SavedTravelers {
   last_used_at: Timestamp | null;
   loyalty_programs: Generated<Json>;
   middle_name: string | null;
+  /**
+   * Phone country calling code, one to three digits without +.
+   */
   phone_country_code: string | null;
   phone_number: string | null;
   second_last_name: string | null;

@@ -983,8 +983,9 @@ function createConsoleMarkupRulesApi(core) {
 
     /**
      * Changes any subset of a markup rule's fields (`null` clears a nullable one, `scope` is replaced as a whole); the
-     * default rule keeps its catch-all scope. Requires `ifMatch` (the rule's `version` or ETag); the answer has the new
-     * `version` and may carry `warnings`. Not retried. `PATCH /v1/console/settings/markup-rules/{markupRuleId}` with
+     * default rule always matches: it keeps its catch-all scope, stays active with no validity window and keeps
+     * priority 1000 (`409 CONFLICT` `default_rule` otherwise). Requires `ifMatch` (the rule's `version` or ETag); the
+     * answer has the new `version` and may carry `warnings`. Not retried. `PATCH /v1/console/settings/markup-rules/{markupRuleId}` with
      * `If-Match`; `settings:write`.
      * @param {ConsoleUpdateMarkupRuleParams} params
      * @param {RequestOptions} [options]
@@ -1282,17 +1283,18 @@ function createConsoleStorefrontAssetsApi(core) {
      * shown in the console; by default the name of the `file` part, which is the `File`'s own name or `blob` for a
      * plain `Blob`) and `file` (the image, a `Blob` or `File`: PNG, JPEG or WebP, ICO for a `favicon`, at most 1 MB, no
      * SVG). The server reads the type from the bytes and stores the file unchanged (metadata such as EXIF stays in
-     * it). The SDK leaves the `Content-Type` and its boundary to `fetch`. A same-key retry returns the stored asset;
-     * reference the asset from the storefront settings or a page body by its `id`.
+     * it). The SDK leaves the `Content-Type` and its boundary to `fetch`. A same-key retry returns the stored asset,
+     * and so does the same file uploaded again for the same kind (one asset holds one file); reference the asset from
+     * the storefront settings or a page body by its `id`.
      * `POST /v1/console/settings/assets` with a generated `Idempotency-Key`; `settings:write`.
      * @param {ConsoleUploadStorefrontAssetParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<StorefrontAsset>}
      * @throws {TypeError} without a `Blob` or `File` as `file` or without `kind`, before any request
-     * @throws {ValidationError} `VALIDATION_FAILED` (400: a missing, empty or unknown part), `ASSET_INVALID` (422: `details.reason` `type`, `size` or `dimensions`)
+     * @throws {ValidationError} `VALIDATION_FAILED` (400: a missing, empty or unknown part), `INVALID_REQUEST` (400: a body that is not well-formed `multipart/form-data`), `ASSET_INVALID` (422: `details.reason` `type`, `size` or `dimensions`)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
      * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
-     * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED` (409)
+     * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED`, `CONFLICT` (409, `details.reason` `asset_exists`: the same file is already the asset `details.assetId` of another `details.kind`)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
@@ -1326,8 +1328,10 @@ function createConsoleStorefrontAssetsApi(core) {
 function createConsoleNotificationTemplatesApi(core) {
   return {
     /**
-     * Lists the effective template of every key and supported locale: the OTA's own (`customised: true`) or the code
-     * default (`customised: false`), each with the variables its key allows; by key, then locale, not paginated.
+     * Lists the effective template of every key and supported locale: the locale's own row, else the active row of its
+     * language that its e-mails use (`inheritedFrom`, `version: null`), else the code default; `customised` is false
+     * for the code default and for a row seeded from it until the OTA edits it. Each comes with the variables its key
+     * allows; by key, then locale, not paginated.
      * `GET /v1/console/settings/notification-templates`; `settings:read`.
      * @param {ConsoleListNotificationTemplatesParams} [params]
      * @param {RequestOptions} [options]
@@ -1341,8 +1345,9 @@ function createConsoleNotificationTemplatesApi(core) {
     list: (params, options) => core.call(op.console_settings_templates_list, params, live(options)),
 
     /**
-     * Gets the effective template of one key, channel (`email`) and locale; a customised one has a `version`, the
-     * `ifMatch` of `put` (the code default has `version: null`).
+     * Gets the effective template of one key, channel (`email`) and locale, as `list` shows it; the locale's own row
+     * has a `version`, the `ifMatch` of `put`, whether `customised` or seeded from the code default (an inherited
+     * template and the code default have `version: null`).
      * `GET /v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}`; `settings:read`.
      * @param {ConsoleNotificationTemplateRefParams} params
      * @param {RequestOptions} [options]
@@ -1357,8 +1362,9 @@ function createConsoleNotificationTemplatesApi(core) {
 
     /**
      * Creates or replaces the OTA's template of one key, channel and locale (`subject`, `bodyHtml`, `bodyText`,
-     * `isActive`). Pass `ifMatch` (its `version` or ETag) when the OTA already has its own template and leave it out
-     * when it has none; a malformed `ifMatch` is a `TypeError`. The server compiles the template in strict mode
+     * `isActive`): the row of exactly that locale, never its language's. Pass `ifMatch` (its `version` or ETag) when
+     * the locale has its own row (a `version` that is not null, a seeded row included) and leave it out when it has
+     * none; a malformed `ifMatch` is a `TypeError`. The server compiles the template in strict mode
      * against the key's variables. `PUT /v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}`,
      * with `If-Match` when given (safe to repeat); `settings:write`.
      * @param {ConsolePutNotificationTemplateParams} params
@@ -1392,8 +1398,8 @@ function createConsoleNotificationTemplatesApi(core) {
     preview: (params, options) => core.call(op.console_settings_templates_preview, params, live(options)),
 
     /**
-     * Deletes the OTA's template of one key, channel and locale, so the code default applies again, and resolves with
-     * that default (`customised: false`). Safe to repeat.
+     * Deletes the OTA's template of one key, channel and locale, and resolves with what the locale shows then: the
+     * active row of its language (`inheritedFrom`), else the code default (`customised: false`). Safe to repeat.
      * `POST /v1/console/settings/notification-templates/{templateKey}/{channel}/{locale}/reset`; `settings:write`.
      * @param {ConsoleNotificationTemplateRefParams} params
      * @param {RequestOptions} [options]

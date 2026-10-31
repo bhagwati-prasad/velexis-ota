@@ -11,12 +11,14 @@ import { Module } from "@nestjs/common";
 import { TenancyModule } from "../tenancy/tenancy.module";
 import { AirlineCardLimits } from "./airline-card/abuse-limits";
 import { PAYMENT_GATEWAY } from "./payment-gateway";
-import { StripeClientFactory } from "./stripe/stripe-client.factory";
+import { StripeClientFactory, stripeKeyProvider } from "./stripe/stripe-client.factory";
 import { StripeGateway } from "./stripe/stripe.gateway";
 
 @Module({
   imports: [TenancyModule.forApi()],
   providers: [
+    // The KEKs that decrypt an `api_keys` connection's key (OBE-077).
+    stripeKeyProvider,
     StripeClientFactory,
     StripeGateway,
     { provide: PAYMENT_GATEWAY, useExisting: StripeGateway },

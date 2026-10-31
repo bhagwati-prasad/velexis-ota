@@ -17,15 +17,46 @@
 // id (never sent) render the page's own "not found" state inside the shell, so the environment switch is at hand, and
 // every other API error renders the console's message for its code with the request id and "Try again". An error of
 // the payments or of the Amadeus order is shown in its place, under the booking.
+//
+// The actions (OAD-008, routes.md §3.2 "Actions"): the page renders the dialogs and forms of what the staff member may do
+// now, by permission (`can()`) and by the booking's `consoleActions` (Issue and Cancel never while the outcome is
+// unknown, `pending`), each with an idempotency key rendered here once per render (`crypto.randomUUID()`), so a double
+// submit replays the same action and a success, which revalidates the page, brings new keys. Issue, Cancel and Resync
+// sit under the header on every tab; the order's edits on the Travellers and contacts tab; the note form on the Timeline
+// and notes tab; Capture and Refund on the payments of the Payments tab, which know their `version` from
+// `console.payments.get`. The client components get plain values only (ids, versions, amounts, the names and contacts
+// they prefill), never the booking.
 import type {
   ConsoleApi,
   ConsoleBooking,
   ConsoleFlightOrderRetrieval,
   ConsolePayment,
+  ConsoleStaffProfile,
 } from "@velexis/ota-sdk";
 import type { Metadata } from "next";
 import Link from "next/link";
+import type { ReactNode } from "react";
 
+import {
+  CONTACT_PURPOSES,
+  canAllowUnpaid,
+  cancelPlanOf,
+  capturableOf,
+  issuePlanOf,
+  keptContactOf,
+  keptFieldOf,
+  refundableOf,
+} from "@/app/(console)/bookings/[bookingId]/action-rules";
+import { CancelDialog } from "@/app/(console)/bookings/[bookingId]/cancel-dialog";
+import { IssueDialog } from "@/app/(console)/bookings/[bookingId]/issue-dialog";
+import { NoteForm } from "@/app/(console)/bookings/[bookingId]/note-form";
+import {
+  BookingEditPanel,
+  ResyncForm,
+  type ContactEditValues,
+  type TravelerEditValues,
+} from "@/app/(console)/bookings/[bookingId]/patch-form";
+import { CaptureDialog, RefundDialog } from "@/app/(console)/bookings/[bookingId]/payment-dialogs";
 import {
   BOOKING_ID_PATTERN,
   BookingDetail,
@@ -33,6 +64,7 @@ import {
   REFRESH_PARAM,
   TAB_PARAM,
   tabOf,
+  type BookingActionSlots,
   type BookingTab,
   type OrderView,
   type PaymentDetail,
@@ -43,7 +75,7 @@ import {
 import { BOOKINGS_PATH } from "@/app/(console)/bookings/views";
 import { ErrorState } from "@/components/error-state";
 import { errorMessage, isVelexisErrorLike, type VelexisErrorLike } from "@/lib/errors";
-import { can } from "@/lib/permissions";
+import { can, type StaffEnvironment } from "@/lib/permissions";
 import { redirectOnSessionError } from "@/lib/session";
 import { getConsoleRequest, type ConsoleRequest } from "@/lib/velexis";
 
@@ -185,6 +217,190 @@ async function loadPayments(
   return { permitted: true, details };
 }
 
+// ---- Actions (OAD-008) ------------------------------------------------------------------------------------------------
+
+/** A new idempotency key for one dialog of this render. */
+function newKey(): string {
+  return crypto.randomUUID();
+}
+
+/** What a dialog prefills of a traveller. */
+function travelerValues(traveler: ConsoleBooking["travelers"][number]): TravelerEditValues {
+  const name = traveler.name ?? null;
+  const phone = traveler.contact?.phones?.[0];
+  const label = [name?.firstName, name?.lastName]
+    .filter((part) => part !== undefined && part !== "")
+    .join(" ");
+  return {
+    travelerId: traveler.travelerId,
+    label: label === "" ? `traveller ${traveler.travelerId}` : label,
+    firstName: name?.firstName ?? "",
+    lastName: name?.lastName ?? "",
+    dateOfBirth: traveler.dateOfBirth ?? undefined,
+    gender: traveler.gender ?? undefined,
+    email: traveler.contact?.emailAddress ?? undefined,
+    phoneCountryCode: phone?.countryCallingCode ?? undefined,
+    phoneNumber: phone?.number ?? undefined,
+    // The API replaces the traveller's contact whole: what the dialog does not show goes back with the edit.
+    kept: keptFieldOf(keptContactOf(traveler.contact)),
+  };
+}
+
+/** What a dialog prefills of a contact of the order; one per purpose the API takes. */
+function contactValues(contacts: ConsoleBooking["contacts"]): ContactEditValues[] {
+  const seen = new Set<string>();
+  const values: ContactEditValues[] = [];
+  for (const contact of contacts) {
+    if (seen.has(contact.purpose) || !CONTACT_PURPOSES.some((choice) => choice.value === contact.purpose)) {
+      continue;
+    }
+    seen.add(contact.purpose);
+    const phone = contact.phones?.[0];
+    const address = contact.address ?? null;
+    values.push({
+      purpose: contact.purpose,
+      firstName: contact.addresseeName?.firstName ?? undefined,
+      lastName: contact.addresseeName?.lastName ?? undefined,
+      companyName: contact.companyName ?? undefined,
+      email: contact.emailAddress ?? undefined,
+      phoneCountryCode: phone?.countryCallingCode ?? undefined,
+      phoneNumber: phone?.number ?? undefined,
+      addressLine1: address?.lines?.[0] ?? undefined,
+      addressLine2: address?.lines?.[1] ?? undefined,
+      postalCode: address?.postalCode ?? undefined,
+      cityName: address?.cityName ?? undefined,
+      countryCode: address?.countryCode ?? undefined,
+      language: contact.language ?? undefined,
+      // The API replaces the order's contact of this purpose whole: what the dialog does not show goes back with it.
+      kept: keptFieldOf(keptContactOf(contact)),
+    });
+  }
+  return values;
+}
+
+/** Capture and Refund of each payment of the Payments tab, by payment id. */
+function paymentActions(
+  bookingId: string,
+  payments: PaymentsView | undefined,
+  staff: ConsoleStaffProfile,
+  environment: StaffEnvironment,
+): Record<string, ReactNode> | undefined {
+  if (payments === undefined || !payments.permitted) {
+    return undefined;
+  }
+  const slots: Record<string, ReactNode> = {};
+  for (const { id, payment } of payments.details) {
+    if (payment === undefined) {
+      continue;
+    }
+    const authorized = can(staff, "payments:capture") ? capturableOf(payment) : undefined;
+    const refundable = can(staff, "payments:refund") ? refundableOf(payment) : undefined;
+    if (authorized === undefined && refundable === undefined) {
+      continue;
+    }
+    slots[id] = (
+      <>
+        {authorized === undefined ? null : (
+          <CaptureDialog
+            paymentId={id}
+            bookingId={bookingId}
+            environment={environment}
+            idempotencyKey={newKey()}
+            version={payment.version}
+            authorized={authorized}
+          />
+        )}
+        {refundable === undefined ? null : (
+          <RefundDialog
+            paymentId={id}
+            bookingId={bookingId}
+            environment={environment}
+            idempotencyKey={newKey()}
+            refundable={refundable}
+          />
+        )}
+      </>
+    );
+  }
+  return slots;
+}
+
+/**
+ * The action controls of the booking for this staff member, now: each one only with its permission and when the
+ * booking's `consoleActions` allow it; Issue and Cancel never while the outcome is unknown (`pending`). Tab-specific
+ * controls are built for their tab only.
+ */
+function bookingActions(
+  booking: ConsoleBooking,
+  tab: BookingTab,
+  staff: ConsoleStaffProfile,
+  environment: StaffEnvironment,
+  payments: PaymentsView | undefined,
+): BookingActionSlots {
+  const actions = booking.consoleActions;
+  const decided = booking.status !== "pending";
+  const common = {
+    bookingId: booking.id,
+    reference: booking.reference,
+    version: booking.version,
+    environment,
+  };
+  const bar: ReactNode[] = [];
+  if (decided && actions.canIssue && can(staff, "bookings:issue")) {
+    const ticketing = booking.ticketing.status;
+    bar.push(
+      <IssueDialog
+        key="issue"
+        {...common}
+        idempotencyKey={newKey()}
+        plan={issuePlanOf(booking)}
+        canAllowUnpaid={canAllowUnpaid(staff.staff.role)}
+        urgent={ticketing === "failed" || ticketing === "manual_review"}
+      />,
+    );
+  }
+  if (decided && actions.canCancel && can(staff, "bookings:cancel")) {
+    bar.push(
+      <CancelDialog key="cancel" {...common} idempotencyKey={newKey()} plan={cancelPlanOf(booking)} />,
+    );
+  }
+  if (actions.canResync && can(staff, "bookings:write")) {
+    bar.push(<ResyncForm key="resync" bookingId={booking.id} />);
+  }
+  const editable = actions.canPatch && can(staff, "bookings:write");
+  const agreement = booking.ticketingAgreement;
+  const payment = tab === "payments" ? paymentActions(booking.id, payments, staff, environment) : undefined;
+  return {
+    ...(bar.length === 0 ? {} : { bar }),
+    ...(tab === "travellers" && editable
+      ? {
+          travellers: (
+            <BookingEditPanel
+              bookingId={booking.id}
+              version={booking.version}
+              environment={environment}
+              idempotencyKeys={Object.fromEntries(
+                [
+                  ...booking.travelers.map((traveler) => `traveler:${traveler.travelerId}`),
+                  ...booking.contacts.map((contact) => `contact:${contact.purpose}`),
+                  "remark",
+                  "agreement",
+                ].map((name) => [name, newKey()]),
+              )}
+              travelers={booking.travelers.map(travelerValues)}
+              contacts={contactValues(booking.contacts)}
+              agreement={{ option: agreement?.option ?? undefined, delay: agreement?.delay ?? undefined }}
+            />
+          ),
+        }
+      : {}),
+    ...(tab === "timeline" && actions.canAddNote && can(staff, "bookings:write")
+      ? { timeline: <NoteForm bookingId={booking.id} idempotencyKey={newKey()} /> }
+      : {}),
+    ...(payment === undefined ? {} : { payments: payment }),
+  };
+}
+
 /** The page's "not found" state, with the way back to the list. */
 function NotFound({ environment }: { readonly environment: string }) {
   return (
@@ -272,14 +488,16 @@ export default async function BookingPage({
       ? await loadPayments(request.console, booking, can(staff, PAYMENTS_PERMISSION), here)
       : undefined;
   const order = tab === "amadeus-order" ? await loadOrder(request.console, booking, here) : undefined;
+  const timeZone = staff.tenant.timeZone;
   return (
     <BookingDetail
       booking={booking}
       tab={tab}
-      timeZone={staff.tenant.timeZone}
+      timeZone={timeZone}
       refresh={loaded.refresh}
       payments={payments}
       order={order}
+      actions={bookingActions(booking, tab, staff, environment, payments)}
     />
   );
 }

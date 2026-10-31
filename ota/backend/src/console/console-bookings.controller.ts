@@ -11,13 +11,19 @@
 // it opts in with `@AuditedRead`, and its use case writes the `order.retrieve` row with the booking, which the
 // interceptor then leaves alone. patch and resync answer the booking's new `ETag`;
 // addNote answers `201` with `Location` (the booking, anchored at the note), and its `Idempotency-Key` is the
-// idempotency interceptor's. The PNR lookup and import (OBE-064) join this controller.
+// idempotency interceptor's.
 //
 // Since OBE-063: console.bookings.issue (`bookings:issue`) and cancel (`bookings:cancel`), both `If-Match` and
 // `Idempotency-Key`, over the same service: each answers the booking with its new `ETag`; a claim that found the booking
 // held by another claim or writer answers `503 SERVICE_UNAVAILABLE` with `Retry-After` (`retryAfterOf`, as
 // bookings.cancel's), which the idempotency layer does not keep. Their use cases write the `booking.issue` and
 // `booking.cancel` staff actions.
+//
+// Since OBE-064: console.bookings.findByRecordLocator (`bookings:read`) and import (`bookings:write`,
+// `Idempotency-Key`) over PnrImportService (pnr-import.service.ts). The lookup is an audited read (`pnr.lookup`,
+// OADR-0011 point 8): it opts in with `@AuditedRead`, and its use case writes the row with the record locator as its
+// target. The import answers `201` with the console booking, `Location` and `ETag`; the idempotency interceptor stores
+// it for the key's replays.
 //
 // Nest registers a controller's routes in the order of its methods, and Express tries them in that order: the literal
 // `GET by-record-locator` must be declared before `GET :bookingId`, or the get handler answers it (the route-parity
@@ -43,6 +49,7 @@ import {
   type ConsoleBookingPage,
 } from "./console-bookings.mapper";
 import { ConsoleBookingsService } from "./console-bookings.service";
+import { PnrImportService, type PnrLookupResult } from "./pnr-import.service";
 import { AuditedRead } from "./staff-actions.writer";
 
 /** Runs a use case; its `503` of a booking another claim holds gets `Retry-After` (the same key can come again). */
@@ -71,6 +78,7 @@ export class ConsoleBookingsController {
   constructor(
     private readonly bookings: ConsoleBookingsService,
     private readonly actions: ConsoleBookingActionsService,
+    private readonly pnr: PnrImportService,
   ) {}
 
   @Get()
@@ -81,6 +89,31 @@ export class ConsoleBookingsController {
   ): Promise<ConsoleBookingPage> {
     res.setHeader("Cache-Control", CONSOLE_BOOKING_CACHE_CONTROL);
     return await this.bookings.list(input.query ?? {});
+  }
+
+  // Before `GET :bookingId` (see the file header).
+  @Get("by-record-locator")
+  @OpenApiOperation("consoleFindBookingByRecordLocator")
+  @AuditedRead({ action: "pnr.lookup" })
+  async findByRecordLocator(
+    @OpenApiInput() input: ValidatedInput<"consoleFindBookingByRecordLocator">,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<PnrLookupResult> {
+    res.setHeader("Cache-Control", CONSOLE_BOOKING_CACHE_CONTROL);
+    return await this.pnr.findByRecordLocator(input.query);
+  }
+
+  @Post("imports")
+  @OpenApiOperation("consoleImportBooking")
+  async import(
+    @OpenApiInput() input: ValidatedInput<"consoleImportBooking">,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<ConsoleBooking> {
+    const booking = await this.pnr.import(bodyOf("consoleImportBooking", input.body));
+    res.setHeader("Location", `/v1/console/bookings/${booking.id}`);
+    res.setHeader("ETag", bookingEtagOf(booking.version));
+    res.setHeader("Cache-Control", CONSOLE_BOOKING_CACHE_CONTROL);
+    return booking;
   }
 
   @Get(":bookingId")

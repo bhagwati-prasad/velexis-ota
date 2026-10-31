@@ -2,13 +2,19 @@
 // in-memory stand-in for `IdempotencyRepository` that keeps the SQL's semantics (one record per scope and key, the
 // lease as the holder's token, deletes and renewals of records in flight only). The KEKs are the test process's
 // (test/helpers/api-env.ts), so encryption and decryption are the real envelope of @velexis/crypto. The SQL, the
-// interceptor and the pipeline around it are test/integration/common/idempotency.int.test.ts.
-import type { DiscoveryService } from "@nestjs/core";
+// interceptor and the pipeline around it are test/integration/common/idempotency.int.test.ts. The renewal of the lease
+// while a handler runs (FIX-W30-OTA) runs here with Vitest's fake timers, through the service and through the
+// interceptor: a handler "takes" longer than the 2-minute lease without a real wait, and every step happens at a known
+// instant.
+import type { CallHandler } from "@nestjs/common";
+import type { DiscoveryService, Reflector } from "@nestjs/core";
+import { ExecutionContextHost } from "@nestjs/core/helpers/execution-context-host";
 import type { OtaOperationId } from "@velexis/api-types/operations";
 import { aadFor, decryptValue, DecryptionError, type KeyProvider } from "@velexis/crypto";
 import type { TenantSchema } from "@velexis/db";
 import { AppError } from "@velexis/errors";
 import type { PinoLogger } from "nestjs-pino";
+import { defer } from "rxjs";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { testKeyProvider } from "../../../test/helpers/api-env";
 import { OPENAPI_SETUP_TIMEOUT_MS } from "../../../test/helpers/openapi";
@@ -23,8 +29,10 @@ import type {
   IdempotencyRow,
   NewIdempotencyRecord,
 } from "./idempotency.repository";
+import { IdempotencyInterceptor } from "./idempotency.interceptor";
 import {
   IDEMPOTENCY_LEASE_MS,
+  IDEMPOTENCY_LEASE_RENEW_MS,
   IDEMPOTENCY_RETENTION_MS,
   IDEMPOTENCY_WAIT_MS,
   IdempotencyHooksFor,
@@ -41,7 +49,9 @@ import {
   type IdempotencyTicket,
   type IdempotentRequest,
 } from "./idempotency.service";
+import { OPENAPI_OPERATION, VALIDATED_INPUT } from "./openapi-operation.decorator";
 import { loadOpenApiDocument, type OpenApiDocument } from "./openapi-validation.interceptor";
+import type { RequestContext } from "./request-context";
 
 const SCHEMA = "tenant_alpha" as TenantSchema;
 
@@ -63,6 +73,12 @@ const CSRF = "Zm9vYmFyYmF6cXV4cXV1eGNvcmdlZ3JhdWx0Z2FycGx5";
  */
 class MemoryRecords {
   readonly rows = new Map<string, IdempotencyRow>();
+  /** The (fake) clock when the records were made: renewals are timed from it. */
+  private readonly origin = Date.now();
+  /** The lease renewals asked for: milliseconds since the records were made, and whether the lease was renewed. */
+  readonly renewals: Array<{ readonly at: number; readonly renewed: boolean }> = [];
+  /** Errors the next renewals throw, one each. */
+  readonly renewalFailures: Error[] = [];
 
   insertProcessing(_trx: unknown, record: NewIdempotencyRecord): Promise<boolean> {
     if (this.find(record.scope, record.key) !== undefined) {
@@ -101,6 +117,19 @@ class MemoryRecords {
       this.rows.set(id, { ...row, locked_until: lockedUntil, updated_at: now });
     }
     return Promise.resolve();
+  }
+
+  extendLease(_trx: unknown, id: string, lease: Date, next: Date, now: Date): Promise<boolean> {
+    const failure = this.renewalFailures.shift();
+    if (failure !== undefined) {
+      return Promise.reject(failure);
+    }
+    const row = this.held(id, lease);
+    if (row !== undefined) {
+      this.rows.set(id, { ...row, locked_until: next, updated_at: now });
+    }
+    this.renewals.push({ at: Date.now() - this.origin, renewed: row !== undefined });
+    return Promise.resolve(row !== undefined);
   }
 
   complete(_trx: unknown, id: string, lease: Date, outcome: IdempotencyOutcome): Promise<boolean> {
@@ -764,5 +793,226 @@ describe("the idempotent operations", () => {
     for (const operationId of operations) {
       expect([operationId, document.operation(operationId).method]).toEqual([operationId, "post"]);
     }
+  });
+});
+
+describe("the lease of a request whose handler runs longer than it (FIX-W30-OTA)", () => {
+  it("[FIX-W30-OTA AC4] is renewed every 30 s until the outcome: a same-key request waits and replays, never taking it over", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const { service, records, logger } = harness();
+    expect(IDEMPOTENCY_LEASE_RENEW_MS * 4).toBe(IDEMPOTENCY_LEASE_MS);
+    const ticket = ticketOf(await service.claim(lookup(KEY)));
+    const renewal = service.keepLease(ticket);
+
+    // 130 s into a handler that takes 150 s: past the first lease, the record is still this request's.
+    await vi.advanceTimersByTimeAsync(IDEMPOTENCY_LEASE_MS + 10_000);
+    expect(records.only()).toMatchObject({ status: "processing", locked_until: ticket.lease });
+    expect(ticket.lease.getTime()).toBeGreaterThan(Date.now());
+    let settled: IdempotencyClaim | undefined;
+    const waiting = service.claim(lookup(KEY)).then((claim) => (settled = claim));
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(settled).toBeUndefined();
+    await renewal.stop();
+    await service.settle(ticket, FOUND);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await waiting;
+
+    expect(settled === undefined ? undefined : replayOf(settled)).toEqual(FOUND);
+    expect(records.only()).toMatchObject({ status: "completed", locked_until: null });
+    expect(records.renewals).toEqual(
+      [30_000, 60_000, 90_000, 120_000, 150_000].map((at) => ({ at, renewed: true })),
+    );
+    // No renewal after the answer, and nothing was taken over or lost.
+    await vi.advanceTimersByTimeAsync(5 * IDEMPOTENCY_LEASE_RENEW_MS);
+    expect(records.renewals).toHaveLength(5);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("[FIX-W30-OTA AC4] answers a same-key request still waiting after its 60 s with 409 CONFLICT, and the handler's outcome is kept", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const { service, records } = harness();
+    const ticket = ticketOf(await service.claim(lookup(KEY)));
+    const renewal = service.keepLease(ticket);
+    await vi.advanceTimersByTimeAsync(IDEMPOTENCY_LEASE_MS + 5_000);
+
+    const waiting = rejectionOf(service.claim(lookup(KEY)));
+    await vi.advanceTimersByTimeAsync(IDEMPOTENCY_WAIT_MS + 1_000);
+    const conflict = await waiting;
+    await renewal.stop();
+    await service.settle(ticket, FOUND);
+
+    expect([conflict.code, conflict.status, conflict.details]).toEqual([
+      "CONFLICT",
+      409,
+      { reason: "idempotency_key_in_use" },
+    ]);
+    // The first request's answer is stored (its lease was never lost) and replayed to the next same-key request.
+    expect(records.only()).toMatchObject({ status: "completed", response_status: 200 });
+    expect(replayOf(await service.claim(lookup(KEY)))).toEqual(FOUND);
+  });
+
+  it("[FIX-W30-OTA AC4] never renews a lease it lost: the other holder keeps its lease and its outcome, the loss is logged once", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const { service, records, logger } = harness();
+    const first = ticketOf(await service.claim(lookup(KEY)));
+    const renewal = service.keepLease(first);
+    await vi.advanceTimersByTimeAsync(IDEMPOTENCY_LEASE_RENEW_MS + 1_000);
+    // The lease ran out while the database could not be reached (as if renewals had failed for 2 minutes), and a
+    // waiting request took the record over with a lease of its own.
+    const stale = records.only();
+    records.rows.set(stale.id, { ...stale, locked_until: new Date(Date.now() - 1) });
+    const second = ticketOf(await service.claim(lookup(KEY)));
+    await vi.advanceTimersByTimeAsync(IDEMPOTENCY_LEASE_RENEW_MS);
+
+    expect(records.renewals.map((renewal) => renewal.renewed)).toEqual([true, false]);
+    expect(records.only().locked_until).toEqual(second.lease);
+    expect(logger.warn.mock.calls.filter(([, message]) => message === "idempotency.lease_lost")).toHaveLength(
+      1,
+    );
+    await vi.advanceTimersByTimeAsync(3 * IDEMPOTENCY_LEASE_RENEW_MS);
+    expect(records.renewals).toHaveLength(2);
+
+    // The first request's outcome is not written over the record the second one holds.
+    await renewal.stop();
+    await service.settle(first, FOUND);
+    expect(records.only()).toMatchObject({ status: "processing", locked_until: second.lease });
+    expect(logger.warn.mock.calls.filter(([, message]) => message === "idempotency.lease_lost")).toHaveLength(
+      2,
+    );
+  });
+
+  it("[FIX-W30-OTA AC4] logs a renewal that failed and renews again at the next tick, so the lease holds", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const { service, records, logger } = harness();
+    records.renewalFailures.push(new Error("connection terminated"));
+    const ticket = ticketOf(await service.claim(lookup(KEY)));
+    const renewal = service.keepLease(ticket);
+
+    await vi.advanceTimersByTimeAsync(3 * IDEMPOTENCY_LEASE_RENEW_MS);
+    await renewal.stop();
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ operationId: "lookupBooking" }),
+      "idempotency.lease_renew_failed",
+    );
+    // The failed renewal at 30 s is not recorded; those at 60 and 90 s renewed the lease.
+    expect(records.renewals).toEqual([
+      { at: 60_000, renewed: true },
+      { at: 90_000, renewed: true },
+    ]);
+    expect(records.only().locked_until).toEqual(ticket.lease);
+  });
+});
+
+describe("the interceptor's handler slower than the lease (FIX-W30-OTA)", () => {
+  /** The answer of one request through the interceptor: its body, or the error it was refused with. */
+  interface Outcome {
+    readonly body?: unknown;
+    readonly error?: AppError;
+  }
+
+  /** Sends lookupBooking with KEY through the interceptor; the handler takes `handlerMs` of the fake clock. */
+  function interceptorHarness(): {
+    readonly records: MemoryRecords;
+    readonly runs: () => number;
+    readonly send: (handlerMs: number, fail?: AppError) => Promise<Outcome>;
+  } {
+    const { service, records } = harness();
+    const reflector = { get: (key: string) => (key === OPENAPI_OPERATION ? "lookupBooking" : undefined) };
+    const context = { requestId: () => "req-test-0001", isConsoleScope: () => false };
+    const interceptor = new IdempotencyInterceptor(
+      reflector as unknown as Reflector,
+      service,
+      context as unknown as RequestContext,
+      { setContext: vi.fn(), warn: vi.fn() } as unknown as PinoLogger,
+    );
+    let runs = 0;
+    const send = async (handlerMs: number, fail?: AppError): Promise<Outcome> => {
+      const req = {
+        method: "POST",
+        originalUrl: "/v1/bookings/lookup",
+        headers: { "idempotency-key": KEY },
+        cookies: { "__Host-vx_csrf": CSRF },
+        [VALIDATED_INPUT]: { operationId: "lookupBooking", path: {}, query: {}, body: LOOKUP },
+      };
+      const headers = new Map<string, string>();
+      const res = {
+        statusCode: 200,
+        headersSent: false,
+        status(code: number) {
+          this.statusCode = code;
+          return this;
+        },
+        getHeader: (name: string) => headers.get(name),
+        setHeader: (name: string, value: string) => headers.set(name, value),
+        append: vi.fn(),
+      };
+      const next: CallHandler = {
+        handle: () =>
+          defer(async () => {
+            runs += 1;
+            const run = runs;
+            await new Promise((resolveRun) => setTimeout(resolveRun, handlerMs));
+            if (fail !== undefined) {
+              throw fail;
+            }
+            return { bookingId: "bkg_01JA4CH3G1K4N7R0U3X6A9D2F5", run };
+          }),
+      };
+      const execution = new ExecutionContextHost([req, res, () => undefined]);
+      try {
+        const body: unknown = await new Promise((resolveBody, rejectBody) => {
+          interceptor.intercept(execution, next).subscribe({ next: resolveBody, error: rejectBody });
+        });
+        return { body };
+      } catch (error) {
+        if (error instanceof AppError) {
+          return { error };
+        }
+        throw error;
+      }
+    };
+    return { records, runs: () => runs, send };
+  }
+
+  it("[FIX-W30-OTA AC4] keeps the lease to the end: a same-key request after 2 minutes waits and gets the same answer, the handler runs once", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const { records, runs, send } = interceptorHarness();
+
+    const first = send(150_000);
+    await vi.advanceTimersByTimeAsync(IDEMPOTENCY_LEASE_MS + 5_000);
+    const duplicate = send(150_000);
+    await vi.advanceTimersByTimeAsync(30_000);
+    const [a, b] = await Promise.all([first, duplicate]);
+
+    expect(runs()).toBe(1);
+    expect(a).toEqual({ body: { bookingId: "bkg_01JA4CH3G1K4N7R0U3X6A9D2F5", run: 1 } });
+    expect(b).toEqual(a);
+    expect(records.only()).toMatchObject({ status: "completed", locked_until: null });
+    // Renewed while the handler ran, never after its answer.
+    expect(records.renewals.map((renewal) => renewal.at)).toEqual([30_000, 60_000, 90_000, 120_000]);
+    await vi.advanceTimersByTimeAsync(4 * IDEMPOTENCY_LEASE_RENEW_MS);
+    expect(records.renewals).toHaveLength(4);
+  });
+
+  it("[FIX-W30-OTA AC4] ends the renewals before it settles a handler's error too", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const { records, runs, send } = interceptorHarness();
+
+    // 245 s: four minutes and five seconds, never at the instant of a renewal.
+    const outcome = send(
+      2 * IDEMPOTENCY_LEASE_MS + 5_000,
+      new AppError("UNPROCESSABLE", { details: { reason: "test_refusal" } }),
+    );
+    await vi.advanceTimersByTimeAsync(2 * IDEMPOTENCY_LEASE_MS + 5_000);
+    const { error } = await outcome;
+
+    expect([error?.code, runs()]).toEqual(["UNPROCESSABLE", 1]);
+    expect(records.only()).toMatchObject({ status: "failed", response_status: 422, locked_until: null });
+    const renewed = records.renewals.length;
+    // At 30, 60, …, 240 s.
+    expect(renewed).toBe(8);
+    await vi.advanceTimersByTimeAsync(4 * IDEMPOTENCY_LEASE_RENEW_MS);
+    expect(records.renewals).toHaveLength(renewed);
   });
 });

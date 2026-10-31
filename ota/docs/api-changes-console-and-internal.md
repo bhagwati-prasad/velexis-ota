@@ -1,6 +1,6 @@
 # OTA API changes, part 2: console and internal
 
-This document is part 2 of the spec-first changes to the OTA OpenAPI document. It adds what the OTA admin needs in M4 and the contract does not have: console settings for markup rules, fee rules, storefront settings (branding, theme, content pages, assets) and notification templates, plus console payments (list, capture, refund). It also adds the public storefront pages and assets the hosted storefront reads, and documents the internal endpoints (health, Stripe webhooks, signed file downloads). For each change it gives the operation ids, `x-sdk-method`, request and response sketches, tables and error codes. The workflow, vendor extensions and new error codes are in [part 1](api-changes.md).
+This document is part 2 of the spec-first changes to the OTA OpenAPI document. It adds what the OTA admin needs in M4 and the contract does not have: console settings for markup rules, fee rules, storefront settings (branding, theme, content pages, assets) and notification templates, plus console payments (list, capture, refund), and for M5 the platform's billing notice in the console session (§3.1). It also adds the public storefront pages and assets the hosted storefront reads, and documents the internal endpoints (health, Stripe webhooks, signed file downloads). For each change it gives the operation ids, `x-sdk-method`, request and response sketches, tables and error codes. The workflow, vendor extensions and new error codes are in [part 1](api-changes.md).
 
 Related: [`scope.md`](scope.md), [`data-model.md`](data-model.md), [OADR-0005](adr/0005-markup-and-fee-engine.md) (markups and fees), [OADR-0012](adr/0012-storefront-settings-assets-and-pages.md) (settings, assets, pages), [OADR-0013](adr/0013-notifications-and-booking-documents.md) (templates), [OADR-0010](adr/0010-stripe-gateway-and-payment-webhooks.md) (payments), [`flows/console-operations.md`](flows/console-operations.md).
 
@@ -48,7 +48,7 @@ MarkupRule:            # one row of markup_rules, camelCase
 MarkupRuleInput:       # create: name, scope, calculation and its values required; update: any subset
 ```
 
-List: `?active=true|false`, ordered by `priority, id`, cursor pagination. Rules: the default rule (`isDefault`) cannot be deleted or have its scope narrowed (`409 CONFLICT`, `details.reason = "default_rule"`); deleting a rule keeps history (bookings and priced offers keep amounts, `markup_rule_id` becomes `NULL`). Changes apply to the next search; cached offers keep their prices until they expire ([OADR-0005](adr/0005-markup-and-fee-engine.md)). Errors: `400 VALIDATION_FAILED`, `409 CONFLICT`, `412`.
+List: `?active=true|false`, ordered by `priority, id`, cursor pagination. Rules: the default rule (`isDefault`) cannot be deleted or have its scope narrowed (`409 CONFLICT`, `details.reason = "default_rule"`), and since 2026-10-30 (lead decision (2e), FIX-W34-OTA; [OADR-0005](adr/0005-markup-and-fee-engine.md) point 3 revised) an update that sets `isActive: false`, an `activeFrom` or `activeUntil` other than `null`, or a `priority` other than 1000 is the same `409`: it always matches; deleting a rule keeps history (bookings and priced offers keep amounts, `markup_rule_id` becomes `NULL`). Changes apply to the next search; cached offers keep their prices until they expire ([OADR-0005](adr/0005-markup-and-fee-engine.md)). Errors: `400 VALIDATION_FAILED`, `409 CONFLICT`, `412`.
 
 ### 2.2 Fee rules (`fee_rules`)
 
@@ -89,7 +89,7 @@ StorefrontSettings:
       require3ds: boolean, acceptedCardBrands: AmadeusPaymentBrand[]
       requireEmailVerification: boolean
       offerTtlMinutes: 5..240, checkoutTtlMinutes: 5..1440
-    airlineCard: { enabledTest: boolean, enabledLive: boolean }   # live writable only after the M6 review
+    airlineCard: { enabledTest: boolean, enabledLive: boolean, liveAvailable: boolean (read-only) }   # live turned on only after the M6 review
     legal: { termsVersion, privacyVersion, links: [{kind, label, url | pageSlug}] }
     support: { email, phone, hours, helpCenterUrl, emergencyPhone }
     seo: { titleTemplate, defaultTitle, defaultDescription, ogImageAssetId, robots }
@@ -98,7 +98,7 @@ StorefrontSettings:
     version: integer, updatedAt: date-time
 ```
 
-- Validation: currencies against `reference.currencies`; `supported` lists contain the default; a font outside the bundled list, or an asset id of the wrong kind, is `422 UNPROCESSABLE`. `airlineCard.enabledLive = true` is refused (`403 FEATURE_DISABLED`) while `AIRLINE_CARD_ENABLED` is off. Turning on the airline card while active markup or fee rules exist returns a `warnings[]` entry: airline-card bookings are sold at the airline's price ([OADR-0004](adr/0004-airline-card-data-handling.md)).
+- Validation: currencies against `reference.currencies`; `supported` lists contain the default; a font outside the bundled list, or an asset id of the wrong kind, is `422 UNPROCESSABLE`. `airlineCard.enabledLive = true` is refused (`403 FEATURE_DISABLED`) while `AIRLINE_CARD_ENABLED` is off. Since 2026-10-30 (lead decision (2e) of the second batch, FIX-W35-OTA) only a save that turns it on, from a stored `false` to `true`, is refused: a save that keeps a stored `true` or sends `false` passes, so an OTA whose live airline card was on when the switch went off can still save its other sections and turn it off. The answer of get and update carries the read-only `airlineCard.liveAvailable`, the switch itself (lead decision (2d), FIX-W35-OTA; a value sent is ignored), so the OTA admin offers the live box only while it is true. Turning on the airline card while active markup or fee rules exist returns a `warnings[]` entry: airline-card bookings are sold at the airline's price ([OADR-0004](adr/0004-airline-card-data-handling.md)).
 - Effect: bumps `version`, deletes the `storefront.get` caches of both environments; the hosted storefront sees the change within 5 minutes (its `sessionStorage` cache).
 - Errors: `400`, `412`, `422 UNPROCESSABLE`, `403 FEATURE_DISABLED`.
 
@@ -121,6 +121,8 @@ StorefrontPage:
 
 The body is a **Markdown subset**: headings 2–4, paragraphs, bold, italic, bullet and numbered lists, links (`https:`, `mailto:`, `tel:` and relative `/p/<slug>`), and images that reference a `page_image` asset. Anything else (HTML, tables, code, other schemes) is refused with `422 UNPROCESSABLE` and `details.line`. One page per `(slug, locale)` (`409 CONFLICT`). A page referenced by `legal.links` cannot be deleted (`409 CONFLICT`).
 
+Since OBE-072 (2026-10-30): one parser in the backend (`ota/backend/src/storefront/markdown-subset.parser.ts`) checks a body on save and builds storefront.getPage's blocks; besides the refusals of StorefrontPageMarkdown it refuses `+ ` bullets and `1) ` numbers (write `- ` or `1. `), setext headings (`===` or `---` under text), empty headings and items, link titles, links without text and control characters, always with the line they start on, and nests bold, italic and links at most 8 deep. Unmatched `*`, `_` and brackets stay text, as do entities such as `&amp;` (never decoded). A title is stored trimmed (a blank one, or one with a control character, is `400 VALIDATION_FAILED` at `/title`), the locale as the settings write it. The checks of create run in the order of its description: locale, Markdown, images. Since FIX-W35-OTA (lead decision (2c) of 2026-10-30, second batch; [OADR-0012](adr/0012-storefront-settings-assets-and-pages.md) revision of that day) these stricter checks are named in the OpenAPI descriptions of `StorefrontPageMarkdown`, the page titles, `consoleCreateStorefrontPage` and `consoleUpdateStorefrontPage` (descriptions only), and the pages cache key below is confirmed.
+
 ### 2.5 Storefront assets (`storefront_assets`, new table)
 
 | operationId | Method and path | `x-sdk-method` | Permission |
@@ -129,7 +131,7 @@ The body is a **Markdown subset**: headings 2–4, paragraphs, bold, italic, bul
 | `consoleUploadStorefrontAsset` | `POST /v1/console/settings/assets` (`multipart/form-data`: `file`, `kind`) | `console.settings.assets.upload` | `settings:write` |
 | `consoleDeleteStorefrontAsset` | `DELETE /v1/console/settings/assets/{assetId}` | `console.settings.assets.delete` | `settings:write` |
 
-`StorefrontAsset`: `id` (`ast_…`), `kind` (`logo`, `logo_dark`, `logo_square`, `favicon`, `og_image`, `page_image`), `contentType` (`image/png`, `image/jpeg`, `image/webp`; `image/x-icon` for favicons only), `sizeBytes` (≤ 1 MB), `width`, `height`, `fileName`, `url` (public, §4.2), `createdAt`. **No SVG** and no CSS uploads. The server sniffs the type from the magic bytes and reads the dimensions from the file header (logos ≤ 2000 × 2000). It does not re-encode images (no image library in the stack), so the admin tells staff that file metadata is kept; files are served with `nosniff` and `Content-Disposition: inline`. Errors: `422 ASSET_INVALID` (`details.reason`: `type`, `size`, `dimensions`), `409 CONFLICT` when settings or a page reference the asset. Idempotency-Key required on upload.
+`StorefrontAsset`: `id` (`ast_…`), `kind` (`logo`, `logo_dark`, `logo_square`, `favicon`, `og_image`, `page_image`), `contentType` (`image/png`, `image/jpeg`, `image/webp`; `image/x-icon` for favicons only), `sizeBytes` (≤ 1 MB), `width`, `height`, `fileName`, `url` (public, §4.2), `createdAt`. **No SVG** and no CSS uploads. The server sniffs the type from the magic bytes and reads the dimensions from the file header (logos ≤ 2000 × 2000). It does not re-encode images (no image library in the stack), so the admin tells staff that file metadata is kept; files are served with `nosniff` and `Content-Disposition: inline`. Errors: `422 ASSET_INVALID` (`details.reason`: `type`, `size`, `dimensions`), `409 CONFLICT` when settings or a page reference the asset. Idempotency-Key required on upload. Since OBE-071 (2026-10-29): the storage key is the file's SHA-256 and `storage_key` is unique, so the same file uploaded again for the same kind answers that asset, and for another kind `409 CONFLICT` (`details.reason = "asset_exists"`, `details.assetId`, `details.kind`); the multipart body is parsed on the upload route only, and a body above 1 MB and 16 KB answers `size` without being read further.
 
 ### 2.6 Notification templates (`notification_templates`)
 
@@ -141,10 +143,10 @@ The body is a **Markdown subset**: headings 2–4, paragraphs, bold, italic, bul
 | `consolePreviewNotificationTemplate` | `POST …/{templateKey}/{channel}/{locale}/preview` | `console.settings.templates.preview` | `settings:read` |
 | `consoleResetNotificationTemplate` | `POST …/{templateKey}/{channel}/{locale}/reset` | `console.settings.templates.reset` | `settings:write` |
 
-- The list shows the **effective** template for every key the code knows: the tenant row if it exists, otherwise the code default (`customised: false`). `NotificationTemplate`: `key`, `channel` (`email` in the MVP), `locale`, `subject`, `bodyHtml`, `bodyText`, `variables[]` (the allow-list of that key, with descriptions), `customised`, `isActive`, `version`, `updatedAt`.
+- The list shows the **effective** template for every key the code knows: the tenant row of the locale if it exists, otherwise the active row of its language that its e-mails use (`inheritedFrom`, since FIX-W33-OTA), otherwise the code default (`customised: false`; a row provisioning seeded from it is not customised either until the OTA edits it, FIX-W33-OTA). `NotificationTemplate`: `key`, `channel` (`email` in the MVP), `locale`, `subject`, `bodyHtml`, `bodyText`, `variables[]` (the allow-list of that key, with descriptions), `customised`, `inheritedFrom`, `isActive`, `version`, `updatedAt`.
 - `put` upserts the row (`If-Match` when it exists); the server compiles subject, HTML and text with Handlebars in strict mode and checks every variable against the allow-list → `422 TEMPLATE_INVALID` with `details.errors[{part, line, message}]`.
 - `preview` renders with the template's `sample_data`, or with variables in the body, and returns `{subject, html, text}`. The OTA admin shows the HTML in a sandboxed `iframe` (`sandbox` without scripts).
-- `reset` deletes the row, so the code default applies again.
+- `reset` deletes the row, so the language's row or the code default applies again (and is answered).
 - MVP keys: `auth.verify_email`, `auth.password_reset`, `booking.confirmed`, `booking.ticketed`, `booking.ticketing_delayed`, `booking.cancelled`, `booking.cancellation_requested`, `booking.not_confirmed`, `staff.ticketing_failed`, `staff.manual_review`, `staff.airline_card_alert`; since 2026-10-23 (OADR-0013 point 4 as revised, FIX-W28-NOTIFY) also `booking.updated`, after `booking.not_confirmed`; since 2026-10-24 (OADR-0013 point 4 as revised, FIX-W29-OTA) also `account.email_changed` and `account.deleted`, after `auth.password_reset`.
 
 ## 3. Console payments (`payments`, `payment_events`, `refunds`)
@@ -162,6 +164,30 @@ The body is a **Markdown subset**: headings 2–4, paragraphs, bold, italic, bul
 - `refund {amount, reason, reasonNote?}`: Stripe payments `captured` or `partially_refunded`; `amount` ≤ captured − refunded − the refunds still in flight. Creates a `refunds` row (`pending`, `requested_by_type = staff`) and answers `201` with the payment and its new `pending` refund. The request makes no Stripe call: the payments queue sends the refund (`refund.submit`, idempotency key `refund:<rfd_id>`) and the webhooks finish it, so Stripe being down delays a refund and never refuses it, and there is no `502`. Errors: `422 UNPROCESSABLE` (`details.reason`: `amount_exceeds_captured`, `refund_via_airline` for airline-card payments, `currency_mismatch`), `409 CONFLICT` (`payment_not_refundable`).
 - Captures and refunds that belong to a booking also write `booking_events`: `payment.captured` for a capture; `refund.requested` for a refund request, shown to the customer as a refund asked for; and `refund.succeeded` only when Stripe reports the refund `succeeded` (the webhook), because only Stripe's answer makes it refunded (lead decision 6 of 2026-10-22). A refund request never writes `payment.refunded` or `refund.succeeded`.
 
+### 3.1 The billing notice in the console session (M5, OBE-076)
+
+Not a payment operation: the OTA's own subscription state, which the platform's billing sync keeps and the OTA admin shows as a banner ([ADR-0013](../../docs/mvp/adr/0013-subscription-billing-stripe-billing.md) point 7: `past_due` shows a banner in the portal and the OTA admin). The OTA backend cannot read `platform.subscriptions`, so billing sync copies the banner state onto `platform.tenants.billing_notice`, a column of the tenant row the OTA backend already reads ([`platform/docs/data-model.md`](../../platform/docs/data-model.md) §4.2, [`platform/docs/architecture.md`](../../platform/docs/architecture.md) §6.2); the OTA admin reads only through the SDK ([OADR-0018](adr/0018-ota-admin-consumes-the-sdk-server-side.md)), so the console session carries it. One field, no new operation, parameter or error code:
+
+| Schema | Field | Values | Answered by |
+|---|---|---|---|
+| `ConsoleTenant` | `billingNotice`: optional, nullable | `past_due`, `trial_ending`, `null` | `ConsoleStaffSession.tenant` (`consoleSignIn`, `consoleRefreshSession`: `console.auth.signIn`, `console.auth.refresh`) and `ConsoleStaffProfile.tenant` (`consoleGetMe`: `console.auth.me`) |
+
+- **Values** ([`platform/docs/flows/subscription-billing.md`](../../platform/docs/flows/subscription-billing.md) §E, §G): `past_due` while the subscription is `past_due` or `paused`; `trial_ending` before a trial ends (a manual trial from its first reminder, 14 days before the end); `null` otherwise (billing sync clears it when the Stripe subscription is `trialing` or `active`, §E). The notice never blocks the console: a `canceled`, `unpaid` or `incomplete_expired` subscription suspends the OTA instead, and the console then answers `403 TENANT_SUSPENDED`.
+- **Source**: the cached tenant row of the platform read repository (read-only to the OTA backend, [ADR-0003](../../docs/mvp/adr/0003-six-components-two-nestjs-backends.md)); the platform's `tenant` invalidation refreshes it. The column is per tenant, so the value is the same in both environments.
+- **Additive** ([ADR-0006](../../docs/mvp/adr/0006-contract-first-openapi.md) Workflow step 1, [`../backend/openapi/README.md`](../backend/openapi/README.md) §4): the field is optional, so an answer without it stays valid and means no banner; the OTA admin treats a missing field like `null`. The frozen contract in `docs/velexis-sdk/` does not have it and is not edited: its SDK types and the SDK's own both resolve `ConsoleTenant` through the generated `@velexis/api-types`, so the SDK contract test sees the optional field on both sides and passes unchanged.
+- **Tasks**: OBE-076 (this spec, M5), OBE-082 (sign-in, refresh and `console.auth.me` fill it from the cached tenant row), OAD-018 (the banner in the OTA admin, with a link to the portal's billing page). The sign-in and profile examples show `billingNotice: null`.
+
+### 3.2 The storefront origin in the console session (M4, FIX-W36-OTA)
+
+Lead decision (2f) of 2026-10-30, third batch: the OTA admin links a published content page on the storefront ("View on storefront", `<storefrontUrl>/p/<slug>`), and it knows no storefront host of its own ([OADR-0018](adr/0018-ota-admin-consumes-the-sdk-server-side.md): it reads through the SDK only), so the console session carries it. One field, no new operation, parameter or error code:
+
+| Schema | Field | Value | Answered by |
+|---|---|---|---|
+| `ConsoleTenant` | `storefrontUrl`: optional, read-only, `format: uri` | The OTA's storefront origin for the console's environment, without a trailing slash: `https://<key>.<STOREFRONT_BASE_DOMAIN>` (its sub-domain, [ADR-0018](../../docs/mvp/adr/0018-hosted-storefront-custom-domains.md)), and the primary custom domain once OBE-080 resolves them | `ConsoleStaffSession.tenant` (`console.auth.signIn`, `console.auth.refresh`) and `ConsoleStaffProfile.tenant` (`console.auth.me`) |
+
+- **Source**: the tenant key and the process's `STOREFRONT_BASE_DOMAIN`, the origin the e-mails' links use (`storefrontUrl` of `notifications/renderer.ts`); no Amadeus or platform call beyond the tenant row the answer already reads.
+- **Additive** ([`../backend/openapi/README.md`](../backend/openapi/README.md) §4): optional, so an answer an `Idempotency-Key` replays from before the field stays valid; the OTA admin then makes no link. The frozen contract in `docs/velexis-sdk/` is not edited (both sides of the SDK contract test resolve `ConsoleTenant` through the generated `@velexis/api-types`). The sign-in and profile examples show `https://acme.ota.example.com`.
+
 ## 4. Public storefront pages and assets
 
 ### 4.1 Pages
@@ -174,6 +200,7 @@ The body is a **Markdown subset**: headings 2–4, paragraphs, bold, italic, bul
 - Published pages of the request locale (`Accept-Language`, falling back to the default locale). The list returns `{slug, title, kind, showInFooter, sortOrder}`.
 - `getPage` returns `{slug, locale, title, kind, blocks[], updatedAt}`. `blocks` is the Markdown subset parsed **on the server** into a small JSON tree (`heading`, `paragraph`, `list`, `image`, with inline `text`, `strong`, `em`, `link`), so the storefront renders it with `createElement` and `textContent` and never with `innerHTML` ([`conventions.md` §4](../../docs/mvp/conventions.md#4-vanilla-storefront-otafrontend)).
 - Cached like `storefront.get` (5 minutes per tenant, environment and locale). Errors: `404 NOT_FOUND`, `403 TENANT_SUSPENDED`.
+- Since OBE-072 (2026-10-30): the cache is the hash `t:<tenantId>:<env>:pages:<locale>` beside storefront.get's `sf:` entries (field `list`, and `page:<slug>` per page read; [`architecture.md`](architecture.md) §7, [OADR-0012](adr/0012-storefront-settings-assets-and-pages.md) point 7 note of that day). Every console page change and every storefront settings change deletes it for every supported locale in both environments, so a change shows at once on the API and within the storefront's own 5-minute copy.
 
 ### 4.2 Assets
 
@@ -183,6 +210,7 @@ The body is a **Markdown subset**: headings 2–4, paragraphs, bold, italic, bul
 
 - Used as a plain image URL. `storefront.get` returns same-origin paths for the edge (`/api/v1/assets/acme/ast_….png`) and absolute URLs on `api.ota.example.com` for key callers, so `img-src 'self'` holds on the hosted storefront ([ADR-0018](../../docs/mvp/adr/0018-hosted-storefront-custom-domains.md)).
 - Served for `active` and `suspended` tenants (a suspended storefront still shows its logo on the maintenance page). Headers: `Cache-Control: public, max-age=31536000, immutable` (ids never change content), `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'`. Unknown tenant or asset → `404`.
+- Since OBE-071 (2026-10-29): also `Content-Disposition: inline` and `Cross-Origin-Resource-Policy: cross-origin` (helmet's `same-origin` would stop key callers' own sites from showing the absolute URL). The path's tenant key alone chooses the OTA: a credential sent along is checked as on every route (`401`, `403 ORIGIN_NOT_ALLOWED`, `403 SCOPE_NOT_ALLOWED`) but never chooses or refuses the OTA, so the edge header of a suspended storefront's maintenance page gets its logo. The 120 requests per minute per IP are counted with the document downloads (`downloadFile`).
 
 ## 5. (e) Internal endpoints
 
@@ -198,6 +226,8 @@ Documented under the tag `Internal` with `x-internal: true`; no SDK methods; blo
 | `downloadFile` | `GET /v1/files/{storageKey}?exp=…&sig=…` | Browsers following `bookings.getDocumentDownloadUrl` | M3 | `x-sdk-exclude`; HMAC-SHA-256 with `document-url.key`, valid 5 minutes; re-checks the tenant ([ADR-0017](../../docs/mvp/adr/0017-email-documents-storage.md)). Done by OBE-054 under the tag `Booking documents`, not `x-internal`: like `getPublicAsset` it is a public plain URL, part of the public reference |
 
 Webhook answers: `200` once the event is stored as a `payment_events` row (or is a known duplicate, or has no known tenant: logged and acknowledged); `400` on a bad signature. On every endpoint, `metadata.velexis_tenant_id` and `metadata.velexis_environment`, when present, must match the tenant and environment the endpoint resolved, `event.livemode` must match the environment, and the payment is looked up only inside that tenant; a mismatch is logged as a security event and acknowledged with `200` without effect. Processing happens in `ota-stripe-events` ([OADR-0010](adr/0010-stripe-gateway-and-payment-webhooks.md)).
+
+Since OBE-078 (2026-10-30) the two M5 webhooks are served and no longer in `pending-operations.ts` (it holds the 19 deferred operations only). As built: the Connect endpoint reads the `connect_standard` connection of `event.account` and the `c/` endpoint its connection (with the encrypted signing secret, decrypted in the receiver only) from the platform tables for each delivery, `503` when they cannot be read; on both, the payment must also have been created on the event's `acct_…` (its `payments.metadata.connection`, OBE-077), else the event is one more mismatch of step 4 (a security event, `200` without effect), so the worker reads the object again where it lives: the Velexis key with `Stripe-Account` for a `connect_standard` payment, the key the tenant's connection holds for that account for an `api_keys` one (the Connect path once the OTA connected that account, lead decision (2i) of 2026-10-30). The stored payload adds `endpoint` (`connect`, `connection`), `account` and `connectionId` ([`../backend/README.md`](../backend/README.md), Payments).
 
 **No Caddy `ask` endpoint in the OTA backend.** On-demand TLS for custom domains asks the **platform** backend (`GET 127.0.0.1:3100/internal/tls/ask`), which owns `tenant_domains` ([ADR-0018](../../docs/mvp/adr/0018-hosted-storefront-custom-domains.md), [PADR-0004](../../platform/docs/adr/0004-custom-domain-verification.md)). The OTA backend only resolves verified hosts for edge requests. Adding a second `ask` here would split one rule across two owners.
 
@@ -215,7 +245,7 @@ Webhook answers: `200` once the event is stored as a `payment_events` row (or is
 | Public asset, file download | 2 | none (`x-sdk-exclude`) | M3, M4 |
 | Health, webhooks | 5 | none (`x-internal`) | M0, M3, M5 |
 
-After the changes the document has 96 + 39 = **135 operations**, of which 128 have an `x-sdk-method` (96 + 32). They arrive in M3 (OBE-029: 1, OBE-039: 1, OBE-054: 1) and M4 (OBE-058: 17 settings operations; OBE-090: 4 console payments, the 2 health endpoints and the 2 M5 webhooks, documented ahead of their handler; OBE-091: 8 page and asset operations and the 3 public ones). So the M4 document is complete at 135 operations; the M5 spec task OBE-076 adds only the billing notice field, and `pending-operations.ts` holds the 19 deferred operations and the two M5 webhooks at the M4 exit.
+After the changes the document has 96 + 39 = **135 operations**, of which 128 have an `x-sdk-method` (96 + 32). They arrive in M3 (OBE-029: 1, OBE-039: 1, OBE-054: 1) and M4 (OBE-058: 17 settings operations; OBE-090: 4 console payments, the 2 health endpoints and the 2 M5 webhooks, documented ahead of their handler; OBE-091: 8 page and asset operations and the 3 public ones). So the M4 document is complete at 135 operations; the M5 spec task OBE-076 adds only the billing notice field (§3.1), and `pending-operations.ts` holds the 19 deferred operations and the two M5 webhooks at the M4 exit.
 
 ## 7. Console bookings list: the needs-attention filters (OBE-061)
 

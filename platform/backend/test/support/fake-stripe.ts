@@ -22,6 +22,11 @@
 // - **Search** (`customers.search`) answers the stored Customers whose `metadata.velexis_tenant_id` is the one of the
 //   query `metadata['velexis_tenant_id']:'<id>'`, the only query the platform sends (any other throws), as a
 //   `search_result` page. Unlike Stripe's search, whose index may lag up to a minute, it sees a Customer at once.
+// - **List** (`balanceTransactions.list`, PBE-059) answers the stored balance transactions whose `created` is in
+//   `params.created` (`gt`, `gte`, `lt`, `lte`), newest first as Stripe lists them (equal times in the order they were
+//   put), one page of `limit` (10 by default, at most 100) after `starting_after`, with `has_more`; an unknown
+//   `starting_after` throws the SDK's 404. `expand: ["data.source"]` replaces each transaction's `source` id by the
+//   stored object. The SDK's promise also pages through the results; the platform reads one page at a time.
 // - **Failures** queued with `failNext(method, error)` are thrown by the next calls of that method, one each, before
 //   anything else happens; the call is still recorded. For a create, `failNext(method, error, options)` plays what
 //   Stripe does with an idempotency key on a failure: `created` makes (and keeps) the object before the error is
@@ -31,7 +36,16 @@
 //   `created`, or makes one.
 // - **Calls** are recorded in order (`calls`, `callsOf(method)`) with the id, a copy of the parameters and the
 //   idempotency key, so a test asserts what the platform asked for, and that it asked for nothing (`calls` empty).
+// - **Connect OAuth** (`oauth.token`, PBE-055) exchanges a code that `grantConnectCode(code, {stripeUserId,
+//   livemode})` made, once: it needs an idempotency key (a POST), takes `grant_type: "authorization_code"` only, and
+//   answers Stripe's `OAuthToken` with the account id, the mode and fresh fake tokens (`grantConnectCode` returns them,
+//   so a test can look for them where they must never be). A code it does not hold, or one exchanged already, throws
+//   the SDK's `StripeInvalidGrantError` (400 `invalid_grant`) with Stripe's message, which names the code. The
+//   connected account itself is an `account` object put with `put`, read with `accounts.retrieve(id)`.
+//   `oauth.deauthorize` (FIX-W36-PLATFORM) needs an idempotency key, `client_id` and `stripe_user_id`, records the
+//   account in `deauthorized`, and answers Stripe's `{stripe_user_id}`; a queued failure is thrown first, as always.
 // - `notConfigured()` makes `api()` throw StripeNotConfiguredError, as the application does without STRIPE_SECRET_KEY.
+import { randomBytes } from "node:crypto";
 import Stripe from "stripe";
 import {
   StripeClient,
@@ -41,6 +55,10 @@ import {
 
 /** The calls of StripeApi, as `<resource>.<method>`. */
 export const FAKE_STRIPE_METHODS = Object.freeze([
+  // Connect Standard (PBE-055; the deauthorisation since FIX-W36-PLATFORM).
+  "oauth.token",
+  "oauth.deauthorize",
+  "accounts.retrieve",
   "customers.create",
   "customers.retrieve",
   "customers.search",
@@ -50,7 +68,14 @@ export const FAKE_STRIPE_METHODS = Object.freeze([
   "subscriptions.retrieve",
   "invoices.retrieve",
   "prices.retrieve",
+  "balanceTransactions.list",
+  "charges.retrieve",
+  "paymentIntents.retrieve",
 ] as const);
+
+/** The default and the highest `limit` of a Stripe list call. */
+export const STRIPE_LIST_DEFAULT_LIMIT = 10;
+export const STRIPE_LIST_MAX_LIMIT = 100;
 
 /** One call of StripeApi. */
 export type FakeStripeMethod = (typeof FAKE_STRIPE_METHODS)[number];
@@ -73,6 +98,24 @@ export interface FakeStripeFailureOptions {
   /** Stripe stored the failure for the idempotency key: later calls with the key throw it again. */
   readonly storedForKey?: boolean;
 }
+
+/** What Stripe answers for a Connect OAuth code made with `grantConnectCode` (PBE-055). */
+export interface FakeConnectGrant {
+  /** `acct_…`: the account the person connected (`stripe_user_id`). */
+  readonly stripeUserId: string;
+  /** `livemode` of the answer: Stripe answers the mode of the platform key that exchanges the code. */
+  readonly livemode: boolean;
+}
+
+/** The tokens the fake hands out for a code: what the platform must discard, never store, log or answer. */
+export interface FakeConnectTokens {
+  readonly accessToken: string;
+  readonly refreshToken: string;
+  readonly publishableKey: string;
+}
+
+/** A code `grantConnectCode` made and not exchanged yet. */
+interface ConnectCode extends FakeConnectGrant, FakeConnectTokens {}
 
 /** A failure queued by `failNext`. */
 interface QueuedFailure extends FakeStripeFailureOptions {
@@ -132,6 +175,9 @@ export class FakeStripe extends StripeClient {
   private readonly objects = new Map<string, Json>();
   private readonly failures = new Map<FakeStripeMethod, QueuedFailure[]>();
   private readonly byIdempotencyKey = new Map<string, KeyRecord>();
+  private readonly connectCodes = new Map<string, ConnectCode>();
+  /** The `acct_…` ids `oauth.deauthorize` disconnected, in order. */
+  readonly deauthorized: string[] = [];
   private sequence = 0;
   private configured = true;
   private readonly resources: StripeApi;
@@ -139,6 +185,21 @@ export class FakeStripe extends StripeClient {
   constructor() {
     super();
     this.resources = {
+      oauth: {
+        token: (params: unknown, options?: unknown) =>
+          settle(() => this.oauthTokenNow(params, options)) as Promise<Stripe.OAuthToken>,
+        deauthorize: (params: unknown, options?: unknown) =>
+          settle(() => this.oauthDeauthorizeNow(params, options)) as Promise<Stripe.OAuthDeauthorization>,
+      },
+      accounts: {
+        // The SDK also retrieves the platform's own account without an id; the platform always names the account.
+        retrieve: ((id: unknown, params?: unknown) =>
+          typeof id === "string"
+            ? this.retrieve<Stripe.Account>("accounts.retrieve", "account", id, params)
+            : Promise.reject(
+                new Error("FakeStripe: accounts.retrieve needs the id of a connected account"),
+              )) as StripeApi["accounts"]["retrieve"],
+      },
       customers: {
         create: (params?: unknown, options?: unknown) =>
           this.create<Stripe.Customer>("customers.create", params, options),
@@ -185,6 +246,21 @@ export class FakeStripe extends StripeClient {
       prices: {
         retrieve: (id: string, params?: unknown) =>
           this.retrieve<Stripe.Price>("prices.retrieve", "price", id, params),
+      },
+      balanceTransactions: {
+        // The SDK's promise also pages through the results; the platform reads one page at a time.
+        list: (params?: unknown, options?: unknown) =>
+          settle(() =>
+            this.listBalanceTransactionsNow(params, options),
+          ) as unknown as Stripe.ApiListPromise<Stripe.BalanceTransaction>,
+      },
+      charges: {
+        retrieve: (id: string, params?: unknown) =>
+          this.retrieve<Stripe.Charge>("charges.retrieve", "charge", id, params),
+      },
+      paymentIntents: {
+        retrieve: (id: string, params?: unknown) =>
+          this.retrieve<Stripe.PaymentIntent>("paymentIntents.retrieve", "payment_intent", id, params),
       },
     };
   }
@@ -268,14 +344,87 @@ export class FakeStripe extends StripeClient {
     return this.calls.filter((call) => call.method === method);
   }
 
-  /** Forgets every call, object, failure and idempotency key. */
+  /**
+   * Makes `code` a Connect OAuth code that `oauth.token` exchanges once for `grant` (file header), and returns the
+   * tokens the exchange will hand out with it. A later grant of the same code replaces it.
+   */
+  grantConnectCode(code: string, grant: FakeConnectGrant): FakeConnectTokens {
+    const suffix = randomBytes(12).toString("hex");
+    const tokens: FakeConnectTokens = {
+      accessToken: `fake_connect_access_${suffix}`,
+      refreshToken: `fake_connect_refresh_${suffix}`,
+      publishableKey: `fake_connect_publishable_${suffix}`,
+    };
+    this.connectCodes.set(code, { ...grant, ...tokens });
+    return tokens;
+  }
+
+  /** Forgets every call, object, failure, idempotency key and Connect code. */
   reset(): this {
     this.calls.length = 0;
     this.objects.clear();
     this.failures.clear();
     this.byIdempotencyKey.clear();
+    this.connectCodes.clear();
+    this.deauthorized.length = 0;
     this.configured = true;
     return this;
+  }
+
+  /** `oauth.token`: exchanges a code of `grantConnectCode` once (file header). */
+  private oauthTokenNow(params: unknown, options: unknown): Stripe.Response<Stripe.OAuthToken> {
+    this.record("oauth.token", undefined, params, options);
+    const key = isRecord(options) ? options["idempotencyKey"] : undefined;
+    if (typeof key !== "string" || key.length === 0) {
+      throw new Error(
+        "FakeStripe: oauth.token without an idempotency key (every POST needs one, architecture §7)",
+      );
+    }
+    const query = isRecord(params) ? params : {};
+    if (query["grant_type"] !== "authorization_code") {
+      throw new Error("FakeStripe: oauth.token knows only grant_type authorization_code");
+    }
+    const code = query["code"];
+    const granted = typeof code === "string" ? this.connectCodes.get(code) : undefined;
+    if (typeof code !== "string" || granted === undefined) {
+      // Stripe's OAuth error, as the SDK throws it: its description names the code.
+      throw new Stripe.errors.StripeInvalidGrantError({
+        type: "invalid_grant",
+        message: `Authorization code does not exist: ${String(code)}`,
+        statusCode: 400,
+      });
+    }
+    this.connectCodes.delete(code);
+    return this.response<Stripe.OAuthToken>({
+      access_token: granted.accessToken,
+      livemode: granted.livemode,
+      refresh_token: granted.refreshToken,
+      scope: "read_write",
+      stripe_publishable_key: granted.publishableKey,
+      stripe_user_id: granted.stripeUserId,
+      token_type: "bearer",
+    });
+  }
+
+  /** `oauth.deauthorize`: disconnects the platform from an account (file header). */
+  private oauthDeauthorizeNow(
+    params: unknown,
+    options: unknown,
+  ): Stripe.Response<Stripe.OAuthDeauthorization> {
+    this.record("oauth.deauthorize", undefined, params, options);
+    const key = isRecord(options) ? options["idempotencyKey"] : undefined;
+    if (typeof key !== "string" || key.length === 0) {
+      throw new Error(
+        "FakeStripe: oauth.deauthorize without an idempotency key (every POST needs one, architecture §7)",
+      );
+    }
+    const query = isRecord(params) ? params : {};
+    const account = query["stripe_user_id"];
+    if (typeof query["client_id"] !== "string" || typeof account !== "string") {
+      throw new Error("FakeStripe: oauth.deauthorize needs client_id and stripe_user_id");
+    }
+    this.deauthorized.push(account);
+    return this.response<Stripe.OAuthDeauthorization>({ stripe_user_id: account });
   }
 
   /**
@@ -361,6 +510,64 @@ export class FakeStripe extends StripeClient {
       url: "/v1/customers/search",
       has_more: false,
       next_page: null,
+      data,
+    });
+  }
+
+  /** `balanceTransactions.list`: one page of the stored balance transactions (file header). */
+  private listBalanceTransactionsNow(
+    params: unknown,
+    options: unknown,
+  ): Stripe.ApiList<Stripe.BalanceTransaction> {
+    this.record("balanceTransactions.list", undefined, params, options);
+    const query = isRecord(params) ? params : {};
+    const created = isRecord(query["created"]) ? query["created"] : {};
+    const bound = (name: string): number | undefined => {
+      const value = created[name];
+      return typeof value === "number" ? value : undefined;
+    };
+    const [gt, gte, lt, lte] = [bound("gt"), bound("gte"), bound("lt"), bound("lte")];
+    const limit = typeof query["limit"] === "number" ? query["limit"] : STRIPE_LIST_DEFAULT_LIMIT;
+    if (!Number.isInteger(limit) || limit < 1 || limit > STRIPE_LIST_MAX_LIMIT) {
+      throw FakeStripe.apiError(400, "parameter_invalid_integer");
+    }
+    const all = [...this.objects.values()]
+      .filter((object) => {
+        const time = object["created"];
+        return (
+          object["object"] === "balance_transaction" &&
+          typeof time === "number" &&
+          (gt === undefined || time > gt) &&
+          (gte === undefined || time >= gte) &&
+          (lt === undefined || time < lt) &&
+          (lte === undefined || time <= lte)
+        );
+      })
+      // Newest first; Array.prototype.sort is stable, so equal times keep the order they were put in.
+      .sort((a, b) => (b["created"] as number) - (a["created"] as number));
+    let start = 0;
+    const after = query["starting_after"];
+    if (typeof after === "string") {
+      const index = all.findIndex((object) => object["id"] === after);
+      if (index < 0) {
+        throw FakeStripe.apiError(404, "resource_missing");
+      }
+      start = index + 1;
+    }
+    const expand = Array.isArray(query["expand"]) ? query["expand"] : [];
+    const data = all.slice(start, start + limit).map((object) => {
+      const answer = structuredClone(object);
+      const source = answer["source"];
+      const expanded = typeof source === "string" ? this.objects.get(source) : undefined;
+      if (expand.includes("data.source") && expanded !== undefined) {
+        answer["source"] = structuredClone(expanded);
+      }
+      return answer;
+    });
+    return this.response<Stripe.ApiList<Stripe.BalanceTransaction>>({
+      object: "list",
+      url: "/v1/balance_transactions",
+      has_more: start + limit < all.length,
       data,
     });
   }

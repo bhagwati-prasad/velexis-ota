@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { AmadeusCallError } from "../amadeus/error-mapper";
 import type { PaymentRow } from "../payments/payments.repository";
 import type { BookingChildren, BookingRow } from "./bookings.repository";
+import { localDayOf } from "./cancellation-mode";
 import {
   authorisationSettlementOf,
   BOOKING_BUSY_RETRY_AFTER_SECONDS,
@@ -31,6 +32,7 @@ import {
   staffCancellationOf,
   staffRefundOf,
   staffRefusalOf,
+  staffStepOf,
   unsentAnswer,
   type CancellationEventRow,
   type CancellationQuote,
@@ -484,6 +486,61 @@ describe("a staff cancellation (OBE-063)", () => {
       staffCancellationOf({ cancelledBy: "staff", staff: { ...staff, refundMode: "most" } }),
     ).toBeUndefined();
     expect(staffCancellationOf(null)).toBeUndefined();
+  });
+
+  // The step of a staff cancellation by the quote's rule (lead decision (2c) of 2026-10-30, third batch): before, a
+  // ticket that held a seat always meant `void`, whatever day it was issued.
+  describe("the step by the cancellation-mode rule (FIX-W36-OTA)", () => {
+    const zone = "Asia/Tokyo";
+    // 12:00 in Tokyo; the day there began at 15:00 UTC the day before.
+    const now = new Date("2026-03-11T03:00:00Z");
+    const today = localDayOf(now, zone);
+    const asked = { amountPaid: "125.47", estimatedRefund: "125.47", penalty: "0.00", otaFee: "0.00" };
+    const stepOf = (ticketingStatus: string, tickets: { status: string; issuedAt: Date | null }[]) =>
+      staffStepOf({ ticketingStatus, tickets, timeZone: zone, now, estimate: asked, minorUnits: 2 });
+
+    it("[FIX-W36-OTA AC2] releases a booking without issued tickets, with the refund asked", () => {
+      expect(stepOf("manual_review", [])).toEqual({ mode: "release", estimate: asked });
+      // Tickets that hold no seat any more count as none.
+      expect(
+        stepOf("pending", [
+          { status: "VOID", issuedAt: today.startsAt },
+          { status: "REFUNDED", issuedAt: null },
+        ]),
+      ).toEqual({ mode: "release", estimate: asked });
+    });
+
+    it("[FIX-W36-OTA AC2] voids tickets issued today in the OTA's time zone, with the refund asked", () => {
+      expect(stepOf("issued", [{ status: "ISSUED", issuedAt: today.startsAt }])).toEqual({
+        mode: "void",
+        estimate: asked,
+      });
+      // 23:00 UTC the day before is 08:00 of today in Tokyo: a same-day void there, though not in UTC.
+      expect(stepOf("issued", [{ status: "ISSUED", issuedAt: new Date("2026-03-10T23:00:00Z") }]).mode).toBe(
+        "void",
+      );
+    });
+
+    it("[FIX-W36-OTA AC2] asks no void for a ticket issued before today or at an unknown time: a request, no refund", () => {
+      const request = {
+        mode: "request_only",
+        estimate: { amountPaid: "125.47", estimatedRefund: "0.00", penalty: "0.00", otaFee: "0.00" },
+      };
+      // A minute before Tokyo's midnight: yesterday there.
+      expect(
+        stepOf("issued", [{ status: "ISSUED", issuedAt: new Date(today.startsAt.getTime() - 60_000) }]),
+      ).toEqual(request);
+      // One of two tickets of yesterday is enough.
+      expect(
+        stepOf("issued", [
+          { status: "ISSUED", issuedAt: today.startsAt },
+          { status: "ISSUED", issuedAt: new Date(today.startsAt.getTime() - 60_000) },
+        ]),
+      ).toEqual(request);
+      expect(stepOf("issued", [{ status: "ISSUED", issuedAt: null }])).toEqual(request);
+      // A ticketed state without stored tickets.
+      expect(stepOf("partially_issued", [])).toEqual(request);
+    });
   });
 
   it("answers the airline's refusal of a staff DELETE as 422 SUPPLIER_REJECTED with its supplier issue", () => {

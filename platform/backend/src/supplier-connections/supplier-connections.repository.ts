@@ -13,6 +13,9 @@
 // `listForTenant` reads a tenant's connections without the ciphertext column (the portal's list, PBE-027), and
 // `toAmadeusConnection` is the API's `AmadeusConnection` of a row: never the client secret or any ciphertext.
 // `setStatus` is the platform admin's switch of a connection (PBE-030, `adminSetConnectionStatus`).
+// `tenantStatusForShare`, `lockViewForTenant` and `updateSettings` are the portal's settings update (PBE-040,
+// `updateAmadeusConnection`): the tenant's row `FOR SHARE` first, then the connection `FOR UPDATE` without the
+// ciphertext column, as the payment connection's update does.
 import { Inject, Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types/platform";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
@@ -82,6 +85,19 @@ export interface VelexisConnectionInsert extends VelexisOffice {
 /** The columns of a new `velexis` connection that waits for an office (no free office, or no active account). */
 export type PendingVelexisConnectionInsert = Omit<VelexisConnectionInsert, "officeId">;
 
+/**
+ * The settings `updateAmadeusConnection` changes (PBE-040): each column that is present replaces the stored value, the
+ * jsonb ones as a whole (`ticketing_defaults` as the API's `AmadeusTicketingDefaults`, `monitored_queues` as its list of
+ * `AmadeusMonitoredQueue`). Offices, credentials and status are never changed here.
+ */
+export interface SupplierConnectionSettings {
+  readonly default_office_id?: string;
+  readonly queuing_office_id?: string;
+  readonly owner_office_id?: string;
+  readonly ticketing_defaults?: AmadeusConnection["ticketingDefaults"];
+  readonly monitored_queues?: AmadeusConnection["monitoredQueues"];
+}
+
 @Injectable()
 export class SupplierConnectionsRepository {
   constructor(@Inject(PLATFORM_DB) private readonly db: PlatformDb) {}
@@ -117,6 +133,26 @@ export class SupplierConnectionsRepository {
     return trx
       .selectFrom("platform.supplier_connections")
       .selectAll()
+      .where("tenant_id", "=", tenantId)
+      .where("provider", "=", AMADEUS_PROVIDER)
+      .where("environment", "=", environment)
+      .forUpdate()
+      .executeTakeFirst();
+  }
+
+  /**
+   * The tenant's Amadeus connection of `environment`, locked for the rest of `trx` (`FOR UPDATE`) as `lockForTenant`
+   * locks it, but read without the client secret's ciphertext (the column is never selected): the portal's settings
+   * update (PBE-040) answers from this row when nothing changes.
+   */
+  async lockViewForTenant(
+    trx: PlatformTransaction,
+    tenantId: string,
+    environment: AmadeusEnvironment,
+  ): Promise<SupplierConnectionView | undefined> {
+    return trx
+      .selectFrom("platform.supplier_connections")
+      .select(SUPPLIER_CONNECTION_VIEW_COLUMNS)
       .where("tenant_id", "=", tenantId)
       .where("provider", "=", AMADEUS_PROVIDER)
       .where("environment", "=", environment)
@@ -266,6 +302,57 @@ export class SupplierConnectionsRepository {
     return trx
       .updateTable("platform.supplier_connections")
       .set((eb) => ({ status, version: eb("version", "+", 1), updated_at: now }))
+      .where("id", "=", id)
+      .returning(SUPPLIER_CONNECTION_VIEW_COLUMNS)
+      .executeTakeFirstOrThrow();
+  }
+
+  /**
+   * The status of the tenant `tenantId`, read in `trx` with `FOR SHARE`, so the tenant cannot be suspended (or change
+   * otherwise) until `trx` ends; `undefined` when there is no such tenant. A portal write to a tenant's connection takes
+   * this lock before it locks the connection (`lockViewForTenant`): the tenant first, then its connection.
+   */
+  async tenantStatusForShare(trx: PlatformTransaction, tenantId: string): Promise<string | undefined> {
+    const row = await trx
+      .selectFrom("platform.tenants")
+      .select("status")
+      .where("id", "=", tenantId)
+      .forShare()
+      .executeTakeFirst();
+    return row?.status;
+  }
+
+  /**
+   * Writes the settings of a connection locked by `lockViewForTenant` (PBE-040, `updateAmadeusConnection`): the columns
+   * `settings` holds, with `version + 1`, in `trx`. Offices, credentials and status stay as they are; the row comes back
+   * without the client secret's ciphertext.
+   */
+  async updateSettings(
+    trx: PlatformTransaction,
+    id: string,
+    settings: SupplierConnectionSettings,
+    now: Date,
+  ): Promise<SupplierConnectionView> {
+    return trx
+      .updateTable("platform.supplier_connections")
+      .set((eb) => ({
+        ...(settings.default_office_id === undefined
+          ? {}
+          : { default_office_id: settings.default_office_id }),
+        ...(settings.queuing_office_id === undefined
+          ? {}
+          : { queuing_office_id: settings.queuing_office_id }),
+        ...(settings.owner_office_id === undefined ? {} : { owner_office_id: settings.owner_office_id }),
+        // jsonb columns are written as JSON text.
+        ...(settings.ticketing_defaults === undefined
+          ? {}
+          : { ticketing_defaults: JSON.stringify(settings.ticketing_defaults) }),
+        ...(settings.monitored_queues === undefined
+          ? {}
+          : { monitored_queues: JSON.stringify(settings.monitored_queues) }),
+        version: eb("version", "+", 1),
+        updated_at: now,
+      }))
       .where("id", "=", id)
       .returning(SUPPLIER_CONNECTION_VIEW_COLUMNS)
       .executeTakeFirstOrThrow();

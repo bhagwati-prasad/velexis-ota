@@ -29,13 +29,17 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:contract": "tsc -p tsconfig.build.json && tsc -p test/contract/tsconfig.json",
+    "test:smoke": "vitest run --config vitest.smoke.config.js",
     "clean": "rm -rf dist coverage"
   },
   "devDependencies": {
     "@velexis/api-types": "workspace:*",
+    "@velexis/config": "workspace:*",
     "@velexis/testing": "workspace:*",
     "esbuild": "0.25.12",
     "happy-dom": "17.6.3",
+    "ioredis": "5.11.1",
+    "pg": "8.23.1",
     "typescript": "5.6.3",
     "vitest": "3.2.7",
     "yaml": "2.9.1"

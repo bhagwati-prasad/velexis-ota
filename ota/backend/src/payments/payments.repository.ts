@@ -85,6 +85,12 @@ export interface PaymentRow {
    * like an empty list, as nothing refundable (card-fees.ts `keptCardFeeOf`).
    */
   readonly cardFeeLines?: unknown;
+  /**
+   * `payments.metadata`: for a Stripe payment since OBE-077 the account it was created on (`{"connection": …}`,
+   * payment-gateway.ts `recordedPaymentAccount`); `undefined` only on a row built by hand, which counts as a payment
+   * without a record (`velexis`).
+   */
+  readonly metadata?: unknown;
   readonly amountAuthorized: string;
   readonly amountCaptured: string;
   readonly amountRefunded: string;
@@ -283,6 +289,7 @@ function paymentRows(trx: TenantTransaction) {
       "p.created_at as createdAt",
       "p.updated_at as updatedAt",
       "p.card_fee_lines as cardFeeLines",
+      "p.metadata as metadata",
       "c.customer_id as checkoutCustomerId",
       sql<boolean>`coalesce(c.is_guest, false)`.as("checkoutIsGuest"),
       sql<string>`p.currency::text`.as("currency"),

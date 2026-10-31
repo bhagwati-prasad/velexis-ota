@@ -32,6 +32,10 @@
 //   subscriptions' SubscriptionsService (`billing/subscriptions.service.ts`) is provided here, not by BillingModule:
 //   its manual edit also moves the tenant's plan through TenantsModule's repository, and BillingModule may not import
 //   TenantsModule, a module of its own layer (architecture §2.2).
+// - AdminPayoutsController: the payout accounts (masked view, reveal with a reason and a step-up, review) over
+//   SettlementsModule's PayoutAccountsService (PBE-058).
+// - AdminSettlementsController: the settlement statements: the generation of a month's drafts over SettlementsModule's
+//   SettlementJobs (PBE-059) and the review workflow over its SettlementReviewService (PBE-060).
 //
 // Later tasks add the other areas of platform/docs/api-inventory-admin.md, one controller per area. The admin
 // bootstrap commands of dist/cli.js (`admin:grant`, `admin:reset-mfa`, admin-cli.commands.ts) run outside this module,
@@ -47,6 +51,7 @@ import { DomainsModule } from "../domains/domains.module";
 import { NotificationsModule } from "../notifications/notifications.module";
 import { PaymentConnectionsModule } from "../payment-connections/payment-connections.module";
 import { ProvisioningModule } from "../provisioning/provisioning.module";
+import { SettlementsModule } from "../settlements/settlements.module";
 import { SupplierConnectionsModule } from "../supplier-connections/supplier-connections.module";
 import { TenantsModule } from "../tenants/tenants.module";
 import { AdminAccountsController } from "./admin-accounts.controller";
@@ -62,6 +67,8 @@ import { AdminDashboardRepository } from "./admin-dashboard.repository";
 import { AdminDashboardService } from "./admin-dashboard.service";
 import { AdminJobsController } from "./admin-jobs.controller";
 import { AdminJobsService } from "./admin-jobs.service";
+import { AdminPayoutsController } from "./admin-payouts.controller";
+import { AdminSettlementsController } from "./admin-settlements.controller";
 import { AdminTenantsController } from "./admin-tenants.controller";
 import { AdminTenantsService } from "./admin-tenants.service";
 import { QueueInspector } from "./queue-inspector";
@@ -80,6 +87,7 @@ import { QueueInspector } from "./queue-inspector";
     BillingModule,
     DomainsModule,
     PaymentConnectionsModule,
+    SettlementsModule,
   ],
   controllers: [
     AdminAuthController,
@@ -91,6 +99,8 @@ import { QueueInspector } from "./queue-inspector";
     AdminTenantsController,
     AdminJobsController,
     AdminBillingController,
+    AdminPayoutsController,
+    AdminSettlementsController,
   ],
   providers: [
     AdminAuthService,

@@ -42,11 +42,14 @@ import {
 import { JOB_BATCH_LIMITS } from "../../../src/jobs/limits";
 import { FAN_OUT_JOB } from "../../../src/jobs/schedulers";
 import { BOOKINGS_SYNC_SCAN_JOB } from "../../../src/bookings/booking-sync.processor";
+import { CHECKOUTS_EXPIRE_JOB } from "../../../src/checkout/checkout-expiry.processor";
+import { RETENTION_JOB } from "../../../src/jobs/retention.processor";
 import { RECONCILE_SCAN_JOB } from "../../../src/bookings/reconcile.processor";
 import { TICKETING_SCAN_JOB } from "../../../src/bookings/ticketing.processor";
 import { NOTIFICATIONS_SWEEP_JOB } from "../../../src/notifications/notifications.processor";
 import { AUTHORISATION_WATCH_JOB } from "../../../src/payments/authorisation-watch.processor";
 import { REFUNDS_SWEEP_JOB } from "../../../src/payments/refunds-sweep.processor";
+import { QUEUES_POLL_JOB } from "../../../src/console/queue-poller.processor";
 import { OFFERS_PURGE_JOB } from "../../../src/shopping/offers-purge.processor";
 import { createWorkerApp, createWorkerLogger, WorkerModule } from "../../../src/worker.module";
 import { testWorkerVariables } from "../../helpers/api-env";
@@ -344,7 +347,8 @@ const NONE = { searches: 0, offers: 0, upsells: 0, pricedOffers: 0 };
 /**
  * The scheduler of offers.purge among those registered at start-up (the outbox sweep of OBE-030, the authorisation
  * watch of OBE-040, the ticketing scan of OBE-044, the reconciliation scan of OBE-043, the booking sync scan of
- * OBE-045 and the refund sweep of FIX-W27-FOLLOWUPS are the others).
+ * OBE-045, the refund sweep of FIX-W27-FOLLOWUPS, the checkout expiry and retention purge of OBE-056, and the queue
+ * poller of OBE-065 are the others).
  */
 const purgeScheduler = (): JobSchedulerJson | undefined =>
   registered.find((scheduler) => scheduler.key === OFFERS_PURGE_JOB);
@@ -354,10 +358,13 @@ describe("the schedulers", () => {
     expect(registered.map((scheduler) => scheduler.key).sort()).toEqual([
       RECONCILE_SCAN_JOB,
       BOOKINGS_SYNC_SCAN_JOB,
+      CHECKOUTS_EXPIRE_JOB,
       NOTIFICATIONS_SWEEP_JOB,
       OFFERS_PURGE_JOB,
       AUTHORISATION_WATCH_JOB,
+      QUEUES_POLL_JOB,
       REFUNDS_SWEEP_JOB,
+      RETENTION_JOB,
       TICKETING_SCAN_JOB,
     ]);
     expect(purgeScheduler()).toEqual(
@@ -380,6 +387,9 @@ describe("the schedulers", () => {
           RECONCILE_SCAN_JOB,
           BOOKINGS_SYNC_SCAN_JOB,
           REFUNDS_SWEEP_JOB,
+          CHECKOUTS_EXPIRE_JOB,
+          RETENTION_JOB,
+          QUEUES_POLL_JOB,
         ],
         removed: [],
       }),

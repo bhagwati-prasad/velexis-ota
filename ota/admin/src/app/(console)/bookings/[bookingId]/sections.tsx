@@ -32,6 +32,11 @@
 //
 // Card data: no form of payment shows more than its brand and last 4 digits (no holder, no expiry: lead decision (1) of
 // 2026-10-24), and the airline card is never offered again (OADR-0018, OADR-0004).
+//
+// The actions (OAD-008) are client components the page hands in as `actions` (`BookingActionSlots`), already filtered by
+// the staff member's permissions and the booking's `consoleActions`: issue, cancel and resync under the header on every
+// tab, the order's edits on the Travellers and contacts tab, the note form on the Timeline and notes tab, and capture and
+// refund on each payment of the Payments tab.
 import type {
   ConsoleBooking,
   ConsoleBookingEvent,
@@ -96,6 +101,21 @@ export type OrderView =
   | { readonly state: "unavailable"; readonly reason: string | undefined }
   | { readonly state: "loaded"; readonly retrieval: ConsoleFlightOrderRetrieval }
   | { readonly state: "failed"; readonly error: VelexisErrorLike; readonly supplier?: SupplierIssueLike };
+
+/**
+ * The action controls of the page (OAD-008), rendered where they belong. The page builds them only for what the staff
+ * member may do now (permissions and `consoleActions`); a slot left out renders nothing.
+ */
+export interface BookingActionSlots {
+  /** Issue, cancel and resync: under the header, on every tab. */
+  readonly bar?: ReactNode;
+  /** The order's edits (travellers, contacts, remarks, ticketing agreement): on the Travellers and contacts tab. */
+  readonly travellers?: ReactNode;
+  /** The note form: on the Timeline and notes tab. */
+  readonly timeline?: ReactNode;
+  /** Capture and refund, by payment id: on that payment of the Payments tab. */
+  readonly payments?: Readonly<Record<string, ReactNode>>;
+}
 
 /** The outcome of a "Sync from Amadeus" (`console.bookings.get` with `refresh: true`). */
 export type RefreshOutcome =
@@ -165,6 +185,7 @@ export const DETAIL_STRINGS = Object.freeze({
   visibleToCustomer: "Visible to the customer",
   guest: "Guest booking",
   attention: "Needs attention",
+  actions: "Booking actions",
   sync: "Sync from Amadeus",
   synced: "Synchronised with Amadeus just now.",
   syncThrottled: "Synchronised with Amadeus moments ago: this is the data of that sync.",
@@ -250,7 +271,7 @@ export function humanize(value: string): string {
 }
 
 /** The label of `value` in `labels`, else the value in words. */
-function labelOf(labels: Readonly<Record<string, string>>, value: string): string {
+export function labelOf(labels: Readonly<Record<string, string>>, value: string): string {
   return Object.hasOwn(labels, value) ? (labels[value] ?? value) : humanize(value);
 }
 
@@ -272,7 +293,8 @@ const CHANNEL_LABELS: Readonly<Record<string, string>> = {
   import: "Imported",
 };
 
-const PROVIDER_LABELS: Readonly<Record<string, string>> = {
+/** Payment providers in words (the payments pages use them too). */
+export const PROVIDER_LABELS: Readonly<Record<string, string>> = {
   stripe: "Stripe",
   adyen: "Adyen",
   checkout_com: "Checkout.com",
@@ -281,7 +303,8 @@ const PROVIDER_LABELS: Readonly<Record<string, string>> = {
   airline: "Airline",
 };
 
-const METHOD_LABELS: Readonly<Record<string, string>> = {
+/** Payment methods in words (the payments pages use them too). */
+export const METHOD_LABELS: Readonly<Record<string, string>> = {
   card: "Card",
   airline_card: "Airline card",
   apple_pay: "Apple Pay",
@@ -1575,14 +1598,17 @@ function contactAddress(contact: Contact): string | undefined {
 function TravellersTab({
   booking,
   timeZone,
+  edits,
 }: {
   readonly booking: ConsoleBooking;
   readonly timeZone: string;
+  readonly edits?: ReactNode;
 }) {
   const names = travelerNames(booking);
   const agreement = booking.ticketingAgreement;
   return (
     <div className="grid gap-4">
+      {edits ?? null}
       <Section id="travellers" title={DETAIL_STRINGS.travelers} description={DETAIL_STRINGS.documentsMasked}>
         <div className="grid gap-3 lg:grid-cols-2">
           {booking.travelers.map((traveler) => (
@@ -1880,8 +1906,8 @@ function formOfPaymentText(form: FormOfPayment): string {
   }
 }
 
-/** The card of a payment: brand and last 4 only. */
-function cardText(payment: BookingPayment): string | undefined {
+/** The card of a payment: brand and last 4 only (never the expiry the provider reports). */
+export function cardText(payment: BookingPayment): string | undefined {
   if (payment.card !== null) {
     return `${payment.card.brand} •••• ${payment.card.last4}`;
   }
@@ -1895,14 +1921,20 @@ function refundRequester(refund: PaymentRefund): string {
     : `${humanize(requestedBy.type)} ${requestedBy.id}`;
 }
 
-function PaymentCard({
+/**
+ * One payment with its facts, and with `detail.payment` (`console.payments.get`) its events and refunds: on the booking's
+ * Payments tab, and on the payment's own page `/payments/[paymentId]` (OAD-011).
+ */
+export function PaymentCard({
   summary,
   detail,
   timeZone,
+  actions,
 }: {
   readonly summary: BookingPayment;
   readonly detail: PaymentDetail | undefined;
   readonly timeZone: string;
+  readonly actions?: ReactNode;
 }) {
   const payment: BookingPayment = detail?.payment ?? summary;
   const full = detail?.payment;
@@ -1915,6 +1947,7 @@ function PaymentCard({
         <StatusBadge kind="paymentRecord" status={payment.status} />
         <code className="text-xs font-normal text-muted-foreground">{payment.id}</code>
       </h3>
+      {actions === undefined ? null : <div className="flex flex-wrap items-start gap-2">{actions}</div>}
       {airline ? (
         <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-950">
           {DETAIL_STRINGS.airlineCard}
@@ -2065,10 +2098,12 @@ function PaymentsTab({
   booking,
   view,
   timeZone,
+  actions,
 }: {
   readonly booking: ConsoleBooking;
   readonly view: PaymentsView;
   readonly timeZone: string;
+  readonly actions?: Readonly<Record<string, ReactNode>> | undefined;
 }) {
   const details = view.permitted ? new Map(view.details.map((detail) => [detail.id, detail])) : undefined;
   return (
@@ -2086,6 +2121,7 @@ function PaymentsTab({
               summary={summary}
               detail={details?.get(summary.id)}
               timeZone={timeZone}
+              actions={actions?.[summary.id]}
             />
           ))
         )}
@@ -2129,10 +2165,19 @@ function VisibilityPill({ visible }: { readonly visible: boolean }) {
   );
 }
 
-function TimelineTab({ booking, timeZone }: { readonly booking: ConsoleBooking; readonly timeZone: string }) {
+function TimelineTab({
+  booking,
+  timeZone,
+  noteForm,
+}: {
+  readonly booking: ConsoleBooking;
+  readonly timeZone: string;
+  readonly noteForm?: ReactNode;
+}) {
   return (
     <div className="grid gap-4">
       <Section id="notes" title={DETAIL_STRINGS.notes}>
+        {noteForm ?? null}
         {booking.notes.length === 0 ? (
           <p className="text-sm text-muted-foreground">{DETAIL_STRINGS.noNotes}</p>
         ) : (
@@ -2230,27 +2275,56 @@ export interface BookingDetailProps {
   readonly payments?: PaymentsView | undefined;
   /** The Amadeus order view (only when that tab is open). */
   readonly order?: OrderView | undefined;
+  /** The action controls the staff member may use now (OAD-008); none for a read-only role. */
+  readonly actions?: BookingActionSlots | undefined;
 }
 
-/** The booking's header, what needs staff, the tabs and the open tab's sections. */
-export function BookingDetail({ booking, tab, timeZone, refresh, payments, order }: BookingDetailProps) {
+/** The booking's header, its actions, what needs staff, the tabs and the open tab's sections. */
+export function BookingDetail({
+  booking,
+  tab,
+  timeZone,
+  refresh,
+  payments,
+  order,
+  actions,
+}: BookingDetailProps) {
   return (
     <div className="grid gap-6">
       <Header booking={booking} tab={tab} />
+      {actions?.bar === undefined ? null : (
+        <section aria-label={DETAIL_STRINGS.actions} className="flex flex-wrap items-start gap-3">
+          {actions.bar}
+        </section>
+      )}
       {refresh === undefined ? null : <RefreshNotice booking={booking} refresh={refresh} />}
       <Attention items={attentionOf(booking, timeZone)} />
       <Tabs bookingId={booking.id} current={tab} />
-      <TabContent booking={booking} tab={tab} timeZone={timeZone} payments={payments} order={order} />
+      <TabContent
+        booking={booking}
+        tab={tab}
+        timeZone={timeZone}
+        payments={payments}
+        order={order}
+        actions={actions}
+      />
     </div>
   );
 }
 
-function TabContent({ booking, tab, timeZone, payments, order }: Omit<BookingDetailProps, "refresh">) {
+function TabContent({
+  booking,
+  tab,
+  timeZone,
+  payments,
+  order,
+  actions,
+}: Omit<BookingDetailProps, "refresh">) {
   switch (tab) {
     case "overview":
       return <Overview booking={booking} timeZone={timeZone} />;
     case "travellers":
-      return <TravellersTab booking={booking} timeZone={timeZone} />;
+      return <TravellersTab booking={booking} timeZone={timeZone} edits={actions?.travellers} />;
     case "amadeus-order":
       return (
         <AmadeusOrderTab
@@ -2262,9 +2336,16 @@ function TabContent({ booking, tab, timeZone, payments, order }: Omit<BookingDet
     case "tickets":
       return <TicketsTab booking={booking} timeZone={timeZone} />;
     case "payments":
-      return <PaymentsTab booking={booking} view={payments ?? { permitted: false }} timeZone={timeZone} />;
+      return (
+        <PaymentsTab
+          booking={booking}
+          view={payments ?? { permitted: false }}
+          timeZone={timeZone}
+          actions={actions?.payments}
+        />
+      );
     case "timeline":
-      return <TimelineTab booking={booking} timeZone={timeZone} />;
+      return <TimelineTab booking={booking} timeZone={timeZone} noteForm={actions?.timeline} />;
     case "staff-actions":
       return <StaffActionsTab booking={booking} timeZone={timeZone} />;
   }

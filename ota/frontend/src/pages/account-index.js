@@ -92,8 +92,11 @@ const PROFILE_FIELDS = /** @type {const} */ ([
   "phone.number",
   "marketingConsent",
 ]);
-/** A calling code as the form takes it: an optional `+` and one to four digits (`customers.phone_country_code`). */
-const CALLING_CODE = /^\+?([0-9]{1,4})$/;
+/**
+ * A calling code as the form takes it: an optional `+` and one to three digits, the contract's
+ * `AmadeusPhone.countryCallingCode` since FIX-W30-OTA (`1` for North America included).
+ */
+const CALLING_CODE = /^\+?([0-9]{1,3})$/;
 /** A phone number once spaces, dots, hyphens and brackets are taken out: one to fifteen digits (`AmadeusPhone`). */
 const PHONE_NUMBER = /^[0-9]{1,15}$/;
 /** What a typed phone number may contain besides digits. */
@@ -223,8 +226,8 @@ export function profileRequest(values, baseline) {
       problems.push({ path: "/phone/number", code: "pattern" });
     }
     if (phoneChanged && code !== undefined && PHONE_NUMBER.test(numberText)) {
-      // `+` and the digits: the contract's pattern (`[0-9+]{2,5}`) refuses a one-digit code such as 1 without it, and
-      // the API drops the `+`.
+      // `+` and the digits, as the form shows them; the contract takes both forms (FIX-W30-OTA: before it, its pattern
+      // `[0-9+]{2,5}` refused a one-digit code such as 1 without the `+`), and the API drops the `+`.
       changes.phone = { deviceType: "MOBILE", countryCallingCode: `+${code}`, number: numberText };
     }
   }

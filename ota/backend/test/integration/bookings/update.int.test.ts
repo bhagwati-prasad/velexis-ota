@@ -17,7 +17,7 @@
 // 30 s.
 import { randomBytes } from "node:crypto";
 import { getQueueToken } from "@nestjs/bullmq";
-import type { INestApplicationContext } from "@nestjs/common";
+import { Module, type INestApplicationContext } from "@nestjs/common";
 import type { ConfigService } from "@nestjs/config";
 import { defineConfig, env, loadDevEnvFiles } from "@velexis/config";
 import { encryptValue, hashApiKey, type KeyProvider } from "@velexis/crypto";
@@ -70,6 +70,7 @@ import {
   testKeyProvider,
   testWorkerVariables,
 } from "../../helpers/api-env";
+import { journeyAmadeusLimitsModule } from "../../helpers/amadeus-limits";
 import { MemorySink } from "../../helpers/log-sink";
 import { useNextApplicationLoggerOutsideRequests } from "../../helpers/nest-pino";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
@@ -645,7 +646,13 @@ beforeAll(async () => {
       clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout),
     },
   });
-  api = await createTestApp({ database: db, redis, env: { AMADEUS_BASE_URL_TEST: stub.url } });
+  api = await createTestApp({
+    database: db,
+    redis,
+    env: { AMADEUS_BASE_URL_TEST: stub.url },
+    // Its updates read and patch orders of one tenant one after the other (helpers/amadeus-limits.ts).
+    imports: [journeyAmadeusLimitsModule()],
+  });
   const config = loadWorkerConfig({
     ...testWorkerVariables(),
     APP_ENV: "test",
@@ -655,9 +662,14 @@ beforeAll(async () => {
     SMTP_URL: mailpitSmtpUrl(),
   });
   useNextApplicationLoggerOutsideRequests();
-  worker = await createWorkerApp(
-    WorkerModule.forRoot(config, { logger: createWorkerLogger(config, workerSink) }),
-  );
+  @Module({
+    imports: [
+      journeyAmadeusLimitsModule(),
+      WorkerModule.forRoot(config, { logger: createWorkerLogger(config, workerSink) }),
+    ],
+  })
+  class WorkerRootModule {}
+  worker = await createWorkerApp(WorkerRootModule);
   await worker.init();
   // No scheduler iteration may fire while the file runs: each commit's `notify` job sends the e-mails.
   const maintenance = worker.get<Queue>(getQueueToken(OTA_QUEUE.maintenance), { strict: false });

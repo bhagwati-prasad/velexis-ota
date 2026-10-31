@@ -1,7 +1,8 @@
 // `dev:seed` of dist/cli.js (PBE-034; README §5 and §6, platform/docs/flows/amadeus-connection.md §A item 4): refused
 // with exit 1 and nothing written when APP_ENV=production; otherwise it creates, once, the platform admin
 // `admin@example.com` with MFA (printing its password and `otpauth://` URI once), the Velexis test Amadeus account at
-// AMADEUS_BASE_URL_TEST (the stub), verified, and 10 test offices. A second run creates no duplicates, prints no secret
+// AMADEUS_BASE_URL_TEST (the stub), verified, and 20 test offices, DEV1A0001 to DEV1A0020 (ten until the lead's
+// decision (2f) of 2026-10-30, FIX-W34-SHARED). A second run creates no duplicates, adds no office, prints no secret
 // and writes no audit row. When the stub is not running the account stays `pending_verification` and the command exits
 // 1; once the stub runs, the next run verifies it. A test account that an admin disabled or configured is left as it
 // is.
@@ -333,15 +334,17 @@ describe("dev:seed", () => {
     expect(invalidatedAfterFirst, "the amadeus_account invalidation of the account").toBe(true);
   });
 
-  it("[PBE-034 AC2] adds the 10 test offices to the test account's pool", async () => {
+  it("[PBE-034 AC2] adds the 20 test offices DEV1A0001 to DEV1A0020 to the test account's pool", async () => {
     const account = await testAmadeusAccount();
-    const pool10 = await offices();
-    expect(pool10.map((office) => office.office_id)).toEqual([...DEV_SEED_OFFICE_IDS]);
-    expect(new Set(pool10.map((office) => office.amadeus_account_id))).toEqual(new Set([account?.id]));
+    const pool20 = await offices();
+    const expected = Array.from({ length: 20 }, (_, index) => `DEV1A${String(index + 1).padStart(4, "0")}`);
+    expect(DEV_SEED_OFFICE_IDS).toEqual(expected);
+    expect(pool20.map((office) => office.office_id)).toEqual(expected);
+    expect(new Set(pool20.map((office) => office.amadeus_account_id))).toEqual(new Set([account?.id]));
     expect(
-      pool10.every((office) => office.status === "available" && office.assigned_tenant_id === null),
+      pool20.every((office) => office.status === "available" && office.assigned_tenant_id === null),
     ).toBe(true);
-    expect(first.stdout).toContain("Test offices DEV1A0001 to DEV1A0010: 10 added, 0 in the pool already.");
+    expect(first.stdout).toContain("Test offices DEV1A0001 to DEV1A0020: 20 added, 0 in the pool already.");
   });
 
   it("[PBE-034 AC2] writes one audit row per change, as the system with the operator", async () => {
@@ -376,7 +379,7 @@ describe("dev:seed", () => {
     expect(second.stdout).not.toContain(printedSecrets(first).password ?? "no password printed");
     expect(second.stdout).toContain(`Platform admin ${DEV_SEED_ADMIN_EMAIL} (`);
     expect(second.stdout).toContain("exists already; nothing changed");
-    expect(second.stdout).toContain("Test offices DEV1A0001 to DEV1A0010: 0 added, 10 in the pool already.");
+    expect(second.stdout).toContain("Test offices DEV1A0001 to DEV1A0020: 0 added, 20 in the pool already.");
   });
 
   it("[PBE-034] the new admin signs in to the platform admin with the printed password and a code of the URI", async () => {

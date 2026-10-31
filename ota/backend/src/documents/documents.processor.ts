@@ -8,6 +8,8 @@
 //   booking.schedule_changed  the airline changed the flights (any synchronisation that found it, FIX-W27-SYNC, lead
 //                      decision (3) of 2026-10-23): a new itinerary with the new times;
 //   booking.cancelled  a new itinerary, marked cancelled;
+//   booking.imported   an order imported from Amadeus (console.bookings.import, OBE-064): the itinerary, and a receipt
+//                      per e-ticket the order already had;
 // and after that transaction's commit (`afterCommit` of TenantTx; a rollback drops them) the jobs go to `ota-documents`:
 // `document.render {tenantId, bookingId, kind, bookingVersion[, ticketId]}`, the booking's version as the transaction
 // left it. The job key `document.render:<bookingId>:<kind>:<bookingVersion>[:<ticketId>]` is the job's BullMQ
@@ -181,6 +183,7 @@ export const DOCUMENT_TRIGGERS: Readonly<Record<string, { readonly receipts: boo
   "booking.ticketed": { receipts: true },
   "booking.schedule_changed": { receipts: false },
   "booking.cancelled": { receipts: false },
+  "booking.imported": { receipts: true },
 });
 
 /** The jobs a transaction asked for, by job key, until its commit. */

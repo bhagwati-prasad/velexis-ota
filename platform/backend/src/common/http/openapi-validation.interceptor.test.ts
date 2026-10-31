@@ -13,6 +13,7 @@ import {
   OpenApiValidationInterceptor,
   PlatformOpenApi,
   requestInputOf,
+  type RequestInput,
 } from "./openapi-validation.interceptor";
 
 // Test data only: a made-up password.
@@ -66,6 +67,13 @@ class ValidationTestController {
   @Post("sign-out-everywhere")
   @OpenApiOperation("signOutEverywhere")
   signOutEverywhere(): string {
+    return "handled";
+  }
+
+  // Bound here only to run its request validation (the API binds it in ConnectionsController since PBE-040).
+  @Patch("tenants/:tenantId/amadeus-connections/:environment")
+  @OpenApiOperation("updateAmadeusConnection")
+  updateAmadeusConnection(): string {
     return "handled";
   }
 
@@ -252,6 +260,37 @@ describe("OpenApiValidationInterceptor", () => {
     expect(JSON.stringify(tenant.error?.fieldErrors)).not.toContain("<script>");
   });
 
+  it("[FIX-W32-PLATFORM AC1] refuses a monitored queue numbered above 99 with 400 VALIDATION_FAILED at the queue's path, and takes 0 to 99", async () => {
+    const settings = (queueId: number) =>
+      request({
+        params: { tenantId: TENANT_ID, environment: "test" },
+        headers: { "if-match": '"2"' },
+        body: {
+          monitoredQueues: [
+            { officeId: "NCE1A0955", queueId: 8, category: 0 },
+            { officeId: "NCE1A0955", queueId, category: 1 },
+          ],
+        },
+      });
+
+    for (const queueId of [0, 99]) {
+      expect([queueId, await run("updateAmadeusConnection", settings(queueId))]).toEqual([
+        queueId,
+        { answer: "handled" },
+      ]);
+    }
+    for (const queueId of [100, 512]) {
+      const { error } = await run("updateAmadeusConnection", settings(queueId));
+      expect(error?.code).toBe("VALIDATION_FAILED");
+      expect(error?.status).toBe(400);
+      expect(error?.fieldErrors).toEqual([
+        { path: "/monitoredQueues/1/queueId", code: "maximum", message: "Must be at most 99." },
+      ]);
+      // The message names the rule, never the value.
+      expect(JSON.stringify(error?.fieldErrors)).not.toContain(String(queueId));
+    }
+  });
+
   it("reads header parameters case-insensitively, as Node lower-cases header names", async () => {
     const req = request({
       params: { tenantId: TENANT_ID },
@@ -336,6 +375,197 @@ describe("OpenApiRequestValidator", () => {
         },
       }),
     ).toThrow("upload: the API reads JSON request bodies only (application/json)");
+  });
+});
+
+/** The admin operations whose request carries a `reason` (PADR-0006 item 5, PADR-0012 item 5, PADR-0003 item 10). */
+const ADMIN_REASON_OPERATIONS: readonly PlatformOperationId[] = [
+  "adminSuspendTenant",
+  "adminResumeTenant",
+  "adminSetConnectionStatus",
+  "adminCancelProvisioningJob",
+  "adminUpdateManualSubscription",
+  "adminReleaseAmadeusOffice",
+  "adminRetireAmadeusOffice",
+  "adminAddSettlementAdjustment",
+  "adminVoidSettlement",
+  "adminRevealPayoutAccount",
+  "adminRemoveDomain",
+  "adminDisableAccount",
+  "adminEnableAccount",
+  "adminResetAccountMfa",
+  "adminGrantAdmin",
+  "adminRevokeAdmin",
+];
+const ACCOUNT_ID = "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X";
+const SETTLEMENT_ID = "stl_01JD9W3Y7A1C5E9G3J7M1Q5S9V";
+const TOO_SHORT = { code: "minLength", message: "Must be at least 5 characters long." } as const;
+const TOO_LONG = { code: "maxLength", message: "Must be at most 500 characters long." } as const;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+/** Every schema of a property named `reason` in a request body schema, at any depth, `$ref`s followed. */
+function reasonSchemasOf(schema: unknown, seen = new Set<string>()): unknown[] {
+  if (Array.isArray(schema)) {
+    return schema.flatMap((item) => reasonSchemasOf(item, seen));
+  }
+  if (!isRecord(schema)) {
+    return [];
+  }
+  const ref = schema["$ref"];
+  if (typeof ref === "string") {
+    const components = (api.document["components"] as { schemas: Record<string, unknown> }).schemas;
+    const name = ref.replace("#/components/schemas/", "");
+    if (seen.has(name)) {
+      return [];
+    }
+    seen.add(name);
+    return reasonSchemasOf(components[name], seen);
+  }
+  const properties = isRecord(schema["properties"]) ? schema["properties"] : {};
+  return [
+    ...(Object.hasOwn(properties, "reason") ? [properties["reason"]] : []),
+    ...Object.values(properties).flatMap((child) => reasonSchemasOf(child, seen)),
+    ...["oneOf", "anyOf", "allOf", "items"].flatMap((key) => reasonSchemasOf(schema[key], seen)),
+  ];
+}
+
+describe("admin reasons, trimmed before they are counted (FIX-W35-PLATFORM, lead decision (2j) of 2026-10-30)", () => {
+  let validator: OpenApiRequestValidator;
+
+  // Compiling the validators of these operations (strict Ajv over the platform document) takes a few hundred
+  // milliseconds; once here, so every test below runs on compiled validators. Budget: 30 s on a loaded runner.
+  beforeAll(() => {
+    validator = new OpenApiRequestValidator(api);
+    for (const operationId of [...ADMIN_REASON_OPERATIONS, "signUp"]) {
+      validator.compile(operationId);
+    }
+  }, 30_000);
+
+  const input = (overrides: Partial<RequestInput>): RequestInput => ({
+    path: {},
+    query: {},
+    headers: {},
+    body: undefined,
+    unreadBody: false,
+    ...overrides,
+  });
+
+  const suspendErrors = (reason: string): readonly unknown[] =>
+    validator.validate(
+      "adminSuspendTenant",
+      input({ path: { tenantId: TENANT_ID }, body: { suspensionReason: "abuse", reason } }),
+    ).fieldErrors;
+
+  it("[FIX-W35-PLATFORM AC4] trims a body's reason before it counts its 5–500 characters, and hands on a trimmed copy", () => {
+    const sent = {
+      suspensionReason: "abuse",
+      reason: "  \t Card testing reported by Stripe on 2026-10-20.\n ",
+    };
+    const snapshot = structuredClone(sent);
+
+    const { validated, fieldErrors } = validator.validate(
+      "adminSuspendTenant",
+      input({ path: { tenantId: TENANT_ID }, body: sent }),
+    );
+
+    expect(fieldErrors).toEqual([]);
+    expect(validated.body).toEqual({
+      suspensionReason: "abuse",
+      reason: "Card testing reported by Stripe on 2026-10-20.",
+    });
+    // The request itself is not changed: the handler gets a copy.
+    expect(sent).toEqual(snapshot);
+    // Only spaces, or 4 characters once trimmed (white space of any kind), is too short; 500 once trimmed is enough.
+    expect(suspendErrors("          ")).toEqual([{ path: "/reason", ...TOO_SHORT }]);
+    expect(suspendErrors(" \t abcd \n ")).toEqual([{ path: "/reason", ...TOO_SHORT }]);
+    expect(suspendErrors(" abcde ")).toEqual([]);
+    expect(suspendErrors(`   ${"x".repeat(500)}   `)).toEqual([]);
+    expect(suspendErrors(` ${"x".repeat(501)} `)).toEqual([{ path: "/reason", ...TOO_LONG }]);
+  });
+
+  it("[FIX-W35-PLATFORM AC4] trims adminRevokeAdmin's optional reason in the query the same way", () => {
+    const query = { reason: "  Left the support team on 2027-01-31.  " };
+
+    const { validated, fieldErrors } = validator.validate(
+      "adminRevokeAdmin",
+      input({ path: { accountId: ACCOUNT_ID }, query }),
+    );
+
+    expect(fieldErrors).toEqual([]);
+    expect(validated.query).toEqual({ reason: "Left the support team on 2027-01-31." });
+    expect(query.reason).toBe("  Left the support team on 2027-01-31.  ");
+    expect(
+      validator.validate(
+        "adminRevokeAdmin",
+        input({ path: { accountId: ACCOUNT_ID }, query: { reason: "     " } }),
+      ).fieldErrors,
+    ).toEqual([{ path: "/query/reason", ...TOO_SHORT }]);
+    // Still optional.
+    expect(
+      validator.validate("adminRevokeAdmin", input({ path: { accountId: ACCOUNT_ID } })).fieldErrors,
+    ).toEqual([]);
+  });
+
+  it("[FIX-W35-PLATFORM AC4] trims nothing but the reason, and validates a body without one as it is", () => {
+    const adjustment = {
+      amount: { amount: "-25.00", currency: "EUR" },
+      description: "  Refund of a duplicate charge  ",
+      reason: "  Agreed with the OTA's finance contact.  ",
+    };
+    const adjusted = validator.validate(
+      "adminAddSettlementAdjustment",
+      input({ path: { settlementId: SETTLEMENT_ID }, body: adjustment }),
+    );
+    expect(adjusted.fieldErrors).toEqual([]);
+    expect(adjusted.validated.body).toEqual({
+      ...adjustment,
+      reason: "Agreed with the OTA's finance contact.",
+    });
+
+    // A body whose schema holds no admin reason is not copied.
+    const signUp = signUpBody();
+    const signedUp = validator.validate("signUp", input({ body: signUp }));
+    expect(signedUp.fieldErrors).toEqual([]);
+    expect(signedUp.validated.body).toBe(signUp);
+  });
+
+  it("[FIX-W35-PLATFORM AC4] every reason of the document's operations is an AdminReason, so each one is trimmed", () => {
+    const withReason: string[] = [];
+    for (const operation of api.operations()) {
+      const schemas = [
+        ...operation.parameters.filter((parameter) => parameter.name === "reason").map((p) => p.schema),
+        ...reasonSchemasOf(operation.requestBody?.schema),
+      ];
+      if (schemas.length > 0) {
+        withReason.push(operation.operationId);
+      }
+      for (const schema of schemas) {
+        expect(schema, operation.operationId).toEqual({ $ref: "#/components/schemas/AdminReason" });
+      }
+    }
+    expect([...withReason].sort()).toEqual([...ADMIN_REASON_OPERATIONS].sort());
+
+    for (const operationId of ADMIN_REASON_OPERATIONS) {
+      const inQuery = operationId === "adminRevokeAdmin";
+      const sent = (reason: string): Partial<RequestInput> =>
+        inQuery ? { query: { reason } } : { body: { reason } };
+      expect(validator.validate(operationId, input(sent("       "))).fieldErrors, operationId).toContainEqual(
+        {
+          path: inQuery ? "/query/reason" : "/reason",
+          ...TOO_SHORT,
+        },
+      );
+      const { validated, fieldErrors } = validator.validate(operationId, input(sent("  abcde \n")));
+      expect(
+        fieldErrors.filter((error) => error.path.endsWith("/reason")),
+        operationId,
+      ).toEqual([]);
+      expect(inQuery ? validated.query["reason"] : (validated.body as { reason: string }).reason).toBe(
+        "abcde",
+      );
+    }
   });
 });
 

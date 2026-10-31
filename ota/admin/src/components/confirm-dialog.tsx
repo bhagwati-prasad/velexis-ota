@@ -4,13 +4,27 @@
 // routes.md §3.2): issue, cancel, capture, refund, import, resync and settings deletes. It shows a summary of the
 // effect (amount, refund mode, environment), asks for the required reason that the API stores in `staff_actions`,
 // repeats "LIVE" in the live environment, and carries a hidden idempotency key that the page rendered once: a double
-// click, a resubmission after an error or a retry after a timeout all send the same key, so the API replays the action
-// instead of issuing or refunding twice.
+// click, a retry after a timeout, a network error, a `412` or a `5xx` all send the same key, so the API replays the
+// action (or waits for it) instead of issuing or refunding twice.
+//
+// After a final refusal that the API stores under the key (a stored `4xx` but `412`; `429` and a request still running
+// under the key are not stored), the action's state brings a new key (`nextActionKey`, lib/action-state.ts
+// `withNextActionKey`), which the dialog sends from then on (`useActionKey`): a corrected resubmission, an amount
+// lowered after a `422` say, is a new request instead of a `409 IDEMPOTENCY_KEY_REUSED` that only a reload would end
+// (OADR-0018 point 5, revision of 2026-10-27, FIX-W31-OTA). After `409 IDEMPOTENCY_KEY_REUSED` itself no new key comes
+// (revision of 2026-10-28, FIX-W32-OTA): an earlier request under the key, with other values, may still be running or
+// may have refunded or captured, so the dialog keeps its key and its message tells staff to reload the page. Every
+// dialog built on this one gets it; the note form of a booking uses the same hook.
 //
 // The action is a server action for `useActionState` (`(state, formData) => Promise<ActionState>`). It receives the
 // form's fields: the hidden `fields` (`bookingId`, `version`), the inputs of `children`, the trimmed `reason` and the
 // key as `actionKey`. It must validate the reason again (Zod) and start with `requireStaff(permission)`; after a
-// success it revalidates the page, whose new render brings a new key for the next action.
+// success it revalidates the page, whose new render brings a new key for the next action; after the failure of a call
+// that carried the key it answers `withNextActionKey(state, error)`.
+//
+// `askReason={false}` (OAD-013) is for an operation whose contract takes no reason (the settings deletes: a markup or
+// fee rule's `DELETE` has no body): the dialog then shows no reason field and posts none, because a reason the API
+// never stores would only pretend to be audited; the confirmation, the environment badge and the key stay.
 import { LoaderCircleIcon, TriangleAlertIcon } from "lucide-react";
 import {
   startTransition,
@@ -43,14 +57,43 @@ import {
   REASON_FIELD,
   REASON_MAX_LENGTH,
   REASON_MIN_LENGTH,
+  actionKeyAfter,
   fieldError,
   fieldErrorId,
   type ActionState,
 } from "@/lib/action-state";
 import type { StaffEnvironment } from "@/lib/permissions";
 
+/**
+ * The dialog panel never grows past the window (1 rem of margin above and below) and scrolls inside it instead
+ * (WCAG 1.4.10 and 2.4.11: what is cut off by a fixed panel can be neither seen nor reached).
+ */
+export const SCROLLING_DIALOG_CLASS = "max-h-[calc(100dvh-2rem)] overflow-y-auto";
+
 // The field names and the reason's bounds live in lib/action-state.ts, which server actions can import too.
 export { ACTION_KEY_FIELD, REASON_FIELD, REASON_MAX_LENGTH, REASON_MIN_LENGTH };
+
+/**
+ * The idempotency key of a dialog's or form's next submission (OADR-0018 point 5, revision of 2026-10-27): the key the
+ * page rendered (`rendered`) until an action's state brings a new one (`nextActionKey`, after a final refusal the API
+ * stored under the key), which every later submission sends until the next one comes; a state without a new key (a
+ * retry after a timeout, a `412`, a `5xx`, a `409 IDEMPOTENCY_KEY_REUSED` since 2026-10-28, the form's own validation)
+ * keeps the current key. A new render of the page
+ * (after a success, which revalidates it, or a reload) brings a new `rendered` key, which replaces it.
+ */
+export function useActionKey(rendered: string, state: ActionState): string {
+  const [current, setCurrent] = useState({ rendered, state, key: rendered });
+  if (current.rendered !== rendered) {
+    setCurrent({ rendered, state, key: rendered });
+    return rendered;
+  }
+  if (current.state !== state) {
+    const key = actionKeyAfter(current.key, state);
+    setCurrent({ rendered, state, key });
+    return key;
+  }
+  return current.key;
+}
 
 export const CONFIRM_STRINGS = Object.freeze({
   reasonLabel: "Reason",
@@ -113,16 +156,24 @@ export interface ConfirmDialogProps {
   readonly action: ConfirmAction;
   /**
    * The idempotency key, rendered once with the page (`crypto.randomUUID()` in the server component): the same for
-   * every submission of this render.
+   * every submission of this render, until the action's state brings a new one (`useActionKey`).
    */
   readonly idempotencyKey: string;
   /** Hidden fields of the action (`bookingId`, `version` for `ifMatch`). */
   readonly fields?: Readonly<Record<string, string>>;
-  /** Other inputs of the action (amount, refund mode), above the reason. */
-  readonly children?: ReactNode;
+  /**
+   * Other inputs of the action (amount, refund mode), above the reason. A function gets the dialog's current state, so
+   * the inputs can show their own field errors (`fieldError(state, name)`); a reopened dialog passes the initial state.
+   */
+  readonly children?: ReactNode | ((state: ActionState) => ReactNode);
   /** Bounds of the reason; 3 to 500 characters by default. */
   readonly reasonMinLength?: number;
   readonly reasonMaxLength?: number;
+  /**
+   * Ask for the reason (the default). `false` for an operation whose contract takes none (the settings deletes): no
+   * reason field is shown or posted.
+   */
+  readonly askReason?: boolean;
   /** Style the confirming button as destructive (the default: these actions change bookings and money). */
   readonly destructive?: boolean;
 }
@@ -144,10 +195,13 @@ export function ConfirmDialog({
   children,
   reasonMinLength = REASON_MIN_LENGTH,
   reasonMaxLength = REASON_MAX_LENGTH,
+  askReason = true,
   destructive = true,
 }: ConfirmDialogProps) {
   const [open, setOpen] = useState(false);
   const [state, dispatch, pending] = useActionState(action, INITIAL_ACTION_STATE);
+  // Kept here, not in the form, so a dialog closed and opened again goes on with the key it was last given.
+  const actionKey = useActionKey(idempotencyKey, state);
   // The state already seen when the dialog was last opened: its message is not shown again.
   const [seen, setSeen] = useState<ActionState>(INITIAL_ACTION_STATE);
   const fresh = state !== seen;
@@ -170,8 +224,13 @@ export function ConfirmDialog({
         }}
       >
         <DialogTrigger asChild>{trigger}</DialogTrigger>
-        {/* A click outside does not throw a typed reason away; Escape and "Cancel" still close the dialog. */}
-        <DialogContent onInteractOutside={(event) => event.preventDefault()}>
+        {/* A click outside does not throw a typed reason away; Escape and "Cancel" still close the dialog. A dialog
+            taller than the window (the PNR import's) scrolls inside it, so its title and its buttons stay reachable:
+            the centred, fixed panel would otherwise cut both off on a 720-pixel screen (OAD-016's journey). */}
+        <DialogContent
+          onInteractOutside={(event) => event.preventDefault()}
+          className={SCROLLING_DIALOG_CLASS}
+        >
           <DialogHeader>
             <div className="flex items-center gap-2">
               <DialogTitle>{title}</DialogTitle>
@@ -184,10 +243,11 @@ export function ConfirmDialog({
           <ConfirmForm
             confirmLabel={confirmLabel}
             environment={environment}
-            idempotencyKey={idempotencyKey}
+            idempotencyKey={actionKey}
             fields={fields}
             reasonMinLength={reasonMinLength}
             reasonMaxLength={reasonMaxLength}
+            askReason={askReason}
             destructive={destructive}
             pending={pending}
             state={fresh ? state : INITIAL_ACTION_STATE}
@@ -214,10 +274,11 @@ interface ConfirmFormProps {
   readonly fields: Readonly<Record<string, string>>;
   readonly reasonMinLength: number;
   readonly reasonMaxLength: number;
+  readonly askReason: boolean;
   readonly destructive: boolean;
   readonly pending: boolean;
   readonly state: ActionState;
-  readonly children?: ReactNode;
+  readonly children?: ReactNode | ((state: ActionState) => ReactNode);
   readonly onCancel: () => void;
   readonly onSubmit: (formData: FormData) => void;
 }
@@ -230,6 +291,7 @@ function ConfirmForm({
   fields,
   reasonMinLength,
   reasonMaxLength,
+  askReason,
   destructive,
   pending,
   state,
@@ -248,6 +310,10 @@ function ConfirmForm({
 
   function submit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
+    if (!askReason) {
+      onSubmit(new FormData(event.currentTarget));
+      return;
+    }
     const found = reasonProblem(reason, reasonMinLength, reasonMaxLength);
     if (found !== undefined) {
       setProblem(found);
@@ -274,43 +340,45 @@ function ConfirmForm({
           {CONFIRM_STRINGS.liveWarning}
         </p>
       ) : null}
-      {children}
-      <div className="grid gap-2">
-        <Label htmlFor={reasonId}>{CONFIRM_STRINGS.reasonLabel}</Label>
-        <p id={hintId} className="text-sm text-muted-foreground">
-          {CONFIRM_STRINGS.reasonHint}
-        </p>
-        <Textarea
-          ref={reasonInput}
-          id={reasonId}
-          name={REASON_FIELD}
-          value={reason}
-          rows={3}
-          required
-          autoFocus
-          aria-describedby={reasonError === undefined ? hintId : `${hintId} ${errorId}`}
-          {...(reasonError === undefined ? {} : { "aria-invalid": true })}
-          onChange={(event) => {
-            const value = event.currentTarget.value;
-            setReason(value);
-            // A corrected reason clears the message; the next submission checks it again.
-            if (
-              problem !== undefined &&
-              reasonProblem(value, reasonMinLength, reasonMaxLength) === undefined
-            ) {
-              setProblem(undefined);
-            }
-          }}
-        />
-        <p className="text-xs text-muted-foreground tabular-nums" aria-hidden="true">
-          {CONFIRM_STRINGS.counter(reasonLength(reason), reasonMaxLength)}
-        </p>
-        {reasonError === undefined ? null : (
-          <p id={errorId} className="text-sm font-medium text-destructive">
-            {reasonError}
+      {typeof children === "function" ? children(state) : children}
+      {askReason ? (
+        <div className="grid gap-2">
+          <Label htmlFor={reasonId}>{CONFIRM_STRINGS.reasonLabel}</Label>
+          <p id={hintId} className="text-sm text-muted-foreground">
+            {CONFIRM_STRINGS.reasonHint}
           </p>
-        )}
-      </div>
+          <Textarea
+            ref={reasonInput}
+            id={reasonId}
+            name={REASON_FIELD}
+            value={reason}
+            rows={3}
+            required
+            autoFocus
+            aria-describedby={reasonError === undefined ? hintId : `${hintId} ${errorId}`}
+            {...(reasonError === undefined ? {} : { "aria-invalid": true })}
+            onChange={(event) => {
+              const value = event.currentTarget.value;
+              setReason(value);
+              // A corrected reason clears the message; the next submission checks it again.
+              if (
+                problem !== undefined &&
+                reasonProblem(value, reasonMinLength, reasonMaxLength) === undefined
+              ) {
+                setProblem(undefined);
+              }
+            }}
+          />
+          <p className="text-xs text-muted-foreground tabular-nums" aria-hidden="true">
+            {CONFIRM_STRINGS.counter(reasonLength(reason), reasonMaxLength)}
+          </p>
+          {reasonError === undefined ? null : (
+            <p id={errorId} className="text-sm font-medium text-destructive">
+              {reasonError}
+            </p>
+          )}
+        </div>
+      ) : null}
       {state.ok === false && state.message !== undefined ? (
         <div role="alert" className="grid gap-1 rounded-md border border-destructive/40 px-3 py-2 text-sm">
           <p className="font-medium text-destructive">{state.message}</p>

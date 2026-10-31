@@ -23,6 +23,7 @@ describe("runCli", () => {
     await Promise.all([
       import("./dev/dev-seed.command.js"),
       import("./provisioning/report-migrations.command.js"),
+      import("./payments/airline-card/scrub-card-copies.command.js"),
     ]);
   }, 60_000);
 
@@ -73,5 +74,25 @@ describe("runCli", () => {
     expect(stderr).toBe(
       "dev:seed creates development data and refuses APP_ENV=production; nothing was written.\n",
     );
+  });
+
+  it("[FIX-W30-OTA AC5] lists tenants:scrub-card-copies and refuses it without one target, before reading any configuration", async () => {
+    const { stdout } = await run(["help"]);
+    expect(CLI_COMMANDS).toContain("tenants:scrub-card-copies");
+    expect(stdout).toContain("tenants:scrub-card-copies  --tenant <key> | --all");
+
+    for (const argv of [
+      ["tenants:scrub-card-copies"],
+      ["tenants:scrub-card-copies", "--all", "--tenant", "alpha"],
+    ]) {
+      // No variable is given: a command that went on would fail on the missing configuration, not with the usage.
+      const { code, stdout: out, stderr } = await run(argv, {});
+      expect(code).toBe(1);
+      expect(out).toBe("");
+      expect(stderr).toBe(
+        "tenants:scrub-card-copies: name one tenant or --all.\n" +
+          "Usage: node dist/cli.js tenants:scrub-card-copies (--tenant <key> | --all) [--batch-size <n>]\n",
+      );
+    }
   });
 });

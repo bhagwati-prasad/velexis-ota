@@ -71,10 +71,22 @@ export function mount(root, { today = todayIso(), trip = "return" } = {}) {
   const returnField = /** @type {HTMLElement} */ (root.querySelector("[data-return-field]") ?? ret);
   let current = trip;
 
+  /**
+   * Sets `input.min` only when it changes: Chromium rebuilds a date field's month, day and year whenever `min` is set,
+   * even to the value it has, and drops the digits being typed (a year typed after a valid month and day; OFE-019).
+   * @param {HTMLInputElement} input
+   * @param {string} value
+   */
+  const setMin = (input, value) => {
+    if (input.min !== value) {
+      input.min = value;
+    }
+  };
+
   /** The return date may not be before the departure (or today). */
   const sync = () => {
-    depart.min = today;
-    ret.min = isIsoDate(depart.value) && depart.value > today ? depart.value : today;
+    setMin(depart, today);
+    setMin(ret, isIsoDate(depart.value) && depart.value > today ? depart.value : today);
   };
 
   /** @param {{ trip: Trip }} props */

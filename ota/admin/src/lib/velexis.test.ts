@@ -31,6 +31,7 @@ vi.mock("next/navigation", () => ({ redirect: vi.fn(fakeRedirect) }));
 import { createRefreshDedup } from "./refresh-dedup";
 import {
   ENVIRONMENT_COOKIE,
+  PAGE_PATH_HEADER,
   STAFF_ACCESS_TOKEN_COOKIE,
   STAFF_REFRESH_TOKEN_COOKIE,
   TENANT_COOKIE,
@@ -205,6 +206,33 @@ describe("SDK clients", () => {
     expect(request?.headers.get("X-Velexis-Environment")).toBe("live");
   });
 
+  it("[FIX-W34-OTA AC2] gives the SDK the caller's maxRetries, and leaves the SDK's default when there is none", async () => {
+    const accessToken = staffAccessToken("retries", Date.now(), 900);
+    // `Retry-After: 0`: each retry the client allows goes out at once instead of after the back-off.
+    api.on("GET /v1/console/bookings", () =>
+      apiError("SERVICE_UNAVAILABLE", 503, {}, { "Retry-After": "0" }),
+    );
+    const sentWith = async (maxRetries: number | undefined): Promise<number> => {
+      const before = api.requests.length;
+      const client = createConsoleClient(
+        {
+          accessToken,
+          environment: "test",
+          incoming: new Headers(),
+          ...(maxRetries === undefined ? {} : { maxRetries }),
+        },
+        { fetch: api.fetch },
+      );
+      await expect(client.bookings.list({ limit: 5 })).rejects.toMatchObject({ status: 503 });
+      return api.requests.length - before;
+    };
+
+    expect(await sentWith(0)).toBe(1);
+    expect(await sentWith(1)).toBe(2);
+    // The SDK's default: 2 retries.
+    expect(await sentWith(undefined)).toBe(3);
+  });
+
   it("logs one line per response with method, path, status, request id and duration, never a body or a token", async () => {
     const lines: string[] = [];
     const logger = createLogger({
@@ -256,6 +284,35 @@ describe("SDK clients", () => {
     nextHeaders.cookies.mockResolvedValue(new CookieJar({ [TENANT_COOKIE]: TENANT_ID }));
     expect(await redirectOf(() => getConsole())).toBe(`${TEST_PORTAL_URL}/console?tenant=${TENANT_ID}`);
     expect(api.requests).toEqual([]);
+  });
+
+  it("[FIX-W33-OTA] [OAD-002] sends a server component to /auth/refresh with the page's path as ?next=, a same-origin path only", async () => {
+    const page = "/bookings?status=confirmed&q=VX7K2Q";
+    const withPage = (value: string) =>
+      nextHeaders.headers.mockResolvedValue(
+        new Headers({ "X-Forwarded-For": STAFF_IP, "User-Agent": BROWSER_AGENT, [PAGE_PATH_HEADER]: value }),
+      );
+    const back = `/auth/refresh?${new URLSearchParams({ next: page }).toString()}`;
+
+    // A refresh token only (the middleware could not refresh).
+    withPage(page);
+    const jar = signedIn(900);
+    jar.entries.delete(STAFF_ACCESS_TOKEN_COOKIE);
+    expect(await redirectOf(() => getConsole())).toBe(back);
+    // An access token the API refuses as expired.
+    signedIn(900);
+    api.on("GET /v1/console/auth/me", () => apiError("TOKEN_EXPIRED", 401));
+    expect(await redirectOf(() => getStaff())).toBe(back);
+    // Anything but a path on the admin is dropped, as /auth/refresh drops it.
+    for (const unsafe of [
+      "https://evil.example/",
+      "//evil.example/bookings",
+      "/\\evil.example",
+      "/a/..//evil.example",
+    ]) {
+      withPage(unsafe);
+      expect(await redirectOf(() => getStaff()), unsafe).toBe("/auth/refresh");
+    }
   });
 
   it("getStaff() is console.auth.me, and sends an expired or ended session away", async () => {

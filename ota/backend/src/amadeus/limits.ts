@@ -1,8 +1,10 @@
 // The limits of the Amadeus client (OADR-0001 points 6 and 7, flows/amadeus-connection-and-tokens.md §4, ADR-0012;
 // OBE-018): the 12 operations with their specification, method, path, timeout and retry class, the token buckets and
-// the retry delay. Everything here is a constant: the bucket sizes and timeouts are revisited after the M2 load test
-// (ADR-0012 follow-up), and tests pass their own `AmadeusLimits` (shorter timeouts, other buckets) to the client and
-// the rate limiter through the `AMADEUS_LIMITS` injection token.
+// the retry delay. Everything here is a constant, and tests pass their own `AmadeusLimits` (shorter timeouts, other
+// buckets) to the client and the rate limiter through the `AMADEUS_LIMITS` injection token. The M2 load test (OBE-028,
+// the ADR-0012 follow-up) kept the bucket sizes: ota/docs/performance.md §3 has the figures and the reasons. The
+// timeouts cannot be measured against the stub; they stay as planned until the Amadeus test environment shows its
+// latencies.
 //
 //   Operation                                       Timeout  Automatic retry
 //   OAuth token                                     10 s     1 (network, timeout, 5xx; the timeout is the token
@@ -242,6 +244,8 @@ export const DEFAULT_AMADEUS_LIMITS: AmadeusLimits = Object.freeze({
     listQueue: 15_000,
   }),
   retryDelayMs: Object.freeze({ min: 300, max: 800 }),
+  // Both buckets kept by the M2 load test (ota/docs/performance.md §3). The credential set's rate is the planning
+  // figure for the shared Velexis account (ADR-0012): lower it when Amadeus states the account's real quota.
   credentialBucket: Object.freeze({ ratePerSecond: 20, burst: 20 }),
   tenantBucket: Object.freeze({ ratePerSecond: 5, burst: 10 }),
 });

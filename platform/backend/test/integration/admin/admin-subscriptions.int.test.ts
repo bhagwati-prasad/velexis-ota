@@ -578,6 +578,49 @@ describe("adminUpdateManualSubscription", () => {
     expect(await auditOf(second.id)).toEqual([]);
   });
 
+  it("[FIX-W30-PLATFORM AC2] locks the tenant's row before the subscription's, as billing sync does: while a transaction holds the tenant, the edit waits holding no lock on the subscription", async () => {
+    const ota = await otaWith();
+    // A transaction of this test takes billing sync's first lock (flow §D): the tenant's row.
+    const holder = await pool.connect();
+    let pending: ReturnType<typeof patchSubscription>;
+    try {
+      await holder.query("BEGIN");
+      await holder.query("SELECT id FROM platform.tenants WHERE id = $1 FOR UPDATE", [ota.tenant.id]);
+      const { rows } = await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
+      const holderPid = rows[0]?.pid;
+      pending = patchSubscription(ota.sub, 1, { planCode: "growth", reason: REASON });
+      // Awaited below; a failure before then must not count as unhandled.
+      void pending.catch(() => undefined);
+      /** How many sessions wait for this test's transaction. */
+      const waitingOnHolder = async (): Promise<number> => {
+        const waiting = await pool.query<{ n: number }>(
+          "SELECT count(*)::int AS n FROM pg_stat_activity WHERE $1 = ANY (pg_blocking_pids(pid))",
+          [holderPid],
+        );
+        return waiting.rows[0]?.n ?? 0;
+      };
+      await expect.poll(waitingOnHolder, { timeout: WAIT_MS, interval: 20 }).toBe(1);
+      // Then billing sync's next lock, the subscription's row: free, because the edit waits for the tenant first. An
+      // edit that held it while it waited would make this fail at once (55P03), where billing sync would deadlock.
+      const probe = await holder.query(
+        "SELECT id FROM platform.subscriptions WHERE id = $1 FOR UPDATE NOWAIT",
+        [ota.sub],
+      );
+      expect(probe.rowCount).toBe(1);
+      await holder.query("COMMIT");
+    } catch (error) {
+      await holder.query("ROLLBACK");
+      throw error;
+    } finally {
+      holder.release();
+    }
+
+    const res = await pending;
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body).toMatchObject({ planCode: "growth", version: 2 });
+    expect(await storedTenant(ota.tenant.id)).toMatchObject({ plan_code: "growth" });
+  });
+
   it("answers 412 for a stale If-Match, 404 for an unknown subscription, and writes nothing for no change", async () => {
     const ota = await otaWith();
     const stale = await patchSubscription(ota.sub, 7, { status: "canceled", reason: REASON });

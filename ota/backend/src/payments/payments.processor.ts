@@ -56,7 +56,9 @@
 //                           amount the cancellation keeps (`captureAmount`) with `pi:capture:<pay_id>:cancellation:
 //                           <amount>`, the key of the request's capture, then besides the events above the release
 //                           (RefundsRepository.recordRelease: the rest of the authorisation as the customer's refund,
-//                           `succeeded`, and the booking's `refund.succeeded`), once. When it cannot capture, the
+//                           `succeeded`, requested by whoever cancelled, the customer, the staff or the system, as the
+//                           event's `cancelledBy` and actor say: FIX-W30-OTA; and the booking's `refund.succeeded`),
+//                           once. When it cannot capture, the
 //                           alert asks the staff to capture the kept amount or release the authorisation, and a
 //                           `payment.capture_failed` event with `final` makes the cancellation's `refundStatus`
 //                           `manual_review`; the cancellation stands either way.
@@ -103,6 +105,7 @@ import { TenantContext } from "../tenancy/tenant-context";
 import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
 import {
   PAYMENT_GATEWAY,
+  recordedPaymentAccount,
   type GatewayContext,
   type GatewayPayment,
   type GatewayRefundState,
@@ -112,11 +115,13 @@ import {
 import { providerStateUpdate } from "./payment-state";
 import { PaymentsRepository, type LockedBookingRow, type PaymentRow } from "./payments.repository";
 import {
+  cancellationRequesterOf,
   REFUND_REASONS,
   RefundsRepository,
   refundSubmission,
   type RefundJobRow,
   type RefundReason,
+  type RefundRequester,
 } from "./refunds.repository";
 import { StripeCallError, StripeMetadataMismatchError } from "./stripe/stripe.gateway";
 
@@ -445,8 +450,12 @@ export interface CancellationCapture {
   readonly amount: string;
   /** The reason of the release's refund row (`refundReason`, refunds.reason). */
   readonly reason: RefundReason;
-  /** The customer who cancelled (`cus_…`), or `null` for a guest or the system. */
-  readonly customerId: string | null;
+  /**
+   * Who cancelled (`refunds.requested_by` of the release; `cancellationRequesterOf` of the event's `cancelledBy` and
+   * actor, FIX-W30-OTA): the customer (`cus_…`, `null` for a guest), the staff (`stf_…`, `null` for a console key) or the
+   * system.
+   */
+  readonly requestedBy: { readonly type: RefundRequester; readonly id: string | null };
 }
 
 /**
@@ -481,7 +490,7 @@ export async function cancellationCaptureOf(
     reason: (REFUND_REASONS as readonly unknown[]).includes(reason)
       ? (reason as RefundReason)
       : "customer_request",
-    customerId: row.actorType === "customer" ? row.actorId : null,
+    requestedBy: cancellationRequesterOf(data["cancelledBy"], { type: row.actorType, id: row.actorId }),
   };
 }
 
@@ -794,7 +803,7 @@ export class PaymentJobsHandler {
       amount: authorised.minus(kept).toFixed(2),
       kept: kept.toFixed(2),
       reason: cancellation.reason,
-      requestedBy: { type: "customer", id: cancellation.customerId },
+      requestedBy: cancellation.requestedBy,
       source: "system",
       now,
     });
@@ -1086,6 +1095,8 @@ export class PaymentJobsHandler {
         currency: row.currency,
         amount: new Money(row.amount).toFixed(minorUnits),
         minorUnits,
+        // Where the payment lives (OBE-077): the refund is made on that account.
+        account: recordedPaymentAccount(payment.metadata),
       });
     } catch (error) {
       return await this.afterRefundFailure(claim, attempt, error);
@@ -1310,6 +1321,7 @@ export class PaymentJobsHandler {
       amount: new Money(payment.amount).toFixed(minorUnits),
       minorUnits,
       version: payment.version,
+      account: recordedPaymentAccount(payment.metadata),
     };
   }
 

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Page</title>
+    <link rel="stylesheet" href="/src/styles/main.css" />
+    <script type="module" src="/src/pages/p.js"></script>
+  </head>
+  <body class="flex min-h-screen flex-col bg-surface font-body text-ink antialiased">
+    <!-- @include partials/noscript.html -->
+    <!-- @include partials/test-banner.html -->
+    <!-- @include partials/header.html -->
+    <main
+      id="main"
+      tabindex="-1"
+      class="mx-auto w-full max-w-4xl flex-1 px-4 py-10 focus:outline-none"
+      data-content-page
+    >
+      <article data-page-article hidden>
+        <h1 tabindex="-1" class="font-heading text-3xl font-semibold focus:outline-none" data-page-title></h1>
+        <div class="mt-6" data-page-body></div>
+      </article>
+
+      <div data-page-state></div>
+
+      <div class="space-y-4" aria-hidden="true" data-page-loading hidden>
+        <div class="h-9 w-2/3 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+        <div class="h-4 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+        <div class="h-4 w-5/6 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+        <div class="h-4 w-4/6 rounded-ui bg-panel motion-safe:animate-pulse"></div>
+      </div>
+
+      <section data-page-not-found hidden>
+        <h1 tabindex="-1" class="font-heading text-3xl font-semibold focus:outline-none">Page not found</h1>
+        <p class="mt-3 max-w-prose text-muted">
+          The page you are looking for does not exist or has moved. Check the address, or start again from the
+          home page.
+        </p>
+        <p class="mt-6">
+          <a
+            href="/"
+            class="inline-block rounded-ui bg-primary px-4 py-2 font-medium text-on-primary hover:opacity-90"
+            >Search flights</a
+          >
+        </p>
+      </section>
+    </main>
+    <!-- @include partials/footer.html -->
+    <!-- @include partials/states.html -->
+  </body>
+</html>

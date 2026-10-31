@@ -8,6 +8,9 @@
 // It leaves alone:
 //   - the anonymous caller of public, webhook and local routes: those routes find their tenant themselves (the
 //     tenant key in an asset path, a signed file key, the Stripe event) or have none (health);
+//   - every caller of getPublicAsset (OBE-071, `PATH_TENANT_OPERATIONS`): the path's tenant key chooses the OTA, and a
+//     suspended OTA's images are served, so the edge header Caddy adds to a storefront's `/api/*` (its maintenance page
+//     loads its logo) or a key neither chooses nor refuses it; the caller guard has checked the credential;
 //   - handlers that bind no operation (the health endpoints, documented as the internal healthLive and healthReady)
 //     and the 501 routes of pending operations, which answer without touching tenant data, as they skip validation.
 // The route-parity contract test keeps every other route bound to an operation, so every route that can reach tenant
@@ -57,6 +60,11 @@ import { scopedOperation } from "./scope.guard";
 export const ENVIRONMENT_HEADER = "x-velexis-environment";
 
 const ENVIRONMENTS: readonly TenantEnvironment[] = ["test", "live"];
+
+/** Operations whose path names the tenant, whatever the caller (see the file header): no tenant is resolved here. */
+export const PATH_TENANT_OPERATIONS: ReadonlySet<OtaOperationId> = new Set<OtaOperationId>([
+  "getPublicAsset",
+]);
 
 /** The actor before any session guard: the storefront visitor is a guest, a key acts as itself, the service as none. */
 function initialActor(caller: Exclude<Caller, { type: "anonymous" }>): ContextActor {
@@ -119,7 +127,7 @@ export class TenantGuard implements CanActivate {
       OPENAPI_OPERATION,
       context.getHandler(),
     );
-    if (operationId === undefined) {
+    if (operationId === undefined || PATH_TENANT_OPERATIONS.has(operationId)) {
       return true;
     }
     const caller = this.callers.get();

@@ -43,12 +43,18 @@
 // - console.auth.me. The staff member, the tenant (the request's environment and the Amadeus connection of it, never
 //   its credentials), the role's permissions, the session and the environments, read on every call.
 //
+// The tenant of the three answers (`toConsoleTenant`) carries `storefrontUrl`, the OTA's storefront origin for the
+// console's environment: `https://<key>.<STOREFRONT_BASE_DOMAIN>` (notifications/renderer.ts `storefrontUrl`, the
+// sub-domain the storefront and the e-mails use), the primary custom domain once OBE-080 resolves them (lead decision
+// (2f) of 2026-10-30, third batch, FIX-W36-OTA). The OTA admin links published content pages with it.
+//
 // Permissions follow the role matrix of scope §1.3 (`ROLE_PERMISSIONS`); `environments` is `["test"]`, or
 // `["test", "live"]` for a live tenant (`storefront_environment = live`) and a role other than `viewer` (point 5).
 //
 // The platform's `account_sessions`, `last_login_at` and `last_active_at`, which the contract's descriptions mention,
 // are never written: the OTA backend never writes a platform table (ADR-0003, OADR-0011 point 2). No token is logged.
 import { Injectable } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import type { components } from "@velexis/api-types";
 import { AppError } from "@velexis/errors";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
@@ -61,7 +67,9 @@ import {
   type IdempotentInput,
 } from "../../common/http/idempotency.service";
 import { IdGenerator } from "../../common/ids";
+import type { SharedConfig } from "../../config";
 import { staffActionRow, type StaffActionActor } from "../../console/staff-actions.writer";
+import { storefrontUrl } from "../../notifications/renderer";
 import { PlatformCache } from "../../tenancy/platform-cache";
 import {
   PlatformReadRepository,
@@ -139,13 +147,15 @@ export function toStaffMember(member: PlatformStaffMember): StaffMember {
 
 /**
  * The contract's `ConsoleTenant`: the tenant in the request's environment, with its Amadeus connection of that
- * environment (offices only, never credentials; `connected` when the connection is `active`).
+ * environment (offices only, never credentials; `connected` when the connection is `active`) and its storefront origin
+ * on `storefrontBaseDomain` (STOREFRONT_BASE_DOMAIN; see the file header).
  */
 export function toConsoleTenant(
   tenant: PlatformTenant,
   timeZone: string,
   environment: TenantEnvironment,
   connection: PlatformAmadeusConnection | null,
+  storefrontBaseDomain: string,
 ): ConsoleTenant {
   return {
     id: tenant.id,
@@ -156,6 +166,7 @@ export function toConsoleTenant(
     defaultCurrency: tenant.defaultCurrency.trim(),
     defaultLocale: tenant.defaultLocale,
     timeZone,
+    storefrontUrl: storefrontUrl(tenant.key, storefrontBaseDomain),
     supplier: {
       connected: connection?.status === "active",
       officeIds: (connection?.officeIds ?? []).filter((office) => AMADEUS_OFFICE_ID.test(office)),
@@ -226,8 +237,14 @@ export class StaffAuthService {
     private readonly tx: TenantTx,
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
+    config: ConfigService<SharedConfig, true>,
     @InjectPinoLogger(StaffAuthService.name) private readonly logger: PinoLogger,
-  ) {}
+  ) {
+    this.storefrontBaseDomain = config.get("STOREFRONT_BASE_DOMAIN", { infer: true });
+  }
+
+  /** STOREFRONT_BASE_DOMAIN: the tenants' storefront sub-domains (`ConsoleTenant.storefrontUrl`). */
+  private readonly storefrontBaseDomain: string;
 
   /** console.auth.signIn (see the file header). */
   async signIn(input: StaffSignInInput): Promise<ConsoleStaffSession> {
@@ -383,7 +400,13 @@ export class StaffAuthService {
     const tenant = await this.cachedTenant(tenantId);
     return {
       staff: toStaffMember(member),
-      tenant: toConsoleTenant(tenant, member.tenantTimeZone, environment, await this.connection(tenantId)),
+      tenant: toConsoleTenant(
+        tenant,
+        member.tenantTimeZone,
+        environment,
+        await this.connection(tenantId),
+        this.storefrontBaseDomain,
+      ),
       permissions: permissionsOf(member.role),
       session: {
         id: family.id,
@@ -461,7 +484,13 @@ export class StaffAuthService {
         subject: { type: "staff", id: family.staffId, roles: [family.role] },
       },
       staff: toStaffMember(member),
-      tenant: toConsoleTenant(tenant, member.tenantTimeZone, environment, await this.connection(tenant.id)),
+      tenant: toConsoleTenant(
+        tenant,
+        member.tenantTimeZone,
+        environment,
+        await this.connection(tenant.id),
+        this.storefrontBaseDomain,
+      ),
       permissions: permissionsOf(family.role),
       environments: environmentsOf(family.role, tenant.storefrontEnvironment),
     };

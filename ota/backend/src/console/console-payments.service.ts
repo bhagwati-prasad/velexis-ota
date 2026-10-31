@@ -9,11 +9,12 @@
 // - `list` (`payments:read`): the payments of the environment, newest first (`created_at`, then `id`, descending) with
 //   a keyset cursor bound to the environment and the filters (`status` in the API's spelling, `cancelled` for the
 //   stored `canceled`; `provider`, `method`, `bookingId`, `createdFrom` at or after, `createdTo` before). No Stripe call.
-// - `get` (`payments:read`, `ETag: "<version>"`): one payment as a ConsolePayment. `refresh=true` first reads the
-//   PaymentIntent again through the PaymentGateway (the Velexis account of the payment's environment: the only mode
-//   served before M5) and applies it under the row's lock and `version` with payment-state.ts's rules, as the webhook
-//   processor does, with a `payment_events` row (`source = staff`); an airline-card payment, or one without a
-//   PaymentIntent, is answered as stored. A Stripe failure answers `502 PAYMENT_PROVIDER_ERROR` and changes nothing.
+// - `get` (`payments:read`, `ETag: "<version>"`): one payment as a ConsolePayment, with the account mode it was created
+//   with (`providerConnection`: the one it recorded since OBE-077, else its connection's). `refresh=true` first reads
+//   the PaymentIntent again through the PaymentGateway (on the account the payment was created on, OBE-077) and
+//   applies it under the row's lock and `version` with payment-state.ts's rules, as the webhook processor does, with a
+//   `payment_events` row (`source = staff`); an airline-card payment, or one without a PaymentIntent, is answered as
+//   stored. A Stripe failure answers `502 PAYMENT_PROVIDER_ERROR` and changes nothing.
 // - `capture` (`payments:capture`, `If-Match`, `Idempotency-Key`; plan step 2): T1 reads the payment (`412` when the
 //   `If-Match` is stale; `409 CONFLICT` `payment_not_capturable` unless it is a Stripe payment in `authorized`; the
 //   amount in the payment's currency (`422` `currency_mismatch`), positive with at most the currency's minor units
@@ -61,6 +62,7 @@ import { OTA_QUEUE } from "../common/queues/queue-names";
 import { AIRLINE_PROVIDER } from "../payments/airline-card/airline-card.gateway";
 import {
   PAYMENT_GATEWAY,
+  recordedPaymentAccount,
   type GatewayContext,
   type GatewayPayment,
   type GatewayState,
@@ -894,23 +896,35 @@ export class ConsolePaymentsService {
     }));
   }
 
-  /** The account modes of the payments' connections (one platform read, outside any tenant transaction). */
+  /**
+   * The account modes of the connections of the payments that recorded none (written before OBE-077; one platform
+   * read, outside any tenant transaction).
+   */
   private async accountModes(
     tenant: RequestTenant,
     rows: readonly PaymentRow[],
   ): Promise<ReadonlyMap<string, PaymentAccountMode>> {
-    const ids = rows.flatMap((row) => (row.providerConnectionId === null ? [] : [row.providerConnectionId]));
+    const ids = rows.flatMap((row) =>
+      row.providerConnectionId === null || recordedPaymentAccount(row.metadata) !== null
+        ? []
+        : [row.providerConnectionId],
+    );
     return ids.length === 0 ? new Map() : await this.platform.paymentConnectionModes(tenant.tenantId, ids);
   }
 
-  /** The account mode of a payment's connection; none for an airline-card payment or a connection not found. */
+  /**
+   * The account mode a payment was created with: the one it recorded (OBE-077, `payments.metadata.connection`; the
+   * platform updates a connection in place when the OTA switches mode, PADR-0011 points 1 and 7), else its connection's;
+   * none for an airline-card payment or a connection not found.
+   */
   private modeOf(
     row: PaymentRow,
     modes: ReadonlyMap<string, PaymentAccountMode>,
   ): PaymentAccountMode | undefined {
-    return row.provider === AIRLINE_PROVIDER || row.providerConnectionId === null
-      ? undefined
-      : modes.get(row.providerConnectionId);
+    if (row.provider === AIRLINE_PROVIDER || row.providerConnectionId === null) {
+      return undefined;
+    }
+    return recordedPaymentAccount(row.metadata)?.accountMode ?? modes.get(row.providerConnectionId);
   }
 
   private async minorUnitsOf(trx: TenantTransaction, currency: string): Promise<number> {
@@ -935,6 +949,7 @@ export class ConsolePaymentsService {
       amount: new Money(row.amount).toFixed(minorUnits),
       minorUnits,
       version: row.version,
+      account: recordedPaymentAccount(row.metadata),
     };
   }
 

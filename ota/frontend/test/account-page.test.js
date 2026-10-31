@@ -464,6 +464,22 @@ describe("profile", () => {
       { path: "/phone/countryCallingCode", code: "pattern" },
     ]);
   });
+
+  it("[FIX-W30-OTA AC1] profileRequest takes the US's calling code 1 and refuses four digits, as the contract does", () => {
+    const baseline = profileValues(/** @type {never} */ (CUSTOMER));
+    expect(
+      profileRequest(
+        { ...baseline, "phone.countryCallingCode": "1", "phone.number": "202 555 0143" },
+        baseline,
+      ),
+    ).toEqual({
+      changes: { phone: { deviceType: "MOBILE", countryCallingCode: "+1", number: "2025550143" } },
+      problems: [],
+    });
+    expect(profileRequest({ ...baseline, "phone.countryCallingCode": "+1234" }, baseline).problems).toEqual([
+      { path: "/phone/countryCallingCode", code: "pattern" },
+    ]);
+  });
 });
 
 describe("visitors and failures", () => {

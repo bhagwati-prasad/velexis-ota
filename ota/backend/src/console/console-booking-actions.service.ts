@@ -97,7 +97,9 @@
 //   the ticketing claim of the ticketing job (T1, ticketing.service.ts): the booking `FOR NO KEY UPDATE SKIP LOCKED`
 //   (held: `503 SERVICE_UNAVAILABLE` with `Retry-After`), the `If-Match`, the status (`ticketed` or issued: `409
 //   ALREADY_ISSUED`; `cancelled`: `409 BOOKING_ALREADY_CANCELLED`; no order: `409 BOOKING_NOT_MODIFIABLE`), no
-//   undecided cancellation and no fresh claim of the job or of another request (`409 BOOKING_NOT_MODIFIABLE`,
+//   cancellation holding it (an undecided one, and since FIX-W31-OTA, lead decision (1) of 2026-10-27, one whose claim
+//   committed less than 5 minutes ago and whose DELETE has no recorded outcome yet: cancellation-state.ts
+//   `cancellationHoldOf`) and no fresh claim of the job or of another request (`409 BOOKING_NOT_MODIFIABLE`,
 //   `details.reason` `cancellation_pending` or `ticketing_in_progress`), an airline-card booking only with `other`
 //   forms of payment `CASH` or `ACCOUNT` (the OTA's own settlement with the airline; `400 VALIDATION_FAILED` at
 //   `/formOfPayments` otherwise), and the payment (`issuePaymentOf`): a captured one is paid, an authorised Stripe
@@ -124,10 +126,13 @@
 //   before and after. The idempotency interceptor serialises a double submit of one key: the second request replays the
 //   first answer, so the payment is captured and the order issued once.
 // - `cancel` (`bookings:cancel`, `If-Match`, `Idempotency-Key`): CancellationService.cancelByStaff (see its file
-//   header: the refresh, the claim, the DELETE, the record and money steps of OBE-049 with `refund.mode`, the flag
-//   and the worker's check of a DELETE without an answer), whose record step's transaction writes the `booking.cancel`
-//   staff action; the answer is the booking, with ORDER_GONE_WARNING when Amadeus no longer had the order. The
-//   same-key replays of its `504` are answered from the booking (ConsoleCancelBookingIdempotencyHooks).
+//   header: the refresh, the step by the quote's cancellation-mode rule in `storefront_settings.time_zone`, the claim,
+//   the DELETE of `release` and `void`, the record and money steps of OBE-049 with `refund.mode`, the flag and the
+//   worker's check of a DELETE without an answer, or the request to the airline of `request_only` without a DELETE:
+//   lead decision (2c) of 2026-10-30, third batch, FIX-W36-OTA), whose record step's (or request's) transaction writes
+//   the `booking.cancel` staff action with the mode; the answer is the booking, with ORDER_GONE_WARNING when Amadeus no
+//   longer had the order and STAFF_REQUEST_ONLY_WARNING for a request. The same-key replays of its `504` are answered
+//   from the booking (ConsoleCancelBookingIdempotencyHooks).
 import { Injectable } from "@nestjs/common";
 import type { components, operations } from "@velexis/api-types";
 import type { Insertable, TenantDatabase, Updateable } from "@velexis/db";
@@ -151,7 +156,7 @@ import {
 import { VELEXIS_REMARK_PREFIX, velexisRemarkText } from "../bookings/booking-reference";
 import {
   bookingEtagOf,
-  dictionariesOf,
+  consoleDictionariesOf,
   offerFareRulesOf,
   type FareRuleType,
   type StoredFareRules,
@@ -169,8 +174,8 @@ import { BookingUpdatedEmails, type BookingUpdatedEmail } from "../bookings/book
 import {
   bookingBusy,
   CancellationService,
-  cancellationStateOf,
   ORDER_GONE_WARNING,
+  STAFF_REQUEST_ONLY_WARNING,
   type StaffCancelRecord,
 } from "../bookings/cancellation.service";
 import { CustomerBookingsService } from "../bookings/customer-bookings.service";
@@ -196,7 +201,7 @@ import {
   ticketingClaimFresh,
   type TicketingBookingRow,
 } from "../bookings/ticketing.service";
-import { cancellationEventsOf } from "../bookings/cancellation-state";
+import { cancellationHoldOf } from "../bookings/cancellation-state";
 import {
   IdempotencyHooksFor,
   type IdempotencyHooks,
@@ -944,9 +949,9 @@ export function keptOrderDataOf(data: JsonObject): JsonObject {
 
 /**
  * The Amadeus answer as console.bookings.retrieve returns it: verbatim, except that its forms of payment pass the
- * shared redactor (no card number, OADR-0018 point 8) and its dictionaries keep `carriers` and `aircraft` only, as
- * every booking answer does (`dictionariesOf`: the document's AmadeusLocationEntry and AmadeusCurrencyEntry require a
- * member that Amadeus's maps by code never have).
+ * shared redactor (no card number, OADR-0018 point 8) and its dictionaries go through `consoleDictionariesOf`:
+ * `carriers` and `aircraft`, and since FIX-W33-OTA `locations` and `currencies` with the `key` member the document's
+ * AmadeusLocationEntry and AmadeusCurrencyEntry require (Amadeus's maps by code never have it).
  */
 export function consoleOrderReplyOf(body: JsonObject): JsonObject {
   const { dictionaries: raw, ...rest } = body;
@@ -955,7 +960,7 @@ export function consoleOrderReplyOf(body: JsonObject): JsonObject {
   if (isRecord(data) && data["formOfPayments"] !== undefined) {
     reply["data"] = { ...data, formOfPayments: redactPayload(data["formOfPayments"]) };
   }
-  const dictionaries = dictionariesOf(raw);
+  const dictionaries = consoleDictionariesOf(raw);
   if (dictionaries !== null) {
     reply["dictionaries"] = dictionaries;
   }
@@ -2188,7 +2193,9 @@ export class ConsoleBookingActionsService {
         details: { status: row.status },
       });
     }
-    if (cancellationStateOf(await cancellationEventsOf(trx, bookingId)).kind === "undecided") {
+    // A cancellation holds the booking (FIX-W31-OTA, cancellation-state.ts `cancellationHoldOf`): its DELETE is in
+    // flight (a fresh `cancellation_claimed_at`) or got no answer and is undecided, as before.
+    if (cancellationHoldOf(row, now) !== undefined) {
       throw new AppError("BOOKING_NOT_MODIFIABLE", {
         message: "A cancellation of this booking is being checked with the airline.",
         details: { reason: "cancellation_pending" },
@@ -2491,12 +2498,20 @@ export class ConsoleBookingActionsService {
       (trx, record) => this.recordCancel(trx, bookingId, record),
     );
     const booking = await this.consoleBookings.get(bookingId, { refresh: false });
-    return outcome.orderNotFound
-      ? { ...booking, warnings: [...(booking.warnings ?? []), { ...ORDER_GONE_WARNING }] }
-      : booking;
+    const warning = outcome.orderNotFound
+      ? ORDER_GONE_WARNING
+      : outcome.requested
+        ? STAFF_REQUEST_ONLY_WARNING
+        : undefined;
+    return warning === undefined
+      ? booking
+      : { ...booking, warnings: [...(booking.warnings ?? []), { ...warning }] };
   }
 
-  /** The `booking.cancel` staff action, in the record step's transaction (redacted before and after). */
+  /**
+   * The `booking.cancel` staff action, in the record step's transaction, or the request's of `request_only` (redacted
+   * before and after; `mode` the step the cancellation took, FIX-W36-OTA).
+   */
   private async recordCancel(
     trx: TenantTransaction,
     bookingId: string,
@@ -2515,7 +2530,9 @@ export class ConsoleBookingActionsService {
         amountPaid: record.before.amountPaid,
       },
       after: {
-        status: "cancelled",
+        // A request to the airline leaves the booking as it was (FIX-W36-OTA).
+        status: record.cause === "request_only" ? record.before.status : "cancelled",
+        mode: ask.mode,
         reasonCode: ask.reasonCode,
         cause: record.cause,
         ticketsVoided: record.ticketsVoided,

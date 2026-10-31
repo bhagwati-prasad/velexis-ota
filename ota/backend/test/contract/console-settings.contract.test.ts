@@ -761,7 +761,7 @@ describe("the 17 console settings operations (api-changes part 2 §2.1–§2.3, 
   it("lists the 17 operations in pending-operations.ts with the tasks that implement them until those are done [OBE-058 AC3]", () => {
     // A task that implements its operations removes their entries (pending-operations.ts); route parity
     // (route-parity.contract.test.ts) then requires their handlers.
-    const implemented: ReadonlySet<SettingsOperation["task"]> = new Set(["OBE-069", "OBE-070"]);
+    const implemented: ReadonlySet<SettingsOperation["task"]> = new Set(["OBE-069", "OBE-070", "OBE-073"]);
     for (const { operationId, task } of SETTINGS_OPERATIONS) {
       expect([operationId, PENDING_OPERATIONS[operationId as keyof typeof PENDING_OPERATIONS]]).toEqual([
         operationId,
@@ -1116,15 +1116,30 @@ describe("storefront settings (api-changes part 2 §2.3; OADR-0012, OADR-0015)",
       consent: ["regime", "bannerRequired", "policyVersion", "categories"],
       operations: ["opsAlertEmail", "bookingQueue"],
     };
+    // Read-only fields a section answers besides the ones it is saved with (lead decision (2d) of 2026-10-30, second
+    // batch, FIX-W35-OTA): optional, so the PATCH body stays complete without them, and ignored when sent.
+    const readOnly: Readonly<Record<string, readonly string[]>> = {
+      airlineCard: ["liveAvailable"],
+    };
     for (const section of SECTIONS) {
       const schema = sectionSchema(section);
-      expect([section, Object.keys(objectAt(schema, "properties"))]).toEqual([section, fields[section]]);
+      expect([section, Object.keys(objectAt(schema, "properties"))]).toEqual([
+        section,
+        [...(fields[section] ?? []), ...(readOnly[section] ?? [])],
+      ]);
       // Sections travel in the PATCH body too: closed and complete.
       expect([section, schema["additionalProperties"], schema["required"]]).toEqual([
         section,
         false,
         fields[section],
       ]);
+      for (const name of readOnly[section] ?? []) {
+        expect([section, name, objectAt(schema, "properties", name)]).toEqual([
+          section,
+          name,
+          expect.objectContaining({ type: "boolean", readOnly: true }),
+        ]);
+      }
     }
     const branding = sectionSchema("branding");
     expect(Object.keys(objectAt(branding, "properties", "colors", "properties"))).toEqual([
@@ -1316,9 +1331,15 @@ describe("notification templates (api-changes part 2 §2.6; OADR-0013)", () => {
       "bodyText",
       "variables",
       "customised",
+      // FIX-W33-OTA (lead decision (1k) of 2026-10-29): the locale of the language's row a locale without one shows.
+      "inheritedFrom",
       "isActive",
       "version",
       "updatedAt",
+    ]);
+    expect(objectAt(template, "properties", "inheritedFrom")["anyOf"]).toEqual([
+      { $ref: "#/components/schemas/LocaleCode" },
+      { type: "null" },
     ]);
     expect(objectAt(template, "properties", "variables", "items")).toEqual({
       $ref: "#/components/schemas/NotificationTemplateVariable",

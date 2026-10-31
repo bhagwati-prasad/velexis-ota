@@ -30,8 +30,14 @@
 //
 // The five `*_asset_id` columns reference `storefront_assets` (RESTRICT); the response carries URLs built from the
 // asset id and its file extension (OADR-0012 point 3), so `assetsByIds` reads those two columns and the kind.
+//
+// The uploaded images themselves (OBE-071; settings/assets.service.ts, storefront/public-assets.service.ts): the
+// `storefront_assets` rows with their file metadata (`StoredAssetRow`), listed newest first with a keyset position,
+// read by id or by storage key (`forUpdate` locks the row: a delete holds it against new settings references, whose
+// foreign key check waits for it), inserted without a second row for a storage key (`ON CONFLICT DO NOTHING`), and
+// deleted; and where an asset is in use: the settings columns that name it and the content pages whose body shows it.
 import { Injectable } from "@nestjs/common";
-import { sql, type TenantDatabase, type Updateable } from "@velexis/db";
+import { sql, type Insertable, type TenantDatabase, type Updateable } from "@velexis/db";
 import type { CurrencyRow } from "../reference/reference.repository";
 import type { TenantTransaction } from "../tenancy/tenant-tx";
 
@@ -87,6 +93,49 @@ export interface StorefrontAssetRow {
 }
 
 export type { CurrencyRow };
+
+/** An uploaded image with its file metadata (OBE-071). */
+export interface StoredAssetRow extends StorefrontAssetRow {
+  readonly contentType: string;
+  readonly fileName: string;
+  readonly sizeBytes: number;
+  readonly width: number | null;
+  readonly height: number | null;
+  /** `tenant_<key>/assets/<sha256>.<ext>`: unique, so one row holds one file. */
+  readonly storageKey: string;
+  /** SHA-256 of the file, hex. */
+  readonly contentHash: string;
+  readonly createdAt: Date;
+}
+
+/** A listed asset with its keyset position: `created_at` in UTC with microseconds (`YYYY-MM-DDTHH:MM:SS.ffffff`). */
+export interface ListedAssetRow extends StoredAssetRow {
+  readonly sortKey: string;
+}
+
+/** The columns of `StoredAssetRow`. */
+const ASSET_COLUMNS = [
+  "id",
+  "kind",
+  "file_extension as fileExtension",
+  "content_type as contentType",
+  "file_name as fileName",
+  "size_bytes as sizeBytes",
+  "width",
+  "height",
+  "storage_key as storageKey",
+  "content_hash as contentHash",
+  "created_at as createdAt",
+] as const;
+
+/** The settings columns that reference an asset, as JSON pointers of the console's StorefrontSettings. */
+export const ASSET_SETTINGS_COLUMNS = Object.freeze([
+  ["logo_asset_id", "/branding/logoAssetId"],
+  ["logo_dark_asset_id", "/branding/logoDarkAssetId"],
+  ["logo_square_asset_id", "/branding/logoSquareAssetId"],
+  ["favicon_asset_id", "/branding/faviconAssetId"],
+  ["og_image_asset_id", "/seo/ogImageAssetId"],
+] as const);
 
 /** The columns of `settings`, as `StorefrontSettingsRow` names them. */
 const SETTINGS_COLUMNS = [
@@ -318,5 +367,104 @@ export class StorefrontRepository {
       .limit(1)
       .executeTakeFirst();
     return fee !== undefined;
+  }
+
+  // ---- Uploaded images (OBE-071) ------------------------------------------------------------------------------------
+
+  /**
+   * One page of the assets, of `kind` when given, newest first (`created_at`, then `id`), after the keyset position
+   * `after`, at most `limit` rows.
+   */
+  async listAssets(
+    trx: TenantTransaction,
+    page: {
+      readonly kind?: string | undefined;
+      readonly after?: { readonly key: string; readonly id: string } | undefined;
+      readonly limit: number;
+    },
+  ): Promise<ListedAssetRow[]> {
+    let select = trx
+      .selectFrom("storefront_assets")
+      .select([
+        ...ASSET_COLUMNS,
+        sql<string>`to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US')`.as("sortKey"),
+      ]);
+    if (page.kind !== undefined) {
+      select = select.where("kind", "=", page.kind);
+    }
+    if (page.after !== undefined) {
+      select = select.where(
+        sql<boolean>`(created_at, id) < (${page.after.key}::timestamp AT TIME ZONE 'UTC', ${page.after.id})`,
+      );
+    }
+    return await select.orderBy("created_at", "desc").orderBy("id", "desc").limit(page.limit).execute();
+  }
+
+  /** The asset `id`; `forUpdate` locks its row until the end of the transaction. */
+  async assetById(
+    trx: TenantTransaction,
+    id: string,
+    options: { readonly forUpdate?: boolean } = {},
+  ): Promise<StoredAssetRow | undefined> {
+    const query = trx.selectFrom("storefront_assets").select(ASSET_COLUMNS).where("id", "=", id);
+    return await (options.forUpdate === true ? query.forUpdate() : query).executeTakeFirst();
+  }
+
+  /** The asset whose file is stored under `storageKey`, its row locked until the end of the transaction. */
+  async assetByStorageKeyForUpdate(
+    trx: TenantTransaction,
+    storageKey: string,
+  ): Promise<StoredAssetRow | undefined> {
+    return await trx
+      .selectFrom("storefront_assets")
+      .select(ASSET_COLUMNS)
+      .where("storage_key", "=", storageKey)
+      .forUpdate()
+      .executeTakeFirst();
+  }
+
+  /**
+   * Inserts an asset, unless a row already holds its storage key (written by a request that committed meanwhile):
+   * `undefined` then, and nothing is written.
+   */
+  async insertAsset(
+    trx: TenantTransaction,
+    row: Insertable<TenantDatabase["storefront_assets"]>,
+  ): Promise<StoredAssetRow | undefined> {
+    return await trx
+      .insertInto("storefront_assets")
+      .values(row)
+      .onConflict((conflict) => conflict.column("storage_key").doNothing())
+      .returning(ASSET_COLUMNS)
+      .executeTakeFirst();
+  }
+
+  /** Deletes the asset `id`; the settings' foreign keys refuse it while they reference it (RESTRICT). */
+  async deleteAsset(trx: TenantTransaction, id: string): Promise<void> {
+    await trx.deleteFrom("storefront_assets").where("id", "=", id).execute();
+  }
+
+  /** The JSON pointers of the settings fields that reference the asset `id` (ASSET_SETTINGS_COLUMNS order). */
+  async settingsReferencing(trx: TenantTransaction, id: string): Promise<string[]> {
+    const row = await trx
+      .selectFrom("storefront_settings")
+      .select(ASSET_SETTINGS_COLUMNS.map(([column]) => column))
+      .where("id", "=", "sfs_default")
+      .executeTakeFirst();
+    if (row === undefined) {
+      return [];
+    }
+    return ASSET_SETTINGS_COLUMNS.filter(([column]) => row[column] === id).map(([, path]) => path);
+  }
+
+  /** The content pages whose body shows the asset `id` (`![alt](ast_…)`; its id anywhere in the body), by id. */
+  async pagesShowing(trx: TenantTransaction, id: string): Promise<string[]> {
+    const rows = await trx
+      .selectFrom("storefront_pages")
+      .select("id")
+      .where(sql<boolean>`strpos(body_markdown, ${id}) > 0`)
+      .orderBy("id")
+      .execute();
+    return rows.map((row) => row.id);
   }
 }

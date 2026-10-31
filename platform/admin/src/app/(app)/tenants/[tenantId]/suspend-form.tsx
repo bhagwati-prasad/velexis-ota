@@ -152,11 +152,15 @@ export function SuspendResumeForm({
   const pending = suspend.isPending || resume.isPending;
   const outcome = latest === "suspend" ? suspend.state : latest === "resume" ? resume.state : undefined;
 
+  // The two dialogs have their own keys: without them React keeps the one <button> when the status changes and only
+  // swaps its classes, and the Button's `transition-all` then fades the outline "Resume" into the destructive "Suspend"
+  // for 150 ms, with colours in between that do not keep 4.5:1 (axe found one in e2e run 41015776555).
   return (
     <div className="grid gap-3">
       <div className="flex flex-wrap items-center gap-3">
         {status === "active" ? (
           <ReasonDialog
+            key="suspend"
             trigger={
               <Button variant="destructive" disabled={pending}>
                 {S.suspend}
@@ -175,6 +179,7 @@ export function SuspendResumeForm({
           </ReasonDialog>
         ) : status === "suspended" ? (
           <ReasonDialog
+            key="resume"
             trigger={
               <Button variant="outline" disabled={pending}>
                 {S.resume}

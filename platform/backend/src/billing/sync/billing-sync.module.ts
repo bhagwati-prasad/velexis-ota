@@ -12,11 +12,12 @@
 //   plan map and the status rules. They write through BillingModule's repositories (`subscriptions`,
 //   `billing_customers`, read `plans`) and TenantsRepository, provided here on their own because those modules carry
 //   the portal's routes, and suspend, resume and dispatch through ProvisioningModule's worker part (layer 2), whose one
-//   module object WorkerModule imports too. The handlers of the invoice events (PBE-046), the dunning and the trial
-//   schedules join it.
+//   module object WorkerModule imports too. The handlers re-fetch and write a Stripe subscription under its lock
+//   (SubscriptionSyncLock, subscription-lock.ts, FIX-W30-PLATFORM). The handlers of the invoice events (PBE-046), the
+//   dunning and the trial schedules join it.
 //
-// It uses the global CommonModule (Clock, IdGenerator, PLATFORM_DB), the global RedisModule (InvalidationPublisher),
-// the queues of QueuesModule and AuditModule.
+// It uses the global CommonModule (Clock, IdGenerator, PLATFORM_DB), the global RedisModule (InvalidationPublisher,
+// and REDIS_CLIENT for the subscription lock), the queues of QueuesModule and AuditModule.
 import { Module, type DynamicModule } from "@nestjs/common";
 import { DiscoveryModule } from "@nestjs/core";
 import { AuditModule } from "../../audit/audit.module";
@@ -37,6 +38,7 @@ import { PriceToPlan } from "./price-to-plan";
 import { BillingStatusRules } from "./status-rules";
 import { StripeEventsProcessor } from "./stripe-events.processor";
 import { StripeEventsSweepScheduler } from "./stripe-events-sweep.scheduler";
+import { SubscriptionSyncLock } from "./subscription-lock";
 
 /** The worker's part of BillingSyncModule (`BillingSyncModule.forWorker()`). */
 @Module({
@@ -53,6 +55,7 @@ import { StripeEventsSweepScheduler } from "./stripe-events-sweep.scheduler";
     TenantsRepository,
     PriceToPlan,
     BillingStatusRules,
+    SubscriptionSyncLock,
     SubscriptionChangedHandler,
     CheckoutSessionCompletedHandler,
   ],

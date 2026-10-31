@@ -6,7 +6,8 @@
 // deterministic id, which the module that owns the work handles (`@TenantJob("<schedule id>")`). Schedules join this
 // list with the task that adds their work (M3: notifications.sweep with OBE-030, payments.authorisation_watch with
 // OBE-040, ticketing.scan with OBE-044, bookings.reconcile_scan with OBE-043, bookings.sync_scan with OBE-045,
-// refunds.sweep with FIX-W27-FOLLOWUPS, checkouts.expire, …; M4: queues.poll).
+// refunds.sweep with FIX-W27-FOLLOWUPS, checkouts.expire and retention.daily with OBE-056; M4: queues.poll with
+// OBE-065).
 //
 // Target tenants (OADR-0014 point 4): a schedule names the statuses it runs for, `active` and possibly `suspended`
 // (suspended tenants keep their obligations to paid travellers, but nothing that starts new supplier activity runs for
@@ -147,6 +148,34 @@ export const OTA_SCHEDULES: readonly ScheduleDefinition[] = Object.freeze([
     statuses: ["active", "suspended"],
     description:
       "Enqueue refund.submit {tenantId, id} again, with its own job id refund-submit-<rfd_id>, for the refunds still pending and unclaimed 5 minutes after their request (a lost enqueue), 100 per job, oldest first, a full batch continuing with the next (payments/refunds-sweep.processor.ts)",
+  }),
+  schedule({
+    id: "checkouts.expire",
+    pattern: "* * * * *",
+    milestone: "M3",
+    // A suspended OTA's checkouts expire all the same, and their authorisations are released (OADR-0014 point 4).
+    statuses: ["active", "suspended"],
+    description:
+      "Expire at most 50 open or payment_pending checkouts past expires_at per job, oldest first, skipping a checkout held by a booking (pending: OADR-0003 point 10), and enqueue payment.void {tenantId, id} for the voidable Stripe payments of expired checkouts that pay for no order (checkout/checkout-expiry.processor.ts)",
+  }),
+  schedule({
+    id: "retention.daily",
+    pattern: "35 3 * * *",
+    milestone: "M3",
+    // Housekeeping of the tenant's own tables: it starts no supplier activity, and a suspended OTA's jobs (the
+    // reconciliation, the sync, the e-mails of its paid bookings) still write them, so they are purged too.
+    statuses: ["active", "suspended"],
+    description:
+      "Delete, in batches of 1 000, supplier_requests older than 90 days, queue_snapshots older than 30 days, expired idempotency_keys, and customer sessions, password reset tokens and booking access tokens expired more than 7 days ago; never bookings, payments, refunds, events, documents or staff actions (jobs/retention.processor.ts)",
+  }),
+  schedule({
+    id: "queues.poll",
+    pattern: "*/15 * * * *",
+    milestone: "M4",
+    // A Queue List read is new supplier activity: a suspended OTA's queues are not polled (OADR-0014 point 4).
+    statuses: ["active"],
+    description:
+      "Read each monitored queue of the tenant's active Amadeus connections (platform.supplier_connections.monitored_queues, test and live) with Queue List and store one queue_snapshots row per queue, 5 queues per job (console/queue-poller.processor.ts)",
   }),
 ]);
 

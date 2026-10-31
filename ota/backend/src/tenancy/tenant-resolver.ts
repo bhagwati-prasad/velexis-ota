@@ -17,6 +17,17 @@
 // An unknown host, an unverified or other-purpose domain, and a custom domain of a tenant that is not active all
 // answer `403 HOST_NOT_ALLOWED` (`details.reason: unknown`), so nothing about the tenant behind a host leaks. A host
 // that cannot be a host name is refused without a lookup. Unknown hosts and keys are cached as such for 10 s.
+//
+// The live environment (OBE-081, ADR-0018 "Environment"): the edge's environment is read with the tenant row itself
+// (`tenant:<id>`; `tenantkey:` and `host:` hold only the id), so when the platform's goLive (PBE-061) sets
+// `storefront_environment = live` and publishes the `tenant` invalidation, the next edge request of every host of the
+// tenant is live, within a second, and at the latest when the cached row expires (60 s). From then on the edge's
+// searches, prices, checkouts, payments and bookings are `live` rows made through the live Amadeus connection and the
+// live payment connection (`conn:<kind>:<tenantId>:live`), and the storefront's reads (searches, priced offers,
+// checkouts, payments, the booking access guard, the guest lookup, a customer's trips) filter by the request's
+// environment, so the test rows answer `404` there. The console's `live` (the OTA admin's header) is open only to a
+// live tenant and a role other than viewer: the permission guard checks it (common/auth/permission.guard.ts).
+// test/integration/tenancy/live-environment.int.test.ts proves the switch end to end.
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { isTenantSchema } from "@velexis/db";

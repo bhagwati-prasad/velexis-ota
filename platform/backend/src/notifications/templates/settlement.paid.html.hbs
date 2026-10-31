@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Your settlement was paid</title>
+  </head>
+  <body style="margin: 0; padding: 24px; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 1.5; color: #1f2933; background-color: #ffffff;">
+    <p>Hello {{fullName}},</p>
+    <p>Velexis paid the settlement of your OTA {{tenantName}} ({{tenantKey}}) for {{period}} by bank transfer to your payout account: {{netAmount}}, sent on {{paidOn}} with the bank reference {{payoutReference}}.</p>
+    <p>The statement and its lines, as a CSV file, are in the portal: <a href="{{statementUrl}}">{{statementUrl}}</a></p>
+    <p>The Velexis team</p>
+  </body>
+</html>

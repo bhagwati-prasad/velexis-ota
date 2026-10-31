@@ -78,6 +78,41 @@ const SAMPLES: Readonly<Record<EmailTemplateKey, EmailVariables>> = {
     },
     secretData: {},
   },
+  "payouts.reviewed": {
+    data: {
+      fullName: "Ana Lima",
+      tenantName: "Acme Travel",
+      tenantKey: "acme",
+      outcome: "verified",
+      nextStep: "Velexis can now pay your monthly settlements to this account.",
+      payoutAccountUrl:
+        "https://platform.example.com/otas/ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/payments/payout-account",
+    },
+    secretData: {},
+  },
+  "settlement.paid": {
+    data: {
+      fullName: "Ana Lima",
+      tenantName: "Acme Travel",
+      tenantKey: "acme",
+      period: "January 2027",
+      netAmount: "8935.10 EUR",
+      paidOn: "2027-02-07",
+      payoutReference: "VX-SETTLE-2027-01-ACME",
+      statementUrl:
+        "https://platform.example.com/otas/ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/payments/settlements/stl_01JC7T1V5X9Z3B7D1F5H9K3N7Q",
+    },
+    secretData: {},
+  },
+  "connection.stripe_disconnected": {
+    data: {
+      fullName: "Ana Lima",
+      tenantName: "Acme Travel",
+      tenantKey: "acme",
+      paymentsUrl: "https://platform.example.com/otas/ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/payments",
+    },
+    secretData: {},
+  },
 };
 
 const templates = EmailTemplates.load();
@@ -111,7 +146,7 @@ function loadError(dir: string): EmailTemplateError {
 }
 
 describe("e-mail templates", () => {
-  it("[PBE-011 AC4] are the M1 templates of PADR-0013, with a key the email_outbox CHECK accepts", () => {
+  it("[PBE-011 AC4] are the M1 templates of PADR-0013 and the M5 ones, with a key the email_outbox CHECK accepts", () => {
     expect([...EMAIL_TEMPLATE_KEYS].sort()).toEqual(
       [
         "auth.verify_email",
@@ -125,6 +160,11 @@ describe("e-mail templates", () => {
         "tenant.suspended",
         "tenant.resumed",
         "ops.alert",
+        // M5: the payout account review (PBE-058) and the paid settlement (PBE-060).
+        "payouts.reviewed",
+        "settlement.paid",
+        // M5: a Connect deauthorisation (PBE-056).
+        "connection.stripe_disconnected",
       ].sort(),
     );
     for (const key of EMAIL_TEMPLATE_KEYS) {

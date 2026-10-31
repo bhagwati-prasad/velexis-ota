@@ -10,6 +10,7 @@ vi.mock("@/app/(console)/env-actions", () => ({
 
 import { Button } from "@/components/ui/button";
 import type { ActionState } from "@/lib/action-state";
+import { ERROR_MESSAGES } from "@/lib/errors";
 
 import {
   ACTION_KEY_FIELD,
@@ -18,11 +19,16 @@ import {
   REASON_FIELD,
   reasonLength,
   reasonProblem,
+  SCROLLING_DIALOG_CLASS,
   type ConfirmAction,
 } from "./confirm-dialog";
 
 /** The key the page rendered once for this dialog (a dummy UUID). */
 const KEY = "8f1d2c3b-4a5e-4f60-9a7b-1c2d3e4f5a6b";
+/** Keys a server action hands back after a final refusal, and the key of the page's next render (dummy UUIDs). */
+const NEXT_KEY = "2a3b4c5d-6e7f-4a8b-9c0d-1e2f3a4b5c6d";
+const LATER_KEY = "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b";
+const RENDERED_AGAIN_KEY = "4c5d6e7f-8a9b-4c0d-a1e2-f3a4b5c6d7e8";
 const BOOKING_ID = "bkg_01JBT7A1B2C3D4E5F6G7H8J9K0";
 
 /**
@@ -39,8 +45,8 @@ interface Submission {
   readonly version: FormDataEntryValue | null;
 }
 
-function renderDialog(action: ConfirmAction, environment: "test" | "live" = "test") {
-  return render(
+function dialogOf(action: ConfirmAction, environment: "test" | "live" = "test", key: string = KEY) {
+  return (
     <ConfirmDialog
       trigger={<Button>Issue tickets</Button>}
       title="Issue the tickets of VX-7K2M9Q?"
@@ -48,10 +54,14 @@ function renderDialog(action: ConfirmAction, environment: "test" | "live" = "tes
       confirmLabel="Issue tickets"
       environment={environment}
       action={action}
-      idempotencyKey={KEY}
+      idempotencyKey={key}
       fields={{ bookingId: BOOKING_ID, version: "7" }}
-    />,
+    />
   );
+}
+
+function renderDialog(action: ConfirmAction, environment: "test" | "live" = "test") {
+  return render(dialogOf(action, environment));
 }
 
 /** Opens the dialog and returns it with its reason field and its form. */
@@ -236,6 +246,14 @@ describe("ConfirmDialog", () => {
     expect(within(dialog).getByRole("button", { name: "Issue tickets in LIVE" })).toBeTruthy();
   });
 
+  it("[OAD-016 AC1] keeps a dialog taller than the window inside it, scrolling, so its title and buttons stay reachable", async () => {
+    const { action } = recordingAction(() => ({ ok: true }));
+    renderDialog(action);
+    const { dialog } = await open();
+    expect(dialog.className.split(" ")).toEqual(expect.arrayContaining(SCROLLING_DIALOG_CLASS.split(" ")));
+    expect(SCROLLING_DIALOG_CLASS).toBe("max-h-[calc(100dvh-2rem)] overflow-y-auto");
+  });
+
   it("shows TEST and no live warning in the test environment", async () => {
     const { action } = recordingAction(() => ({ ok: true }));
     renderDialog(action);
@@ -260,5 +278,100 @@ describe("ConfirmDialog", () => {
 
     expect((second.reason as HTMLTextAreaElement).value).toBe("");
     expect(within(second.dialog).queryByRole("alert")).toBeNull();
+  });
+
+  it("[FIX-W31-OTA AC2] sends the new key an action's state brings after a final refusal, keeps a key when none comes, and takes the next render's key", async () => {
+    const { action, submissions } = recordingAction((call) => {
+      switch (call) {
+        case 1:
+          // A 422 the API keeps under the key: the action hands back a new one.
+          return {
+            ok: false,
+            code: "UNPROCESSABLE",
+            message: "The amount is above what can still be refunded.",
+            nextActionKey: NEXT_KEY,
+          };
+        case 2:
+          // A 503: nothing is kept under the key, the retry sends it again.
+          return { ok: false, code: "SERVICE_UNAVAILABLE", message: "The OTA API is unavailable right now." };
+        case 3:
+          // Another final refusal the API keeps under the key: another new one. (Before the revision of 2026-10-28 this
+          // was 409 IDEMPOTENCY_KEY_REUSED, which now brings no new key: FIX-W32-OTA AC3 below.)
+          return {
+            ok: false,
+            code: "BOOKING_NOT_MODIFIABLE",
+            message: "Changed meanwhile.",
+            nextActionKey: LATER_KEY,
+          };
+        default:
+          return { ok: true, message: "Tickets issued" };
+      }
+    });
+    const rendered = render(dialogOf(action));
+    const { dialog, reason, form } = await open();
+    const hiddenKey = () =>
+      form.querySelector(`input[type="hidden"][name="${ACTION_KEY_FIELD}"]`)?.getAttribute("value");
+    fireEvent.change(reason, { target: { value: "Customer confirmed by phone" } });
+
+    fireEvent.submit(form);
+    await waitFor(() => expect(hiddenKey()).toBe(NEXT_KEY), UI_WAIT);
+    expect(within(dialog).getByRole("alert").textContent).toContain("above what can still be refunded");
+    fireEvent.submit(form);
+    await waitFor(() => expect(action).toHaveBeenCalledTimes(2), UI_WAIT);
+    await within(dialog).findByText("The OTA API is unavailable right now.", {}, UI_WAIT);
+    expect(hiddenKey()).toBe(NEXT_KEY);
+
+    // Closed and opened again, the dialog goes on with the key it was last given.
+    fireEvent.click(within(dialog).getByRole("button", { name: CONFIRM_STRINGS.cancel }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), UI_WAIT);
+    const reopened = await open();
+    expect(
+      reopened.form.querySelector(`input[type="hidden"][name="${ACTION_KEY_FIELD}"]`)?.getAttribute("value"),
+    ).toBe(NEXT_KEY);
+    const reopenedKey = () =>
+      reopened.form.querySelector(`input[type="hidden"][name="${ACTION_KEY_FIELD}"]`)?.getAttribute("value");
+    fireEvent.change(reopened.reason, { target: { value: "Customer confirmed by phone" } });
+    fireEvent.submit(reopened.form);
+    // The third answer's state is rendered (its new key in the form) before the next submission, as a person who reads
+    // the refusal first would send it; the button is disabled while the action runs.
+    await waitFor(() => expect(reopenedKey()).toBe(LATER_KEY), UI_WAIT);
+    expect(action).toHaveBeenCalledTimes(3);
+    fireEvent.submit(reopened.form);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), UI_WAIT);
+    expect(submissions.map((submission) => submission.key)).toEqual([KEY, NEXT_KEY, NEXT_KEY, LATER_KEY]);
+
+    // The success revalidated the page: its new render brings a new key, which the next action sends.
+    rendered.rerender(dialogOf(action, "test", RENDERED_AGAIN_KEY));
+    const next = await open();
+    fireEvent.change(next.reason, { target: { value: "Second issuance attempt" } });
+    fireEvent.submit(next.form);
+    await waitFor(() => expect(action).toHaveBeenCalledTimes(5), UI_WAIT);
+    expect(submissions.at(-1)?.key).toBe(RENDERED_AGAIN_KEY);
+  });
+
+  it("[FIX-W32-OTA AC3] keeps its key after 409 IDEMPOTENCY_KEY_REUSED and tells staff to reload the page", async () => {
+    const message = ERROR_MESSAGES.IDEMPOTENCY_KEY_REUSED ?? "";
+    // The action's state of the refusal: the reload message and no new key (lib/action-state.ts `keepsActionKey`).
+    const { action, submissions } = recordingAction(() => ({
+      ok: false,
+      code: "IDEMPOTENCY_KEY_REUSED",
+      message,
+      requestId: "req_reused",
+    }));
+    render(dialogOf(action));
+    const { dialog, reason, form } = await open();
+    fireEvent.change(reason, { target: { value: "Customer confirmed by phone" } });
+
+    fireEvent.submit(form);
+    const alert = await within(dialog).findByRole("alert", {}, UI_WAIT);
+    expect(alert.textContent).toContain("may still be running");
+    expect(alert.textContent).toContain("Reload the page");
+    expect(
+      form.querySelector(`input[type="hidden"][name="${ACTION_KEY_FIELD}"]`)?.getAttribute("value"),
+    ).toBe(KEY);
+    fireEvent.submit(form);
+    await waitFor(() => expect(action).toHaveBeenCalledTimes(2), UI_WAIT);
+    // Never a new key: only the page's next render (the reload) brings one.
+    expect(submissions.map((submission) => submission.key)).toEqual([KEY, KEY]);
   });
 });

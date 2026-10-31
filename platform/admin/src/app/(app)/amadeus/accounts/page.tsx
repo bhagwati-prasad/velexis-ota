@@ -81,13 +81,16 @@ function OfficeCounts({ account, label }: { readonly account: Account; readonly 
           <li key={status}>
             <Link
               href={poolHref(environment, status)}
-              className="grid gap-0.5 rounded-lg border px-3 py-2 outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              className="group grid gap-0.5 rounded-lg border px-3 py-2 outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
               data-count={account.officeCounts[status]}
             >
               <span className="text-lg font-semibold tabular-nums">
                 {formatCount(account.officeCounts[status])}
               </span>{" "}
-              <span className="text-xs text-muted-foreground">{OFFICE_STATUS_LABELS[status]}</span>
+              {/* The hover's foreground on hover: muted text on bg-accent is 4.35:1, under WCAG 1.4.3's 4.5:1. */}
+              <span className="text-xs text-muted-foreground group-hover:text-accent-foreground">
+                {OFFICE_STATUS_LABELS[status]}
+              </span>
             </Link>
           </li>
         ))}

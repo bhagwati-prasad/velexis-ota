@@ -1,7 +1,8 @@
 // Query-string helpers and safe redirects for the storefront (ota/frontend/README.md §4, §10, OADR-0015 point 3).
 // Pages are addressed by their `.html` path and dynamic values travel in the query string (`?search=srch_…`,
 // `?offer=off_…`); lists are comma-separated (`stops=0,1&carriers=AF,KL`). A `next` parameter is only ever followed
-// when it is a path on this storefront: one leading `/`, anything else goes to `/`.
+// when it is a path on this storefront: one leading `/`, anything else goes to `/`. Content pages live at `/p/<slug>`
+// (OADR-0015 point 4; `pageSlugFromPath`, `pageHref`).
 
 /** Where an unsafe or missing `next` sends the visitor. */
 export const DEFAULT_NEXT = "/";
@@ -197,6 +198,43 @@ export function safeNext(value) {
   } catch {
     return DEFAULT_NEXT;
   }
+}
+
+/** A content page's slug (`StorefrontPageSlug`): lower-case words joined by hyphens, at most 64 characters. */
+export const PAGE_SLUG = /^(?=.{1,64}$)[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * Whether `value` is a content page's slug.
+ * @param {unknown} value
+ * @returns {value is string}
+ */
+export const isPageSlug = (value) => typeof value === "string" && PAGE_SLUG.test(value);
+
+/**
+ * The storefront path of a content page, `/p/<slug>` (OADR-0015 point 4: Caddy, the dev server and `vite preview`
+ * serve it with p.html).
+ * @param {string} slug
+ */
+export const pageHref = (slug) => `/p/${slug}`;
+
+/**
+ * The slug of the content page at `pathname` (`/p/<slug>`; one trailing slash and upper case are accepted, as Caddy's
+ * matcher accepts them), or `null` when the path names no valid slug (`/p/`, `/p.html`, `/p/a/b`, `/p/%3Cx%3E`, …).
+ * @param {string} pathname
+ * @returns {string | null}
+ */
+export function pageSlugFromPath(pathname) {
+  const match = /^\/p\/([^/]+)\/?$/i.exec(typeof pathname === "string" ? pathname : "");
+  if (!match) {
+    return null;
+  }
+  let slug;
+  try {
+    slug = decodeURIComponent(match[1] ?? "").toLowerCase();
+  } catch {
+    return null;
+  }
+  return isPageSlug(slug) ? slug : null;
 }
 
 /**

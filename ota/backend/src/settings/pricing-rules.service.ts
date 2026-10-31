@@ -15,11 +15,13 @@
 //           `201` with `Location`, `ETag` and the warnings of the saved rule. The `Idempotency-Key` is the idempotency
 //           interceptor's.
 //   update  in one transaction: the row is read `FOR NO KEY UPDATE` (`404`), its version compared with `If-Match`
-//           (`412 PRECONDITION_FAILED`), a `scope` sent for the default markup rule must match every offer
-//           (`409 CONFLICT`, `details.reason = "default_rule"`; it is stored `{}`), the stored rule with the sent fields
-//           replacing theirs is checked as a create is (`400`), and every column is written at `version + 1` (`scope`
-//           only when sent, or `{}` for the default rule: pricing-rules.mapper.ts); answered with the new `ETag` and
-//           the warnings of the saved rule.
+//           (`412 PRECONDITION_FAILED`), the default markup rule stays a catch-all that always matches (`409
+//           CONFLICT`, `details.reason = "default_rule"`, for a `scope` that does not match every offer, which is
+//           stored `{}` otherwise, `isActive: false`, an `activeFrom` or `activeUntil` other than null, or a
+//           `priority` other than 1000: pricing-rules.mapper.ts `defaultRuleChanges`; FIX-W34-OTA), the stored rule
+//           with the sent fields replacing theirs is checked as a create is (`400`), and every column is written at
+//           `version + 1` (`scope` only when sent, or `{}` for the default rule: pricing-rules.mapper.ts); answered
+//           with the new `ETag` and the warnings of the saved rule.
 //   delete  in one transaction: the row is read `FOR UPDATE` (`404`), `If-Match` (`412`), the default markup rule is
 //           refused (`409 CONFLICT`, `default_rule`), and the row is deleted (the history keeps its amounts,
 //           rules.repository.ts); answered `204`.
@@ -48,6 +50,8 @@ import {
   consoleFeeRuleOf,
   consoleMarkupRuleOf,
   decodeRuleCursor,
+  DEFAULT_RULE_PRIORITY,
+  defaultRuleChanges,
   encodeRuleCursor,
   feeChangesOf,
   feeColumnsOf,
@@ -55,7 +59,6 @@ import {
   feeRuleWarnings,
   feeStateOfInput,
   feeStateOfRule,
-  isCatchAllScope,
   markupChangesOf,
   markupColumnsOf,
   markupRuleProblems,
@@ -123,10 +126,15 @@ function invalid(problems: readonly FieldError[]): AppError {
   return new AppError("VALIDATION_FAILED", { fieldErrors: [...problems] });
 }
 
-/** `409 CONFLICT` for a change the default markup rule does not allow. */
+/** The message of `409 CONFLICT` `default_rule`: what stays fixed of the default markup rule (OADR-0005 point 3). */
+export const DEFAULT_RULE_CONFLICT_MESSAGE =
+  "The default markup rule always matches: it cannot be deleted, its scope stays empty, it stays active with no " +
+  `validity window, and its priority stays ${DEFAULT_RULE_PRIORITY}.`;
+
+/** `409 CONFLICT` for a change the default markup rule does not allow (a delete, or `defaultRuleChanges`). */
 function defaultRuleConflict(): AppError {
   return new AppError("CONFLICT", {
-    message: "The default markup rule cannot be deleted, and its scope stays empty.",
+    message: DEFAULT_RULE_CONFLICT_MESSAGE,
     details: { reason: "default_rule" },
   });
 }
@@ -167,8 +175,8 @@ export class PricingRulesService {
         if (!row.is_default) {
           return undefined;
         }
-        // A delete (no update), or a scope that narrows the catch-all rule.
-        return update === undefined || (update.scope !== undefined && !isCatchAllScope(update.scope))
+        // A delete (no update), or an update that would stop the catch-all rule from matching every offer.
+        return update === undefined || defaultRuleChanges(update).length > 0
           ? defaultRuleConflict()
           : undefined;
       },

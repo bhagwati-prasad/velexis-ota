@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Platform delivery lead. Decided during planning; revisit when the pending-operations list is empty at the M5 exit, or if the OTA plan needs to change a `tenant.*` message in a way that is not backward compatible.
-**Revisions:** 2026-10-12 (planning review): the M1 admin slice is split in two tasks (PBE-007 and PBE-066), because 47 operations did not fit one task; seven tasks now edit the document.
+**Revisions:** 2026-10-12 (planning review): the M1 admin slice is split in two tasks (PBE-007 and PBE-066), because 47 operations did not fit one task; seven tasks now edit the document. 2026-10-28 (lead decision (2) of 2026-10-28, recorded with FIX-W32-PLATFORM): item 1 approves, under [ADR-0006](../../../docs/mvp/adr/0006-contract-first-openapi.md) workflow step 1, one narrowing of a written slice before its operation is implemented: the M3–M4 slice's `AmadeusMonitoredQueue.queueId` takes 0–99 (dated note under item 1).
 
 ## Context
 
@@ -27,6 +27,8 @@ Two smaller questions were also open:
    | M3–M4 | PBE-037 | `updatePaymentConnection`, `createConsoleToken`, `updateAmadeusConnection` |
    | M5 portal | PBE-041 | `goLive`, custom domains, own Amadeus, Stripe Connect and API keys, payout account, settlements, Checkout, Customer Portal, invoices |
    | M5 admin and webhooks | PBE-042 | Every admin operation marked M5, both Stripe webhook receivers |
+
+   **2026-10-28 (lead decision (2), FIX-W32-PLATFORM): the monitored queue number.** A written slice changes additively only, unless an ADR approves a breaking change ([ADR-0006](../../../docs/mvp/adr/0006-contract-first-openapi.md) workflow step 1). This revision approves one narrowing of the M3–M4 slice: `AmadeusMonitoredQueue.queueId` takes 0–99 (`maximum: 99`; it had only `minimum: 0`). That is the bound of every `queueId` parameter of the OTA document's Queue List reads and of the OTA backend's poller, which skips a stored queue outside it. No caller relied on a higher number: `updateAmadeusConnection`, the only operation whose request carries the schema, is pending until PBE-040 (item 2), and the platform writes no monitored queue before it (a new connection's list is empty). The answers that carry an `AmadeusConnection` therefore hold no other number. The change-log row is in [`../../backend/openapi/README.md`](../../backend/openapi/README.md#8-change-log) §8.
 
 2. **Route parity with a pending list.** `platform/backend/test/contract/route-parity.contract.test.ts` fails when:
    - a route is bound with `@OpenApiOperation` to an operation that is not in the document, or with another method or path;

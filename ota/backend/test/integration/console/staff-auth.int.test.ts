@@ -39,7 +39,7 @@ import { redisKeys } from "../../../src/common/redis/redis.keys";
 import type { ApiConfig } from "../../../src/config";
 import { StaffTokens } from "../../../src/identity/staff/staff-sessions";
 import type { OtaPool } from "../../../src/tenancy/tenancy.module";
-import { newApiKey, testApiCredentials } from "../../helpers/api-env";
+import { newApiKey, TEST_STOREFRONT_BASE_DOMAIN, testApiCredentials } from "../../helpers/api-env";
 import { OPENAPI_SETUP_TIMEOUT_MS, preloadOpenApiDocument } from "../../helpers/openapi";
 import { createTestApp, type TestApp } from "../../support/create-test-app";
 
@@ -389,7 +389,13 @@ describe("console.auth.signIn", () => {
       accountId: member.accountId,
       role: "agent",
     });
-    expect(first.body.tenant).toMatchObject({ id: alphaId, key: "alpha", environment: "test" });
+    expect(first.body.tenant).toMatchObject({
+      id: alphaId,
+      key: "alpha",
+      environment: "test",
+      // FIX-W36-OTA AC5 (lead decision (2f) of 2026-10-30): the OTA's storefront origin.
+      storefrontUrl: `https://alpha.${TEST_STOREFRONT_BASE_DOMAIN}`,
+    });
     expect(first.body.environments).toEqual(["test"]);
     for (const res of [second, atAlpha, thenAtBeta]) {
       expect(answer(res)).toEqual([401, "PORTAL_TOKEN_INVALID"]);
@@ -670,6 +676,7 @@ describe("console.auth.me", () => {
         environment: "test",
         timeZone: "Europe/Madrid",
         supplier: { connected: false, officeIds: [] },
+        storefrontUrl: `https://alpha.${TEST_STOREFRONT_BASE_DOMAIN}`,
       });
       expect(res.body.session).toMatchObject({ id: familyId, userAgent: client.userAgent });
       expect(res.body.environments).toEqual(["test"]);
@@ -823,6 +830,7 @@ describe("console.auth.refresh", () => {
     expect(new Set([refreshToken, next.refreshToken, newest.refreshToken]).size).toBe(3);
     expect(claimsOf(newest.accessToken)).toMatchObject({ sid: familyId, sub: member.staffId });
     expect(again.body.permissions).toEqual(expect.arrayContaining(["bookings:issue"]));
+    expect(again.body.tenant.storefrontUrl).toBe(`https://alpha.${TEST_STOREFRONT_BASE_DOMAIN}`);
     // KEEPTTL: a rotation never extends the family.
     expect(ttlAfter).toBeLessThanOrEqual(ttl);
     expect(meAfterRotation.status).toBe(200);

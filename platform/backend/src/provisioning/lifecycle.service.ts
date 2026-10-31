@@ -54,9 +54,10 @@
 // - `retryProvisioning` (owners): one transaction locks the tenant's row; only a `failed` tenant may be retried (`409
 //   PROVISIONING_NOT_RETRYABLE`, also when a `provision` job is active already, the partial unique index). The tenant
 //   goes back to `provisioning` (`version + 1`), a **new** `provision` job is queued (the failed ones stay as history)
-//   and `provisioning_job.retried` is audited. After the commit the job is dispatched as createTenant's is (never
-//   failing the call; the reconciler takes a job left `queued`), and the answer is `202 {job, checkoutUrl: null}`
-//   with the job as it is then.
+//   and `provisioning_job.retried` is audited. After the commit a `tenant` invalidation is published (the status
+//   changed: architecture §6.3, as the admin's retry publishes it, FIX-W32-PLATFORM) and the job is dispatched as
+//   createTenant's is (never failing the call; the reconciler takes a job left `queued`), and the answer is `202 {job,
+//   checkoutUrl: null}` with the job as it is then.
 //   From M5 (PBE-044) a tenant failed by an abandoned Checkout (no current subscription, the newest one a Stripe row
 //   `incomplete_expired`, billing flow §H) gets a new `incomplete` Stripe row with the same plan and interval in the
 //   same transaction, and a pending `incomplete` row is reused. Its job is not dispatched (the gate is closed until the
@@ -91,7 +92,7 @@ import { EnvelopeService } from "../common/crypto.provider";
 import { PLATFORM_DB, type PlatformDb } from "../common/database";
 import { FeatureSwitches } from "../common/features";
 import { IdGenerator } from "../common/ids";
-import { runInTransaction } from "../common/redis/invalidation.publisher";
+import { InvalidationPublisher, runInTransaction } from "../common/redis/invalidation.publisher";
 import type { PlatformBackendConfig } from "../config";
 import { DomainsRepository, HOSTNAME_UNIQUE_INDEX } from "../domains/domains.repository";
 import { MembershipsRepository } from "../memberships/memberships.repository";
@@ -275,6 +276,7 @@ export class LifecycleService {
     private readonly jobs: ProvisioningJobsRepository,
     private readonly dispatcher: ProvisioningDispatcher,
     private readonly audit: AuditService,
+    private readonly invalidations: InvalidationPublisher,
     private readonly envelope: EnvelopeService,
     private readonly features: FeatureSwitches,
     private readonly ids: IdGenerator,
@@ -368,6 +370,8 @@ export class LifecycleService {
         if (tenant.status !== "failed" || !(await this.tenants.reopenFailed(trx, tenantId, now))) {
           throw new AppError("PROVISIONING_NOT_RETRYABLE", { details: { status: tenant.status } });
         }
+        // The status changed (`failed` → `provisioning`): the OTA backend drops its cached row after the commit.
+        this.invalidations.publishAfterCommit(trx, { v: 1, type: "tenant", id: tenantId });
         const checkout = stripeBilling ? await this.reopenCheckout(trx, tenantId, now) : null;
         const job = await this.jobs.insertQueued(trx, {
           id: this.ids.new("job"),

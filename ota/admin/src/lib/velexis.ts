@@ -14,6 +14,10 @@
 // - Server components never refresh (they cannot write cookies): their client has the access token only, and
 //   `getStaff()` sends an expired session to `/auth/refresh`. Refreshes go through `refreshStaffSession`, which is
 //   de-duplicated per refresh token (lib/refresh-dedup.ts).
+// - Retries are the SDK's default (2 for an idempotent request on 429, 503, 504 and network errors) for every caller
+//   but staff shopping: its search actions ask for a client with `maxRetries: 0` (`ConsoleClientInput.maxRetries`, a
+//   client-level SDK option), so a search that timed out at Amadeus (`504 SUPPLIER_TIMEOUT`) reaches Amadeus once
+//   (lead decision (2d) of 2026-10-30, FIX-W34-OTA; README §7).
 import "server-only";
 
 import { createLogger, type Logger } from "@velexis/logger";
@@ -30,7 +34,7 @@ import { getConfig } from "@/config";
 import { isVelexisErrorLike } from "@/lib/errors";
 import { canOpenEnvironment, type StaffEnvironment } from "@/lib/permissions";
 import { dedupRefresh, type DedupRefresh, type StaffRefreshOutcome } from "@/lib/refresh-dedup";
-import { readSession, redirectOnSessionError, redirectToRefresh } from "@/lib/session";
+import { pagePathOf, readSession, redirectOnSessionError, redirectToRefresh } from "@/lib/session";
 
 // ---- End user ---------------------------------------------------------------------------------------------------
 
@@ -93,6 +97,12 @@ export interface ConsoleClientInput {
   readonly environment: StaffEnvironment;
   /** The incoming request's headers, for the end-user headers. */
   readonly incoming: IncomingHeaders;
+  /**
+   * The client's automatic retries (`VelexisClientOptions.maxRetries`); absent for the SDK's default. Staff shopping's
+   * calls (the searches, the Branded Fares upsell and the price confirmation) pass `0` (`SHOPPING_RETRIES` of the
+   * shopping actions), every other caller leaves it out.
+   */
+  readonly maxRetries?: number;
 }
 
 /** Replacements for tests (OADR-0018 point 10: a fake `fetch` in the real SDK) and for the de-duplication. */
@@ -132,8 +142,9 @@ function logResponse(logger: Logger): ResponseHook {
 
 /**
  * A server-mode console client for one request: the service key, the OTA API on loopback, the staff access token,
- * `sessionKind: "staff"`, the environment, the end-user headers and the response log. It never gets a refresh token
- * (refreshes go through `refreshStaffSession`).
+ * `sessionKind: "staff"`, the environment, the end-user headers and the response log, and `maxRetries` when the
+ * caller gives one (else the SDK's default). It never gets a refresh token (refreshes go through
+ * `refreshStaffSession`).
  */
 export function createConsoleClient(input: ConsoleClientInput, deps: ConsoleClientDeps = {}): ConsoleApi {
   const config = getConfig();
@@ -145,6 +156,7 @@ export function createConsoleClient(input: ConsoleClientInput, deps: ConsoleClie
     headers: endUserHeaders(input.incoming),
     onResponse: logResponse(deps.logger ?? sdkLogger()),
     ...(input.accessToken === null ? {} : { accessToken: input.accessToken }),
+    ...(input.maxRetries === undefined ? {} : { maxRetries: input.maxRetries }),
     ...(deps.fetch === undefined ? {} : { fetch: deps.fetch }),
   };
   return createVelexisClient(options).console;
@@ -197,7 +209,8 @@ export interface ConsoleRequest {
  * The console of this request (React `cache`: once per server request), for server components: the client, the staff
  * profile and the environment the request works in. Without a session it redirects to the portal; with a refresh
  * token only (the middleware could not refresh) it redirects to `/auth/refresh`, because a server component cannot
- * write the rotated tokens.
+ * write the rotated tokens, with the page's path as `?next=` (`pagePathOf`: the middleware's header, a same-origin path
+ * only, checked as `/auth/refresh` checks it; FIX-W33-OTA), so the staff member comes back to the same page.
  *
  * `console.auth.me` runs first, in the environment of the cookie. When that is `live` and the API refuses it
  * (`403 ENVIRONMENT_NOT_ALLOWED`: the OTA is no longer live, or the role became one that never opens live), or the
@@ -209,11 +222,13 @@ export interface ConsoleRequest {
  */
 export const getConsoleRequest = cache(async (): Promise<ConsoleRequest> => {
   const session = await readSession();
+  const incoming = await headers();
+  // The page to come back to after `/auth/refresh` (the middleware's `PAGE_PATH_HEADER`, a same-origin path only).
+  const here = pagePathOf(incoming);
   const { accessToken } = session;
   if (accessToken === undefined) {
-    redirectToRefresh();
+    redirectToRefresh(here);
   }
-  const incoming = await headers();
   const clientIn = (environment: StaffEnvironment): ConsoleApi =>
     createConsoleClient({ accessToken, environment, incoming });
 
@@ -224,7 +239,7 @@ export const getConsoleRequest = cache(async (): Promise<ConsoleRequest> => {
     staff = await client.auth.me();
   } catch (error) {
     if (wanted !== "live" || !isVelexisErrorLike(error) || error.code !== "ENVIRONMENT_NOT_ALLOWED") {
-      return redirectOnSessionError(error);
+      return redirectOnSessionError(error, here);
     }
   }
   if (staff !== undefined && canOpenEnvironment(staff, wanted)) {
@@ -235,7 +250,7 @@ export const getConsoleRequest = cache(async (): Promise<ConsoleRequest> => {
   try {
     staff = await testClient.auth.me();
   } catch (error) {
-    return redirectOnSessionError(error);
+    return redirectOnSessionError(error, here);
   }
   return { console: testClient, staff, environment: "test", liveRefused: true };
 });

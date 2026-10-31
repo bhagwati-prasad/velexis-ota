@@ -522,12 +522,23 @@ export class ProvisioningService {
 
   /**
    * The `seed_defaults` step inside the provisioning transaction (`db` is its connection): the settings row, the
-   * default markup rule and the template defaults of OBE-004, all `ON CONFLICT DO NOTHING`.
+   * default markup rule and the template defaults of OBE-004, all `ON CONFLICT DO NOTHING`. `timeZone` is the platform
+   * tenant's (`tenantTimeZone`, read before the transaction): the settings' first `time_zone` when the runtime knows
+   * it, else `UTC` (FIX-W35-OTA).
    */
-  async seedDefaults(db: TenantSeedDb, tenant: PlatformTenant): Promise<SeedTenantResult> {
+  async seedDefaults(
+    db: TenantSeedDb,
+    tenant: PlatformTenant,
+    timeZone?: string | null,
+  ): Promise<SeedTenantResult> {
     return seedTenant(
       db,
-      { name: tenant.name, defaultCurrency: tenant.defaultCurrency, defaultLocale: tenant.defaultLocale },
+      {
+        name: tenant.name,
+        defaultCurrency: tenant.defaultCurrency,
+        defaultLocale: tenant.defaultLocale,
+        timeZone,
+      },
       { now: this.clock.now(), templatesDir: this.options.templatesDir },
     );
   }
@@ -535,6 +546,8 @@ export class ProvisioningService {
   /** The one transaction: schema, grants, files and ledger (`migrateTenantSchema`), then seeds and the ledger read. */
   private async provisionSchema(tenant: PlatformTenant): Promise<ProvisionResult> {
     const startedAt = this.clock.now();
+    // The platform's zone, read before the transaction opens (no platform read while it holds the schema's lock).
+    const timeZone = await this.platform.tenantTimeZone(tenant.id);
     let inTransaction:
       | {
           readonly migrationsDoneAt: Date;
@@ -550,7 +563,7 @@ export class ProvisioningService {
       create: true,
       beforeCommit: async ({ db }) => {
         const migrationsDoneAt = this.clock.now();
-        const seeded = await this.seedDefaults(db, tenant);
+        const seeded = await this.seedDefaults(db, tenant, timeZone);
         const ledger = await readLedgerRows(db);
         inTransaction = { migrationsDoneAt, seedsDoneAt: this.clock.now(), seeded, ledger };
       },

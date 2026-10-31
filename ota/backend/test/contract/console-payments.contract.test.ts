@@ -9,7 +9,7 @@
 // - The internal endpoints under the `Internal` tag (`x-internal: true`): `healthLive` and `healthReady` (`x-milestone:
 //   M0`, served by HealthController since OBE-001, so no undocumented route is left) and the two M5 webhooks
 //   `receiveStripeConnectWebhook` and `receiveStripeConnectionWebhook` with the tenant rules of OADR-0010 point 4,
-//   pending for OBE-078.
+//   pending until OBE-078 served them.
 //
 // Requests are validated with the API's own validators (loadOpenApiDocument), responses with the checker every
 // integration test uses; the health answers are the API's own (the application and HealthService). Totals are asserted
@@ -401,11 +401,12 @@ describe("the 8 operations of OBE-090 (api-changes part 2 §3, §5)", () => {
     }
   });
 
-  it("lists the two webhooks (OBE-078) as pending, the payment operations no more (OBE-068), and no undocumented route [OBE-090 AC1]", () => {
+  it("lists none of the 8 operations as pending since OBE-068 and OBE-078 served theirs, and no undocumented route [OBE-090 AC1]", () => {
     // A task that implements its operations removes their entries; route parity (route-parity.contract.test.ts)
-    // then requires their handlers. The health endpoints have theirs (HealthController), and since OBE-068 the four
-    // payment operations have theirs (ConsolePaymentsController), so they are neither pending nor undocumented.
-    const implemented: ReadonlySet<Expected["task"]> = new Set(["served", "OBE-068"]);
+    // then requires their handlers. The health endpoints have theirs (HealthController), since OBE-068 the four
+    // payment operations have theirs (ConsolePaymentsController) and since OBE-078 the two M5 webhooks theirs
+    // (StripeConnectWebhookController, StripeConnectionWebhookController), so none is pending or undocumented.
+    const implemented: ReadonlySet<Expected["task"]> = new Set(["served", "OBE-068", "OBE-078"]);
     for (const { operationId, task } of OBE_090_OPERATIONS) {
       expect([operationId, PENDING_OPERATIONS[operationId as keyof typeof PENDING_OPERATIONS]]).toEqual([
         operationId,

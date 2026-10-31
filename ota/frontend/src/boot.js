@@ -6,7 +6,8 @@
 // 1. The configuration: `storefront.get` through lib/config.js (5 minutes in sessionStorage). While it loads, the live
 //    region says "Loading" (only when it takes a moment).
 // 2. Then, at once: the theme (lib/theme.js), the header (name, logo, currency selector, account menu), the footer
-//    (legal links, support contacts), the test banner and `noindex` for `environment = test`, and `auth.getSession`
+//    (legal links, the content pages of `storefront.listPages` with `showInFooter` once they arrive, their failure
+//    ignored, support contacts), the test banner and `noindex` for `environment = test`, and `auth.getSession`
 //    for the account menu (`401` = signed out; called only when the SDK has the `auth` namespace, SDK-008, and the OTA
 //    has customer accounts). A component that fails is reported and skipped: it never stops the page.
 // 3. `client` is the SDK client for the page's calls: with the currency the traveller chose in the header
@@ -398,7 +399,7 @@ export async function boot({
     : null;
   const footerRoot = /** @type {HTMLElement | null} */ (doc.querySelector("body > footer"));
   if (footerRoot) {
-    safely(() => mountFooter(footerRoot, { config }));
+    safely(() => mountFooter(footerRoot, { config, client }));
   }
   safely(() => mountTestBanner(doc.body, { environment: config.environment }));
   if (config.environment === "test") {

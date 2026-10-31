@@ -9,7 +9,11 @@
 //      row, never makes the claim skip: such a transaction can only add rows that reference the booking, never change
 //      the booking row the claim reads and writes, and the result step below waits for it) and checked again, whatever
 //      the job said: `confirmed` with an Amadeus order, not paid by airline card (OBE-051 sends those to manual review;
-//      they are never retried), paid when the tenant is suspended (OADR-0008 point 8), and due: `ticketing_status` `pending` or `failed` with `ticketing_next_attempt_at` reached, or an
+//      they are never retried), paid when the tenant is suspended (OADR-0008 point 8), no cancellation holding it
+//      (lead decision (1) of 2026-10-27, FIX-W31-OTA, cancellation-state.ts `cancellationHoldOf`: a cancellation's
+//      claim committed less than 5 minutes ago whose outcome is not recorded, `bookings.cancellation_claimed_at`, or an
+//      `undecided` DELETE without an answer; skip `cancellation_pending`, the booking stays due), and due:
+//      `ticketing_status` `pending` or `failed` with `ticketing_next_attempt_at` reached, or an
 //      `in_progress` claim older than TICKETING_CLAIM_TTL_MS (abandoned by a worker or request that stopped). The claim
 //      writes `in_progress`, `ticketing_last_attempt_at = now` (the claim's fencing token), no next attempt and, for an
 //      attempt that may issue, `ticketing_attempts + 1`; it commits before Amadeus is called. An attempt that may not
@@ -42,7 +46,10 @@
 // token, so the job skips the booking while staff issue it (claimSkip: `not_due`) and a staff issuance never runs
 // next to the job's. Like each attempt of the job it reads the order first (step 2: tickets an earlier, timed-out call
 // issued are recorded, not issued again), and its result step records the tickets with the job's own step
-// (`recordIssuedTickets`). console.bookings.cancel refuses a booking while such a claim is fresh.
+// (`recordIssuedTickets`). console.bookings.cancel refuses a booking while such a claim is fresh, and bookings.cancel
+// too since FIX-W30-OTA; the other way round, since FIX-W31-OTA both ticketing claims leave a booking alone while a
+// cancellation holds it (step 1: the job skips it, console.bookings.issue answers `409 BOOKING_NOT_MODIFIABLE` with
+// `details.reason = cancellation_pending`), so neither calls Flight Order Issue on an order being deleted.
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { AppError } from "@velexis/errors";
@@ -61,6 +68,7 @@ import { Money } from "../pricing/pricing.types";
 import type { PlatformTenant } from "../tenancy/platform-read.types";
 import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
 import { BookingsRepository, type BookingChildren } from "./bookings.repository";
+import { cancellationHoldOf, cancellationUndecidedOf } from "./cancellation-state";
 import {
   OrderRecorder,
   readCreatedOrder,
@@ -113,6 +121,10 @@ export interface TicketingBookingRow {
   readonly version: number;
   /** A payment of the booking is an airline-card payment (`payments.method = airline_card`). */
   readonly paidByAirlineCard: boolean;
+  /** `bookings.cancellation_claimed_at`: a cancellation's claim whose outcome is not recorded yet (FIX-W31-OTA). */
+  readonly cancellationClaimedAt: Date | null;
+  /** The booking's cancellation is `undecided` (a DELETE without an answer), read after the lock (FIX-W31-OTA). */
+  readonly cancellationUndecided: boolean;
 }
 
 /** The query options of the scan. */
@@ -175,7 +187,10 @@ export class TicketingRepository {
   /**
    * The booking `id`, locked `FOR NO KEY UPDATE SKIP LOCKED` (the claim, see the file header) or `FOR UPDATE` (the
    * result, which waits); `undefined` when it does not exist or, with `skipLocked`, when another claim, worker or
-   * request holds it (`FOR NO KEY UPDATE` or stronger; a `FOR KEY SHARE` holder never makes the claim skip).
+   * request holds it (`FOR NO KEY UPDATE` or stronger; a `FOR KEY SHARE` holder never makes the claim skip). Its
+   * cancellation state is read in a statement after the lock (`cancellationUndecided`), so it holds what a cancellation
+   * that held the booking committed (the flag of a DELETE without an answer is a booking event, not a column of the
+   * row); `cancellation_claimed_at` comes with the row, whose latest version the lock returns.
    */
   async lock(
     trx: TenantTransaction,
@@ -186,6 +201,7 @@ export class TicketingRepository {
       .selectFrom("bookings")
       .select((eb) => [
         "bookings.id",
+        "bookings.cancellation_claimed_at as cancellationClaimedAt",
         "bookings.environment",
         "bookings.reference",
         "bookings.status",
@@ -219,7 +235,14 @@ export class TicketingRepository {
     const row = await (
       options.skipLocked ? query.forNoKeyUpdate().skipLocked() : query.forUpdate()
     ).executeTakeFirst();
-    return row === undefined ? undefined : { ...row, paidByAirlineCard: Boolean(row.paidByAirlineCard) };
+    if (row === undefined) {
+      return undefined;
+    }
+    return {
+      ...row,
+      paidByAirlineCard: Boolean(row.paidByAirlineCard),
+      cancellationUndecided: await cancellationUndecidedOf(trx, row.id),
+    };
   }
 }
 
@@ -232,6 +255,11 @@ export type TicketingSkip =
   | "airline_card"
   /** A suspended tenant's booking without a captured amount. */
   | "unpaid"
+  /**
+   * A cancellation holds the booking (FIX-W31-OTA): its DELETE is in flight (a fresh `cancellation_claimed_at`) or
+   * got no answer and is undecided; the booking stays due and a later scan tries again once the outcome is recorded.
+   */
+  | "cancellation_pending"
   /** Not due yet, already issued, given up, waiting for staff, or freshly claimed by someone else. */
   | "not_due";
 
@@ -303,6 +331,9 @@ export function claimSkip(
   }
   if (tenantStatus === "suspended" && !new Money(row.amountPaid).greaterThan(0)) {
     return "unpaid";
+  }
+  if (cancellationHoldOf(row, now) !== undefined) {
+    return "cancellation_pending";
   }
   const retryDue =
     (row.ticketingStatus === "pending" || row.ticketingStatus === "failed") &&

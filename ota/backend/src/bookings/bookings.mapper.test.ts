@@ -492,6 +492,7 @@ describe("the cancellation of a booking (FIX-W28-CANCEL)", () => {
   const facts = (patch: Partial<CancellationFacts> = {}): CancellationFacts => ({
     cancelled: undefined,
     state: { kind: "none" },
+    claimPending: false,
     payments: new Map(),
     ...patch,
   });
@@ -691,6 +692,43 @@ describe("the cancellation of a booking (FIX-W28-CANCEL)", () => {
         }),
       ),
     ).toBeNull();
+  });
+
+  it("[FIX-W36-OTA AC2] shows a staff member's request to the airline (request_only, no DELETE) as pending by the staff", () => {
+    const request = event(CANCELLATION_EVENTS.requested, {
+      mode: "request_only",
+      cause: "request_only",
+      cancelledBy: "staff",
+      reasonCode: "customer_request",
+      requestedAt,
+      amountPaid: "125.47",
+      estimatedRefund: { amount: "0.00", currency: "EUR" },
+    });
+    const live = { id: BOOKING_ID, status: "ticketed", cancelledAt: null, amountPaid: "125.47" };
+    for (const scope of ["customer", "console"] as const) {
+      expect(
+        cancellationOf(
+          input({
+            booking: live,
+            cancelReason: null,
+            scope,
+            facts: facts({ state: cancellationStateOf([request]) }),
+          }),
+        ),
+      ).toEqual({
+        bookingId: BOOKING_ID,
+        status: "pending",
+        requestedAt,
+        cancelledAt: null,
+        cancelledBy: "staff",
+        reasonCode: "customer_request",
+        comment: null,
+        ticketsVoided: false,
+        estimatedRefund: { amount: "0.00", currency: "EUR" },
+        refund: null,
+        refundStatus: "manual_review",
+      });
+    }
   });
 
   it("[FIX-W28-CANCEL AC3] never shows staff text in customer scope, and shows a staff member's reason in console scope", () => {

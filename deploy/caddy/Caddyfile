@@ -135,16 +135,13 @@
 	}
 }
 
-# Shared rules for the two API hosts.
+# Shared rules for the two API hosts. Their request body limit is in each site block: the OTA API host raises it for
+# one route.
 (api_common) {
 	import access_log
 	import security_headers
 	import request_id
 	encode zstd gzip
-
-	request_body {
-		max_size 1MB
-	}
 
 	# Edge credentials are only ever set by the storefront site block below; drop any client copy.
 	request_header -X-Velexis-Edge
@@ -199,6 +196,18 @@
 		defer
 	}
 
+	# The OTA API's public images (/api/v1/assets/<key>/<id>.<ext>, getPublicAsset; OADR-0012 point 3, lead decision
+	# (2b) of 2026-10-30) keep the API's own `Content-Security-Policy: default-src 'none'` instead of the storefront
+	# CSP, so an image opened directly loads and runs nothing. The storefront's header block replaces any upstream CSP,
+	# so this block sets the API's value again (PUBLIC_ASSET_CSP of ota/backend/src/storefront/public-assets.controller.ts:
+	# change both together): as with @pay_airline, it sorts before the storefront's header block and applies after it.
+	# The other storefront headers stay, and every other /api/* answer keeps the storefront CSP.
+	@public_asset path /api/v1/assets/*
+	header @public_asset {
+		Content-Security-Policy "default-src 'none'"
+		defer
+	}
+
 	# Internal endpoints and readiness details of the OTA API are never public, as on the API hosts. This must be
 	# a handle of its own before `handle /api/*`: a plain `respond` sorts after `handle` and would never run.
 	@api_private {
@@ -228,6 +237,11 @@
 		header @hashed Cache-Control "public, max-age=31536000, immutable"
 		@not_hashed not path /assets/*
 		header @not_hashed Cache-Control "no-cache"
+		# The OTA's content pages (OADR-0015 point 4, OADR-0012 point 5): /p/<slug> is served by p.html, which reads the
+		# slug from its address and asks the OTA API for the page (an unknown slug shows the 404 content there, with
+		# noindex). `rewrite` runs before `try_files` (Caddy's directive order); the dev server and `vite preview` do the
+		# same (ota/frontend/scripts/vite-plugins.js).
+		rewrite /p/* /p.html
 		try_files {path} {path}.html {path}/index.html
 		file_server
 	}
@@ -277,6 +291,9 @@ admin.{$PLATFORM_BASE_DOMAIN:platform.example.com} {
 # Platform API (platform/backend) incl. /webhooks/stripe/billing. /internal/* is blocked by api_common.
 api.{$PLATFORM_BASE_DOMAIN:platform.example.com} {
 	import api_common
+	request_body {
+		max_size 1MB
+	}
 	reverse_proxy 127.0.0.1:3100
 }
 
@@ -298,6 +315,31 @@ admin.{$STOREFRONT_BASE_DOMAIN:ota.example.com} {
 # OTA API for SDK users with pk_/sk_ keys, and the Stripe payment webhooks.
 api.{$STOREFRONT_BASE_DOMAIN:ota.example.com} {
 	import api_common
+
+	# Request bodies up to 1MB (1,000,000 bytes), except the storefront asset upload (POST /v1/console/settings/assets,
+	# consoleUploadStorefrontAsset, OADR-0012 point 2; lead decision (2c) of 2026-10-30): a file of up to 1 MiB in a
+	# multipart body, which the API itself refuses above 1 MiB + 16 KiB (1,064,960 bytes: ASSET_UPLOAD_BODY_LIMIT_BYTES
+	# of ota/backend/src/settings/assets.service.ts; change both together), so the edge lets up to 1100KiB (1,126,400
+	# bytes) through on that route only. Two request_body directives that both match nest, and the smaller limit wins:
+	# the two matchers are each other's negation, so exactly one applies to every request. The storefront's /api keeps
+	# its 256KB, and the OTA admin calls the API on the loopback.
+	@asset_upload {
+		method POST
+		path /v1/console/settings/assets
+	}
+	request_body @asset_upload {
+		max_size 1100KiB
+	}
+	@not_asset_upload {
+		not {
+			method POST
+			path /v1/console/settings/assets
+		}
+	}
+	request_body @not_asset_upload {
+		max_size 1MB
+	}
+
 	reverse_proxy 127.0.0.1:4000
 }
 

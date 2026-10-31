@@ -25,6 +25,10 @@
 // Stripe's return adds `payment_intent`, `payment_intent_client_secret` and `redirect_status` to the address; the page
 // module takes them out with `history.replaceState` before boot() runs, so no request of the page carries the client
 // secret in its `Referer`, and they stay out of the history and bookmarks even when boot() shows a full-page state.
+// The requests the browser makes before this module runs (its own script, the module preloads, the stylesheet) still
+// see that address: complete.html sets `<meta name="referrer" content="strict-origin">` first in its head (as
+// account/verify.html does, FIX-W30-OTA), so their `Referer` is the origin alone. Not `no-referrer`: the SDK's
+// `mode: "same-origin"` writes would then send `Origin: null`, which the API's CSRF check refuses.
 
 import { boot, renderState } from "../boot.js";
 import { mount as mountLiveRegion } from "../components/live-region.js";
