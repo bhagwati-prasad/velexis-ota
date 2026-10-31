@@ -605,6 +605,33 @@ const COVERAGE: readonly CoverageRow[] = [
     },
   },
   {
+    // PBE-054: the owner's live request inserts the live connection without an office (flows/amadeus-connection.md
+    // §C); the OTA backend may hold a cached "no live connection". The plan has live mode and the switch is on in
+    // this file's application; Velexis's live account is this row's own (one account per environment).
+    change: "live connection requested (the OTA's live Amadeus connection, waiting for an office)",
+    operationId: "requestLiveAmadeus",
+    publishes: ["connection"],
+    async arrange() {
+      await insertAmadeusAccount(pool, {
+        id: mine(ids.new("ama")),
+        environment: "live",
+        base_url: "https://travel.api.amadeus.com",
+      });
+      const plan = await insertPlan(pool, {
+        code: planCode(),
+        limits: { staffSeats: 5, apiKeys: 10, customDomains: 0, liveMode: true },
+      });
+      const owner = await person();
+      const { tenant } = await ota({ tenant: { plan_code: plan.code }, members: [[owner, "owner"]] });
+      const headers = await portal(owner.id);
+      return {
+        send: () => t.http.post(`/v1/tenants/${tenant.id}/amadeus-connections/live/request`).set(headers),
+        status: 202,
+        events: [{ v: 1, type: "connection", tenantId: tenant.id }],
+      };
+    },
+  },
+  {
     // PBE-040: the owner's settings of the Amadeus connection (flows/amadeus-connection.md §E).
     change: "Amadeus connection settings (office defaults, ticketing defaults, monitored queues)",
     operationId: "updateAmadeusConnection",
@@ -943,6 +970,32 @@ const COVERAGE: readonly CoverageRow[] = [
       };
     },
   },
+  {
+    // PBE-054: the OTA backend stops serving the OTA's old orders through the office (PADR-0012 items 4 and 5).
+    change: "office released to the pool",
+    operationId: "adminReleaseAmadeusOffice",
+    publishes: ["amadeus_account"],
+    async arrange() {
+      const { tenant } = await ota();
+      const office = await insertAmadeusOffice(pool, amadeusAccount, {
+        id: ids.new("amo"),
+        status: "releasing",
+        assigned_tenant_id: tenant.id,
+        assigned_at: daysAfterNow(-90),
+        release_requested_at: daysAfterNow(-30),
+      });
+      const headers = await adminHeaders();
+      return {
+        send: () =>
+          t.http
+            .post(`/v1/admin/amadeus-offices/${office.id}/release`)
+            .set(headers)
+            .send({ confirmNoOpenBookings: true, reason: REASON }),
+        status: 200,
+        events: [{ v: 1, type: "amadeus_account", id: amadeusAccount.id }],
+      };
+    },
+  },
 
   // ---- domain: verified, failed, removed, primary changed ---------------------------------------------------------
   {
@@ -1055,8 +1108,11 @@ const COVERAGE: readonly CoverageRow[] = [
 
 beforeAll(async () => {
   // FEATURE_CUSTOM_DOMAINS on (with the storefront address it requires, a documentation address of RFC 5737), so the
-  // row of makeDomainPrimary, `x-feature: custom_domains` since FIX-W38-PLATFORM, reaches its handler.
-  t = await createTestApp({ env: { FEATURE_CUSTOM_DOMAINS: "true", STOREFRONT_IPV4: "203.0.113.10" } });
+  // row of makeDomainPrimary, `x-feature: custom_domains` since FIX-W38-PLATFORM, reaches its handler, and
+  // FEATURE_LIVE_SWITCH on, so the row of requestLiveAmadeus (`x-feature: live_switch`, PBE-054) reaches its handler.
+  t = await createTestApp({
+    env: { FEATURE_CUSTOM_DOMAINS: "true", STOREFRONT_IPV4: "203.0.113.10", FEATURE_LIVE_SWITCH: "true" },
+  });
   pool = t.app.get<PlatformPool>(PLATFORM_POOL);
   ids = t.app.get(IdGenerator);
   tokens = t.app.get(TokenService);

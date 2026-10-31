@@ -10,6 +10,9 @@
 // `lockOldestAvailable` (`FOR UPDATE SKIP LOCKED`, PBE-022). `startReleasing` moves the OTA's assigned offices of an
 // environment to `releasing` when its own credentials are applied (PBE-053), under the connection's lock. Reads for
 // the API (`AmadeusOfficeView`) add the environment (from the account) and the key of the assigned tenant.
+//
+// `release` returns an `assigned` or `releasing` office to the pool (PBE-054, `adminReleaseAmadeusOffice`, PADR-0012
+// item 5): `available`, no tenant, `released_at`.
 import { Inject, Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -241,6 +244,29 @@ export class AmadeusOfficesRepository {
       .set((eb) => ({ status: "retired", version: eb("version", "+", 1), updated_at: now }))
       .where("id", "=", id)
       .where("status", "=", "available")
+      .returning("id")
+      .executeTakeFirstOrThrow();
+  }
+
+  /**
+   * Returns a row locked by `lock` (and found `assigned` or `releasing`) to the pool (PBE-054, PADR-0012 item 5):
+   * `available`, no tenant, no assignment or release request time, `released_at = now`, `version + 1`. Throws as
+   * `assign` does when the row is in neither status after all.
+   */
+  async release(trx: PlatformTransaction, id: string, now: Date): Promise<void> {
+    await trx
+      .updateTable("platform.amadeus_offices")
+      .set((eb) => ({
+        status: "available",
+        assigned_tenant_id: null,
+        assigned_at: null,
+        release_requested_at: null,
+        released_at: now,
+        version: eb("version", "+", 1),
+        updated_at: now,
+      }))
+      .where("id", "=", id)
+      .where("status", "in", ["assigned", "releasing"])
       .returning("id")
       .executeTakeFirstOrThrow();
   }

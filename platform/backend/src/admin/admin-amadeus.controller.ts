@@ -1,10 +1,10 @@
 // The Velexis Amadeus routes of the platform admin (platform/docs/api-inventory-admin.md §5, PBE-020): the shared
 // accounts under `/v1/admin/amadeus-accounts` (list, create, update, verify again) and the office pool under
-// `/v1/admin/amadeus-offices` (list, add in bulk, notes, assign, retire). Every operation is `x-scope:
-// platform_admin`, so AdminAuthGuard checks the admin token and re-reads the account first; RecentMfaGuard adds the
-// step-up of `adminCreateAmadeusAccount` (`x-mfa-step-up`), and AmadeusAccountsService the one of an update that
-// changes the credentials. Thin: each handler binds its operation, reads the validated request and makes one service
-// call. The client secret travels in the request body only; nothing here logs a body, and no answer holds it.
+// `/v1/admin/amadeus-offices` (list, add in bulk, notes, assign, release since PBE-054, retire). Every operation is
+// `x-scope: platform_admin`, so AdminAuthGuard checks the admin token and re-reads the account first; RecentMfaGuard
+// adds the step-up of `adminCreateAmadeusAccount` (`x-mfa-step-up`), and AmadeusAccountsService the one of an update
+// that changes the credentials. Thin: each handler binds its operation, reads the validated request and makes one
+// service call. The client secret travels in the request body only; nothing here logs a body, and no answer holds it.
 import { Controller, Get, HttpCode, Patch, Post, Res } from "@nestjs/common";
 import type { AccessTokenClaims } from "../auth/token.service";
 import { AccessToken } from "../common/auth/decorators";
@@ -27,6 +27,7 @@ import {
   type AmadeusOfficesAdded,
   type AssignAmadeusOfficeRequest,
   type ListAmadeusOfficesQuery,
+  type ReleaseAmadeusOfficeRequest,
   type UpdateAmadeusOfficeRequest,
 } from "../supplier-connections/amadeus-offices.service";
 
@@ -136,6 +137,17 @@ export class AdminAmadeusController {
     @Validated("body") body: AssignAmadeusOfficeRequest,
   ): Promise<AmadeusOfficeAssigned> {
     return this.offices.assign(token, path["officeRowId"] as string, body);
+  }
+
+  @Post("amadeus-offices/:officeRowId/release")
+  @HttpCode(200)
+  @OpenApiOperation("adminReleaseAmadeusOffice")
+  adminReleaseAmadeusOffice(
+    @AccessToken() token: AccessTokenClaims,
+    @Validated("path") path: RequestParameters,
+    @Validated("body") body: ReleaseAmadeusOfficeRequest,
+  ): Promise<AdminAmadeusOffice> {
+    return this.offices.release(token, path["officeRowId"] as string, body);
   }
 
   @Post("amadeus-offices/:officeRowId/retire")

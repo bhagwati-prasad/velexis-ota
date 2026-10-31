@@ -10,6 +10,9 @@
 //   credentials `submitAmadeusCredentials`, PBE-053, over AmadeusCredentialsService, which submits through
 //   CredentialSubmissionsService of CredentialSubmissionsModule; the settings update `updateAmadeusConnection`,
 //   PBE-040, over ConnectionsService).
+// - Since PBE-054 it also holds the live office (LiveOfficeService): the portal's `requestLiveAmadeus` on
+//   ConnectionsController, and the `amadeus.live_ready` e-mail that AmadeusOfficesService queues when it assigns a live
+//   office (NotificationsModule's OutboxService, as the ops alerts of the request).
 // - `SupplierConnectionsModule.forWorker()` (WorkerModule) adds the worker's side: the Amadeus token check
 //   (AmadeusOAuthGateway), the one processor of `platform-connections` (VerificationProcessor, which runs
 //   `credentials.verify` with CredentialsVerifyProcessor of `CredentialSubmissionsModule.forWorker()`, PBE-052), the
@@ -18,7 +21,8 @@
 //   processor (PoolLevelScheduler), in a module of its own, so the worker gets none of the admin's services.
 //
 // It uses the global CommonModule (Clock, IdGenerator, PLATFORM_DB, EnvelopeService; AccountAuthStates in the API),
-// RedisModule (InvalidationPublisher), AuditModule and NotificationsModule (the ops alert of the pool level).
+// RedisModule (InvalidationPublisher), AuditModule and NotificationsModule (the ops alert of the pool level; in the API
+// the live office's e-mails, PBE-054).
 import { Module, type DynamicModule } from "@nestjs/common";
 import { AuditModule } from "../audit/audit.module";
 import { CredentialSubmissionsModule } from "../common/credentials/credential-submissions.module";
@@ -33,6 +37,7 @@ import { AmadeusOfficesRepository } from "./amadeus-offices.repository";
 import { AmadeusOfficesService } from "./amadeus-offices.service";
 import { ConnectionsController } from "./connections.controller";
 import { ConnectionsService } from "./connections.service";
+import { LiveOfficeService } from "./live-office.service";
 import { PoolLevelScheduler } from "./pool-level.scheduler";
 import { SupplierConnectionsRepository } from "./supplier-connections.repository";
 import { VerificationProcessor } from "./verification.processor";
@@ -66,13 +71,14 @@ export class SupplierConnectionsModule {
   static forApi(): DynamicModule {
     return {
       module: SupplierConnectionsModule,
-      imports: [AuditModule, QueuesModule, CredentialSubmissionsModule],
+      imports: [AuditModule, NotificationsModule, QueuesModule, CredentialSubmissionsModule],
       controllers: [ConnectionsController],
       providers: [
         AmadeusAccountsService,
         AmadeusOfficesService,
         ConnectionsService,
         AmadeusCredentialsService,
+        LiveOfficeService,
       ],
       exports: [AmadeusAccountsService, AmadeusOfficesService],
     };

@@ -41,9 +41,8 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   // since PBE-044, getPayoutAccount and setPayoutAccount since PBE-058, startStripeConnect and completeStripeConnect
   // since PBE-055, listSettlements, getSettlement and downloadSettlementLines since PBE-060, addDomain, removeDomain and
   // makeDomainPrimary since PBE-049, getCredentialSubmission since PBE-052, checkDomain since PBE-050,
-  // submitAmadeusCredentials since PBE-053.
+  // submitAmadeusCredentials since PBE-053, requestLiveAmadeus since PBE-054.
   { operationId: "goLive", task: "PBE-061" },
-  { operationId: "requestLiveAmadeus", task: "PBE-054" },
   { operationId: "submitStripeApiKeys", task: "PBE-057" },
   { operationId: "useVelexisPayments", task: "PBE-057" },
   { operationId: "listInvoices", task: "PBE-046" },
@@ -53,13 +52,12 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   // implements its M5 part. receiveStripeBillingEvent is bound since PBE-043, the three payout account operations
   // (adminGetPayoutAccount, adminRevealPayoutAccount, adminReviewPayoutAccount) since PBE-058, adminGenerateSettlements
   // since PBE-059, the settlement review (list, detail, lines and their CSV, adjustments, approval, payment, void) since
-  // PBE-060, receiveStripeConnectAccountEvent since PBE-056.
+  // PBE-060, receiveStripeConnectAccountEvent since PBE-056, adminReleaseAmadeusOffice since PBE-054.
   { operationId: "adminCheckPlanPrices", task: "PBE-048" },
   { operationId: "adminResyncSubscription", task: "PBE-048" },
   { operationId: "adminListInvoices", task: "PBE-048" },
   { operationId: "adminListStripeEvents", task: "PBE-048" },
   { operationId: "adminReprocessStripeEvent", task: "PBE-048" },
-  { operationId: "adminReleaseAmadeusOffice", task: "PBE-054" },
   { operationId: "adminListDomains", task: "PBE-051" },
   { operationId: "adminRecheckDomain", task: "PBE-051" },
   { operationId: "adminRemoveDomain", task: "PBE-051" },

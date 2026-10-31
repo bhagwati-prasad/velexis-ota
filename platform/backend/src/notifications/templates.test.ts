@@ -158,6 +158,16 @@ const SAMPLES: Readonly<Record<EmailTemplateKey, EmailVariables>> = {
     },
     secretData: {},
   },
+  "amadeus.live_ready": {
+    data: {
+      fullName: "Ana Lima",
+      tenantName: "Acme Travel",
+      tenantKey: "acme",
+      officeId: "OSL1A0101",
+      amadeusUrl: "https://platform.example.com/otas/ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/amadeus",
+    },
+    secretData: {},
+  },
 };
 
 const templates = EmailTemplates.load();
@@ -216,6 +226,8 @@ describe("e-mail templates", () => {
         // M5: the end of a custom domain's DNS verification (PBE-050).
         "domain.verified",
         "domain.failed",
+        // M5: a live office assigned after the owner's request (PBE-054).
+        "amadeus.live_ready",
       ].sort(),
     );
     for (const key of EMAIL_TEMPLATE_KEYS) {

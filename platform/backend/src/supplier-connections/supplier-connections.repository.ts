@@ -12,6 +12,9 @@
 //
 // `listForTenant` reads a tenant's connections without the ciphertext column (the portal's list, PBE-027), and
 // `toAmadeusConnection` is the API's `AmadeusConnection` of a row: never the client secret or any ciphertext.
+// `tenantForLiveRequest` (the tenant `FOR SHARE` with its plan's limits) and `activeOwners` are the live office's reads
+// (PBE-054: `requestLiveAmadeus`, and the `amadeus.live_ready` e-mail of a live assignment), read only, as the
+// operations' `x-platform-tables` say.
 // `setStatus` is the platform admin's switch of a connection (PBE-030, `adminSetConnectionStatus`).
 // `tenantStatusForShare`, `lockViewForTenant` and `updateSettings` are the portal's settings update (PBE-040,
 // `updateAmadeusConnection`): the tenant's row `FOR SHARE` first, then the connection `FOR UPDATE` without the
@@ -65,7 +68,24 @@ const SUPPLIER_CONNECTION_VIEW_COLUMNS = [
 export interface ConnectionTenant {
   readonly id: string;
   readonly key: string;
+  readonly name: string;
   readonly status: string;
+}
+
+/** A tenant as a live office request needs it (PBE-054): its status, name and key, and its plan's limits. */
+export interface LiveRequestTenant {
+  readonly status: string;
+  readonly key: string;
+  readonly name: string;
+  /** `plans.limits` of the tenant's plan (`liveMode` among them); `null` when the plan row is missing. */
+  readonly limits: unknown;
+}
+
+/** An active owner of a tenant, with the e-mail address and name the live-ready e-mail needs (PBE-054). */
+export interface ConnectionOwner {
+  readonly account_id: string;
+  readonly email: string;
+  readonly full_name: string;
 }
 
 /** The office fields of a `velexis` connection served by one office (flow §B, PADR-0012). */
@@ -149,11 +169,11 @@ export interface SupplierConnectionSettings {
 export class SupplierConnectionsRepository {
   constructor(@Inject(PLATFORM_DB) private readonly db: PlatformDb) {}
 
-  /** The tenant's id, key and status, read in `trx`; `undefined` when there is no such tenant. */
+  /** The tenant's id, key, name and status, read in `trx`; `undefined` when there is no such tenant. */
   async tenant(trx: PlatformTransaction, tenantId: string): Promise<ConnectionTenant | undefined> {
     return trx
       .selectFrom("platform.tenants")
-      .select(["id", "key", "status"])
+      .select(["id", "key", "name", "status"])
       .where("id", "=", tenantId)
       .executeTakeFirst();
   }
@@ -453,6 +473,43 @@ export class SupplierConnectionsRepository {
       .where("id", "=", id)
       .returning(SUPPLIER_CONNECTION_VIEW_COLUMNS)
       .executeTakeFirstOrThrow();
+  }
+
+  /**
+   * The tenant `tenantId` with its plan's `limits`, read in `trx` with `FOR SHARE` on the tenant's row, so the tenant
+   * cannot be suspended (or change otherwise) until `trx` ends (PBE-054, `requestLiveAmadeus`: the tenant first, then
+   * its connection lock); `undefined` when there is no such tenant.
+   */
+  async tenantForLiveRequest(
+    trx: PlatformTransaction,
+    tenantId: string,
+  ): Promise<LiveRequestTenant | undefined> {
+    return trx
+      .selectFrom("platform.tenants as t")
+      .leftJoin("platform.plans as p", "p.code", "t.plan_code")
+      .select(["t.status", "t.key", "t.name", "p.limits"])
+      .where("t.id", "=", tenantId)
+      .forShare("t")
+      .executeTakeFirst();
+  }
+
+  /**
+   * The active owners of `tenantId`, oldest membership first, with their e-mail address and name (read only), in
+   * `trx`: the recipients of the live-ready e-mail (PBE-054). An account that is disabled or deleted gets no e-mail.
+   */
+  async activeOwners(trx: PlatformTransaction, tenantId: string): Promise<ConnectionOwner[]> {
+    return trx
+      .selectFrom("platform.tenant_memberships as m")
+      .innerJoin("platform.accounts as a", "a.id", "m.account_id")
+      .select(["m.account_id", "a.email", "a.full_name"])
+      .where("m.tenant_id", "=", tenantId)
+      .where("m.role", "=", "owner")
+      .where("m.status", "=", "active")
+      .where("a.status", "not in", ["disabled", "deleted"])
+      .where("a.deleted_at", "is", null)
+      .orderBy("m.created_at")
+      .orderBy("m.id")
+      .execute();
   }
 }
 

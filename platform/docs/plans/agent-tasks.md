@@ -1609,7 +1609,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int supplier-connections`
 - **Note:** 2026-10-31 (lead decision (2f) of 2026-10-31, second batch, recorded by FIX-W38-PLATFORM): `CredentialSubmissionsService.submit()` of PBE-052 writes the kind's `amadeus.credentials_submitted` audit row itself, so step 1 does not write it again; the job writes `amadeus.credentials_applied` and `amadeus.credentials_rejected` (step 2 only adds what its `apply` changed, through the verifier's answer). Register the verifier in PBE-052's registry: `CredentialVerifiers.register("amadeus", verifier)` from the `onModuleInit` of a worker module that imports `CredentialSubmissionsModule.forWorker()` (`common/credentials/credentials-verify.processor.ts`, the one static worker module); never a registry or processor of your own. A sweep exists (`credentials.sweep` on `platform-connections`, every 5 minutes, `common/credentials/credentials-sweep.ts`): it queues `credentials.verify` again for a submission `pending` for more than 10 minutes and fails one `verifying` for more than an hour with `PROVIDER_UNAVAILABLE`, its secret erased, so the verifier needs no timeout handling of its own beyond its HTTP timeout. `credential-submissions.int.test.ts` uses its own test registry, which sets the real verifier aside, so registering it in the worker graph needs no change there.
 
-### PBE-054 · Implement live office requests and office release
+### PBE-054 · Implement live office requests and office release ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-042, PBE-020

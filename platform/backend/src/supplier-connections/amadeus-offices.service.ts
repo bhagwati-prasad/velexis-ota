@@ -1,8 +1,7 @@
 // The Amadeus office pool of the platform admin (platform/docs/api-inventory-admin.md §5, flows/amadeus-connection.md
-// §A and §C, PADR-0012; scope PF-90): list, add in bulk, edit notes, assign to an OTA and retire. Who may call them is
-// AdminAuthGuard's (`platform_admin`). This service owns the transactions, their audit rows (`actor_type =
-// 'platform_admin'`) and the invalidations after the commit. Release (`adminReleaseAmadeusOffice`) comes in M5
-// (PBE-054).
+// §A, §C and §D item 5, PADR-0012; scope PF-51, PF-90): list, add in bulk, edit notes, assign to an OTA, release to the
+// pool (since PBE-054) and retire. Who may call them is AdminAuthGuard's (`platform_admin`). This service owns the
+// transactions, their audit rows (`actor_type = 'platform_admin'`) and the invalidations after the commit.
 //
 // - Add: the ids are upper-cased (the OpenAPI document checks 9 letters or digits); an id that the account's pool holds
 //   already, or that repeats an earlier id of the request, is skipped, and both lists keep the request order. One
@@ -14,7 +13,19 @@
 //   has an assigned office of that account (`office_already_assigned`). The office becomes `assigned`, and the OTA's
 //   `velexis` connection of the environment is created, or completed, with `office_ids = {office}`, the default,
 //   queuing and owner offices set to it and `status = 'active'`. After the commit: `connection` and `amadeus_account`
-//   invalidations. A tenant that is gone (`deleted`, `deprovisioning`) or unknown answers `404`.
+//   invalidations. A tenant that is gone (`deleted`, `deprovisioning`) or unknown answers `404`. A live office (M5,
+//   PBE-054) completes the live connection the owner requested (`requestLiveAmadeus`, LiveOfficeService) or creates it,
+//   and the owners get the e-mail `amadeus.live_ready` in the same transaction (`LiveOfficeService.notifyLiveReady`).
+// - Release (M5, PBE-054; PADR-0012 item 5): the body carries `confirmNoOpenBookings: true` and the admin's reason
+//   (5–500 characters, trimmed by the validation interceptor). A `releasing` office (the OTA moved to its own
+//   credentials) is released. An `assigned` office is released only when it backs no active `velexis` connection of its
+//   OTA: under the tenant's connection lock of the office's environment, taken before the office row (the order of the
+//   own-credential apply, PBE-053, which moves the office to `releasing` under that lock), an `active` `velexis`
+//   connection on the office's account whose `office_ids` hold the office answers `409 CONFLICT`
+//   (`connection_active`); a disabled one (PADR-0012 item 8) does not. An `available` or `retired` office answers `409
+//   CONFLICT` (`not_assigned`). The office becomes `available` with `released_at` and no tenant, with the audit row
+//   `amadeus_office.released` (the reason, the confirmation and the OTA it left), and an `amadeus_account`
+//   invalidation after the commit (the OTA backend stops using the office for that OTA's old orders).
 // - Retire: only an `available` office (`409 CONFLICT`, `not_available`), with the admin's reason in the audit row;
 //   `amadeus_account` invalidation (an office status changed, platform architecture §6.3).
 import { Inject, Injectable } from "@nestjs/common";
@@ -37,7 +48,12 @@ import {
   type AmadeusOfficeInsert,
   type AmadeusOfficeView,
 } from "./amadeus-offices.repository";
-import { SupplierConnectionsRepository, toAmadeusConnection } from "./supplier-connections.repository";
+import { LIVE_ENVIRONMENT, LiveOfficeService } from "./live-office.service";
+import {
+  SupplierConnectionsRepository,
+  toAmadeusConnection,
+  type SupplierConnectionRecord,
+} from "./supplier-connections.repository";
 
 export type AdminAmadeusOffice = components["schemas"]["AdminAmadeusOffice"];
 export type AdminAmadeusOfficeList = components["schemas"]["AdminAmadeusOfficeList"];
@@ -47,6 +63,7 @@ export type UpdateAmadeusOfficeRequest = components["schemas"]["UpdateAmadeusOff
 export type AssignAmadeusOfficeRequest = components["schemas"]["AssignAmadeusOfficeRequest"];
 export type AmadeusOfficeAssigned = components["schemas"]["AmadeusOfficeAssigned"];
 export type AdminReasonRequest = components["schemas"]["AdminReasonRequest"];
+export type ReleaseAmadeusOfficeRequest = components["schemas"]["ReleaseAmadeusOfficeRequest"];
 
 /** The query of `adminListAmadeusOffices`, as the validation interceptor coerced it (`limit` defaults to 50). */
 export interface ListAmadeusOfficesQuery {
@@ -141,6 +158,7 @@ export class AmadeusOfficesService {
     private readonly offices: AmadeusOfficesRepository,
     private readonly accounts: AmadeusAccountsRepository,
     private readonly connections: SupplierConnectionsRepository,
+    private readonly liveOffices: LiveOfficeService,
     private readonly audit: AuditService,
     private readonly invalidations: InvalidationPublisher,
     private readonly ids: IdGenerator,
@@ -325,12 +343,97 @@ export class AmadeusOfficesService {
           connectionCreated: existing === undefined,
         },
       });
+      if (environment === LIVE_ENVIRONMENT) {
+        await this.liveOffices.notifyLiveReady(trx, {
+          tenantId,
+          tenantName: tenant.name,
+          tenantKey: tenant.key,
+          officeId: office.office_id,
+          connectionId: connection.id,
+          connectionVersion: connection.version,
+        });
+      }
       this.invalidations.publishAfterCommit(trx, { v: 1, type: "connection", tenantId });
       this.invalidations.publishAfterCommit(trx, { v: 1, type: "amadeus_account", id: account.id });
       return {
         office: toAdminAmadeusOffice(await this.view(trx, office.id)),
         connection: toAmadeusConnection(connection),
       };
+    });
+  }
+
+  /**
+   * adminReleaseAmadeusOffice: a `releasing` office, or an `assigned` one that backs no active `velexis` connection,
+   * back to the pool, with the reason and the confirmation in the audit row (see the file header).
+   */
+  async release(
+    claims: Pick<AccessTokenClaims, "sub">,
+    officeRowId: string,
+    request: ReleaseAmadeusOfficeRequest,
+  ): Promise<AdminAmadeusOffice> {
+    const now = this.clock.now();
+    return runInTransaction(this.db, async (trx) => {
+      // An assigned office's tenant connection is locked before the office row: the own-credential apply (PBE-053)
+      // takes them in that order (it moves the OTA's assigned office to `releasing` under the connection's lock), so
+      // the two never wait for each other in a cycle. The office is read again once locked.
+      const seen = await this.offices.findView(officeRowId, trx);
+      if (seen === undefined) {
+        throw new AppError("NOT_FOUND");
+      }
+      const locked =
+        seen.status === "assigned" && seen.assigned_tenant_id !== null
+          ? await this.lockedConnection(trx, seen.assigned_tenant_id, seen.environment as AmadeusEnvironment)
+          : undefined;
+      const office = await this.lockedOffice(trx, officeRowId);
+      const tenantId = office.assigned_tenant_id;
+      if ((office.status !== "assigned" && office.status !== "releasing") || tenantId === null) {
+        throw new AppError("CONFLICT", { details: { reason: "not_assigned" } });
+      }
+      const account = await this.accounts.find(office.amadeus_account_id, trx);
+      if (account === undefined) {
+        throw new AppError("NOT_FOUND");
+      }
+      const environment = account.environment as AmadeusEnvironment;
+      if (office.status === "assigned") {
+        // The office changed hands between the read and the lock only when it was released and assigned again
+        // meanwhile; its new tenant's connection is then locked after the office row.
+        const { connection } =
+          locked?.tenantId === tenantId ? locked : await this.lockedConnection(trx, tenantId, environment);
+        if (
+          connection !== undefined &&
+          connection.credential_source === "velexis" &&
+          connection.status === "active" &&
+          connection.amadeus_account_id === account.id &&
+          connection.office_ids.includes(office.office_id)
+        ) {
+          throw new AppError("CONFLICT", { details: { reason: "connection_active" } });
+        }
+      }
+
+      await this.offices.release(trx, office.id, now);
+      await this.audit.record(trx, {
+        actorType: "platform_admin",
+        actorAccountId: claims.sub,
+        action: "amadeus_office.released",
+        targetType: "amadeus_office",
+        targetId: office.id,
+        tenantId,
+        before: {
+          status: office.status,
+          tenantId,
+          assignedAt: office.assigned_at?.toISOString() ?? null,
+          releaseRequestedAt: office.release_requested_at?.toISOString() ?? null,
+        },
+        after: { status: "available", tenantId: null, releasedAt: now.toISOString() },
+        details: {
+          officeId: office.office_id,
+          environment,
+          reason: request.reason,
+          confirmNoOpenBookings: request.confirmNoOpenBookings,
+        },
+      });
+      this.invalidations.publishAfterCommit(trx, { v: 1, type: "amadeus_account", id: account.id });
+      return toAdminAmadeusOffice(await this.view(trx, office.id));
     });
   }
 
@@ -363,6 +466,19 @@ export class AmadeusOfficesService {
       });
       return toAdminAmadeusOffice(await this.view(trx, office.id));
     });
+  }
+
+  /**
+   * The tenant's Amadeus connection of `environment` (or none), locked for the rest of `trx` under the tenant's
+   * connection lock of that environment, as an assignment and the own-credential apply lock it.
+   */
+  private async lockedConnection(
+    trx: PlatformTransaction,
+    tenantId: string,
+    environment: AmadeusEnvironment,
+  ): Promise<{ tenantId: string; connection: SupplierConnectionRecord | undefined }> {
+    await this.connections.lockTenantEnvironment(trx, tenantId, environment);
+    return { tenantId, connection: await this.connections.lockForTenant(trx, tenantId, environment) };
   }
 
   /** The office `officeRowId`, locked; `404 NOT_FOUND` when there is none. */

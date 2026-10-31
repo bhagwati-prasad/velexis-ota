@@ -43,6 +43,9 @@ export const EMAIL_TEMPLATE_KEYS = [
   // M5: the DNS verification of a custom domain ended (PBE-050, `domain.verify`; PADR-0013 item 5).
   "domain.verified",
   "domain.failed",
+  // M5: a platform admin assigned the live office the owner requested (PBE-054, adminAssignAmadeusOffice; PADR-0013
+  // item 5, note of 2026-10-31).
+  "amadeus.live_ready",
 ] as const;
 
 /** A key of EMAIL_TEMPLATE_KEYS. */
@@ -158,6 +161,10 @@ export const EMAIL_TEMPLATES: Readonly<Record<EmailTemplateKey, EmailTemplateDef
     "reason",
     "domainsUrl",
   ]),
+  "amadeus.live_ready": definition(
+    "A platform admin assigned a live Amadeus office and the live connection is active (to the owners)",
+    ["fullName", "tenantName", "tenantKey", "officeId", "amadeusUrl"],
+  ),
 });
 
 /** Variables every template may use, filled in by the renderer from the configuration (PADR-0013 item 7). */
