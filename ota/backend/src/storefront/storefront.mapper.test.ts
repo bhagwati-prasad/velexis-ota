@@ -7,6 +7,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { OTA_OPENAPI_DOCUMENT } from "../common/http/openapi-validation.interceptor";
 import { newId } from "../common/ids";
+import type { PlatformStorefrontDomain } from "../tenancy/platform-read.repository";
 import {
   acceptedLocales,
   AIRLINE_CARD_NOTICES,
@@ -117,6 +118,7 @@ function source(
     tenantName: "Alpha Travel Holding",
     environment: "test",
     storefrontBaseDomain: "ota.example.com",
+    customDomains: [],
     settings,
     assets: [],
     currencies: CURRENCIES,
@@ -566,6 +568,119 @@ describe("a configured tenant", () => {
     );
 
     expect(entryWithWrongKind.assets.favicon).toBeNull();
+  });
+});
+
+describe("the storefront hosts (FIX-W38-OTA, lead decisions (2e) and (2g) of 2026-10-31, second batch)", () => {
+  const VERIFIED = "2026-10-20T08:00:00.000Z";
+  const custom = (
+    hostname: string,
+    values: Partial<Omit<PlatformStorefrontDomain, "hostname">> = {},
+  ): PlatformStorefrontDomain => ({
+    hostname,
+    kind: "custom",
+    isPrimary: false,
+    tlsStatus: "issued",
+    verifiedAt: VERIFIED,
+    ...values,
+  });
+  /** A tenant whose privacy link names a content page and whose terms an external page. */
+  const settings = seededRow({
+    legalLinks: [
+      { kind: "privacy", pageSlug: "privacy-policy" },
+      { kind: "terms", url: "https://legal.alpha-travel.example/terms" },
+    ],
+  });
+
+  it("[FIX-W38-OTA AC3] names the primary custom domain: primaryUrl, the absolute legal page URLs and canonicalBaseUrl, and domains lists it primary", () => {
+    const entry = toCachedStorefront(
+      source(settings, {
+        customDomains: [
+          custom("book.alpha-travel.example", { isPrimary: true }),
+          custom("travel.alpha-travel.example", { verifiedAt: "2026-10-22T10:00:00.000Z" }),
+        ],
+      }),
+    );
+
+    for (const config of [storefrontFor(entry, EDGE), storefrontFor(entry, KEY)]) {
+      expectValid(config);
+      expect(config.primaryUrl).toBe("https://book.alpha-travel.example");
+      expect(config.domains).toEqual([
+        {
+          host: "alpha.ota.example.com",
+          kind: "subdomain",
+          primary: false,
+          verifiedAt: CREATED.toISOString(),
+        },
+        { host: "book.alpha-travel.example", kind: "custom", primary: true, verifiedAt: VERIFIED },
+        {
+          host: "travel.alpha-travel.example",
+          kind: "custom",
+          primary: false,
+          verifiedAt: "2026-10-22T10:00:00.000Z",
+        },
+      ]);
+      expect(config.legal).toMatchObject({
+        termsUrl: "https://legal.alpha-travel.example/terms",
+        privacyUrl: "https://book.alpha-travel.example/p/privacy-policy",
+        cookiePolicyUrl: "https://book.alpha-travel.example/p/cookies",
+        refundPolicyUrl: "https://book.alpha-travel.example/p/refund-policy",
+      });
+      expect(config.seo.canonicalBaseUrl).toBe("https://book.alpha-travel.example");
+    }
+  });
+
+  it("[FIX-W38-OTA AC3] keeps the sub-domain primary while the primary custom domain has no issued certificate, and lists only servable domains", () => {
+    for (const tlsStatus of ["pending", "failed", "expired"] as const) {
+      const config = storefrontFor(
+        toCachedStorefront(
+          source(settings, {
+            customDomains: [
+              custom("book.alpha-travel.example", { isPrimary: true, tlsStatus }),
+              custom("travel.alpha-travel.example"),
+            ],
+          }),
+        ),
+        KEY,
+      );
+
+      expectValid(config);
+      expect([tlsStatus, config.primaryUrl, config.seo.canonicalBaseUrl, config.legal.privacyUrl]).toEqual([
+        tlsStatus,
+        "https://alpha.ota.example.com",
+        "https://alpha.ota.example.com",
+        "https://alpha.ota.example.com/p/privacy-policy",
+      ]);
+      expect(config.domains).toEqual([
+        {
+          host: "alpha.ota.example.com",
+          kind: "subdomain",
+          primary: true,
+          verifiedAt: CREATED.toISOString(),
+        },
+        { host: "travel.alpha-travel.example", kind: "custom", primary: false, verifiedAt: VERIFIED },
+      ]);
+    }
+  });
+
+  it("names the sub-domain alone without custom domains, as before", () => {
+    const config = storefrontFor(toCachedStorefront(source(settings)), KEY);
+
+    expect([config.primaryUrl, config.domains.map((domain) => [domain.host, domain.primary])]).toEqual([
+      "https://alpha.ota.example.com",
+      [["alpha.ota.example.com", true]],
+    ]);
+  });
+
+  it("keeps the hosts in the cache entry: an entry read back answers the same", () => {
+    const entry = toCachedStorefront(
+      source(settings, { customDomains: [custom("book.alpha-travel.example", { isPrimary: true })] }),
+    );
+    const decoded = decodeCachedStorefront(encodeCachedStorefront(entry));
+
+    expect(decoded === undefined ? undefined : storefrontFor(decoded, EDGE)).toEqual(
+      storefrontFor(entry, EDGE),
+    );
   });
 });
 

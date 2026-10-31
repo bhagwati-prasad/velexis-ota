@@ -20,9 +20,18 @@
 // domain (RFC 2606), which no mail system delivers, until the OTA sets its own.
 //
 // Never published: the operational columns (booking queue, `ops_alert_email`, TTLs, payment timing, search defaults)
-// are not even read by the repository. Platform data: the tenant's name (`payment.merchantName`) and, from the
-// tenant key and STOREFRONT_BASE_DOMAIN, its storefront sub-domain as `primaryUrl` and `domains`; verified custom
-// domains (M5) are not read yet; plan-gated features are not gated yet (no plan data is read in M2).
+// are not even read by the repository. Platform data: the tenant's name (`payment.merchantName`) and its storefront
+// hosts; plan-gated features are not gated yet (no plan data is read).
+//
+// Hosts (lead decision (2g) of 2026-10-31, second batch, FIX-W38-OTA; the rule of notifications/storefront-host.ts,
+// lead decision (2e)). `domains` lists the servable storefront domains: the sub-domain `<key>.<STOREFRONT_BASE_DOMAIN>`
+// (from the tenant key; it serves from provisioning on, so its `verifiedAt` is the settings' creation) and every
+// verified custom domain whose certificate is issued (`StorefrontSource.customDomains`, read by the service with
+// storefront-host.ts `storefrontDomainsOf`), in host name order. The primary one is the primary custom domain among
+// them, else the sub-domain, and its origin (storefront-host.ts `storefrontOrigins`) is `primaryUrl`, the start of the
+// legal pages' default and `/p/<slug>` URLs and `seo.canonicalBaseUrl`. A custom domain made primary before its
+// certificate is issued is neither listed nor primary until the platform's TLS probe records it. Before FIX-W38-OTA
+// only the sub-domain was named.
 //
 // Payment (api-changes §4, OADR-0010 point 1; OBE-038, OBE-077). The cached part carries the settings' side of
 // StorefrontPaymentConfig (card brands, 3-D Secure, merchant country) with the OTA's name as `merchantName`, and no
@@ -50,7 +59,13 @@
 // `sk_` callers never see the method, whichever caller filled the cache; for them `airlineCard` is always null. The
 // method does not need a Stripe account: the airline charges the card.
 import type { components } from "@velexis/api-types";
+import {
+  primaryCustomHost,
+  servableCustomDomains,
+  storefrontOrigins,
+} from "../notifications/storefront-host";
 import { codeBadge, displayLanguage, ReferenceNames, toCurrency } from "../reference/reference.mapper";
+import type { PlatformStorefrontDomain } from "../tenancy/platform-read.repository";
 import type { CurrencyRow, StorefrontAssetRow, StorefrontSettingsRow } from "./storefront.repository";
 
 type Schemas = components["schemas"];
@@ -117,6 +132,11 @@ export interface StorefrontSource {
   readonly environment: "test" | "live";
   /** STOREFRONT_BASE_DOMAIN: `<key>.<base>` is the tenant's storefront sub-domain. */
   readonly storefrontBaseDomain: string;
+  /**
+   * The tenant's servable custom domains (storefront-host.ts `storefrontDomainsOf`: verified, certificate issued, the
+   * tenant active), the primary one marked; empty while the sub-domain is the only host.
+   */
+  readonly customDomains: readonly PlatformStorefrontDomain[];
   readonly settings: StorefrontSettingsRow;
   /** The `storefront_assets` rows of the settings' asset ids. */
   readonly assets: readonly StorefrontAssetRow[];
@@ -871,9 +891,31 @@ export function referencedCurrencies(settings: StorefrontSettingsRow): string[] 
   ];
 }
 
-/** The tenant's storefront sub-domain as a URL, without a trailing slash: `https://<key>.<base>`. */
-export function storefrontSubdomainUrl(tenantKey: string, storefrontBaseDomain: string): string {
-  return `https://${tenantKey}.${storefrontBaseDomain}`;
+/**
+ * The storefront hosts of the configuration (see the file header): `primaryUrl`, the primary origin of
+ * storefront-host.ts, and `domains`, the sub-domain first, then the servable custom domains, the primary one marked.
+ */
+function hostsOf(source: StorefrontSource): Pick<StorefrontBase, "primaryUrl" | "domains"> {
+  const { tenantKey, storefrontBaseDomain, settings } = source;
+  const primaryHost = primaryCustomHost(source.customDomains);
+  return {
+    primaryUrl: storefrontOrigins(tenantKey, storefrontBaseDomain, primaryHost).primary,
+    domains: [
+      {
+        host: `${tenantKey}.${storefrontBaseDomain}`,
+        kind: "subdomain",
+        primary: primaryHost === null,
+        // The sub-domain serves the storefront from provisioning on, when the settings row is seeded.
+        verifiedAt: settings.createdAt.toISOString(),
+      },
+      ...servableCustomDomains(source.customDomains).map((domain) => ({
+        host: domain.hostname,
+        kind: "custom" as const,
+        primary: domain.hostname === primaryHost,
+        verifiedAt: domain.verifiedAt,
+      })),
+    ],
+  };
 }
 
 /**
@@ -888,7 +930,7 @@ export function toCachedStorefront(source: StorefrontSource, locale?: string): C
   const language = displayLanguage(entryLocale);
   const names = new ReferenceNames(language);
   const name = nonEmpty(settings.brandName, 120) ?? nonEmpty(source.tenantName, 120) ?? tenantKey;
-  const primaryUrl = storefrontSubdomainUrl(tenantKey, source.storefrontBaseDomain);
+  const { primaryUrl, domains } = hostsOf(source);
   const since = settings.createdAt.toISOString().slice(0, 10);
   const defaultCurrency = settings.defaultCurrency.trim().toUpperCase();
   const { markets, defaultMarket } = marketsOf(
@@ -903,15 +945,7 @@ export function toCachedStorefront(source: StorefrontSource, locale?: string): C
     legalName: nonEmpty(settings.legalName, 200) ?? null,
     environment,
     primaryUrl,
-    domains: [
-      {
-        host: `${tenantKey}.${source.storefrontBaseDomain}`,
-        kind: "subdomain",
-        primary: true,
-        // The sub-domain serves the storefront from provisioning on, when the settings row is seeded.
-        verifiedAt: settings.createdAt.toISOString(),
-      },
-    ],
+    domains,
     timeZone: nonEmpty(settings.timeZone, 64) ?? "UTC",
     branding: brandingOf(settings),
     defaultLocale,

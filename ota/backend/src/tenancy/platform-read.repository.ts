@@ -15,7 +15,9 @@
 // src/console/queue-poller.processor.ts), and the payment connection of a connected Stripe account and a connection
 // with its webhook signing secret's ciphertext in OBE-078 (`connectPaymentConnection`, `paymentConnectionWebhook`, for
 // the Connect and `c/<ppc_id>` receivers of src/payments/webhooks/), and a tenant's primary custom storefront host in
-// OBE-080 (`primaryStorefrontHost`, for the links of src/notifications/storefront-host.ts).
+// OBE-080, which FIX-W38-OTA replaced with the tenant's verified storefront domains (`storefrontDomains`, for the
+// links and storefront.get through src/notifications/storefront-host.ts) and the tenant of a storefront host whatever
+// its verification state (`storefrontDomainTenantId`, for the `domain` invalidation of platform-cache.ts).
 import { Inject, Injectable } from "@nestjs/common";
 import {
   assertTenantSchema,
@@ -487,6 +489,52 @@ const STRIPE_ACCOUNT_PATTERN = /^acct_[0-9A-Za-z]{1,255}$/;
 export const STOREFRONT_HOST_PATTERN =
   /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 
+/** `platform.tenant_domains.kind` (the baseline CHECK): the Velexis sub-domain or a domain the OTA owns. */
+export const DOMAIN_KINDS = ["subdomain", "custom"] as const;
+export type DomainKind = (typeof DOMAIN_KINDS)[number];
+
+/**
+ * `platform.tenant_domains.tls_status` (the baseline CHECK): the platform's TLS probe's last answer for the host
+ * (PADR-0004 item 7), `pending` until the first probe.
+ */
+export const TLS_STATUSES = ["pending", "issued", "failed", "expired"] as const;
+export type TlsStatus = (typeof TLS_STATUSES)[number];
+
+/**
+ * A verified storefront domain of a tenant (`platform.tenant_domains` with `purpose = storefront` and
+ * `verification_status = verified`), as notifications/storefront-host.ts decides from it which host the tenant's
+ * links and storefront.get name (FIX-W38-OTA, lead decisions (2e) and (2g) of 2026-10-31, second batch).
+ */
+export interface PlatformStorefrontDomain {
+  /** Lower case, a host the tenant resolver accepts (`STOREFRONT_HOST_PATTERN`). */
+  readonly hostname: string;
+  readonly kind: DomainKind;
+  /** The tenant's primary host of the storefront purpose (`tenant_domains_primary_uq`: at most one). */
+  readonly isPrimary: boolean;
+  readonly tlsStatus: TlsStatus;
+  /**
+   * ISO 8601 instant of the DNS verification (`verified_at`; the row's `updated_at` for a verified row written
+   * without one, which the platform's rules never write).
+   */
+  readonly verifiedAt: string;
+}
+
+/** The columns of `platform.tenant_domains` that `PlatformStorefrontDomain` maps. */
+const STOREFRONT_DOMAIN_COLUMNS = [
+  "id",
+  "hostname",
+  "kind",
+  "is_primary",
+  "tls_status",
+  "verified_at",
+  "updated_at",
+] as const;
+
+type StorefrontDomainRow = Pick<
+  Selectable<PlatformDatabase["platform.tenant_domains"]>,
+  (typeof STOREFRONT_DOMAIN_COLUMNS)[number]
+>;
+
 @Injectable()
 export class PlatformReadRepository {
   constructor(@Inject(PLATFORM_DB) private readonly db: PlatformDb) {}
@@ -597,31 +645,56 @@ export class PlatformReadRepository {
   }
 
   /**
-   * The tenant's primary custom storefront host (OBE-080; ADR-0018 "Custom domain lifecycle" step 5, PADR-0004 item
-   * 8): the host name of its `platform.tenant_domains` row with `purpose = storefront`, `kind = custom`, `is_primary`
-   * and `verification_status = verified` (`tenant_domains_primary_uq`: at most one primary per purpose), or `null`
-   * while its sub-domain is primary, or when the primary row is not a verified custom domain or holds a host name the
-   * tenant resolver would refuse (`STOREFRONT_HOST_PATTERN`): only a host the edge serves is ever linked. The tenant's
-   * status is the caller's check. Not cached: the platform's `domain` invalidation names a host, not its tenant, so a
-   * cached answer could outlive a move of the primary flag; the links read it once per e-mail batch and per console
-   * profile (storefront-host.ts). A value that cannot be a tenant id is unknown without a query.
+   * The tenant's verified storefront domains (FIX-W38-OTA, lead decisions (2e) and (2g) of 2026-10-31, second batch;
+   * ADR-0018 "Custom domain lifecycle" steps 4 and 5, PADR-0004 items 7 and 8): its `platform.tenant_domains` rows
+   * with `purpose = storefront` and `verification_status = verified`, the sub-domain and the custom domains, primary
+   * or not, whatever their TLS status, in host name order (one indexed query, `tenant_domains_tenant_idx`). A row
+   * whose host name the tenant resolver would refuse (`STOREFRONT_HOST_PATTERN`) is left out: only a host the edge
+   * serves is ever linked. Which of them the links and storefront.get name, and which is the primary origin (a custom
+   * domain that is primary and whose certificate is `issued`), is notifications/storefront-host.ts's rule; the
+   * tenant's status is the caller's check. Not cached here: the e-mails and the console read it once per e-mail batch
+   * and per console sign-in, refresh or me (lead decision (1g) of 2026-10-31, second batch), and storefront.get once
+   * per fill of its cache entry, which a `domain` invalidation drops (platform-cache.ts). A value that cannot be a
+   * tenant id is unknown without a query. A kind or TLS status outside the CHECK lists throws
+   * `UnexpectedPlatformValueError`.
    */
-  async primaryStorefrontHost(tenantId: string): Promise<string | null> {
+  async storefrontDomains(tenantId: string): Promise<PlatformStorefrontDomain[]> {
     if (!TENANT_ID_PATTERN.test(tenantId)) {
+      return [];
+    }
+    const rows = await this.read((trx) =>
+      trx
+        .selectFrom("platform.tenant_domains")
+        .select(STOREFRONT_DOMAIN_COLUMNS)
+        .where("tenant_id", "=", tenantId)
+        .where("purpose", "=", "storefront")
+        .where("verification_status", "=", "verified")
+        .orderBy("hostname")
+        .execute(),
+    );
+    return rows.filter((row) => STOREFRONT_HOST_PATTERN.test(row.hostname)).map(toPlatformStorefrontDomain);
+  }
+
+  /**
+   * The tenant id of storefront host `hostname` whatever its verification status (a `platform.tenant_domains` row
+   * with this host name, unique, and `purpose = storefront`), or `null` when there is none (a removed domain, an
+   * unknown host): the tenant whose storefront.get entries a `domain` invalidation of the host drops when the
+   * `host:<hostname>` cache cannot name it (FIX-W38-OTA, platform-cache.ts). A value that cannot be a stored host
+   * name is unknown without a query.
+   */
+  async storefrontDomainTenantId(hostname: string): Promise<string | null> {
+    if (!STOREFRONT_HOST_PATTERN.test(hostname)) {
       return null;
     }
     const row = await this.read((trx) =>
       trx
         .selectFrom("platform.tenant_domains")
-        .select("hostname")
-        .where("tenant_id", "=", tenantId)
+        .select("tenant_id")
+        .where("hostname", "=", hostname)
         .where("purpose", "=", "storefront")
-        .where("kind", "=", "custom")
-        .where("is_primary", "=", true)
-        .where("verification_status", "=", "verified")
         .executeTakeFirst(),
     );
-    return row !== undefined && STOREFRONT_HOST_PATTERN.test(row.hostname) ? row.hostname : null;
+    return row === undefined ? null : row.tenant_id;
   }
 
   /**
@@ -1013,6 +1086,21 @@ function toPlatformPaymentConnection(row: PaymentConnectionRow): PlatformPayment
     status: oneOf(row.status, PAYMENT_CONNECTION_STATUSES, column("status"), row.id),
     statementDescriptorSuffix: row.statement_descriptor_suffix,
     secretCiphertext: row.secret_ciphertext === null ? null : row.secret_ciphertext.toString("base64"),
+  });
+}
+
+/**
+ * Maps a `platform.tenant_domains` row of `storefrontDomains`. A kind or TLS status outside the CHECK lists throws
+ * `UnexpectedPlatformValueError`; the verification time becomes an ISO string.
+ */
+function toPlatformStorefrontDomain(row: StorefrontDomainRow): PlatformStorefrontDomain {
+  const column = (name: string) => `platform.tenant_domains.${name}`;
+  return Object.freeze({
+    hostname: row.hostname,
+    kind: oneOf(row.kind, DOMAIN_KINDS, column("kind"), row.id),
+    isPrimary: row.is_primary,
+    tlsStatus: oneOf(row.tls_status, TLS_STATUSES, column("tls_status"), row.id),
+    verifiedAt: (row.verified_at ?? row.updated_at).toISOString(),
   });
 }
 

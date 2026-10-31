@@ -399,6 +399,7 @@ describe("an update of the row", () => {
       tenantName: "Alpha Travel Holding",
       environment: "test",
       storefrontBaseDomain: "ota.example.com",
+      customDomains: [],
       settings: saved,
       assets,
       currencies: [

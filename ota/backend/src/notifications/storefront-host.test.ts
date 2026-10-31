@@ -1,19 +1,30 @@
 // The storefront host of a tenant's links, without PostgreSQL or SMTP (OBE-080; ADR-0018 "Custom domain lifecycle" step
-// 5, PADR-0004 item 8): the two origins, when the primary custom domain is read and used, how the links an e-mail's
-// payload carries move to it, and what the renderer makes of it (the shipped defaults, rendered on the primary host).
-// The platform table, the worker's outbox and Mailpit are used in test/integration/tenancy/custom-domains.int.test.ts.
+// 5, PADR-0004 item 8): the two origins, when the primary custom domain is read and used (only with an issued
+// certificate since FIX-W38-OTA, lead decision (2e) of 2026-10-31, second batch), which domains storefront.get lists,
+// how the links an e-mail's payload carries move to it, and what the renderer makes of it (the shipped defaults,
+// rendered on the primary host). The platform table, the worker's outbox and Mailpit are used in
+// test/integration/tenancy/custom-domains.int.test.ts.
 import type { ConfigService } from "@nestjs/config";
 import type { PinoLogger } from "nestjs-pino";
 import { describe, expect, it, vi } from "vitest";
 import type { SharedConfig } from "../config";
+import {
+  TLS_STATUSES,
+  type PlatformStorefrontDomain,
+  type TlsStatus,
+} from "../tenancy/platform-read.repository";
 import { TENANT_STATUSES, type TenantStatus } from "../tenancy/platform-read.types";
 import type { TenantTransaction } from "../tenancy/tenant-tx";
 import type { OutboxRepository } from "./outbox.repository";
 import { NotificationRenderer, storefrontUrl } from "./renderer";
 import {
+  isServableCustomDomain,
   onPrimaryOrigin,
+  primaryCustomHost,
   primaryStorefrontHost,
   rebaseStorefrontLinks,
+  servableCustomDomains,
+  storefrontDomainsOf,
   storefrontOrigins,
   storefrontSubdomainOrigin,
   type PrimaryHostReader,
@@ -38,11 +49,44 @@ function recordingLogger(): Pick<PinoLogger, "warn"> & { readonly warn: ReturnTy
   return { warn: vi.fn() };
 }
 
-function readerAnswering(answer: () => Promise<string | null>): PrimaryHostReader & {
-  readonly primaryStorefrontHost: ReturnType<typeof vi.fn>;
+function readerAnswering(answer: () => Promise<PlatformStorefrontDomain[]>): PrimaryHostReader & {
+  readonly storefrontDomains: ReturnType<typeof vi.fn>;
 } {
-  return { primaryStorefrontHost: vi.fn(answer) };
+  return { storefrontDomains: vi.fn(answer) };
 }
+
+const VERIFIED_AT = "2026-10-20T08:00:00.000Z";
+
+/** A verified storefront domain row as PlatformReadRepository.storefrontDomains maps it. */
+function domain(
+  hostname: string,
+  values: Partial<Omit<PlatformStorefrontDomain, "hostname">> = {},
+): PlatformStorefrontDomain {
+  return {
+    hostname,
+    kind: "custom",
+    isPrimary: false,
+    tlsStatus: "issued",
+    verifiedAt: VERIFIED_AT,
+    ...values,
+  };
+}
+
+/** alpha's verified domains: the sub-domain, and `CUSTOM_HOST` primary with a certificate of `tlsStatus`. */
+function primaryCustomDomainWith(tlsStatus: TlsStatus): PlatformStorefrontDomain[] {
+  return [
+    domain("alpha.ota.example.com", { kind: "subdomain", tlsStatus: "issued" }),
+    domain(CUSTOM_HOST, { isPrimary: true, tlsStatus }),
+  ];
+}
+
+/** The answer of each TLS status for the primary custom domain: only `issued` makes it the primary origin. */
+const PRIMARY_BY_TLS_STATUS: Readonly<Record<TlsStatus, string | null>> = {
+  pending: null,
+  issued: CUSTOM_HOST,
+  failed: null,
+  expired: null,
+};
 
 describe("the storefront origins", () => {
   it("are the sub-domain on STOREFRONT_BASE_DOMAIN, and the primary custom domain when there is one", () => {
@@ -57,20 +101,85 @@ describe("the storefront origins", () => {
   });
 });
 
+describe("the servable custom domains (lead decision (2e) of 2026-10-31, second batch)", () => {
+  it("[FIX-W38-OTA AC2] are the verified custom domains whose certificate is issued, for every TLS status", () => {
+    for (const tlsStatus of TLS_STATUSES) {
+      expect([tlsStatus, isServableCustomDomain(domain(CUSTOM_HOST, { tlsStatus }))]).toEqual([
+        tlsStatus,
+        tlsStatus === "issued",
+      ]);
+    }
+    // The sub-domain is named from the tenant key, never from its row; a host the resolver refuses is never one.
+    expect(isServableCustomDomain(domain("alpha.ota.example.com", { kind: "subdomain" }))).toBe(false);
+    expect(isServableCustomDomain(domain("Book.Example.NET"))).toBe(false);
+  });
+
+  it("[FIX-W38-OTA AC3] keeps the servable custom domains in their order, primary or not", () => {
+    const domains = [
+      domain("alpha.ota.example.com", { kind: "subdomain", isPrimary: false }),
+      domain("book.alpha-travel.example", { isPrimary: true }),
+      domain("pending.alpha-travel.example", { tlsStatus: "pending" }),
+      domain("travel.alpha-travel.example"),
+      domain("expired.alpha-travel.example", { tlsStatus: "expired" }),
+    ];
+
+    expect(servableCustomDomains(domains).map((row) => row.hostname)).toEqual([
+      "book.alpha-travel.example",
+      "travel.alpha-travel.example",
+    ]);
+  });
+});
+
+describe("primaryCustomHost", () => {
+  it("[FIX-W38-OTA AC2] is the primary custom domain only once its certificate is issued (pending, failed, expired: the sub-domain)", () => {
+    for (const tlsStatus of TLS_STATUSES) {
+      expect([tlsStatus, primaryCustomHost(primaryCustomDomainWith(tlsStatus))]).toEqual([
+        tlsStatus,
+        PRIMARY_BY_TLS_STATUS[tlsStatus],
+      ]);
+    }
+  });
+
+  it("is none while the sub-domain is primary, also beside servable custom domains that are not", () => {
+    expect(primaryCustomHost([])).toBeNull();
+    expect(
+      primaryCustomHost([
+        domain("alpha.ota.example.com", { kind: "subdomain", isPrimary: true }),
+        domain(CUSTOM_HOST),
+      ]),
+    ).toBeNull();
+  });
+});
+
 describe("primaryStorefrontHost", () => {
   it("reads the verified primary custom domain of an active tenant", async () => {
-    const reader = readerAnswering(() => Promise.resolve(CUSTOM_HOST));
+    const reader = readerAnswering(() => Promise.resolve(primaryCustomDomainWith("issued")));
     const logger = recordingLogger();
 
     expect(await primaryStorefrontHost(reader, { id: TENANT_ID, status: "active" }, logger)).toBe(
       CUSTOM_HOST,
     );
-    expect(reader.primaryStorefrontHost).toHaveBeenCalledExactlyOnceWith(TENANT_ID);
+    expect(reader.storefrontDomains).toHaveBeenCalledExactlyOnceWith(TENANT_ID);
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
+  it("[FIX-W38-OTA AC2] links the sub-domain while the primary custom domain's certificate is pending, failed or expired", async () => {
+    for (const tlsStatus of TLS_STATUSES) {
+      const reader = readerAnswering(() => Promise.resolve(primaryCustomDomainWith(tlsStatus)));
+      const logger = recordingLogger();
+
+      expect([
+        tlsStatus,
+        await primaryStorefrontHost(reader, { id: TENANT_ID, status: "active" }, logger),
+      ]).toEqual([tlsStatus, PRIMARY_BY_TLS_STATUS[tlsStatus]]);
+      expect(logger.warn).not.toHaveBeenCalled();
+    }
+  });
+
   it("answers null while the sub-domain is primary", async () => {
-    const reader = readerAnswering(() => Promise.resolve(null));
+    const reader = readerAnswering(() =>
+      Promise.resolve([domain("alpha.ota.example.com", { kind: "subdomain", isPrimary: true })]),
+    );
 
     expect(
       await primaryStorefrontHost(reader, { id: TENANT_ID, status: "active" }, recordingLogger()),
@@ -78,7 +187,7 @@ describe("primaryStorefrontHost", () => {
   });
 
   it("never reads the custom domain of a tenant that is not active: the edge serves only its sub-domain", async () => {
-    const reader = readerAnswering(() => Promise.resolve(CUSTOM_HOST));
+    const reader = readerAnswering(() => Promise.resolve(primaryCustomDomainWith("issued")));
     const others = TENANT_STATUSES.filter(
       (status): status is Exclude<TenantStatus, "active"> => status !== "active",
     );
@@ -86,7 +195,7 @@ describe("primaryStorefrontHost", () => {
     for (const status of others) {
       expect(await primaryStorefrontHost(reader, { id: TENANT_ID, status }, recordingLogger())).toBeNull();
     }
-    expect(reader.primaryStorefrontHost).not.toHaveBeenCalled();
+    expect(reader.storefrontDomains).not.toHaveBeenCalled();
   });
 
   it("falls back to the sub-domain when the platform cannot be read, and logs the tenant only", async () => {
@@ -98,6 +207,40 @@ describe("primaryStorefrontHost", () => {
       expect.objectContaining({ tenantId: TENANT_ID }),
       "storefront_host.primary_unavailable",
     );
+  });
+});
+
+describe("storefrontDomainsOf (storefront.get, lead decision (2g) of 2026-10-31, second batch)", () => {
+  it("[FIX-W38-OTA AC3] answers the servable custom domains of an active tenant, the primary one among them", async () => {
+    const reader = readerAnswering(() =>
+      Promise.resolve([
+        domain("alpha.ota.example.com", { kind: "subdomain" }),
+        domain("book.alpha-travel.example", { isPrimary: true }),
+        domain("pending.alpha-travel.example", { tlsStatus: "pending" }),
+        domain("failed.alpha-travel.example", { tlsStatus: "failed" }),
+      ]),
+    );
+
+    expect(await storefrontDomainsOf(reader, { id: TENANT_ID, status: "active" })).toEqual([
+      domain("book.alpha-travel.example", { isPrimary: true }),
+    ]);
+    expect(reader.storefrontDomains).toHaveBeenCalledExactlyOnceWith(TENANT_ID);
+  });
+
+  it("answers none for a tenant that is not active, without a read", async () => {
+    const reader = readerAnswering(() => Promise.resolve(primaryCustomDomainWith("issued")));
+
+    for (const status of TENANT_STATUSES.filter((value) => value !== "active")) {
+      expect(await storefrontDomainsOf(reader, { id: TENANT_ID, status })).toEqual([]);
+    }
+    expect(reader.storefrontDomains).not.toHaveBeenCalled();
+  });
+
+  it("throws a read that fails: storefront.get answers it and caches nothing", async () => {
+    const failure = new Error("connect ECONNREFUSED 127.0.0.1:5432");
+    const reader = readerAnswering(() => Promise.reject(failure));
+
+    await expect(storefrontDomainsOf(reader, { id: TENANT_ID, status: "active" })).rejects.toBe(failure);
   });
 });
 

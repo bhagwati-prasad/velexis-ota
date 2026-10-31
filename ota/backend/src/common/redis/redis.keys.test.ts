@@ -322,6 +322,34 @@ describe("redisKeyPatterns", () => {
       /redisKeys\.membersOfAccount: accountId must be an account id/,
     );
   });
+
+  it("[FIX-W38-OTA AC3] matches the storefront.get entries of one tenant and environment, every locale, and rebuilds only sf keys", () => {
+    const pattern = redisKeyPatterns.storefrontEntriesOf(TENANT_ID, "live");
+
+    expect(pattern.match).toBe(`t:${TENANT_ID}:live:sf:*`);
+    for (const locale of ["und", "en", "fr-FR"]) {
+      expect(pattern.keyOf(redisKeys.sf(TENANT_ID, "live", locale).key)).toEqual(
+        redisKeys.sf(TENANT_ID, "live", locale),
+      );
+    }
+    for (const name of [
+      redisKeys.sf(TENANT_ID, "test", "en").key,
+      redisKeys.sf(OTHER_TENANT_ID, "live", "en").key,
+      redisKeys.pages(TENANT_ID, "live", "en").key,
+      `t:${TENANT_ID}:live:sf:`,
+      `t:${TENANT_ID}:live:sf:en:extra`,
+      `t:${TENANT_ID}:live:sf:*`,
+    ]) {
+      expect([name, pattern.keyOf(name)]).toEqual([name, undefined]);
+    }
+    expect(Object.isFrozen(pattern)).toBe(true);
+    expect(() => redisKeyPatterns.storefrontEntriesOf("ten_*", "test")).toThrow(
+      /redisKeys\.storefrontEntriesOf: tenantId must be a tenant id/,
+    );
+    expect(() => redisKeyPatterns.storefrontEntriesOf(TENANT_ID, "prod" as "test")).toThrow(
+      /redisKeys\.storefrontEntriesOf: env must be one of test, live/,
+    );
+  });
 });
 
 // ---- Source scan --------------------------------------------------------------------------------------------------

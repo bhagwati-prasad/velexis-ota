@@ -3,7 +3,9 @@
 // publishes `{v: 1, type, …ids}` after the commit of every change to a row the OTA backend caches; this subscriber
 // validates each message with `validateInvalidation` (@velexis/api-types/jobs) and has the platform cache delete
 // exactly the keys of its type (`invalidatedKeys` of platform-cache.ts): tenant, domain, api_key, connection,
-// membership, account, amadeus_account and plan.
+// membership, account, amadeus_account and plan; a `domain` event also drops the storefront.get entries of the host's
+// tenant, which the cache resolves from `host:<hostname>` before deleting it, else from the platform table
+// (FIX-W38-OTA, lead decision (2g) of 2026-10-31, second batch).
 //
 // It holds a Redis connection of its own (`ota-backend-invalidation`): a connection in subscriber mode can run no
 // other command, so the deletions go through the process's command client. Messages are applied one after another,

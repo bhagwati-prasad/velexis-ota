@@ -341,7 +341,9 @@ paths:
         markets, features, legal, support, consent, SEO, `accepted_card_brands` → `payment.cardBrands` (Amadeus
         PaymentBrand values), `require_3ds` → `payment.threeDSecure`, the email-verification policy →
         `auth.emailVerification`, `version`) and merges platform data by value: `platform.tenants` (name, status),
-        `platform.tenant_domains` (verified storefront domains → `domains`, the primary one → `primaryUrl`),
+        `platform.tenant_domains` (verified storefront domains → `domains`, the primary one → `primaryUrl`; a custom
+        domain only once its certificate is issued, `tls_status = issued`, lead decisions (2e) and (2g) of 2026-10-31,
+        second batch),
         `platform.payment_provider_connections` (the default connection whose environment matches the key:
         `pk_test_`/`sk_test_`/`hk_test_` → test, live otherwise; provider id, publishable key, account id, and
         `supported_methods` intersected with the methods checkout.createPayment accepts — card, apple_pay, google_pay,
@@ -12915,7 +12917,13 @@ paths:
         `request_only` request (the refusal bookings.cancel gives a customer while a cancellation is in progress: `409
         BOOKING_NOT_MODIFIABLE`, `details.reason = pending`, `details.action = canCancel`, with no second traveller
         e-mail and no second staff alert; 2026-10-31, lead decision (2c): before, a request was finished here and a
-        second request could be recorded); no issuance in progress (a
+        second request could be recorded). This includes the request for the staff that bookings.cancel records when
+        Amadeus refuses its Flight Order Management DELETE or no longer has the order (`release` or `void` mode): it
+        cannot be finished with this operation; the staff cancel the booking with the airline, and
+        console.bookings.resync records the airline's cancellation (segments `CANCELLED`, the booking `cancelled`),
+        which ends the request. An airline that refuses for good leaves the request open, and so does an order Amadeus
+        no longer has, which the resync cannot read (`422 SUPPLIER_REJECTED`): a known MVP limitation (lead decision
+        (2c) of 2026-10-31, second batch; a 'close request' action is post-MVP). No issuance in progress (a
         fresh ticketing claim of the ticketing job or of a staff issuance: `409 BOOKING_NOT_MODIFIABLE`,
         `details.reason = ticketing_in_progress`). Permission `bookings:cancel`. Unlike bookings.cancel (customer scope)
         there is no self-service window or cancellation-quote requirement.
@@ -31116,7 +31124,10 @@ components:
         primaryUrl:
           type: string
           format: uri
-          description: Canonical public URL of the storefront (primary tenant domain).
+          description: >-
+            Canonical public URL of the storefront (primary tenant domain): the OTA's primary custom domain while it is
+            verified and primary and its certificate is issued, else its sub-domain (lead decision (2e) of 2026-10-31,
+            second batch). The default and content-page legal URLs and `seo.canonicalBaseUrl` start with it.
         domains:
           type: array
           minItems: 1
@@ -31124,7 +31135,9 @@ components:
             $ref: '#/components/schemas/StorefrontDomain'
           description: >-
             Verified storefront domains of the OTA (`platform.tenant_domains`, purpose storefront): its
-            `<key>.velexis.app` sub-domain and custom domains. Validate the request host against it and redirect
+            `<key>.velexis.app` sub-domain and the custom domains whose certificate is issued (a verified custom domain
+            is listed once the platform's TLS probe records `tls_status = issued`; lead decision (2g) of 2026-10-31,
+            second batch), the one of `primaryUrl` marked `primary`. Validate the request host against it and redirect
             secondary hosts to `primaryUrl`.
         timeZone:
           type: string
@@ -39382,12 +39395,15 @@ components:
           format: uri
           readOnly: true
           description: >-
-            The OTA's storefront origin for the console's environment, without a trailing slash:
-            `https://<key>.<STOREFRONT_BASE_DOMAIN>`, the OTA's storefront sub-domain (ADR-0018), and the OTA's primary
-            custom domain once custom domains are resolved (OBE-080). The OTA admin links a published content page as
-            `<storefrontUrl>/p/<slug>`. Answered by console.auth.signIn, refresh and me (lead decision (2f) of
-            2026-10-30, third batch, FIX-W36-OTA); optional, so an answer an `Idempotency-Key` replays from before the
-            field validates (it has none).
+            The OTA's storefront origin for the console's environment, without a trailing slash, the origin the OTA's
+            e-mails link: `https://<host>` of the OTA's primary custom domain while it is verified and primary and its
+            certificate is issued (`tls_status = issued`) and the OTA is active, else
+            `https://<key>.<STOREFRONT_BASE_DOMAIN>`, the OTA's storefront sub-domain (ADR-0018; lead decision (2e) of
+            2026-10-31, second batch). The same in test and live; read on every answer, so a moved primary flag or a
+            certificate the platform's TLS probe records shows in the next one. The OTA admin links a published
+            content page as `<storefrontUrl>/p/<slug>`. Answered by console.auth.signIn, refresh and me (lead decision
+            (2f) of 2026-10-30, third batch, FIX-W36-OTA); optional, so an answer an `Idempotency-Key` replays from
+            before the field validates (it has none).
         supplier:
           type: object
           required:
@@ -39429,9 +39445,12 @@ components:
             sync, ADR-0013): `past_due` while a subscription payment has failed or the subscription is paused,
             `trial_ending` before a trial ends; `null` when there is none. The OTA admin shows it as a banner with a link
             to the portal's billing page. It never blocks the console: when a subscription ends (`canceled`, `unpaid`),
-            the platform suspends the OTA instead (`403 TENANT_SUSPENDED`). Read from the cached tenant row, which a
-            `tenant` invalidation refreshes; the same in both environments. Optional (added in M5, OBE-076): an answer
-            without it means no banner.
+            the platform suspends the OTA instead (`403 TENANT_SUSPENDED`). console.auth.signIn answers it from the
+            tenant row it reads past the cache (for its status check); console.auth.refresh and console.auth.me from
+            the cached tenant row (`tenant:<id>`, 60 seconds), which the platform's `tenant` invalidation drops, so a
+            change shows in them within one second of the invalidation (lead decision (2h) of 2026-10-31, second
+            batch). The same in both environments. Optional (added in M5, OBE-076): an answer without it means no
+            banner.
     ConsoleStaffSession:
       type: object
       required:

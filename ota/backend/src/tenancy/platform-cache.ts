@@ -22,6 +22,14 @@
 // `tenantkey:` and `host:` hold a tenant id, never the row, so the `tenant` invalidation of a status change reaches
 // every way to a tenant through one key. `invalidate(event)` deletes exactly the keys of an event (`invalidatedKeys`).
 //
+// A `domain` invalidation also drops the storefront.get entries of the host's tenant, `t:<tenantId>:<env>:sf:*` of
+// both environments (lead decision (2g) of 2026-10-31, second batch, FIX-W38-OTA): they name the tenant's storefront
+// hosts, the primary one and the servable custom domains (storefront/storefront.service.ts), and live 5 minutes. The
+// event names a host, not its tenant, so the tenant is resolved first: from the cached `host:<hostname>` entry, read
+// before it is deleted, else from `platform.tenant_domains` (PlatformReadRepository.storefrontDomainTenantId, read-only,
+// any verification state). A host of no tenant (a removed domain the cache did not hold, an unknown host) drops
+// nothing, and so does a tenant that cannot be resolved now (logged; the entries expire within their 5 minutes).
+//
 // Degraded mode (point 5): while Redis cannot be reached (the command client is reconnecting), lookups go to
 // PostgreSQL directly and nothing is cached; a failing Redis command is the same. A failing platform lookup is
 // `503 SERVICE_UNAVAILABLE`; a row the backend cannot read (UnexpectedPlatformValueError, InvalidTenantSchemaError)
@@ -31,7 +39,8 @@
 // lookup that read PostgreSQL before the commit may write after the subscriber deleted the key. Every invalidation
 // first bumps `generation` (in this process, which also runs the subscriber); a fill that started under an older
 // generation is not written, and one whose write lands after a bump is deleted again. Every process that fills the
-// cache (the API, and the worker's jobs since OBE-024) runs its own subscriber for this reason.
+// cache (the API, and the worker's jobs since OBE-024) runs its own subscriber for this reason. storefront.get's fill
+// applies the same guard to its entries (`invalidationGeneration`, FIX-W38-OTA).
 import { Inject, Injectable } from "@nestjs/common";
 import type { InvalidationEvent } from "@velexis/api-types/jobs";
 import { InvalidTenantSchemaError, isTenantSchema } from "@velexis/db";
@@ -74,7 +83,10 @@ const SCAN_COUNT = 200;
 /** ioredis statuses in which the command client cannot answer: it waits to reconnect, or has been closed. */
 const REDIS_DOWN: ReadonlySet<string> = new Set(["reconnecting", "close", "end"]);
 
-/** The connection kinds and environments of a tenant: the four `conn:` keys of a `connection` invalidation. */
+/**
+ * The connection kinds and environments of a tenant: the four `conn:` keys of a `connection` invalidation, and the
+ * environments of the storefront.get entries a `domain` invalidation drops.
+ */
 const CONNECTION_KINDS: readonly ConnectionKind[] = ["amadeus", "payment"];
 const ENVIRONMENTS: readonly KeyEnvironment[] = ["test", "live"];
 
@@ -90,7 +102,8 @@ const only = (...keys: RedisKey[]): InvalidatedKeys => ({ keys, patterns: [] });
  * The keys of each invalidation type (platform architecture §6.3, OADR-0009 point 4). `tenantkey:` is never
  * invalidated: it maps an immutable key to an immutable id, and a cached "not found" lives 10 s. `plan` deletes
  * nothing yet: no cache of the OTA backend holds plan data (nothing reads `platform.plans` before plan-gated
- * features exist); the feature that caches plan rows adds its key here.
+ * features exist); the feature that caches plan rows adds its key here. A `domain` event's storefront.get entries
+ * depend on the host's tenant, which `PlatformCache.invalidate` resolves first (see the file header).
  */
 export function invalidatedKeys(event: InvalidationEvent): InvalidatedKeys {
   switch (event.type) {
@@ -345,20 +358,69 @@ export class PlatformCache {
   }
 
   /**
-   * Deletes the keys of an invalidation event (`invalidatedKeys`) and resolves to how many existed. Fills in flight
-   * are not written back (see the file header). Throws when Redis does not answer.
+   * Deletes the keys of an invalidation event (`invalidatedKeys`), and for a `domain` event the storefront.get entries
+   * of the host's tenant (see the file header), and resolves to how many existed. Fills in flight are not written back
+   * (see the file header). Throws when Redis does not answer.
    */
   async invalidate(event: InvalidationEvent): Promise<number> {
     this.generation += 1;
     const { keys, patterns } = invalidatedKeys(event);
+    const tenantPatterns = event.type === "domain" ? await this.storefrontEntriesOfHost(event.hostname) : [];
     const unique = new Set<RedisKeyName>(keys.map((key) => key.key));
-    for (const pattern of patterns) {
+    for (const pattern of [...patterns, ...tenantPatterns]) {
       for (const key of await this.scan(pattern)) {
         unique.add(key.key);
       }
     }
     const names = [...unique];
     return names.length === 0 ? 0 : await this.redis.del(...names);
+  }
+
+  /**
+   * How many invalidations this process has applied so far: a cache outside this class that holds platform data
+   * (storefront.get's entries) compares it before and after a fill, as this class's own fills do (see the file
+   * header).
+   */
+  invalidationGeneration(): number {
+    return this.generation;
+  }
+
+  /**
+   * The patterns of the storefront.get entries of the tenant of storefront host `hostname`, in both environments, or
+   * none for a host of no tenant or a tenant that cannot be resolved now (see the file header).
+   */
+  private async storefrontEntriesOfHost(hostname: string): Promise<RedisKeyPattern[]> {
+    const tenantId = await this.tenantOfHost(hostname);
+    if (tenantId === null) {
+      return [];
+    }
+    try {
+      return ENVIRONMENTS.map((environment) => redisKeyPatterns.storefrontEntriesOf(tenantId, environment));
+    } catch (error) {
+      if (error instanceof TypeError) {
+        return []; // Not a tenant id the keys are built with: no entry of it exists.
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * The tenant id of `hostname`: the cached `host:<hostname>` entry's (read before the invalidation deletes it), else
+   * the `platform.tenant_domains` row's whatever its verification state, else `null`. A cached "unknown" says nothing
+   * here (the event may be the verification that ends it). A platform that cannot be read is logged without the host.
+   */
+  private async tenantOfHost(hostname: string): Promise<string | null> {
+    const key = keyOf(() => redisKeys.host(hostname));
+    const cached = key === undefined ? undefined : await this.read(key, parseTenantId);
+    if (typeof cached?.value === "string") {
+      return cached.value;
+    }
+    try {
+      return await this.platform.storefrontDomainTenantId(hostname);
+    } catch (error) {
+      this.logger.warn({ err: error }, "platform_cache.domain_tenant_unavailable");
+      return null;
+    }
   }
 
   /** `key` from Redis, else `load` from PostgreSQL, cached for the key's TTL (a `null` for its negative TTL). */

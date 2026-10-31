@@ -3,8 +3,8 @@
 //
 //   brand.*     from the tenant's `storefront_settings` (brand name, support e-mail and phone; empty when not set) and
 //               its storefront URL, the primary origin of storefront-host.ts (OBE-080): `https://<host>` of its
-//               verified primary custom domain while the tenant is active, else
-//               `https://<key>.<STOREFRONT_BASE_DOMAIN>`;
+//               verified primary custom domain with an issued certificate (FIX-W38-OTA) while the tenant is active,
+//               else `https://<key>.<STOREFRONT_BASE_DOMAIN>`;
 //   links       built here from the e-mail's secret values, on that storefront URL: `verifyUrl` is
 //               `<storefront>/account/verify.html?token=<token>`, `resetUrl` `<storefront>/account/reset-password.html?…`;
 //               they exist only in memory while the worker renders the e-mail;
@@ -402,8 +402,8 @@ export class NotificationRenderer {
   /**
    * Reads, in `trx`, the sender settings of the tenant and the template of each key and locale of `rows`, and returns
    * the batch that renders them after the transaction, on the tenant's primary storefront host: `primaryHost`, its
-   * verified primary custom domain as storefront-host.ts `primaryStorefrontHost` read it before the transaction, or
-   * `null` (the default) for its sub-domain.
+   * verified primary custom domain with an issued certificate as storefront-host.ts `primaryStorefrontHost` read it
+   * before the transaction, or `null` (the default) for its sub-domain.
    */
   async prepare(
     trx: TenantTransaction,

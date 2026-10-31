@@ -28,9 +28,10 @@
 // serves, and so does its sub-domain. The CSRF guard (common/auth/csrf.guard.ts, OADR-0006 point 3) runs after this
 // resolution and requires `Origin: https://<X-Velexis-Host>`, the host resolved here: a custom domain's pages pass on
 // their own host, and a page of another host of the same tenant does not (sessions are host-only, OADR-0006 point 7).
-// The links of the e-mails and `ConsoleTenant.storefrontUrl` use the tenant's primary host
-// (notifications/storefront-host.ts). test/integration/tenancy/custom-domains.int.test.ts proves the lifecycle end to
-// end.
+// The links of the e-mails, `ConsoleTenant.storefrontUrl` and storefront.get use the tenant's primary host
+// (notifications/storefront-host.ts: a custom domain only once its certificate is issued, FIX-W38-OTA), and the same
+// `domain` invalidation drops the tenant's storefront.get entries (platform-cache.ts).
+// test/integration/tenancy/custom-domains.int.test.ts proves the lifecycle end to end.
 //
 // The live environment (OBE-081, ADR-0018 "Environment"): the edge's environment is read with the tenant row itself
 // (`tenant:<id>`; `tenantkey:` and `host:` hold only the id), so when the platform's goLive (PBE-061) sets

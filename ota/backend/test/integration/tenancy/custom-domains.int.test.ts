@@ -1,14 +1,23 @@
-// Custom storefront domains end to end (OBE-080; ADR-0018 "Custom domain lifecycle", OADR-0009 point 2, OADR-0006
-// point 3, PADR-0004 items 4, 5 and 8, PADR-0014 point 5), against PostgreSQL 16, Redis 7 and Mailpit.
+// Custom storefront domains end to end (OBE-080, FIX-W38-OTA; ADR-0018 "Custom domain lifecycle", OADR-0009 point 2,
+// OADR-0006 point 3, PADR-0004 items 4, 5, 7 and 8, PADR-0014 point 5), against PostgreSQL 16, Redis 7 and Mailpit.
 //
 // The file clones the @velexis/testing template (tenant_alpha provisioned) and plays the platform as velexis_migrator,
 // the owner of the platform tables (the OTA backend only reads them): alpha `active` with its sub-domain
 // `alpha.ota.example.com` (verified and primary, as createTenant writes it), its storefront settings as provisioning
 // seeds them, and an owner who opens the console through the OTA admin's service key with a portal token. The custom
-// domain `book.alpha-travel.example` then goes through the lifecycle the platform drives (PBE-049, PBE-050): added
-// `pending`, `verified`, made primary (the sub-domain loses the flag in the same transaction), the tenant suspended and
-// resumed, and removed (the sub-domain primary again); a second custom domain fails its re-check. After each change the
-// platform's `vx:invalidate` event is published on this file's Redis, as the platform publishes it after its commit.
+// domain `book.alpha-travel.example` then goes through the lifecycle the platform drives (PBE-049, PBE-050, PBE-051):
+// added `pending`, `verified`, made primary (the sub-domain loses the flag in the same transaction) while its
+// certificate is still `pending`, then `failed` and `expired`, then `issued` by the TLS probe, the primary flag moved
+// back and forth, the tenant suspended and resumed, and removed (the sub-domain primary again); a second custom domain
+// fails its re-check. After each change the platform's `vx:invalidate` event is published on this file's Redis, as the
+// platform publishes it after its commit: a `domain` event for a change of the TLS status too, which storefront.get's
+// 5-minute entries need to follow it at once (the e-mails and the console read the domains uncached).
+//
+// Lead decisions (2e) and (2g) of 2026-10-31, second batch (FIX-W38-OTA): a custom domain is linked (the e-mails, the
+// console's storefrontUrl, storefront.get's primaryUrl, legal page URLs and canonicalBaseUrl) only while it is verified,
+// primary and its certificate is `issued`; storefront.get's `domains` lists the sub-domain and every verified custom
+// domain with an issued certificate; and the `domain` invalidation drops the tenant's storefront.get entries, so a
+// moved primary flag shows within one second.
 //
 // Two processes run in-process on the clone and the Redis database: the API (createTestApp), where the edge (Caddy's
 // headers) reaches storefront.get and a search, and the OTA admin reaches console.auth.signIn, me and refresh; and
@@ -54,9 +63,11 @@ import { redisKeys } from "../../../src/common/redis/redis.keys";
 import { loadWorkerConfig } from "../../../src/config";
 import { OutboxService, type EnqueueNotificationInput } from "../../../src/notifications/outbox.service";
 import { storefrontUrl } from "../../../src/notifications/renderer";
+import { primaryStorefrontHost } from "../../../src/notifications/storefront-host";
 import { TEMPLATE_REGISTRY, type SampleData } from "../../../src/notifications/templates/registry";
 import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefront-settings.seed";
-import { PlatformReadRepository } from "../../../src/tenancy/platform-read.repository";
+import { PlatformCache } from "../../../src/tenancy/platform-cache";
+import { PlatformReadRepository, type TlsStatus } from "../../../src/tenancy/platform-read.repository";
 import type { OtaPool } from "../../../src/tenancy/tenancy.module";
 import { TenantContext, type RequestTenant } from "../../../src/tenancy/tenant-context";
 import { TenantTx } from "../../../src/tenancy/tenant-tx";
@@ -130,6 +141,8 @@ interface DomainValues {
   readonly purpose?: "storefront" | "api" | "console";
   readonly verification_status?: "pending" | "verified" | "failed";
   readonly is_primary?: boolean;
+  /** The TLS probe's last answer (PBE-051); `pending` (the column default) unless told otherwise. */
+  readonly tls_status?: TlsStatus;
 }
 
 /** A `tenant_domains` row (a custom storefront domain, pending, unless told otherwise), as addDomain writes it. */
@@ -147,7 +160,17 @@ async function insertDomain(tenantId: string, hostname: string, values: DomainVa
       verification_status: status,
       verification_token: `vx-verify-${randomBytes(20).toString("hex")}`,
       verified_at: status === "verified" ? new Date() : null,
+      tls_status: values.tls_status ?? "pending",
     })
+    .execute();
+}
+
+/** The TLS probe's result (PBE-051): the certificate's state as the probe found it. */
+async function setTlsStatus(hostname: string, tlsStatus: TlsStatus): Promise<void> {
+  await migrator
+    .updateTable("platform.tenant_domains")
+    .set({ tls_status: tlsStatus, tls_checked_at: new Date(), updated_at: new Date() })
+    .where("hostname", "=", hostname)
     .execute();
 }
 
@@ -230,6 +253,49 @@ function storefrontOn(host: string): Promise<Response> {
     .get("/v1/storefront")
     .set({ ...edgeHeaders(host), "X-Forwarded-For": nextIp() })
     .then((res) => res);
+}
+
+/** What storefront.get names of the tenant's hosts. */
+interface StorefrontHosts {
+  readonly primaryUrl: string;
+  readonly domains: ReadonlyArray<readonly [host: string, kind: string, primary: boolean]>;
+  readonly canonicalBaseUrl: string;
+  readonly termsUrl: string;
+}
+
+/** storefront.get's hosts on `host` (validated against the document). */
+async function hostsOn(host: string): Promise<StorefrontHosts> {
+  const res = await storefrontOn(host);
+  expect(answer(res)).toEqual([200, undefined]);
+  expectResponseToMatch("getStorefront", res);
+  const body = res.body as {
+    primaryUrl: string;
+    domains: Array<{ host: string; kind: string; primary: boolean }>;
+    seo: { canonicalBaseUrl: string };
+    legal: { termsUrl: string };
+  };
+  return {
+    primaryUrl: body.primaryUrl,
+    domains: body.domains.map((domain) => [domain.host, domain.kind, domain.primary] as const),
+    canonicalBaseUrl: body.seo.canonicalBaseUrl,
+    termsUrl: body.legal.termsUrl,
+  };
+}
+
+/**
+ * The hosts storefront.get names with `primary` as the primary origin and `custom` listed: the sub-domain always,
+ * the custom domains after it; the legal pages (provisioning's defaults) and the canonical URL on `primary`.
+ */
+function hostsWith(primary: string, custom: readonly string[] = []): StorefrontHosts {
+  return {
+    primaryUrl: primary,
+    domains: [
+      [SUBDOMAIN_HOST, "subdomain", primary === SUBDOMAIN],
+      ...custom.map((host) => [host, "custom", primary === `https://${host}`] as const),
+    ],
+    canonicalBaseUrl: primary,
+    termsUrl: `${primary}/p/terms`,
+  };
 }
 
 /** The tenant key storefront.get answers on `host`, or the refusal's status and code. */
@@ -544,6 +610,12 @@ describe("verification", () => {
     expectResponseToMatch("getStorefront", res);
     expect(await servedOn(SUBDOMAIN_HOST)).toBe("alpha");
   });
+
+  it("[FIX-W38-OTA AC3] is not named by storefront.get while its certificate is pending: the sub-domain alone, primary", async () => {
+    // Served by the edge (above), but not linked or listed before the TLS probe found its certificate issued.
+    expect(await hostsOn(CUSTOM_HOST)).toEqual(hostsWith(SUBDOMAIN));
+    expect(await hostsOn(SUBDOMAIN_HOST)).toEqual(hostsWith(SUBDOMAIN));
+  });
 });
 
 describe("a verified custom domain that is not primary", () => {
@@ -561,17 +633,73 @@ describe("a verified custom domain that is not primary", () => {
   });
 });
 
+describe("a primary custom domain whose certificate is not issued", () => {
+  let sent: SentLinks;
+  let urls: ConsoleStorefrontUrls;
+  let hosts: StorefrontHosts;
+  const byTlsStatus = new Map<TlsStatus, readonly [ConsoleStorefrontUrls, StorefrontHosts]>();
+
+  // The platform's makeDomainPrimary before the TLS probe found a certificate, then the e-mails, a console sign-in and
+  // storefront.get; then the probe finding the certificate failed, then expired.
+  beforeAll(async () => {
+    await makePrimary(alphaId, CUSTOM_HOST);
+    await publish(domainEvent(SUBDOMAIN_HOST), domainEvent(CUSTOM_HOST));
+    sent = await sendEmails("pending");
+    urls = await consoleStorefrontUrls();
+    hosts = await hostsOn(CUSTOM_HOST);
+    for (const tlsStatus of ["failed", "expired"] as const) {
+      await setTlsStatus(CUSTOM_HOST, tlsStatus);
+      await publish(domainEvent(CUSTOM_HOST));
+      byTlsStatus.set(tlsStatus, [await consoleStorefrontUrls(), await hostsOn(SUBDOMAIN_HOST)]);
+    }
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W38-OTA AC2] leaves the e-mails' links and the console's storefront origin on the sub-domain while the certificate is pending", () => {
+    expect({ booking: sent.booking, account: sent.account }).toEqual(linksOn(SUBDOMAIN, sent.token));
+    expect([...sent.booking, ...sent.account].filter((link) => link.includes(CUSTOM_HOST))).toEqual([]);
+    expect(urls).toEqual({ signIn: SUBDOMAIN, me: SUBDOMAIN, refresh: SUBDOMAIN });
+  });
+
+  it("[FIX-W38-OTA AC3] keeps storefront.get on the sub-domain, which it names primary, and lists no custom domain", () => {
+    expect(hosts).toEqual(hostsWith(SUBDOMAIN));
+  });
+
+  it("[FIX-W38-OTA AC2] links the sub-domain as well when the certificate failed or expired", () => {
+    for (const tlsStatus of ["failed", "expired"] as const) {
+      expect([tlsStatus, byTlsStatus.get(tlsStatus)]).toEqual([
+        tlsStatus,
+        [{ signIn: SUBDOMAIN, me: SUBDOMAIN, refresh: SUBDOMAIN }, hostsWith(SUBDOMAIN)],
+      ]);
+    }
+  });
+
+  it("is served by the edge all the same: the certificate decides the links, not the resolution", async () => {
+    expect([await servedOn(CUSTOM_HOST), await servedOn(SUBDOMAIN_HOST)]).toEqual(["alpha", "alpha"]);
+  });
+});
+
 describe("the primary custom domain", () => {
   let sent: SentLinks;
   let urls: ConsoleStorefrontUrls;
 
-  // The platform's makeDomainPrimary, then the e-mails and a console sign-in.
+  // The TLS probe finds the primary custom domain's certificate issued (PBE-051) and storefront.get follows within a
+  // second of the domain invalidation; then the e-mails and a console sign-in.
   beforeAll(async () => {
-    await makePrimary(alphaId, CUSTOM_HOST);
-    await publish(domainEvent(SUBDOMAIN_HOST), domainEvent(CUSTOM_HOST));
+    expect(await hostsOn(SUBDOMAIN_HOST)).toEqual(hostsWith(SUBDOMAIN));
+    await setTlsStatus(CUSTOM_HOST, "issued");
+    await publish(domainEvent(CUSTOM_HOST));
+    await vi.waitFor(async () => {
+      expect(await hostsOn(SUBDOMAIN_HOST)).toEqual(hostsWith(CUSTOM, [CUSTOM_HOST]));
+    }, WITHIN_A_SECOND);
     sent = await sendEmails("primary");
     urls = await consoleStorefrontUrls();
   }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W38-OTA AC3] is what storefront.get names, on either host: primaryUrl, the legal pages, canonicalBaseUrl and domains", async () => {
+    for (const host of [CUSTOM_HOST, SUBDOMAIN_HOST]) {
+      expect(await hostsOn(host)).toEqual(hostsWith(CUSTOM, [CUSTOM_HOST]));
+    }
+  });
 
   it("is where the booking e-mails link, and the account e-mails' links too [OBE-080 AC2]", () => {
     expect({ booking: sent.booking, account: sent.account }).toEqual(linksOn(CUSTOM, sent.token));
@@ -604,6 +732,46 @@ describe("the primary custom domain", () => {
       ]);
       expectResponseToMatch("createFlightSearch", res);
     }
+  });
+});
+
+describe("a move of the primary flag", () => {
+  // The domain invalidation of the last describe was applied seconds ago (the e-mails since): no event is in flight.
+  it("[FIX-W38-OTA AC3] drops the tenant's storefront.get entries of both environments, and nothing for a host of no tenant", async () => {
+    const cache = api.app.get(PlatformCache, { strict: false });
+    const entries = (["test", "live"] as const).map(
+      (environment) => redisKeys.sf(alphaId, environment, "und").key,
+    );
+    // Entries as storefront.get caches them (the live one as a live storefront would; alpha's is in test).
+    for (const entry of entries) {
+      await redis.client.set(entry, "{}", "EX", 300);
+    }
+
+    await cache.invalidate(domainEvent("unknown.alpha-travel.example"));
+    expect(await redis.client.exists(...entries)).toBe(2);
+
+    await cache.invalidate(domainEvent(CUSTOM_HOST));
+    expect(await redis.client.exists(...entries)).toBe(0);
+  });
+
+  it("[FIX-W38-OTA AC3] shows in storefront.get within one second of the domain invalidation, both ways", async () => {
+    expect(await hostsOn(SUBDOMAIN_HOST)).toEqual(hostsWith(CUSTOM, [CUSTOM_HOST]));
+
+    // makeDomainPrimary of the sub-domain: the cached entry still answers until the invalidation drops it.
+    await makePrimary(alphaId, SUBDOMAIN_HOST);
+    expect(await hostsOn(SUBDOMAIN_HOST)).toEqual(hostsWith(CUSTOM, [CUSTOM_HOST]));
+    await publish(domainEvent(SUBDOMAIN_HOST), domainEvent(CUSTOM_HOST));
+    await vi.waitFor(async () => {
+      expect(await hostsOn(SUBDOMAIN_HOST)).toEqual(hostsWith(SUBDOMAIN, [CUSTOM_HOST]));
+    }, WITHIN_A_SECOND);
+    expect(await hostsOn(CUSTOM_HOST)).toEqual(hostsWith(SUBDOMAIN, [CUSTOM_HOST]));
+
+    // And back: the custom domain primary again.
+    await makePrimary(alphaId, CUSTOM_HOST);
+    await publish(domainEvent(SUBDOMAIN_HOST), domainEvent(CUSTOM_HOST));
+    await vi.waitFor(async () => {
+      expect(await hostsOn(SUBDOMAIN_HOST)).toEqual(hostsWith(CUSTOM, [CUSTOM_HOST]));
+    }, WITHIN_A_SECOND);
   });
 });
 
@@ -660,6 +828,12 @@ describe("removal", () => {
     expect(answer(await searchFrom(CUSTOM_HOST, CUSTOM))).toEqual(REFUSED);
     expect(await servedOn(SUBDOMAIN_HOST)).toBe("alpha");
   });
+
+  it("[FIX-W38-OTA AC3] names the sub-domain alone in storefront.get, primary again, within one second", async () => {
+    await vi.waitFor(async () => {
+      expect(await hostsOn(SUBDOMAIN_HOST)).toEqual(hostsWith(SUBDOMAIN));
+    }, WITHIN_A_SECOND);
+  });
 });
 
 describe("after the removal of the primary custom domain", () => {
@@ -679,10 +853,14 @@ describe("after the removal of the primary custom domain", () => {
 
 describe("a failed re-check", () => {
   it("stops serving the domain within one second of the domain invalidation", async () => {
-    await insertDomain(alphaId, SECOND_HOST, { verification_status: "verified" });
+    await insertDomain(alphaId, SECOND_HOST, { verification_status: "verified", tls_status: "issued" });
     await publish(domainEvent(SECOND_HOST));
     await vi.waitFor(async () => {
       expect(await servedOn(SECOND_HOST)).toBe("alpha");
+    }, WITHIN_A_SECOND);
+    // [FIX-W38-OTA AC3] A verified custom domain with an issued certificate is listed, not primary.
+    await vi.waitFor(async () => {
+      expect(await hostsOn(SECOND_HOST)).toEqual(hostsWith(SUBDOMAIN, [SECOND_HOST]));
     }, WITHIN_A_SECOND);
 
     await setVerification(SECOND_HOST, "failed");
@@ -693,18 +871,21 @@ describe("a failed re-check", () => {
       expect(await servedOn(SECOND_HOST)).toEqual(REFUSED);
     }, WITHIN_A_SECOND);
     await expectRefused(SECOND_HOST);
+    expect(await hostsOn(SUBDOMAIN_HOST)).toEqual(hostsWith(SUBDOMAIN));
   });
 });
 
-describe("PlatformReadRepository.primaryStorefrontHost", () => {
-  it("answers only a verified, primary custom storefront domain", async () => {
+describe("PlatformReadRepository.storefrontDomains and the primary host of storefront-host.ts", () => {
+  it("[FIX-W38-OTA AC2] answers only a verified, primary custom storefront domain whose certificate is issued", async () => {
     const repository = api.app.get(PlatformReadRepository, { strict: false });
     const betaId = newId("ten");
     await migrator
       .insertInto("platform.tenants")
       .values({ id: betaId, key: "beta", name: "Beta Travel", status: "active", plan_code: "early_access" })
       .execute();
-    const primaryOf = (): Promise<string | null> => repository.primaryStorefrontHost(betaId);
+    const logger = { warn: vi.fn() };
+    const primaryOf = (): Promise<string | null> =>
+      primaryStorefrontHost(repository, { id: betaId, status: "active" }, logger);
     const seen: Array<string | null> = [await primaryOf()];
 
     await insertDomain(betaId, "beta.ota.example.com", {
@@ -713,10 +894,13 @@ describe("PlatformReadRepository.primaryStorefrontHost", () => {
       is_primary: true,
     });
     seen.push(await primaryOf());
-    await insertDomain(betaId, "book.beta-travel.example", { verification_status: "verified" });
+    await insertDomain(betaId, "book.beta-travel.example", {
+      verification_status: "verified",
+      tls_status: "issued",
+    });
     seen.push(await primaryOf());
     // Data the platform's rules never write (only a verified domain becomes primary), read safely all the same.
-    await insertDomain(betaId, "pending.beta-travel.example");
+    await insertDomain(betaId, "pending.beta-travel.example", { tls_status: "issued" });
     await makePrimary(betaId, "pending.beta-travel.example");
     seen.push(await primaryOf());
     await setVerification("pending.beta-travel.example", "failed");
@@ -726,13 +910,50 @@ describe("PlatformReadRepository.primaryStorefrontHost", () => {
       purpose: "api",
       verification_status: "verified",
       is_primary: true,
+      tls_status: "issued",
     });
     seen.push(await primaryOf());
     await makePrimary(betaId, "book.beta-travel.example");
     seen.push(await primaryOf());
 
     expect(seen).toEqual([null, null, null, null, null, null, "book.beta-travel.example"]);
+    // The certificate decides: every TLS status the probe records.
+    const byTlsStatus: Array<[TlsStatus, string | null]> = [];
+    for (const tlsStatus of ["pending", "failed", "expired", "issued"] as const) {
+      await setTlsStatus("book.beta-travel.example", tlsStatus);
+      byTlsStatus.push([tlsStatus, await primaryOf()]);
+    }
+    expect(byTlsStatus).toEqual([
+      ["pending", null],
+      ["failed", null],
+      ["expired", null],
+      ["issued", "book.beta-travel.example"],
+    ]);
+    expect(logger.warn).not.toHaveBeenCalled();
+    // The rows themselves: the verified storefront domains, in host name order, whatever their TLS status.
+    expect(
+      (await repository.storefrontDomains(betaId)).map((row) => [
+        row.hostname,
+        row.kind,
+        row.isPrimary,
+        row.tlsStatus,
+      ]),
+    ).toEqual([
+      ["beta.ota.example.com", "subdomain", false, "pending"],
+      ["book.beta-travel.example", "custom", true, "issued"],
+    ]);
     // Not a tenant id: unknown without a query.
-    expect(await repository.primaryStorefrontHost("tenant_beta")).toBeNull();
+    expect(await repository.storefrontDomains("tenant_beta")).toEqual([]);
+  });
+
+  it("[FIX-W38-OTA AC3] storefrontDomainTenantId names the tenant of a storefront host whatever its verification state", async () => {
+    const repository = api.app.get(PlatformReadRepository, { strict: false });
+
+    expect(await repository.storefrontDomainTenantId(SUBDOMAIN_HOST)).toBe(alphaId);
+    // Failed, and pending: still the tenant's rows.
+    expect(await repository.storefrontDomainTenantId(SECOND_HOST)).toBe(alphaId);
+    expect(await repository.storefrontDomainTenantId(CUSTOM_HOST)).toBeNull(); // removed
+    expect(await repository.storefrontDomainTenantId("api.beta-travel.example")).toBeNull(); // another purpose
+    expect(await repository.storefrontDomainTenantId("Not A Host")).toBeNull();
   });
 });

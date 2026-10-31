@@ -143,9 +143,9 @@ export function storefrontPathOf(slug: string): string {
 /**
  * The address of a page on the OTA's storefront, `<storefrontUrl>/p/<slug>`, for "View on storefront" (lead decision
  * (2f) of 2026-10-30, third batch, FIX-W36-OTA): `storefrontUrl` is the storefront origin console.auth.me answers
- * (`ConsoleTenant.storefrontUrl`: `https://<key>.<STOREFRONT_BASE_DOMAIN>`, the primary custom domain once OBE-080
- * resolves them). `undefined`, so no link is made, for a profile without it (an answer from before the field), a value
- * that is not an `http(s)` origin, or a slug that is not one.
+ * (`ConsoleTenant.storefrontUrl`: the OTA's primary custom domain while it is verified and primary and its certificate
+ * is issued, else `https://<key>.<STOREFRONT_BASE_DOMAIN>`). `undefined`, so no link is made, for a profile without it
+ * (an answer from before the field), a value that is not an `http(s)` origin, or a slug that is not one.
  */
 export function storefrontPageUrlOf(storefrontUrl: string | undefined, slug: string): string | undefined {
   if (storefrontUrl === undefined || !SLUG_PATTERN.test(slug)) {

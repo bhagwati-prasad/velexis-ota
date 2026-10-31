@@ -45,9 +45,10 @@
 //
 // The tenant of the three answers (`toConsoleTenant`) carries `storefrontUrl`, the OTA's storefront origin for the
 // console's environment (lead decision (2f) of 2026-10-30, third batch, FIX-W36-OTA): the primary origin the e-mails
-// use too (notifications/storefront-host.ts, OBE-080), `https://<host>` of the OTA's verified primary custom domain,
-// else `https://<key>.<STOREFRONT_BASE_DOMAIN>`, the same in test and live (lead decision (1d) of 2026-10-31). The OTA
-// admin links published content pages with it.
+// use too (notifications/storefront-host.ts, OBE-080), `https://<host>` of the OTA's primary custom domain once it is
+// verified and its certificate is issued (lead decision (2e) of 2026-10-31, second batch, FIX-W38-OTA), else
+// `https://<key>.<STOREFRONT_BASE_DOMAIN>`, the same in test and live (lead decision (1d) of 2026-10-31). The OTA admin
+// links published content pages with it.
 //
 // Permissions follow the role matrix of scope §1.3 (`ROLE_PERMISSIONS`); `environments` is `["test"]`, or
 // `["test", "live"]` for a live tenant (`storefront_environment = live`) and a role other than `viewer` (point 5).

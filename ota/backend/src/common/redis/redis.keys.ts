@@ -491,8 +491,9 @@ export type RedisKeyBuilderName = keyof typeof redisKeys;
 
 /**
  * The keys of one builder that share a prefix, for `SCAN … MATCH` (OBE-012: the `account` invalidation drops every
- * cached membership of the account). `match` is the glob of the scan; `keyOf` turns a name the scan returned back
- * into the builder's key, or `undefined` when the name is not one (so only keys this file would build are deleted).
+ * cached membership of the account; FIX-W38-OTA: the `domain` invalidation drops every storefront.get entry of the
+ * host's tenant). `match` is the glob of the scan; `keyOf` turns a name the scan returned back into the builder's key,
+ * or `undefined` when the name is not one (so only keys this file would build are deleted).
  */
 export interface RedisKeyPattern<K extends RedisKeyKind = RedisKeyKind> {
   /** The `MATCH` glob, such as `member:acc_…:*`; its fixed part has no glob characters. */
@@ -511,6 +512,22 @@ export const redisKeyPatterns = Object.freeze({
       keyOf(name: string): RedisKey<"shared"> | undefined {
         const tenantId = name.startsWith(prefix) ? name.slice(prefix.length) : "";
         return PARTS.tenantId.pattern.test(tenantId) ? redisKeys.member(account, tenantId) : undefined;
+      },
+    });
+  },
+  /**
+   * `t:<tenantId>:<env>:sf:*`: every cached storefront.get entry of one tenant and environment, whatever its locale
+   * (`sf:und` and the supported locales'; lead decision (2g) of 2026-10-31, second batch, FIX-W38-OTA).
+   */
+  storefrontEntriesOf(tenantId: string, env: KeyEnvironment): RedisKeyPattern<"tenant"> {
+    const tenant = part("storefrontEntriesOf", "tenantId", "tenantId", tenantId);
+    const environment = oneOf("storefrontEntriesOf", "env", ENVIRONMENTS, env);
+    const prefix = `t:${tenant}:${environment}:sf:`;
+    return Object.freeze({
+      match: `${prefix}*`,
+      keyOf(name: string): RedisKey<"tenant"> | undefined {
+        const locale = name.startsWith(prefix) ? name.slice(prefix.length) : "";
+        return PARTS.locale.pattern.test(locale) ? redisKeys.sf(tenant, environment, locale) : undefined;
       },
     });
   },

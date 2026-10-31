@@ -6,10 +6,10 @@
 //   1. resolve the tenant through the platform cache and re-check its status: `active` or `suspended` (a suspended
 //      OTA's travellers still get their e-mails, OADR-0014 point 4); any other tenant is skipped;
 //   2. read the tenant's primary storefront host from the platform table (storefront-host.ts, OBE-080: its verified
-//      primary custom domain while it is active, else none), before any transaction; then claim at most 100 due rows
-//      (`FOR UPDATE SKIP LOCKED`, outbox.repository.ts: a 5-minute lease, committed before anything is sent) and read,
-//      in the same transaction, the tenant's sender settings and templates, and the attachment plan of the booking
-//      e-mails that attach documents (attachments.ts, OBE-055);
+//      primary custom domain with an issued certificate while it is active, else none; FIX-W38-OTA), before any
+//      transaction; then claim at most 100 due rows (`FOR UPDATE SKIP LOCKED`, outbox.repository.ts: a 5-minute
+//      lease, committed before anything is sent) and read, in the same transaction, the tenant's sender settings and
+//      templates, and the attachment plan of the booking e-mails that attach documents (attachments.ts, OBE-055);
 //   3. per row, outside any transaction: decrypt the secret values, read the attachments of an `attach` plan, render
 //      (renderer.ts on that host, `documents.attached` as the plan decided), send with
 //      `From: "<brand name>" <MAIL_FROM address>` and `Reply-To: <support e-mail>` (mailer.gateway.ts);

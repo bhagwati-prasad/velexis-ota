@@ -845,7 +845,7 @@ function serviceHarness(): ServiceHarness {
   } as unknown as PlatformCache;
   const platform = {
     tenantById: () => Promise.resolve(tenant.value),
-    primaryStorefrontHost: () => Promise.resolve(null),
+    storefrontDomains: () => Promise.resolve([]),
   } as unknown as PlatformReadRepository;
   const { logger, lines } = recordingLogger();
   const service = new StaffAuthService(

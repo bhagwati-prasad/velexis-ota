@@ -14,6 +14,17 @@
 // So the cache never holds more than one entry per supported locale and environment, whatever the visitors send. A
 // settings change (OBE-070) deletes the tenant's `sf:*` entries of both environments.
 //
+// Hosts (lead decision (2g) of 2026-10-31, second batch, FIX-W38-OTA). The entry names the tenant's storefront hosts
+// (storefront.mapper.ts: `domains`, `primaryUrl`, the legal page URLs, `seo.canonicalBaseUrl`), from its servable
+// custom domains, which a fill reads from the platform table (notifications/storefront-host.ts `storefrontDomainsOf`,
+// read-only, one indexed query; none while the tenant is not active; a read that fails is `503 SERVICE_UNAVAILABLE`
+// and caches nothing, as a failed platform lookup of the tenant row is). The platform's `domain` invalidation (a
+// domain verified, failed or removed, its primary flag moved) deletes the tenant's `sf:*` entries of both
+// environments (tenancy/platform-cache.ts), so the next storefront.get reads the hosts again. A fill that read the
+// platform before such an invalidation is not written, and is deleted again when its write lands after one
+// (`PlatformCache.invalidationGeneration`, the guard of the platform caches' own fills), so it never puts the old hosts
+// back for 5 minutes.
+//
 // Redis down: entries are neither read nor written, and every request reads PostgreSQL (architecture §10). A missing
 // settings row (a schema whose provisioning did not seed it) is answered as a tenant that is not ready:
 // `403 TENANT_SUSPENDED`, the storefront's maintenance page.
@@ -34,9 +45,12 @@ import { PinoLogger } from "nestjs-pino";
 import { redisKeys, type RedisKey } from "../common/redis/redis.keys";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import type { ApiConfig } from "../config";
+import { storefrontDomainsOf } from "../notifications/storefront-host";
 import { AirlineCardLimits } from "../payments/airline-card/abuse-limits";
 import { PAYMENT_GATEWAY, type GatewayAccount, type PaymentGateway } from "../payments/payment-gateway";
 import { PlatformCache } from "../tenancy/platform-cache";
+import { PlatformReadRepository, type PlatformStorefrontDomain } from "../tenancy/platform-read.repository";
+import { UnexpectedPlatformValueError, type PlatformTenant } from "../tenancy/platform-read.types";
 import { TenantContext, type RequestTenant } from "../tenancy/tenant-context";
 import { TenantTx } from "../tenancy/tenant-tx";
 import {
@@ -73,6 +87,7 @@ export class StorefrontService {
     private readonly tenants: TenantContext,
     private readonly repository: StorefrontRepository,
     private readonly platform: PlatformCache,
+    private readonly platformRead: PlatformReadRepository,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @Inject(PAYMENT_GATEWAY) private readonly payments: PaymentGateway,
     private readonly airlineCardLimits: AirlineCardLimits,
@@ -148,20 +163,27 @@ export class StorefrontService {
     return await this.fill(tenant, acceptLanguage);
   }
 
-  /** Builds the entries from the settings row and caches the default one and, if another, the requested one. */
+  /**
+   * Builds the entries from the settings row and caches the default one and, if another, the requested one, unless a
+   * platform invalidation arrived since the platform was read (see the file header).
+   */
   private async fill(tenant: RequestTenant, acceptLanguage: string | undefined): Promise<CachedStorefront> {
+    const generation = this.platform.invalidationGeneration();
     const source = await this.load(tenant);
     const defaults = toCachedStorefront(source);
     const locale = negotiateLocale(acceptLanguage, localesOf(defaults), defaults.locale);
     const entry = locale === defaults.locale ? defaults : toCachedStorefront(source, locale);
-    await this.write(tenant, DEFAULT_ENTRY_LOCALE, defaults);
+    await this.write(tenant, DEFAULT_ENTRY_LOCALE, defaults, generation);
     if (entry !== defaults) {
-      await this.write(tenant, entry.locale, entry);
+      await this.write(tenant, entry.locale, entry, generation);
     }
     return entry;
   }
 
-  /** The settings row with its assets and currencies (one transaction), and the tenant's platform name. */
+  /**
+   * The settings row with its assets and currencies (one transaction), and the tenant's platform name and servable
+   * custom domains.
+   */
   private async load(tenant: RequestTenant): Promise<StorefrontSource> {
     const rows = await this.tx.run(async (trx) => {
       const settings = await this.repository.settings(trx);
@@ -184,8 +206,26 @@ export class StorefrontService {
       tenantName: platformTenant?.name ?? null,
       environment: tenant.environment,
       storefrontBaseDomain: this.storefrontBaseDomain,
+      customDomains: platformTenant === null ? [] : await this.customDomains(platformTenant),
       ...rows,
     };
+  }
+
+  /**
+   * The tenant's servable custom domains (storefront-host.ts `storefrontDomainsOf`); a platform that cannot be read is
+   * `503 SERVICE_UNAVAILABLE`, as the platform cache answers a failed lookup, and nothing is cached (a row the backend
+   * cannot read stays an error, as there).
+   */
+  private async customDomains(tenant: PlatformTenant): Promise<PlatformStorefrontDomain[]> {
+    try {
+      return await storefrontDomainsOf(this.platformRead, tenant);
+    } catch (error) {
+      if (error instanceof AppError || error instanceof UnexpectedPlatformValueError) {
+        throw error;
+      }
+      this.logger.warn({ tenantId: tenant.id }, "storefront.domains_unavailable");
+      throw new AppError("SERVICE_UNAVAILABLE", { cause: error });
+    }
   }
 
   /** The key of an entry, or `undefined` when the locale cannot be a key part (the cache is then skipped). */
@@ -222,14 +262,30 @@ export class StorefrontService {
     return entry;
   }
 
-  /** Caches an entry for 5 minutes; Redis errors are ignored (the next request reads PostgreSQL again). */
-  private async write(tenant: RequestTenant, locale: string, entry: CachedStorefront): Promise<void> {
+  /**
+   * Caches an entry for 5 minutes, unless a platform invalidation came after `generation` (the platform rows it holds
+   * may be stale), and deletes it again when one came while it was written. Redis errors are ignored (the next request
+   * reads PostgreSQL again).
+   */
+  private async write(
+    tenant: RequestTenant,
+    locale: string,
+    entry: CachedStorefront,
+    generation: number,
+  ): Promise<void> {
     const key = this.keyOf(tenant, locale);
-    if (key === undefined || REDIS_DOWN.has(this.redis.status)) {
+    if (
+      key === undefined ||
+      REDIS_DOWN.has(this.redis.status) ||
+      generation !== this.platform.invalidationGeneration()
+    ) {
       return;
     }
     try {
       await this.redis.set(key.key, encodeCachedStorefront(entry), "EX", key.ttlSeconds);
+      if (generation !== this.platform.invalidationGeneration()) {
+        await this.redis.del(key.key);
+      }
     } catch {
       // Not cached this time.
     }
