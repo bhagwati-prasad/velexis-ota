@@ -1891,7 +1891,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - Resync and reprocess are offered only in the states the API allows [PF-89].
 - **Verify:** `pnpm --filter @velexis/platform-admin test`
 
-### PAD-013 · Build the settlements and payout account pages in the admin
+### PAD-013 · Build the settlements and payout account pages in the admin ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-admin
 - **Milestone:** M5
 - **Depends on:** PAD-004, PBE-060

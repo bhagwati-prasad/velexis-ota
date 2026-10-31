@@ -41,6 +41,7 @@ import DashboardPage from "@/app/(app)/page";
 import { AssignOfficeForm } from "@/app/(app)/tenants/[tenantId]/assign-office-form";
 import { ConnectionStatusForm } from "@/app/(app)/tenants/[tenantId]/connection-status-form";
 import { NotesForm } from "@/app/(app)/tenants/[tenantId]/notes-form";
+import { PayoutAccountPanel } from "@/app/(app)/tenants/[tenantId]/payout-account";
 import TenantDetailPage from "@/app/(app)/tenants/[tenantId]/page";
 import { MigrateForm, SuspendResumeForm } from "@/app/(app)/tenants/[tenantId]/suspend-form";
 import { TenantTabs } from "@/app/(app)/tenants/[tenantId]/tabs";
@@ -566,6 +567,8 @@ const CLIENT_COMPONENTS: ReadonlySet<unknown> = new Set<unknown>([
   NotesForm,
   ConnectionStatusForm,
   AssignOfficeForm,
+  // PAD-013: the payout account of the connections tab, which loads the masked account itself.
+  PayoutAccountPanel,
 ]);
 
 /**

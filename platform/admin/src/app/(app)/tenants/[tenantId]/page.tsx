@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import { AssignOfficeForm, type OfficeOption } from "@/app/(app)/tenants/[tenantId]/assign-office-form";
 import { ConnectionStatusForm } from "@/app/(app)/tenants/[tenantId]/connection-status-form";
 import { NotesForm } from "@/app/(app)/tenants/[tenantId]/notes-form";
+import { PayoutAccountPanel } from "@/app/(app)/tenants/[tenantId]/payout-account";
 import { MigrateForm, SuspendResumeForm } from "@/app/(app)/tenants/[tenantId]/suspend-form";
 import { TenantTabs, type TenantTab } from "@/app/(app)/tenants/[tenantId]/tabs";
 import { DateTime } from "@/components/date-time";
@@ -615,11 +616,13 @@ function PaymentConnectionCard({
 
 function ConnectionsPanel({
   tenantId,
+  tenantName,
   amadeus,
   payments,
   offices,
 }: {
   readonly tenantId: string;
+  readonly tenantName: string;
   readonly amadeus: readonly AmadeusConnection[];
   readonly payments: readonly PaymentConnection[];
   readonly offices: AvailableOffices;
@@ -652,6 +655,8 @@ function ConnectionsPanel({
           ))
         )}
       </div>
+      {/* PAD-013: loads the masked payout account itself when the tab is shown (the page stays one call). */}
+      <PayoutAccountPanel tenantId={tenantId} tenantName={tenantName} />
     </div>
   );
 }
@@ -865,6 +870,7 @@ function tabsOf(detail: TenantDetail, offices: AvailableOffices): TenantTab[] {
       content: (
         <ConnectionsPanel
           tenantId={tenant.id}
+          tenantName={tenant.name}
           amadeus={detail.amadeusConnections}
           payments={detail.paymentConnections}
           offices={offices}
@@ -936,6 +942,10 @@ function BackLink() {
  * with a reason, and, on an Amadeus connection that waits for an office, assign an available office of the pool,
  * whose list this page loads only then. Each form gets only the fields it needs, and every success revalidates this
  * page, so it shows the new status, connection and jobs.
+ *
+ * The connections tab also holds the OTA's payout account (PAD-013, `payout-account.tsx`): masked, with "Reveal bank
+ * details" (reason and step-up, 60 seconds in `RevealPanel`) and its review (verify, reject with a note). The panel
+ * loads the account when the tab is shown, so this page itself makes no second call.
  */
 export default async function TenantDetailPage({
   params,

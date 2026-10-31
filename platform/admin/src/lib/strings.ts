@@ -1801,3 +1801,303 @@ export const OFFICE_ACTION_STRINGS = Object.freeze({
   formExpired: "This form is out of date. Reload the page and try again.",
   rateLimitedFor: (seconds: number) => `Too many attempts. Try again in ${waitTime(seconds)}.`,
 });
+
+// ---- Settlements and payout accounts (PAD-013) ------------------------------------------------------------------
+
+/** The month a statement covers, from its `periodStart` (the first instant of the month, UTC): "February 2027". */
+export function formatMonth(periodStart: string): string {
+  const instant = Date.parse(periodStart);
+  if (!Number.isFinite(instant)) {
+    return periodStart;
+  }
+  return new Intl.DateTimeFormat("en", { year: "numeric", month: "long", timeZone: "UTC" }).format(instant);
+}
+
+/** The kinds of a statement line (`SettlementLineType`). */
+export const SETTLEMENT_LINE_TYPE_LABELS = Object.freeze({
+  charge: "Payment",
+  refund: "Refund",
+  dispute: "Dispute",
+  dispute_reversal: "Dispute won",
+  adjustment: "Adjustment",
+  carry_forward: "Carried balance",
+});
+
+/** The kinds of a payout account (`PayoutScheme`). */
+export const PAYOUT_SCHEME_LABELS = Object.freeze({ iban: "IBAN", local: "Local account" });
+
+/** `/settlements`: every statement, its filters and the drafts' generation (PF-91). */
+export const SETTLEMENT_LIST_STRINGS = Object.freeze({
+  title: "Settlements",
+  intro:
+    "The monthly statements of the payments Velexis collected for each OTA, newest month first. Review the drafts, approve them, pay the approved ones by bank transfer and mark them paid.",
+  filtersLabel: "Filter the statements",
+  statusLabel: "Status",
+  periodLabel: "Month",
+  caption: "Statements",
+  columnStatement: "Statement",
+  columnOta: "OTA",
+  columnMonth: "Month",
+  columnCurrency: "Currency",
+  columnStatus: "Status",
+  columnNet: "Net amount",
+  columnLines: "Lines",
+  columnGenerated: "Generated",
+  columnApproved: "Approved",
+  columnPaid: "Paid",
+  /** The environment of a test statement (development only), next to its currency. */
+  testEnvironment: "Test",
+  none: "Not yet",
+  empty: "No statement matches these filters.",
+  invalidFilters:
+    "These filters cannot be used: a status, a month or an OTA is not valid, or the page of the list is out of date.",
+  showAll: "Show every statement",
+  unavailableTitle: "The statements could not be loaded",
+  /** The list is limited to one OTA (`tenantId`, as the payout account of a tenant links it). */
+  oneTenant: "Showing the statements of one OTA.",
+  openTenant: "Open the OTA",
+  everyTenant: "Show every OTA",
+});
+
+/** The "Generate drafts" form of `/settlements` (`adminGenerateSettlements`). */
+export const GENERATE_SETTLEMENTS_STRINGS = Object.freeze({
+  title: "Generate drafts",
+  intro:
+    "Builds the drafts of a month that has ended from the Stripe balance transactions of the Velexis account, as the monthly run does on day 3. Existing drafts of the month are rebuilt from scratch and lose their adjustments; approved, paid and carried-forward statements are never touched.",
+  monthLabel: "Month",
+  monthHint: "A calendar month (UTC) that has ended.",
+  onlyTenantLabel: "Only the OTA of this list",
+  onlyTenantHint: (tenantId: string) => `Rebuild the drafts of ${tenantId} only, not those of every OTA.`,
+  submit: "Generate drafts",
+  confirmTitle: (month: string) => `Generate the drafts of ${month}?`,
+  confirmEveryTenant: (month: string) =>
+    `The drafts of every OTA for ${month} are rebuilt from scratch: adjustments added to them are dropped. Approved, paid and carried-forward statements stay as they are.`,
+  confirmOneTenant: (month: string) =>
+    `The drafts of this OTA for ${month} are rebuilt from scratch: adjustments added to them are dropped. Approved, paid and carried-forward statements stay as they are.`,
+  confirm: "Generate drafts",
+  working: "Queuing the generation…",
+  queued: (month: string) =>
+    `The drafts of ${month} are being generated. They show in the list once the job has run: reload it in a moment.`,
+  showDrafts: "Show the drafts of this month",
+  monthInvalid: "Choose a month from the list.",
+  /** `400 VALIDATION_FAILED`, `period_not_closed` on `/periodStart`. */
+  periodNotClosed: "Choose a month that has ended.",
+  tenantGone: "This OTA no longer exists. Reload the page.",
+  formExpired: "This form is out of date. Reload the page and try again.",
+  rateLimitedFor: (seconds: number) => `Too many attempts. Try again in ${waitTime(seconds)}.`,
+});
+
+/** `/settlements/[settlementId]`: one statement, its totals, lines and payout account status. */
+export const SETTLEMENT_DETAIL_STRINGS = Object.freeze({
+  title: "Statement",
+  heading: (tenantName: string, month: string) => `${tenantName}, ${month}`,
+  backToList: "All statements",
+  unavailableTitle: "The statement could not be loaded",
+  // Totals
+  totalsTitle: "Totals",
+  totalsIntro: "Net amount = payments − refunds − disputes − Stripe fees − Velexis fee + adjustments.",
+  gross: "Payments",
+  refunds: "Refunds",
+  disputes: "Disputes",
+  stripeFees: "Stripe fees",
+  velexisFees: (rate: string) => `Velexis fee (${rate})`,
+  adjustments: "Adjustments and carried balances",
+  net: "Net amount",
+  netPositive: "Owed to the OTA, to be paid by bank transfer.",
+  netNotPositive: "Zero or less: approving carries it forward to the next month's draft.",
+  // The statement
+  detailsTitle: "Statement",
+  status: "Status",
+  ota: "OTA",
+  environment: "Environment",
+  currency: "Currency",
+  month: "Month",
+  lines: "Lines",
+  generated: "Generated",
+  approved: "Approved",
+  approvedBy: "Approved by",
+  paid: "Transfer date",
+  paidBy: "Marked paid by",
+  payoutReference: "Bank reference",
+  carriedTo: "Carried to",
+  voided: "Voided",
+  voidReason: "Reason for voiding",
+  notes: "Notes",
+  version: "Version",
+  id: "Statement id",
+  notYet: "Not yet",
+  none: "None",
+  // Payout account
+  payoutTitle: "Payout account",
+  payoutStatus: "Review",
+  noPayoutAccount: "This OTA has not entered a payout account yet.",
+  payoutNeeded: "Approving a positive net amount, and marking it paid, needs a verified payout account.",
+  openPayout: (tenantName: string) => `Open the payout account of ${tenantName}`,
+  // Lines
+  linesTitle: "Lines",
+  linesIntro: (currency: string) =>
+    `One line per Stripe balance transaction, the balances carried from earlier statements and the manual adjustments, in date order. Amounts are in ${currency}; refunds and disputes are negative.`,
+  linesCaption: "Lines of the statement",
+  columnDate: "Date",
+  columnType: "Kind",
+  columnDescription: "Description",
+  columnAmount: "Amount",
+  columnStripeFee: "Stripe fee",
+  columnOriginal: "Original amount",
+  columnReferences: "References",
+  columnAddedBy: "Added by",
+  linesEmpty: "This statement has no lines.",
+  voidLines: "A voided draft keeps no lines.",
+  linesInvalid: "This page of lines is no longer available.",
+  linesUnavailable: "The lines could not be loaded.",
+  firstLines: "Show the first lines",
+  downloadCsv: "Download the lines as CSV",
+  downloadHint: "Every line as a spreadsheet file; it holds the OTA's payment records.",
+});
+
+/** The review actions of a statement (`settlement-actions.tsx`, `[settlementId]/actions.ts`). */
+export const SETTLEMENT_ACTION_STRINGS = Object.freeze({
+  sectionTitle: "Review",
+  intro: {
+    draft: "Check the totals and the lines, add adjustments where needed, then approve the draft or void it.",
+    approved:
+      "Pay the net amount by bank transfer to the OTA's verified payout account, then record the transfer here.",
+    paid: "This statement is paid. It can no longer change.",
+    carried_forward:
+      "This statement is carried forward: the next month's draft takes its balance. It can no longer change.",
+    void: "This draft is voided. Generate the month again to build a new draft.",
+  },
+  working: "Working…",
+  statusNow: "Status now:",
+  // Adjustment
+  adjustmentTitle: "Add an adjustment",
+  amountLabel: (currency: string) => `Amount (${currency})`,
+  amountHint: (currency: string, decimals: number) =>
+    decimals === 0
+      ? `A whole amount in ${currency}, without decimals. Positive is owed to the OTA; negative, with a minus sign, is owed to Velexis.`
+      : `An amount in ${currency} with at most ${decimals === 1 ? "1 decimal" : `${decimals} decimals`}, such as 100.00 or -25.50. Positive is owed to the OTA; negative is owed to Velexis.`,
+  amountRequired: "Enter the amount.",
+  amountFormat:
+    "Enter an amount with digits and a point, such as 100.00 or -25.50, with at most 10 digits before the point.",
+  amountZero: "Enter an amount other than zero.",
+  amountDecimals: (currency: string, decimals: number) =>
+    decimals === 0
+      ? `An amount in ${currency} has no decimals.`
+      : `An amount in ${currency} has at most ${decimals === 1 ? "1 decimal" : `${decimals} decimals`}.`,
+  descriptionLabel: "Description",
+  descriptionHint: "The text of the line, which the OTA sees on its statement. At most 500 characters.",
+  descriptionRequired: "Enter the text of the line.",
+  descriptionTooLong: "Enter a description of at most 500 characters.",
+  addAdjustment: "Add adjustment",
+  adding: "Adding…",
+  added: "The adjustment is added. The totals and the lines show it.",
+  // Approve
+  approve: "Approve",
+  approveTitle: (tenantName: string, month: string) => `Approve the statement of ${tenantName} for ${month}?`,
+  approvePositive: (net: string) =>
+    `The net amount of ${net} becomes approved, to be paid by bank transfer, and the statement can no longer change. You confirm with a code from your authenticator app.`,
+  approveNotPositive:
+    "The net amount is zero or less, so the statement is carried forward: next month's draft takes its balance, and the statement can no longer change. You confirm with a code from your authenticator app.",
+  approveConfirm: "Approve statement",
+  payoutWarning:
+    "The net amount is positive and the OTA's payout account is not verified: the approval is refused until it is.",
+  approved: "The statement is approved, to be paid by bank transfer.",
+  carriedForward: "The statement is carried forward to the next month's draft.",
+  // Mark paid
+  markPaidTitle: "Record the bank transfer",
+  paidOnLabel: "Date of the transfer",
+  paidOnHint: "The day the bank transfer was made, in UTC; not in the future.",
+  paidOnRequired: "Enter the date of the transfer.",
+  paidOnInvalid: "Enter the date of the transfer as a calendar date.",
+  paidOnFuture: "The date of the transfer cannot be in the future.",
+  referenceLabel: "Bank reference",
+  referenceHint: "The reference as the bank statement shows it. At most 200 characters.",
+  referenceRequired: "Enter the bank reference.",
+  referenceTooLong: "Enter a reference of at most 200 characters.",
+  markPaid: "Mark paid",
+  marking: "Saving…",
+  paid: "The statement is marked paid. The OTA's owners and finance members get an e-mail.",
+  revealToPay: "The bank details are on the OTA's page:",
+  // Void
+  void: "Void draft",
+  voidTitle: (tenantName: string, month: string) => `Void the draft of ${tenantName} for ${month}?`,
+  voidDescription:
+    "The draft becomes void and loses its lines, so a new draft can settle them again: generate the month again afterwards. The reason is kept on the statement.",
+  voidConfirm: "Void draft",
+  voided: "The draft is voided.",
+  // Refusals
+  stale:
+    "Someone else changed this statement since the page was loaded, so nothing was saved. Reload the page to see it as it is now, then try again.",
+  reload: "Reload the page",
+  notDraft: "This statement is no longer a draft. Reload the page to see its status.",
+  notApproved: "Only an approved statement can be marked paid. Reload the page to see its status.",
+  carryForwardChanged:
+    "The balance carried from earlier statements changed since this draft was generated. Generate the month again, then approve the new draft.",
+  payoutRequired: "The OTA has no verified payout account. Verify it on the OTA's page first.",
+  statementGone: "This statement no longer exists. Go back to the list.",
+  formExpired: "This form is out of date. Reload the page and try again.",
+  rateLimitedFor: (seconds: number) => `Too many attempts. Try again in ${waitTime(seconds)}.`,
+});
+
+/** The payout account of an OTA on its page (`payout-account.tsx`, `payout-actions.ts`; PF-64 AC2). */
+export const PAYOUT_ACCOUNT_STRINGS = Object.freeze({
+  title: "Payout account",
+  intro:
+    "The bank account where Velexis pays this OTA's settlements, shown masked. Revealing the full details needs a reason and a code from your authenticator app, and is in the audit log.",
+  loading: "Loading the payout account…",
+  none: "This OTA has not entered a payout account yet. Its owner enters it in the portal.",
+  unavailable: "The payout account could not be loaded.",
+  tryAgain: "Try again",
+  holder: "Account holder",
+  country: "Bank country",
+  currency: "Currency",
+  scheme: "Kind",
+  account: "Account",
+  status: "Review",
+  reviewNote: "Review note",
+  updated: "Last changed",
+  /** The masked number, read by a screen reader as "IBAN ending in 7947". */
+  maskedLabel: { iban: "IBAN", local: "Account number" },
+  pendingNote: "Check the account against the OTA's legal name, then verify it before the first payout.",
+  statements: "Statements of this OTA",
+  // Reveal
+  reveal: "Reveal bank details",
+  revealTitle: (tenantName: string) => `Reveal the bank details of ${tenantName}?`,
+  revealDescription:
+    "The full bank details show on this page for 60 seconds. You confirm with a code from your authenticator app.",
+  revealConfirm: "Reveal",
+  revealedTitle: (tenantName: string) => `Bank details of ${tenantName}`,
+  iban: "IBAN",
+  bic: "BIC",
+  accountNumber: "Account number",
+  routingNumber: "Routing number",
+  // Verify
+  verify: "Verify",
+  verifyTitle: (tenantName: string) => `Verify the payout account of ${tenantName}?`,
+  verifyDescription:
+    "Statements with a positive net amount can then be approved and paid to this account. The owners get an e-mail.",
+  verifyConfirm: "Verify account",
+  verified: "The payout account is verified.",
+  // Reject
+  reject: "Reject",
+  rejectTitle: (tenantName: string) => `Reject the payout account of ${tenantName}`,
+  rejectDescription:
+    "Nothing is paid to a rejected account. The owners get an e-mail with your note and can enter the account again.",
+  noteLabel: "Note for the owner",
+  noteHint:
+    "Why the account is rejected, as the owner sees it in the portal. Never write a bank number here. At most 1,000 characters.",
+  noteRequired: "Write why the account is rejected.",
+  noteTooLong: "Enter a note of at most 1,000 characters.",
+  rejectConfirm: "Reject account",
+  rejected: "The payout account is rejected. The owners get an e-mail with your note.",
+  cancel: "Cancel",
+  statusNow: "Review now:",
+  working: "Working…",
+  // Refusals
+  stale:
+    "The owner or another admin changed this payout account since it was loaded, so nothing was saved. Reload the page to see it as it is now.",
+  reload: "Reload the page",
+  gone: "This OTA has no payout account any more. Reload the page.",
+  formExpired: "This form is out of date. Reload the page and try again.",
+  rateLimitedFor: (seconds: number) => `Too many attempts. Try again in ${waitTime(seconds)}.`,
+});
