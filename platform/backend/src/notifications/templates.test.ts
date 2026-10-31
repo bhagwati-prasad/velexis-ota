@@ -137,6 +137,27 @@ const SAMPLES: Readonly<Record<EmailTemplateKey, EmailVariables>> = {
     },
     secretData: {},
   },
+  "domain.verified": {
+    data: {
+      fullName: "Ana Lima",
+      tenantName: "Acme Travel",
+      tenantKey: "acme",
+      hostname: "travel.acme-travel.example.com",
+      domainsUrl: "https://platform.example.com/otas/ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/domains",
+    },
+    secretData: {},
+  },
+  "domain.failed": {
+    data: {
+      fullName: "Ana Lima",
+      tenantName: "Acme Travel",
+      tenantKey: "acme",
+      hostname: "travel.acme-travel.example.com",
+      reason: "The TXT record was not found.",
+      domainsUrl: "https://platform.example.com/otas/ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/domains",
+    },
+    secretData: {},
+  },
 };
 
 const templates = EmailTemplates.load();
@@ -192,6 +213,9 @@ describe("e-mail templates", () => {
         // M5: the end of a credential verification (PBE-052).
         "connection.credentials_applied",
         "connection.credentials_failed",
+        // M5: the end of a custom domain's DNS verification (PBE-050).
+        "domain.verified",
+        "domain.failed",
       ].sort(),
     );
     for (const key of EMAIL_TEMPLATE_KEYS) {

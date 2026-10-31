@@ -40,6 +40,9 @@ export const EMAIL_TEMPLATE_KEYS = [
   // M5: the verification of the OTA's own credentials ended (PBE-052, `credentials.verify`; PADR-0013 item 5).
   "connection.credentials_applied",
   "connection.credentials_failed",
+  // M5: the DNS verification of a custom domain ended (PBE-050, `domain.verify`; PADR-0013 item 5).
+  "domain.verified",
+  "domain.failed",
 ] as const;
 
 /** A key of EMAIL_TEMPLATE_KEYS. */
@@ -140,6 +143,21 @@ export const EMAIL_TEMPLATES: Readonly<Record<EmailTemplateKey, EmailTemplateDef
       "connectionUrl",
     ],
   ),
+  "domain.verified": definition("A custom domain passed its DNS verification (to the owners)", [
+    "fullName",
+    "tenantName",
+    "tenantKey",
+    "hostname",
+    "domainsUrl",
+  ]),
+  "domain.failed": definition("A custom domain was not verified within its 72-hour window (to the owners)", [
+    "fullName",
+    "tenantName",
+    "tenantKey",
+    "hostname",
+    "reason",
+    "domainsUrl",
+  ]),
 });
 
 /** Variables every template may use, filled in by the renderer from the configuration (PADR-0013 item 7). */

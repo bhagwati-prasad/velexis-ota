@@ -115,6 +115,52 @@ export const STOREFRONT_ADDRESS_SWITCH_VARIABLES = Object.freeze({
 });
 
 /**
+ * One item of DNS_RESOLVERS, as `node:dns` `Resolver.setServers` takes it: an IPv4 address with an optional port
+ * (`1.1.1.1`, `127.0.0.1:5353`), or an IPv6 address, bare or in brackets with a port (`2606:4700:4700::1111`,
+ * `[2606:4700:4700::1111]:53`). No host name: the resolvers must not depend on another resolver. `dnsResolverProblems`
+ * checks the address and the port themselves.
+ */
+export const DNS_RESOLVER_ITEM =
+  /^(?:[0-9.]{7,15}(?::[0-9]{1,5})?|[0-9A-Fa-f:.]{2,45}|\[[0-9A-Fa-f:.]{2,45}\](?::[0-9]{1,5})?)$/;
+
+/** The public resolvers DNS verification asks when DNS_RESOLVERS is not set (PADR-0004 item 3). */
+export const DEFAULT_DNS_RESOLVERS = Object.freeze(["1.1.1.1", "8.8.8.8"] as const);
+
+/** The most resolvers DNS_RESOLVERS may list: each one that does not answer costs a timeout of its own. */
+export const MAX_DNS_RESOLVERS = 4;
+
+/**
+ * The address and port of one DNS_RESOLVERS item, or `undefined` when it is none: an IPv4 address (with `:port`), or an
+ * IPv6 address (bare, or `[address]:port`); a port is 1 to 65535.
+ */
+export function parseDnsResolver(item: string): { address: string; port?: number } | undefined {
+  const bracketed = /^\[([^\]]+)\](?::([0-9]{1,5}))?$/.exec(item);
+  const plainV4 = /^([0-9.]+)(?::([0-9]{1,5}))?$/.exec(item);
+  let address: string;
+  let port: string | undefined;
+  if (bracketed !== null) {
+    [, address = "", port] = bracketed;
+    if (!isIPv6(address)) {
+      return undefined;
+    }
+  } else if (plainV4 !== null) {
+    [, address = "", port] = plainV4;
+    if (isIP(address) !== 4) {
+      return undefined;
+    }
+  } else if (isIPv6(item)) {
+    address = item;
+  } else {
+    return undefined;
+  }
+  if (port === undefined) {
+    return { address };
+  }
+  const number = Number(port);
+  return number >= 1 && number <= 65_535 ? { address, port: number } : undefined;
+}
+
+/**
  * A secret or restricted API key of the Velexis Stripe account (`sk_test_…`, `sk_live_…`, `rk_test_…`, `rk_live_…`).
  * Its mode must be the deployment's (`stripeProblems`): live keys in production only, test keys everywhere else.
  */
@@ -231,6 +277,14 @@ export const PLATFORM_BACKEND_CONFIG_SCHEMA = {
    */
   STOREFRONT_IPV4: env.string({ optional: true, pattern: IPV4_ADDRESS_PATTERN }),
   STOREFRONT_IPV6: env.string({ optional: true, pattern: IPV6_ADDRESS_CHARACTERS }),
+  /**
+   * The DNS resolvers of custom domain verification (PBE-050, PADR-0004 item 3): a comma-separated list of 1 to
+   * MAX_DNS_RESOLVERS IP addresses, each with an optional port (`1.1.1.1,8.8.8.8`, `[2606:4700:4700::1111]:53`). The
+   * worker's `node:dns` `Resolver` asks them, never the VM's caching resolver, so a new record is seen at once and a
+   * stale local cache never verifies a domain. The default is two public resolvers, safe in production; the API
+   * validates the value too, because both read `platform-backend.env`.
+   */
+  DNS_RESOLVERS: env.list({ pattern: DNS_RESOLVER_ITEM, default: DEFAULT_DNS_RESOLVERS }),
   /**
    * The OTAs that are not `failed` one account may own (platform/docs/scope.md PF-10 AC4): beyond it createTenant
    * answers `422 UNPROCESSABLE` with `details.reason = "tenant_limit"`.
@@ -394,6 +448,34 @@ function storefrontAddressProblems(source: EnvSource | undefined): ConfigProblem
 }
 
 /**
+ * The DNS_RESOLVERS rules that a pattern cannot express: every item is an IP address of its family with a port of 1 to
+ * 65535 when it has one, and there are at most MAX_DNS_RESOLVERS of them. A value that is invalid on its own is
+ * reported by the schema, not here.
+ */
+function dnsResolverProblems(source: EnvSource | undefined): ConfigProblem[] {
+  const items = validValues(
+    { DNS_RESOLVERS: PLATFORM_BACKEND_CONFIG_SCHEMA.DNS_RESOLVERS },
+    source,
+  )?.DNS_RESOLVERS;
+  if (items === undefined) {
+    return [];
+  }
+  if (items.some((item) => parseDnsResolver(item) === undefined)) {
+    return [
+      {
+        variable: "DNS_RESOLVERS",
+        reason:
+          "must list IP addresses, each with an optional port of 1 to 65535 (`[address]:port` for IPv6)",
+      },
+    ];
+  }
+  if (items.length > MAX_DNS_RESOLVERS) {
+    return [{ variable: "DNS_RESOLVERS", reason: `must list at most ${MAX_DNS_RESOLVERS} resolvers` }];
+  }
+  return [];
+}
+
+/**
  * Validates the configuration in `source` (default: the process environment) and returns it deep-frozen. Throws one
  * `ConfigError` that names every invalid variable and the reason, never a value.
  */
@@ -402,6 +484,7 @@ export function parseConfig(source?: EnvSource): PlatformBackendConfig {
     ...trustProxyProblems(source),
     ...stripeProblems(source),
     ...storefrontAddressProblems(source),
+    ...dnsResolverProblems(source),
   ];
   try {
     const config = defineConfig(PLATFORM_BACKEND_CONFIG_SCHEMA, source);

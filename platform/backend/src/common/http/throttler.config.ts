@@ -163,7 +163,8 @@ export type RateLimitId = keyof typeof RATE_LIMITS;
  * `adminVerifyMfa`) are public: their account is known only from the challenge, so the MFA service counts `mfa` there
  * itself (PBE-015, with `RedisThrottlerStorage` and `trackerDigest("account", …)`); "5 attempts per challenge" and the
  * sign-in lockout live in the challenge and the account, not here.
- * The "Domain check now" operation arrives with the M5 slice of the document, which maps it to `domainCheck`.
+ * The "Domain check now" row is `checkDomain` (PBE-050): 1 per `domainId` per minute, counted before the auth guards,
+ * so every call counts, whatever it answers.
  */
 export const OPERATION_RATE_LIMITS: Readonly<Partial<Record<PlatformOperationId, readonly RateLimitId[]>>> =
   Object.freeze({
@@ -177,6 +178,7 @@ export const OPERATION_RATE_LIMITS: Readonly<Partial<Record<PlatformOperationId,
     lookupInvitation: ["invitationLookup"],
     checkTenantKey: ["keyAvailability"],
     createConsoleToken: ["consoleToken"],
+    checkDomain: ["domainCheck"],
   });
 
 /** The limits of a handler: those of its operation, or `authenticated`. */

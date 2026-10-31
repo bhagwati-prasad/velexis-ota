@@ -1540,7 +1540,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - A plan without custom domains, or the switch off, answers `FEATURE_DISABLED` [PF-41 AC5].
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int domains`
 
-### PBE-050 · Implement DNS verification and check now
+### PBE-050 · Implement DNS verification and check now ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-049

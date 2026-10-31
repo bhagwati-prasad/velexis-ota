@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Your domain is verified</title>
+  </head>
+  <body style="margin: 0; padding: 24px; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 1.5; color: #1f2933; background-color: #ffffff;">
+    <p>Hello {{fullName}},</p>
+    <p>Velexis found the DNS records of {{hostname}}: the domain is verified for your OTA {{tenantName}} ({{tenantKey}}). Velexis now obtains its certificate, which usually takes a few minutes; the storefront is then served on https://{{hostname}}/.</p>
+    <p>You can make it the primary address of your storefront on the domains page: <a href="{{domainsUrl}}">{{domainsUrl}}</a></p>
+    <p>Keep the DNS records in place. Velexis checks them every day and stops serving the domain if they are removed.</p>
+    <p>The Velexis team</p>
+  </body>
+</html>

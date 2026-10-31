@@ -11,10 +11,13 @@ import { FEATURE_VARIABLES, FEATURES } from "./common/features";
 import {
   APP_DIR,
   createProcessLogger,
+  DEFAULT_DNS_RESOLVERS,
   EMAIL_ADDRESS,
   loadConfig,
   loadConfigOrReport,
+  MAX_DNS_RESOLVERS,
   parseConfig,
+  parseDnsResolver,
   PLATFORM_BACKEND_CONFIG_SCHEMA,
   PLATFORM_PROCESSES,
   STOREFRONT_ADDRESS_SWITCH_VARIABLES,
@@ -199,6 +202,7 @@ describe("parseConfig", () => {
       PUBLIC_PLATFORM_ADMIN_URL: "http://localhost:3001",
       PUBLIC_OTA_ADMIN_URL: "http://localhost:3002",
       STOREFRONT_BASE_DOMAIN: "ota.example.com",
+      DNS_RESOLVERS: ["1.1.1.1", "8.8.8.8"],
       MAX_TENANTS_PER_ACCOUNT: 3,
       FEATURE_STRIPE_BILLING: false,
       FEATURE_OWN_STRIPE: false,
@@ -465,6 +469,7 @@ describe("parseConfig", () => {
       OTA_ADMIN_URL,
       "STOREFRONT_BASE_DOMAIN",
       ...STOREFRONT_ADDRESS_VARIABLES,
+      "DNS_RESOLVERS",
       "MAX_TENANTS_PER_ACCOUNT",
       ...Object.values(FEATURE_VARIABLES),
       ...STRIPE_VARIABLES,
@@ -965,6 +970,79 @@ describe("parseConfig: the storefront addresses (PBE-049)", () => {
           parseConfig({ ...REQUIRED, ...addresses, FEATURE_CUSTOM_DOMAINS: "true" }).STOREFRONT_IPV4,
         ).toBe(STOREFRONT_ADDRESSES.STOREFRONT_IPV4);
       }
+    }
+  });
+});
+
+describe("parseConfig: the DNS resolvers of domain verification (PBE-050)", () => {
+  it("[PBE-050] defaults DNS_RESOLVERS to two public resolvers, also for an empty value", () => {
+    expect(DEFAULT_DNS_RESOLVERS).toEqual(["1.1.1.1", "8.8.8.8"]);
+    expect(parseConfig(REQUIRED).DNS_RESOLVERS).toEqual(["1.1.1.1", "8.8.8.8"]);
+    expect(parseConfig({ ...REQUIRED, DNS_RESOLVERS: "" }).DNS_RESOLVERS).toEqual(["1.1.1.1", "8.8.8.8"]);
+  });
+
+  it("[PBE-050] accepts IPv4 and IPv6 resolvers, with optional ports, trimmed", () => {
+    const config = parseConfig({
+      ...REQUIRED,
+      DNS_RESOLVERS: " 9.9.9.9, 127.0.0.1:5353 ,2606:4700:4700::1111,[2001:db8::53]:53",
+    });
+
+    expect(config.DNS_RESOLVERS).toEqual([
+      "9.9.9.9",
+      "127.0.0.1:5353",
+      "2606:4700:4700::1111",
+      "[2001:db8::53]:53",
+    ]);
+    expect(Object.isFrozen(config.DNS_RESOLVERS)).toBe(true);
+    expect(parseDnsResolver("127.0.0.1:5353")).toEqual({ address: "127.0.0.1", port: 5353 });
+    expect(parseDnsResolver("[2001:db8::53]:53")).toEqual({ address: "2001:db8::53", port: 53 });
+    expect(parseDnsResolver("2001:db8::53")).toEqual({ address: "2001:db8::53" });
+  });
+
+  it("[PBE-050] refuses host names, bad addresses and ports, and more than four resolvers, without echoing them", () => {
+    for (const value of [
+      "dns.example.net",
+      "1.1.1.1,resolver.example.net",
+      "300.1.1.1",
+      "1.1.1",
+      "1.1.1.1:0",
+      "1.1.1.1:65536",
+      "2001:db8::53:53:53:53:53:53",
+      "[1.1.1.1]:53",
+      "[2001:db8::53]:99999",
+      "2001:db8::53%eth0",
+      "https://1.1.1.1",
+      "1.1.1.1/32",
+      "1.1.1.1,1.0.0.1,8.8.8.8,8.8.4.4,9.9.9.9",
+    ]) {
+      const error = configError({ ...REQUIRED, DNS_RESOLVERS: value });
+      expect(
+        error.problems.map(({ variable }) => variable),
+        value,
+      ).toEqual(["DNS_RESOLVERS"]);
+      expect(error.message, value).not.toContain(value);
+    }
+    expect(configError({ ...REQUIRED, DNS_RESOLVERS: "1.1.1.1:0" }).problems[0]?.reason).toBe(
+      "must list IP addresses, each with an optional port of 1 to 65535 (`[address]:port` for IPv6)",
+    );
+    expect(
+      configError({ ...REQUIRED, DNS_RESOLVERS: "1.1.1.1,1.0.0.1,8.8.8.8,8.8.4.4,9.9.9.9" }).problems[0]
+        ?.reason,
+    ).toBe(`must list at most ${MAX_DNS_RESOLVERS} resolvers`);
+  });
+
+  it("[PBE-050] declares DNS_RESOLVERS in every env template, with the public resolvers of PADR-0004", () => {
+    for (const file of [
+      ".env.example",
+      "platform/backend/.env.example",
+      "deploy/env/platform-backend.env.example",
+    ]) {
+      const values = readEnvFile(join(REPO_ROOT, file));
+      expect(values["DNS_RESOLVERS"], file).toBe("1.1.1.1,8.8.8.8");
+      expect(
+        parseConfig({ ...REQUIRED, DNS_RESOLVERS: values["DNS_RESOLVERS"] }).DNS_RESOLVERS,
+        file,
+      ).toEqual(DEFAULT_DNS_RESOLVERS);
     }
   });
 });

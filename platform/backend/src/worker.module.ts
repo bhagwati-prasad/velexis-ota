@@ -11,8 +11,10 @@
 // processor of `platform-connections` (the verification jobs, PBE-020), ProvisioningModule the one processor of
 // `platform-tenant-events` with the provisioning post-steps (PBE-022), BillingSyncModule the one processor of
 // `platform-stripe-events` with the `stripe_events.sweep` handler (PBE-043), PaymentConnectionsModule the handler of the
-// Connect account events that processor runs (PBE-056), and SettlementsModule the one processor of
-// `platform-settlements` (the monthly drafts) with the `settlements.monthly` handler (PBE-059).
+// Connect account events that processor runs (PBE-056), SettlementsModule the one processor of
+// `platform-settlements` (the monthly drafts) with the `settlements.monthly` handler (PBE-059), and DomainsModule the
+// one processor of `platform-domains` (the DNS verification of custom domains) with the `domains.verify_pending`
+// handler (PBE-050).
 import { Module, type DynamicModule } from "@nestjs/common";
 import { DiscoveryModule } from "@nestjs/core";
 import type { Logger } from "@velexis/logger";
@@ -24,6 +26,7 @@ import { MaintenanceProcessor } from "./common/queues/maintenance.processor";
 import { QueuesModule } from "./common/queues/queues.module";
 import { JobSchedulerRegistry, schedulerSwitchesProvider } from "./common/queues/scheduler.registry";
 import { configModule, type PlatformBackendConfig } from "./config";
+import { DomainsModule } from "./domains/domains.module";
 import { HealthModule } from "./health/health.module";
 import { MembershipsModule } from "./memberships/memberships.module";
 import { NotificationsModule } from "./notifications/notifications.module";
@@ -55,6 +58,7 @@ export class WorkerModule {
         BillingSyncModule.forWorker(),
         PaymentConnectionsModule.forWorker(),
         SettlementsModule.forWorker(),
+        DomainsModule.forWorker(),
       ],
       // The schedules of a milestone switch that is off are not registered (PADR-0015 item 2).
       providers: [schedulerSwitchesProvider, JobSchedulerRegistry, MaintenanceProcessor],

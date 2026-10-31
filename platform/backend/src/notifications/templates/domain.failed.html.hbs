@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Your domain could not be verified</title>
+  </head>
+  <body style="margin: 0; padding: 24px; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 1.5; color: #1f2933; background-color: #ffffff;">
+    <p>Hello {{fullName}},</p>
+    <p>Velexis could not verify {{hostname}} for your OTA {{tenantName}} ({{tenantKey}}) within 72 hours, so the domain is marked as failed. The last check found: {{reason}}</p>
+    <p>Check the DNS records shown on the domains page at your DNS provider, then choose "Check now" there to start a new 72-hour window: <a href="{{domainsUrl}}">{{domainsUrl}}</a></p>
+    <p>Until then the storefront is not served on this domain. You can also remove the domain on the same page.</p>
+    <p>The Velexis team</p>
+  </body>
+</html>

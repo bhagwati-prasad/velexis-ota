@@ -5,8 +5,12 @@
 // host (the tenant's unique `key`, or the unique `hostname` of a custom domain), and the host names of a tenant for the
 // `vx:invalidate` subscriber. PBE-049 adds the writes of the portal's custom domains (add, make primary, remove), each
 // in the caller's transaction under the tenant's domain lock (`lockTenantDomains`), so two concurrent additions cannot
-// both take the plan's last free domain and two primary changes cannot cross. The DNS checks come with PBE-050.
-// Kysely on the API's `PLATFORM_DB`, schema-qualified tables (ADR-0005).
+// both take the plan's last free domain and two primary changes cannot cross. PBE-050 adds the DNS verification: the
+// pending custom domains of the 5-minute run (`pendingCustomDomainIds`, on the partial index of pending rows), the
+// domain a `domain.verify` job checks (`findForCheck`, then `lockForCheck` in the job's transaction), the outcome
+// (`markVerified`, `recordCheckFailure`), the restart of a failed domain's window by `checkDomain` (`restartWindow`),
+// and the OTA's name and active owners for the owners' e-mails (`tenantLabel`, `activeOwners`, read only).
+// Kysely on the process's `PLATFORM_DB` (the API's or the worker's pool), schema-qualified tables (ADR-0005).
 import { Inject, Injectable } from "@nestjs/common";
 import { sql } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -94,6 +98,37 @@ export interface NewCustomDomain {
 export interface DomainRef {
   readonly id: string;
   readonly hostname: string;
+}
+
+/** A domain as a DNS check reads it: the portal's row with its tenant and the verification state. */
+export interface DomainCheckRow extends DomainListRow {
+  readonly tenant_id: string;
+  readonly verified_at: Date | null;
+  readonly check_failures: number;
+}
+
+/** The name, key, status and deletion time of a tenant, for the owners' e-mails. */
+export interface DomainTenantLabel {
+  readonly name: string;
+  readonly key: string;
+  readonly status: string;
+  readonly deleted_at: Date | null;
+}
+
+/** An active owner of a tenant, with the address the owners' e-mails go to. */
+export interface DomainOwner {
+  readonly account_id: string;
+  readonly email: string;
+  readonly full_name: string;
+}
+
+/** The outcome of a failed DNS check, as `recordCheckFailure` writes it. */
+export interface DomainCheckFailure {
+  /** The error code of domain-checks.ts (`txt_missing`, …). */
+  readonly error: string;
+  /** True when the verification window has ended: the domain becomes `failed`. */
+  readonly failed: boolean;
+  readonly now: Date;
 }
 
 @Injectable()
@@ -256,6 +291,108 @@ export class DomainsRepository {
   /** Deletes one domain row. */
   async delete(trx: PlatformTransaction, domainId: string): Promise<void> {
     await trx.deleteFrom("platform.tenant_domains").where("id", "=", domainId).execute();
+  }
+
+  /**
+   * The ids of every `pending` custom domain, the oldest deadline first (`tenant_domains_pending_idx`): one
+   * `domain.verify` job each in the 5-minute run.
+   */
+  async pendingCustomDomainIds(): Promise<string[]> {
+    const rows = await this.db
+      .selectFrom("platform.tenant_domains")
+      .select("id")
+      .where("verification_status", "=", "pending")
+      .where("kind", "=", "custom")
+      .orderBy("verification_deadline_at")
+      .orderBy("id")
+      .execute();
+    return rows.map((row) => row.id);
+  }
+
+  /** The domain `domainId` with its tenant, as a DNS check reads it before asking DNS; `undefined` when it is gone. */
+  async findForCheck(domainId: string): Promise<DomainCheckRow | undefined> {
+    return this.checkRows(this.db).where("d.id", "=", domainId).executeTakeFirst();
+  }
+
+  /** The domain `domainId` with its tenant, read in `trx` and locked (`FOR UPDATE` of the domain row). */
+  async lockForCheck(trx: PlatformTransaction, domainId: string): Promise<DomainCheckRow | undefined> {
+    return this.checkRows(trx).where("d.id", "=", domainId).forUpdate("d").executeTakeFirst();
+  }
+
+  /** A passed check: `verified` at `now`, no failure counted, no error, checked at `now`. */
+  async markVerified(trx: PlatformTransaction, domainId: string, now: Date): Promise<void> {
+    await trx
+      .updateTable("platform.tenant_domains")
+      .set({
+        verification_status: "verified",
+        verified_at: now,
+        check_failures: 0,
+        last_checked_at: now,
+        last_check_error: null,
+        updated_at: now,
+      })
+      .where("id", "=", domainId)
+      .execute();
+  }
+
+  /** A failed check: its time and error code, and `failed` when the window has ended. */
+  async recordCheckFailure(
+    trx: PlatformTransaction,
+    domainId: string,
+    failure: DomainCheckFailure,
+  ): Promise<void> {
+    await trx
+      .updateTable("platform.tenant_domains")
+      .set({
+        last_checked_at: failure.now,
+        last_check_error: failure.error,
+        updated_at: failure.now,
+        ...(failure.failed ? { verification_status: "failed" } : {}),
+      })
+      .where("id", "=", domainId)
+      .execute();
+  }
+
+  /** A failed domain's new verification window: `pending` again until `deadline`, with the same token. */
+  async restartWindow(trx: PlatformTransaction, domainId: string, deadline: Date, now: Date): Promise<void> {
+    await trx
+      .updateTable("platform.tenant_domains")
+      .set({ verification_status: "pending", verification_deadline_at: deadline, updated_at: now })
+      .where("id", "=", domainId)
+      .execute();
+  }
+
+  /** The name, key, status and deletion time of the tenant `tenantId`, read in `trx`; `undefined` without one. */
+  async tenantLabel(trx: PlatformTransaction, tenantId: string): Promise<DomainTenantLabel | undefined> {
+    return trx
+      .selectFrom("platform.tenants")
+      .select(["name", "key", "status", "deleted_at"])
+      .where("id", "=", tenantId)
+      .executeTakeFirst();
+  }
+
+  /**
+   * The active owners of `tenantId`, oldest membership first, with their e-mail address and name (read only), in
+   * `trx`. An account that is disabled or deleted is left out.
+   */
+  async activeOwners(trx: PlatformTransaction, tenantId: string): Promise<DomainOwner[]> {
+    return trx
+      .selectFrom("platform.tenant_memberships as m")
+      .innerJoin("platform.accounts as a", "a.id", "m.account_id")
+      .select(["m.account_id", "a.email", "a.full_name"])
+      .where("m.tenant_id", "=", tenantId)
+      .where("m.role", "=", "owner")
+      .where("m.status", "=", "active")
+      .where("a.status", "not in", ["disabled", "deleted"])
+      .where("a.deleted_at", "is", null)
+      .orderBy("m.created_at")
+      .orderBy("m.id")
+      .execute();
+  }
+
+  /** The columns of DomainCheckRow: the portal's columns, the tenant and the verification state. */
+  private checkRows(db: PlatformDb | PlatformTransaction) {
+    return this.domainRows(db).select(["d.tenant_id", "d.verified_at", "d.check_failures"]);
   }
 
   /** The columns of DomainListRow: a domain row with its tenant's key. */

@@ -668,10 +668,19 @@ describe("TenantRoleGuard", () => {
   it("[PBE-017 AC4] answers 404 NOT_FOUND to a non-member on every route under /v1/tenants/{tenantId}", async () => {
     expect(tenantOperations.length).toBeGreaterThan(20);
     for (const { operationId, method, path } of tenantOperations) {
-      const url = path.replace(/\{([A-Za-z]+)\}/g, (_match, name: string) =>
-        name === "tenantId" ? ota.tenant.id : (PATH_VALUES[name] ?? name),
-      );
-      for (const who of ["stranger", "removed"]) {
+      for (const [who, domainNumber] of [
+        ["stranger", 99_998],
+        ["removed", 99_999],
+      ] as const) {
+        // A domain id of each caller's own: checkDomain counts 1 call per domain per minute before any auth guard
+        // (RateLimitGuard, `domainCheck`), so a second caller on the same id would meet that limit, not the tenant's.
+        const url = path.replace(/\{([A-Za-z]+)\}/g, (_match, name: string) =>
+          name === "tenantId"
+            ? ota.tenant.id
+            : name === "domainId"
+              ? testId("dom", domainNumber)
+              : (PATH_VALUES[name] ?? name),
+        );
         const res = await t.http[method as "get" | "post" | "patch" | "put" | "delete"](url)
           .set(await bearer(who))
           .set("If-Match", '"1"')

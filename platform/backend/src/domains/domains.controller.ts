@@ -1,5 +1,5 @@
 // The domain routes of the portal (platform/docs/api-inventory-resources.md §2): `listDomains` since PBE-027; adding,
-// making primary and removing a custom domain since PBE-049; checking one comes with PBE-050. Thin: each handler binds
+// making primary and removing a custom domain since PBE-049; checking one now since PBE-050. Thin: each handler binds
 // its operation, reads the validated request and makes one service call. Every member may list the domains
 // (`viewOverview` of the role matrix); owners and admins manage them (`manageDomains`). TenantRoleGuard answers `404`
 // to non-members and `403` to the other roles before the handler runs, and FeatureGuard answers `403
@@ -30,6 +30,21 @@ export class DomainsController {
     @Validated("body") body: AddDomainRequest,
   ): Promise<Domain> {
     return this.domains.add(membership, body);
+  }
+
+  /**
+   * `checkDomain` (PBE-050): `202` with the domain as it is now, once its `domain.verify` job is queued. RateLimitGuard
+   * counts it against `domainCheck` (1 per domain per minute) before any other guard runs.
+   */
+  @Post(":domainId/check")
+  @HttpCode(202)
+  @OpenApiOperation("checkDomain")
+  @TenantRoles(...tenantRolesOf("checkDomain"))
+  checkDomain(
+    @CurrentMembership() membership: TenantMembership,
+    @Validated("path") path: Readonly<Record<string, unknown>>,
+  ): Promise<Domain> {
+    return this.domains.check(membership, path["domainId"] as string);
   }
 
   @Post(":domainId/make-primary")

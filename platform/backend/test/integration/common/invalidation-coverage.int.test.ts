@@ -8,10 +8,12 @@
 //
 // What the table does not hold, and where it is proven instead:
 // - `domain` events of the custom domain operations of M5 that are still pending (test/contract/pending-operations.ts:
-//   checkDomain, the admin's re-check and removal, PBE-050 and PBE-051): the guard test below fails once one of them
-//   is bound without its row. makeDomainPrimary and removeDomain have theirs since PBE-049; addDomain writes a
-//   pending domain, which neither the OTA backend nor TLS `ask` serves, so it publishes nothing (architecture §6.3:
-//   verified, failed, removed, primary changed) and has no row.
+//   the admin's re-check and removal, PBE-051): the guard test below fails once one of them is bound without its row.
+//   makeDomainPrimary and removeDomain have theirs since PBE-049; addDomain writes a pending domain, which neither the
+//   OTA backend nor TLS `ask` serves, so it publishes nothing (architecture §6.3: verified, failed, removed, primary
+//   changed) and has no row. checkDomain (PBE-050) has a row that publishes nothing: restarting a failed domain's
+//   window makes it pending, served nowhere either; the verification its job may bring is the worker's, proven in
+//   domain-verification.int.test.ts.
 // - Changes the platform worker makes, not a request: provisioning's post-steps (post-steps.int.test.ts) and its
 //   failure handler (failure-handler.test.ts), billing sync of Stripe subscriptions (billing-events.int.test.ts), the
 //   verification job of a shared Amadeus account (amadeus-accounts.int.test.ts), and the developer's commands
@@ -999,6 +1001,32 @@ const COVERAGE: readonly CoverageRow[] = [
       };
     },
   },
+  {
+    // A failed domain is served nowhere, nor is the pending one its new window makes of it: no event (§6.3). The
+    // verification the queued job may bring publishes from the worker (domain-verification.int.test.ts).
+    change: "failed custom domain checked now (new verification window)",
+    operationId: "checkDomain",
+    publishes: [],
+    async arrange() {
+      const owner = await person();
+      const { tenant } = await ota({ members: [[owner, "owner"]] });
+      const custom = await insertTenantDomain(pool, tenant, {
+        id: ids.new("dom"),
+        hostname: mine(`cov-${randomBytes(6).toString("hex")}.example.net`),
+        kind: "custom",
+        verification_status: "failed",
+        verified_at: null,
+        verification_token: "vx-verify-K7Q4M2XP9TRWH5ZDB3NV8QKE1MZT6RYC",
+        verification_deadline_at: daysAfterNow(-1),
+      });
+      const headers = await portal(owner.id);
+      return {
+        send: () => t.http.post(`/v1/tenants/${tenant.id}/domains/${custom.id}/check`).set(headers),
+        status: 202,
+        events: [],
+      };
+    },
+  },
 
   // ---- plan: limits or features --------------------------------------------------------------------------------
   {
@@ -1069,7 +1097,11 @@ afterAll(async () => {
 
 describe("the invalidation coverage table", () => {
   for (const { change, operationId, publishes, arrange } of COVERAGE) {
-    it(`[PBE-036 AC1] ${change} (${operationId}) publishes exactly its ${publishes.join(" and ")} event`, async () => {
+    const expected =
+      publishes.length === 0
+        ? "publishes no event"
+        : `publishes exactly its ${publishes.join(" and ")} event`;
+    it(`[PBE-036 AC1] ${change} (${operationId}) ${expected}`, async () => {
       const mutation = await arrange();
       // The row is consistent: its events are of the types it names (a type may come more than once, as `domain`
       // for both hosts of a primary change).

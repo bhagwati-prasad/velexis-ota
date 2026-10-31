@@ -8,8 +8,8 @@
 // Rows come from the builders, with ids and tenant keys of this file only; jobs left active by a test are canceled
 // after it, so no later dispatch takes them up. The queue tests use queues no process of this file consumes
 // (`platform-domains` and `ota-bookings` for the counts, `platform-settlements` for the failed list,
-// `platform-stripe-events` for the retry: the worker's own processors of those two queues, PBE-059 and PBE-043, are
-// left out of the worker's module graph here), and fail or hold their jobs with BullMQ workers of their own (closed
+// `platform-stripe-events` for the retry: the worker's own processors of those queues, PBE-050, PBE-059 and PBE-043,
+// are left out of the worker's module graph here), and fail or hold their jobs with BullMQ workers of their own (closed
 // in their hooks), so the counts are exactly the jobs a group added. Waiting jobs carry a creation time relative to
 // the FakeClock, so the age of the oldest is exact. Expensive work (a retried setup run end to end, jobs failed by a
 // worker) runs in the set-up hooks of each group, with explicit bounds; the tests then check what happened.
@@ -37,6 +37,7 @@ import { Clock } from "../../../src/common/clock";
 import { PLATFORM_POOL, type PlatformPool } from "../../../src/common/database";
 import { JobSchedulerRegistry } from "../../../src/common/queues/scheduler.registry";
 import { createProcessLogger, PLATFORM_PROCESSES } from "../../../src/config";
+import { DomainChecksProcessor } from "../../../src/domains/domain-checks.processor";
 import { DISPATCH_LEASE_MS, ProvisioningDispatcher } from "../../../src/provisioning/dispatcher";
 import { SettlementsProcessor } from "../../../src/settlements/settlements.processor";
 import { WorkerModule } from "../../../src/worker.module";
@@ -106,11 +107,13 @@ beforeAll(async () => {
     .useValue(t.clock)
     .overrideProvider(JobSchedulerRegistry)
     .useValue({})
-    // Not processors any more (plain values), so platform-stripe-events and platform-settlements have no consumer in
-    // this file (see above).
+    // Not processors any more (plain values), so platform-stripe-events, platform-settlements and platform-domains
+    // have no consumer in this file (see above).
     .overrideProvider(StripeEventsProcessor)
     .useValue({})
     .overrideProvider(SettlementsProcessor)
+    .useValue({})
+    .overrideProvider(DomainChecksProcessor)
     .useValue({})
     .compile();
   await worker.init();

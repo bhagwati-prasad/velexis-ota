@@ -10,7 +10,7 @@
 // lists the ownership record `TXT _velexis.<host>` with the row's verification value, and both routing options, the
 // `CNAME <host>` to the OTA's sub-domain and, for a zone apex that cannot have a CNAME, `A <host>` to STOREFRONT_IPV4
 // and `AAAA <host>` to STOREFRONT_IPV6 (each only while configured; STOREFRONT_IPV4 is required while the switch is
-// on). Verification (PBE-050) accepts either routing option.
+// on). Verification (PBE-050, domain-checks.ts) accepts either routing option.
 //
 // Every write runs in one transaction under the tenant's domain lock and needs an `active` OTA (`409
 // TENANT_NOT_ACTIVE`, PADR-0014 item 5: a suspended OTA's domains are read-only):
@@ -31,6 +31,15 @@
 //   sub-domain when the flag moved) are published and the cached `tlsask:<host>` answer is deleted (PADR-0004 item 6:
 //   the platform deletes it itself, besides the invalidation), so neither the storefront nor the TLS gate serves the
 //   host any more. The host name is then free for another tenant.
+// - `checkDomain` (PBE-050), which owners and admins call to have a domain's DNS records checked now: a `pending` or
+//   `failed` custom domain only (`409 CONFLICT` with `details.reason = "subdomain"` for the sub-domain,
+//   `"already_verified"` for a verified domain, which the daily re-check watches); a `failed` domain first gets a new
+//   72-hour window with the same token (`pending` again, audit row `domain.verification_restarted`). After the commit
+//   `domain.verify` is queued (DomainJobs); the job is the operation's effect, so a job that cannot be queued answers
+//   `503 SERVICE_UNAVAILABLE` (the restart stands, and the 5-minute run checks the domain). The answer is the domain as
+//   it is now; the result shows in `listDomains` once the job ran. Nothing is published: neither a pending nor a failed
+//   domain is served (architecture §6.3). The limit of 1 call per domain per minute (`429 RATE_LIMITED`) is
+//   RateLimitGuard's (`domainCheck`, throttler.config.ts).
 //
 // Audit rows hold host names, statuses and the primary flag, never the verification value (it is no secret, being
 // published in DNS, but it has no place in the audit trail either).
@@ -50,6 +59,7 @@ import { afterCommit, InvalidationPublisher, runInTransaction } from "../common/
 import { REDIS_CLIENT } from "../common/redis/redis.module";
 import { redisKeys } from "../common/redis/redis-keys";
 import type { PlatformBackendConfig } from "../config";
+import { DomainJobs } from "./domain-checks.processor";
 import {
   HOSTNAME_UNIQUE_INDEX,
   DomainsRepository,
@@ -177,6 +187,7 @@ export class DomainsService {
 
   constructor(
     private readonly domains: DomainsRepository,
+    private readonly jobs: DomainJobs,
     private readonly audit: AuditService,
     private readonly invalidations: InvalidationPublisher,
     private readonly ids: IdGenerator,
@@ -293,6 +304,50 @@ export class DomainsService {
       this.invalidations.publishAfterCommit(trx, { v: 1, type: "domain", hostname: domain.hostname });
       return this.toDomain(await this.reread(trx, tenantId, domain.id));
     });
+  }
+
+  /**
+   * `checkDomain`: queues the DNS check of a pending or failed custom domain now, after restarting a failed domain's
+   * window with the same token (a `domain.verification_restarted` audit row), and answers the domain as it is.
+   */
+  async check(membership: TenantMembership, domainId: string): Promise<Domain> {
+    const { tenantId, accountId } = membership;
+    const now = this.clock.now();
+    const domain = await runInTransaction(this.db, async (trx) => {
+      await this.domains.lockTenantDomains(trx, tenantId);
+      const locked = await this.lockedDomain(trx, tenantId, domainId);
+      await this.writableTenant(trx, tenantId);
+      if (locked.kind !== "custom") {
+        throw new AppError("CONFLICT", { details: { reason: "subdomain" } });
+      }
+      if (locked.verification_status === "verified") {
+        throw new AppError("CONFLICT", { details: { reason: "already_verified" } });
+      }
+      if (locked.verification_status === "failed") {
+        const deadline = new Date(now.getTime() + VERIFICATION_WINDOW_MS);
+        await this.domains.restartWindow(trx, locked.id, deadline, now);
+        await this.audit.record(trx, {
+          actorType: "account",
+          actorAccountId: accountId,
+          action: "domain.verification_restarted",
+          targetType: "domain",
+          targetId: locked.id,
+          tenantId,
+          before: {
+            verificationStatus: locked.verification_status,
+            verificationDeadlineAt: locked.verification_deadline_at?.toISOString() ?? null,
+          },
+          after: { verificationStatus: "pending", verificationDeadlineAt: deadline.toISOString() },
+          details: { hostname: locked.hostname },
+        });
+        return this.reread(trx, tenantId, locked.id);
+      }
+      return locked;
+    });
+    if (!(await this.jobs.enqueueVerify(domain.id))) {
+      throw new AppError("SERVICE_UNAVAILABLE");
+    }
+    return this.toDomain(domain);
   }
 
   /**
