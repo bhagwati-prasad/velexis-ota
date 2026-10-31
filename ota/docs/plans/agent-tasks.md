@@ -2448,7 +2448,8 @@ The platform turns on own Stripe, own Amadeus credentials, custom domains and go
   - An office `available` again (released) no longer routes to the Velexis account.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- amadeus && pnpm --filter @velexis/ota-backend test:int amadeus`
 
-### OBE-080 · Resolve verified custom domains and use the primary host in e-mail links
+### OBE-080 · Resolve verified custom domains and use the primary host in e-mail links ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M5
 - **Depends on:** OBE-012, OBE-055

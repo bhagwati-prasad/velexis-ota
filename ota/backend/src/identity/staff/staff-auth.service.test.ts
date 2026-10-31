@@ -395,6 +395,15 @@ describe("permissions and environments", () => {
     ).toBe("https://beta_travel.stage.example.net");
   });
 
+  it("answers the verified primary custom domain as the storefront origin, in both environments (OBE-080)", () => {
+    for (const environment of ["test", "live"] as const) {
+      expect(
+        toConsoleTenant(tenantRow(), "UTC", environment, null, "ota.example.com", "travel.example.net")
+          .storefrontUrl,
+      ).toBe("https://travel.example.net");
+    }
+  });
+
   it("leaves the password and TOTP code of a password grant out of the idempotency request hash", () => {
     const hooks = new ConsoleSignInIdempotencyHooks();
     const input = (body: unknown): IdempotentInput => ({ path: {}, query: {}, body });
@@ -834,7 +843,10 @@ function serviceHarness(): ServiceHarness {
     tenantById: () => Promise.resolve(tenant.value),
     connection: () => Promise.resolve(null),
   } as unknown as PlatformCache;
-  const platform = { tenantById: () => Promise.resolve(tenant.value) } as unknown as PlatformReadRepository;
+  const platform = {
+    tenantById: () => Promise.resolve(tenant.value),
+    primaryStorefrontHost: () => Promise.resolve(null),
+  } as unknown as PlatformReadRepository;
   const { logger, lines } = recordingLogger();
   const service = new StaffAuthService(
     sessions as unknown as StaffSessions,

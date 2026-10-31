@@ -14,7 +14,8 @@
 // monitored queues of a tenant's Amadeus connections in OBE-065 (`monitoredQueues`, for the queue poller of
 // src/console/queue-poller.processor.ts), and the payment connection of a connected Stripe account and a connection
 // with its webhook signing secret's ciphertext in OBE-078 (`connectPaymentConnection`, `paymentConnectionWebhook`, for
-// the Connect and `c/<ppc_id>` receivers of src/payments/webhooks/).
+// the Connect and `c/<ppc_id>` receivers of src/payments/webhooks/), and a tenant's primary custom storefront host in
+// OBE-080 (`primaryStorefrontHost`, for the links of src/notifications/storefront-host.ts).
 import { Inject, Injectable } from "@nestjs/common";
 import {
   assertTenantSchema,
@@ -593,6 +594,34 @@ export class PlatformReadRepository {
         .executeTakeFirst(),
     );
     return row === undefined ? null : row.tenant_id;
+  }
+
+  /**
+   * The tenant's primary custom storefront host (OBE-080; ADR-0018 "Custom domain lifecycle" step 5, PADR-0004 item
+   * 8): the host name of its `platform.tenant_domains` row with `purpose = storefront`, `kind = custom`, `is_primary`
+   * and `verification_status = verified` (`tenant_domains_primary_uq`: at most one primary per purpose), or `null`
+   * while its sub-domain is primary, or when the primary row is not a verified custom domain or holds a host name the
+   * tenant resolver would refuse (`STOREFRONT_HOST_PATTERN`): only a host the edge serves is ever linked. The tenant's
+   * status is the caller's check. Not cached: the platform's `domain` invalidation names a host, not its tenant, so a
+   * cached answer could outlive a move of the primary flag; the links read it once per e-mail batch and per console
+   * profile (storefront-host.ts). A value that cannot be a tenant id is unknown without a query.
+   */
+  async primaryStorefrontHost(tenantId: string): Promise<string | null> {
+    if (!TENANT_ID_PATTERN.test(tenantId)) {
+      return null;
+    }
+    const row = await this.read((trx) =>
+      trx
+        .selectFrom("platform.tenant_domains")
+        .select("hostname")
+        .where("tenant_id", "=", tenantId)
+        .where("purpose", "=", "storefront")
+        .where("kind", "=", "custom")
+        .where("is_primary", "=", true)
+        .where("verification_status", "=", "verified")
+        .executeTakeFirst(),
+    );
+    return row !== undefined && STOREFRONT_HOST_PATTERN.test(row.hostname) ? row.hostname : null;
   }
 
   /**

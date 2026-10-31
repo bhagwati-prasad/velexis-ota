@@ -2,8 +2,9 @@
 // db README §8). The render data of a key holds exactly the variables of its allow-list (templates/registry.ts):
 //
 //   brand.*     from the tenant's `storefront_settings` (brand name, support e-mail and phone; empty when not set) and
-//               its storefront URL, `https://<key>.<STOREFRONT_BASE_DOMAIN>` (the tenant's sub-domain; custom domains
-//               join with OBE-080);
+//               its storefront URL, the primary origin of storefront-host.ts (OBE-080): `https://<host>` of its
+//               verified primary custom domain while the tenant is active, else
+//               `https://<key>.<STOREFRONT_BASE_DOMAIN>`;
 //   links       built here from the e-mail's secret values, on that storefront URL: `verifyUrl` is
 //               `<storefront>/account/verify.html?token=<token>`, `resetUrl` `<storefront>/account/reset-password.html?…`;
 //               they exist only in memory while the worker renders the e-mail;
@@ -12,7 +13,10 @@
 //               what the sender decided when it sends the e-mail (OBE-055, attachments.ts): true when the documents
 //               are attached, else false (the e-mail points to the booking page);
 //   the rest    from `notifications.payload`, the variables the code that queued the e-mail passed
-//               (`checkTemplateData` checked them then; only allow-listed paths are copied here).
+//               (`checkTemplateData` checked them then; only allow-listed paths are copied here). The links that code
+//               built on the sub-domain (`booking.url`, with `storefrontUrl` below) are moved to the primary origin
+//               when the e-mail is rendered (storefront-host.ts `rebaseStorefrontLinks`), so an e-mail links to the
+//               host that is primary when it is sent.
 //
 // `NotificationRenderer.prepare` reads, in the caller's transaction, what a batch of rows needs from the tenant (the
 // sender settings and the template of each key and locale); `RenderBatch.render` then renders one row in memory, after
@@ -26,6 +30,12 @@ import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import type { SharedConfig } from "../config";
 import type { TenantTransaction } from "../tenancy/tenant-tx";
 import { OutboxRepository, type SenderSettings } from "./outbox.repository";
+import {
+  rebaseStorefrontLinks,
+  storefrontOrigins,
+  storefrontSubdomainOrigin,
+  type StorefrontOrigins,
+} from "./storefront-host";
 import {
   TemplateInvalidError,
   TemplateMissingError,
@@ -276,13 +286,16 @@ export interface BrandValues {
   readonly supportEmail: string;
   /** Empty when the OTA has not set it. */
   readonly supportPhone: string;
-  /** `https://<key>.<STOREFRONT_BASE_DOMAIN>`, without a trailing slash. */
+  /** The tenant's primary storefront origin (storefront-host.ts), without a trailing slash. */
   readonly storefrontUrl: string;
 }
 
-/** The storefront URL of a tenant: its sub-domain on STOREFRONT_BASE_DOMAIN, always https (ADR-0018). */
+/**
+ * The storefront URL of a tenant: its sub-domain on STOREFRONT_BASE_DOMAIN, always https (ADR-0018). Where the code
+ * that queues an e-mail builds its links; the renderer moves them to the primary origin (see the file header).
+ */
 export function storefrontUrl(tenantKey: string, baseDomain: string): string {
-  return `https://${tenantKey}.${baseDomain}`;
+  return storefrontSubdomainOrigin(tenantKey, baseDomain);
 }
 
 /**
@@ -369,30 +382,38 @@ export class NotificationRenderer {
     this.baseDomain = config.get("STOREFRONT_BASE_DOMAIN", { infer: true });
   }
 
-  /** The `brand.*` values of a tenant from its sender settings (the tenant's name when it has no settings row). */
+  /**
+   * The `brand.*` values of a tenant from its sender settings (the tenant's name when it has no settings row), on the
+   * storefront origin `storefront` (the sub-domain when left out).
+   */
   brand(
     tenant: { readonly key: string; readonly name: string },
     sender: SenderSettings | undefined,
+    storefront: string = storefrontUrl(tenant.key, this.baseDomain),
   ): BrandValues {
     return {
       name: sender?.brandName ?? tenant.name,
       supportEmail: sender?.supportEmail ?? "",
       supportPhone: sender?.supportPhone ?? "",
-      storefrontUrl: storefrontUrl(tenant.key, this.baseDomain),
+      storefrontUrl: storefront,
     };
   }
 
   /**
    * Reads, in `trx`, the sender settings of the tenant and the template of each key and locale of `rows`, and returns
-   * the batch that renders them after the transaction.
+   * the batch that renders them after the transaction, on the tenant's primary storefront host: `primaryHost`, its
+   * verified primary custom domain as storefront-host.ts `primaryStorefrontHost` read it before the transaction, or
+   * `null` (the default) for its sub-domain.
    */
   async prepare(
     trx: TenantTransaction,
     tenant: { readonly key: string; readonly name: string },
     rows: readonly RenderableRow[],
+    primaryHost: string | null = null,
   ): Promise<RenderBatch> {
     const sender = await this.repository.senderSettings(trx);
-    const brand = this.brand(tenant, sender);
+    const origins = storefrontOrigins(tenant.key, this.baseDomain, primaryHost);
+    const brand = this.brand(tenant, sender, origins.primary);
     const effective = new Map<string, EffectiveTemplate | Error>();
     for (const row of rows) {
       const id = `${row.template_key}\u0000${row.locale}`;
@@ -418,7 +439,7 @@ export class NotificationRenderer {
     return {
       sender,
       brand,
-      render: (row, secrets, options) => this.renderRow(row, secrets, brand, effective, options),
+      render: (row, secrets, options) => this.renderRow(row, secrets, brand, origins, effective, options),
     };
   }
 
@@ -426,6 +447,7 @@ export class NotificationRenderer {
     row: RenderableRow,
     secrets: Readonly<Record<string, string>>,
     brand: BrandValues,
+    origins: StorefrontOrigins,
     effective: ReadonlyMap<string, EffectiveTemplate | Error>,
     options: RenderOptions | undefined,
   ): Promise<RenderedNotification> {
@@ -439,7 +461,7 @@ export class NotificationRenderer {
     }
     const data = renderData(key, {
       brand,
-      payload: row.payload,
+      payload: rebaseStorefrontLinks(row.payload, origins),
       secrets,
       documentsAttached: options?.documentsAttached,
     });

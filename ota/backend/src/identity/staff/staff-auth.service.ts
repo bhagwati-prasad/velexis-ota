@@ -44,9 +44,10 @@
 //   its credentials), the role's permissions, the session and the environments, read on every call.
 //
 // The tenant of the three answers (`toConsoleTenant`) carries `storefrontUrl`, the OTA's storefront origin for the
-// console's environment: `https://<key>.<STOREFRONT_BASE_DOMAIN>` (notifications/renderer.ts `storefrontUrl`, the
-// sub-domain the storefront and the e-mails use), the primary custom domain once OBE-080 resolves them (lead decision
-// (2f) of 2026-10-30, third batch, FIX-W36-OTA). The OTA admin links published content pages with it.
+// console's environment (lead decision (2f) of 2026-10-30, third batch, FIX-W36-OTA): the primary origin the e-mails
+// use too (notifications/storefront-host.ts, OBE-080), `https://<host>` of the OTA's verified primary custom domain,
+// else `https://<key>.<STOREFRONT_BASE_DOMAIN>`, the same in test and live (lead decision (1d) of 2026-10-31). The OTA
+// admin links published content pages with it.
 //
 // Permissions follow the role matrix of scope §1.3 (`ROLE_PERMISSIONS`); `environments` is `["test"]`, or
 // `["test", "live"]` for a live tenant (`storefront_environment = live`) and a role other than `viewer` (point 5).
@@ -69,7 +70,7 @@ import {
 import { IdGenerator } from "../../common/ids";
 import type { SharedConfig } from "../../config";
 import { staffActionRow, type StaffActionActor } from "../../console/staff-actions.writer";
-import { storefrontUrl } from "../../notifications/renderer";
+import { primaryStorefrontHost, storefrontOrigins } from "../../notifications/storefront-host";
 import { PlatformCache } from "../../tenancy/platform-cache";
 import {
   PlatformReadRepository,
@@ -147,8 +148,9 @@ export function toStaffMember(member: PlatformStaffMember): StaffMember {
 
 /**
  * The contract's `ConsoleTenant`: the tenant in the request's environment, with its Amadeus connection of that
- * environment (offices only, never credentials; `connected` when the connection is `active`) and its storefront origin
- * on `storefrontBaseDomain` (STOREFRONT_BASE_DOMAIN; see the file header).
+ * environment (offices only, never credentials; `connected` when the connection is `active`) and its storefront origin:
+ * `https://<primaryHost>` (storefront-host.ts `primaryStorefrontHost`), else its sub-domain on `storefrontBaseDomain`
+ * (STOREFRONT_BASE_DOMAIN; see the file header).
  */
 export function toConsoleTenant(
   tenant: PlatformTenant,
@@ -156,6 +158,7 @@ export function toConsoleTenant(
   environment: TenantEnvironment,
   connection: PlatformAmadeusConnection | null,
   storefrontBaseDomain: string,
+  primaryHost: string | null = null,
 ): ConsoleTenant {
   return {
     id: tenant.id,
@@ -166,7 +169,7 @@ export function toConsoleTenant(
     defaultCurrency: tenant.defaultCurrency.trim(),
     defaultLocale: tenant.defaultLocale,
     timeZone,
-    storefrontUrl: storefrontUrl(tenant.key, storefrontBaseDomain),
+    storefrontUrl: storefrontOrigins(tenant.key, storefrontBaseDomain, primaryHost).primary,
     supplier: {
       connected: connection?.status === "active",
       officeIds: (connection?.officeIds ?? []).filter((office) => AMADEUS_OFFICE_ID.test(office)),
@@ -406,6 +409,7 @@ export class StaffAuthService {
         environment,
         await this.connection(tenantId),
         this.storefrontBaseDomain,
+        await primaryStorefrontHost(this.platform, tenant, this.logger),
       ),
       permissions: permissionsOf(member.role),
       session: {
@@ -490,6 +494,7 @@ export class StaffAuthService {
         environment,
         await this.connection(tenant.id),
         this.storefrontBaseDomain,
+        await primaryStorefrontHost(this.platform, tenant, this.logger),
       ),
       permissions: permissionsOf(family.role),
       environments: environmentsOf(family.role, tenant.storefrontEnvironment),

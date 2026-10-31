@@ -7,7 +7,8 @@
 //                                                            403 TENANT_SUSPENDED (the storefront shows its
 //                                                            "temporarily unavailable" page, PADR-0014 point 5)
 //         any other host                                   → host:<hostname> → a verified tenant_domains row with
-//                                                            purpose storefront, of an active tenant only
+//                                                            purpose storefront, of an active tenant only (a custom
+//                                                            domain; see "Custom domains" below)
 //         environment: tenants.storefront_environment
 //   key   the key's tenant (tenant:<id>), active only       environment: the key's
 //   service the tenant the guard located (the staff token's tid, the portal token's or the refresh token's family's
@@ -17,6 +18,19 @@
 // An unknown host, an unverified or other-purpose domain, and a custom domain of a tenant that is not active all
 // answer `403 HOST_NOT_ALLOWED` (`details.reason: unknown`), so nothing about the tenant behind a host leaks. A host
 // that cannot be a host name is refused without a lookup. Unknown hosts and keys are cached as such for 10 s.
+//
+// Custom domains (OBE-080; ADR-0018 "Custom domain lifecycle", PADR-0004 items 4, 5 and 8): the platform publishes the
+// `domain` invalidation after it verifies, fails or removes a domain or moves its primary flag, and the subscriber
+// deletes `host:<hostname>`: the cached tenant id, and a cached "unknown" of a host that was pending. So a newly
+// verified domain serves its tenant from the request after the invalidation (within a second), and a domain that
+// failed its re-check or was removed answers `403 HOST_NOT_ALLOWED` from then on (at the latest when the cached id
+// expires, 60 s, if the event was lost). Being primary changes nothing here: every verified domain of an active tenant
+// serves, and so does its sub-domain. The CSRF guard (common/auth/csrf.guard.ts, OADR-0006 point 3) runs after this
+// resolution and requires `Origin: https://<X-Velexis-Host>`, the host resolved here: a custom domain's pages pass on
+// their own host, and a page of another host of the same tenant does not (sessions are host-only, OADR-0006 point 7).
+// The links of the e-mails and `ConsoleTenant.storefrontUrl` use the tenant's primary host
+// (notifications/storefront-host.ts). test/integration/tenancy/custom-domains.int.test.ts proves the lifecycle end to
+// end.
 //
 // The live environment (OBE-081, ADR-0018 "Environment"): the edge's environment is read with the tenant row itself
 // (`tenant:<id>`; `tenantkey:` and `host:` hold only the id), so when the platform's goLive (PBE-061) sets

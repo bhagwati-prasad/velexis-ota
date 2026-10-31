@@ -5,12 +5,14 @@
 // tenant's outbox, one batch per job:
 //   1. resolve the tenant through the platform cache and re-check its status: `active` or `suspended` (a suspended
 //      OTA's travellers still get their e-mails, OADR-0014 point 4); any other tenant is skipped;
-//   2. claim at most 100 due rows (`FOR UPDATE SKIP LOCKED`, outbox.repository.ts: a 5-minute lease, committed before
-//      anything is sent) and read, in the same transaction, the tenant's sender settings and templates, and the
-//      attachment plan of the booking e-mails that attach documents (attachments.ts, OBE-055);
+//   2. read the tenant's primary storefront host from the platform table (storefront-host.ts, OBE-080: its verified
+//      primary custom domain while it is active, else none), before any transaction; then claim at most 100 due rows
+//      (`FOR UPDATE SKIP LOCKED`, outbox.repository.ts: a 5-minute lease, committed before anything is sent) and read,
+//      in the same transaction, the tenant's sender settings and templates, and the attachment plan of the booking
+//      e-mails that attach documents (attachments.ts, OBE-055);
 //   3. per row, outside any transaction: decrypt the secret values, read the attachments of an `attach` plan, render
-//      (renderer.ts, `documents.attached` as the plan decided), send with `From: "<brand name>" <MAIL_FROM address>`
-//      and `Reply-To: <support e-mail>` (mailer.gateway.ts);
+//      (renderer.ts on that host, `documents.attached` as the plan decided), send with
+//      `From: "<brand name>" <MAIL_FROM address>` and `Reply-To: <support e-mail>` (mailer.gateway.ts);
 //   4. per row, in a short transaction fenced by the lease:
 //        waiting        → its documents are not ready and the 2 minutes since they were asked for are not over:
 //                         `pending` again for ATTACHMENT_RECHECK_MS without an attempt (released, `deferred`);
@@ -51,6 +53,7 @@ import {
 } from "../jobs/fan-out";
 import { JOB_BATCH_LIMITS } from "../jobs/limits";
 import { PlatformCache } from "../tenancy/platform-cache";
+import { PlatformReadRepository } from "../tenancy/platform-read.repository";
 import type { PlatformTenant, TenantStatus } from "../tenancy/platform-read.types";
 import { TenantContext } from "../tenancy/tenant-context";
 import { TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
@@ -81,6 +84,7 @@ import {
   type RenderBatch,
   type RenderedNotification,
 } from "./renderer";
+import { primaryStorefrontHost } from "./storefront-host";
 import { TemplateInvalidError, TemplateMissingError, TemplateRenderError } from "./template.service";
 
 /** The schedule of the sweep (jobs/schedulers.ts) and the name of its per-tenant jobs. */
@@ -203,16 +207,19 @@ export class OutboxDrainer {
     private readonly renderer: NotificationRenderer,
     private readonly mailer: MailerGateway,
     private readonly attachments: NotificationAttachments,
+    private readonly platform: PlatformReadRepository,
     private readonly clock: Clock,
     @Inject(NOTIFICATIONS_KEY_PROVIDER) private readonly keys: KeyProvider,
     @InjectPinoLogger(OutboxDrainer.name) private readonly logger: PinoLogger,
   ) {}
 
   /** Claims, renders and sends one batch of `tenant`'s due rows, inside the tenant's context. */
-  async drain(tenant: Pick<PlatformTenant, "id" | "key" | "name">): Promise<DrainOutcome> {
+  async drain(tenant: Pick<PlatformTenant, "id" | "key" | "name" | "status">): Promise<DrainOutcome> {
     const started = this.clock.now();
     const leaseUntil = new Date(started.getTime() + CLAIM_LEASE_MS);
     const limit = JOB_BATCH_LIMITS.notificationOutbox;
+    // Read before the transaction: a platform read holds a connection of its own (storefront-host.ts).
+    const primaryHost = await primaryStorefrontHost(this.platform, tenant, this.logger);
     const { rows, batch, plans } = await this.tx.run(async (trx) => {
       const claimed = await this.repository.claimDue(trx, started, leaseUntil, limit);
       if (claimed.length === 0) {
@@ -220,7 +227,7 @@ export class OutboxDrainer {
       }
       return {
         rows: claimed,
-        batch: await this.renderer.prepare(trx, tenant, claimed),
+        batch: await this.renderer.prepare(trx, tenant, claimed, primaryHost),
         plans: await this.attachments.plan(trx, claimed, started),
       };
     });
