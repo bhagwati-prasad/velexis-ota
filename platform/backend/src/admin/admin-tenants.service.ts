@@ -14,7 +14,8 @@
 //   answers `400 VALIDATION_FAILED` on `/query/cursor`.
 // - adminGetTenant (`get`): the OTA, its active members (oldest first), its pending invitations (newest first), the
 //   subscription the portal shows (`null` when there is none), its Amadeus and payment connections (`test` before
-//   `live`), its domains, its last 20 jobs and its last 50 audit rows (newest first). An unknown id, or a tenant being
+//   `live`; an `api_keys` connection with its webhook URL, as the portal's list shows it, PBE-057), its domains, its
+//   last 20 jobs and its last 50 audit rows (newest first). An unknown id, or a tenant being
 //   deprovisioned or deleted (no `TenantStatus`), answers `404 NOT_FOUND`.
 // - adminUpdateTenant (`update`): `notes` (`tenants.metadata.notes`, never shown to the OTA) and `legalName`, `null`
 //   clearing either, in every tenant status, with `If-Match` (`412 PRECONDITION_FAILED`). One transaction locks the row,
@@ -40,8 +41,9 @@ import { InvitationsRepository } from "../memberships/invitations.repository";
 import { toInvitation } from "../memberships/invitations.service";
 import { toMember } from "../memberships/members.service";
 import { MembershipsRepository } from "../memberships/memberships.repository";
-import { toPaymentConnection } from "../payment-connections/payment-connections.controller";
+import { toPaymentConnectionWith } from "../payment-connections/payment-connections.controller";
 import { PaymentConnectionsRepository } from "../payment-connections/payment-connections.repository";
+import { paymentConnectionWebhookUrl } from "../payment-connections/stripe-api-keys.service";
 import { ProvisioningJobsRepository } from "../provisioning/provisioning-jobs.repository";
 import {
   SupplierConnectionsRepository,
@@ -188,7 +190,11 @@ export class AdminTenantsService {
       invitations: invitations.map(toInvitation),
       subscription: subscription === undefined ? null : toSubscription(subscription),
       amadeusConnections: amadeusConnections.map(toAmadeusConnection),
-      paymentConnections: paymentConnections.map(toPaymentConnection),
+      paymentConnections: paymentConnections.map((connection) =>
+        toPaymentConnectionWith(connection, {
+          webhookUrl: paymentConnectionWebhookUrl(this.baseDomain, connection),
+        }),
+      ),
       domains: domains.map((domain) => toDomain(domain, this.baseDomain, this.storefrontAddresses)),
       recentJobs: jobs.map(toAdminProvisioningJob),
       recentAudit: auditRows.map(toAuditEntry),

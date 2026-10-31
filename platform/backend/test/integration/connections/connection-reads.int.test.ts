@@ -38,6 +38,8 @@ let tokens: TokenService;
 
 /** The OTA with every kind of row: its members by role, a stranger, and what was written. */
 let ota: InsertedOta;
+/** The `api_keys` live connection's id: its webhook URL names it (PBE-057). */
+let liveConnectionId: string;
 const members = new Map<TenantRole | "stranger", string>();
 
 beforeAll(async () => {
@@ -75,7 +77,7 @@ beforeAll(async () => {
 
   // Stripe: the `velexis` test connection, and a `live` connection with the OTA's own keys (both secrets ciphertexts).
   await insertPaymentConnection(pool, ota.tenant, { statement_descriptor_suffix: "AGENCY TRAVEL" });
-  await insertPaymentConnection(pool, ota.tenant, {
+  const live = await insertPaymentConnection(pool, ota.tenant, {
     environment: "live",
     account_mode: "api_keys",
     account_reference: "acct_1TestOwnAccount",
@@ -93,6 +95,7 @@ beforeAll(async () => {
     connected_at: new Date("2026-10-05T08:00:00Z"),
     status: "pending",
   });
+  liveConnectionId = live.id;
 
   // Domains: a pending custom domain next to the sub-domain of insertOta.
   await insertTenantDomain(pool, ota.tenant, {
@@ -253,7 +256,7 @@ describe("listAmadeusConnections and listPaymentConnections", () => {
           version: 1,
         },
         {
-          id: expect.stringMatching(/^ppc_/),
+          id: liveConnectionId,
           environment: "live",
           provider: "stripe",
           accountMode: "api_keys",
@@ -264,7 +267,8 @@ describe("listAmadeusConnections and listPaymentConnections", () => {
           capabilities: { chargesEnabled: true, payoutsEnabled: false, detailsSubmitted: true },
           connectedAt: "2026-10-05T08:00:00.000Z",
           disconnectedAt: null,
-          webhookUrl: null,
+          // The OTA backend's receiver of this connection, to configure in the OTA's Stripe dashboard (PBE-057).
+          webhookUrl: `https://api.${TEST_BASE_DOMAIN}/webhooks/stripe/c/${liveConnectionId}`,
           pendingSubmission: null,
           version: 1,
         },

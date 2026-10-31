@@ -23,8 +23,9 @@
 //    seconds. The suffix the connection already has changes nothing: no write, no audit row, no invalidation, and the
 //    connection is answered as it is (as updateTenant and adminSetConnectionStatus do).
 //
-// The answer is the row without its ciphertexts; the controller maps it with `toPaymentConnection` and sets `ETag`.
-// "Now" is the injected Clock's time.
+// The answer is the row without its ciphertexts; the controller maps it as the list does (`toPaymentConnectionWith`)
+// and sets `ETag`. The list itself is StripeApiKeysService.listConnections since PBE-057, which adds the webhook URL and
+// the pending submission. "Now" is the injected Clock's time.
 import { Inject, Injectable } from "@nestjs/common";
 import { AppError } from "@velexis/errors";
 import { AuditService } from "../audit/audit.service";
@@ -53,11 +54,6 @@ export class PaymentConnectionsService {
     private readonly clock: Clock,
     @Inject(PLATFORM_DB) private readonly db: PlatformDb,
   ) {}
-
-  /** listPaymentConnections: the tenant's Stripe connections, `test` first, read without the secrets' ciphertexts. */
-  async list(tenantId: string): Promise<PaymentConnectionView[]> {
-    return this.connections.listForTenant(tenantId);
-  }
 
   /**
    * updatePaymentConnection: sets the statement descriptor suffix of the tenant's Stripe connection of `environment`

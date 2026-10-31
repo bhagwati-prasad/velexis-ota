@@ -32,6 +32,11 @@
 // secret-named public field) throws `InvalidCredentialSubmissionError` inside the transaction, so the caller's change
 // rolls back with it. The secrets are never logged, audited, queued or answered.
 //
+// `supersedeOpen(trx, slot)` (PBE-057) ends the open submission of a slot without a new one, its secrets erased, for
+// an operation that makes it moot (`useVelexisPayments`); the caller audits it with its own change. `lockSlot(trx,
+// slot)` (PBE-057) takes the slot's lock early, for an operation that reads the slot's earlier submissions before it
+// calls `submit` (`submitStripeApiKeys`).
+//
 // `get(tenantId, submissionId)` answers the submission of `getCredentialSubmission` (`toCredentialSubmission`): status
 // and error, never a secret nor the public fields; a submission of another OTA answers `404 NOT_FOUND`.
 // `pendingByEnvironment(tenantId, kind)` gives the connection lists their `pendingSubmission` (PBE-053).
@@ -57,6 +62,7 @@ import {
   type CredentialEnvironment,
   type CredentialKind,
   type CredentialSubmissionView,
+  type SupersededSubmission,
 } from "./credential-submissions.repository";
 
 /** A submission as `getCredentialSubmission` answers it. */
@@ -353,4 +359,32 @@ export class CredentialSubmissionsService {
       clearTimeout(timer);
     }
   }
+
+  /**
+   * Marks the open submission of the tenant's `kind` and `environment` `superseded` in `trx` (an open transaction of
+   * `runInTransaction`), both secrets erased, after the slot's advisory lock, as `submit` does before it inserts; a
+   * verification still running finds it final and writes nothing. Answers what it marked (none, or one). The caller
+   * takes it before it locks the connection of the slot (lock order: submission, then connection) and audits it.
+   */
+  async supersedeOpen(trx: PlatformTransaction, slot: CredentialSlot): Promise<SupersededSubmission[]> {
+    await this.lockSlot(trx, slot);
+    return this.submissions.supersedeOpen(trx, { ...slot, now: this.clock.now() });
+  }
+
+  /**
+   * Takes the advisory lock of the tenant's `kind` and `environment` slot in `trx`, held until it ends: the lock that
+   * `submit` and `supersedeOpen` take. An operation that reads the slot's earlier submissions to build the new one
+   * (`submitStripeApiKeys` keeps their connection id) takes it first, so a submission of the same slot at the same
+   * moment waits for it and reads what it wrote; taking it again in the same transaction does not wait.
+   */
+  async lockSlot(trx: PlatformTransaction, slot: CredentialSlot): Promise<void> {
+    await this.submissions.lockSlot(trx, slot.tenantId, slot.kind, slot.environment);
+  }
+}
+
+/** A slot of submissions: the tenant, the kind and the environment (one open submission each, PADR-0010 item 2). */
+export interface CredentialSlot {
+  readonly tenantId: string;
+  readonly kind: CredentialKind;
+  readonly environment: CredentialEnvironment;
 }

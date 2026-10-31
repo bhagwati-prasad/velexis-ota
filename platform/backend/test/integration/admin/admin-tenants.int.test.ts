@@ -316,6 +316,8 @@ describe("adminGetTenant", () => {
     readonly auditIds: string[];
     /** The `token_hash` values of the OTA's invitations, which no answer may contain. */
     readonly tokenHashes: string[];
+    /** The id of the OTA's live payment connection in `api_keys` mode: its webhook URL names it (PBE-057). */
+    readonly apiKeysConnectionId: string;
   }
 
   /** The failed job's error, longer than the 1000 characters of `AdminProvisioningJob.error`. */
@@ -382,7 +384,7 @@ describe("adminGetTenant", () => {
     });
     await insertSupplierConnection(pool, tenant, { environment: "live", client_id: "acme-live-client" });
     await insertPaymentConnection(pool, tenant, { statement_descriptor_suffix: "ACME TRAVEL" });
-    await insertPaymentConnection(pool, tenant, {
+    const apiKeysConnection = await insertPaymentConnection(pool, tenant, {
       environment: "live",
       account_mode: "api_keys",
       account_reference: "acct_1TestAcmeAccount",
@@ -462,7 +464,15 @@ describe("adminGetTenant", () => {
       tenant_id: stranger.tenant.id,
       tenant_key: stranger.tenant.key,
     });
-    return { tenant, owner, adminMember, jobIds, auditIds, tokenHashes };
+    return {
+      tenant,
+      owner,
+      adminMember,
+      jobIds,
+      auditIds,
+      tokenHashes,
+      apiKeysConnectionId: apiKeysConnection.id,
+    };
   }
 
   it("[PBE-029 AC2] answers the control-plane view, valid against the document, with no property ending in Ciphertext", async () => {
@@ -489,7 +499,7 @@ describe("adminGetTenant", () => {
       invitations: Array<{ email: string; status: string }>;
       subscription: { planCode: string; status: string } | null;
       amadeusConnections: Array<{ environment: string; credentialSource: string }>;
-      paymentConnections: Array<{ environment: string; accountMode: string }>;
+      paymentConnections: Array<{ environment: string; accountMode: string; webhookUrl: string | null }>;
       domains: Array<{ hostname: string }>;
       recentJobs: Array<{ id: string; kind: string; tenantKey: string; error: string | null }>;
       recentAudit: Array<{ id: string; tenantId: string }>;
@@ -529,9 +539,10 @@ describe("adminGetTenant", () => {
       ["test", "velexis"],
       ["live", "tenant"],
     ]);
-    expect(body.paymentConnections.map((c) => [c.environment, c.accountMode])).toEqual([
-      ["test", "velexis"],
-      ["live", "api_keys"],
+    // The portal's masked shape: the `api_keys` connection with the webhook URL its owner configures (PBE-057).
+    expect(body.paymentConnections.map((c) => [c.environment, c.accountMode, c.webhookUrl])).toEqual([
+      ["test", "velexis", null],
+      ["live", "api_keys", `https://api.${TEST_BASE_DOMAIN}/webhooks/stripe/c/${full.apiKeysConnectionId}`],
     ]);
     expect(body.domains.map(({ hostname }) => hostname).sort()).toEqual(
       [`${tenant.key}.${TEST_BASE_DOMAIN}`, "travel.acme.example.net"].sort(),

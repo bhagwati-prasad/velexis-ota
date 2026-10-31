@@ -2,6 +2,7 @@
 // code, the 10-second timeout, one retry, no telemetry, `<purpose>:<rowId>` idempotency keys, and no client without
 // STRIPE_SECRET_KEY. Nothing here talks to Stripe: creating an SDK client sends no request.
 import type { ConfigService } from "@nestjs/config";
+import { sha256Hex } from "@velexis/crypto";
 import Stripe from "stripe";
 import { describe, expect, it } from "vitest";
 import { FAKE_STRIPE_METHODS, FakeStripe } from "../../../test/support/fake-stripe";
@@ -92,6 +93,23 @@ describe("the SDK client", () => {
 
     expect(stripe.isConfigured()).toBe(false);
     expect(() => stripe.api()).toThrow(StripeNotConfiguredError);
+  });
+
+  it("[PBE-057] calls with an OTA's own key on a client of its own: the same options, no STRIPE_SECRET_KEY needed, the key kept nowhere", () => {
+    const stripe = new SdkStripeClient(configWith(undefined));
+
+    const first = stripe.withKey("rk_test_unit_own_key_value");
+    const second = stripe.withKey("rk_test_unit_own_key_value");
+
+    expect(first).not.toBe(second);
+    expect(typeof first.accounts.retrieveCurrent).toBe("function");
+    expect(apiField(first, "version")).toBe(STRIPE_API_VERSION);
+    expect(apiField(first, "timeout")).toBe(STRIPE_TIMEOUT_MS);
+    expect(apiField(first, "maxNetworkRetries")).toBe(STRIPE_MAX_NETWORK_RETRIES);
+    // The Velexis client is still unconfigured, and the OTA's key is not kept on it.
+    expect(() => stripe.api()).toThrow(StripeNotConfiguredError);
+    expect(JSON.stringify(stripe)).not.toContain("rk_test_unit_own_key_value");
+    expect(Object.values(stripe)).not.toContain("rk_test_unit_own_key_value");
   });
 });
 
@@ -208,8 +226,9 @@ describe("FakeStripe (test/support/fake-stripe.ts)", () => {
     expect((await api.prices.retrieve("price_test_growth_month")).id).toBe("price_test_growth_month");
     expect(stripe.calls).toHaveLength(3);
     // The nine calls of billing, the settlements' balance transactions, charges and PaymentIntents (PBE-059),
-    // and the Connect OAuth's code exchange and account read (PBE-055) and deauthorisation (FIX-W36-PLATFORM).
-    expect(FAKE_STRIPE_METHODS).toHaveLength(15);
+    // the Connect OAuth's code exchange and account read (PBE-055) and deauthorisation (FIX-W36-PLATFORM), and the
+    // account read with an OTA's own key (PBE-057).
+    expect(FAKE_STRIPE_METHODS).toHaveLength(16);
 
     expect(() => stripe.notConfigured().api()).toThrow(StripeNotConfiguredError);
     expect(stripe.isConfigured()).toBe(false);
@@ -355,5 +374,43 @@ describe("FakeStripe (test/support/fake-stripe.ts)", () => {
       [params, options.idempotencyKey],
     ]);
     expect(stripe.reset().deauthorized).toEqual([]);
+  });
+
+  it("[PBE-057] answers GET /v1/account for an OTA's own key it was given, 401 for any other, and fails as queued", async () => {
+    const stripe = new FakeStripe().notConfigured();
+    stripe.grantOwnKey("sk_test_UnitOwnKey1", { accountId: "acct_UnitOwn1" });
+    stripe.grantOwnKey("sk_live_UnitOwnKey2", { accountId: "acct_UnitOwn2", livemode: true });
+
+    const own = await stripe.withKey("sk_test_UnitOwnKey1").accounts.retrieveCurrent();
+    expect(own).toMatchObject({ id: "acct_UnitOwn1", object: "account" });
+    expect(own).not.toHaveProperty("livemode");
+    expect(await stripe.withKey("sk_live_UnitOwnKey2").accounts.retrieveCurrent()).toMatchObject({
+      id: "acct_UnitOwn2",
+      livemode: true,
+    });
+    const refused: unknown = await stripe
+      .withKey("rk_test_UnitUnknownKeyWxyz")
+      .accounts.retrieveCurrent()
+      .catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(Stripe.errors.StripeAuthenticationError);
+    expect(refused).toMatchObject({ statusCode: 401, message: "Invalid API Key provided: rk_test_****Wxyz" });
+    stripe.failNext("accounts.retrieveCurrent", FakeStripe.apiError(503));
+    await expect(stripe.withKey("sk_test_UnitOwnKey1").accounts.retrieveCurrent()).rejects.toBeInstanceOf(
+      Stripe.errors.StripeAPIError,
+    );
+
+    // Recorded without the key; the keys asked are kept as their SHA-256 only.
+    expect(stripe.callsOf("accounts.retrieveCurrent")).toHaveLength(4);
+    expect(JSON.stringify(stripe.calls)).not.toContain("UnitOwnKey");
+    expect(stripe.ownKeyDigests).toEqual(
+      ["sk_test_UnitOwnKey1", "sk_live_UnitOwnKey2", "rk_test_UnitUnknownKeyWxyz", "sk_test_UnitOwnKey1"].map(
+        (key) => sha256Hex(key),
+      ),
+    );
+    stripe.reset();
+    expect(stripe.ownKeyDigests).toEqual([]);
+    await expect(stripe.withKey("sk_test_UnitOwnKey1").accounts.retrieveCurrent()).rejects.toBeInstanceOf(
+      Stripe.errors.StripeAuthenticationError,
+    );
   });
 });

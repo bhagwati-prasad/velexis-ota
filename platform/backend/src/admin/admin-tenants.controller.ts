@@ -6,8 +6,9 @@
 // re-reads the account first; the reasons of the **reason** operations were checked by the validation interceptor.
 // Thin: each handler binds its operation, reads the validated request, makes one service call and maps its rows with
 // the admin's mappers (`toAdminTenant`, `toAdminProvisioningJob`) or the portal's masked connection shapes
-// (`toAmadeusConnection`, `toPaymentConnection`), as the tenant detail shows them. The versioned answers of the tenant
-// views carry the tenant's version in `ETag`, which adminUpdateTenant takes back in `If-Match`.
+// (`toAmadeusConnection`, `toPaymentConnectionWith` with an `api_keys` connection's webhook URL, PBE-057), as the tenant
+// detail shows them. The versioned answers of the tenant views carry the tenant's version in `ETag`, which
+// adminUpdateTenant takes back in `If-Match`.
 import { Controller, Get, HttpCode, Patch, Post, Res } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type { components } from "@velexis/api-types/platform";
@@ -16,7 +17,8 @@ import { AccessToken } from "../common/auth/decorators";
 import { etagOf, versionOfIfMatch } from "../common/http/if-match";
 import { OpenApiOperation, Validated } from "../common/http/openapi-operation.decorator";
 import type { PlatformBackendConfig } from "../config";
-import { toPaymentConnection } from "../payment-connections/payment-connections.controller";
+import { toPaymentConnectionWith } from "../payment-connections/payment-connections.controller";
+import { paymentConnectionWebhookUrl } from "../payment-connections/stripe-api-keys.service";
 import { MigrateService } from "../provisioning/migrate.service";
 import {
   SuspensionService,
@@ -163,7 +165,9 @@ export class AdminTenantsController {
     );
     return result.kind === "amadeus"
       ? toAmadeusConnection(result.connection)
-      : toPaymentConnection(result.connection);
+      : toPaymentConnectionWith(result.connection, {
+          webhookUrl: paymentConnectionWebhookUrl(this.baseDomain, result.connection),
+        });
   }
 
   /** The `202` answer of a suspend or resume. */

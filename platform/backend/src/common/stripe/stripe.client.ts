@@ -20,6 +20,11 @@
 //
 // Without STRIPE_SECRET_KEY (every switch that needs Stripe off, config.ts) the client is not configured and `api()`
 // throws StripeNotConfiguredError. The key stays in this file: no getter returns it and nothing logs it.
+//
+// `withKey(secretKey)` (PBE-057) is the one call the platform makes with an OTA's own key instead of Velexis's: the
+// verification of submitted Stripe API keys reads the key's account (`GET /v1/account`, `OwnKeyStripeApi`). It needs
+// no STRIPE_SECRET_KEY, builds a new SDK client with the same options for each call and keeps neither the client nor
+// the key; the FakeStripe answers it for the keys a test gives it.
 import { Injectable, type ClassProvider } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import Stripe from "stripe";
@@ -84,6 +89,14 @@ export interface StripeApi {
   readonly paymentIntents: Pick<Stripe.PaymentIntentsResource, "retrieve">;
 }
 
+/**
+ * The calls the platform makes with an OTA's own secret or restricted key (Stripe payments flow §D item 3, PBE-057):
+ * only the key's own account, `GET /v1/account`, which proves the key works and names the account.
+ */
+export interface OwnKeyStripeApi {
+  readonly accounts: Pick<Stripe.AccountsResource, "retrieveCurrent">;
+}
+
 /** The options every SDK client is created with (exported for the client's test). */
 export function stripeClientOptions(): Stripe.StripeConfig {
   return {
@@ -114,6 +127,12 @@ export abstract class StripeClient {
 
   /** The calls on the Velexis account; throws StripeNotConfiguredError when STRIPE_SECRET_KEY is unset. */
   abstract api(): StripeApi;
+
+  /**
+   * The calls on the account of `secretKey`, an OTA's own secret or restricted key (PBE-057). Works without
+   * STRIPE_SECRET_KEY; the key is used for the call and never kept or logged.
+   */
+  abstract withKey(secretKey: string): OwnKeyStripeApi;
 }
 
 /** The SDK client on STRIPE_SECRET_KEY, created on first use and kept for the process. */
@@ -137,6 +156,11 @@ export class SdkStripeClient extends StripeClient {
     }
     this.#client ??= new Stripe(this.#secretKey, stripeClientOptions());
     return this.#client;
+  }
+
+  withKey(secretKey: string): OwnKeyStripeApi {
+    // A client of its own per call, with the same pinned version, timeout and retries: nothing keeps the OTA's key.
+    return new Stripe(secretKey, stripeClientOptions());
   }
 }
 

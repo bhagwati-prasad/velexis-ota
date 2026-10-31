@@ -44,12 +44,21 @@
 //   connected account itself is an `account` object put with `put`, read with `accounts.retrieve(id)`.
 //   `oauth.deauthorize` (FIX-W36-PLATFORM) needs an idempotency key, `client_id` and `stripe_user_id`, records the
 //   account in `deauthorized`, and answers Stripe's `{stripe_user_id}`; a queued failure is thrown first, as always.
-// - `notConfigured()` makes `api()` throw StripeNotConfiguredError, as the application does without STRIPE_SECRET_KEY.
+// - **An OTA's own key** (`withKey(secretKey).accounts.retrieveCurrent()`, `GET /v1/account`, PBE-057) answers the
+//   account that `grantOwnKey(secretKey, {accountId, livemode?})` gave that exact key: Stripe's `account` object with
+//   the id (and `livemode` only when the grant names one: Stripe's account object has none). Any other key throws what
+//   the SDK throws for a key Stripe does not know: `StripeAuthenticationError`, 401, with Stripe's message, which
+//   masks the key (`sk_test_****abcd`). The call is recorded as `accounts.retrieveCurrent` without the key; the SHA-256
+//   of each key asked is kept in `ownKeyDigests`, in order. A queued failure is thrown first, as always.
+// - `notConfigured()` makes `api()` throw StripeNotConfiguredError, as the application does without STRIPE_SECRET_KEY;
+//   `withKey` keeps working, as it does in the application.
 import { randomBytes } from "node:crypto";
+import { sha256Hex } from "@velexis/crypto";
 import Stripe from "stripe";
 import {
   StripeClient,
   StripeNotConfiguredError,
+  type OwnKeyStripeApi,
   type StripeApi,
 } from "../../src/common/stripe/stripe.client";
 
@@ -71,6 +80,8 @@ export const FAKE_STRIPE_METHODS = Object.freeze([
   "balanceTransactions.list",
   "charges.retrieve",
   "paymentIntents.retrieve",
+  // An OTA's own key: `GET /v1/account` of the verification of Stripe API keys (PBE-057).
+  "accounts.retrieveCurrent",
 ] as const);
 
 /** The default and the highest `limit` of a Stripe list call. */
@@ -116,6 +127,20 @@ export interface FakeConnectTokens {
 
 /** A code `grantConnectCode` made and not exchanged yet. */
 interface ConnectCode extends FakeConnectGrant, FakeConnectTokens {}
+
+/** What `GET /v1/account` answers for an OTA's own key that `grantOwnKey` gave (PBE-057). */
+export interface FakeOwnKeyGrant {
+  /** `acct_…`: the account of the key. */
+  readonly accountId: string;
+  /** Answered as the account's `livemode` only when set: Stripe's account object carries none. */
+  readonly livemode?: boolean;
+}
+
+/** Stripe's way of naming a key in an error: its prefix, `****` and its last four characters. */
+function maskedKey(key: string): string {
+  const prefix = /^[a-z]+_(?:test|live)_/.exec(key)?.[0] ?? "";
+  return `${prefix}****${key.slice(-4)}`;
+}
 
 /** A failure queued by `failNext`. */
 interface QueuedFailure extends FakeStripeFailureOptions {
@@ -178,6 +203,9 @@ export class FakeStripe extends StripeClient {
   private readonly connectCodes = new Map<string, ConnectCode>();
   /** The `acct_…` ids `oauth.deauthorize` disconnected, in order. */
   readonly deauthorized: string[] = [];
+  /** The SHA-256 (hex) of every OTA key `withKey(…).accounts.retrieveCurrent` was called with, in order. */
+  readonly ownKeyDigests: string[] = [];
+  private readonly ownKeys = new Map<string, FakeOwnKeyGrant>();
   private sequence = 0;
   private configured = true;
   private readonly resources: StripeApi;
@@ -300,6 +328,23 @@ export class FakeStripe extends StripeClient {
     return this.resources;
   }
 
+  withKey(secretKey: string): OwnKeyStripeApi {
+    return {
+      accounts: {
+        retrieveCurrent: ((params?: unknown, options?: unknown) =>
+          settle(() =>
+            this.retrieveCurrentNow(secretKey, params, options),
+          )) as OwnKeyStripeApi["accounts"]["retrieveCurrent"],
+      },
+    };
+  }
+
+  /** Makes `GET /v1/account` with exactly `secretKey` answer the account of `grant` (file header). */
+  grantOwnKey(secretKey: string, grant: FakeOwnKeyGrant): this {
+    this.ownKeys.set(secretKey, { ...grant });
+    return this;
+  }
+
   /** Makes `api()` throw StripeNotConfiguredError (no STRIPE_SECRET_KEY). */
   notConfigured(): this {
     this.configured = false;
@@ -367,8 +412,37 @@ export class FakeStripe extends StripeClient {
     this.byIdempotencyKey.clear();
     this.connectCodes.clear();
     this.deauthorized.length = 0;
+    this.ownKeys.clear();
+    this.ownKeyDigests.length = 0;
     this.configured = true;
     return this;
+  }
+
+  /** `GET /v1/account` with an OTA's own key: the account `grantOwnKey` gave the key, or Stripe's 401 (file header). */
+  private retrieveCurrentNow(
+    secretKey: string,
+    params: unknown,
+    options: unknown,
+  ): Stripe.Response<Stripe.Account> {
+    this.ownKeyDigests.push(sha256Hex(secretKey));
+    this.record("accounts.retrieveCurrent", undefined, params, options);
+    const grant = this.ownKeys.get(secretKey);
+    if (grant === undefined) {
+      throw new Stripe.errors.StripeAuthenticationError({
+        type: "invalid_request_error",
+        message: `Invalid API Key provided: ${maskedKey(secretKey)}`,
+        statusCode: 401,
+      });
+    }
+    return this.response<Stripe.Account>({
+      id: grant.accountId,
+      object: "account",
+      charges_enabled: true,
+      payouts_enabled: true,
+      details_submitted: true,
+      type: "standard",
+      ...(grant.livemode === undefined ? {} : { livemode: grant.livemode }),
+    });
   }
 
   /** `oauth.token`: exchanges a code of `grantConnectCode` once (file header). */

@@ -20,6 +20,14 @@
 // `acct_…` (`connectRowsOfAccount`, and `lockConnectRowsOfAccount` in the write's transaction), refresh their
 // capabilities and status (`refreshConnectAccount`), disable them with `disconnected_at` (`disconnectConnect`), and
 // read the OTA's name and key and its active owners for the owners' e-mail (`tenantLabel`, `activeOwners`, read only).
+// The API-key mode and the return to Velexis payments (PBE-057, flows/stripe-payments-account.md §D and §E, PADR-0011
+// items 5 and 6) read a connection without its ciphertexts (`findViewForTenant`), the latest submission of own Stripe
+// keys of each environment and the connection id it carries (`latestApiKeysSubmissions`,
+// `latestApiKeysConnectionId`: `credential_submissions` read only, never a ciphertext) and the payout account's review
+// status (`payoutAccountStatus`, `payoutAccountStatusForShare`: `tenant_payout_accounts` read only); they switch a
+// locked row, or insert a missing one, to `api_keys` with the secrets sealed for the row (`applyApiKeys`,
+// `insertApiKeys`), and switch a locked row back to `velexis` with every account reference, key and secret cleared
+// (`switchToVelexis`).
 import { Inject, Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -152,6 +160,52 @@ export interface PaymentConnectionOwner {
   readonly email: string;
   readonly full_name: string;
 }
+
+/** The columns an API-key connection gets (PADR-0011 item 5, PADR-0010 item 5). */
+export interface ApiKeysWrite {
+  /** `acct_…`: the account of the verified key (`payment_provider_connections_mode_ck`). */
+  readonly accountReference: string;
+  /** The OTA's publishable key (`pk_<env>_…`, not a secret). */
+  readonly publishableKey: string;
+  /** The secret or restricted key, sealed for the row (`…payment_provider_connections.secret_ciphertext:<id>`). */
+  readonly secretCiphertext: Uint8Array;
+  /** The webhook signing secret, sealed for the row (`…webhook_secret_ciphertext:<id>`). */
+  readonly webhookSecretCiphertext: Uint8Array;
+  /** The KEK that wraps both data keys. */
+  readonly encryptionKeyId: string;
+  /** The owner or admin who submitted the keys; `null` when that account is gone. */
+  readonly connectedByAccountId: string | null;
+  readonly now: Date;
+}
+
+/** A missing connection of `environment`, inserted in API-key mode. */
+export interface ApiKeysInsert extends ApiKeysWrite {
+  /** `ppc_…`: the id the submission's webhook URL named. */
+  readonly id: string;
+  readonly tenantId: string;
+  readonly environment: PaymentEnvironment;
+  readonly statementDescriptorSuffix: string | null;
+}
+
+/** The latest submission of own Stripe keys of one environment: what `pendingSubmission` is made of. */
+export interface ApiKeysSubmissionSummary {
+  readonly id: string;
+  readonly environment: string;
+  readonly status: string;
+  readonly error_code: string | null;
+}
+
+/** What the return to Velexis payments writes on a connection (PADR-0011 item 6). */
+export interface VelexisSwitch {
+  /** `active`, or `disabled` for a connection a platform admin disabled: the admin's disable holds. */
+  readonly status: "active" | "disabled";
+  /** The owner who switched back. */
+  readonly switchedByAccountId: string;
+  readonly now: Date;
+}
+
+/** A `ppc_…` id, as `payment_provider_connections.id` and the document's `PaymentConnection.id` have them. */
+const CONNECTION_ID = /^ppc_[0-9A-HJKMNP-TV-Z]{26}$/;
 
 @Injectable()
 export class PaymentConnectionsRepository {
@@ -354,16 +408,22 @@ export class PaymentConnectionsRepository {
    * by a Stripe deauthorisation (`disconnected_at` set). Read on the pool. A livemode mismatch of the Connect callback
    * deauthorises the account only when this is `undefined` (FIX-W37-PLATFORM, lead decision (2a) of 2026-10-31).
    */
-  async connectedHolderOf(accountReference: string): Promise<string | undefined> {
-    const row = await this.db
+  async connectedHolderOf(
+    accountReference: string,
+    exceptConnectionId?: string,
+  ): Promise<string | undefined> {
+    let query = this.db
       .selectFrom("platform.payment_provider_connections")
       .select("tenant_id")
       .where("provider", "=", STRIPE_PROVIDER)
       .where("account_mode", "=", "connect_standard")
       .where("account_reference", "=", accountReference)
-      .where("disconnected_at", "is", null)
-      .orderBy("id")
-      .executeTakeFirst();
+      .where("disconnected_at", "is", null);
+    if (exceptConnectionId !== undefined) {
+      // The return to Velexis payments of one connection asks whether any other connection still holds it (PBE-057).
+      query = query.where("id", "<>", exceptConnectionId);
+    }
+    const row = await query.orderBy("id").executeTakeFirst();
     return row?.tenant_id;
   }
 
@@ -494,6 +554,197 @@ export class PaymentConnectionsRepository {
         disconnected_at: now,
         version: eb("version", "+", 1),
         updated_at: now,
+      }))
+      .where("id", "=", id)
+      .returning(PAYMENT_CONNECTION_VIEW_COLUMNS)
+      .executeTakeFirstOrThrow();
+  }
+
+  /** The tenant's Stripe connection of `environment` without its ciphertexts, read on `db` (no lock). */
+  async findViewForTenant(
+    tenantId: string,
+    environment: PaymentEnvironment,
+    db: PlatformDb | PlatformTransaction = this.db,
+  ): Promise<PaymentConnectionView | undefined> {
+    return db
+      .selectFrom("platform.payment_provider_connections")
+      .select(PAYMENT_CONNECTION_VIEW_COLUMNS)
+      .where("tenant_id", "=", tenantId)
+      .where("provider", "=", STRIPE_PROVIDER)
+      .where("environment", "=", environment)
+      .executeTakeFirst();
+  }
+
+  /**
+   * The tenant's latest submission of own Stripe keys (`stripe_api_keys`) in each environment (`created_at`, then id),
+   * at most one per environment: its id, status and error code, read on the pool (never a ciphertext or public field).
+   */
+  async latestApiKeysSubmissions(tenantId: string): Promise<ApiKeysSubmissionSummary[]> {
+    return this.db
+      .selectFrom("platform.credential_submissions")
+      .distinctOn("environment")
+      .select(["id", "environment", "status", "error_code"])
+      .where("tenant_id", "=", tenantId)
+      .where("kind", "=", "stripe_api_keys")
+      .orderBy("environment")
+      .orderBy("created_at", "desc")
+      .orderBy("id", "desc")
+      .execute();
+  }
+
+  /**
+   * The connection id (`public_data.connectionId`) of the tenant's latest submission of own Stripe keys for
+   * `environment`, in `trx`; `undefined` without one, or when it is not a `ppc_…` id. A submission for an environment
+   * without a connection carries the id the connection will get, so the next submission keeps the webhook URL.
+   */
+  async latestApiKeysConnectionId(
+    trx: PlatformTransaction,
+    tenantId: string,
+    environment: PaymentEnvironment,
+  ): Promise<string | undefined> {
+    const row = await trx
+      .selectFrom("platform.credential_submissions")
+      .select(sql<string | null>`public_data ->> 'connectionId'`.as("connection_id"))
+      .where("tenant_id", "=", tenantId)
+      .where("kind", "=", "stripe_api_keys")
+      .where("environment", "=", environment)
+      .orderBy("created_at", "desc")
+      .orderBy("id", "desc")
+      .executeTakeFirst();
+    const id = row?.connection_id;
+    return typeof id === "string" && CONNECTION_ID.test(id) ? id : undefined;
+  }
+
+  /**
+   * The review status of the tenant's payout account (`pending_review`, `verified`, `rejected`), or `undefined`
+   * without one; read on `db` (the pool, or the caller's transaction).
+   */
+  async payoutAccountStatus(
+    tenantId: string,
+    db: PlatformDb | PlatformTransaction = this.db,
+  ): Promise<string | undefined> {
+    const row = await db
+      .selectFrom("platform.tenant_payout_accounts")
+      .select("status")
+      .where("tenant_id", "=", tenantId)
+      .executeTakeFirst();
+    return row?.status;
+  }
+
+  /**
+   * The review status of the tenant's payout account read in `trx` with `FOR SHARE`, so a change of the account waits
+   * for the return to Velexis payments, or that return sees it; `undefined` without one.
+   */
+  async payoutAccountStatusForShare(trx: PlatformTransaction, tenantId: string): Promise<string | undefined> {
+    const row = await trx
+      .selectFrom("platform.tenant_payout_accounts")
+      .select("status")
+      .where("tenant_id", "=", tenantId)
+      .forShare()
+      .executeTakeFirst();
+    return row?.status;
+  }
+
+  /**
+   * Switches a connection locked by `lockForTenant` to API-key mode in `trx` (flows/stripe-payments-account.md §D item
+   * 3): `account_mode = 'api_keys'`, the verified `acct_…`, the publishable key, both secrets sealed for this row and
+   * their KEK, no capabilities (they come from Connect's `account.updated` only), `connected_at` and
+   * `last_verified_at` now, no `disconnected_at` or `last_error`, `active`, the submitter, `version + 1`. The row comes
+   * back without the ciphertexts.
+   */
+  async applyApiKeys(
+    trx: PlatformTransaction,
+    id: string,
+    write: ApiKeysWrite,
+  ): Promise<PaymentConnectionView> {
+    return trx
+      .updateTable("platform.payment_provider_connections")
+      .set((eb) => ({
+        account_mode: "api_keys",
+        account_reference: write.accountReference,
+        publishable_key: write.publishableKey,
+        secret_ciphertext: Buffer.from(write.secretCiphertext),
+        webhook_secret_ciphertext: Buffer.from(write.webhookSecretCiphertext),
+        encryption_key_id: write.encryptionKeyId,
+        capabilities: JSON.stringify({}),
+        connected_at: write.now,
+        disconnected_at: null,
+        last_verified_at: write.now,
+        last_error: null,
+        status: "active",
+        created_by_account_id: write.connectedByAccountId,
+        version: eb("version", "+", 1),
+        updated_at: write.now,
+      }))
+      .where("id", "=", id)
+      .returning(PAYMENT_CONNECTION_VIEW_COLUMNS)
+      .executeTakeFirstOrThrow();
+  }
+
+  /**
+   * Inserts the tenant's Stripe connection of an environment that has none yet, in API-key mode, in `trx`: the columns
+   * of `applyApiKeys` under the id the submission's webhook URL named, `manual` capture and the default connection of
+   * the environment. The row comes back without the ciphertexts.
+   */
+  async insertApiKeys(trx: PlatformTransaction, row: ApiKeysInsert): Promise<PaymentConnectionView> {
+    return trx
+      .insertInto("platform.payment_provider_connections")
+      .values({
+        id: row.id,
+        tenant_id: row.tenantId,
+        provider: STRIPE_PROVIDER,
+        environment: row.environment,
+        account_mode: "api_keys",
+        account_reference: row.accountReference,
+        publishable_key: row.publishableKey,
+        secret_ciphertext: Buffer.from(row.secretCiphertext),
+        webhook_secret_ciphertext: Buffer.from(row.webhookSecretCiphertext),
+        encryption_key_id: row.encryptionKeyId,
+        capture_mode: "manual",
+        is_default: true,
+        status: "active",
+        statement_descriptor_suffix: row.statementDescriptorSuffix,
+        capabilities: JSON.stringify({}),
+        connected_at: row.now,
+        last_verified_at: row.now,
+        created_by_account_id: row.connectedByAccountId,
+        created_at: row.now,
+        updated_at: row.now,
+      })
+      .returning(PAYMENT_CONNECTION_VIEW_COLUMNS)
+      .executeTakeFirstOrThrow();
+  }
+
+  /**
+   * Switches a connection locked by `lockForTenant` back to the Velexis account in `trx` (flows/stripe-payments-
+   * account.md §E): `account_mode = 'velexis'`, no account reference, publishable key, secrets or key id, no
+   * capabilities, no `connected_at`, `disconnected_at`, `last_verified_at` or `last_error`, the status of `change`, the
+   * owner who switched back, `version + 1`. The capture mode and the statement descriptor suffix stay. The row comes
+   * back without the ciphertexts.
+   */
+  async switchToVelexis(
+    trx: PlatformTransaction,
+    id: string,
+    change: VelexisSwitch,
+  ): Promise<PaymentConnectionView> {
+    return trx
+      .updateTable("platform.payment_provider_connections")
+      .set((eb) => ({
+        account_mode: "velexis",
+        account_reference: null,
+        publishable_key: null,
+        secret_ciphertext: null,
+        webhook_secret_ciphertext: null,
+        encryption_key_id: null,
+        capabilities: JSON.stringify({}),
+        connected_at: null,
+        disconnected_at: null,
+        last_verified_at: null,
+        last_error: null,
+        status: change.status,
+        created_by_account_id: change.switchedByAccountId,
+        version: eb("version", "+", 1),
+        updated_at: change.now,
       }))
       .where("id", "=", id)
       .returning(PAYMENT_CONNECTION_VIEW_COLUMNS)
