@@ -1,23 +1,34 @@
 // The Amadeus connection routes of the portal (platform/docs/api-inventory-resources.md §3; scope §1.2 "See Amadeus and
-// payment connections (masked)", PF-53): `listAmadeusConnections` since PBE-027 and `updateAmadeusConnection` since
-// PBE-040. Thin: each handler binds its operation, reads the validated request and makes one ConnectionsService call.
+// payment connections (masked)", PF-52, PF-53): `listAmadeusConnections` since PBE-027, `updateAmadeusConnection` since
+// PBE-040 and `submitAmadeusCredentials` since PBE-053. Thin: each handler binds its operation, reads the validated
+// request and makes one service call.
 //
 // - `listAmadeusConnections`: owners, admins and finance members see the OTA's `test` and `live` connections. The rows
 //   are read without the client secret's ciphertext and mapped by `toAmadeusConnection`, which answers the OTA's own
-//   `clientId` but never a secret; `pendingSubmission` stays `null` until the M5 credential submissions (PBE-052,
-//   PBE-053).
+//   `clientId` but never a secret; `pendingSubmission` is the latest submission of own credentials of the environment
+//   while it is open or after it failed (AmadeusCredentialsService.listConnections, PBE-053).
 // - `updateAmadeusConnection` (`PATCH …/amadeus-connections/{environment}`, `If-Match`): owners and admins change the
 //   office defaults, the ticketing defaults and the monitored queues (connections.service.ts); the answer is the
-//   connection as the list maps it, with its new version in `ETag`.
+//   connection mapped by `toAmadeusConnection`, with its new version in `ETag`. Its `pendingSubmission` is `null`:
+//   only the list reads the submissions (the portal's Amadeus page reloads the list after a save).
+// - `submitAmadeusCredentials` (`PUT …/amadeus-connections/{environment}/credentials`): owners and admins with a TOTP
+//   step-up (RecentMfaGuard) while `FEATURE_OWN_AMADEUS` is on (FeatureGuard) submit the OTA's own client id, client
+//   secret and offices; the answer is `202 {submission}`, `pending` until the worker verifies it
+//   (amadeus-credentials.service.ts, amadeus-credentials.verifier.ts). The secret is never answered or logged.
 //
 // TenantRoleGuard answers `404` to non-members and `403` to the other roles before a handler runs.
-import { Controller, Get, Patch, Res } from "@nestjs/common";
+import { Controller, Get, HttpCode, Patch, Put, Res } from "@nestjs/common";
 import type { components } from "@velexis/api-types/platform";
 import { CurrentMembership, TenantRoles, type TenantMembership } from "../common/auth/tenant-role.guard";
 import { etagOf, versionOfIfMatch } from "../common/http/if-match";
 import { OpenApiOperation, Validated } from "../common/http/openapi-operation.decorator";
 import { tenantRolesOf } from "../memberships/tenant-roles";
 import type { AmadeusEnvironment } from "./amadeus-accounts.repository";
+import {
+  AmadeusCredentialsService,
+  type CredentialSubmissionAccepted,
+  type SubmitAmadeusCredentialsRequest,
+} from "./amadeus-credentials.service";
 import { ConnectionsService, type UpdateAmadeusConnectionRequest } from "./connections.service";
 import { toAmadeusConnection, type AmadeusConnection } from "./supplier-connections.repository";
 
@@ -30,7 +41,10 @@ interface HeaderTarget {
 
 @Controller("v1/tenants/:tenantId/amadeus-connections")
 export class ConnectionsController {
-  constructor(private readonly connections: ConnectionsService) {}
+  constructor(
+    private readonly connections: ConnectionsService,
+    private readonly credentials: AmadeusCredentialsService,
+  ) {}
 
   @Get()
   @OpenApiOperation("listAmadeusConnections")
@@ -38,8 +52,7 @@ export class ConnectionsController {
   async listAmadeusConnections(
     @CurrentMembership() membership: TenantMembership,
   ): Promise<AmadeusConnectionList> {
-    const rows = await this.connections.list(membership.tenantId);
-    return { data: rows.map(toAmadeusConnection) };
+    return { data: await this.credentials.listConnections(membership.tenantId) };
   }
 
   @Patch(":environment")
@@ -60,5 +73,17 @@ export class ConnectionsController {
     );
     res.setHeader("ETag", etagOf(row.version));
     return toAmadeusConnection(row);
+  }
+
+  @Put(":environment/credentials")
+  @HttpCode(202)
+  @OpenApiOperation("submitAmadeusCredentials")
+  @TenantRoles(...tenantRolesOf("submitAmadeusCredentials"))
+  submitAmadeusCredentials(
+    @CurrentMembership() membership: TenantMembership,
+    @Validated("path") path: Readonly<Record<string, unknown>>,
+    @Validated("body") body: SubmitAmadeusCredentialsRequest,
+  ): Promise<CredentialSubmissionAccepted> {
+    return this.credentials.submit(membership, path["environment"] as AmadeusEnvironment, body);
   }
 }

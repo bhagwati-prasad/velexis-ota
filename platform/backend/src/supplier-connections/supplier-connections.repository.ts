@@ -15,7 +15,8 @@
 // `setStatus` is the platform admin's switch of a connection (PBE-030, `adminSetConnectionStatus`).
 // `tenantStatusForShare`, `lockViewForTenant` and `updateSettings` are the portal's settings update (PBE-040,
 // `updateAmadeusConnection`): the tenant's row `FOR SHARE` first, then the connection `FOR UPDATE` without the
-// ciphertext column, as the payment connection's update does.
+// ciphertext column, as the payment connection's update does. `switchToTenant` and `insertTenant` apply the OTA's own
+// verified credentials (PBE-053, the `amadeus` verifier of `credentials.verify`), under `lockTenantEnvironment`.
 import { Inject, Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types/platform";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
@@ -84,6 +85,52 @@ export interface VelexisConnectionInsert extends VelexisOffice {
 
 /** The columns of a new `velexis` connection that waits for an office (no free office, or no active account). */
 export type PendingVelexisConnectionInsert = Omit<VelexisConnectionInsert, "officeId">;
+
+/**
+ * The OTA's own verified credentials for a `tenant` connection (PBE-053): the Amadeus host, the client id, the client
+ * secret envelope-encrypted for the connection's row (associated data
+ * `platform.supplier_connections.client_secret_ciphertext:<sc_id>`, ADR-0010) and its KEK, and the offices (the default,
+ * queuing and owner offices among `officeIds`).
+ */
+export interface TenantCredentials {
+  readonly baseUrl: string;
+  readonly clientId: string;
+  readonly clientSecretCiphertext: Uint8Array;
+  readonly encryptionKeyId: string;
+  readonly officeIds: readonly string[];
+  readonly defaultOfficeId: string;
+  readonly queuingOfficeId: string;
+  readonly ownerOfficeId: string;
+}
+
+/** The columns of a new `tenant` connection. */
+export interface TenantConnectionInsert {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly environment: AmadeusEnvironment;
+  readonly credentials: TenantCredentials;
+  readonly createdByAccountId: string | null;
+  readonly now: Date;
+}
+
+/** The columns a `tenant` connection takes from its credentials (`supplier_connections_source_ck`), verified at `now`. */
+function tenantCredentialColumns(credentials: TenantCredentials, now: Date) {
+  return {
+    credential_source: "tenant",
+    amadeus_account_id: null,
+    base_url: credentials.baseUrl,
+    client_id: credentials.clientId,
+    client_secret_ciphertext: Buffer.from(credentials.clientSecretCiphertext),
+    encryption_key_id: credentials.encryptionKeyId,
+    office_ids: [...credentials.officeIds],
+    default_office_id: credentials.defaultOfficeId,
+    queuing_office_id: credentials.queuingOfficeId,
+    owner_office_id: credentials.ownerOfficeId,
+    status: "active",
+    last_verified_at: now,
+    last_error: null,
+  };
+}
 
 /**
  * The settings `updateAmadeusConnection` changes (PBE-040): each column that is present replaces the stored value, the
@@ -289,6 +336,56 @@ export class SupplierConnectionsRepository {
   }
 
   /**
+   * Switches a connection locked by `lockForTenant` to the OTA's own credentials (PBE-053, flows/amadeus-connection.md
+   * §D item 3): `credential_source = 'tenant'`, no Velexis account, the host, client id and re-encrypted secret, the
+   * offices, `active` and verified now, no error, `version + 1`. Ticketing defaults and monitored queues keep what the
+   * OTA set. The row comes back without the client secret's ciphertext.
+   */
+  async switchToTenant(
+    trx: PlatformTransaction,
+    id: string,
+    credentials: TenantCredentials,
+    now: Date,
+  ): Promise<SupplierConnectionView> {
+    return trx
+      .updateTable("platform.supplier_connections")
+      .set((eb) => ({
+        ...tenantCredentialColumns(credentials, now),
+        version: eb("version", "+", 1),
+        updated_at: now,
+      }))
+      .where("id", "=", id)
+      .returning(SUPPLIER_CONNECTION_VIEW_COLUMNS)
+      .executeTakeFirstOrThrow();
+  }
+
+  /**
+   * Inserts the tenant's connection of `environment` with the OTA's own credentials (PBE-053, flows/amadeus-connection.md
+   * §D item 4: own credentials before any Velexis connection of that environment): the columns of `switchToTenant`,
+   * empty ticketing defaults and monitored queues, version 1. The caller holds `lockTenantEnvironment`. The row comes back
+   * without the client secret's ciphertext.
+   */
+  async insertTenant(trx: PlatformTransaction, row: TenantConnectionInsert): Promise<SupplierConnectionView> {
+    return trx
+      .insertInto("platform.supplier_connections")
+      .values({
+        id: row.id,
+        tenant_id: row.tenantId,
+        provider: AMADEUS_PROVIDER,
+        environment: row.environment,
+        ...tenantCredentialColumns(row.credentials, row.now),
+        // jsonb columns are written as JSON text.
+        ticketing_defaults: JSON.stringify({}),
+        monitored_queues: JSON.stringify([]),
+        created_by_account_id: row.createdByAccountId,
+        created_at: row.now,
+        updated_at: row.now,
+      })
+      .returning(SUPPLIER_CONNECTION_VIEW_COLUMNS)
+      .executeTakeFirstOrThrow();
+  }
+
+  /**
    * Sets the status of a connection locked by `lockForTenant` (PBE-030, `adminSetConnectionStatus`: `disabled`, or back
    * to `active`), with `version + 1`, in `trx`. Offices, settings and credentials stay as they are; the row comes back
    * without the client secret's ciphertext.
@@ -363,8 +460,9 @@ const iso = (value: Date | null): string | null => (value === null ? null : valu
 
 /**
  * The API's `AmadeusConnection` of a row: the office fields, settings and verification state, never the client
- * secret or its ciphertext; `clientId` only for the OTA's own credentials. `pendingSubmission` is the M5 credential
- * submission (PBE-053) and stays `null` until then.
+ * secret or its ciphertext; `clientId` only for the OTA's own credentials. `pendingSubmission` is `null` here:
+ * `listAmadeusConnections` replaces it with the latest submission of own credentials for the connection's environment
+ * while it is open or after it failed (PBE-053, AmadeusCredentialsService.listConnections).
  */
 export function toAmadeusConnection(row: SupplierConnectionView): AmadeusConnection {
   return {

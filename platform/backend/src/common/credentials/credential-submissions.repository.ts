@@ -233,6 +233,23 @@ export class CredentialSubmissionsRepository {
       .executeTakeFirst();
   }
 
+  /**
+   * The tenant's latest submission of `kind` in each environment (`created_at`, then id), without its ciphertexts, at
+   * most one per environment (PBE-053: the `pendingSubmission` of the connection lists).
+   */
+  async latestByEnvironment(tenantId: string, kind: CredentialKind): Promise<CredentialSubmissionView[]> {
+    return this.db
+      .selectFrom("platform.credential_submissions")
+      .distinctOn("environment")
+      .select(VIEW_COLUMNS)
+      .where("tenant_id", "=", tenantId)
+      .where("kind", "=", kind)
+      .orderBy("environment")
+      .orderBy("created_at", "desc")
+      .orderBy("id", "desc")
+      .execute();
+  }
+
   /** A submission without its ciphertexts, read on `db` (the pool, or the caller's transaction). */
   async find(
     submissionId: string,

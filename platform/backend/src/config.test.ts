@@ -9,6 +9,8 @@ import { createTestJwtKeyFile, ed25519PrivateKeyPem, writeTestKeyFile } from "..
 import { createTestMasterKeyDir, TEST_MAIL_ENV } from "../test/support/master-key";
 import { FEATURE_VARIABLES, FEATURES } from "./common/features";
 import {
+  AMADEUS_OFFICIAL_BASE_URLS,
+  amadeusBaseUrl,
   APP_DIR,
   createProcessLogger,
   DEFAULT_DNS_RESOLVERS,
@@ -106,6 +108,15 @@ const STRIPE_TEST_VALUES = {
   STRIPE_CONNECT_CLIENT_ID: "ca_dummy",
   STRIPE_CONNECT_WEBHOOK_SECRET: "whsec_dummy_connect",
 } as const satisfies Record<(typeof STRIPE_VARIABLES)[number], string>;
+
+/** The Amadeus hosts of own credentials PBE-053 adds, after the Stripe variables in the schema. */
+const AMADEUS_URL_VARIABLES = ["AMADEUS_BASE_URL_TEST", "AMADEUS_BASE_URL_LIVE"] as const;
+
+/** The two Amadeus hosts of a configuration. */
+const amadeusUrlsOf = (config: ReturnType<typeof parseConfig>) => ({
+  AMADEUS_BASE_URL_TEST: config.AMADEUS_BASE_URL_TEST,
+  AMADEUS_BASE_URL_LIVE: config.AMADEUS_BASE_URL_LIVE,
+});
 
 /** The storefront addresses PBE-049 adds, right after STOREFRONT_BASE_DOMAIN in the schema. */
 const STOREFRONT_ADDRESS_VARIABLES = ["STOREFRONT_IPV4", "STOREFRONT_IPV6"] as const;
@@ -210,6 +221,8 @@ describe("parseConfig", () => {
       FEATURE_OWN_AMADEUS: false,
       FEATURE_CUSTOM_DOMAINS: false,
       FEATURE_LIVE_SWITCH: false,
+      AMADEUS_BASE_URL_TEST: "https://test.travel.api.amadeus.com",
+      AMADEUS_BASE_URL_LIVE: "https://travel.api.amadeus.com",
     });
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(config.TRUST_PROXY)).toBe(true);
@@ -473,6 +486,7 @@ describe("parseConfig", () => {
       "MAX_TENANTS_PER_ACCOUNT",
       ...Object.values(FEATURE_VARIABLES),
       ...STRIPE_VARIABLES,
+      ...AMADEUS_URL_VARIABLES,
     ]);
   });
 
@@ -1043,6 +1057,97 @@ describe("parseConfig: the DNS resolvers of domain verification (PBE-050)", () =
         parseConfig({ ...REQUIRED, DNS_RESOLVERS: values["DNS_RESOLVERS"] }).DNS_RESOLVERS,
         file,
       ).toEqual(DEFAULT_DNS_RESOLVERS);
+    }
+  });
+});
+
+describe("parseConfig: the Amadeus hosts of own credentials (PBE-053)", () => {
+  it("[PBE-053] defaults AMADEUS_BASE_URL_TEST and AMADEUS_BASE_URL_LIVE to the official hosts, an empty value too", () => {
+    expect(AMADEUS_OFFICIAL_BASE_URLS).toEqual({
+      AMADEUS_BASE_URL_TEST: "https://test.travel.api.amadeus.com",
+      AMADEUS_BASE_URL_LIVE: "https://travel.api.amadeus.com",
+    });
+    for (const source of [REQUIRED, { ...REQUIRED, AMADEUS_BASE_URL_TEST: "", AMADEUS_BASE_URL_LIVE: "" }]) {
+      const config = parseConfig(source);
+      expect(amadeusUrlsOf(config)).toEqual(AMADEUS_OFFICIAL_BASE_URLS);
+      expect([amadeusBaseUrl(config, "test"), amadeusBaseUrl(config, "live")]).toEqual([
+        "https://test.travel.api.amadeus.com",
+        "https://travel.api.amadeus.com",
+      ]);
+    }
+  });
+
+  it("[PBE-053] accepts the loopback stub and another https host outside production, without a trailing slash", () => {
+    for (const appEnv of ["development", "test"]) {
+      const config = parseConfig({
+        ...REQUIRED,
+        APP_ENV: appEnv,
+        AMADEUS_BASE_URL_TEST: "http://127.0.0.1:4900/",
+        AMADEUS_BASE_URL_LIVE: "https://amadeus.example.test:8443",
+      });
+      expect(amadeusBaseUrl(config, "test")).toBe("http://127.0.0.1:4900");
+      expect(amadeusBaseUrl(config, "live")).toBe("https://amadeus.example.test:8443");
+    }
+  });
+
+  it.each([
+    ["http://example.com", "an http host off the loopback interface"],
+    ["http://localhost:4900", "localhost, which the token check refuses"],
+    ["https://test.travel.api.amadeus.com/v1", "a path"],
+    ["https://test.travel.api.amadeus.com?x=1", "a query"],
+    ["https://user:secret-value@test.travel.api.amadeus.com", "user info"],
+    ["ftp://test.travel.api.amadeus.com", "another scheme"],
+    ["https://test.travel.api.amadeus.com:99999", "a port above 65535"],
+    ["test.travel.api.amadeus.com", "no scheme"],
+  ])("[PBE-053] refuses AMADEUS_BASE_URL_TEST=%s (%s) without echoing it", (value) => {
+    const error = configError({ ...REQUIRED, AMADEUS_BASE_URL_TEST: value });
+
+    expect(error.problems.map((problem) => problem.variable)).toEqual(["AMADEUS_BASE_URL_TEST"]);
+    expect(error.message).not.toContain("secret-value");
+  });
+
+  it("[PBE-053] accepts only the official hosts with APP_ENV=production (an override is for development and tests)", () => {
+    const production = { ...REQUIRED, APP_ENV: "production" };
+
+    expect(amadeusUrlsOf(parseConfig(production))).toEqual(AMADEUS_OFFICIAL_BASE_URLS);
+    expect(
+      parseConfig({ ...production, AMADEUS_BASE_URL_LIVE: "https://travel.api.amadeus.com/" })
+        .AMADEUS_BASE_URL_LIVE,
+    ).toBe("https://travel.api.amadeus.com/");
+    expect(
+      configError({
+        ...production,
+        AMADEUS_BASE_URL_TEST: "http://127.0.0.1:4900",
+        AMADEUS_BASE_URL_LIVE: "https://test.travel.api.amadeus.com",
+      }).problems,
+    ).toEqual([
+      {
+        variable: "AMADEUS_BASE_URL_TEST",
+        reason: "must be the official Amadeus host of its environment with APP_ENV=production",
+      },
+      {
+        variable: "AMADEUS_BASE_URL_LIVE",
+        reason: "must be the official Amadeus host of its environment with APP_ENV=production",
+      },
+    ]);
+  });
+
+  it("[PBE-053] declares both hosts in every env template: the stub locally, empty (the official hosts) on the VM", () => {
+    for (const file of [
+      ".env.example",
+      "platform/backend/.env.example",
+      "deploy/env/platform-backend.env.example",
+    ]) {
+      const values = pick(readEnvFile(join(REPO_ROOT, file)), AMADEUS_URL_VARIABLES);
+      if (file.startsWith("deploy/")) {
+        expect(values, file).toEqual({ AMADEUS_BASE_URL_TEST: "", AMADEUS_BASE_URL_LIVE: "" });
+      } else {
+        expect(values, file).toEqual({
+          AMADEUS_BASE_URL_TEST: "http://127.0.0.1:4900",
+          AMADEUS_BASE_URL_LIVE: "http://127.0.0.1:4900",
+        });
+      }
+      expect(() => parseConfig({ ...REQUIRED, ...values }), file).not.toThrow();
     }
   });
 });

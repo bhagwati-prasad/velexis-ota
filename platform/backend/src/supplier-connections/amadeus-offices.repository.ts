@@ -7,8 +7,9 @@
 //
 // Writes go through a row locked with `lock` (`FOR UPDATE`), so two concurrent assignments of one office are
 // serialised and the second sees the first one's status; the provisioning post-step takes the oldest free office with
-// `lockOldestAvailable` (`FOR UPDATE SKIP LOCKED`, PBE-022). Reads for the API (`AmadeusOfficeView`) add the
-// environment (from the account) and the key of the assigned tenant.
+// `lockOldestAvailable` (`FOR UPDATE SKIP LOCKED`, PBE-022). `startReleasing` moves the OTA's assigned offices of an
+// environment to `releasing` when its own credentials are applied (PBE-053), under the connection's lock. Reads for
+// the API (`AmadeusOfficeView`) add the environment (from the account) and the key of the assigned tenant.
 import { Inject, Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -202,6 +203,35 @@ export class AmadeusOfficesRepository {
       .where("status", "=", "available")
       .returning("id")
       .executeTakeFirstOrThrow();
+  }
+
+  /**
+   * Moves every office `assigned` to the tenant on a Velexis account of `environment` to `releasing` with
+   * `release_requested_at`, keeping `assigned_tenant_id`, with `version + 1`, in `trx` (PADR-0012 item 4: the OTA now
+   * uses its own credentials; PBE-053). The UPDATE locks the rows it changes. Answers them (none when the OTA had no
+   * Velexis office of that environment).
+   */
+  async startReleasing(
+    trx: PlatformTransaction,
+    tenantId: string,
+    environment: AmadeusEnvironment,
+    now: Date,
+  ): Promise<AmadeusOfficeRecord[]> {
+    return trx
+      .updateTable("platform.amadeus_offices as o")
+      .from("platform.amadeus_accounts as a")
+      .set((eb) => ({
+        status: "releasing",
+        release_requested_at: now,
+        version: eb("o.version", "+", 1),
+        updated_at: now,
+      }))
+      .whereRef("a.id", "=", "o.amadeus_account_id")
+      .where("a.environment", "=", environment)
+      .where("o.assigned_tenant_id", "=", tenantId)
+      .where("o.status", "=", "assigned")
+      .returningAll("o")
+      .execute();
   }
 
   /** Retires a row locked by `lock` (and found `available`), with `version + 1`; throws as `assign` does. */

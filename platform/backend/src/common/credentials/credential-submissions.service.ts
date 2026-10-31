@@ -34,6 +34,7 @@
 //
 // `get(tenantId, submissionId)` answers the submission of `getCredentialSubmission` (`toCredentialSubmission`): status
 // and error, never a secret nor the public fields; a submission of another OTA answers `404 NOT_FOUND`.
+// `pendingByEnvironment(tenantId, kind)` gives the connection lists their `pendingSubmission` (PBE-053).
 import { InjectQueue } from "@nestjs/bullmq";
 import { Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types/platform";
@@ -60,6 +61,12 @@ import {
 
 /** A submission as `getCredentialSubmission` answers it. */
 export type CredentialSubmission = components["schemas"]["CredentialSubmission"];
+
+/** The latest submission of a connection's environment, as the connection lists answer it (`pendingSubmission`). */
+export type PendingCredentialSubmission = components["schemas"]["PendingCredentialSubmission"];
+
+/** The statuses a `pendingSubmission` shows: an open submission, or one that failed (the portal shows why). */
+const PENDING_SUBMISSION_STATUSES = Object.freeze(["pending", "verifying", "failed"] as const);
 
 /** The job that verifies a submission (PADR-0010 item 4). */
 export const CREDENTIALS_VERIFY_JOB = "credentials.verify";
@@ -290,6 +297,28 @@ export class CredentialSubmissionsService {
       throw new AppError("NOT_FOUND");
     }
     return toCredentialSubmission(row);
+  }
+
+  /**
+   * The `pendingSubmission` of the tenant's connections of `kind`, by environment (PBE-053): the latest submission of
+   * the environment while it is `pending` or `verifying`, or after it `failed`; no entry once it was applied (or for an
+   * environment without submissions). Never a secret nor a public field.
+   */
+  async pendingByEnvironment(
+    tenantId: string,
+    kind: CredentialKind,
+  ): Promise<Partial<Record<CredentialEnvironment, PendingCredentialSubmission>>> {
+    const pending: Partial<Record<CredentialEnvironment, PendingCredentialSubmission>> = {};
+    for (const row of await this.submissions.latestByEnvironment(tenantId, kind)) {
+      if ((PENDING_SUBMISSION_STATUSES as readonly string[]).includes(row.status)) {
+        pending[row.environment as CredentialEnvironment] = {
+          id: row.id,
+          status: row.status as PendingCredentialSubmission["status"],
+          errorCode: row.status === "failed" ? row.error_code : null,
+        };
+      }
+    }
+    return pending;
   }
 
   /**

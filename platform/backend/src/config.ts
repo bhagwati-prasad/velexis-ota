@@ -190,6 +190,37 @@ export const STRIPE_SWITCH_VARIABLES = Object.freeze({
 });
 
 /**
+ * The Amadeus Enterprise hosts of each environment (flows/amadeus-connection.md §D item 3): the defaults of
+ * AMADEUS_BASE_URL_TEST and AMADEUS_BASE_URL_LIVE, and the only values `APP_ENV=production` accepts.
+ */
+export const AMADEUS_OFFICIAL_BASE_URLS = Object.freeze({
+  AMADEUS_BASE_URL_TEST: "https://test.travel.api.amadeus.com",
+  AMADEUS_BASE_URL_LIVE: "https://travel.api.amadeus.com",
+} as const);
+
+/**
+ * An Amadeus base URL: an `https:` origin, or `http://127.0.0.1` with an optional port (the Amadeus stub of development
+ * and tests: the rule of `platform.amadeus_accounts.base_url` and of the token check, AmadeusOAuthGateway), with an
+ * optional trailing slash and nothing else: no path, query, fragment or user info. `amadeusBaseUrl` drops the slash.
+ */
+export const AMADEUS_BASE_URL_PATTERN =
+  /^(?:https:\/\/[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(?::[0-9]{1,5})?|http:\/\/127\.0\.0\.1(?::[0-9]{1,5})?)\/?$/;
+
+/** The Amadeus base URL variable of each environment of a connection. */
+export const AMADEUS_BASE_URL_VARIABLES = Object.freeze({
+  test: "AMADEUS_BASE_URL_TEST",
+  live: "AMADEUS_BASE_URL_LIVE",
+} as const);
+
+/** The configured Amadeus base URL of `environment`, without a trailing slash (`https://test.travel.api.amadeus.com`). */
+export function amadeusBaseUrl(
+  config: Pick<PlatformBackendConfig, "AMADEUS_BASE_URL_TEST" | "AMADEUS_BASE_URL_LIVE">,
+  environment: keyof typeof AMADEUS_BASE_URL_VARIABLES,
+): string {
+  return config[AMADEUS_BASE_URL_VARIABLES[environment]].replace(/\/$/, "");
+}
+
+/**
  * The schema of every variable the platform backend reads (README §3, configuration matrix in
  * docs/mvp/architecture.md §6). Defaults exist only where they are safe in production (conventions §8).
  */
@@ -320,6 +351,22 @@ export const PLATFORM_BACKEND_CONFIG_SCHEMA = {
    * without it the endpoint refuses every delivery. A secret: never logged.
    */
   STRIPE_CONNECT_WEBHOOK_SECRET: env.string({ optional: true, pattern: STRIPE_WEBHOOK_SECRET_PATTERN }),
+  /**
+   * The Amadeus host of each environment for the OTA's own credentials (PBE-053, flows/amadeus-connection.md §D): the
+   * worker's token request that verifies a submission goes there, and the connection it switches stores it as its
+   * `base_url`. The defaults are the official hosts (AMADEUS_OFFICIAL_BASE_URLS); another value, such as the Amadeus
+   * stub `http://127.0.0.1:4900` of development and tests, is refused with `APP_ENV=production`
+   * (`amadeusBaseUrlProblems`). An empty value counts as unset. The worker reads them; the API validates them too,
+   * because both read `platform-backend.env`.
+   */
+  AMADEUS_BASE_URL_TEST: env.string({
+    pattern: AMADEUS_BASE_URL_PATTERN,
+    default: AMADEUS_OFFICIAL_BASE_URLS.AMADEUS_BASE_URL_TEST,
+  }),
+  AMADEUS_BASE_URL_LIVE: env.string({
+    pattern: AMADEUS_BASE_URL_PATTERN,
+    default: AMADEUS_OFFICIAL_BASE_URLS.AMADEUS_BASE_URL_LIVE,
+  }),
 } as const satisfies ConfigSchema;
 
 export type PlatformBackendConfig = ConfigOf<typeof PLATFORM_BACKEND_CONFIG_SCHEMA>;
@@ -476,6 +523,33 @@ function dnsResolverProblems(source: EnvSource | undefined): ConfigProblem[] {
 }
 
 /**
+ * The Amadeus base URL rules that a pattern cannot express (PBE-053, flows/amadeus-connection.md §D item 3: the host is
+ * "overridable only in development"): each value must be a URL whose port is at most 65535, and with
+ * `APP_ENV=production` it must be the official host of its environment (AMADEUS_OFFICIAL_BASE_URLS), so a deployment
+ * never sends an OTA's client secret anywhere else. A variable that is invalid on its own is reported by the schema,
+ * not here.
+ */
+function amadeusBaseUrlProblems(source: EnvSource | undefined): ConfigProblem[] {
+  const problems: ConfigProblem[] = [];
+  const appEnv = validValues({ APP_ENV: PLATFORM_BACKEND_CONFIG_SCHEMA.APP_ENV }, source)?.APP_ENV;
+  for (const variable of Object.values(AMADEUS_BASE_URL_VARIABLES)) {
+    const value = validValues({ [variable]: PLATFORM_BACKEND_CONFIG_SCHEMA[variable] }, source)?.[variable];
+    if (value === undefined) {
+      continue;
+    }
+    if (!URL.canParse(value)) {
+      problems.push({ variable, reason: "must be a URL with a port of at most 65535" });
+    } else if (appEnv === "production" && value.replace(/\/$/, "") !== AMADEUS_OFFICIAL_BASE_URLS[variable]) {
+      problems.push({
+        variable,
+        reason: "must be the official Amadeus host of its environment with APP_ENV=production",
+      });
+    }
+  }
+  return problems;
+}
+
+/**
  * Validates the configuration in `source` (default: the process environment) and returns it deep-frozen. Throws one
  * `ConfigError` that names every invalid variable and the reason, never a value.
  */
@@ -485,6 +559,7 @@ export function parseConfig(source?: EnvSource): PlatformBackendConfig {
     ...stripeProblems(source),
     ...storefrontAddressProblems(source),
     ...dnsResolverProblems(source),
+    ...amadeusBaseUrlProblems(source),
   ];
   try {
     const config = defineConfig(PLATFORM_BACKEND_CONFIG_SCHEMA, source);

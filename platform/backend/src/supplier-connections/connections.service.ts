@@ -3,7 +3,8 @@
 // this service owns the transaction of a change, its audit row and the `connection` invalidation after the commit
 // (architecture §4).
 //
-// `list` (`listAmadeusConnections`, PBE-027) reads the OTA's connections without the client secret's ciphertext.
+// The list of `listAmadeusConnections` (PBE-027) moved to AmadeusCredentialsService.listConnections with PBE-053, which
+// adds each connection's pending credential submission.
 //
 // `updateSettings` (`updateAmadeusConnection`, PBE-040; owners and admins, `If-Match`) changes the settings the OTA
 // backend applies to Amadeus calls in one environment: the default, queuing and owner offices, the ticketing defaults
@@ -144,11 +145,6 @@ export class ConnectionsService {
     private readonly clock: Clock,
     @Inject(PLATFORM_DB) private readonly db: PlatformDb,
   ) {}
-
-  /** listAmadeusConnections: the tenant's Amadeus connections, `test` first, read without the secret's ciphertext. */
-  async list(tenantId: string): Promise<SupplierConnectionView[]> {
-    return this.connections.listForTenant(tenantId);
-  }
 
   /**
    * updateAmadeusConnection: replaces the settings `request` sends on the tenant's Amadeus connection of `environment`

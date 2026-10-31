@@ -6,13 +6,16 @@
 // - `SupplierConnectionsModule.forApi()` (AdminModule) adds the platform admin's use cases, exported for its
 //   controllers: the Velexis Amadeus accounts (AmadeusAccountsService) and the office pool (AmadeusOfficesService)
 //   (PBE-020). They queue the verification job on `platform-connections` (QueuesModule). It also carries the portal's
-//   Amadeus connection routes (ConnectionsController over ConnectionsService: `listAmadeusConnections`, PBE-027, and
-//   the settings update `updateAmadeusConnection`, PBE-040).
+//   Amadeus connection routes (ConnectionsController: `listAmadeusConnections`, PBE-027, and the submission of own
+//   credentials `submitAmadeusCredentials`, PBE-053, over AmadeusCredentialsService, which submits through
+//   CredentialSubmissionsService of CredentialSubmissionsModule; the settings update `updateAmadeusConnection`,
+//   PBE-040, over ConnectionsService).
 // - `SupplierConnectionsModule.forWorker()` (WorkerModule) adds the worker's side: the Amadeus token check
 //   (AmadeusOAuthGateway), the one processor of `platform-connections` (VerificationProcessor, which runs
-//   `credentials.verify` with CredentialsVerifyProcessor of `CredentialSubmissionsModule.forWorker()`, PBE-052) and the
-//   `amadeus.pool_level` handler of the `platform-maintenance` processor (PoolLevelScheduler), in a module of its own,
-//   so the worker gets none of the admin's services.
+//   `credentials.verify` with CredentialsVerifyProcessor of `CredentialSubmissionsModule.forWorker()`, PBE-052), the
+//   verifier of the OTA's own Amadeus credentials (AmadeusCredentialsVerifier, PBE-053), which registers itself for
+//   `amadeus` in that module's one registry, and the `amadeus.pool_level` handler of the `platform-maintenance`
+//   processor (PoolLevelScheduler), in a module of its own, so the worker gets none of the admin's services.
 //
 // It uses the global CommonModule (Clock, IdGenerator, PLATFORM_DB, EnvelopeService; AccountAuthStates in the API),
 // RedisModule (InvalidationPublisher), AuditModule and NotificationsModule (the ops alert of the pool level).
@@ -23,6 +26,8 @@ import { QueuesModule } from "../common/queues/queues.module";
 import { NotificationsModule } from "../notifications/notifications.module";
 import { AmadeusAccountsRepository } from "./amadeus-accounts.repository";
 import { AmadeusAccountsService } from "./amadeus-accounts.service";
+import { AmadeusCredentialsService } from "./amadeus-credentials.service";
+import { AmadeusCredentialsVerifier } from "./amadeus-credentials.verifier";
 import { AmadeusOAuthGateway } from "./amadeus-oauth.gateway";
 import { AmadeusOfficesRepository } from "./amadeus-offices.repository";
 import { AmadeusOfficesService } from "./amadeus-offices.service";
@@ -37,11 +42,18 @@ const REPOSITORIES = [AmadeusAccountsRepository, AmadeusOfficesRepository, Suppl
 
 /**
  * The worker's part of SupplierConnectionsModule (`SupplierConnectionsModule.forWorker()`): the verification
- * processor of `platform-connections`, the token check it calls and the `amadeus.pool_level` handler.
+ * processor of `platform-connections`, the token check it calls, the `amadeus` credential verifier and the
+ * `amadeus.pool_level` handler.
  */
 @Module({
   imports: [AuditModule, NotificationsModule, QueuesModule, CredentialSubmissionsModule.forWorker()],
-  providers: [...REPOSITORIES, AmadeusOAuthGateway, VerificationProcessor, PoolLevelScheduler],
+  providers: [
+    ...REPOSITORIES,
+    AmadeusOAuthGateway,
+    VerificationProcessor,
+    AmadeusCredentialsVerifier,
+    PoolLevelScheduler,
+  ],
 })
 export class SupplierConnectionsWorkerModule {}
 
@@ -54,9 +66,14 @@ export class SupplierConnectionsModule {
   static forApi(): DynamicModule {
     return {
       module: SupplierConnectionsModule,
-      imports: [AuditModule, QueuesModule],
+      imports: [AuditModule, QueuesModule, CredentialSubmissionsModule],
       controllers: [ConnectionsController],
-      providers: [AmadeusAccountsService, AmadeusOfficesService, ConnectionsService],
+      providers: [
+        AmadeusAccountsService,
+        AmadeusOfficesService,
+        ConnectionsService,
+        AmadeusCredentialsService,
+      ],
       exports: [AmadeusAccountsService, AmadeusOfficesService],
     };
   }
