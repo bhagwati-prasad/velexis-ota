@@ -22,7 +22,7 @@ vi.mock("@/app/(console)/env-actions", () => ({ switchEnvironment: vi.fn(), rese
 import { CONFIRM_STRINGS } from "@/components/confirm-dialog";
 import type { ActionState } from "@/lib/action-state";
 
-import type { CancelPlan, IssuePlan } from "./action-rules";
+import { REFUND_NOT_AVAILABLE_CODE, type CancelPlan, type IssuePlan } from "./action-rules";
 import { CANCEL_STRINGS, CancelDialog } from "./cancel-dialog";
 import { ISSUE_STRINGS, IssueDialog } from "./issue-dialog";
 import { NOTE_STRINGS, NoteForm } from "./note-form";
@@ -308,7 +308,7 @@ describe("CancelDialog", () => {
   it("offers an airline-card booking no refund, and release or capture for an authorisation", async () => {
     render(
       cancelDialog({
-        supplier: "request_only",
+        supplier: "void",
         money: { kind: "airline" },
         modes: ["none"],
         currency: "EUR",
@@ -319,7 +319,7 @@ describe("CancelDialog", () => {
       "none",
     ]);
     expect(within(dialog).getByText("No refund from the console")).toBeTruthy();
-    expect(within(dialog).getByText(CANCEL_STRINGS.supplier.request_only)).toBeTruthy();
+    expect(within(dialog).getByText(CANCEL_STRINGS.supplier.void)).toBeTruthy();
     cleanup();
     document.body.replaceChildren();
 
@@ -361,6 +361,58 @@ describe("CancelDialog", () => {
       "full",
       "amount",
     ]);
+  });
+
+  it("[FIX-W37-OTA AC1] offers a request to the airline no refund choice, says why, and posts refund mode none", async () => {
+    render(
+      cancelDialog({
+        supplier: "request_only",
+        money: { kind: "captured", refundable: eur("1414.06") },
+        modes: ["none"],
+        currency: "EUR",
+      }),
+    );
+    const { dialog, form } = await open(CANCEL_STRINGS.trigger);
+
+    expect(within(dialog).getByText(CANCEL_STRINGS.supplier.request_only)).toBeTruthy();
+    expect(within(dialog).getByText(CANCEL_STRINGS.requestMoney)).toBeTruthy();
+    expect(within(dialog).queryAllByRole("radio")).toEqual([]);
+    expect(within(dialog).queryByLabelText(CANCEL_STRINGS.amount("EUR"))).toBeNull();
+    expect(hidden(form, "refundMode")).toBe("none");
+    confirm(dialog, form);
+    await waitFor(() => expect(actions.cancelBooking).toHaveBeenCalledTimes(1), UI_WAIT);
+    expect(lastForm(actions.cancelBooking).getAll("refundMode")).toEqual(["none"]);
+    expect(lastForm(actions.cancelBooking).has("amount")).toBe(false);
+  });
+
+  it("[FIX-W37-OTA AC1] shows the API's refund_not_available of a stale page and switches to the request's form", async () => {
+    const message = "A ticket was issued before today: the airline is asked first.";
+    actions.cancelBooking.mockResolvedValueOnce({
+      ok: false,
+      code: REFUND_NOT_AVAILABLE_CODE,
+      message,
+      nextActionKey: OTHER_KEY,
+    } satisfies ActionState);
+    render(cancelDialog(captured));
+    const { dialog, form } = await open(CANCEL_STRINGS.trigger);
+    fireEvent.click(within(dialog).getByLabelText(/Refund everything still refundable/));
+    confirm(dialog, form);
+
+    // The message, the request's step and money, and no refund choice any more.
+    expect(await within(dialog).findByText(message, {}, UI_WAIT)).toBeTruthy();
+    expect(within(dialog).getByText(CANCEL_STRINGS.supplier.request_only)).toBeTruthy();
+    expect(within(dialog).queryByText(CANCEL_STRINGS.supplier.void)).toBeNull();
+    expect(within(dialog).getByText(CANCEL_STRINGS.requestMoney)).toBeTruthy();
+    expect(within(dialog).queryAllByRole("radio")).toEqual([]);
+    expect(hidden(form, "refundMode")).toBe("none");
+    expect(lastForm(actions.cancelBooking).get("refundMode")).toBe("full");
+
+    // Confirming again sends the request: no refund, with the new key the refusal brought.
+    confirm(dialog, form);
+    await waitFor(() => expect(actions.cancelBooking).toHaveBeenCalledTimes(2), UI_WAIT);
+    const sent = lastForm(actions.cancelBooking);
+    expect(sent.getAll("refundMode")).toEqual(["none"]);
+    expect(sent.get("actionKey")).toBe(OTHER_KEY);
   });
 
   it("shows the action's field error on the amount", async () => {

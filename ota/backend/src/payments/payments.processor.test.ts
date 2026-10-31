@@ -956,6 +956,8 @@ describe("PaymentJobsHandler", () => {
         minorUnits: 2,
         // The account the payment recorded (OBE-077): none on this row, so the Velexis account.
         account: null,
+        // The payment's connection, for the gateway's warning of a refused call (FIX-W37-OTA): never its account.
+        connectionId: "ppc_01JBPAYMENTS0000000000000",
       },
     );
     // The claim (version 1 → 2) is what fails: a row another job took over meanwhile is left alone.

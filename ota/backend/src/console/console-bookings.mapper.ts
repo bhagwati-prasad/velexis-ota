@@ -584,9 +584,9 @@ export interface ConsoleActionsInput {
   /** The last refresh claim or sync (`bookingDetails.lastRefreshAt`). */
   readonly lastRefreshAt: Date | null;
   /**
-   * A cancellation is undecided or another one's DELETE is in flight (cancellation-state.ts
-   * `staffCancellationPendingOf`): console.bookings.cancel refuses with `pending`, canCancel shows it (FIX-W33-OTA).
-   * Absent: none.
+   * A cancellation is undecided, another one's DELETE is in flight or (since lead decision (2c) of 2026-10-31,
+   * FIX-W37-OTA) a request waits for the staff (cancellation-state.ts `staffCancellationPendingOf`):
+   * console.bookings.cancel refuses with `pending`, canCancel shows it (FIX-W33-OTA). Absent: none.
    */
   readonly cancellationPending?: boolean;
   readonly now: Date;

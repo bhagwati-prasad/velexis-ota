@@ -2,7 +2,7 @@
 // vitest.smoke.config.js runs once as its global setup, the customer journey both modes call, and the test staff
 // session of the server mode.
 //
-// The smoke tests run against a running OTA API wired to the Amadeus stub, with the two test keys the OTA backend's
+// The smoke tests run against a running OTA API wired to the Amadeus stub, with the three test keys the OTA backend's
 // `dev:seed` printed when it created them (ota/backend/README.md §5 and §6). Nothing here starts a process: the stack
 // is the developer's (or the nightly workflow's, .github/workflows/e2e.yml), and the keys are given, never stored.
 //
@@ -11,8 +11,10 @@
 //
 //   OTA_API_URL                 the API on a direct loopback connection (default http://127.0.0.1:4000, the API's port)
 //   SDK_SMOKE_PUBLISHABLE_KEY   the `pk_test_…` key dev:seed printed (token mode)
-//   SDK_SMOKE_SECRET_KEY        the `sk_test_…` key dev:seed printed (server mode; scoped `storefront`)
-//   OTA_ADMIN_SERVICE_KEY       the OTA admin's service key of the same stack (root .env.example's development value)
+//   SDK_SMOKE_SECRET_KEY        the `sk_test_…` key dev:seed printed as its "Secret test key" (server mode; scoped
+//                               `storefront`)
+//   SDK_SMOKE_CONSOLE_KEY       the `sk_test_…` key dev:seed printed as its "Console automation test key" (server mode's
+//                               console: `console:automation` with `amadeus:read` only)
 //   REDIS_URL                   the API's Redis, where the test portal token is stored as the platform's API stores it
 //   DATABASE_MIGRATOR_URL       the stack database as velexis_migrator, for the test staff member's platform rows
 //
@@ -21,12 +23,15 @@
 // timeout of REQUEST_TIMEOUT_MS, so an API that stops answering in the middle fails the calls instead of stalling them.
 //
 // The test staff member (server mode): dev:seed's secret key is scoped `storefront`, which the scope guard refuses on
-// every console operation (403 SCOPE_NOT_ALLOWED, `storefront_key`), so the console's staff session is the OTA admin's:
-// the service key, a staff token signed in with a portal token. `openTestStaffSession` writes what the platform would
-// have written before its `createConsoleToken` (an active account with an `agent` membership of the demo OTA, as
-// velexis_migrator, like the end-to-end harness's platform rows and dev:seed itself) and stores the portal token as
-// that operation does (`SET ptk:<sha256> <json> EX 60 NX`, PADR-0007 item 1); `close` signs the session out and deletes
-// the account again (its membership goes with it). No token, key or password is ever logged or printed.
+// every console operation (403 SCOPE_NOT_ALLOWED, `storefront_key`), so the console is reached with dev:seed's console
+// automation key (lead decision (2f) of 2026-10-31, FIX-W37-OTA; until then with the OTA admin's service key): a
+// secret key not scoped `storefront` signs a staff member in with a portal token and then calls the console with that
+// staff token, whose role decides (the plan's "sk_test with a staff token", scope.guard.ts), and makes its key-only
+// calls with the permissions listed on the key. `openTestStaffSession` writes what the platform would have written
+// before its `createConsoleToken` (an active account with an `agent` membership of the demo OTA, as velexis_migrator,
+// like the end-to-end harness's platform rows and dev:seed itself) and stores the portal token as that operation does
+// (`SET ptk:<sha256> <json> EX 60 NX`, PADR-0007 item 1); `close` signs the session out and deletes the account again
+// (its membership goes with it). No token, key or password is ever logged or printed.
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { ConfigError, defineConfig, env, loadDevEnvFiles } from "@velexis/config";
@@ -66,7 +71,7 @@ export const SMOKE_STAFF_ROLE = "agent";
 
 /**
  * The end user a server-mode client names on every call (the SDK's `endUser` option: X-Velexis-End-User-IP and -Agent),
- * as a third-party server forwards its visitor, and as the OTA admin's service key requires (OADR-0011 point 4): an
+ * as a third-party server forwards its visitor (OADR-0009 point 8: the staff member's address of a staff session): an
  * address of the IPv6 documentation prefix 2001:db8::/32 (RFC 3849) in a random /64 of its own. The API counts its
  * limits per end-user IP (5 sign-ups an hour, architecture §8; IPv6 by /64), so each run counts apart and the smoke
  * run can be repeated on one stack; without it every server-mode call would count against the API's loopback client.
@@ -87,8 +92,7 @@ export const SMOKE_SCHEMA = {
   // PADR-0005: the environment, then 40 base62 characters (dev:seed's newTestKey).
   SDK_SMOKE_PUBLISHABLE_KEY: env.string({ pattern: /^pk_test_[0-9A-Za-z]{40}$/ }),
   SDK_SMOKE_SECRET_KEY: env.string({ pattern: /^sk_test_[0-9A-Za-z]{40}$/ }),
-  // The pattern of ota/backend/src/config.ts (SERVICE_KEY_PATTERN).
-  OTA_ADMIN_SERVICE_KEY: env.string({ pattern: /^sk_[A-Za-z0-9_]{16,}$/ }),
+  SDK_SMOKE_CONSOLE_KEY: env.string({ pattern: /^sk_test_[0-9A-Za-z]{40}$/ }),
   REDIS_URL: env.url({ protocols: ["redis:", "rediss:"] }),
   DATABASE_MIGRATOR_URL: env.url({ protocols: ["postgres:", "postgresql:"] }),
 };
@@ -124,8 +128,8 @@ function readConfig(schema, source) {
   } catch (error) {
     if (error instanceof ConfigError) {
       throw new SmokeSetupError(
-        `The SDK smoke tests are not configured. ${HOW_TO_START}, then pass the two keys its dev:seed printed as ` +
-          `SDK_SMOKE_PUBLISHABLE_KEY and SDK_SMOKE_SECRET_KEY.\n${error.message}`,
+        `The SDK smoke tests are not configured. ${HOW_TO_START}, then pass the three keys its dev:seed printed as ` +
+          `SDK_SMOKE_PUBLISHABLE_KEY, SDK_SMOKE_SECRET_KEY and SDK_SMOKE_CONSOLE_KEY.\n${error.message}`,
       );
     }
     throw error;
@@ -384,12 +388,13 @@ export function newPortalToken() {
 }
 
 /**
- * Opens a staff session of a new test staff member of the demo OTA through the OTA admin's service key (the file
- * header): the platform rows, the portal token, then console.auth.signIn. `close` signs the session out and deletes the
- * account; it never throws.
+ * Opens a staff session of a new test staff member of the demo OTA through dev:seed's console automation key (the
+ * file header): the platform rows, the portal token, then console.auth.signIn. `close` signs the session out and
+ * deletes the account; it never throws.
  * @param {SmokeSettings} settings
- * @param {import("../../src/index.js").VelexisClient} service A server-mode client with the service key, `sessionKind:
- *   "staff"`, `environment: "test"` and an end user (`endUser`, newSmokeEndUser).
+ * @param {import("../../src/index.js").VelexisClient} service A server-mode client with the console automation key,
+ *   `sessionKind: "staff"` and an end user (`endUser`, newSmokeEndUser); no `environment`, which a secret key never
+ *   sends (it acts in its own).
  */
 export async function openTestStaffSession(settings, service) {
   const { default: pg } = await import("pg");

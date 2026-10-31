@@ -49,6 +49,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { AmadeusClient } from "../../../src/amadeus/amadeus.client";
 import { AMADEUS_LIMITS, DEFAULT_AMADEUS_LIMITS, type AmadeusLimits } from "../../../src/amadeus/limits";
 import { newBookingReference } from "../../../src/bookings/booking-reference";
+import { BookingsRepository } from "../../../src/bookings/bookings.repository";
 import { CustomerBookingsService } from "../../../src/bookings/customer-bookings.service";
 import {
   CANCELLATION_CHECK_JOB,
@@ -69,7 +70,8 @@ import { NotificationsProcessor } from "../../../src/notifications/notifications
 import { PaymentsProcessor } from "../../../src/payments/payments.processor";
 import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefront-settings.seed";
 import type { OtaPool } from "../../../src/tenancy/tenancy.module";
-import type { TenantTransaction } from "../../../src/tenancy/tenant-tx";
+import { TenantContext, type RequestTenant } from "../../../src/tenancy/tenant-context";
+import { TenantTx, type TenantTransaction } from "../../../src/tenancy/tenant-tx";
 import { createWorkerApp, createWorkerLogger, WorkerModule } from "../../../src/worker.module";
 import { buildOrderContact, buildOrderRequestInput } from "../../builders/bookings";
 import { testApiCredentials, testKeyProvider, testWorkerVariables } from "../../helpers/api-env";
@@ -1680,10 +1682,11 @@ describe("console.bookings.cancel by the cancellation-mode rule (FIX-W36-OTA)", 
     const versionBefore = (await bookingRow(booking.id)).version;
     stripe.reset();
     stub.clearRequests();
+    // `none`: since lead decision (2b) of 2026-10-31 a request takes no refund (`full` and `amount` are refused below).
     const body = {
       reasonCode: "customer_request",
       reason: "Customer called; tickets of the day before yesterday",
-      refund: { mode: "full" },
+      refund: { mode: "none" },
     };
 
     const res = await agent.cancel(booking.id, etag, body);
@@ -1727,10 +1730,8 @@ describe("console.bookings.cancel by the cancellation-mode rule (FIX-W36-OTA)", 
     ]);
     expect(events.map((event) => event.type)).not.toContain("booking.cancelled");
     expect(JSON.stringify(events)).not.toContain(body.reason);
-    expect(await notificationsOf(booking.id)).toEqual([
-      "booking.cancellation_requested",
-      "staff.manual_review",
-    ]);
+    // The traveller's e-mail; no staff alert since lead decision (2d) of 2026-10-31 (the staff asked for it).
+    expect(await notificationsOf(booking.id)).toEqual(["booking.cancellation_requested"]);
     const actions = await staffActionsOf(booking.id);
     expect(actions.map((action) => [action.action, action.outcome])).toEqual([
       ["booking.cancel", "succeeded"],
@@ -1743,13 +1744,13 @@ describe("console.bookings.cancel by the cancellation-mode rule (FIX-W36-OTA)", 
         mode: "request_only",
         cause: "request_only",
         ticketsVoided: false,
-        refundMode: "full",
+        refundMode: "none",
         refund: { amount: "0.00", currency: "EUR" },
         refundStatus: "manual_review",
       },
     });
 
-    // notifyCustomer false: the staff alert only, no e-mail to the traveller.
+    // notifyCustomer false: no e-mail to the traveller (and no staff alert, as above).
     const quiet = await seedBooking("mode.request.quiet", { ticketed: true, ticketsIssuedAt: twoDaysAgo });
     const quietRes = await agent.cancel(quiet.id, (await shownMode(agent, quiet.id))[1], {
       reasonCode: "other",
@@ -1757,7 +1758,223 @@ describe("console.bookings.cancel by the cancellation-mode rule (FIX-W36-OTA)", 
       notifyCustomer: false,
     });
     expect(answer(quietRes)).toEqual([200, undefined]);
-    expect(await notificationsOf(quiet.id)).toEqual(["staff.manual_review"]);
+    expect(await notificationsOf(quiet.id)).toEqual([]);
+    expect(amadeusCalls("cancelFlightOrder")).toEqual([]);
+  });
+});
+
+describe("console.bookings.cancel of a request to the airline (FIX-W37-OTA)", () => {
+  /** What a refused cancellation must have left as it was: the booking, its events, e-mails, money and order. */
+  async function untouched(
+    booking: SeededBooking,
+    payment: { readonly id: string; readonly intentId: string },
+    version: number,
+  ): Promise<void> {
+    expect(await bookingRow(booking.id)).toMatchObject({ status: "ticketed", cancelled_by: null, version });
+    expect((await eventsOf(booking.id)).map((event) => event.type)).not.toContain(
+      "booking.cancellation_requested",
+    );
+    expect(await notificationsOf(booking.id)).toEqual([]);
+    expect(await refundsOf(booking.id)).toEqual([]);
+    expect(await paymentRow(payment.id)).toMatchObject({ status: "captured", amount_captured: TOTAL });
+    expect(stripeRequestsAbout(payment.intentId)).toEqual([]);
+    expect(amadeusCalls("cancelFlightOrder")).toEqual([]);
+    expect(await stubOrderStatus(booking.orderId)).toBe(200);
+  }
+
+  it("[FIX-W37-OTA AC1] refuses a refund asked with a request to the airline (422 refund_not_available) and writes nothing, then takes none", async () => {
+    const agent = await staff("agent");
+    const booking = await seedBooking("w37.refund", {
+      ticketed: true,
+      ticketsIssuedAt: new Date(Date.now() - 2 * DAY),
+    });
+    const payment = await seedPayment(booking.id, "captured");
+    const etag = await etagOf(agent, booking.id);
+    const version = (await bookingRow(booking.id)).version;
+    stripe.reset();
+    stub.clearRequests();
+    const ask = { reasonCode: "customer_request", reason: "Customer called; refund asked" };
+
+    for (const refund of [
+      { mode: "full" },
+      { mode: "amount", amount: { amount: "50.00", currency: "EUR" } },
+    ]) {
+      const refused = await agent.cancel(booking.id, etag, { ...ask, refund });
+      expect(answer(refused)).toEqual([422, "UNPROCESSABLE"]);
+      expectResponseToMatch("consoleCancelBooking", refused);
+      expect(refused.body.error.details).toEqual({ reason: "refund_not_available" });
+    }
+    // The refresh read the order (the mode is decided after it); nothing else was sent or written.
+    expect(amadeusCalls("getFlightOrder").length).toBeGreaterThan(0);
+    await untouched(booking, payment, version);
+    // The audit rule's refusal rows only (the staff writer's `failed` row of every refused console call).
+    expect((await staffActionsOf(booking.id)).map((action) => [action.action, action.outcome])).toEqual([
+      ["bookings.cancel", "failed"],
+      ["bookings.cancel", "failed"],
+    ]);
+
+    // `none` (and no refund at all, as the FIX-W36-OTA test shows) is the request to the airline.
+    const accepted = await agent.cancel(booking.id, etag, { ...ask, refund: { mode: "none" } });
+    expect(answer(accepted)).toEqual([200, undefined]);
+    expect(accepted.body).toMatchObject({
+      status: "ticketed",
+      warnings: expect.arrayContaining([STAFF_REQUEST_ONLY_WARNING]),
+      cancellation: { status: "pending", cancelledBy: "staff" },
+    });
+    expect(await notificationsOf(booking.id)).toEqual(["booking.cancellation_requested"]);
+    expect(stripeRequestsAbout(payment.intentId)).toEqual([]);
+  });
+
+  it("[FIX-W37-OTA AC1] decides by the mode after the refresh: a booking shown as a same-day void whose refresh finds a ticket of an earlier day refuses the refund", async () => {
+    const agent = await staff("agent");
+    const booking = await seedBooking("w37.stale", { ticketed: true });
+    const payment = await seedPayment(booking.id, "captured");
+    const read = await agent.get(`${BOOKINGS}/${booking.id}`);
+    // What the console shows from the stored tickets: an e-ticket of an hour ago, a same-day void.
+    expect(read.body.cancellationMode?.mode).toBe("void");
+    const version = (await bookingRow(booking.id)).version;
+    // The refresh records the ticket as issued two days ago (what Amadeus answers now, simulated after the real read).
+    const bookings = api.app.get(CustomerBookingsService, { strict: false });
+    const refresh = bookings.refresh.bind(bookings);
+    const spy = vi.spyOn(bookings, "refresh").mockImplementationOnce(async (...args) => {
+      const refreshed = await refresh(...args);
+      await inTenant((trx) =>
+        trx
+          .updateTable("booking_tickets")
+          .set({ issued_at: new Date(Date.now() - 2 * DAY) })
+          .where("booking_id", "=", booking.id)
+          .execute(),
+      );
+      return refreshed;
+    });
+    stripe.reset();
+    stub.clearRequests();
+    let refused: Response;
+    try {
+      refused = await agent.cancel(booking.id, read.headers["etag"] as string, {
+        reasonCode: "customer_request",
+        reason: "Customer called; full refund",
+        refund: { mode: "full" },
+      });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(answer(refused)).toEqual([422, "UNPROCESSABLE"]);
+    expect(refused.body.error.details).toEqual({ reason: "refund_not_available" });
+    await untouched(booking, payment, version);
+    expect((await agent.get(`${BOOKINGS}/${booking.id}`)).body.cancellationMode?.mode).toBe("request_only");
+  });
+
+  it("[FIX-W37-OTA AC2] refuses a second staff cancellation while the staff's request waits (409 pending), with no second e-mail or alert", async () => {
+    const owner = await staff("owner");
+    const booking = await seedBooking("w37.second", {
+      ticketed: true,
+      ticketsIssuedAt: new Date(Date.now() - 2 * DAY),
+    });
+    const payment = await seedPayment(booking.id, "captured");
+    const first = await owner.cancel(booking.id, await etagOf(owner, booking.id), {
+      reasonCode: "customer_request",
+      reason: "First request to the airline",
+    });
+    expect(answer(first)).toEqual([200, undefined]);
+    const after = (await bookingRow(booking.id)).version;
+    const eventsAfter = (await eventsOf(booking.id)).length;
+
+    // The console shows the refusal (canCancel false, pending) and no step, as console.bookings.cancel answers.
+    const read = await owner.get(`${BOOKINGS}/${booking.id}`);
+    expect(read.body.consoleActions).toMatchObject({ canCancel: false, reasons: { canCancel: "pending" } });
+    expect(read.body.cancellationMode).toBeNull();
+    stub.clearRequests();
+    const second = await owner.cancel(booking.id, read.headers["etag"] as string, {
+      reasonCode: "customer_request",
+      reason: "Second request to the airline",
+    });
+
+    // The refusal bookings.cancel gives a customer while a cancellation is in progress.
+    expect(answer(second)).toEqual([409, "BOOKING_NOT_MODIFIABLE"]);
+    expectResponseToMatch("consoleCancelBooking", second);
+    expect(second.body.error.details).toEqual({ reason: "pending", action: "canCancel" });
+    expect(await bookingRow(booking.id)).toMatchObject({ status: "ticketed", version: after });
+    expect(await eventsOf(booking.id)).toHaveLength(eventsAfter);
+    expect(await notificationsOf(booking.id)).toEqual(["booking.cancellation_requested"]);
+    expect(amadeusCalls("getFlightOrder")).toEqual([]);
+    expect(amadeusCalls("cancelFlightOrder")).toEqual([]);
+    expect(stripeRequestsAbout(payment.intentId)).toEqual([]);
+    expect((await staffActionsOf(booking.id)).map((action) => [action.action, action.outcome])).toEqual([
+      ["booking.cancel", "succeeded"],
+      ["bookings.cancel", "failed"],
+    ]);
+  });
+
+  it("[FIX-W37-OTA AC2] refuses a staff cancellation while a customer's request waits, as the customer's own second one", async () => {
+    const owner = await staff("owner");
+    const booking = await seedBooking("w37.customer", {
+      ticketed: true,
+      ticketsIssuedAt: new Date(Date.now() - 2 * DAY),
+    });
+    await seedPayment(booking.id, "captured");
+    // The customer's request, as bookings.cancel records it in `request_only` mode (a guest's, here): the recorder in
+    // a tenant transaction of the request's context, as the API's T1 calls it.
+    const recorder = api.app.get(CancellationRecorder, { strict: false });
+    const repository = api.app.get(BookingsRepository, { strict: false });
+    const requestId = "req_w37customerrequest";
+    const guest = { type: "guest", id: null } as const;
+    await api.app.get(TenantContext, { strict: false }).run(
+      {
+        tenantId: alphaId,
+        key: "alpha",
+        schemaName: ALPHA,
+        environment: "test",
+        caller: { type: "anonymous", id: "anonymous" },
+        actor: guest,
+        requestId,
+      } satisfies RequestTenant,
+      () =>
+        api.app.get(TenantTx, { strict: false }).run(async (trx) => {
+          const row = await repository.booking(trx, booking.id);
+          if (row === undefined) {
+            throw new Error("the seeded booking is missing");
+          }
+          await recorder.recordRequest(
+            trx,
+            { tenantId: alphaId, key: "alpha", environment: "test", requestId },
+            row,
+            {
+              mode: "request_only",
+              reasonCode: "change_of_plans",
+              comment: null,
+              estimate: { amountPaid: TOTAL, estimatedRefund: "0.00", penalty: "0.00", otaFee: "0.00" },
+              currency: "EUR",
+              actor: guest,
+              requestedAt: new Date(),
+            },
+            "request_only",
+            null,
+            null,
+          );
+        }),
+    );
+    // The customer's request alerts the staff, as before (lead decision (2d) changes the staff's own only).
+    expect(await notificationsOf(booking.id)).toEqual([
+      "booking.cancellation_requested",
+      "staff.manual_review",
+    ]);
+    const version = (await bookingRow(booking.id)).version;
+    stub.clearRequests();
+
+    const refused = await owner.cancel(booking.id, await etagOf(owner, booking.id), {
+      reasonCode: "customer_request",
+      reason: "Finish the customer's request",
+    });
+
+    expect(answer(refused)).toEqual([409, "BOOKING_NOT_MODIFIABLE"]);
+    expect(refused.body.error.details).toEqual({ reason: "pending", action: "canCancel" });
+    expect((await bookingRow(booking.id)).version).toBe(version);
+    expect(await notificationsOf(booking.id)).toEqual([
+      "booking.cancellation_requested",
+      "staff.manual_review",
+    ]);
     expect(amadeusCalls("cancelFlightOrder")).toEqual([]);
   });
 });

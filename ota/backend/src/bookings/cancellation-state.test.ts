@@ -41,11 +41,22 @@ describe("a cancellation in progress (cancellation-state.ts)", () => {
     expect(cancellationPendingOf({ state: REQUESTED, claimPending: false })).toBe(true);
   });
 
-  it("[FIX-W33-OTA] [OBE-063] refuses a staff cancellation while one is undecided or has its DELETE in flight, not for a customer's request", () => {
+  it("[FIX-W33-OTA] [OBE-063] refuses a staff cancellation while one is undecided or has its DELETE in flight", () => {
     expect(staffCancellationPendingOf({ state: NONE, claimPending: false })).toBe(false);
     expect(staffCancellationPendingOf({ state: NONE, claimPending: true })).toBe(true);
     expect(staffCancellationPendingOf({ state: UNDECIDED, claimPending: false })).toBe(true);
-    // A customer's request waiting for the staff is what the staff finish (console.bookings.cancel `staffCheck`).
-    expect(staffCancellationPendingOf({ state: REQUESTED, claimPending: false })).toBe(false);
+  });
+
+  it("[FIX-W37-OTA AC2] refuses a staff cancellation while a request waits for the staff, as it refuses a customer's", () => {
+    // Lead decision (2c) of 2026-10-31: until then the staff finished such a request with console.bookings.cancel, and a
+    // booking still in request_only mode got a second request (a second traveller e-mail and staff alert).
+    expect(staffCancellationPendingOf({ state: REQUESTED, claimPending: false })).toBe(true);
+    for (const state of [NONE, REQUESTED, UNDECIDED]) {
+      for (const claimPending of [false, true]) {
+        expect(staffCancellationPendingOf({ state, claimPending })).toBe(
+          cancellationPendingOf({ state, claimPending }),
+        );
+      }
+    }
   });
 });

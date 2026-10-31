@@ -1598,6 +1598,7 @@ export class ReconcileService {
             minorUnits,
             version: payment.version,
             account: recordedPaymentAccount(payment.metadata),
+            connectionId: payment.providerConnectionId,
           },
           amount,
         );

@@ -1182,11 +1182,21 @@ describe("the Connect and connection webhooks (api-changes part 2 §5; OADR-0010
       /\s+/g,
       " ",
     );
-    // Connect: the tenant only from event.account, through the connect_standard connection of that account.
+    // Connect: the tenant only from event.account, through the one connection of that account (any mode since lead
+    // decision (2l) of 2026-10-31, FIX-W37-OTA: until then the connect_standard connection only).
     expect(connect).toContain("The OTA comes **only** from `event.account`");
     expect(connect).toContain(
-      "the `connect_standard` connection of `{environment}` whose `account_reference` is that `acct_…`",
+      "the one Stripe connection of `{environment}` whose `account_reference` is that `acct_…`",
     );
+    expect(connect).toContain("connections of several OTAs holding that account, is an unknown account");
+    // Step 4 on both: the payment created on the event's account (the account compared, not the mode; OADR-0010
+    // point 4, note of 2026-10-31).
+    expect(connect).toContain("the payment must have been created on the event's `acct_…`");
+    expect(connection).toContain("the payment must have been created on the connection's `acct_…`");
+    for (const description of [connect, connection]) {
+      expect(description).toContain("the account is compared, not the mode");
+      expect(description).toContain("OADR-0010 point 4, note of 2026-10-31");
+    }
     expect(connect).toContain("`STRIPE_WEBHOOK_SECRET_CONNECT_TEST`");
     expect(connect).toContain("`event.livemode` must match `{environment}`");
     // c/<ppc_id>: the tenant only from the path's connection, verified with that connection's own secret.

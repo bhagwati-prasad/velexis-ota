@@ -1332,6 +1332,7 @@ export class PaymentsService {
       minorUnits,
       version: row.version,
       account: recordedPaymentAccount(row.metadata),
+      connectionId: row.providerConnectionId,
     };
   }
 

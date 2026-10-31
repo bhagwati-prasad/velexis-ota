@@ -23,6 +23,7 @@ import { Redis } from "ioredis";
 import type { PinoLogger } from "nestjs-pino";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runCli } from "../../../src/cli";
+import { DEV_SEED_KEY_LABELS } from "../../../src/dev/dev-seed.command";
 import { Clock } from "../../../src/common/clock";
 import { newId } from "../../../src/common/ids";
 import { BULLMQ_PREFIX, PLATFORM_TENANT_EVENTS } from "../../../src/common/queues/queue-names";
@@ -64,6 +65,12 @@ async function cli(argv: string[], env: Record<string, string>): Promise<CliRun>
     env,
   });
   return { code, stdout: out.join(""), stderr: err.join("") };
+}
+
+/** The key printed on the line of `label` (`  <label> (<key id>): <key>`), as the nightly workflow reads it. */
+function printedKey(stdout: string, label: string): string | undefined {
+  const line = stdout.split("\n").find((text) => text.startsWith(`  ${label} (`));
+  return line?.match(KEY_TEXT)?.[0];
 }
 
 /** The variables of dev:seed on `db` (the root and app `.env.local` files locally). */
@@ -155,7 +162,7 @@ describe("dev:seed", () => {
       .executeTakeFirstOrThrow();
   }
 
-  it("twice leaves one tenant, one schema and two keys, printed once [OBE-007 AC2]", async () => {
+  it("twice leaves one tenant, one schema and three keys, printed once [OBE-007 AC2] [FIX-W37-OTA AC5]", async () => {
     expect(first).toMatchObject({ code: 0, stderr: "" });
     expect(second).toMatchObject({ code: 0, stderr: "" });
 
@@ -176,7 +183,9 @@ describe("dev:seed", () => {
       .selectFrom("platform.api_keys")
       .select(["kind", "environment", "prefix", "scopes", "allowed_origins", "revoked_at"])
       .where("tenant_id", "=", tenant.id)
+      // The console key's name ("dev:seed console automation …") comes before the storefront's ("dev:seed secret …").
       .orderBy("kind")
+      .orderBy("name")
       .execute();
     expect(
       keys.map(({ kind, environment, scopes, allowed_origins, revoked_at }) => ({
@@ -188,24 +197,42 @@ describe("dev:seed", () => {
       })),
     ).toEqual([
       { kind: "publishable", environment: "test", scopes: [], allowed_origins: [], revoked_at: null },
+      // The console automation key of the SDK's smoke test (lead decision (2f) of 2026-10-31): least privilege.
+      {
+        kind: "secret",
+        environment: "test",
+        scopes: ["console:automation", "amadeus:read"],
+        allowed_origins: [],
+        revoked_at: null,
+      },
       { kind: "secret", environment: "test", scopes: ["storefront"], allowed_origins: [], revoked_at: null },
     ]);
 
-    // The raw keys are printed by the run that creates them, and never again.
+    // The raw keys are printed by the run that creates them, each on its own labelled line, and never again.
     const printed = first.stdout.match(KEY_TEXT) ?? [];
-    expect(printed).toHaveLength(2);
+    expect(printed).toHaveLength(3);
     expect(printed.map((key) => key.slice(0, 14)).sort()).toEqual(keys.map((key) => key.prefix).sort());
+    for (const [kind, label] of Object.entries(DEV_SEED_KEY_LABELS)) {
+      const lines = first.stdout.split("\n").filter((line) => line.startsWith(`  ${label} (`));
+      expect(lines, kind).toHaveLength(1);
+      expect(lines[0], kind).toMatch(
+        new RegExp(
+          `^  ${label} \\(key_[0-9A-Z]{26}\\): ${kind === "publishable" ? "pk" : "sk"}_test_[A-Za-z0-9]{40}$`,
+        ),
+      );
+    }
     expect(second.stdout.match(KEY_TEXT)).toBeNull();
     expect(second.stdout).toContain("exists already");
   });
 
   it("stores only the keys' HMAC, and the printed sk_test authenticates with the shared pepper [OBE-007 AC2]", async () => {
     const tenant = await demoTenant();
-    const printed = first.stdout.match(KEY_TEXT) ?? [];
-    const secret = printed.find((key) => key.startsWith("sk_test_"));
-    const publishable = printed.find((key) => key.startsWith("pk_test_"));
+    const secret = printedKey(first.stdout, DEV_SEED_KEY_LABELS.secret);
+    const publishable = printedKey(first.stdout, DEV_SEED_KEY_LABELS.publishable);
+    const automation = printedKey(first.stdout, DEV_SEED_KEY_LABELS.console);
     expect(secret).toBeDefined();
     expect(publishable).toBeDefined();
+    expect(automation).toBeDefined();
 
     const { rows } = await sql<{ key_hash: string; last4: string; prefix: string }>`
       SELECT key_hash, last4, prefix FROM platform.api_keys WHERE prefix = ${(secret ?? "").slice(0, 14)}
@@ -230,6 +257,13 @@ describe("dev:seed", () => {
     await expect(verifier.verify(publishable ?? "")).resolves.toMatchObject({
       tenantId: tenant.id,
       kind: "publishable",
+    });
+    // The console automation key passes the verifier's scope rules (console:automation needs a permission).
+    await expect(verifier.verify(automation ?? "")).resolves.toMatchObject({
+      tenantId: tenant.id,
+      kind: "secret",
+      environment: "test",
+      scopes: ["console:automation", "amadeus:read"],
     });
   });
 
@@ -442,6 +476,43 @@ describe("dev:seed", () => {
       expect(refused.code).toBe(1);
       expect(refused.stderr).toContain("Redis refused the events (ECONNREFUSED); 0 of 2 were published.");
       expect(refused.stderr).not.toContain("dummy");
+    });
+  });
+
+  // Last in this describe, so the runs above are what its other tests read.
+  describe("a database whose console automation key is gone (or one seeded before that key existed)", () => {
+    /** A run after the console automation key was revoked. */
+    let third: CliRun;
+
+    // One more dev:seed run, which finds tenant_demo complete: about 1 s here; budgeted for a loaded CI runner.
+    beforeAll(async () => {
+      const automation = printedKey(first.stdout, DEV_SEED_KEY_LABELS.console) ?? "";
+      await migrator
+        .updateTable("platform.api_keys")
+        .set({ revoked_at: new Date() })
+        .where("prefix", "=", automation.slice(0, 14))
+        .execute();
+      third = await cli(["dev:seed"], devSeedEnv(db));
+    }, 60_000);
+
+    it("[FIX-W37-OTA AC5] creates a missing console automation key alone, as it does each of its keys, printing only it", async () => {
+      expect(third).toMatchObject({ code: 0, stderr: "" });
+      const printed = third.stdout.match(KEY_TEXT) ?? [];
+      expect(printed).toHaveLength(1);
+      expect(printedKey(third.stdout, DEV_SEED_KEY_LABELS.console)).toBe(printed[0]);
+      expect(third.stdout).toContain(`${DEV_SEED_KEY_LABELS.publishable}: exists already`);
+      expect(third.stdout).toContain(`${DEV_SEED_KEY_LABELS.secret}: exists already`);
+      const tenant = await demoTenant();
+      const valid = await migrator
+        .selectFrom("platform.api_keys")
+        .select(["prefix", "scopes"])
+        .where("tenant_id", "=", tenant.id)
+        .where("revoked_at", "is", null)
+        .where("name", "=", "dev:seed console automation test key")
+        .execute();
+      expect(valid).toEqual([
+        { prefix: (printed[0] ?? "").slice(0, 14), scopes: ["console:automation", "amadeus:read"] },
+      ]);
     });
   });
 });

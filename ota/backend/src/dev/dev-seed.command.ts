@@ -14,19 +14,24 @@
 //    pool, else the oldest available one, assigned to it (`velexis`, the office as default, queuing and owner office,
 //    `active`), as the `assign_amadeus_office` post-step does;
 // 4. its Stripe `test` payment connection in `velexis` mode (manual capture, `active`, default), no secret;
-// 5. a `pk_test_…` key without origins and an `sk_test_…` key scoped `storefront` (PADR-0005: 40 base62 characters from
-//    the CSPRNG, the 14-character prefix, `last4`, `key_hash = hashApiKey(key, pepper)` with the shared pepper of
-//    API_KEY_PEPPER_FILE), each kind only when the tenant has no valid test key of it.
+// 5. a `pk_test_…` key without origins, an `sk_test_…` key scoped `storefront` and, since FIX-W37-OTA (lead decision
+//    (2f) of 2026-10-31), an `sk_test_…` console automation key (`console:automation` with the least permissions the
+//    SDK's server-mode smoke test needs, DEV_SEED_KEY_SCOPES) (PADR-0005: 40 base62 characters from the CSPRNG, the
+//    14-character prefix, `last4`, `key_hash = hashApiKey(key, pepper)` with the shared pepper of API_KEY_PEPPER_FILE),
+//    each only when the tenant has no valid test key of its role (`keyRoleOf`: a secret key with `console:automation`
+//    is the console key, any other secret key the storefront's).
 //
 // Then it provisions `tenant_demo` with `ProvisioningService.provisionTenant`, the worker's real provisioning function
 // (velexis_provisioner, DATABASE_PROVISIONER_URL; the platform rows read back as velexis_ota_app, DATABASE_URL), and,
 // in a second transaction, sets the tenant `active` with `activated_at`, mirrors the ledger into
 // `platform.tenant_schema_migrations` and sets `schema_version`, as the platform's `record_migrations` and `activate`
-// post-steps do. The two raw keys are printed once, on stdout, when they are created: they are stored nowhere in clear
-// and never logged, so a second run prints neither (a lost key is revoked and rolled in the portal, or the rows are
-// deleted locally before running the seed again).
+// post-steps do. The raw keys are printed once, on stdout, when they are created, each on its own labelled line
+// (DEV_SEED_KEY_LABELS: `  <label> (<key id>): <key>`, which the nightly workflow's SDK smoke step reads by label):
+// they are stored nowhere in clear and never logged, so a second run prints none of them (a lost key is revoked and
+// rolled in the portal, or the rows are deleted locally before running the seed again; a database seeded before the
+// console key existed gets that key alone on its next run).
 //
-// A second run changes nothing: one tenant, one schema, two keys. Exit codes (cli.ts): 0 when the demo OTA is active
+// A second run changes nothing: one tenant, one schema, three keys. Exit codes (cli.ts): 0 when the demo OTA is active
 // with its schema, connections and keys; 1 after the production refusal, an invalid configuration, a missing platform
 // seed (no test Amadeus account, no free test office), a tenant `demo` in another state, or a failed provisioning (its
 // code and message on stderr). It never prints a DSN or the pepper.
@@ -82,10 +87,41 @@ export const DEV_TENANT = Object.freeze({
 /** The environment of everything dev:seed creates: the demo OTA stays in test. */
 const ENVIRONMENT = "test";
 
-/** The names of the two keys, as the portal lists them. */
+/** The names of the keys, as the portal lists them. */
 export const DEV_SEED_KEY_NAMES = Object.freeze({
   publishable: "dev:seed publishable test key",
   secret: "dev:seed secret test key",
+  console: "dev:seed console automation test key",
+} as const);
+
+/**
+ * The label of each key's line in the output, which the nightly workflow's SDK smoke step finds the key by
+ * (.github/workflows/e2e.yml: `grep -E '^  <label> '`): no label starts another.
+ */
+export const DEV_SEED_KEY_LABELS = Object.freeze({
+  publishable: "Publishable test key",
+  secret: "Secret test key",
+  console: "Console automation test key",
+} as const);
+
+/**
+ * `platform.api_keys.scopes` of each key (PADR-0005 item 6, `scopeProblem` of api-key.verifier.ts). The console key
+ * (lead decision (2f) of 2026-10-31, FIX-W37-OTA) is for the SDK's server-mode smoke test (ota/sdk/test/smoke/
+ * server-mode.smoke.test.js), least privilege: `console:automation` and only the permissions of the console calls that
+ * test makes with the key alone (the permission guard checks those against the key's scopes; scope.guard.ts):
+ *
+ *   amadeus:read   console.amadeus.getFlightOffers, console.amadeus.getQueue and console.amadeus.getFlightOrder
+ *
+ * Its other console calls carry the staff token it signs in (console.auth.signIn with a test portal token, as the
+ * scope guard lets any secret key not scoped `storefront` do): console.auth.me and console.auth.signOut need the
+ * session and no permission, and console.bookings.list, console.customers.list and console.bookings.create are checked
+ * against the staff member's role, never against the key (scope.guard.ts). No write, issue, cancel, refund, settings
+ * or raw Amadeus write permission; the smoke test proves a key-only call outside these permissions is refused.
+ */
+export const DEV_SEED_KEY_SCOPES = Object.freeze({
+  publishable: Object.freeze([] as string[]),
+  secret: Object.freeze(["storefront"]),
+  console: Object.freeze(["console:automation", "amadeus:read"]),
 } as const);
 
 /** The variables dev:seed reads (README §3; root and app `.env.local` locally). */
@@ -131,6 +167,25 @@ export function randomBase62(length: number): string {
 }
 
 export type DevKeyKind = keyof typeof DEV_SEED_KEY_NAMES;
+
+/** `platform.api_keys.kind` of each key: the console key is a secret key. */
+export function apiKeyKindOf(kind: DevKeyKind): "publishable" | "secret" {
+  return kind === "publishable" ? "publishable" : "secret";
+}
+
+/**
+ * The role of a valid key of the tenant: a publishable key, the console key (a secret key with `console:automation`),
+ * or the storefront's secret key (any other secret key), so each is created only when the tenant has none of its role.
+ */
+export function keyRoleOf(kind: string, scopes: readonly string[]): DevKeyKind | undefined {
+  if (kind === "publishable") {
+    return "publishable";
+  }
+  if (kind !== "secret") {
+    return undefined;
+  }
+  return scopes.includes("console:automation") ? "console" : "secret";
+}
 
 /** A new test key of `kind`: the full key (shown once) and the columns of its row. */
 export function newTestKey(
@@ -372,17 +427,24 @@ async function seedPaymentConnection(trx: MigratorTx, tenantId: string, now: Dat
   return inserted !== undefined;
 }
 
-/** The kinds of which the tenant has a valid (neither revoked nor expired) test key. */
-async function validKeyKinds(trx: MigratorTx, tenantId: string, now: Date): Promise<Set<string>> {
+/** The roles (`keyRoleOf`) of which the tenant has a valid (neither revoked nor expired) test key. */
+async function validKeyRoles(trx: MigratorTx, tenantId: string, now: Date): Promise<Set<DevKeyKind>> {
   const rows = await trx
     .selectFrom("platform.api_keys")
-    .select("kind")
+    .select(["kind", "scopes"])
     .where("tenant_id", "=", tenantId)
     .where("environment", "=", ENVIRONMENT)
     .where("revoked_at", "is", null)
     .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", now)]))
     .execute();
-  return new Set(rows.map((row) => row.kind));
+  const roles = new Set<DevKeyKind>();
+  for (const row of rows) {
+    const role = keyRoleOf(row.kind, row.scopes);
+    if (role !== undefined) {
+      roles.add(role);
+    }
+  }
+  return roles;
 }
 
 async function insertKey(
@@ -401,13 +463,13 @@ async function insertKey(
         id,
         tenant_id: tenantId,
         name: DEV_SEED_KEY_NAMES[kind],
-        kind,
+        kind: apiKeyKindOf(kind),
         environment: ENVIRONMENT,
         prefix: made.prefix,
         key_hash: made.keyHash,
         last4: made.last4,
         allowed_origins: [],
-        scopes: kind === "secret" ? ["storefront"] : [],
+        scopes: [...DEV_SEED_KEY_SCOPES[kind]],
         created_at: now,
         updated_at: now,
       })
@@ -440,10 +502,10 @@ export async function seedPlatformRows(
     const domainCreated = await seedSubdomain(trx, tenant.id, hostname, now);
     const amadeus = await seedAmadeusConnection(trx, tenant.id, now);
     const paymentConnectionCreated = await seedPaymentConnection(trx, tenant.id, now);
-    const valid = await validKeyKinds(trx, tenant.id, now);
+    const valid = await validKeyRoles(trx, tenant.id, now);
     const createdKeys: Array<{ kind: DevKeyKind; id: string; key: string }> = [];
     const existingKeys: DevKeyKind[] = [];
-    for (const kind of ["publishable", "secret"] as const) {
+    for (const kind of ["publishable", "secret", "console"] as const) {
       if (valid.has(kind)) {
         existingKeys.push(kind);
       } else {
@@ -585,17 +647,13 @@ function seedLines(outcome: PlatformSeedOutcome): string[] {
     `Stripe test payment connection (velexis mode): ${state(outcome.paymentConnectionCreated)}.`,
   ];
   for (const kind of outcome.existingKeys) {
-    lines.push(
-      `${kind === "publishable" ? "Publishable" : "Secret"} test key: exists already (its key was shown when ` +
-        "dev:seed created it).",
-    );
+    lines.push(`${DEV_SEED_KEY_LABELS[kind]}: exists already (its key was shown when dev:seed created it).`);
   }
   if (outcome.createdKeys.length > 0) {
     lines.push("Test API keys created. Shown once, never again:");
     for (const created of outcome.createdKeys) {
-      lines.push(
-        `  ${created.kind === "publishable" ? "Publishable" : "Secret     "} (${created.id}): ${created.key}`,
-      );
+      // One key per line, after its label (DEV_SEED_KEY_LABELS), which the nightly SDK smoke step reads it by.
+      lines.push(`  ${DEV_SEED_KEY_LABELS[created.kind]} (${created.id}): ${created.key}`);
     }
   }
   return lines;

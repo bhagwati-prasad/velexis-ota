@@ -166,6 +166,12 @@ export interface GatewayPayment {
    * before the snapshot (`velexis`): every call for the payment is made on it.
    */
   readonly account: GatewayPaymentAccount | null;
+  /**
+   * `payments.provider_connection_id` (`ppc_…`), the connection the payment was created with: for the gateway's log
+   * line of a call it refuses (FIX-W37-OTA, lead decision (2m) of 2026-10-31), never for choosing the account
+   * (`account` does). Absent or `null`: none recorded.
+   */
+  readonly connectionId?: string | null;
 }
 
 /** What a new session needs besides the payment. */
@@ -235,6 +241,8 @@ export interface GatewayRefund {
   readonly minorUnits: number;
   /** The account of the refunded payment (GatewayPayment.account): the refund is made where the payment lives. */
   readonly account: GatewayPaymentAccount | null;
+  /** The refunded payment's `provider_connection_id` (GatewayPayment.connectionId): for the logs only. */
+  readonly connectionId?: string | null;
 }
 
 /** The provider's view of a refund. */

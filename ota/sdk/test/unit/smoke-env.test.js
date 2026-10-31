@@ -30,7 +30,7 @@ const SETTINGS = Object.freeze({
   OTA_API_URL: "http://127.0.0.1:4000",
   SDK_SMOKE_PUBLISHABLE_KEY: `pk_test_${"a".repeat(40)}`,
   SDK_SMOKE_SECRET_KEY: `sk_test_${"b".repeat(40)}`,
-  OTA_ADMIN_SERVICE_KEY: "sk_dev_ota_admin_service_key_change_me",
+  SDK_SMOKE_CONSOLE_KEY: `sk_test_${"d".repeat(40)}`,
   REDIS_URL: "redis://127.0.0.1:6379/0",
   DATABASE_MIGRATOR_URL: "postgres://velexis_migrator:dev_migrator@127.0.0.1:5432/velexis",
 });
@@ -179,6 +179,30 @@ describe("the reachability check of the smoke run", () => {
 });
 
 describe("the settings of the smoke run", () => {
+  it("[FIX-W37-OTA AC5] needs dev:seed's console automation key, and no longer the OTA admin's service key", () => {
+    /** @type {unknown} */
+    let error;
+    try {
+      readSmokeSettings({ ...SETTINGS, SDK_SMOKE_CONSOLE_KEY: undefined });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(SmokeSetupError);
+    expect(String(error)).toContain("SDK_SMOKE_CONSOLE_KEY is required but missing");
+    expect(String(error)).toContain("SDK_SMOKE_CONSOLE_KEY");
+    // A live key, or the service key's shape, is not the console key of dev:seed's test OTA.
+    for (const value of [`sk_live_${"e".repeat(40)}`, "sk_dev_ota_admin_service_key_change_me"]) {
+      expect(() => readSmokeSettings({ ...SETTINGS, SDK_SMOKE_CONSOLE_KEY: value })).toThrow(
+        /SDK_SMOKE_CONSOLE_KEY does not match/,
+      );
+    }
+    const settings = readSmokeSettings({
+      ...SETTINGS,
+      OTA_ADMIN_SERVICE_KEY: "sk_dev_ota_admin_service_key_change_me",
+    });
+    expect(Object.keys(settings)).not.toContain("OTA_ADMIN_SERVICE_KEY");
+  });
+
   it("names each missing or malformed setting, never its value [SDK-014 AC1]", () => {
     const secret = `sk_live_${"c".repeat(40)}`;
     /** @type {unknown} */

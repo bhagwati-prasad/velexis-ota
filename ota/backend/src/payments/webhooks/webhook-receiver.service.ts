@@ -9,8 +9,9 @@
 //   endpoint                 signing secret                                tenant from
 //   velexis/{environment}    STRIPE_WEBHOOK_SECRET_VELEXIS_<ENV>           metadata.velexis_tenant_id (only Velexis
 //                                                                          creates PaymentIntents on its account)
-//   connect/{environment}    STRIPE_WEBHOOK_SECRET_CONNECT_<ENV>           event.account → the `connect_standard`
-//                                                                          connection of the environment with that
+//   connect/{environment}    STRIPE_WEBHOOK_SECRET_CONNECT_<ENV>           event.account → the one Stripe
+//                                                                          connection of the environment (any mode,
+//                                                                          FIX-W37-OTA) with that
 //                                                                          `account_reference`, only
 //   c/{connectionId}         the connection's own, decrypted here only     the path's connection (`api_keys`), only
 //
@@ -32,8 +33,10 @@
 //   4. inside that tenant only, the payment by `metadata.payment_id`, then by the PaymentIntent id; it must be a Stripe
 //      payment of the endpoint's environment whose PaymentIntent, when set, is the event's. On Connect and `c/` the
 //      payment must also have been created on the endpoint's Stripe account (its `payments.metadata.connection`
-//      names that `acct_…`, payment-gateway.ts `recordedPaymentAccount`), so the worker reads its objects where they
-//      live (OADR-0010 point 1 note: a payment keeps its account);
+//      names that `acct_…`, payment-gateway.ts `recordedPaymentAccount`; the account is compared, never the mode, so a
+//      payment taken in one mode on an account the OTA later moved to the other passes), otherwise it is a mismatch
+//      of this step, answered `200` without effect (OADR-0010 point 4, note of 2026-10-31), so the worker reads its
+//      objects where they live (OADR-0010 point 1 notes: a payment keeps its account);
 //   5. one transaction of the tenant writes the `payment_events` row (`source = webhook`, `type = webhook.<type>`,
 //      `provider_event_id` = the event id, a payload of ids, statuses and amounts only, through the shared redactor;
 //      on Connect and `c/` with the endpoint, the `acct_…` and the connection id); an event id already stored is a
@@ -43,13 +46,13 @@
 //      repeated one adds nothing; then the answer is `200 {received: true}`. The worker reads the object again on the
 //      payment's account (stripe-events.processor.ts).
 //
-// Acknowledged with `200` and without effect: a Connect event without `account` or for an `acct_…` that no
-// `connect_standard` connection of the environment has, an unknown or unusable tenant (neither active nor suspended),
-// an unknown payment, and every mismatch of steps 2 to 4, which is a security event (`securityEvent` in the log line,
-// no payload), so the signed events of one tenant can never write into another tenant's schema and raise no staff
-// alert. `503 SERVICE_UNAVAILABLE` when the connection or the tenant cannot be looked up, the event cannot be queued
-// (Redis down, ENQUEUE_TIMEOUT_MS) or the PaymentIntent of a dispute cannot be read: Stripe sends the event again, and
-// the delivery that finds it stored queues it. A database failure is a `500`, which Stripe also retries. The event
+// Acknowledged with `200` and without effect: a Connect event without `account` or for an `acct_…` that no Stripe
+// connection of the environment has, or that more than one (several OTAs) has, an unknown or unusable tenant (neither
+// active nor suspended), an unknown payment, and every mismatch of steps 2 to 4, which is a security event
+// (`securityEvent` in the log line, no payload), so the signed events of one tenant can never write into another
+// tenant's schema and raise no staff alert. `503 SERVICE_UNAVAILABLE` when the connection or the tenant cannot be
+// looked up, the event cannot be queued (Redis down, ENQUEUE_TIMEOUT_MS) or the PaymentIntent of a dispute cannot be
+// read: Stripe sends the event again, and the delivery that finds it stored queues it. A database failure is a `500`, which Stripe also retries. The event
 // body is never logged, stored whole or trusted for state: the worker reads the objects again.
 import { InjectQueue } from "@nestjs/bullmq";
 import { Inject, Injectable } from "@nestjs/common";
@@ -378,10 +381,11 @@ export class WebhookReceiverService {
     const connection = await this.platformRead(base, () =>
       this.platform.connectPaymentConnection(environment, accountReference),
     );
+    // The one connection of any mode that holds the account (an OTA that moved it to its own keys included, lead
+    // decision (2l) of 2026-10-31); none, or several OTAs, is an unknown account.
     if (
       connection === null ||
       connection.provider !== "stripe" ||
-      connection.accountMode !== "connect_standard" ||
       connection.environment !== environment ||
       connection.accountReference !== accountReference
     ) {

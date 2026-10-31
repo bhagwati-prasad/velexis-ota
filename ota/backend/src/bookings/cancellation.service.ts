@@ -141,8 +141,10 @@
 // (`version + 1`); the customer-visible event `booking.cancellation_requested`, the traveller's
 // `booking.cancellation_requested` e-mail and a staff alert (`staff.manual_review` through StaffAlerts to
 // `ops_alert_email`, else the owners, else, in the worker, Velexis ops: notifications/staff-recipients.ts; flow §3 step
-// 6). The staff finish it from the console. `refundStatus: manual_review` (paid) or
-// `not_applicable`.
+// 6), but none for a staff member's own request (`requestAlertsStaff`, lead decision (2d) of 2026-10-31). The staff
+// finish it with the airline, a resync and a refund from the payment; while it waits, every further cancellation,
+// the customer's and the staff's, is refused with `pending` (lead decision (2c) of 2026-10-31). `refundStatus:
+// manual_review` (paid) or `not_applicable`.
 //
 // **The worker's check** (`booking.cancellation_check {tenantId, bookingId}` on `ota-bookings`, CancellationChecks,
 // handed over by the queue's consumer reconcile.processor.ts): the claim (`FOR NO KEY UPDATE SKIP LOCKED`, a booking
@@ -165,13 +167,19 @@
 // DELETE; `request_only` (a ticket issued before today, or at an unknown time) sends none and records, in the claim's
 // transaction, a request to the airline as a customer's `request_only` does (`recordRequest`: `version + 1`,
 // `booking.cancellation_requested` with `cancelledBy: staff`, the traveller's e-mail unless `notifyCustomer: false`,
-// the staff alert), with the console's staff action (`audit`, cause `request_only`); no money moves (the estimate's
-// refund is 0, as a customer's request: the staff refund from the payment once the airline cancelled), and the
-// console answers the booking with STAFF_REQUEST_ONLY_WARNING (lead decision (2c) of 2026-10-30, third batch,
-// FIX-W36-OTA; before, the DELETE was sent in every mode, as `void` when a ticket held a seat). No self-service window
-// and no quote: the checks are the booking of the environment, `409 BOOKING_ALREADY_CANCELLED`, `412`, an Amadeus order
-// (`409 BOOKING_NOT_MODIFIABLE`), no undecided cancellation and no other cancellation's fresh claim (`details.reason =
-// "pending"`, the latter since FIX-W32-OTA; a customer's request waiting for the staff is what the staff finish here),
+// no staff alert since lead decision (2d) of 2026-10-31: the staff asked for it), with the console's staff action
+// (`audit`, cause `request_only`); no money moves (the estimate's refund is 0, as a customer's request: the staff
+// refund from the payment once the airline cancelled), and the console answers the booking with
+// STAFF_REQUEST_ONLY_WARNING (lead decision (2c) of 2026-10-30, third batch, FIX-W36-OTA; before, the DELETE was sent
+// in every mode, as `void` when a ticket held a seat). Such a request takes `refund.mode` `none` or no `refund` only:
+// `full` and `amount` answer `422 UNPROCESSABLE` (`details.reason = "refund_not_available"`,
+// `staffRequestRefundRefusalOf`) when the claim's check, after the refresh, finds `request_only`, and nothing is
+// written or sent (lead decision (2b) of 2026-10-31, FIX-W37-OTA). No self-service window and no quote: the checks are
+// the booking of the environment, `409 BOOKING_ALREADY_CANCELLED`, `412`, an Amadeus order (`409
+// BOOKING_NOT_MODIFIABLE`), no undecided cancellation, no other cancellation's fresh claim and no request waiting for
+// the staff (`details.reason = "pending"`, the claim since FIX-W32-OTA, the request since lead decision (2c) of
+// 2026-10-31, FIX-W37-OTA: the customer's refusal, so neither the customer's request nor a staff member's own is
+// followed by a second one; until then the staff finished such a request here),
 // no fresh ticketing claim of a staff issuance or of the ticketing job
 // (`details.reason = "ticketing_in_progress"`: its capture would race the money step; `ticketingInProgress`, which
 // bookings.cancel answers too since FIX-W30-OTA) and no segment departed (`details.reason = "flown"`, after the GET
@@ -1187,6 +1195,40 @@ export function staffStepOf(input: StaffStepInput): {
   };
 }
 
+/**
+ * Whether a cancellation handed to the staff (`recordRequest`) alerts them (`staff.manual_review`): a customer's request
+ * always does (they finish it); a staff member's own `request_only` request does not (lead decision (2d) of
+ * 2026-10-31, FIX-W37-OTA: the staff asked for it, and the console's answer says what to do next). The traveller's
+ * `booking.cancellation_requested` e-mail is not this rule's (it follows `notifyCustomer`).
+ */
+export function requestAlertsStaff(
+  ask: Pick<CancellationAsk, "staff">,
+  cause: "request_only" | "refused" | "order_not_found",
+): boolean {
+  return ask.staff === undefined || cause !== "request_only";
+}
+
+/** The message of `refund_not_available` (the console's dialog says what to do instead). */
+export const REFUND_NOT_AVAILABLE_MESSAGE =
+  "This cancellation is a request to the airline (a ticket was issued before today, or at an unknown time): the " +
+  "airline is asked first, and the refund is made from the payment once it answered. Cancel without a refund.";
+
+/**
+ * The refusal of a refund asked with a staff member's request to the airline (lead decision (2b) of 2026-10-31,
+ * FIX-W37-OTA): in `request_only` mode, as the API decides it after the order's refresh (`staffStepOf`), `refund.mode`
+ * `full` or `amount` answers `422 UNPROCESSABLE` with `details.reason = refund_not_available` before anything is
+ * written or sent, as no money moves until the airline answered; `none` and no `refund` (`default`) are accepted. Every
+ * other mode takes every refund mode. `undefined` when the request is accepted.
+ */
+export function staffRequestRefundRefusalOf(
+  mode: SupplierMode,
+  refundMode: StaffRefundMode,
+): AppError | undefined {
+  return mode === "request_only" && (refundMode === "full" || refundMode === "amount")
+    ? refundRefused("refund_not_available", REFUND_NOT_AVAILABLE_MESSAGE)
+    : undefined;
+}
+
 /** What `recordCancelled` did. */
 export type RecordedCancellation =
   | { readonly kind: "cancelled"; readonly money: RecordedMoney; readonly ticketsVoided: boolean }
@@ -1545,18 +1587,20 @@ export class CancellationRecorder {
         dedupeKey: `booking.cancellation_requested:${booking.id}:v${booking.version + 1}`,
       });
     }
-    const why =
-      cause === "request_only"
-        ? "it is ticketed outside the void window"
-        : cause === "refused"
-          ? `the airline refused the cancellation (${supplierCode ?? "SUPPLIER_REJECTED"})`
-          : "Amadeus no longer returns its order: check the office";
-    const who = ask.staff === undefined ? "The customer" : "A staff member";
-    await this.staffAlert(trx, booking, `cancellation_requested_v${booking.version + 1}`, {
-      reason:
-        `${who} asked to cancel this booking (${ask.reasonCode}) and ${why}. Cancel it at the airline and ` +
-        "refund the selling amount less the penalties from the console.",
-    });
+    if (requestAlertsStaff(ask, cause)) {
+      const why =
+        cause === "request_only"
+          ? "it is ticketed outside the void window"
+          : cause === "refused"
+            ? `the airline refused the cancellation (${supplierCode ?? "SUPPLIER_REJECTED"})`
+            : "Amadeus no longer returns its order: check the office";
+      const who = ask.staff === undefined ? "The customer" : "A staff member";
+      await this.staffAlert(trx, booking, `cancellation_requested_v${booking.version + 1}`, {
+        reason:
+          `${who} asked to cancel this booking (${ask.reasonCode}) and ${why}. Cancel it at the airline and ` +
+          "refund the selling amount less the penalties from the console.",
+      });
+    }
     this.logger.info({ bookingId: booking.id, mode: ask.mode, cause }, "bookings.cancellation_requested");
   }
 
@@ -1694,6 +1738,7 @@ export class CancellationRecorder {
         minorUnits,
         version: row.version,
         account: recordedPaymentAccount(row.metadata),
+        connectionId: row.providerConnectionId,
       };
       const state = await this.gateway.void(ctx, gatewayPayment);
       return await this.tx.run(async (trx) => {
@@ -1765,6 +1810,7 @@ export class CancellationRecorder {
         minorUnits,
         version: payment.version,
         account: recordedPaymentAccount(payment.metadata),
+        connectionId: payment.providerConnectionId,
       };
       const state = await this.gateway.capture(ctx, gatewayPayment, capture.amount, "cancellation");
       if (state.status === "captured") {
@@ -2742,9 +2788,11 @@ export class CancellationService {
         details: { status: booking.status },
       });
     }
-    // An undecided cancellation is checked by the worker; a customer's request waiting for the staff is finished here.
+    // An undecided cancellation is checked by the worker; a request waiting for the staff, the customer's or a staff
+    // member's own, refuses a second one as bookings.cancel refuses it (lead decision (2c) of 2026-10-31, FIX-W37-OTA:
+    // no second request to the airline, traveller e-mail or staff alert; until then such a request was finished here).
     const state = cancellationStateOf(await this.repository.cancellationEvents(trx, bookingId));
-    if (state.kind === "undecided") {
+    if (state.kind === "undecided" || state.kind === "requested") {
       throw cancellationPending();
     }
     // Another cancellation's DELETE in flight, the customer's or the staff's (FIX-W32-OTA): never a second DELETE.
@@ -2789,6 +2837,13 @@ export class CancellationService {
       estimate: refund.estimate,
       minorUnits,
     });
+    // A refund asked with a request to the airline (lead decision (2b) of 2026-10-31, FIX-W37-OTA): refused by the mode
+    // the claim's check decides, which reads the tickets the refresh recorded (the checks without a lock run before the
+    // refresh, whose tickets may give another mode); the claim's transaction then writes nothing and nothing is sent.
+    const refusal = lock ? staffRequestRefundRefusalOf(step.mode, refund.mode) : undefined;
+    if (refusal !== undefined) {
+      throw refusal;
+    }
     return {
       booking,
       orderId: booking.amadeusOrderId,

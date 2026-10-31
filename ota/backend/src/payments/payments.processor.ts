@@ -1097,6 +1097,7 @@ export class PaymentJobsHandler {
         minorUnits,
         // Where the payment lives (OBE-077): the refund is made on that account.
         account: recordedPaymentAccount(payment.metadata),
+        connectionId: payment.providerConnectionId,
       });
     } catch (error) {
       return await this.afterRefundFailure(claim, attempt, error);
@@ -1322,6 +1323,7 @@ export class PaymentJobsHandler {
       minorUnits,
       version: payment.version,
       account: recordedPaymentAccount(payment.metadata),
+      connectionId: payment.providerConnectionId,
     };
   }
 

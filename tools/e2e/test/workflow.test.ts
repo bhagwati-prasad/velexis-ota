@@ -123,7 +123,10 @@ describe(".github/workflows/e2e.yml", () => {
   it("runs storefront-stripe only at night, with the Stripe test keys and the Stripe CLI whose checksum it checked [OFE-017 AC1]", () => {
     const index = steps.findIndex((step) => /--project=storefront-stripe/.test(step.run ?? ""));
     const step = steps[index];
-    expect(step?.name).toContain("[OFE-017 AC1] [OFE-017 AC2]");
+    // OAD-017's payments journey runs in this project too (lead decision (2e) of 2026-10-31, FIX-W37-OTA): the name says so.
+    expect(step?.name).toBe(
+      "[OFE-017 AC1] [OFE-017 AC2] [OAD-017] Stripe storefront and OTA admin payment journeys (nightly, project storefront-stripe)",
+    );
     // Nightly, and only when the three secrets exist: the platform's two (E2E_STRIPE=1 needs them) and the
     // publishable key of the same test account.
     expect(step?.if).toBe("github.event_name == 'schedule' && env.STOREFRONT_STRIPE_CONFIGURED == 'true'");
@@ -186,10 +189,12 @@ describe(".github/workflows/e2e.yml", () => {
     // The processes stop with the step; their output goes where the upload step finds it.
     expect(lines).toContain("logs=tools/e2e/test-results/sdk-smoke");
     expect(lines).toContain("trap 'jobs -p | xargs -r kill' EXIT");
-    // The keys reach the tests in their environment only: no line prints the seed's output.
+    // The keys reach the tests in their environment only: no line prints the seed's output. Each key is read from the
+    // line of its label (dev-seed.command.ts DEV_SEED_KEY_LABELS; FIX-W37-OTA: two of the three are sk_test keys).
     expect(lines.filter((line) => /\$seed/.test(line))).toEqual([
-      `SDK_SMOKE_PUBLISHABLE_KEY="$(printf '%s\\n' "$seed" | grep -Eo 'pk_test_[A-Za-z0-9]{40}')" \\`,
-      `  SDK_SMOKE_SECRET_KEY="$(printf '%s\\n' "$seed" | grep -Eo 'sk_test_[A-Za-z0-9]{40}')" \\`,
+      `SDK_SMOKE_PUBLISHABLE_KEY="$(printf '%s\\n' "$seed" | grep -E '^  Publishable test key ' | grep -Eo 'pk_test_[A-Za-z0-9]{40}')" \\`,
+      `  SDK_SMOKE_SECRET_KEY="$(printf '%s\\n' "$seed" | grep -E '^  Secret test key ' | grep -Eo 'sk_test_[A-Za-z0-9]{40}')" \\`,
+      `  SDK_SMOKE_CONSOLE_KEY="$(printf '%s\\n' "$seed" | grep -E '^  Console automation test key ' | grep -Eo 'sk_test_[A-Za-z0-9]{40}')" \\`,
     ]);
     expect(lines.at(-1)).toBe("  pnpm --filter @velexis/ota-sdk test:smoke");
     expect(runs.filter((run) => /test:smoke/.test(run))).toHaveLength(1);

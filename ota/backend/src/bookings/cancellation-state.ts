@@ -163,15 +163,18 @@ export function cancellationPendingOf(facts: {
 }
 
 /**
- * The same for a staff cancellation (console.bookings.cancel `staffCheck`, OBE-063): an undecided cancellation or
- * another cancellation's fresh claim; a customer's request waiting for the staff is what the staff finish. The console's
- * canCancel shows it (FIX-W33-OTA).
+ * The same for a staff cancellation (console.bookings.cancel `staffCheck`, OBE-063), which the console's canCancel shows
+ * (FIX-W33-OTA): since lead decision (2c) of 2026-10-31 (FIX-W37-OTA) the very refusal of a customer's cancellation
+ * (`cancellationPendingOf`): an undecided cancellation, another cancellation's fresh claim, and a cancellation request
+ * waiting for the staff (the customer's, or a staff member's own `request_only` request), so no second request to the
+ * airline, traveller e-mail or staff alert is ever recorded. Until then console.bookings.cancel finished a request
+ * waiting for the staff.
  */
 export function staffCancellationPendingOf(facts: {
   readonly state: CancellationState;
   readonly claimPending: boolean;
 }): boolean {
-  return facts.state.kind === "undecided" || facts.claimPending;
+  return cancellationPendingOf(facts);
 }
 
 // ---- The ticketing claims and an undecided cancellation (FIX-W31-OTA) ---------------------------------------------

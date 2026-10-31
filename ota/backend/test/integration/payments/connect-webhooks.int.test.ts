@@ -9,9 +9,12 @@
 //     `stripe.event` on `ota-stripe-events`;
 //   - the worker's module graph (WorkerModule.forRoot, as dist/worker.js builds it), whose consumer reads the event's
 //     object again from the fake Stripe API on the account the payment was created on (the Velexis key with
-//     `Stripe-Account` for Connect, the connection's own decrypted key for `api_keys`, and the Connect path for an
-//     `api_keys` payment whose account the OTA has connected since, lead decision (2i) of 2026-10-30) and applies that
-//     state: PaymentIntents, a dispute and a refund with its charge.
+//     `Stripe-Account` for Connect, the connection's own decrypted key for `api_keys`, the Connect path for an
+//     `api_keys` payment whose account the OTA has connected since, lead decision (2i) of 2026-10-30, and the
+//     connection's key for a `connect_standard` payment whose account the OTA has moved to its own keys since, lead
+//     decision (2l) of 2026-10-31) and applies that state: PaymentIntents, a dispute and a refund with its charge. The
+//     Connect endpoint finds the OTA by the one connection of any mode that holds the event's account (FIX-W37-OTA): an
+//     account two OTAs hold is no one's.
 //
 // The platform rows are written as the platform writes them (velexis_migrator): tenant alpha has a `connect_standard`
 // connection in test and an `api_keys` one in live, tenant beta an `api_keys` one in test (one Stripe connection per
@@ -98,6 +101,11 @@ const ALPHA_OWN = `acct_${randomBytes(8).toString("hex")}AlphaOwn`;
 const ALPHA_SECRET_KEY = `sk_live_${randomBytes(20).toString("hex")}`;
 const ALPHA_PUBLISHABLE_KEY = `pk_live_${randomBytes(20).toString("hex")}`;
 const ALPHA_WEBHOOK_SECRET = `whsec_${randomBytes(24).toString("hex")}`;
+/**
+ * An account two other OTAs hold with their own keys in test (platform rows only, FIX-W37-OTA): the Connect endpoint
+ * resolves it to no one.
+ */
+const SHARED_ACCOUNT = `acct_${randomBytes(8).toString("hex")}Shared`;
 /** Tenant beta's own account (API keys, test) and its keys. */
 const BETA_OWN = `acct_${randomBytes(8).toString("hex")}BetaOwn`;
 const BETA_SECRET_KEY = `sk_test_${randomBytes(20).toString("hex")}`;
@@ -465,6 +473,20 @@ beforeAll(async () => {
     publishableKey: BETA_PUBLISHABLE_KEY,
     webhookSecret: BETA_WEBHOOK_SECRET,
   });
+  // Two OTAs of the platform only (no schema: the receiver never reaches one for them) holding the same account.
+  for (const key of ["gamma", "delta"]) {
+    const tenantId = newId("ten");
+    await migrator
+      .insertInto("platform.tenants")
+      .values({ id: tenantId, key, name: `${key} Travel`, status: "active", plan_code: "early_access" })
+      .execute();
+    await insertApiKeysConnection(tenantId, "test", {
+      account: SHARED_ACCOUNT,
+      secretKey: `sk_test_${randomBytes(20).toString("hex")}`,
+      publishableKey: `pk_test_${randomBytes(20).toString("hex")}`,
+      webhookSecret: `whsec_${randomBytes(24).toString("hex")}`,
+    });
+  }
   // Both OTAs' settings as the provisioning seed writes them, with the alert address an OTA sets in its admin.
   for (const tenant of ["alpha", "beta"] as const) {
     await txOf(tenant)(async (trx) => {
@@ -534,10 +556,18 @@ describe("the platform rows the receivers read", () => {
       tenantId: alphaId,
       accountMode: "connect_standard",
     });
-    // Only a connect_standard connection of that environment: not alpha's live own account, nor another environment.
+    // A connection of that environment: not another environment's, nor an account no connection has.
     expect(await platform.connectPaymentConnection("live", ALPHA_CONNECTED)).toBeNull();
-    expect(await platform.connectPaymentConnection("live", ALPHA_OWN)).toBeNull();
-    expect(await platform.connectPaymentConnection("test", "acct_test_alpha")).toBeNull();
+    expect(await platform.connectPaymentConnection("test", "acct_testalpha")).toBeNull();
+    // In any mode since lead decision (2l) of 2026-10-31 (FIX-W37-OTA): until then alpha's live own account (api_keys)
+    // was no account's for the Connect endpoint.
+    expect(await platform.connectPaymentConnection("live", ALPHA_OWN)).toMatchObject({
+      id: alphaOwnId,
+      tenantId: alphaId,
+      accountMode: "api_keys",
+    });
+    // Held by two OTAs: no one's.
+    expect(await platform.connectPaymentConnection("test", SHARED_ACCOUNT)).toBeNull();
     const own = await platform.paymentConnectionWebhook(betaOwnId);
     expect(own?.connection).toMatchObject({ id: betaOwnId, tenantId: betaId, accountMode: "api_keys" });
     expect(own?.webhookSecretCiphertext).toEqual(expect.any(String));
@@ -917,6 +947,126 @@ describe("an api_keys payment of an account alpha connected with Connect since (
       [`Bearer ${SECRET_KEY}`, ALPHA_CONNECTED],
     ]);
     expect(await paymentOf("alpha", paymentId)).toMatchObject({ status: "authorized", version: 2 });
+  });
+});
+
+// The mirror of lead decision (2i), lead decision (2l) of 2026-10-31 (FIX-W37-OTA): beta took this payment through
+// Connect Standard on the account it has since given Velexis its own keys of (its test connection, `api_keys`).
+describe("a connect_standard payment of an account beta moved to its own keys since (lead decision (2l))", () => {
+  let paymentId: string;
+  let intentId: string;
+  const connectEvent = stripeId("evt");
+  const connectionEvent = stripeId("evt");
+  const answers: request.Response[] = [];
+
+  beforeAll(async () => {
+    intentId = stripeId("pi");
+    paymentId = await insertPayment({
+      tenant: "beta",
+      environment: "test",
+      connectionId: betaOwnId,
+      account: { accountMode: "connect_standard", accountReference: BETA_OWN },
+      status: "requires_action",
+      intentId,
+    });
+    // A Connect event of that account (Stripe still sends the connected account's events to the platform).
+    putIntent(intentId, metadataOf(betaId, paymentId), {
+      status: "requires_capture",
+      amount_capturable: 45210,
+    });
+    const connect = signedStripeEvent(
+      "payment_intent.amount_capturable_updated",
+      {
+        id: connectEvent,
+        account: BETA_OWN,
+        data: { object: { id: intentId, metadata: metadataOf(betaId, paymentId) } },
+      },
+      CONNECT_SECRET,
+    );
+    answers.push(await deliver(CONNECT_TEST, connect.payload, connect.header));
+    await finishedJob(connectEvent);
+    // Then an event of the account's own endpoint, the connection's (`c/<ppc_id>`).
+    putIntent(intentId, metadataOf(betaId, paymentId), {
+      status: "succeeded",
+      amount_capturable: 0,
+      amount_received: 45210,
+    });
+    const own = signedStripeEvent(
+      "payment_intent.succeeded",
+      { id: connectionEvent, data: { object: { id: intentId, metadata: metadataOf(betaId, paymentId) } } },
+      BETA_WEBHOOK_SECRET,
+    );
+    answers.push(await deliver(connectionPath(betaOwnId), own.payload, own.header));
+    await finishedJob(connectionEvent);
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W37-OTA AC7] resolves the Connect event to beta, the one OTA whose connection (api_keys) holds the account", async () => {
+    expect(answers.map((res) => [res.status, res.body])).toEqual([
+      [200, { received: true }],
+      [200, { received: true }],
+    ]);
+    expectResponseToMatch("receiveStripeConnectWebhook", answers[0] as request.Response);
+    expectResponseToMatch("receiveStripeConnectionWebhook", answers[1] as request.Response);
+    const stored = await eventsOf("beta", paymentId);
+    expect(stored.find((row) => row.providerEventId === connectEvent)?.payload).toMatchObject({
+      endpoint: "connect",
+      account: BETA_OWN,
+      connectionId: betaOwnId,
+    });
+    // The account is compared, not the mode: the payment was created on that account, so it passes step 4.
+    expect(stored.find((row) => row.providerEventId === connectionEvent)?.payload).toMatchObject({
+      endpoint: "connection",
+      account: BETA_OWN,
+      connectionId: betaOwnId,
+    });
+    expect(await rowsOfStripeEvent(connectEvent, "alpha")).toBe(0);
+  });
+
+  it("[FIX-W37-OTA AC7] reads the PaymentIntent with beta's own key for both events, as the gateway's captures do", async () => {
+    for (const eventId of [connectEvent, connectionEvent]) {
+      expect((await jobsOf(eventId))[0]?.returnvalue).toMatchObject({ outcome: "applied" });
+    }
+    expect(readsOf(`/v1/payment_intents/${intentId}`).map(credentialsOf)).toEqual([
+      [`Bearer ${BETA_SECRET_KEY}`, undefined],
+      [`Bearer ${BETA_SECRET_KEY}`, undefined],
+    ]);
+    expect(await paymentOf("beta", paymentId)).toMatchObject({
+      status: "captured",
+      amountCaptured: "452.10",
+    });
+  });
+});
+
+describe("a Connect event of an account two OTAs hold", () => {
+  const eventId = stripeId("evt");
+  let res: request.Response;
+
+  beforeAll(async () => {
+    const shared = signedStripeEvent(
+      "payment_intent.succeeded",
+      {
+        id: eventId,
+        account: SHARED_ACCOUNT,
+        // Metadata never chooses between them.
+        data: { object: { metadata: metadataOf(alphaId, newId("pay")) } },
+      },
+      CONNECT_SECRET,
+    );
+    res = await deliver(CONNECT_TEST, shared.payload, shared.header);
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W37-OTA AC7] is no one's: acknowledged with 200 as an unknown account, nothing stored or queued", async () => {
+    expect([res.status, res.body]).toEqual([200, { received: true }]);
+    expectResponseToMatch("receiveStripeConnectWebhook", res);
+    expect([await rowsOfStripeEvent(eventId, "alpha"), await rowsOfStripeEvent(eventId, "beta")]).toEqual([
+      0, 0,
+    ]);
+    expect(await jobsOf(eventId)).toEqual([]);
+    expect(
+      api.sink
+        .records()
+        .filter((line) => line["eventId"] === eventId && line["msg"] === "payments.webhook_ignored"),
+    ).toEqual([expect.objectContaining({ outcome: "account_unknown" })]);
   });
 });
 

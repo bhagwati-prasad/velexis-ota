@@ -205,6 +205,19 @@ describe("the account a stored event's object is read on (OBE-078)", () => {
     readonly unreachable?: StripeAccountUnavailableError;
   }
 
+  /** A tenant connection that is `connect_standard` on the test account, and one that is `velexis`. */
+  const CONNECTED = {
+    accountMode: "connect_standard",
+    publishableKey: null,
+    secretCiphertext: null,
+  } as const;
+  const VELEXIS_ROW = {
+    accountMode: "velexis",
+    accountReference: null,
+    publishableKey: null,
+    secretCiphertext: null,
+  } as const;
+
   /** A handler whose platform cache, Stripe factory and repository are fakes: `withAccount` records its target. */
   function handler(input: Input) {
     const targets: StripeAccountTarget[] = [];
@@ -306,20 +319,66 @@ describe("the account a stored event's object is read on (OBE-078)", () => {
     });
     expect(velexis.targets).toEqual([{ accountMode: "velexis", environment: "test" }]);
 
+    // The tenant's connection still the connect_standard one of that account.
     const connect = handler({
       endpoint: "connect",
       account: ACCOUNT,
       recorded: { accountMode: "connect_standard", accountReference: ACCOUNT },
+      connection: { accountMode: "connect_standard", publishableKey: null, secretCiphertext: null },
     });
     expect((await connect.instance.handle(EVENT_ID)).outcome).toBe("unchanged");
     expect(connect.targets).toEqual([
       { accountMode: "connect_standard", environment: "test", accountReference: ACCOUNT },
     ]);
-    // Neither reads the tenant's connection: the payment's record names the account.
+    // A velexis event never reads the tenant's connection; a Connect one does since FIX-W37-OTA (lead decision (2l)):
+    // whether the OTA has moved that account to its own keys.
     expect([velexis.connectionLookups, connect.connectionLookups].map((lookup) => lookup.mock.calls)).toEqual(
-      [[], []],
+      [[], [["payment", TENANT.id, "test"]]],
     );
   });
+
+  // The mirror of lead decision (2i), lead decision (2l) of 2026-10-31: by the gateway's one rule (paymentTargetOf).
+  it.each([
+    { name: "api_keys on the payment's account", connection: {}, expected: "own_key" },
+    { name: "connect_standard on the payment's account", connection: CONNECTED, expected: "connect" },
+    {
+      name: "api_keys on another account",
+      connection: { accountReference: "acct_1ProcessorOtherAccount" },
+      expected: "connect",
+    },
+    { name: "velexis", connection: VELEXIS_ROW, expected: "connect" },
+    { name: "no connection", connection: null, expected: "connect" },
+    {
+      name: "api_keys on the payment's account without its key",
+      connection: { secretCiphertext: null },
+      expected: "connect",
+    },
+  ] as const)(
+    "[FIX-W37-OTA AC7] reads a connect_standard payment after a switch to $name by the gateway's rule",
+    async ({ connection, expected }) => {
+      for (const endpoint of ["connect", "connection"] as const) {
+        const { instance, targets, logs } = handler({
+          endpoint,
+          account: ACCOUNT,
+          recorded: { accountMode: "connect_standard", accountReference: ACCOUNT },
+          connection: connection as Partial<PlatformPaymentConnection> | null,
+        });
+
+        expect((await instance.handle(EVENT_ID)).outcome).toBe("unchanged");
+        expect(targets).toEqual([
+          expected === "own_key"
+            ? {
+                accountMode: "api_keys",
+                environment: "test",
+                connectionId: CONNECTION_ID,
+                secretCiphertext: CIPHERTEXT,
+              }
+            : { accountMode: "connect_standard", environment: "test", accountReference: ACCOUNT },
+        ]);
+        expect(JSON.stringify(logs)).not.toContain(CIPHERTEXT);
+      }
+    },
+  );
 
   it("reads an api_keys payment with the key the tenant's connection holds for its account [OBE-078 AC1]", async () => {
     const { instance, targets, connectionLookups, logs } = handler({

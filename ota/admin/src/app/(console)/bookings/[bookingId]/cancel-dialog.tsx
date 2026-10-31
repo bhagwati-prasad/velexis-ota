@@ -13,8 +13,12 @@
 //   without a mode in the answer no step is named;
 // - to the money, per refund mode: a captured Stripe payment refunds nothing, everything still refundable or an amount;
 //   an authorisation is released whole, released in part (the rest captured) or captured whole; an airline card and a
-//   booking without payment are never refunded here (the airline refunds its card).
-import { useState } from "react";
+//   booking without payment are never refunded here (the airline refunds its card). A request to the airline
+//   (`request_only`) offers no refund choice at all and posts `refund.mode = none`: the airline is asked first, and the
+//   refund is made from the payment once it answers (lead decision (2b) of 2026-10-31, FIX-W37-OTA). When the API still
+//   answers `refund_not_available` (the page showed a release or void, the API's refresh found a ticket of an earlier
+//   day), the dialog shows that message and switches to the request's form, so a second confirmation sends the request.
+import { useCallback, useState } from "react";
 
 import {
   AMOUNT_FIELD,
@@ -24,6 +28,8 @@ import {
   NOTIFY_FIELD,
   REASON_CODE_FIELD,
   REFUND_MODE_FIELD,
+  REFUND_NOT_AVAILABLE_CODE,
+  REQUEST_REFUND_MODES,
   VERSION_FIELD,
   type CancelMoney,
   type CancelPlan,
@@ -38,7 +44,7 @@ import {
   SelectField,
   TextField,
 } from "@/app/(console)/bookings/[bookingId]/patch-form";
-import { ConfirmDialog } from "@/components/confirm-dialog";
+import { ConfirmDialog, type ConfirmAction } from "@/components/confirm-dialog";
 import { formatMoney, type MoneyValue } from "@/components/money";
 import { Button } from "@/components/ui/button";
 import type { StaffEnvironment } from "@/lib/permissions";
@@ -56,6 +62,9 @@ export const CANCEL_STRINGS = Object.freeze({
     request_only:
       "A ticket was issued before today (or at an unknown time): Amadeus is not asked to void the tickets. The booking records a request to the airline and stays as it is, and no money moves now: cancel it with the airline, resync the booking, then refund from the payment.",
   } satisfies Record<CancelSupplierStep, string>,
+  /** The money of a request to the airline (`request_only`): no refund choice (FIX-W37-OTA). */
+  requestMoney:
+    "No refund now: the airline is asked first. Once it answers, refund the traveller from the payment (its Refund action).",
   reasonCode: "Reason category",
   money: "The money",
   amount: (currency: string) => `Amount (${currency})`,
@@ -133,10 +142,23 @@ export function CancelDialog({
   idempotencyKey,
   plan,
 }: CancelDialogProps) {
-  const defaultMode = plan.modes[0] ?? "none";
+  // The API's `refund_not_available` after this page's step: its refresh found a request to the airline (FIX-W37-OTA).
+  const [requestFound, setRequestFound] = useState(false);
+  const requestOnly = plan.supplier === "request_only" || requestFound;
+  const supplier = requestFound ? "request_only" : plan.supplier;
+  const modes = requestOnly ? REQUEST_REFUND_MODES : plan.modes;
+  const defaultMode = modes[0] ?? "none";
   const [mode, setMode] = useState<RefundMode>(defaultMode);
   const { choices, details } = modeChoices(plan.money);
-  const offered = choices.filter((choice) => plan.modes.includes(choice.value));
+  const offered = choices.filter((choice) => modes.includes(choice.value));
+  const action = useCallback<ConfirmAction>(async (previous, form) => {
+    const next = await cancelBooking(previous, form);
+    if (next.code === REFUND_NOT_AVAILABLE_CODE) {
+      setRequestFound(true);
+      setMode("none");
+    }
+    return next;
+  }, []);
   return (
     <ConfirmDialog
       trigger={
@@ -147,21 +169,27 @@ export function CancelDialog({
       title={CANCEL_STRINGS.title(reference)}
       summary={
         <div className="grid gap-2">
-          {plan.supplier === null ? null : (
-            <p data-supplier-step={plan.supplier}>{CANCEL_STRINGS.supplier[plan.supplier]}</p>
+          {supplier === null ? null : (
+            <p data-supplier-step={supplier}>{CANCEL_STRINGS.supplier[supplier]}</p>
           )}
-          <p data-refund-mode={mode}>{details[mode]}</p>
+          {requestOnly ? (
+            <p data-refund-mode="none">{CANCEL_STRINGS.requestMoney}</p>
+          ) : (
+            <p data-refund-mode={mode}>{details[mode]}</p>
+          )}
           <p className="text-xs">{CANCEL_STRINGS.timeout}</p>
         </div>
       }
       confirmLabel={CANCEL_STRINGS.confirm}
       environment={environment}
-      action={cancelBooking}
+      action={action}
       idempotencyKey={idempotencyKey}
       fields={{
         [BOOKING_ID_FIELD]: bookingId,
         [VERSION_FIELD]: String(version),
         [CURRENCY_FIELD]: plan.currency,
+        // A request to the airline takes no refund: `none`, with no choice offered.
+        ...(requestOnly ? { [REFUND_MODE_FIELD]: "none" } : {}),
       }}
     >
       {(state) => (
@@ -172,15 +200,17 @@ export function CancelDialog({
             state={state}
             choices={CANCEL_REASON_CODES}
           />
-          <RadioField
-            name={REFUND_MODE_FIELD}
-            label={CANCEL_STRINGS.money}
-            state={state}
-            choices={offered}
-            value={mode}
-            onChange={(value) => setMode(value as RefundMode)}
-          />
-          {mode === "amount" ? (
+          {requestOnly ? null : (
+            <RadioField
+              name={REFUND_MODE_FIELD}
+              label={CANCEL_STRINGS.money}
+              state={state}
+              choices={offered}
+              value={mode}
+              onChange={(value) => setMode(value as RefundMode)}
+            />
+          )}
+          {!requestOnly && mode === "amount" ? (
             <TextField
               name={AMOUNT_FIELD}
               label={CANCEL_STRINGS.amount(plan.currency)}

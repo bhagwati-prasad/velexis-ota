@@ -200,7 +200,13 @@ async function sealedFor(
  * Switches alpha's connection row in place to `mode`, as the platform's payments page does (PADR-0011 point 1; the
  * secrets cleared outside `api_keys`), without publishing anything.
  */
-async function writeMode(mode: Mode, secret = OTA_SECRET_KEY, secretRowId = connectionId): Promise<void> {
+async function writeMode(
+  mode: Mode,
+  secret = OTA_SECRET_KEY,
+  secretRowId = connectionId,
+  /** The `acct_…` of a `connect_standard` or `api_keys` row; default: the mode's own account of the file. */
+  account?: string,
+): Promise<void> {
   const own =
     mode === "api_keys"
       ? {
@@ -213,7 +219,9 @@ async function writeMode(mode: Mode, secret = OTA_SECRET_KEY, secretRowId = conn
     .set({
       account_mode: mode,
       account_reference:
-        mode === "connect_standard" ? CONNECT_ACCOUNT : mode === "api_keys" ? OWN_ACCOUNT : null,
+        mode === "velexis"
+          ? null
+          : (account ?? (mode === "connect_standard" ? CONNECT_ACCOUNT : OWN_ACCOUNT)),
       publishable_key: own === undefined ? null : OTA_PUBLISHABLE_KEY,
       secret_ciphertext: own?.secret.ciphertext ?? null,
       webhook_secret_ciphertext: own?.webhook.ciphertext ?? null,
@@ -263,9 +271,9 @@ async function storefrontPayment(): Promise<Record<string, unknown>> {
   return (res.body as { payment: Record<string, unknown> }).payment;
 }
 
-/** Switches to `mode` and invalidates the cached row: storefront.get shows the mode at once. */
-async function switchTo(mode: Mode): Promise<void> {
-  await writeMode(mode);
+/** Switches to `mode` (on `account`, when given) and invalidates the cached row: storefront.get shows the mode at once. */
+async function switchTo(mode: Mode, account?: string): Promise<void> {
+  await writeMode(mode, OTA_SECRET_KEY, connectionId, account);
   await invalidateConnection();
   expect((await storefrontPayment())["accountMode"]).toBe(mode);
 }
@@ -676,6 +684,82 @@ describe("existing payments keep the account they were created on (OBE-077 step 
       providerPublicKey: null,
     });
     expect(stripe.requests).toEqual([]);
+  });
+});
+
+// Both directions of a switch on one and the same `acct_…` (lead decisions (2i) of 2026-10-30 and (2l) of 2026-10-31):
+// the account is what the gateway compares, not the mode (stripe.gateway.ts `paymentTargetOf`).
+describe("a payment of an account the OTA moved to the other mode (FIX-W36-OTA, FIX-W37-OTA)", () => {
+  /** Completes a checkout whose payment Stripe.js confirmed: checkout.complete reads and captures the payment. */
+  async function completeConfirmed(
+    checkoutId: string,
+    payment: PaymentBody & { amount: { amount: string } },
+  ) {
+    stripe.update(
+      payment.providerPaymentId ?? "",
+      buildStripeConfirmation(Math.round(Number(payment.amount.amount) * 100)),
+    );
+    return seen(
+      await request(api.server)
+        .post(`/v1/checkouts/${checkoutId}/complete`)
+        .set({ ...keyHeaders(), "Idempotency-Key": idempotencyKey() })
+        .send({}),
+    );
+  }
+
+  it("[FIX-W37-OTA AC7] reads, updates and captures a Connect payment with the OTA's own key once it moved that account to api_keys", async () => {
+    await switchTo("connect_standard");
+    const checkoutId = await newCheckout();
+    const created = await createPayment(checkoutId);
+    expect(created.status).toBe(201);
+    const payment = created.body as PaymentBody & { readonly amount: { readonly amount: string } };
+    // The OTA now gives Velexis its own keys of that very account (the platform keeps the row's id).
+    await switchTo("api_keys", CONNECT_ACCOUNT);
+    stripe.reset();
+
+    const read = await getPayment(payment.id);
+    const updated = await updatePayment(payment.id, { card: { brand: "MASTERCARD" } });
+    // The card's brand may change the amount (a card fee): Stripe.js confirms the updated PaymentIntent.
+    const completed = await completeConfirmed(checkoutId, updated.body as typeof payment);
+
+    expect([read.status, updated.status, completed.status]).toEqual([200, 200, 201]);
+    expectResponseToMatch("completeCheckout", completed);
+    const calls = intentRequests(payment.providerPaymentId);
+    expect(calls.map((req) => `${req.method} ${req.path}`)).toContain(
+      `POST /v1/payment_intents/${payment.providerPaymentId}/capture`,
+    );
+    // Every call with the OTA's key, on the account it belongs to (no Stripe-Account header: the key is the account's).
+    expect(stripe.requests.map(credentialsOf)).toEqual(
+      stripe.requests.map(() => [`Bearer ${OTA_SECRET_KEY}`, undefined]),
+    );
+    expect(calls).toHaveLength(stripe.requests.length);
+    expect(stripe.intents.get(payment.providerPaymentId ?? "")?.status).toBe("succeeded");
+    expect(await recorded(payment.id)).toEqual({
+      connectionId,
+      metadata: { connection: { accountMode: "connect_standard", accountReference: CONNECT_ACCOUNT } },
+    });
+  });
+
+  it("[FIX-W37-OTA AC7] reads and captures an api_keys payment through the Connect path once the OTA connected that account (lead decision (2i))", async () => {
+    await switchTo("api_keys", OWN_ACCOUNT);
+    const checkoutId = await newCheckout();
+    const created = await createPayment(checkoutId);
+    expect(created.status).toBe(201);
+    const payment = created.body as PaymentBody & { readonly amount: { readonly amount: string } };
+    await switchTo("connect_standard", OWN_ACCOUNT);
+    stripe.reset();
+
+    const read = await getPayment(payment.id);
+    const completed = await completeConfirmed(checkoutId, payment);
+
+    expect([read.status, completed.status]).toEqual([200, 201]);
+    expect(intentRequests(payment.providerPaymentId).map((req) => `${req.method} ${req.path}`)).toContain(
+      `POST /v1/payment_intents/${payment.providerPaymentId}/capture`,
+    );
+    expect(stripe.requests.map(credentialsOf)).toEqual(
+      stripe.requests.map(() => [`Bearer ${SECRET_KEY}`, OWN_ACCOUNT]),
+    );
+    expect(stripe.intents.get(payment.providerPaymentId ?? "")?.status).toBe("succeeded");
   });
 });
 

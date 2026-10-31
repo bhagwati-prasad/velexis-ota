@@ -12884,11 +12884,16 @@ paths:
         cancellation must be handled with the airline (refund/exchange outside this API). In `request_only` (a ticket
         issued before today or at an unknown time, or a ticketed state without stored tickets) no DELETE is sent and
         Amadeus is not asked to void: the booking records a request to the airline as bookings.cancel does
-        (`booking_events` `booking.cancellation_requested`, a staff alert, the traveller's e-mail unless
-        `notifyCustomer=false`, `staff_actions` `booking.cancel` with the mode), stays as it is (`version` + 1, its
-        `cancellation` `pending`), moves no money and answers `200` with a warning; the staff cancel it with the airline,
-        resync it and refund it from the payment (2026-10-30, lead decision (2c), third batch; before, the DELETE was
-        sent in every mode). (3) Persist (`release` and `void`): `bookings.status = cancelled`, `cancelled_at`,
+        (`booking_events` `booking.cancellation_requested`, the traveller's e-mail unless `notifyCustomer=false`,
+        `staff_actions` `booking.cancel` with the mode), stays as it is (`version` + 1, its `cancellation` `pending`),
+        moves no money and answers `200` with a warning; the staff cancel it with the airline, resync it and refund it
+        from the payment (2026-10-30, lead decision (2c), third batch; before, the DELETE was sent in every mode). Since
+        2026-10-31 (lead decisions (2b) and (2d)): such a request takes `refund.mode` `none` or no `refund` only, as
+        the airline is asked first and the refund is made from the payment once it answered: `full` or `amount` answers
+        `422 UNPROCESSABLE` with `details.reason = refund_not_available` when the mode decided after step (1) is
+        `request_only`, and nothing is written or sent; and a staff member's request raises no staff alert
+        (`staff.manual_review`), as the staff asked for it themselves (a customer's request still does). (3) Persist
+        (`release` and `void`): `bookings.status = cancelled`, `cancelled_at`,
         `cancelled_by = staff`, `cancel_reason` (reasonCode + reason), segments/tickets updated, `version` + 1;
         `booking_events` `booking.cancelled` (visible to the customer), `staff_actions` `booking.cancel` (before/after
         with the mode, reason), `supplier_requests` for both calls. (4) Money: an uncaptured
@@ -12906,7 +12911,11 @@ paths:
         cancellation in progress (a cancellation whose outcome is undecided, or another cancellation, the customer's or
         the staff's, whose Flight Order Management DELETE is in flight, claimed less than 5 minutes ago: `409
         BOOKING_NOT_MODIFIABLE`, `details.reason = pending`, checked again when the booking row is claimed, so a second
-        DELETE is never sent; a customer's request waiting for the staff is finished here); no issuance in progress (a
+        DELETE is never sent); no cancellation request waiting for the staff, the customer's or a staff member's own
+        `request_only` request (the refusal bookings.cancel gives a customer while a cancellation is in progress: `409
+        BOOKING_NOT_MODIFIABLE`, `details.reason = pending`, `details.action = canCancel`, with no second traveller
+        e-mail and no second staff alert; 2026-10-31, lead decision (2c): before, a request was finished here and a
+        second request could be recorded); no issuance in progress (a
         fresh ticketing claim of the ticketing job or of a staff issuance: `409 BOOKING_NOT_MODIFIABLE`,
         `details.reason = ticketing_in_progress`). Permission `bookings:cancel`. Unlike bookings.cancel (customer scope)
         there is no self-service window or cancellation-quote requirement.
@@ -13013,11 +13022,11 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          $ref: '#/components/responses/ConsoleConflict'
+          $ref: '#/components/responses/ConsoleCancelConflict'
         '412':
           $ref: '#/components/responses/PreconditionFailed'
         '422':
-          $ref: '#/components/responses/ConsoleUnprocessable'
+          $ref: '#/components/responses/ConsoleCancelUnprocessable'
         '424':
           $ref: '#/components/responses/FailedDependency'
         '429':
@@ -20004,29 +20013,35 @@ paths:
         changed after signing, another secret (the Velexis account's or a connection's own included), a stale
         timestamp or an environment without a secret answer `400 INVALID_REQUEST` (`details.reason:
         signature_invalid`) before anything in the body is read. (2) `event.livemode` must match `{environment}`
-        (`true` only on `live`). (3) The OTA comes **only** from `event.account`: the `connect_standard` connection of
-        `{environment}` whose `account_reference` is that `acct_…` (`platform.payment_provider_connections`). The OTA
-        controls its connected account and can write any metadata, so `metadata.velexis_tenant_id` never selects the
-        OTA; wherever it or `metadata.velexis_environment` is present, it must equal the OTA and environment found.
-        (4) The payment is looked up by `metadata.payment_id`, then by the PaymentIntent id, inside that OTA only; its
-        `provider_payment_id`, when set, must be the event's object, and a payment of another environment is a
-        mismatch.
+        (`true` only on `live`). (3) The OTA comes **only** from `event.account`: the one Stripe connection of
+        `{environment}` whose `account_reference` is that `acct_…` (`platform.payment_provider_connections`), in any
+        mode and status: the `connect_standard` connection, or the OTA's `api_keys` connection once it moved that same
+        account to its own keys (2026-10-31, lead decision (2l)); no connection, or connections of several OTAs holding
+        that account, is an unknown account. The OTA controls its connected account and can write any metadata, so
+        `metadata.velexis_tenant_id` never selects the OTA; wherever it or `metadata.velexis_environment` is present, it
+        must equal the OTA and environment found. (4) The payment is looked up by `metadata.payment_id`, then by the
+        PaymentIntent id, inside that OTA only; its `provider_payment_id`, when set, must be the event's object, a
+        payment of another environment is a mismatch, and the payment must have been created on the event's `acct_…`
+        (`payments.metadata.connection` names that account, whatever mode it was created in: the account is compared,
+        not the mode): a `velexis` payment or one of another account is a mismatch of this step, answered `200` without
+        effect (OADR-0010 point 4, note of 2026-10-31).
 
 
         **Effect.** As on the Velexis endpoint (receiveStripeVelexisWebhook): in one transaction of the OTA's schema a
         `payment_events` row (`source = webhook`, `type = webhook.<event type>`, `provider_event_id` = the event id, a
         payload of ids, statuses and amounts only); an event id that is already stored is a duplicate and writes
         nothing. Then `stripe.event {tenantId, paymentEventId}` is queued on `ota-stripe-events` with the event id as
-        job id and the answer is `200`. The worker reads the object again from Stripe on the connected account
-        (`Stripe-Account: <acct_…>`) and applies that state, never the event body.
+        job id and the answer is `200`. The worker reads the object again from Stripe on the payment's account (the
+        connected account, `Stripe-Account: <acct_…>`, or the key of the OTA's `api_keys` connection of that same
+        account once it moved there: OADR-0010 point 1 notes) and applies that state, never the event body.
 
 
         **Acknowledged without effect** (`200`, nothing written, no staff alert, logged without the payload): an event
-        without `account` or for an `acct_…` no connection has, an unknown payment, an OTA that is neither active nor
-        suspended, and every mismatch of step 2 to 4, which is logged as a security event: one OTA's signed events can
-        never write into another OTA's schema. **`503 SERVICE_UNAVAILABLE`** when the connection or the OTA cannot be
-        looked up or the event cannot be queued, and **`500 INTERNAL_ERROR`** when the event cannot be stored: Stripe
-        delivers it again either way.
+        without `account` or for an `acct_…` that no connection, or more than one, has, an unknown payment, an OTA that
+        is neither active nor suspended, and every mismatch of step 2 to 4, which is logged as a security event: one
+        OTA's signed events can never write into another OTA's schema. **`503 SERVICE_UNAVAILABLE`** when the connection
+        or the OTA cannot be looked up or the event cannot be queued, and **`500 INTERNAL_ERROR`** when the event cannot
+        be stored: Stripe delivers it again either way.
       tags:
         - Internal
       security: []
@@ -20140,8 +20155,12 @@ paths:
         the account and, in this mode, even knows the signing secret, so `metadata.velexis_tenant_id` never selects
         the OTA; wherever it or `metadata.velexis_environment` is present, it must equal the connection's OTA and
         environment. (4) The payment is looked up by `metadata.payment_id`, then by the PaymentIntent id, inside that
-        OTA only; its `provider_payment_id`, when set, must be the event's object, and a payment of another
-        environment is a mismatch.
+        OTA only; its `provider_payment_id`, when set, must be the event's object, a payment of another environment is
+        a mismatch, and the payment must have been created on the connection's `acct_…` (`payments.metadata.connection`
+        names that account, whatever mode it was created in: the account is compared, not the mode, so a payment the
+        OTA took through Connect Standard on the account it later moved to its own keys passes): a `velexis` payment or
+        one of another account is a mismatch of this step, answered `200` without effect (OADR-0010 point 4, note of
+        2026-10-31).
 
 
         **Effect.** As on the Velexis endpoint (receiveStripeVelexisWebhook): in one transaction of the OTA's schema a
@@ -20149,7 +20168,7 @@ paths:
         payload of ids, statuses and amounts only); an event id that is already stored is a duplicate and writes
         nothing. Then `stripe.event {tenantId, paymentEventId}` is queued on `ota-stripe-events` with the event id as
         job id and the answer is `200`. The worker reads the object again from Stripe with the connection's own key
-        and applies that state, never the event body.
+        (for a payment of that account, whichever mode it was created in) and applies that state, never the event body.
 
 
         **Acknowledged without effect** (`200`, nothing written, no staff alert, logged without the payload): an
@@ -24263,6 +24282,138 @@ components:
                     flightOrderIds:
                       - eJzTd9cPNfX09DUFAAsGAkQ
                       - eJzTd9cPNfX09DUFAAsGAkR
+    ConsoleCancelConflict:
+      description: >-
+        The cancellation conflicts with the booking or order state (consoleCancelBooking). Possible codes:
+        BOOKING_NOT_MODIFIABLE (`details.reason`: `pending` with `details.action = canCancel` while another
+        cancellation is undecided, has its Flight Order Management DELETE in flight, or waits for the staff as a
+        request, the customer's or a staff member's own, the refusal bookings.cancel gives a customer, since
+        2026-10-31; `ticketing_in_progress`; `flown`; or `details.status` for a booking without an Amadeus order),
+        BOOKING_ALREADY_CANCELLED, VERSION_CONFLICT (Amadeus 2552 SIMULTANEOUS UPDATE), IDEMPOTENCY_KEY_REUSED.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            BOOKING_NOT_MODIFIABLE_PENDING:
+              summary: BOOKING_NOT_MODIFIABLE (a cancellation in progress, or a request waiting for the staff)
+              value:
+                error:
+                  code: BOOKING_NOT_MODIFIABLE
+                  message: A cancellation of this booking is already being processed.
+                  status: 409
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: pending
+                    action: canCancel
+            BOOKING_NOT_MODIFIABLE_TICKETING:
+              summary: BOOKING_NOT_MODIFIABLE (an issuance in progress)
+              value:
+                error:
+                  code: BOOKING_NOT_MODIFIABLE
+                  message: 'The tickets of this booking are being issued right now: reload it in a moment.'
+                  status: 409
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: ticketing_in_progress
+            BOOKING_ALREADY_CANCELLED:
+              summary: BOOKING_ALREADY_CANCELLED
+              value:
+                error:
+                  code: BOOKING_ALREADY_CANCELLED
+                  message: The booking is already cancelled.
+                  status: 409
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+            VERSION_CONFLICT:
+              summary: VERSION_CONFLICT
+              value:
+                error:
+                  code: VERSION_CONFLICT
+                  message: The order was changed by someone else; reload it and try again.
+                  status: 409
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  supplier:
+                    provider: amadeus
+                    status: 409
+                    code: 2552
+                    title: SIMULTANEOUS UPDATE
+            IDEMPOTENCY_KEY_REUSED:
+              summary: IDEMPOTENCY_KEY_REUSED
+              value:
+                error:
+                  code: IDEMPOTENCY_KEY_REUSED
+                  message: The Idempotency-Key was already used with a different request body.
+                  status: 409
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    ConsoleCancelUnprocessable:
+      description: >-
+        The cancellation's refund or the cancellation itself was refused (consoleCancelBooking). Possible codes:
+        UNPROCESSABLE (`details.reason`: `refund_not_available` when the step decided after the order's refresh is
+        `request_only` and `refund.mode` is `full` or `amount`: the airline is asked first and the refund is made from
+        the payment once it answered, so send `refund.mode` `none` or no `refund` (since 2026-10-31); nothing was
+        written or sent; `amount_exceeds_captured` with `details.refundable`; `amount_exceeds_authorized` with
+        `details.authorized`; `refund_via_airline` for an airline card; `currency_mismatch` with `details.currency`),
+        SUPPLIER_REJECTED (the airline refused the DELETE; `error.supplier`).
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            REFUND_NOT_AVAILABLE:
+              summary: UNPROCESSABLE (a refund asked with a request to the airline)
+              value:
+                error:
+                  code: UNPROCESSABLE
+                  message: >-
+                    This cancellation is a request to the airline (a ticket was issued before today, or at an unknown
+                    time): the airline is asked first, and the refund is made from the payment once it answered. Cancel
+                    without a refund.
+                  status: 422
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: refund_not_available
+            AMOUNT_EXCEEDS_CAPTURED:
+              summary: UNPROCESSABLE (a refund above what is still refundable)
+              value:
+                error:
+                  code: UNPROCESSABLE
+                  message: The refund is above what can still be refunded.
+                  status: 422
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: amount_exceeds_captured
+                    refundable:
+                      amount: '1364.06'
+                      currency: EUR
+            REFUND_VIA_AIRLINE:
+              summary: UNPROCESSABLE (an airline-card payment)
+              value:
+                error:
+                  code: UNPROCESSABLE
+                  message: The airline charged this card; it is refunded by the airline when the booking is cancelled.
+                  status: 422
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: refund_via_airline
+            SUPPLIER_REJECTED:
+              summary: SUPPLIER_REJECTED
+              value:
+                error:
+                  code: SUPPLIER_REJECTED
+                  message: 'Amadeus rejected the request: TICKETS NOT VOIDABLE.'
+                  status: 422
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  supplier:
+                    provider: amadeus
+                    status: 400
+                    code: 38034
+                    title: TICKETS NOT VOIDABLE
     ConsoleBookingOk:
       description: The booking with console detail.
       headers:

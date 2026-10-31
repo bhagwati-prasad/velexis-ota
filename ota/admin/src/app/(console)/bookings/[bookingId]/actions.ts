@@ -71,6 +71,7 @@ import {
   PHONE_DEVICE_TYPES,
   REASON_CODE_FIELD,
   REFUND_MODE_FIELD,
+  REFUND_NOT_AVAILABLE_CODE,
   REFUND_REASON_FIELD,
   REFUND_REASONS,
   REMARK_TYPES,
@@ -140,6 +141,11 @@ const STRINGS = Object.freeze({
   notCapturable: "This payment can no longer be captured in its current state. Reload the page.",
   cancelRejected:
     "Amadeus refused the cancellation: the tickets can no longer be voided. Cancel and refund with the airline.",
+  // The page showed a release or void, the API found a request to the airline after its refresh (FIX-W37-OTA).
+  refundNotAvailable:
+    "A ticket was issued before today (or at an unknown time), so this cancellation is a request to the airline: the " +
+    "airline is asked first, and the refund is made from the payment once it answers. The form now sends no refund: " +
+    "confirm again to send the request.",
   // Successes
   patched: "Saved to the Amadeus order.",
   issued: "Tickets issued.",
@@ -929,12 +935,24 @@ const CANCEL_OVERRIDES: Overrides = Object.freeze({
     field: AMOUNT_FIELD,
   },
   "UNPROCESSABLE:currency_mismatch": { message: STRINGS.currencyMismatch, field: AMOUNT_FIELD },
+  "UNPROCESSABLE:refund_not_available": STRINGS.refundNotAvailable,
 });
+
+/** The API's refusal of a refund with a request to the airline (`422 UNPROCESSABLE`, `refund_not_available`). */
+function refundNotAvailable(error: unknown): boolean {
+  return (
+    isVelexisErrorLike(error) &&
+    error.code === "UNPROCESSABLE" &&
+    error.details?.["reason"] === "refund_not_available"
+  );
+}
 
 /**
  * Cancel a booking (`bookings:cancel`): `ifMatch`, the dialog's idempotency key, the reason code and text, the refund
  * (`none`, `full`, or `amount` with an amount in the booking's currency) and `notifyCustomer`. What the refund modes
- * mean for an authorisation, a capture or an airline card is in action-rules.ts.
+ * mean for an authorisation, a capture or an airline card is in action-rules.ts. A request to the airline takes `none`
+ * only; the API's `refund_not_available` (a page that showed another step) answers with REFUND_NOT_AVAILABLE_CODE, so
+ * the dialog switches to the request's form (FIX-W37-OTA, lead decision (2b) of 2026-10-31).
  */
 export async function cancelBooking(_previous: ActionState, form: FormData): Promise<ActionState> {
   const staff = await staffFor("bookings:cancel");
@@ -975,7 +993,9 @@ export async function cancelBooking(_previous: ActionState, form: FormData): Pro
       { idempotencyKey: actionKey },
     );
   } catch (error) {
-    return keyedFailure(error, CANCEL_POINTERS, CANCEL_OVERRIDES);
+    const state = keyedFailure(error, CANCEL_POINTERS, CANCEL_OVERRIDES);
+    // The dialog's cue to switch to the request's form (no refund choice): the action's own code (FIX-W37-OTA).
+    return refundNotAvailable(error) ? { ...state, code: REFUND_NOT_AVAILABLE_CODE } : state;
   }
   revalidateBooking(bookingId);
   return actionSuccess(

@@ -127,7 +127,7 @@ jobs:
         # --pass-with-no-tests: the project has no journey until PFE-027 adds the first one tagged @stripe.
         run: pnpm test:e2e -- --project=portal-stripe --pass-with-no-tests
 
-      - name: "[OFE-017 AC1] [OFE-017 AC2] Stripe storefront journeys (nightly, project storefront-stripe)"
+      - name: "[OFE-017 AC1] [OFE-017 AC2] [OAD-017] Stripe storefront and OTA admin payment journeys (nightly, project storefront-stripe)"
         if: github.event_name == 'schedule' && env.STOREFRONT_STRIPE_CONFIGURED == 'true'
         env:
           E2E_STRIPE: "1"
@@ -147,9 +147,9 @@ jobs:
 
       # The SDK's smoke tests (ota/sdk/README.md §8.1) once the Playwright stacks above have stopped: the OTA backend
       # as ota/backend/README.md §6 starts it (the development values of the .env.example files, the job's database
-      # `velexis`, the Amadeus stub, both dev:seed commands, the API). The two test keys the OTA's dev:seed prints go
-      # to the tests in their environment, never to the log; the processes' output goes to
-      # tools/e2e/test-results/sdk-smoke/.
+      # `velexis`, the Amadeus stub, both dev:seed commands, the API). The three test keys the OTA's dev:seed prints,
+      # each on the line of its label (FIX-W37-OTA), go to the tests in their environment, never to the log; the
+      # processes' output goes to tools/e2e/test-results/sdk-smoke/.
       - name: "[SDK-014 AC1] SDK smoke tests in token and server mode (nightly and on demand)"
         if: github.event_name != 'pull_request'
         env:
@@ -167,8 +167,9 @@ jobs:
           seed="$(node ota/backend/dist/cli.js dev:seed)"
           node ota/backend/dist/main.js > "$logs/ota-api.log" 2>&1 &
           timeout 60 sh -c 'until curl -fs -o /dev/null http://127.0.0.1:4000/health/ready; do sleep 1; done'
-          SDK_SMOKE_PUBLISHABLE_KEY="$(printf '%s\n' "$seed" | grep -Eo 'pk_test_[A-Za-z0-9]{40}')" \
-            SDK_SMOKE_SECRET_KEY="$(printf '%s\n' "$seed" | grep -Eo 'sk_test_[A-Za-z0-9]{40}')" \
+          SDK_SMOKE_PUBLISHABLE_KEY="$(printf '%s\n' "$seed" | grep -E '^  Publishable test key ' | grep -Eo 'pk_test_[A-Za-z0-9]{40}')" \
+            SDK_SMOKE_SECRET_KEY="$(printf '%s\n' "$seed" | grep -E '^  Secret test key ' | grep -Eo 'sk_test_[A-Za-z0-9]{40}')" \
+            SDK_SMOKE_CONSOLE_KEY="$(printf '%s\n' "$seed" | grep -E '^  Console automation test key ' | grep -Eo 'sk_test_[A-Za-z0-9]{40}')" \
             pnpm --filter @velexis/ota-sdk test:smoke
 
       - name: Upload traces, screenshots, the report and the stack's logs

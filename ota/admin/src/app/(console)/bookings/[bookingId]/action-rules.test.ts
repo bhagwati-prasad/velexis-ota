@@ -154,4 +154,34 @@ describe("cancelPlanOf: the API's cancellation mode (FIX-W35-OTA)", () => {
     });
     expect(cancelPlanOf(ticketedBooking(justNow, undefined)).supplier).toBeNull();
   });
+
+  it("[FIX-W37-OTA AC1] offers a request to the airline no refund, whatever the payment, and every mode to a void", () => {
+    const justNow = new Date().toISOString();
+    const captured = (cancellationMode: ConsoleBooking["cancellationMode"]): ConsoleBooking =>
+      ({
+        ...ticketedBooking(justNow, cancellationMode),
+        payments: [
+          {
+            provider: "stripe",
+            method: "card",
+            status: "captured",
+            amountCaptured: { amount: "125.47", currency: "EUR" },
+            amountRefunded: { amount: "0.00", currency: "EUR" },
+          },
+        ],
+      }) as unknown as ConsoleBooking;
+    // Lead decision (2b) of 2026-10-31: the airline is asked first; the refund follows from the payment.
+    expect(cancelPlanOf(captured({ mode: "request_only", voidDeadlineAt: null }))).toEqual({
+      supplier: "request_only",
+      money: { kind: "captured", refundable: { amount: "125.47", currency: "EUR" } },
+      modes: ["none"],
+      currency: "EUR",
+    });
+    const tonight = new Date(Date.now() + 60 * 60_000).toISOString();
+    expect(cancelPlanOf(captured({ mode: "void", voidDeadlineAt: tonight })).modes).toEqual([
+      "none",
+      "full",
+      "amount",
+    ]);
+  });
 });

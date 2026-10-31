@@ -53,6 +53,7 @@ import {
   fromMinorUnits,
   parsePaymentConnection,
   PaymentAccountUnusableError,
+  paymentTargetOf,
   StripeCallError,
   StripeGateway,
   toMinorUnits,
@@ -981,6 +982,250 @@ describe("existing payments keep the account they were created on (OBE-077 step 
     },
   );
 
+  // The mirror of lead decision (2i), lead decision (2l) of 2026-10-31: the OTA took this payment through Connect
+  // Standard on the account it has since given Velexis its own keys of. The account is compared, never the mode.
+  const MIRRORED = [
+    {
+      name: "api_keys on the payment's account (active)",
+      next: async () => ({ ...(await rows.api_keys()), accountReference: CONNECT_ACCOUNT }),
+      expected: [`Bearer ${OTA_SECRET_KEY}`, undefined] as const,
+    },
+    {
+      name: "api_keys on the payment's account (disabled: the account and its key are still the OTA's)",
+      next: async () => ({
+        ...(await rows.api_keys()),
+        accountReference: CONNECT_ACCOUNT,
+        status: "disabled",
+      }),
+      expected: [`Bearer ${OTA_SECRET_KEY}`, undefined] as const,
+    },
+    {
+      name: "connect_standard on the payment's account",
+      next: () => rows.connect_standard(),
+      expected: [`Bearer ${SECRET_KEY}`, CONNECT_ACCOUNT] as const,
+    },
+    // No connection of the tenant holds the account with its own keys: the Connect path, as before (PADR-0011 point 7).
+    {
+      name: "api_keys on another account",
+      next: () => rows.api_keys(),
+      expected: [`Bearer ${SECRET_KEY}`, CONNECT_ACCOUNT] as const,
+    },
+    {
+      name: "api_keys on the payment's account, of another tenant",
+      next: async () => ({
+        ...(await rows.api_keys()),
+        accountReference: CONNECT_ACCOUNT,
+        tenantId: "ten_01JA4CG3S8W1Z4C7F0H3L6P9T9",
+      }),
+      expected: [`Bearer ${SECRET_KEY}`, CONNECT_ACCOUNT] as const,
+    },
+    {
+      name: "api_keys on the payment's account, of another environment",
+      next: async () => ({
+        ...(await rows.api_keys()),
+        accountReference: CONNECT_ACCOUNT,
+        environment: "live",
+      }),
+      expected: [`Bearer ${SECRET_KEY}`, CONNECT_ACCOUNT] as const,
+    },
+    {
+      name: "velexis",
+      next: () => rows.velexis(),
+      expected: [`Bearer ${SECRET_KEY}`, CONNECT_ACCOUNT] as const,
+    },
+    { name: "no connection", next: () => null, expected: [`Bearer ${SECRET_KEY}`, CONNECT_ACCOUNT] as const },
+  ] as const;
+
+  it.each(MIRRORED)(
+    "[FIX-W37-OTA AC7] captures, voids and refunds a connect_standard payment after a switch to $name",
+    async ({ next, expected }) => {
+      row = rows.connect_standard();
+      const gateway = gatewayWith(velexisKeys);
+      const connected = await authorised(gateway);
+      expect(connected.account).toEqual({
+        accountMode: "connect_standard",
+        accountReference: CONNECT_ACCOUNT,
+      });
+      row = (await next()) as PlatformPaymentConnection | null;
+      stripe.reset();
+
+      await gateway.capture(CTX, connected, "1414.06");
+      await gateway.refund(CTX, {
+        id: "rfd_01JA4CF2R7V0Y3B6D9G2K5N8Q1",
+        paymentId: connected.id,
+        providerPaymentId: connected.providerPaymentId,
+        currency: "EUR",
+        amount: "100.00",
+        minorUnits: 2,
+        account: connected.account,
+      });
+      await gateway.void(CTX, connected);
+
+      expect(stripe.requests.map((request) => `${request.method} ${request.path}`)).toEqual([
+        `POST /v1/payment_intents/${connected.providerPaymentId}/capture`,
+        "POST /v1/refunds",
+        `POST /v1/payment_intents/${connected.providerPaymentId}/cancel`,
+      ]);
+      expect(stripe.requests.map(credentialsOf)).toEqual([expected, expected, expected]);
+      // The decrypted key never reaches a log line.
+      expect(JSON.stringify(logs)).not.toContain(OTA_SECRET_KEY);
+    },
+  );
+
+  it("[FIX-W37-OTA AC7] gives the stripe-events processor's reads the same target as the gateway's calls (one rule)", async () => {
+    const own = { ...(await rows.api_keys()), accountReference: CONNECT_ACCOUNT };
+    const connected = { accountMode: "connect_standard", accountReference: CONNECT_ACCOUNT } as const;
+    const apiKeys = { accountMode: "api_keys", accountReference: CONNECT_ACCOUNT } as const;
+    // The table of paymentTargetOf (stripe.gateway.ts), which both use.
+    expect(paymentTargetOf(CTX, null, own)).toEqual({ accountMode: "velexis", environment: "test" });
+    expect(paymentTargetOf(CTX, connected, own)).toEqual({
+      accountMode: "api_keys",
+      environment: "test",
+      connectionId: CONNECTION_ID,
+      secretCiphertext: own.secretCiphertext,
+    });
+    expect(paymentTargetOf(CTX, apiKeys, own)).toEqual(paymentTargetOf(CTX, connected, own));
+    const connectRow = rows.connect_standard();
+    const connectPath = {
+      accountMode: "connect_standard",
+      environment: "test",
+      accountReference: CONNECT_ACCOUNT,
+    };
+    expect(paymentTargetOf(CTX, connected, connectRow)).toEqual(connectPath);
+    expect(paymentTargetOf(CTX, apiKeys, connectRow)).toEqual(connectPath);
+    // No connection holds the account: a Connect payment keeps the Connect path, an api_keys one has no target.
+    expect(paymentTargetOf(CTX, connected, null)).toEqual(connectPath);
+    expect(paymentTargetOf(CTX, apiKeys, null)).toBeUndefined();
+    // A malformed account is no account.
+    expect(
+      paymentTargetOf(CTX, { accountMode: "connect_standard", accountReference: "acct_" }, own),
+    ).toBeUndefined();
+  });
+
+  // Lead decision (2m) of 2026-10-31: the one warning of a live payment refused for missing Velexis live keys.
+  it.each(["velexis", "connect_standard"] as const)(
+    "[FIX-W37-OTA AC8] logs one warning without a key or an amount before the 424 of a live %s payment without Velexis live keys",
+    async (mode) => {
+      const live: GatewayContext = { ...CTX, environment: "live" };
+      // The live environment has no Velexis keys (only the test ones are set).
+      const gateway = gatewayWith(velexisKeys);
+      row = connection({
+        environment: "live",
+        ...(mode === "connect_standard"
+          ? { accountMode: "connect_standard", accountReference: CONNECT_ACCOUNT }
+          : {}),
+      });
+      const recorded = payment({
+        providerPaymentId: "pi_test_live_without_keys",
+        connectionId: CONNECTION_ID,
+        account:
+          mode === "velexis"
+            ? VELEXIS_PAYMENT_ACCOUNT
+            : { accountMode: "connect_standard", accountReference: CONNECT_ACCOUNT },
+      });
+      logs = [];
+
+      const error = await appErrorOf(gateway.capture(live, recorded, "1414.06"));
+
+      expect([error.code, error.status, (error.cause as PaymentAccountUnusableError).reason]).toEqual([
+        "PAYMENT_PROVIDER_NOT_CONFIGURED",
+        424,
+        "no_velexis_keys",
+      ]);
+      const warnings = logs.filter(([level]) => level === "warn");
+      expect(warnings).toEqual([
+        [
+          "warn",
+          {
+            operation: "paymentIntents.capture",
+            tenantId: TENANT_ID,
+            environment: "live",
+            accountMode: mode,
+            paymentId: recorded.id,
+            connectionId: CONNECTION_ID,
+            reason: "no_velexis_keys",
+          },
+          "payments.stripe_account_unavailable",
+        ],
+      ]);
+      const logged = JSON.stringify(logs);
+      for (const secret of [SECRET_KEY, PUBLISHABLE_KEY, OTA_SECRET_KEY]) {
+        expect(logged).not.toContain(secret);
+      }
+      expect(logged).not.toContain("1414");
+      expect(stripe.requests).toEqual([]);
+
+      // A new session of a payment of that environment says the same, once, before its 424.
+      logs = [];
+      const session = await appErrorOf(
+        gateway.createSession(live, payment({ connectionId: CONNECTION_ID }), {
+          checkoutId: "chk_01JA4CE5H8K1M4P7R0T3V6Y9B2",
+          requireThreeDSecure: false,
+        }),
+      );
+      expect([session.status, (session.cause as PaymentAccountUnusableError).reason]).toEqual([
+        424,
+        "no_velexis_keys",
+      ]);
+      expect(logs.filter(([level]) => level === "warn")).toEqual([
+        [
+          "warn",
+          expect.objectContaining({
+            operation: "paymentIntents.create",
+            tenantId: TENANT_ID,
+            accountMode: mode,
+            connectionId: CONNECTION_ID,
+            reason: "no_velexis_keys",
+          }),
+          "payments.stripe_account_unavailable",
+        ],
+      ]);
+      expect(JSON.stringify(logs)).not.toContain("1414");
+
+      // checkout.createPayment's first step (`account`), refused before the payment row exists: the same one warning,
+      // without a payment id. This is where a live checkout without Velexis live keys stops.
+      logs = [];
+      const first = await appErrorOf(gateway.account(live));
+      expect([first.status, (first.cause as PaymentAccountUnusableError).reason]).toEqual([
+        424,
+        "no_velexis_keys",
+      ]);
+      expect(logs.filter(([level]) => level === "warn")).toEqual([
+        [
+          "warn",
+          {
+            operation: "paymentIntents.create",
+            tenantId: TENANT_ID,
+            environment: "live",
+            accountMode: mode,
+            paymentId: null,
+            connectionId: CONNECTION_ID,
+            reason: "no_velexis_keys",
+          },
+          "payments.stripe_account_unavailable",
+        ],
+      ]);
+      expect(JSON.stringify(logs)).not.toContain(SECRET_KEY);
+      // storefront.get's read of the account (`findAccount`) answers no account without a warning: no payment is refused.
+      logs = [];
+      expect(await gateway.findAccount(live)).toBeNull();
+      expect(logs.filter(([level]) => level === "warn")).toEqual([]);
+    },
+  );
+
+  it("[FIX-W37-OTA AC8] writes no warning when a payment is refused for the tenant's own configuration, not missing Velexis keys", async () => {
+    // Velexis keys of the environment exist; the tenant's connection is not active: the tenant's matter, not an operator's.
+    const gateway = gatewayWith(velexisKeys);
+    row = connection({ status: "disabled" });
+    logs = [];
+    const refused = await appErrorOf(gateway.account(CTX));
+    expect([refused.status, (refused.cause as PaymentAccountUnusableError).reason]).toEqual([
+      424,
+      "connection_not_active",
+    ]);
+    expect(logs.filter(([level]) => level === "warn")).toEqual([]);
+  });
+
   it("[FIX-W36-OTA AC6] answers 424 no_velexis_keys for a payment moved to Connect when the environment has no Velexis keys", async () => {
     row = await rows.api_keys();
     const own = await authorised(gatewayWith(velexisKeys));
@@ -1120,6 +1365,8 @@ describe("the decrypted key of an api_keys connection (OBE-077 AC2)", () => {
             tenantId: TENANT_ID,
             environment: "test",
             accountMode: "api_keys",
+            // The payment of the refused call since FIX-W37-OTA (lead decision (2m) of 2026-10-31).
+            paymentId: draft.id,
             connectionId: CONNECTION_ID,
             reason,
           },

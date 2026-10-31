@@ -156,7 +156,7 @@ interface Harness {
   readonly retrieveIntent: ReturnType<typeof vi.fn>;
   readonly lookups: ReturnType<typeof vi.fn>;
   readonly logs: Array<{ level: string; object: Record<string, unknown>; message: string }>;
-  /** The `connect_standard` connections by `<environment>:<acct_…>` (connectPaymentConnection). */
+  /** The one connection (any mode, FIX-W37-OTA) of each `<environment>:<acct_…>` (connectPaymentConnection). */
   readonly connectConnections: Map<string, PlatformPaymentConnection>;
   /** The connections with their webhook secret's ciphertext by id (paymentConnectionWebhook). */
   readonly ownConnections: Map<string, PlatformPaymentConnectionWebhook>;
@@ -761,6 +761,37 @@ describe("the Connect endpoint (OBE-078)", () => {
     h.payments.set(PAYMENT_ID, paymentRow({ metadata: createdOn("api_keys", CONNECTED_ACCOUNT) }));
     const { payload, header } = connectEvent();
     expect((await h.receiver.receiveConnect("test", raw(payload), header)).outcome).toBe("stored");
+  });
+
+  it("[FIX-W37-OTA AC7] takes the tenant from the api_keys connection that holds the account now, for a payment of that account in either mode", async () => {
+    // The OTA moved its connected account to its own keys (lead decision (2l) of 2026-10-31): the repository's one
+    // connection of the account (connectPaymentConnection, any mode) is that api_keys row.
+    h.connectConnections.set(
+      `test:${CONNECTED_ACCOUNT}`,
+      connectionRow({
+        accountMode: "api_keys",
+        publishableKey: "pk_test_ownKeys",
+        secretCiphertext: "c2VhbGVk",
+      }),
+    );
+    for (const [mode, id] of [
+      ["connect_standard", "evt_1FixW37OtaConnectStandard"],
+      ["api_keys", "evt_1FixW37OtaApiKeys"],
+    ] as const) {
+      h.payments.set(PAYMENT_ID, paymentRow({ metadata: createdOn(mode, CONNECTED_ACCOUNT) }));
+      const { payload, header, event } = connectEvent({ id });
+
+      expect((await h.receiver.receiveConnect("test", raw(payload), header)).outcome).toBe("stored");
+      expect(JSON.parse(String(h.events.get(event.id)?.["payload"]))).toMatchObject({
+        endpoint: "connect",
+        account: CONNECTED_ACCOUNT,
+        connectionId: CONNECT_CONNECTION_ID,
+      });
+    }
+    // The account is compared, not the mode: a payment of another account is still a mismatch.
+    h.payments.set(PAYMENT_ID, paymentRow({ metadata: createdOn("api_keys", "acct_1AnotherAccount") }));
+    const { payload, header } = connectEvent({ id: "evt_1FixW37OtaOtherAccount" });
+    expect((await h.receiver.receiveConnect("test", raw(payload), header)).outcome).toBe("mismatch");
   });
 
   it("answers 503 when the connection cannot be looked up, so that Stripe sends the event again", async () => {

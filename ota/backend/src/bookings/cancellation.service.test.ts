@@ -26,12 +26,15 @@ import {
   parseCancellationCheckJobData,
   pricingInputOfBooking,
   quoteValid,
+  REFUND_NOT_AVAILABLE_MESSAGE,
   refundReasonOf,
+  requestAlertsStaff,
   retryAfterOf,
   selfServiceCancellationOf,
   staffCancellationOf,
   staffRefundOf,
   staffRefusalOf,
+  staffRequestRefundRefusalOf,
   staffStepOf,
   unsentAnswer,
   type CancellationEventRow,
@@ -541,6 +544,38 @@ describe("a staff cancellation (OBE-063)", () => {
       // A ticketed state without stored tickets.
       expect(stepOf("partially_issued", [])).toEqual(request);
     });
+  });
+
+  // Lead decision (2b) of 2026-10-31: a request to the airline moves no money, so it asks for none.
+  it("[FIX-W37-OTA AC1] refuses a refund asked with a request to the airline, and takes none or no refund", () => {
+    for (const refundMode of ["full", "amount"] as const) {
+      const refusal = staffRequestRefundRefusalOf("request_only", refundMode);
+      expect([refusal?.code, refusal?.status, refusal?.details]).toEqual([
+        "UNPROCESSABLE",
+        422,
+        { reason: "refund_not_available" },
+      ]);
+      expect(refusal?.message).toBe(REFUND_NOT_AVAILABLE_MESSAGE);
+    }
+    for (const refundMode of ["none", "default"] as const) {
+      expect(staffRequestRefundRefusalOf("request_only", refundMode)).toBeUndefined();
+    }
+    // A DELETE (release, void) takes every refund mode, as before.
+    for (const mode of ["release", "void"] as const) {
+      for (const refundMode of ["none", "default", "full", "amount"] as const) {
+        expect(staffRequestRefundRefusalOf(mode, refundMode)).toBeUndefined();
+      }
+    }
+  });
+
+  // Lead decision (2d) of 2026-10-31: the staff asked for their own request; a customer's still alerts them.
+  it("[FIX-W37-OTA AC3] alerts the staff for a customer's request, never for a staff member's own request_only one", () => {
+    const staff = { reason: "Customer called", refundMode: "none" as const, notifyCustomer: true };
+    expect(requestAlertsStaff({ staff }, "request_only")).toBe(false);
+    expect(requestAlertsStaff({ staff: { ...staff, notifyCustomer: false } }, "request_only")).toBe(false);
+    for (const cause of ["request_only", "refused", "order_not_found"] as const) {
+      expect(requestAlertsStaff({ staff: undefined }, cause)).toBe(true);
+    }
   });
 
   it("answers the airline's refusal of a staff DELETE as 422 SUPPLIER_REJECTED with its supplier issue", () => {

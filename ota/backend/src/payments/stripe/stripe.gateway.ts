@@ -23,17 +23,20 @@
 // Existing payments keep their account (PADR-0011 point 7; OBE-077 step 3). A payment records the account it was
 // created on (GatewayPayment.account, `payments.metadata.connection`; payment-gateway.ts), and every call for it (an
 // amount update, a read, a capture, a void, a refund) is made on that account, whatever the tenant's connection says by
-// then: a `velexis` payment with the Velexis key, a `connect_standard` one with the Velexis key and its own
-// `Stripe-Account`, an `api_keys` one with the key of the tenant's current connection while that connection is still
-// `api_keys` on the same `acct_…` (any status: the key of that account is what is stored), or through the Connect path
-// (the Velexis key and `Stripe-Account:` that same `acct_…`) once the tenant's connection is `connect_standard` on that
-// account (any status: the OTA connected the account its keys belonged to; lead decision (2i) of 2026-10-30, third
-// batch, FIX-W36-OTA: before, such a payment answered `424`), else `424` (`payment_account_unavailable`: no connection
-// of the tenant holds that account any more, or it holds another). A payment without a record was
-// written before OBE-077, when only `velexis` was served. A new session is created on the tenant's current account,
-// which must be the one its payment row recorded (`payment_account_changed` otherwise: the connection switched between
-// the row and the call). So a mode switch never moves a payment, and a connection change reaches new payments within 60
-// s (at once after the invalidation).
+// then, by the one rule of `paymentTargetOf` (which the stripe-events processor's reads use too, FIX-W37-OTA): a
+// `velexis` payment with the Velexis key; a `connect_standard` one with the Velexis key and its own `Stripe-Account`,
+// or with the key of the tenant's connection once that connection is `api_keys` on the same `acct_…` (any status: the
+// OTA moved the account to its own keys; lead decision (2l) of 2026-10-31, FIX-W37-OTA, the mirror of (2i)); an
+// `api_keys` one with the key of the tenant's current connection while that connection is still `api_keys` on the
+// same `acct_…` (any status: the key of that account is what is stored), or through the Connect path (the Velexis key
+// and `Stripe-Account:` that same `acct_…`) once the tenant's connection is `connect_standard` on that account (any
+// status: the OTA connected the account its keys belonged to; lead decision (2i) of 2026-10-30, third batch,
+// FIX-W36-OTA: before, such a payment answered `424`), else `424` (`payment_account_unavailable`: no connection of the
+// tenant holds that account any more, or it holds another). The account is compared, never the mode. A payment
+// without a record was written before OBE-077, when only `velexis` was served. A new session is created on the
+// tenant's current account, which must be the one its payment row recorded (`payment_account_changed` otherwise: the
+// connection switched between the row and the call). So a mode switch never moves a payment, and a connection change
+// reaches new payments within 60 s (at once after the invalidation).
 //
 // PaymentIntents (points 2, 3, 7, 8): `capture_method: manual` (captured after the Amadeus order exists, OBE-042), card
 // only, 3-D Secure `automatic`, or `any` when the storefront requires it, the metadata `velexis_tenant_id`,
@@ -50,7 +53,12 @@
 // objects can carry the PaymentIntent (with its client secret), so they are never logged or passed on. An `api_keys`
 // key that cannot be decrypted or is not a key of the environment is `424` (`connection_secret_unreadable`,
 // `connection_secret_invalid`), logged with the connection id only; the decrypted key never appears in a log line or an
-// error.
+// error. Every call of a payment the gateway refuses because its account cannot be reached writes one warning,
+// `payments.stripe_account_unavailable`, with the tenant, the payment and its connection (ids) and the reason, never a
+// key or an amount: a live `velexis` or `connect_standard` payment refused for missing Velexis live keys says
+// `no_velexis_keys` before its `424` (lead decision (2m) of 2026-10-31, FIX-W37-OTA; `accountUnavailable`), its
+// creation included (checkout.createPayment's `account`, before the payment row exists: no payment id, and its
+// PaymentIntent's `createSession`).
 import { Injectable } from "@nestjs/common";
 import { AppError } from "@velexis/errors";
 import { PinoLogger } from "nestjs-pino";
@@ -128,6 +136,10 @@ export class PaymentAccountUnusableError extends Error {
     readonly reason: PaymentAccountUnusableReason,
     readonly tenantId: string,
     readonly environment: string,
+    /** The connection the reason is about, when one was read (for the logs; FIX-W37-OTA). */
+    readonly connectionId?: string,
+    /** Its account mode, when one was read. */
+    readonly accountMode?: string,
   ) {
     super(`The payment connection of ${tenantId} (${environment}) cannot take payments: ${reason}`);
   }
@@ -406,42 +418,86 @@ function apiKeysTargetOf(
 }
 
 /**
- * The target of an `api_keys` payment recorded on `account` (lead decision (2i) of 2026-10-30, third batch; file
- * header): the tenant's `connection` of the environment must hold that same `acct_…` (any status). Still `api_keys`:
- * the connection's key of that account (`apiKeysTargetOf`). Now `connect_standard`: the Connect path, the Velexis key
- * with `Stripe-Account:` that account. `undefined` (the gateway's `424 payment_account_unavailable`) for no connection,
- * another tenant, provider or environment, another account, a `velexis` connection, or an `api_keys` row without its
- * key.
+ * The tenant's `connection` when it holds `accountReference` (the payment's `acct_…`): a Stripe connection of the
+ * tenant and environment of `ctx` with that `account_reference`, in any mode and status; `undefined` otherwise.
  */
-export function apiKeysPaymentTargetOf(
+function connectionHolding(
   ctx: Pick<GatewayContext, "tenantId" | "environment">,
-  account: GatewayPaymentAccount,
+  accountReference: string,
+  connection: PlatformPaymentConnection | null,
+): PlatformPaymentConnection | undefined {
+  return connection !== null &&
+    connection.provider === "stripe" &&
+    connection.tenantId === ctx.tenantId &&
+    connection.environment === ctx.environment &&
+    connection.accountReference === accountReference
+    ? connection
+    : undefined;
+}
+
+/**
+ * The account a payment recorded on `account` is called on (`null`: written before OBE-077, `velexis`), given the
+ * tenant's payment `connection` of the environment: THE rule of the gateway's calls for an existing payment (an amount
+ * update, a read, a capture, a void, a refund) and of the stripe-events processor's reads of a Connect or connection
+ * event (FIX-W37-OTA, lead decision (2l) of 2026-10-31: until then the processor had a copy of it, `readAccountOf`).
+ * The account (the `acct_…`) is what is compared, never the mode:
+ *
+ *   payment recorded as   the tenant's connection of the environment            target
+ *   velexis               (not read)                                            the Velexis account
+ *   connect_standard      api_keys on the same acct_ (any status, complete)     that connection's key on the acct_
+ *                         anything else                                         the Connect path on the acct_
+ *   api_keys              api_keys on the same acct_ (any status, complete)     that connection's key on the acct_
+ *                         connect_standard on the same acct_ (any status)       the Connect path on the acct_
+ *                         anything else                                         none (`424 payment_account_unavailable`)
+ *
+ * Lead decision (2i) of 2026-10-30 (FIX-W36-OTA): an `api_keys` payment whose `acct_…` the tenant connected with
+ * Connect Standard goes through the Connect path. Its mirror, lead decision (2l) of 2026-10-31 (FIX-W37-OTA): a
+ * `connect_standard` payment whose `acct_…` the tenant moved to its own keys is called with that connection's key on
+ * the same account. A `connect_standard` payment otherwise keeps the Connect path, the Velexis platform's access to the
+ * connected account, also when no connection of the tenant holds that account any more (PADR-0011 point 7: a mode
+ * switch never moves a payment), so the `424` of "no connection holds the account" stays an `api_keys` payment's.
+ * "Complete" is `apiKeysTargetOf`'s check (its `acct_…`, its publishable key of the environment, its key's ciphertext,
+ * which only the client factory decrypts). `undefined` is the gateway's `424 payment_account_unavailable` and the
+ * processor's `payment_account_unavailable`.
+ */
+export function paymentTargetOf(
+  ctx: Pick<GatewayContext, "tenantId" | "environment">,
+  account: GatewayPaymentAccount | null,
   connection: PlatformPaymentConnection | null,
 ): StripeAccountTarget | undefined {
-  const accountReference = account.accountReference;
-  if (
-    connection === null ||
-    connection.provider !== "stripe" ||
-    connection.tenantId !== ctx.tenantId ||
-    connection.environment !== ctx.environment ||
-    accountReference === null ||
-    !ACCOUNT_REFERENCE.test(accountReference) ||
-    connection.accountReference !== accountReference
-  ) {
+  const recorded = account ?? VELEXIS_PAYMENT_ACCOUNT;
+  if (recorded.accountMode === "velexis") {
+    return Object.freeze({ accountMode: "velexis", environment: ctx.environment });
+  }
+  const accountReference = recorded.accountReference;
+  if (accountReference === null || !ACCOUNT_REFERENCE.test(accountReference)) {
     return undefined;
   }
-  switch (connection.accountMode) {
-    case "api_keys":
-      return apiKeysTargetOf(connection);
-    case "connect_standard":
-      return Object.freeze({
-        accountMode: "connect_standard",
-        environment: ctx.environment,
-        accountReference,
-      });
-    case "velexis":
-      return undefined;
+  const connectPath = Object.freeze({
+    accountMode: "connect_standard" as const,
+    environment: ctx.environment,
+    accountReference,
+  });
+  const holder = connectionHolding(ctx, accountReference, connection);
+  const ownKeys = holder?.accountMode === "api_keys" ? apiKeysTargetOf(holder) : undefined;
+  if (ownKeys !== undefined) {
+    return ownKeys;
   }
+  if (recorded.accountMode === "connect_standard" || holder?.accountMode === "connect_standard") {
+    return connectPath;
+  }
+  return undefined;
+}
+
+/** What a refused call's log line names besides the tenant: the payment and its connection (ids only). */
+interface CallSubject {
+  readonly paymentId: string;
+  readonly connectionId: string | null;
+}
+
+/** The ids a refused call of `payment` names in its warning. */
+function subjectOf(payment: GatewayPayment): CallSubject {
+  return { paymentId: payment.id, connectionId: payment.connectionId ?? null };
 }
 
 @Injectable()
@@ -460,8 +516,13 @@ export class StripeGateway implements PaymentGateway {
     return resolved instanceof PaymentAccountUnusableError ? null : resolved.account;
   }
 
+  /**
+   * The account a new payment is created on: checkout.createPayment's first step, before its payment row exists, so a
+   * refusal for missing Velexis keys writes its warning without a payment id (`resolveOrThrow`).
+   */
   async account(ctx: GatewayContext): Promise<GatewayAccount> {
-    return (await this.resolveOrThrow(ctx)).account;
+    return (await this.resolveOrThrow(ctx, "paymentIntents.create", { paymentId: null, connectionId: null }))
+      .account;
   }
 
   async createSession(
@@ -469,7 +530,10 @@ export class StripeGateway implements PaymentGateway {
     payment: GatewayPayment,
     session: GatewaySessionInput,
   ): Promise<GatewaySession> {
-    const { account, target } = await this.resolveOrThrow(ctx);
+    const { account, target } = await this.resolveOrThrow(ctx, "paymentIntents.create", {
+      paymentId: payment.id,
+      connectionId: payment.connectionId ?? null,
+    });
     // A new PaymentIntent goes to the tenant's current account, which must be the one the payment row recorded when it
     // was inserted (the connection may have switched since).
     if (!samePaymentAccount(payment.account, paymentAccountOf(account))) {
@@ -493,8 +557,16 @@ export class StripeGateway implements PaymentGateway {
         ? {}
         : { statement_descriptor_suffix: account.statementDescriptor }),
     };
-    const intent = await this.call("paymentIntents.create", ctx, target, (client, scope) =>
-      client.paymentIntents.create(params, { ...scope, idempotencyKey: idempotencyKeys.create(payment.id) }),
+    const intent = await this.call(
+      "paymentIntents.create",
+      ctx,
+      target,
+      (client, scope) =>
+        client.paymentIntents.create(params, {
+          ...scope,
+          idempotencyKey: idempotencyKeys.create(payment.id),
+        }),
+      subjectOf(payment),
     );
     this.checkMetadata(ctx, payment, intent);
     return { account, state: stateOfPaymentIntent(intent, payment.minorUnits) };
@@ -503,12 +575,17 @@ export class StripeGateway implements PaymentGateway {
   async updateAmount(ctx: GatewayContext, payment: GatewayPayment, amount: string): Promise<GatewayState> {
     const target = await this.targetOfPayment(ctx, payment.account);
     const intentId = this.intentIdOf(payment);
-    const intent = await this.call("paymentIntents.update", ctx, target, (client, scope) =>
-      client.paymentIntents.update(
-        intentId,
-        { amount: toMinorUnits(amount, payment.minorUnits) },
-        { ...scope, idempotencyKey: idempotencyKeys.update(payment.id, payment.version) },
-      ),
+    const intent = await this.call(
+      "paymentIntents.update",
+      ctx,
+      target,
+      (client, scope) =>
+        client.paymentIntents.update(
+          intentId,
+          { amount: toMinorUnits(amount, payment.minorUnits) },
+          { ...scope, idempotencyKey: idempotencyKeys.update(payment.id, payment.version) },
+        ),
+      subjectOf(payment),
     );
     this.checkMetadata(ctx, payment, intent);
     return stateOfPaymentIntent(intent, payment.minorUnits);
@@ -518,11 +595,16 @@ export class StripeGateway implements PaymentGateway {
     const target = await this.targetOfPayment(ctx, payment.account);
     const intentId = this.intentIdOf(payment);
     const params: Stripe.PaymentIntentRetrieveParams = { expand: ["payment_method", "latest_charge"] };
-    const intent = await this.call("paymentIntents.retrieve", ctx, target, (client, scope) =>
-      // The SDK refuses an empty options object: a read sends options only for a connected account.
-      scope.stripeAccount === undefined
-        ? client.paymentIntents.retrieve(intentId, params)
-        : client.paymentIntents.retrieve(intentId, params, scope),
+    const intent = await this.call(
+      "paymentIntents.retrieve",
+      ctx,
+      target,
+      (client, scope) =>
+        // The SDK refuses an empty options object: a read sends options only for a connected account.
+        scope.stripeAccount === undefined
+          ? client.paymentIntents.retrieve(intentId, params)
+          : client.paymentIntents.retrieve(intentId, params, scope),
+      subjectOf(payment),
     );
     this.checkMetadata(ctx, payment, intent);
     return stateOfPaymentIntent(intent, payment.minorUnits);
@@ -542,12 +624,17 @@ export class StripeGateway implements PaymentGateway {
       purpose === "cancellation"
         ? idempotencyKeys.captureKept(payment.id, amount)
         : idempotencyKeys.capture(payment.id, amount);
-    const intent = await this.call("paymentIntents.capture", ctx, target, (client, scope) =>
-      client.paymentIntents.capture(
-        intentId,
-        { amount_to_capture: toMinorUnits(amount, payment.minorUnits) },
-        { ...scope, idempotencyKey },
-      ),
+    const intent = await this.call(
+      "paymentIntents.capture",
+      ctx,
+      target,
+      (client, scope) =>
+        client.paymentIntents.capture(
+          intentId,
+          { amount_to_capture: toMinorUnits(amount, payment.minorUnits) },
+          { ...scope, idempotencyKey },
+        ),
+      subjectOf(payment),
     );
     this.checkMetadata(ctx, payment, intent);
     return stateOfPaymentIntent(intent, payment.minorUnits);
@@ -556,12 +643,17 @@ export class StripeGateway implements PaymentGateway {
   async void(ctx: GatewayContext, payment: GatewayPayment): Promise<GatewayState> {
     const target = await this.targetOfPayment(ctx, payment.account);
     const intentId = this.intentIdOf(payment);
-    const intent = await this.call("paymentIntents.cancel", ctx, target, (client, scope) =>
-      client.paymentIntents.cancel(
-        intentId,
-        {},
-        { ...scope, idempotencyKey: idempotencyKeys.cancel(payment.id) },
-      ),
+    const intent = await this.call(
+      "paymentIntents.cancel",
+      ctx,
+      target,
+      (client, scope) =>
+        client.paymentIntents.cancel(
+          intentId,
+          {},
+          { ...scope, idempotencyKey: idempotencyKeys.cancel(payment.id) },
+        ),
+      subjectOf(payment),
     );
     this.checkMetadata(ctx, payment, intent);
     return stateOfPaymentIntent(intent, payment.minorUnits);
@@ -569,20 +661,25 @@ export class StripeGateway implements PaymentGateway {
 
   async refund(ctx: GatewayContext, refund: GatewayRefund): Promise<GatewayRefundState> {
     const target = await this.targetOfPayment(ctx, refund.account);
-    const created = await this.call("refunds.create", ctx, target, (client, scope) =>
-      client.refunds.create(
-        {
-          payment_intent: refund.providerPaymentId,
-          amount: toMinorUnits(refund.amount, refund.minorUnits),
-          metadata: {
-            velexis_tenant_id: ctx.tenantId,
-            velexis_environment: ctx.environment,
-            payment_id: refund.paymentId,
-            refund_id: refund.id,
+    const created = await this.call(
+      "refunds.create",
+      ctx,
+      target,
+      (client, scope) =>
+        client.refunds.create(
+          {
+            payment_intent: refund.providerPaymentId,
+            amount: toMinorUnits(refund.amount, refund.minorUnits),
+            metadata: {
+              velexis_tenant_id: ctx.tenantId,
+              velexis_environment: ctx.environment,
+              payment_id: refund.paymentId,
+              refund_id: refund.id,
+            },
           },
-        },
-        { ...scope, idempotencyKey: idempotencyKeys.refund(refund.id) },
-      ),
+          { ...scope, idempotencyKey: idempotencyKeys.refund(refund.id) },
+        ),
+      { paymentId: refund.paymentId, connectionId: refund.connectionId ?? null },
     );
     return {
       providerRefundId: created.id,
@@ -621,6 +718,15 @@ export class StripeGateway implements PaymentGateway {
     if (connection.status !== "active") {
       return unusable("connection_not_active");
     }
+    // The environment has no Velexis keys for a `velexis` or `connect_standard` connection: with its id and mode.
+    const keysMissing = () =>
+      new PaymentAccountUnusableError(
+        "no_velexis_keys",
+        ctx.tenantId,
+        ctx.environment,
+        connection.id,
+        connection.accountMode,
+      );
     const base = {
       connectionId: connection.id,
       provider: "stripe",
@@ -632,7 +738,7 @@ export class StripeGateway implements PaymentGateway {
         // Both Velexis keys of the environment, or neither (StripeClientFactory).
         const publishableKey = this.clients.velexisPublishableKey(ctx.environment);
         if (publishableKey === undefined) {
-          return unusable("no_velexis_keys");
+          return keysMissing();
         }
         return {
           target: Object.freeze({ accountMode: "velexis", environment: ctx.environment }),
@@ -653,7 +759,7 @@ export class StripeGateway implements PaymentGateway {
         // Both Velexis keys of the environment, or neither (StripeClientFactory).
         const publishableKey = this.clients.velexisPublishableKey(ctx.environment);
         if (publishableKey === undefined) {
-          return unusable("no_velexis_keys");
+          return keysMissing();
         }
         return {
           target: Object.freeze({
@@ -692,45 +798,75 @@ export class StripeGateway implements PaymentGateway {
     }
   }
 
-  private async resolveOrThrow(ctx: GatewayContext): Promise<Resolved> {
+  /**
+   * The tenant's current account and its target for a new PaymentIntent (`operation`), or `424
+   * PAYMENT_PROVIDER_NOT_CONFIGURED` with the reason as its cause. A refusal for the environment's missing Velexis keys
+   * (a `velexis` or `connect_standard` connection, `no_velexis_keys`) writes its one warning first, with the payment
+   * (`ids`, `null` before its row exists) and the connection read (lead decision (2m) of 2026-10-31, FIX-W37-OTA); the
+   * tenant's own configuration (no connection, not active, incomplete) is not an operator's warning.
+   */
+  private async resolveOrThrow(
+    ctx: GatewayContext,
+    operation: string,
+    ids: { readonly paymentId: string | null; readonly connectionId: string | null },
+  ): Promise<Resolved> {
     const resolved = await this.resolve(ctx);
     if (resolved instanceof PaymentAccountUnusableError) {
+      if (resolved.reason === "no_velexis_keys") {
+        this.accountUnavailable(operation, ctx, resolved.accountMode ?? "unknown", resolved.reason, {
+          paymentId: ids.paymentId,
+          connectionId: resolved.connectionId ?? ids.connectionId,
+        });
+      }
       throw new AppError("PAYMENT_PROVIDER_NOT_CONFIGURED", { cause: resolved });
     }
     return resolved;
   }
 
   /**
-   * The target of an existing payment: the account it recorded (`null`: written before OBE-077, `velexis`), whatever
-   * the tenant's connection says now (file header). Only an `api_keys` payment reads the connection: for its account's
-   * key, or for the Connect path on that same account once the tenant connected it (`apiKeysPaymentTargetOf`).
+   * The target of an existing payment by the one rule of `paymentTargetOf` (file header): the account it recorded
+   * (`null`: written before OBE-077, `velexis`), read with the tenant's current connection of the environment for an
+   * `acct_…` of the OTA's own (which mode now holds it), never for a `velexis` one.
    */
   private async targetOfPayment(
     ctx: GatewayContext,
     recorded: GatewayPaymentAccount | null,
   ): Promise<StripeAccountTarget> {
     const account = recorded ?? VELEXIS_PAYMENT_ACCOUNT;
-    switch (account.accountMode) {
-      case "velexis":
-        return Object.freeze({ accountMode: "velexis", environment: ctx.environment });
-      case "connect_standard":
-        if (account.accountReference === null) {
-          throw this.unusable(ctx, "payment_account_unavailable");
-        }
-        return Object.freeze({
-          accountMode: "connect_standard",
-          environment: ctx.environment,
-          accountReference: account.accountReference,
-        });
-      case "api_keys": {
-        const target = apiKeysPaymentTargetOf(ctx, account, await this.connectionOf(ctx));
-        if (target === undefined) {
-          // The tenant left that account (velexis, or another account): no connection of its holds it any more.
-          throw this.unusable(ctx, "payment_account_unavailable");
-        }
-        return target;
-      }
+    const connection = account.accountMode === "velexis" ? null : await this.connectionOf(ctx);
+    const target = paymentTargetOf(ctx, account, connection);
+    if (target === undefined) {
+      // An `api_keys` payment whose account no connection of the tenant holds any more (velexis, another account).
+      throw this.unusable(ctx, "payment_account_unavailable");
     }
+    return target;
+  }
+
+  /**
+   * The one warning of a call the gateway refuses because the account cannot be reached (`payments.stripe_account_unavailable`):
+   * the operation, the tenant, the environment, the mode, the payment and its connection (ids), and the reason; never a
+   * key, a secret or an amount. A live `velexis` or `connect_standard` payment refused for missing Velexis live keys
+   * writes it with the reason `no_velexis_keys` before its `424` (FIX-W37-OTA, lead decision (2m) of 2026-10-31).
+   */
+  private accountUnavailable(
+    operation: string,
+    ctx: GatewayContext,
+    accountMode: string,
+    reason: PaymentAccountUnusableReason,
+    ids: { readonly paymentId: string | null; readonly connectionId: string | null },
+  ): void {
+    this.logger.warn(
+      {
+        operation,
+        tenantId: ctx.tenantId,
+        environment: ctx.environment,
+        accountMode,
+        paymentId: ids.paymentId,
+        connectionId: ids.connectionId,
+        reason,
+      },
+      "payments.stripe_account_unavailable",
+    );
   }
 
   /** `424 PAYMENT_PROVIDER_NOT_CONFIGURED` with the reason as its cause. */
@@ -779,23 +915,17 @@ export class StripeGateway implements PaymentGateway {
     ctx: GatewayContext,
     target: StripeAccountTarget,
     run: (client: Stripe, scope: StripeRequestScope) => Promise<T>,
+    subject?: CallSubject,
   ): Promise<T> {
     try {
       return await this.clients.withAccount(target, run);
     } catch (error) {
       if (error instanceof StripeAccountUnavailableError) {
         const reason = UNAVAILABLE_REASONS[error.reason];
-        this.logger.warn(
-          {
-            operation,
-            tenantId: ctx.tenantId,
-            environment: ctx.environment,
-            accountMode: target.accountMode,
-            connectionId: error.connectionId,
-            reason,
-          },
-          "payments.stripe_account_unavailable",
-        );
+        this.accountUnavailable(operation, ctx, target.accountMode, reason, {
+          paymentId: subject?.paymentId ?? null,
+          connectionId: error.connectionId ?? subject?.connectionId ?? null,
+        });
         throw this.unusable(ctx, reason);
       }
       if (error instanceof Stripe.errors.StripeError) {

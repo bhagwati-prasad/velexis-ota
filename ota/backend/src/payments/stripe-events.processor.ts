@@ -12,15 +12,19 @@
 //                                being recorded);
 //        `connect`, `connection` (OBE-078) the account the payment was created on (`payments.metadata.connection`,
 //                                payment-gateway.ts `recordedPaymentAccount`), which the receiver checked is the
-//                                `acct_…` the event came from and the stored payload names: a `connect_standard`
-//                                payment with the Velexis key and `Stripe-Account: <acct_…>`; an `api_keys` payment
-//                                with the key the tenant's payment connection of the environment holds for that same
-//                                `acct_…` (any status; read through the 60-second platform cache, decrypted by the
-//                                factory for this job only), or through the Connect path on that account once the
-//                                tenant connected it with Connect Standard (lead decision (2i) of 2026-10-30, as the
-//                                gateway's captures, voids and refunds). An account that cannot be reached (no Velexis
-//                                keys, a key that cannot be decrypted, no connection of the tenant holding that account
-//                                any more) fails the job for BullMQ's retries, logged with ids only:
+//                                `acct_…` the event came from and the stored payload names (the account, not the
+//                                mode), called by the gateway's one rule (stripe.gateway.ts `paymentTargetOf`, with
+//                                the tenant's payment connection of the environment through the 60-second platform
+//                                cache; FIX-W37-OTA): a `connect_standard` payment with the Velexis key and
+//                                `Stripe-Account: <acct_…>`, or with the key of the tenant's `api_keys` connection of
+//                                that same `acct_…` once the OTA moved the account to its own keys (lead decision (2l)
+//                                of 2026-10-31); an `api_keys` payment with the key the tenant's connection holds for
+//                                that same `acct_…` (any status; decrypted by the factory for this job only), or
+//                                through the Connect path on that account once the tenant connected it with Connect
+//                                Standard (lead decision (2i) of 2026-10-30). An account that cannot be reached (no
+//                                Velexis keys, a key that cannot be decrypted, no connection of the tenant holding an
+//                                `api_keys` payment's account any more) fails the job for BullMQ's retries, logged
+//                                with ids only:
 //        payment_intent.amount_capturable_updated, .succeeded, .payment_failed, .canceled
 //                                   the PaymentIntent (with its payment method and latest charge): authorised,
 //                                   captured, declined (back to requires_payment_method with the decline code) or
@@ -82,7 +86,12 @@ import {
   type StripeAccountTarget,
   type StripeRequestScope,
 } from "./stripe/stripe-client.factory";
-import { fromMinorUnits, parsePaymentConnection, stateOfPaymentIntent } from "./stripe/stripe.gateway";
+import {
+  fromMinorUnits,
+  parsePaymentConnection,
+  paymentTargetOf,
+  stateOfPaymentIntent,
+} from "./stripe/stripe.gateway";
 import {
   CONNECT_ENDPOINT,
   CONNECTION_ENDPOINT,
@@ -304,7 +313,9 @@ export class StripeEventHandler {
   /**
    * The account the stored event's object is read from again (file header, step 2): the Velexis account of the
    * environment for the `velexis` endpoint; for `connect` and `connection` the account the payment was created on,
-   * which must be the event's `acct_…`.
+   * which must be the event's `acct_…` (the account is compared, not the mode), called by the gateway's one rule
+   * (`paymentTargetOf` of stripe.gateway.ts, with the tenant's payment connection of the environment through the
+   * 60-second platform cache; FIX-W37-OTA, lead decision (2l) of 2026-10-31: until then this file had its own copy).
    */
   private async readAccountOf(
     stored: StoredEvent,
@@ -324,10 +335,6 @@ export class StripeEventHandler {
     ) {
       return { mismatch: "payment_account" };
     }
-    if (recorded.accountMode === "connect_standard") {
-      return { target: { accountMode: "connect_standard", environment, accountReference: account } };
-    }
-    // `api_keys`: the key the tenant's connection holds for that account, or the Connect path once it is connected.
     const tenantId = this.tenants.require().tenantId;
     const connection = await this.cache.connection(
       "payment",
@@ -336,33 +343,8 @@ export class StripeEventHandler {
       () => this.platform.paymentConnection(tenantId, environment),
       parsePaymentConnection,
     );
-    if (
-      connection === null ||
-      connection.provider !== "stripe" ||
-      connection.tenantId !== tenantId ||
-      connection.environment !== environment ||
-      connection.accountReference !== account
-    ) {
-      return { unavailable: "payment_account_unavailable" };
-    }
-    if (connection.accountMode === "connect_standard") {
-      return { target: { accountMode: "connect_standard", environment, accountReference: account } };
-    }
-    if (
-      connection.accountMode !== "api_keys" ||
-      connection.secretCiphertext === null ||
-      connection.secretCiphertext === ""
-    ) {
-      return { unavailable: "payment_account_unavailable" };
-    }
-    return {
-      target: {
-        accountMode: "api_keys",
-        environment,
-        connectionId: connection.id,
-        secretCiphertext: connection.secretCiphertext,
-      },
-    };
+    const target = paymentTargetOf({ tenantId, environment }, recorded, connection);
+    return target === undefined ? { unavailable: "payment_account_unavailable" } : { target };
   }
 
   /**

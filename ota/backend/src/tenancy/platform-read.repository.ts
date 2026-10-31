@@ -696,10 +696,14 @@ export class PlatformReadRepository {
   }
 
   /**
-   * The `connect_standard` Stripe connection of `environment` whose `account_reference` is `accountReference`
-   * (`payment_provider_connections_connect_uq`: at most one), whatever its tenant, default flag and status, or `null`
-   * (OBE-078): the only source of the tenant on the Connect webhook endpoint (OADR-0010 point 4). A value that cannot be
-   * a Stripe account or an environment is unknown without a query. The webhook signing secret is not read.
+   * The one Stripe connection of `environment` whose `account_reference` is `accountReference`, in any mode, whatever
+   * its tenant, default flag and status, or `null` when there is none or there are several (a connection holds one
+   * account per tenant and environment, `payment_provider_connections_uq`, so several are several OTAs): the only
+   * source of the tenant on the Connect webhook endpoint (OBE-078, OADR-0010 point 4). Until FIX-W37-OTA (lead decision
+   * (2l) of 2026-10-31) only the `connect_standard` connection (`payment_provider_connections_connect_uq`: at most one)
+   * counted; now an OTA that moved its connected account to its own keys (`api_keys`) still receives that account's
+   * Connect events, and an account two OTAs hold is no one's. A value that cannot be a Stripe account or an
+   * environment is unknown without a query. The webhook signing secret is not read.
    */
   async connectPaymentConnection(
     environment: AmadeusEnvironment,
@@ -708,17 +712,20 @@ export class PlatformReadRepository {
     if (!STRIPE_ACCOUNT_PATTERN.test(accountReference) || !isOneOf(environment, AMADEUS_ENVIRONMENTS)) {
       return null;
     }
-    const row = await this.read((trx) =>
+    // Two rows are enough to know there is more than one.
+    const rows = await this.read((trx) =>
       trx
         .selectFrom("platform.payment_provider_connections")
         .select(PAYMENT_CONNECTION_COLUMNS)
         .where("provider", "=", "stripe")
         .where("environment", "=", environment)
-        .where("account_mode", "=", "connect_standard")
         .where("account_reference", "=", accountReference)
-        .executeTakeFirst(),
+        .orderBy("id")
+        .limit(2)
+        .execute(),
     );
-    return row === undefined ? null : toPlatformPaymentConnection(row);
+    const [row, other] = rows;
+    return row === undefined || other !== undefined ? null : toPlatformPaymentConnection(row);
   }
 
   /**

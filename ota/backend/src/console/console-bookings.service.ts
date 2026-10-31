@@ -274,8 +274,8 @@ export class ConsoleBookingsService {
     const wantsFareRules = options.fareRules !== undefined && options.fareRules.length > 0;
     // The cancellation block and canCancel follow the cancellation's state (FIX-W28-CANCEL).
     const cancellationFacts = await cancellationFactsOf(trx, bookingId, now);
-    // console.bookings.cancel's `pending` refusal (FIX-W33-OTA): an undecided cancellation, or another one's DELETE in
-    // flight.
+    // console.bookings.cancel's `pending` refusal (FIX-W33-OTA): an undecided cancellation, another one's DELETE in
+    // flight, or (since lead decision (2c) of 2026-10-31, FIX-W37-OTA) a request waiting for the staff.
     const staffCancellationPending = staffCancellationPendingOf(cancellationFacts);
     const syncStatus =
       refreshed ??

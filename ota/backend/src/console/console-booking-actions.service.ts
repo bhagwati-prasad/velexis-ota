@@ -131,8 +131,12 @@
 //   worker's check of a DELETE without an answer, or the request to the airline of `request_only` without a DELETE:
 //   lead decision (2c) of 2026-10-30, third batch, FIX-W36-OTA), whose record step's (or request's) transaction writes
 //   the `booking.cancel` staff action with the mode; the answer is the booking, with ORDER_GONE_WARNING when Amadeus no
-//   longer had the order and STAFF_REQUEST_ONLY_WARNING for a request. The same-key replays of its `504` are answered
-//   from the booking (ConsoleCancelBookingIdempotencyHooks).
+//   longer had the order and STAFF_REQUEST_ONLY_WARNING for a request. Since lead decisions (2b), (2c) and (2d) of
+//   2026-10-31 (FIX-W37-OTA): a request takes no refund (`422 UNPROCESSABLE`, `refund_not_available`, for `full` and
+//   `amount`, nothing written or sent), raises no staff alert, and a booking whose request still waits for the staff is
+//   refused as bookings.cancel refuses it (`409 BOOKING_NOT_MODIFIABLE`, `pending`); each refusal is the staff
+//   writer's `failed` row, as every refused console call's. The same-key replays of its `504` are answered from the
+//   booking (ConsoleCancelBookingIdempotencyHooks).
 import { Injectable } from "@nestjs/common";
 import type { components, operations } from "@velexis/api-types";
 import type { Insertable, TenantDatabase, Updateable } from "@velexis/db";

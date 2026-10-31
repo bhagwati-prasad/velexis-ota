@@ -39,7 +39,7 @@ import {
   TENANT_COOKIE,
 } from "@/lib/session";
 
-import { keptContactOf, keptFieldOf } from "./action-rules";
+import { keptContactOf, keptFieldOf, REFUND_NOT_AVAILABLE_CODE } from "./action-rules";
 import {
   addNote,
   cancelBooking,
@@ -397,13 +397,36 @@ describe("cancelBooking", () => {
       }),
     );
 
-    const state = await cancelBooking(INITIAL_ACTION_STATE, cancelForm(randomUUID()));
+    // A request to the airline takes no refund (lead decision (2b) of 2026-10-31): the dialog posts `none`.
+    const state = await cancelBooking(INITIAL_ACTION_STATE, cancelForm(randomUUID(), { refundMode: "none" }));
 
     expect(state).toEqual({
       ok: true,
       message: `Cancellation requested from the airline: the booking is not cancelled yet. ${detail}`,
     });
+    expect(api.sent(CANCEL).map((request) => request.body)).toEqual([
+      expect.objectContaining({ refund: { mode: "none" } }),
+    ]);
     expect(nextCache.revalidatePath).toHaveBeenCalledWith(`/bookings/${BOOKING_ID}`);
+  });
+
+  it("[FIX-W37-OTA AC1] answers the API's refund_not_available with its own code, the request's words and a new key", async () => {
+    signedIn();
+    api.on(CANCEL, () => apiError("UNPROCESSABLE", 422, { details: { reason: "refund_not_available" } }));
+
+    const state = await cancelBooking(INITIAL_ACTION_STATE, cancelForm(randomUUID(), { refundMode: "full" }));
+
+    expect(state).toMatchObject({
+      ok: false,
+      // The dialog's cue to switch to the request's form, without a refund choice.
+      code: REFUND_NOT_AVAILABLE_CODE,
+      message: expect.stringContaining("the airline is asked first") as unknown,
+    });
+    // On no field: the refund choice the message is about is gone from the next form.
+    expect(state.fieldErrors).toBeUndefined();
+    // A final refusal the API keeps under the key: the request goes with a new one (FIX-W31-OTA).
+    expect(state.nextActionKey).toMatch(/^[0-9a-f-]{36}$/);
+    expect(nextCache.revalidatePath).not.toHaveBeenCalled();
   });
 
   it("sends modes none and full without an amount, even when one was typed before the mode changed", async () => {

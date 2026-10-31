@@ -459,7 +459,8 @@ Every MVP operation of [`../scope.md`](../scope.md) §3 (77 contract operations 
 | `console.customers.list`, `.get` | OBE-066 | SDK-011 | OAD-012 |
 | `console.supplierRequests.list` | OBE-066 | SDK-011 | OAD-012 |
 | `console.amadeus.searchFlightOffers`, `.searchFlightAvailabilities`, `.upsellAirOffers`, `.quoteAirOffers` | OBE-067 | SDK-011 | OAD-010 |
-| `console.amadeus.getFlightOffers`, `.getFlightOrder`, `.getFlightOrderByReference`, `.getQueue` | OBE-067 | SDK-011, SDK-014 (smoke) | API only (custom consoles) |
+| `console.amadeus.getFlightOrder`, `.getFlightOrderByReference` | OBE-067 | SDK-011, SDK-014 (smoke) | OAD-010 (the `/pnr` Advanced panel's raw order reads; 2026-10-31, lead decision (2g), FIX-W37-OTA: until then listed as API only) |
+| `console.amadeus.getFlightOffers`, `.getQueue` | OBE-067 | SDK-011, SDK-014 (smoke) | API only (custom consoles) |
 | `console.payments.list`, `.get` | OBE-068 | SDK-012 | OAD-011, OAD-005, OAD-007 |
 | `console.payments.capture`, `.refund` | OBE-068 | SDK-012 | OAD-011, OAD-008 |
 | `console.settings.markupRules.*` (5), `.feeRules.*` (5) | OBE-069 | SDK-012 | OAD-013 |

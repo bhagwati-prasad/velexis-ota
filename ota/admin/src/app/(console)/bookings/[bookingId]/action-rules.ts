@@ -22,7 +22,9 @@
 //   the payment the money step acts on (change-and-cancel.md "Staff cancellations", cancellation.service.ts
 //   `staffRefundOf`): a captured Stripe payment gives back nothing, everything still refundable or an amount; an
 //   authorisation is released whole (`full`), in part (`amount`: the rest is captured) or captured whole (`none`); an
-//   airline card and a booking without payment take `none` only (`refund_via_airline`).
+//   airline card and a booking without payment take `none` only (`refund_via_airline`). A request to the airline
+//   (`request_only`) takes `none` only too, whatever the payment (lead decision (2b) of 2026-10-31, FIX-W37-OTA): the API
+//   refuses `full` and `amount` with `refund_not_available`, and the dialog offers no refund choice.
 // - Payments (`console.payments.capture`, `.refund`): capture for an `authorized` Stripe payment, up to the authorised
 //   amount; refund for a `captured` or `partially_refunded` Stripe payment, up to what is still refundable (captured
 //   less refunded less the refunds still `pending` or `processing`, as the API counts it). Airline-card payments are
@@ -539,16 +541,32 @@ export function refundModesOf(money: CancelMoney): readonly RefundMode[] {
   }
 }
 
-/** What cancelling `booking` does (see `CancelPlan`). */
+/**
+ * What cancelling `booking` does (see `CancelPlan`). A request to the airline (`request_only`) moves no money and takes
+ * `refund.mode = none` only (lead decision (2b) of 2026-10-31, FIX-W37-OTA): the airline is asked first, and the refund
+ * is made from the payment once it answered, so the dialog offers no refund choice there.
+ */
 export function cancelPlanOf(booking: ConsoleBooking): CancelPlan {
   const money = cancelMoneyOf(booking);
+  const supplier = cancelSupplierStepOf(booking);
   return {
-    supplier: cancelSupplierStepOf(booking),
+    supplier,
     money,
-    modes: refundModesOf(money),
+    modes: supplier === "request_only" ? REQUEST_REFUND_MODES : refundModesOf(money),
     currency: booking.totals.currency,
   };
 }
+
+/** The only refund mode of a request to the airline (`request_only`): nothing moves until the airline answered. */
+export const REQUEST_REFUND_MODES: readonly RefundMode[] = Object.freeze(["none"]);
+
+/**
+ * The action's own code (ActionState.code) for the API's `422 UNPROCESSABLE` with `details.reason =
+ * refund_not_available`: the page showed a `release` or `void` step, but the API, after its refresh of the order, found
+ * a request to the airline (`request_only`), which takes no refund (lead decision (2b) of 2026-10-31). The cancel
+ * dialog then shows the request's form, without a refund choice.
+ */
+export const REFUND_NOT_AVAILABLE_CODE = "REFUND_NOT_AVAILABLE";
 
 // ---- Payments ---------------------------------------------------------------------------------------------------------
 
