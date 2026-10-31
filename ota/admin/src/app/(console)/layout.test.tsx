@@ -229,6 +229,84 @@ describe("(console) layout", () => {
     expect(within(page).getByRole("main").textContent).toBe("Page body");
   });
 
+  it("[OAD-018] offers the LIVE switch of a live OTA to every role but viewer, and none of a test OTA", async () => {
+    const roles = ["owner", "admin", "agent", "finance", "viewer"] as const;
+    const shown: string[] = [];
+    for (const environments of [["test", "live"], ["test"]] as const) {
+      for (const role of roles) {
+        signedIn("test");
+        me(staffProfile({ role, environments: [...environments] }));
+
+        const page = await renderLayout();
+
+        const control =
+          within(page).queryByRole("button", { name: "LIVE" }) === null
+            ? within(page).getByText("TEST").closest("[data-environment]")?.textContent
+            : "switch";
+        shown.push(`${environments.join("+")} ${role}: ${control}`);
+      }
+    }
+
+    expect(shown).toEqual([
+      "test+live owner: switch",
+      "test+live admin: switch",
+      "test+live agent: switch",
+      "test+live finance: switch",
+      "test+live viewer: Environment: TEST",
+      "test owner: Environment: TEST",
+      "test admin: Environment: TEST",
+      "test agent: Environment: TEST",
+      "test finance: Environment: TEST",
+      "test viewer: Environment: TEST",
+    ]);
+  });
+
+  it("[OAD-018 AC1] shows a failed payment's billing banner with the portal's billing page to every role", async () => {
+    signedIn("test");
+    const profile = staffProfile({ role: "viewer", environments: ["test"] });
+    me({ ...profile, tenant: { ...profile.tenant, billingNotice: "past_due" } });
+
+    const page = await renderLayout();
+
+    const alert = within(page).getByRole("alert");
+    expect(alert.getAttribute("data-notice")).toBe("past_due");
+    expect(alert.textContent).toContain("Payment problem: update billing in the portal");
+    expect(
+      within(alert).getByRole("link", { name: "Go to billing in the portal" }).getAttribute("href"),
+    ).toBe(`${TEST_PORTAL_URL}/otas/${TENANT_ID}/billing`);
+    // Above the page, which still renders: the notice never blocks the console.
+    const main = within(page).getByRole("main");
+    expect(main.textContent).toBe("Page body");
+    expect(alert.nextElementSibling).toBe(main);
+  });
+
+  it("[OAD-018 AC1] shows an ending trial's billing banner in live mode too, and no banner without a notice", async () => {
+    signedIn("live");
+    const profile = staffProfile({ role: "agent", environments: ["test", "live"] });
+    me({ ...profile, tenant: { ...profile.tenant, billingNotice: "trial_ending" } });
+
+    const live = await renderLayout();
+
+    expect(shellEnvironment(live)).toBe("live");
+    // The live shell's secondary text keeps WCAG's 4.5:1 on its amber (the neutral grey is 4.3:1 there).
+    for (const text of ["Velexis OTA admin", "Agent"]) {
+      expect(within(live).getByText(text).getAttribute("class")).toContain("text-amber-900");
+      expect(within(live).getByText(text).getAttribute("class")).not.toContain("text-muted-foreground");
+    }
+    const status = within(live).getByRole("status");
+    expect(status.getAttribute("data-notice")).toBe("trial_ending");
+    expect(
+      within(status).getByRole("link", { name: "Go to billing in the portal" }).getAttribute("href"),
+    ).toBe(`${TEST_PORTAL_URL}/otas/${TENANT_ID}/billing`);
+
+    for (const tenant of [{ ...profile.tenant, billingNotice: null }, profile.tenant]) {
+      me({ ...profile, tenant });
+      const page = await renderLayout();
+      expect(page.querySelector("[data-notice]")).toBeNull();
+      expect(within(page).queryByRole("link", { name: "Go to billing in the portal" })).toBeNull();
+    }
+  });
+
   it("renders the full page of a suspended OTA with a link to the portal", async () => {
     signedIn("test");
     api.on("GET /v1/console/auth/me", () => apiError("TENANT_SUSPENDED", 403));

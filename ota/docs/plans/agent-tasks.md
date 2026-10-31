@@ -2515,7 +2515,8 @@ The platform turns on own Stripe, own Amadeus credentials, custom domains and go
   - The test runs in CI as `test:xb`.
 - **Verify:** `pnpm --filter @velexis/platform-backend build && pnpm --filter @velexis/ota-backend build && pnpm --filter @velexis/ota-backend test:xb`
 
-### OAD-018 · Show the live environment and the billing notice in the OTA admin
+### OAD-018 · Show the live environment and the billing notice in the OTA admin ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-admin
 - **Milestone:** M5
 - **Depends on:** OAD-004, OBE-081, OBE-082

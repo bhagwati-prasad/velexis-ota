@@ -10,6 +10,9 @@
 //   (a plain POST to the route handler, which checks `Origin`);
 // - the banner of a refused live environment (routes.md §1: the request already fell back to test, and the banner
 //   resets the cookie);
+// - the platform's billing notice (`tenant.billingNotice` of the same `console.auth.me`: `past_due`, `trial_ending`)
+//   with the link to the portal's billing page of the OTA (components/billing-banner.tsx, OAD-018), for every role
+//   and in both environments; nothing for `null` or a missing field;
 // - the page as `<main id="main-content">`, the target of the root layout's skip link.
 //
 // Next.js hides a server component's error from `error.tsx` in production, so the codes the shell knows are handled
@@ -19,6 +22,7 @@
 import { cookies } from "next/headers";
 import type { ReactNode } from "react";
 
+import { BillingBanner } from "@/components/billing-banner";
 import { ConsoleNav } from "@/components/console-nav";
 import { EnvironmentBadge, EnvironmentBanner, EnvironmentSwitch } from "@/components/env-banner";
 import { ErrorState } from "@/components/error-state";
@@ -26,7 +30,7 @@ import { Button } from "@/components/ui/button";
 import { getConfig } from "@/config";
 import { SIGN_OUT_PATH } from "@/lib/auth-routes";
 import { isVelexisErrorLike, type VelexisErrorLike } from "@/lib/errors";
-import { canOpenEnvironment } from "@/lib/permissions";
+import { canOpenEnvironment, type StaffEnvironment } from "@/lib/permissions";
 import { portalConsoleUrl, readSessionCookies } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { getConsoleRequest, type ConsoleRequest } from "@/lib/velexis";
@@ -49,6 +53,16 @@ const SHELL_STRINGS = Object.freeze({
 });
 
 const LINK_CLASS = "text-sm font-medium text-primary underline underline-offset-4";
+
+/**
+ * The secondary text of the shell (the product name, the staff member's role). In live mode the neutral grey of
+ * `text-muted-foreground` is 4.3:1 on the header's amber, under WCAG's 4.5:1 (axe `color-contrast`, found by OAD-018's
+ * live journey), so the live shell uses its own amber text, 8:1 and more on both of its tints.
+ */
+const SECONDARY_TEXT: Readonly<Record<StaffEnvironment, string>> = Object.freeze({
+  test: "text-muted-foreground",
+  live: "text-amber-900",
+});
 
 /** The full page instead of the shell when `console.auth.me` failed with an API error. */
 function ConsoleUnavailable({
@@ -113,7 +127,7 @@ export default async function ConsoleLayout({ children }: Readonly<{ children: R
       >
         <div className="flex flex-col gap-4 p-4 md:sticky md:top-0 md:max-h-dvh md:overflow-y-auto">
           <div className="grid gap-0.5 px-3">
-            <p className="text-xs text-muted-foreground">{SHELL_STRINGS.productName}</p>
+            <p className={cn("text-xs", SECONDARY_TEXT[environment])}>{SHELL_STRINGS.productName}</p>
             <p className="text-lg font-semibold tracking-tight">{staff.tenant.name}</p>
           </div>
           <ConsoleNav profile={holder} />
@@ -140,7 +154,9 @@ export default async function ConsoleLayout({ children }: Readonly<{ children: R
                 <span className="sr-only">{SHELL_STRINGS.signedInAs} </span>
                 {staff.staff.fullName}
               </p>
-              <p className="truncate text-muted-foreground">{SHELL_STRINGS.roles[staff.staff.role]}</p>
+              <p className={cn("truncate", SECONDARY_TEXT[environment])}>
+                {SHELL_STRINGS.roles[staff.staff.role]}
+              </p>
             </div>
             {/* A plain POST to the sign-out route handler (README §3), which checks Origin and clears the cookies. */}
             <form action={SIGN_OUT_PATH} method="post">
@@ -151,6 +167,11 @@ export default async function ConsoleLayout({ children }: Readonly<{ children: R
           </div>
         </header>
         <EnvironmentBanner environment={environment} liveRefused={liveRefused} />
+        <BillingBanner
+          notice={staff.tenant.billingNotice}
+          portalUrl={PUBLIC_PORTAL_URL}
+          tenantId={staff.tenant.id}
+        />
         <main id="main-content" tabIndex={-1} className="flex-1 px-6 py-8 focus:outline-none">
           {children}
         </main>
