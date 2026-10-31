@@ -64,6 +64,12 @@ export type CredentialSubmission = components["schemas"]["CredentialSubmission"]
 /** The job that verifies a submission (PADR-0010 item 4). */
 export const CREDENTIALS_VERIFY_JOB = "credentials.verify";
 
+/**
+ * The sweep of the submissions whose verification job was lost, and the id of its job scheduler on
+ * `platform-connections` (credentials-sweep.ts; FIX-W38-PLATFORM, lead decision (2f) of 2026-10-31).
+ */
+export const CREDENTIALS_SWEEP_JOB = "credentials.sweep";
+
 /** The payload of `credentials.verify`: the submission's id, nothing else (ADR-0009). */
 export interface CredentialsVerifyJobData {
   readonly submissionId: string;

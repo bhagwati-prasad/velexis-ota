@@ -759,6 +759,23 @@ describe("setPayoutAccount and getPayoutAccount (portal)", () => {
     expect(await emailsOf(f.tenant.id, "ops.alert")).toEqual([]);
   });
 
+  it("[FIX-W38-PLATFORM AC6] answers 403 FEATURE_DISABLED before the step-up while the settlements switch is off", async () => {
+    const f = await fixture();
+    switches.on.delete("settlements");
+
+    // No recent MFA (an owner with MFA but no step-up), and no MFA at all: the switch answers first either way.
+    const withoutStepUp = await setAccount(f, ibanBody(), "owner", false);
+    const withoutMfa = await setAccount(f, ibanBody(), "ownerWithoutMfa", false);
+
+    for (const res of [withoutStepUp, withoutMfa]) {
+      expect(outcomeOf(res)).toBe("403 FEATURE_DISABLED");
+      expect(errorOf(res).details).toEqual({ feature: "settlements" });
+      expectResponseToMatch("setPayoutAccount", res, { document: "platform" });
+    }
+    expect(await storedRow(f.tenant.id)).toBeUndefined();
+    expect(await auditOf(f.tenant.id, "payout_account.updated")).toEqual([]);
+  });
+
   it("answers 404 without an account, 403 to admins, agents and viewers, and 404 to strangers", async () => {
     const f = await fixture();
 

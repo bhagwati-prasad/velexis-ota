@@ -4,8 +4,9 @@
 //
 // - `startStripeConnect` (`POST /v1/tenants/{tenantId}/payment-connections/stripe-connect/start`): owners and admins.
 //   The operation is `x-mfa-step-up` and `x-feature: own_stripe`, so TenantRoleGuard (`404` to non-members, `403` to
-//   the other roles), RecentMfaGuard (`401 REAUTH_REQUIRED`, `403 MFA_REQUIRED`) and FeatureGuard (`403
-//   FEATURE_DISABLED`) answer before the handler. The answer holds the single-use OAuth state, so it is sent with
+//   the other roles), FeatureGuard (`403 FEATURE_DISABLED`) and RecentMfaGuard (`401 REAUTH_REQUIRED`, `403
+//   MFA_REQUIRED`) answer before the handler, in this order (the switch before the step-up since FIX-W38-PLATFORM,
+//   lead decision (2i) of 2026-10-31). The answer holds the single-use OAuth state, so it is sent with
 //   `Cache-Control: no-store`, set before the service runs (its refusals carry it too).
 // - `completeStripeConnect` (`POST /v1/payment-connections/stripe-connect/callback`): the portal's callback page posts
 //   what Stripe sent back for the signed-in account; the OTA is the state's, so the path names none and no tenant guard

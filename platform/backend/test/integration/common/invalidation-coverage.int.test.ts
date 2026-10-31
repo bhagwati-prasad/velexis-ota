@@ -949,7 +949,16 @@ const COVERAGE: readonly CoverageRow[] = [
     publishes: ["domain"],
     async arrange() {
       const owner = await person();
-      const { tenant, domain: subdomain } = await ota({ members: [[owner, "owner"]] });
+      // A plan with custom domains: makeDomainPrimary answers 403 FEATURE_DISABLED without one, as addDomain does
+      // (FIX-W38-PLATFORM, lead decision (2e) of 2026-10-31); the switch is on in this file's application.
+      const plan = await insertPlan(pool, {
+        code: planCode(),
+        limits: { staffSeats: 5, apiKeys: 10, customDomains: 1 },
+      });
+      const { tenant, domain: subdomain } = await ota({
+        tenant: { plan_code: plan.code },
+        members: [[owner, "owner"]],
+      });
       const custom = await insertTenantDomain(pool, tenant, {
         id: ids.new("dom"),
         hostname: mine(`cov-${randomBytes(6).toString("hex")}.example.net`),
@@ -1017,7 +1026,9 @@ const COVERAGE: readonly CoverageRow[] = [
 // ---- Set-up --------------------------------------------------------------------------------------------------------
 
 beforeAll(async () => {
-  t = await createTestApp();
+  // FEATURE_CUSTOM_DOMAINS on (with the storefront address it requires, a documentation address of RFC 5737), so the
+  // row of makeDomainPrimary, `x-feature: custom_domains` since FIX-W38-PLATFORM, reaches its handler.
+  t = await createTestApp({ env: { FEATURE_CUSTOM_DOMAINS: "true", STOREFRONT_IPV4: "203.0.113.10" } });
   pool = t.app.get<PlatformPool>(PLATFORM_POOL);
   ids = t.app.get(IdGenerator);
   tokens = t.app.get(TokenService);

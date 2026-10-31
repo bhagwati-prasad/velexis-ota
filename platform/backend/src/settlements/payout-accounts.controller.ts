@@ -6,8 +6,9 @@
 // - `getPayoutAccount` (`GET …/payout-account`): owners and finance members see the account masked, with its version
 //   in `ETag`.
 // - `setPayoutAccount` (`PUT …/payout-account`): owners set or replace it. Its operation is `x-mfa-step-up` and
-//   `x-feature: settlements`, so RecentMfaGuard answers `401 REAUTH_REQUIRED` (or `403 MFA_REQUIRED`) and FeatureGuard
-//   `403 FEATURE_DISABLED` with `details.feature = settlements` before the handler runs. The bank fields of the body
+//   `x-feature: settlements`, so FeatureGuard answers `403 FEATURE_DISABLED` with `details.feature = settlements`
+//   while the switch is off, and then RecentMfaGuard `401 REAUTH_REQUIRED` (or `403 MFA_REQUIRED`), before the handler
+//   runs (the switch first: FIX-W38-PLATFORM, lead decision (2i) of 2026-10-31). The bank fields of the body
 //   are write-only: nothing here logs the body, and the answer is the masked account, with its new version in `ETag`.
 //
 // TenantRoleGuard answers `404` to non-members and `403` to the other roles before a handler runs.

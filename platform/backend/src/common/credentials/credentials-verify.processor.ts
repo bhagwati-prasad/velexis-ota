@@ -36,7 +36,8 @@
 //    then `PROVIDER_UNAVAILABLE` ("try again later" for the portal), so a submission never keeps its secrets past its
 //    last attempt.
 // 3. In one transaction, with the submission locked (`FOR UPDATE`) and still `verifying` (a newer submission may have
-//    superseded it meanwhile: then nothing is written, `credentials.verify_superseded`):
+//    superseded it meanwhile, or the sweep failed it: then nothing is written, `credentials.verify_superseded`, and the
+//    job's result is the status the submission has):
 //    - verified: the verifier's `apply(trx, …)` switches the connection (it may throw `CredentialRejection` to fail the
 //      submission instead: its writes roll back); the submission becomes `applied`;
 //    - otherwise: the submission becomes `failed` with `error_code` and `error_message`;
@@ -47,6 +48,11 @@
 //    the account is active and still a member of the OTA (idempotency key `credentials:<submissionId>`). A crash
 //    inside this transaction rolls it back, and the retry finds the submission `verifying` (amadeus flow, "Worker
 //    crash during apply").
+//
+// **A lost job** (FIX-W38-PLATFORM, lead decision (2f) of 2026-10-31): the sweep of credentials-sweep.ts, every 5
+// minutes, queues `credentials.verify` again for a submission `pending` for more than 10 minutes, and fails one left
+// `verifying` for more than an hour with `failStuck` (PROVIDER_UNAVAILABLE, the secrets erased, the `*_rejected` audit
+// row and the `connection.credentials_failed` e-mail, under the same lock and status guard as step 3).
 //
 // Neither a secret nor a provider body is logged, stored, queued or returned: the job data is the submission id, the
 // result is the id and the status, the errors BullMQ keeps are fixed texts, and the log lines carry ids, the kind,
@@ -75,6 +81,7 @@ import {
   type CredentialSubmissionView,
 } from "./credential-submissions.repository";
 import {
+  CREDENTIALS_SWEEP_JOB,
   CREDENTIALS_VERIFY_JOB,
   SUBMISSION_AUDIT_ACTIONS,
   type CredentialSecrets,
@@ -98,6 +105,9 @@ export const SECRET_PLACEHOLDER = "[secret]";
 
 /** The actor label of the job's audit rows. */
 const ACTOR_LABEL = CREDENTIALS_VERIFY_JOB;
+
+/** The reason in the audit row of a submission the sweep failed (`failStuck`). */
+export const VERIFICATION_TIMEOUT_REASON = "verification_timeout";
 
 /** The e-mails to the submitter (PADR-0013 item 5). */
 export const CREDENTIALS_APPLIED_TEMPLATE = "connection.credentials_applied";
@@ -349,8 +359,12 @@ export class CredentialsVerifyProcessor {
     }
 
     if (written === undefined) {
-      this.logger.info(context, "credentials.verify_superseded");
-      return { submissionId, status: "superseded" };
+      // Another writer finished the submission first: a newer submission superseded it, or the sweep failed it
+      // (`failStuck`). The result names the status it has now, not this attempt's outcome.
+      const row = await this.submissions.find(submissionId);
+      const status = (row?.status as CredentialSubmissionStatus | undefined) ?? "missing";
+      this.logger.info({ ...context, status }, "credentials.verify_superseded");
+      return { submissionId, status };
     }
     if (written.status === "applied") {
       this.logger.info(context, "credentials.applied");
@@ -603,6 +617,64 @@ export class CredentialsVerifyProcessor {
           attempt,
           errorMessage: decision.errorMessage,
           ...(decision.kind === "incomplete" ? { reason: decision.reason } : {}),
+        },
+      });
+      await this.notify(trx, row, CREDENTIALS_FAILED_TEMPLATE);
+      return row;
+    });
+  }
+
+  /**
+   * Fails a submission the sweep found `verifying` since before `verifyingBefore` (credentials-sweep.ts;
+   * FIX-W38-PLATFORM, lead decision (2f) of 2026-10-31): its job is lost, and its secrets must not outlive it. One
+   * transaction with the submission locked, and only while it is still `verifying` and unchanged since
+   * `verifyingBefore` (the status guard; an attempt that started meanwhile moved `updated_at`): `failed` with
+   * PROVIDER_UNAVAILABLE and VERIFICATION_INCOMPLETE_MESSAGE, both secret columns erased in the same UPDATE, the
+   * kind's `*_rejected` audit row (actor `system`, label `credentials.sweep`, reason `verification_timeout`) and the
+   * submitter's `connection.credentials_failed` e-mail, as a last attempt writes them. A job that finishes at the same
+   * time either commits first (the guard then finds a final row and nothing is written here) or finds the row `failed`
+   * in its own final transaction and writes nothing (`credentials.verify_superseded`). No secret is decrypted.
+   * `undefined` when nothing was written.
+   */
+  async failStuck(
+    submissionId: string,
+    verifyingBefore: Date,
+  ): Promise<CredentialSubmissionView | undefined> {
+    return runInTransaction(this.db, async (trx) => {
+      const current = await this.submissions.lock(trx, submissionId);
+      if (
+        current === undefined ||
+        current.status !== "verifying" ||
+        current.updated_at.getTime() >= verifyingBefore.getTime()
+      ) {
+        return undefined;
+      }
+      const kind = current.kind as CredentialKind;
+      const row = await this.submissions.finish(
+        trx,
+        submissionId,
+        {
+          status: "failed",
+          errorCode: PROVIDER_UNAVAILABLE,
+          errorMessage: VERIFICATION_INCOMPLETE_MESSAGE,
+        },
+        this.clock.now(),
+      );
+      await this.audit.record(trx, {
+        actorType: "system",
+        actorLabel: CREDENTIALS_SWEEP_JOB,
+        action: SUBMISSION_AUDIT_ACTIONS[kind].rejected,
+        targetType: "credential_submission",
+        targetId: submissionId,
+        tenantId: current.tenant_id,
+        before: { status: current.status },
+        after: { status: row.status, errorCode: PROVIDER_UNAVAILABLE },
+        details: {
+          kind,
+          environment: row.environment,
+          attempt: row.attempts,
+          errorMessage: VERIFICATION_INCOMPLETE_MESSAGE,
+          reason: VERIFICATION_TIMEOUT_REASON,
         },
       });
       await this.notify(trx, row, CREDENTIALS_FAILED_TEMPLATE);

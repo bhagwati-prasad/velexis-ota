@@ -15,6 +15,9 @@
 //   (ByReferenceModuleOpaqueKeyFactory), so a DynamicModule built per call would give each importer a registry and a
 //   processor of its own, and a verifier registered by PBE-057's module would never reach the processor of
 //   `platform-connections` (credential-submissions.int.test.ts registers its verifier from a module of its own).
+//   It also holds the sweep of lost `credentials.verify` jobs (CredentialsSweep, run by the same processor) and the
+//   job scheduler of `credentials.sweep` (CredentialsSweepScheduler; FIX-W38-PLATFORM, lead decision (2f) of
+//   2026-10-31).
 //
 // It uses the global CommonModule (Clock, IdGenerator, PLATFORM_DB, EnvelopeService), AuditModule, the queues of
 // QueuesModule and, in the worker, NotificationsModule (the submitter's e-mail).
@@ -25,13 +28,23 @@ import { QueuesModule } from "../queues/queues.module";
 import { CredentialSubmissionsController } from "./credential-submissions.controller";
 import { CredentialSubmissionsRepository } from "./credential-submissions.repository";
 import { CredentialSubmissionsService } from "./credential-submissions.service";
+import { CredentialsSweep, CredentialsSweepScheduler } from "./credentials-sweep";
 import { CredentialsVerifyProcessor, CredentialVerifiers } from "./credentials-verify.processor";
 
-/** The worker's part: the attempt of `credentials.verify` and the registry of verifiers. */
+/**
+ * The worker's part: the attempt of `credentials.verify`, the registry of verifiers, and the sweep of lost jobs with its
+ * job scheduler on `platform-connections` (credentials-sweep.ts, FIX-W38-PLATFORM).
+ */
 @Module({
-  imports: [AuditModule, NotificationsModule],
-  providers: [CredentialSubmissionsRepository, CredentialVerifiers, CredentialsVerifyProcessor],
-  exports: [CredentialVerifiers, CredentialsVerifyProcessor],
+  imports: [AuditModule, NotificationsModule, QueuesModule],
+  providers: [
+    CredentialSubmissionsRepository,
+    CredentialVerifiers,
+    CredentialsVerifyProcessor,
+    CredentialsSweep,
+    CredentialsSweepScheduler,
+  ],
+  exports: [CredentialVerifiers, CredentialsVerifyProcessor, CredentialsSweep],
 })
 export class CredentialSubmissionsWorkerModule {}
 

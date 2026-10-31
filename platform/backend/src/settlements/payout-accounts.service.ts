@@ -1,8 +1,8 @@
 // The payout account use cases (PBE-058; platform/docs/flows/stripe-payments-account.md §B, PADR-0003 item 10,
 // api-inventory-resources.md §5 and api-inventory-admin.md §6, scope PF-64): the bank account where Velexis pays the
 // OTA's monthly settlements in `velexis` mode. Who may call them is the guards' business (the portal's TenantRoleGuard,
-// RecentMfaGuard and FeatureGuard, the admin's AdminAuthGuard and RecentMfaGuard, by the operations' `x-scope`,
-// `x-mfa-step-up` and `x-feature`); this service owns the rules, the transactions, the audit rows and the e-mails.
+// FeatureGuard and RecentMfaGuard, the admin's AdminAuthGuard and RecentMfaGuard, by the operations' `x-scope`,
+// `x-feature` and `x-mfa-step-up`); this service owns the rules, the transactions, the audit rows and the e-mails.
 //
 // - `get` (`getPayoutAccount`, owners and finance; `adminGetPayoutAccount`): the account masked (`toPayoutAccount`):
 //   holder, bank country, currency, scheme, `last4`, review status and note, never a bank number; `404 NOT_FOUND`

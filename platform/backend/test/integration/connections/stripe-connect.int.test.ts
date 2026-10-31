@@ -497,6 +497,29 @@ describe("Stripe Connect Standard in a test deployment", () => {
     expect(await h.keys.keys("stripe:oauth:*")).toHaveLength(statesBefore + 2);
   });
 
+  it("[FIX-W38-PLATFORM AC6] answers 403 FEATURE_DISABLED before the step-up while own_stripe is off", async () => {
+    const f = await h.fixture();
+    const statesBefore = (await h.keys.keys("stripe:oauth:*")).length;
+    h.switches.on.delete("own_stripe");
+
+    // An owner and an admin with MFA but no recent step-up, and an owner without MFA: the switch answers first.
+    const outcomes = [
+      await h.start(f, "owner", false),
+      await h.start(f, "admin", false),
+      await h.start(f, "ownerWithoutMfa", false),
+    ];
+
+    for (const res of outcomes) {
+      expect([outcomeOf(res), errorOf(res).details]).toEqual([
+        "403 FEATURE_DISABLED",
+        { feature: "own_stripe" },
+      ]);
+      expectResponseToMatch("startStripeConnect", res, { document: "platform" });
+    }
+    expect(await h.keys.keys("stripe:oauth:*")).toHaveLength(statesBefore);
+    expect(h.stripe.calls).toEqual([]);
+  });
+
   it("[PBE-055] changes nothing for a declined authorisation or a starter who lost the role, and refuses a suspended OTA", async () => {
     const f = await h.fixture();
     const accountId = newAccountId();

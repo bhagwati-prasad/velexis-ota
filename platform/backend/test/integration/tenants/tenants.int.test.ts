@@ -31,9 +31,10 @@ const FAMILY = testId("asn", 1);
 const PERSON_IP = "203.0.113.7";
 
 /**
- * A test-only route under a tenant path with a step-up and a switch on top of its roles, to show the guard order of
- * architecture §3: TenantRoleGuard (step 6) before RecentMfaGuard (7) and FeatureGuard (8). It binds `listDomains`,
- * whose parameters it has, on a path of its own, so it never meets the real route of PBE-027.
+ * Test-only routes under a tenant path with a step-up (and, on the first, a switch) on top of their roles, to show the
+ * guard order of architecture §3: TenantRoleGuard (step 6) before FeatureGuard (7) and RecentMfaGuard (8); the switch
+ * before the step-up since FIX-W38-PLATFORM (lead decision (2i) of 2026-10-31). They bind `listDomains`, whose
+ * parameters they have, on paths of their own, so they never meet the real route of PBE-027.
  */
 @Controller("v1/tenants/:tenantId/test-guard-order")
 class GuardOrderTestController {
@@ -44,6 +45,16 @@ class GuardOrderTestController {
   @RequireRecentMfa()
   @Feature("custom_domains")
   reach(): { reached: true } {
+    return { reached: true };
+  }
+
+  /** The same roles and step-up without a switch: the step-up's own answers. */
+  @Get("step-up")
+  @HttpCode(200)
+  @OpenApiOperation("listDomains")
+  @TenantRoles("owner")
+  @RequireRecentMfa()
+  reachWithoutSwitch(): { reached: true } {
     return { reached: true };
   }
 }
@@ -674,7 +685,7 @@ describe("TenantRoleGuard", () => {
     }
   });
 
-  it("runs after the authentication and before the step-up and the switches (architecture §3)", async () => {
+  it("[FIX-W38-PLATFORM AC6] runs after the authentication and before the switches and the step-up (architecture §3)", async () => {
     const url = `${tenantUrl()}/test-guard-order`;
     const mfaAgo = (seconds: number): Partial<AccessTokenInput> => ({
       amr: ["pwd", "otp"],
@@ -686,12 +697,19 @@ describe("TenantRoleGuard", () => {
     const viewer = await t.http.get(url).set(await bearer("viewer", mfaAgo(20 * MINUTE)));
     const ownerStale = await t.http.get(url).set(await bearer("owner", mfaAgo(20 * MINUTE)));
     const ownerFresh = await t.http.get(url).set(await bearer("owner", mfaAgo(MINUTE)));
+    // Without the switch (FEATURE_CUSTOM_DOMAINS is off in this application), the step-up answers.
+    const stepUpStale = await t.http.get(`${url}/step-up`).set(await bearer("owner", mfaAgo(20 * MINUTE)));
+    const stepUpFresh = await t.http.get(`${url}/step-up`).set(await bearer("owner", mfaAgo(MINUTE)));
 
     expect([anonymous.status, errorOf(anonymous)]).toEqual([401, "UNAUTHENTICATED"]);
     expect([stranger.status, errorOf(stranger)]).toEqual([404, "NOT_FOUND"]);
     expect([viewer.status, errorOf(viewer)]).toEqual([403, "FORBIDDEN"]);
-    expect([ownerStale.status, errorOf(ownerStale)]).toEqual([401, "REAUTH_REQUIRED"]);
+    // The switch comes before the step-up (FIX-W38-PLATFORM, lead decision (2i) of 2026-10-31): an owner without a
+    // recent step-up hears FEATURE_DISABLED, not REAUTH_REQUIRED, as an owner with one does.
+    expect([ownerStale.status, errorOf(ownerStale)]).toEqual([403, "FEATURE_DISABLED"]);
     expect([ownerFresh.status, errorOf(ownerFresh)]).toEqual([403, "FEATURE_DISABLED"]);
+    expect([stepUpStale.status, errorOf(stepUpStale)]).toEqual([401, "REAUTH_REQUIRED"]);
+    expect([stepUpFresh.status, stepUpFresh.body]).toEqual([200, { reached: true }]);
   });
 
   it("reads the membership on every request: a removal acts at once", async () => {

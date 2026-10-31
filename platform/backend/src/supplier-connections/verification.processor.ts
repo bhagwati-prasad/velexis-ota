@@ -3,7 +3,9 @@
 // processor; it dispatches on the job name: `amadeus_account.verify {amadeusAccountId}` (PBE-020,
 // flows/amadeus-connection.md §A step 2) here, and `credentials.verify {submissionId}`, the verification of the OTA's
 // own credentials (PBE-052, PADR-0010), with CredentialsVerifyProcessor of common/credentials, whose registry holds the
-// verifier of each kind (PBE-053, PBE-057). A job of another name fails at once (`UnrecoverableError`).
+// verifier of each kind (PBE-053, PBE-057), and `credentials.sweep`, every 5 minutes, with CredentialsSweep of
+// common/credentials (FIX-W38-PLATFORM: lost verification jobs). A job of another name fails at once
+// (`UnrecoverableError`).
 //
 // `amadeus_account.verify`, queued by the admin's create, update and verify of a Velexis Amadeus account:
 //
@@ -35,7 +37,11 @@ import { UnrecoverableError, type Job } from "bullmq";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { AuditService } from "../audit/audit.service";
 import { Clock } from "../common/clock";
-import { CREDENTIALS_VERIFY_JOB } from "../common/credentials/credential-submissions.service";
+import {
+  CREDENTIALS_SWEEP_JOB,
+  CREDENTIALS_VERIFY_JOB,
+} from "../common/credentials/credential-submissions.service";
+import { CredentialsSweep, type CredentialsSweepResult } from "../common/credentials/credentials-sweep";
 import {
   CredentialsVerifyProcessor,
   type CredentialsVerifyResult,
@@ -149,16 +155,21 @@ export class VerificationProcessor extends WorkerHost {
     @Inject(PLATFORM_DB) private readonly db: PlatformDb,
     @InjectPinoLogger(VerificationProcessor.name) private readonly logger: PinoLogger,
     private readonly credentials: CredentialsVerifyProcessor,
+    private readonly credentialsSweep: CredentialsSweep,
   ) {
     super();
   }
 
-  async process(job: Job): Promise<AmadeusAccountVerifyResult | CredentialsVerifyResult> {
+  async process(
+    job: Job,
+  ): Promise<AmadeusAccountVerifyResult | CredentialsVerifyResult | CredentialsSweepResult> {
     switch (job.name) {
       case AMADEUS_ACCOUNT_VERIFY_JOB:
         return this.verifyAccount(job);
       case CREDENTIALS_VERIFY_JOB:
         return this.credentials.process(job);
+      case CREDENTIALS_SWEEP_JOB:
+        return this.credentialsSweep.run();
       default:
         this.logger.error({ queue: PLATFORM_QUEUE.connections, job: job.name }, "connections.unknown_job");
         throw new UnrecoverableError("platform-connections has no job of this name");

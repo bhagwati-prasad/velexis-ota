@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Platform tech lead. Decided during planning; revisit after M5, when the switches have all been on in production for one release (then remove them).
+**Revisions:** 2026-10-31 (lead decisions (2e) and (2i) of 2026-10-31, second batch, recorded with FIX-W38-PLATFORM): item 2 says that a switched-off operation answers `FEATURE_DISABLED` before any step-up, and that `makeDomainPrimary` is behind `custom_domains` and the plan's `limits.customDomains` like `addDomain` (dated note under item 2).
 
 ## Context
 
@@ -22,6 +23,7 @@ The solo developer merges small tasks to `main` continuously ([ADR-0020](../../.
    | `FEATURE_LIVE_SWITCH` | Live Amadeus requests, live keys, go-live | M5 |
 
 2. **Enforcement in the backend only.** A `@Feature('…')` decorator on controllers and a check in the schedulers; disabled endpoints answer `403 FEATURE_DISABLED` with `details.feature`. The same guard combines the plan's `limits` and `features` (for example `customDomains > 0`).
+   - *Note (2026-10-31, lead decisions (2e) and (2i) of the second batch, FIX-W38-PLATFORM).* **The switch answers before the step-up**: every operation with `x-feature` answers `403 FEATURE_DISABLED` before any recent-MFA check, so the API's global guards run `FeatureGuard` before `RecentMfaGuard` (after the auth guards and `TenantRoleGuard`, so an unauthenticated caller or a non-member still learns nothing about the switches; [`../architecture.md`](../architecture.md) §3 steps 7 and 8). **`makeDomainPrimary` is behind `custom_domains` like `addDomain`**: `x-feature: custom_domains`, and a plan with `limits.customDomains` 0 answers `403 FEATURE_DISABLED` too (checked by the domain service, which knows the tenant), with nothing written.
 3. **The portal and admin read the switches** from `GET /v1/me` (`features` object in the response) and hide disabled navigation; they hold no switch of their own, so the backend stays the single source.
 4. **Webhooks are always received and stored**, even with a switch off; processing of a disabled feature marks the event `ignored`, so nothing is lost if Stripe is configured early.
 5. **Removal.** One release after a switch has been on in production, a task removes it from code and configuration.

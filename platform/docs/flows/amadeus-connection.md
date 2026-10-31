@@ -102,6 +102,7 @@ Since PFE-018: the portal's Amadeus page holds the settings form of each connect
 | Two admins assign the same office | Row version and the `amadeus_offices_assignment_ck` / unique index reject the second. |
 | Own credentials rejected | The working connection is untouched; the portal shows the error from the submission. |
 | Worker crash during apply | The apply is one transaction; the job retries and finds the submission still `verifying`. |
+| Verification job lost (Redis down at the submit, a worker that died with its job) | The `credentials.sweep` job, every 5 minutes, queues `credentials.verify` again for a submission `pending` for more than 10 minutes, and fails one `verifying` for more than an hour with `PROVIDER_UNAVAILABLE`, its secret erased, audited `amadeus.credentials_rejected` and the submitter e-mailed (2026-10-31, lead decision (2f), FIX-W38-PLATFORM; [PADR-0010](../adr/0010-credential-submission-and-verification.md) item 4 note). |
 | Abuse on a shared office | Admin disables the connection (`adminSetConnectionStatus`), audited; the OTA backend stops calling Amadeus for that tenant. |
 
 ## Tables touched

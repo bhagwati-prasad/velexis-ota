@@ -32,7 +32,7 @@ Same conventions as the OTA document ([`conventions.md` §6](../../docs/mvp/conv
 | `portal` | Portal access token of a verified, active account. |
 | `portal: owner, admin` | Portal token plus an active membership of `{tenantId}` with one of these roles (`TenantRoleGuard`). Non-members get `404`. `member` means any role. |
 | `MFA↑` | Recent MFA step-up: `mfa_at` within 15 minutes (`401 REAUTH_REQUIRED`), or `403 MFA_REQUIRED` if MFA is off ([PADR-0008](adr/0008-email-verification-and-mfa-policy.md)). |
-| `F:<switch>` | Milestone feature switch and plan check ([PADR-0015](adr/0015-milestone-feature-switches.md)); `403 FEATURE_DISABLED` when off. |
+| `F:<switch>` | Milestone feature switch and plan check ([PADR-0015](adr/0015-milestone-feature-switches.md)); `403 FEATURE_DISABLED` when off. An operation with both answers `FEATURE_DISABLED` before any `MFA↑` check (2026-10-31, lead decision (2i), FIX-W38-PLATFORM). |
 | `Idem` | `Idempotency-Key` header required; the response is replayed for 24 h. |
 | `admin` | Platform admin access token (audience `platform_admin`, MFA done) ([PADR-0006](adr/0006-platform-admin-access-and-audit.md)). |
 | `internal` | Loopback only, no token. |

@@ -13,7 +13,8 @@
 // processor sends the owners' e-mails to Mailpit; every address is a `uniqueEmail` of this file. The Stripe settings are
 // the development values of `.env.example`, with this file's Connect signing secret. FIX-W37-PLATFORM (lead decision
 // (2k) of 2026-10-31): a deauthorisation of connections an admin disabled writes one audit row per connection and
-// event (none for one older than the connections), and changes nothing else.
+// event (none for one older than the connections), and changes nothing else. FIX-W38-PLATFORM (lead decision (2b) of
+// 2026-10-31, second batch): one older than the admin-disabled connections ends ignored with STALE_EVENT.
 import { randomBytes } from "node:crypto";
 import { Test, type TestingModule } from "@nestjs/testing";
 import { INVALIDATION_CHANNEL, type InvalidationEvent } from "@velexis/api-types/jobs";
@@ -65,6 +66,8 @@ const STRIPE_ENV = Object.freeze({
 /** The first number of this file's ids (`testId`), away from the other test files'. */
 const FIRST_ID = 56_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+/** The inbox's `last_error` of a deauthorisation older than every connection it could concern. */
+const STALE_EVENT = "STALE_EVENT: the account was connected again after this deauthorisation";
 
 type Row = Record<string, unknown>;
 type ConnectEventType = "account.updated" | "account.application.deauthorized";
@@ -600,14 +603,50 @@ describe("account.application.deauthorized", () => {
     }
 
     // A late delivery of a deauthorisation older than the connections (connected a day ago): it revoked an earlier
-    // connection, so it writes no row.
+    // connection, so it writes no row, and ends ignored as stale (FIX-W38-PLATFORM, lead decision (2b) of 2026-10-31,
+    // second batch: `processed` before).
     const older = await deliver(
       connectEvent("account.application.deauthorized", ota.accountReference, {
         created: nowSeconds() - 2 * 24 * 3600,
       }),
     );
-    expect(older).toMatchObject({ status: "processed", tenant_id: ota.tenant.id });
+    expect(older).toMatchObject({ status: "ignored", last_error: STALE_EVENT, tenant_id: ota.tenant.id });
     expect(await auditOf(ota.tenant.id, "payments.connect_deauthorized_while_disabled")).toHaveLength(2);
+  });
+
+  it("[FIX-W38-PLATFORM AC2] ends a deauthorisation older than admin-disabled connections ignored with STALE_EVENT, writing nothing", async () => {
+    // Connected an hour ago, then disabled by a platform admin; the event was created two hours ago.
+    const ota = await arrangeOta({
+      status: "disabled",
+      connected_at: new Date(t.clock.now().getTime() - 3600 * 1000),
+    });
+    const delivery = connectEvent("account.application.deauthorized", ota.accountReference, {
+      created: nowSeconds() - 2 * 3600,
+    });
+
+    const row = await deliver(delivery);
+
+    expect(row).toMatchObject({ status: "ignored", last_error: STALE_EVENT, tenant_id: ota.tenant.id });
+    for (const connection of await connectionsOfTenant(ota.tenant.id)) {
+      expect(connection).toMatchObject({ status: "disabled", disconnected_at: null, version: 1 });
+    }
+    expect(
+      await rowsOf("SELECT action FROM platform.platform_audit_log WHERE tenant_id = $1", [ota.tenant.id]),
+    ).toEqual([]);
+    expect(await emailsOf(ota.tenant.id)).toEqual([]);
+    expect(invalidationsOf(ota.tenant.id)).toEqual([]);
+    expect(stripe.calls).toEqual([]);
+    // Logged as stale, never as a deauthorisation of the admin-disabled connections.
+    expect(logLines("stripe_connect.deauthorization_stale")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ eventId: delivery.eventId, connectionId: ota.test.id }),
+      ]),
+    );
+    expect(
+      logLines("stripe_connect.deauthorized_admin_disabled").filter(
+        (line) => line["eventId"] === delivery.eventId,
+      ),
+    ).toEqual([]);
   });
 });
 

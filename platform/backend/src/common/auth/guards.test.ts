@@ -105,6 +105,14 @@ class Routes {
   @OpenApiOperation("listDomains")
   domains(): void {}
 
+  /** `x-feature: settlements` and `x-mfa-step-up` in the document. */
+  @OpenApiOperation("setPayoutAccount")
+  setPayoutAccount(): void {}
+
+  /** `x-feature: own_stripe` and `x-mfa-step-up` in the document. */
+  @OpenApiOperation("startStripeConnect")
+  startStripeConnect(): void {}
+
   @Feature("live_switch")
   @OpenApiOperation("getMe")
   meBehindLiveSwitch(): void {}
@@ -170,8 +178,8 @@ function harness(features: Partial<Record<FeatureName, boolean>> = {}) {
     new InternalOnlyGuard(policies),
     new PortalAuthGuard(policies, tokens, context),
     new AdminAuthGuard(policies, tokens, accounts, context),
-    new RecentMfaGuard(policies, accounts, clock),
     new FeatureGuard(policies, new FeatureSwitches(config)),
+    new RecentMfaGuard(policies, accounts, clock),
   ];
 
   /** A bearer header with a fresh token. */
@@ -221,7 +229,9 @@ function harness(features: Partial<Record<FeatureName, boolean>> = {}) {
 }
 
 describe("the guard order", () => {
-  it("runs RateLimitGuard, the auth guards of the scope, AccountRateLimitGuard, TenantRoleGuard, then RecentMfaGuard, then FeatureGuard (architecture §3)", () => {
+  // FeatureGuard before RecentMfaGuard since FIX-W38-PLATFORM (lead decision (2i) of 2026-10-31, second batch); the
+  // step-up came first before.
+  it("[FIX-W38-PLATFORM AC6] runs RateLimitGuard, the auth guards of the scope, AccountRateLimitGuard, TenantRoleGuard, then FeatureGuard, then RecentMfaGuard (architecture §3)", () => {
     expect(API_GUARDS).toEqual([
       RateLimitGuard,
       InternalOnlyGuard,
@@ -229,9 +239,38 @@ describe("the guard order", () => {
       AdminAuthGuard,
       AccountRateLimitGuard,
       TenantRoleGuard,
-      RecentMfaGuard,
       FeatureGuard,
+      RecentMfaGuard,
     ]);
+  });
+
+  it("[FIX-W38-PLATFORM AC6] answers FEATURE_DISABLED before the step-up of setPayoutAccount and startStripeConnect", async () => {
+    const off = harness();
+    const on = harness({ settlements: true, own_stripe: true });
+    // An MFA account without a recent step-up, and an account without MFA: the step-up would refuse both.
+    const callers: ReadonlyArray<Partial<AccessTokenInput> & Pick<AccessTokenInput, "aud" | "sub">> = [
+      { aud: "portal", sub: PERSON, amr: ["pwd", "otp"], mfa_at: NOW - 20 * MINUTE },
+      { aud: "portal", sub: NO_MFA },
+    ];
+
+    for (const [route, feature] of [
+      ["setPayoutAccount", "settlements"],
+      ["startStripeConnect", "own_stripe"],
+    ] as const) {
+      for (const caller of callers) {
+        const refused = await off.call(route, { headers: await off.bearer(caller) });
+        expect([route, refused.result, refused.error?.details]).toEqual([
+          route,
+          "FEATURE_DISABLED",
+          { feature },
+        ]);
+      }
+      // With the switch on, the step-up answers as before.
+      const outcomes = await Promise.all(
+        callers.map(async (caller) => (await on.call(route, { headers: await on.bearer(caller) })).result),
+      );
+      expect([route, outcomes]).toEqual([route, ["REAUTH_REQUIRED", "MFA_REQUIRED"]]);
+    }
   });
 });
 

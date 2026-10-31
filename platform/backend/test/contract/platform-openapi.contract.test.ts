@@ -862,6 +862,8 @@ const SLICE_PBE041: readonly SliceOperation[] = [
 const SLICE_PBE041_FEATURES = {
   goLive: "live_switch",
   addDomain: "custom_domains",
+  // Refused with addDomain's switch and plan rule (FIX-W38-PLATFORM, lead decision (2e) of 2026-10-31, second batch).
+  makeDomainPrimary: "custom_domains",
   requestLiveAmadeus: "live_switch",
   submitAmadeusCredentials: "own_amadeus",
   startStripeConnect: "own_stripe",

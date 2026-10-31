@@ -995,7 +995,7 @@ export interface paths {
          *
          *     **Host name rules**, checked by the service, so a malformed host answers `422 DOMAIN_INVALID` and not `400`: the input is lower-cased, IDN labels become punycode and a trailing dot is dropped (`Travel.Acme.com.` is stored as `travel.acme.com`); the host must then have valid labels, at least two of them and at most 253 characters, and must not be an IP address, `STOREFRONT_BASE_DOMAIN` or a host below it, any other Velexis host, or a host under a shared hosting suffix of the deny list (`github.io`, `herokuapp.com`, `vercel.app`, `netlify.app`, …) where owning a sub-domain proves nothing. A host that any OTA uses, in any status, answers `409 DOMAIN_TAKEN`.
          *
-         *     **Answer**: the new domain, `pending`, with a verification deadline 72 hours ahead and the DNS records to create: the `TXT` record `_velexis.<host>` holding the token (`vx-verify-` and 32 base32 characters), and both routing options, a `CNAME` to the OTA's sub-domain, or `A` and `AAAA` records to the storefront addresses (`STOREFRONT_IPV4`, `STOREFRONT_IPV6`) for an apex domain, which cannot have a CNAME; verification accepts either. Writes an audit row. The platform worker checks pending domains every 5 minutes; `checkDomain` checks one now.
+         *     **Answer**: the new domain, `pending`, with a verification deadline 72 hours ahead and the DNS records to create: the `TXT` record `_velexis.<host>` holding the token (`vx-verify-` and 32 base32 characters), and both routing options, a `CNAME` to the OTA's sub-domain, or address records to the storefront addresses for an apex domain, which cannot have a CNAME: an `A` record to `STOREFRONT_IPV4`, and an `AAAA` record to `STOREFRONT_IPV6` only when that address is set (the platform may have no IPv6 address; then the answer lists no `AAAA` record); verification accepts either option. Writes an audit row. The platform worker checks pending domains every 5 minutes; `checkDomain` checks one now.
          */
         post: operations["addDomain"];
         delete?: never;
@@ -1088,7 +1088,7 @@ export interface paths {
         put?: never;
         /**
          * Make a verified domain the primary storefront host
-         * @description Owners and admins choose the primary storefront host (M5), which links and e-mails use: in one transaction the OTA's other storefront host loses `isPrimary` and this one gets it (the partial unique index keeps exactly one primary), then `domain` invalidations for both hosts are published. Only a verified domain can be primary (`409 DOMAIN_NOT_VERIFIED`); making the sub-domain primary again is allowed, and the primary domain answers `200` unchanged. The OTA must be `active` (`409 TENANT_NOT_ACTIVE`, PADR-0014 item 5). Writes an audit row. Redirecting the sub-domain to the primary host is a follow-up of ADR-0018.
+         * @description Owners and admins choose the primary storefront host (M5), which links and e-mails use: in one transaction the OTA's other storefront host loses `isPrimary` and this one gets it (the partial unique index keeps exactly one primary), then `domain` invalidations for both hosts are published. Like `addDomain`, it needs `FEATURE_CUSTOM_DOMAINS` and a plan with custom domains (`limits.customDomains` above 0); otherwise `403 FEATURE_DISABLED` with `details.feature = custom_domains`, for the sub-domain too, and nothing is written (`removeDomain` still makes the sub-domain primary again when it removes the primary custom domain). Only a verified domain can be primary (`409 DOMAIN_NOT_VERIFIED`); making the sub-domain primary again is allowed, and the primary domain answers `200` unchanged. The OTA must be `active` (`409 TENANT_NOT_ACTIVE`, PADR-0014 item 5). Writes an audit row. Redirecting the sub-domain to the primary host is a follow-up of ADR-0018.
          */
         post: operations["makeDomainPrimary"];
         delete?: never;
@@ -8907,7 +8907,16 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["Unauthenticated"];
-            403: components["responses"]["TenantRoleForbidden"];
+            /** @description The e-mail address is not verified, the caller's role does not allow it, or custom domains are off or not in the plan. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED. */
+            403: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             404: components["responses"]["NotFound"];
             /** @description The domain is not verified, or the OTA is not active. Possible codes: DOMAIN_NOT_VERIFIED, TENANT_NOT_ACTIVE. */
             409: {

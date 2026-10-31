@@ -2,7 +2,8 @@
 // steps 1, 5 and 7, PADR-0004; scope PF-41 AC1, AC4 and AC5) through the HTTP pipeline (createTestApp) on this file's
 // database clone and Redis database: `addDomain` (host name rules, both routing options, the plan limit, the plan and
 // the switch, a host taken by any OTA, concurrent additions), `makeDomainPrimary` (verified only, exactly one primary,
-// both hosts invalidated) and `removeDomain` (custom only, the sub-domain primary again, invalidations, the cached TLS
+// both hosts invalidated; the plan and the switch as for `addDomain` since FIX-W38-PLATFORM, lead decision (2e) of
+// 2026-10-31) and `removeDomain` (custom only, the sub-domain primary again, invalidations, the cached TLS
 // `ask` answer gone, the host free again), with their audit rows and the role and tenant-status rules, and the same DNS
 // records in the platform admin's view of the OTA (`adminGetTenant`). Every answer is checked against the platform
 // document.
@@ -674,6 +675,59 @@ describe("makeDomainPrimary", () => {
     expect([primary.status, errorOf(primary)]).toEqual([404, "NOT_FOUND"]);
     expect([removed.status, errorOf(removed)]).toEqual([404, "NOT_FOUND"]);
     expect(await storedDomains(other.tenant.id)).toHaveLength(2);
+  });
+
+  it("[FIX-W38-PLATFORM AC4] answers FEATURE_DISABLED while the custom_domains switch is off, and writes nothing", async () => {
+    const owner = await ota(plans.two);
+    const hostname = host("switch-off-primary");
+    const verified = await customDomain(owner, hostname, "verified", true);
+    const before = await storedDomains(owner.tenant.id);
+    switches.on.delete("custom_domains");
+    try {
+      // A verified custom domain and the sub-domain alike: the operation is off.
+      for (const domainId of [verified, owner.domain.id]) {
+        const { res, invalidated } = await observe(() => makePrimary(owner.tenant.id, domainId));
+        expect([res.status, errorOf(res), detailsOf(res), invalidated]).toEqual([
+          403,
+          "FEATURE_DISABLED",
+          { feature: "custom_domains" },
+          [],
+        ]);
+      }
+    } finally {
+      switches.on.add("custom_domains");
+    }
+    expect(await storedDomains(owner.tenant.id)).toEqual(before);
+    expect(await primaryHosts(owner.tenant.id)).toEqual([hostname]);
+    expect([...(await auditRows(verified)), ...(await auditRows(owner.domain.id))]).toEqual([]);
+  });
+
+  it("[FIX-W38-PLATFORM AC4] answers FEATURE_DISABLED to a plan without custom domains, as addDomain does, and writes nothing", async () => {
+    // The seeded early_access plan has customDomains 0; the other plan does not set it at all. A verified domain kept
+    // from an earlier plan (a downgrade) cannot be made primary, and the primary one cannot give the flag back.
+    for (const planCode of ["early_access", plans.unset]) {
+      const owner = await ota(planCode);
+      const primaryHost = host("downgraded-primary");
+      const primary = await customDomain(owner, primaryHost, "verified", true);
+      const other = await customDomain(owner, host("downgraded-other"));
+      const before = await storedDomains(owner.tenant.id);
+
+      for (const domainId of [other, owner.domain.id]) {
+        const { res, invalidated } = await observe(() => makePrimary(owner.tenant.id, domainId, "admin"));
+        expect([planCode, res.status, errorOf(res), detailsOf(res), invalidated]).toEqual([
+          planCode,
+          403,
+          "FEATURE_DISABLED",
+          { feature: "custom_domains" },
+          [],
+        ]);
+      }
+      expect(await storedDomains(owner.tenant.id)).toEqual(before);
+      expect(await primaryHosts(owner.tenant.id)).toEqual([primaryHost]);
+      for (const domainId of [primary, other, owner.domain.id]) {
+        expect(await auditRows(domainId)).toEqual([]);
+      }
+    }
   });
 });
 

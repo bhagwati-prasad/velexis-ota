@@ -1,7 +1,8 @@
-// RecentMfaGuard (platform/docs/architecture.md §3 step 7, PADR-0008 "Sensitive actions"): the step-up of the
+// RecentMfaGuard (platform/docs/architecture.md §3 step 8, PADR-0008 "Sensitive actions"): the step-up of the
 // operations marked `x-mfa-step-up: true` (or `@RequireRecentMfa()`): entering credentials, live keys, payout data,
 // go-live, granting `owner`, turning MFA off, regenerating recovery codes and the sensitive admin actions. It runs
-// after PortalAuthGuard or AdminAuthGuard has verified the token:
+// after PortalAuthGuard or AdminAuthGuard has verified the token, and after FeatureGuard, so an operation whose
+// milestone switch is off answers `403 FEATURE_DISABLED` first (FIX-W38-PLATFORM, lead decision (2i) of 2026-10-31):
 //
 // - an account without MFA (read fresh from `platform.accounts`, so turning MFA on or off acts at once) answers
 //   `403 MFA_REQUIRED`: the portal asks the person to set MFA up;

@@ -12,7 +12,8 @@
 // - **Secrets are erased** in the same UPDATE that sets a final status (`applied`, `failed`, `superseded`), as the
 //   CHECK `credential_submissions_secret_purge_ck` requires.
 // - Every read that answers the API selects the row without its ciphertexts (`CredentialSubmissionView`); only
-//   `startAttempt`, the worker's first step of a verification attempt, returns them.
+//   `startAttempt`, the worker's first step of a verification attempt, returns them. The sweep reads ids only
+//   (`staleIds`, FIX-W38-PLATFORM).
 // - The submitter's e-mail reads the account and its active membership of the tenant, and the OTA's name and key, read
 //   only (`emailRecipient`, `tenantLabel`), as payout-accounts.repository.ts reads the owners.
 import { Inject, Injectable } from "@nestjs/common";
@@ -261,6 +262,23 @@ export class CredentialSubmissionsRepository {
       .where("status", "in", OPEN_SUBMISSION_STATUSES)
       .returningAll()
       .executeTakeFirst();
+  }
+
+  /**
+   * The ids of the submissions in `status` unchanged since before `before` (`updated_at`), oldest first, at most
+   * `limit`: the sweep's candidates (credentials-sweep.ts). Ids only, never a ciphertext.
+   */
+  async staleIds(status: "pending" | "verifying", before: Date, limit: number): Promise<string[]> {
+    const rows = await this.db
+      .selectFrom("platform.credential_submissions")
+      .select("id")
+      .where("status", "=", status satisfies CredentialSubmissionStatus)
+      .where("updated_at", "<", before)
+      .orderBy("updated_at")
+      .orderBy("id")
+      .limit(limit)
+      .execute();
+    return rows.map((row) => row.id);
   }
 
   /** The submission without its ciphertexts, locked for the rest of `trx` (`FOR UPDATE`). */

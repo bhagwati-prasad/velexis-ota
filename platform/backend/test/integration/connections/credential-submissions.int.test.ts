@@ -2,11 +2,18 @@
 // api-inventory-resources.md §3 `getCredentialSubmission`). The API's CredentialSubmissionsService (createTestApp)
 // submits in a transaction of the test, as the operations of PBE-053 and PBE-057 will; the worker's module graph
 // (WorkerModule, as dist/worker.js builds it, with the API's FakeClock) runs `credentials.verify` from the same Redis
-// database and database clone. No real verifier exists yet (PBE-053 and PBE-057 add them), so this file registers a
-// test verifier for both kinds in the worker's registry, from a module of its own that imports
-// `CredentialSubmissionsModule.forWorker()` as theirs will (TestVerifierModule); each test scripts its answers
-// (`verifier.onCheck`, `verifier.onApply`). Its `apply` writes a marker on the OTA's test payment connection
-// (`last_error`), so a test sees that the apply ran in the job's transaction, or rolled back with it.
+// database and database clone. This file registers a test verifier for both kinds in the worker's registry, from a
+// module of its own that imports `CredentialSubmissionsModule.forWorker()` as PBE-053 and PBE-057 register theirs
+// (TestVerifierModule); each test scripts its answers (`verifier.onCheck`, `verifier.onApply`). Its `apply` writes a
+// marker on the OTA's test payment connection (`last_error`), so a test sees that the apply ran in the job's
+// transaction, or rolled back with it. The worker graph's registry is this file's own test registry
+// (TestVerifierRegistry; FIX-W38-PLATFORM, lead decision (2f) of 2026-10-31): it keeps the test verifier and sets aside
+// the real verifiers that PBE-053 and PBE-057 register in the worker graph, so they neither clash with it nor reach a
+// provider.
+//
+// The sweep of lost `credentials.verify` jobs (`credentials.sweep`, FIX-W38-PLATFORM) is run by the tests themselves
+// (CredentialsSweep, and one job through the queue) with the FakeClock moved past its ages; the job scheduler the
+// worker registers is checked once and removed in the set-up, so no scheduled run races a test.
 //
 // The secrets are random per test, and after every test no log line of either process (at `trace`), no Redis value
 // (the BullMQ jobs, their data, results and errors) and no audit or outbox row holds one. Every address is a
@@ -30,17 +37,25 @@ import {
   type CredentialKind,
 } from "../../../src/common/credentials/credential-submissions.repository";
 import {
+  CREDENTIALS_SWEEP_JOB,
   CREDENTIALS_VERIFY_JOB,
   CredentialSubmissionsService,
   InvalidCredentialSubmissionError,
   type SubmitCredentialsInput,
 } from "../../../src/common/credentials/credential-submissions.service";
 import {
+  CREDENTIALS_SWEEP_EVERY_MS,
+  CredentialsSweep,
+  SWEEP_PENDING_AGE_MS,
+  SWEEP_VERIFYING_AGE_MS,
+} from "../../../src/common/credentials/credentials-sweep";
+import {
   CredentialRejection,
   CredentialVerifiers,
   PROVIDER_UNAVAILABLE,
   SECRET_PLACEHOLDER,
   VERIFICATION_INCOMPLETE_MESSAGE,
+  VERIFICATION_TIMEOUT_REASON,
   type CredentialApplied,
   type CredentialApplyInput,
   type CredentialCheck,
@@ -139,6 +154,28 @@ async function writeMarker(
 const verifier = new TestVerifier();
 
 /**
+ * The worker graph's verifier registry in this file (FIX-W38-PLATFORM, lead decision (2f) of 2026-10-31): it replaces
+ * CredentialVerifiers (`overrideProvider(…).useClass(…)`, so still one instance per module that provides it, and the
+ * one-registry proof of TestVerifierModule below holds), keeps the test verifier when TestVerifierModule registers it,
+ * and sets every other registration aside: the real verifiers that PBE-053 (`amadeus`) and PBE-057
+ * (`stripe_api_keys`) register in the worker graph neither clash with the test verifier
+ * (`DuplicateCredentialVerifierError`) nor reach Amadeus or Stripe.
+ */
+@Injectable()
+class TestVerifierRegistry extends CredentialVerifiers {
+  /** The kinds of the registrations set aside: the worker graph's own verifiers. */
+  readonly setAside: CredentialKind[] = [];
+
+  override register(kind: CredentialKind, registered: CredentialVerifier): void {
+    if (registered === verifier) {
+      super.register(kind, registered);
+      return;
+    }
+    this.setAside.push(kind);
+  }
+}
+
+/**
  * Registers the test verifier for both kinds the way PBE-053 and PBE-057 register theirs: from a module of its own that
  * imports `CredentialSubmissionsModule.forWorker()`, in `onModuleInit`. So every test also proves that each importer of
  * `forWorker()` reaches the one registry the worker's `credentials.verify` reads (Nest 11 tells dynamic modules apart
@@ -167,6 +204,9 @@ let envelope: EnvelopeService;
 let platformDb: PlatformDb;
 let connectionsQueue: Queue;
 let tokens: TokenService;
+let sweep: CredentialsSweep;
+/** The job schedulers of `platform-connections` once the worker had registered its own (the set-up removes them). */
+let schedulersAtStart: Array<Record<string, unknown>> = [];
 let next = FIRST_ID;
 /** The secrets of the current test: none may appear in a log line, a Redis value or a row. */
 const secretsOfTest: string[] = [];
@@ -190,9 +230,35 @@ beforeAll(async () => {
     .useValue(t.clock)
     .overrideProvider(JobSchedulerRegistry)
     .useValue({})
+    .overrideProvider(CredentialVerifiers)
+    .useClass(TestVerifierRegistry)
     .compile();
   await worker.init();
   verifiers = worker.get(CredentialVerifiers, { strict: false });
+  sweep = worker.get(CredentialsSweep, { strict: false });
+
+  // The sweep's job scheduler is registered in the background when the worker starts: wait for it, keep what Redis
+  // holds for the test below, then remove it and let its first run (at once, on an empty table) finish, so the tests
+  // run the sweep themselves and no scheduled run races them.
+  await vi.waitFor(
+    () => {
+      expect(
+        [...t.logs.lines, ...workerLogs.lines].some((line) => line["msg"] === "credentials.sweep_registered"),
+      ).toBe(true);
+    },
+    { timeout: 10_000, interval: 20 },
+  );
+  schedulersAtStart = (await connectionsQueue.getJobSchedulers(0, -1)) as unknown as Array<
+    Record<string, unknown>
+  >;
+  await connectionsQueue.removeJobScheduler(CREDENTIALS_SWEEP_JOB);
+  await vi.waitFor(
+    async () => {
+      const live = await connectionsQueue.getJobs(["waiting", "active", "delayed", "prioritized"]);
+      expect(live.filter((job) => job?.name === CREDENTIALS_SWEEP_JOB)).toEqual([]);
+    },
+    { timeout: 10_000, interval: 20 },
+  );
 }, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
@@ -1010,5 +1076,295 @@ describe("GET /v1/tenants/{tenantId}/credential-submissions/{submissionId} (getC
     expect(JSON.stringify(res.body)).not.toMatch(/ciphertext|clientId|officeIds|acme-amadeus-client/i);
     await resumeWorker();
     await waitForStatus(row.id, "applied");
+  });
+});
+
+describe("the worker graph's verifier registry", () => {
+  it("[FIX-W38-PLATFORM AC5] is this file's own: a real verifier registered in the worker graph is set aside, and the test verifier answers both kinds", () => {
+    const registry = verifiers as TestVerifierRegistry;
+    expect(registry).toBeInstanceOf(TestVerifierRegistry);
+    const real: CredentialVerifier = {
+      check: () => Promise.reject(new Error("a real verifier must not run in this file")),
+      apply: () => Promise.reject(new Error("a real verifier must not run in this file")),
+    };
+
+    // What PBE-053 and PBE-057 do from their worker modules: no DuplicateCredentialVerifierError, nothing replaced.
+    expect(() => registry.register("amadeus", real)).not.toThrow();
+    expect(() => registry.register("stripe_api_keys", real)).not.toThrow();
+
+    expect([registry.get("amadeus"), registry.get("stripe_api_keys")]).toEqual([verifier, verifier]);
+    expect(registry.kinds().sort()).toEqual(["amadeus", "stripe_api_keys"]);
+    expect(registry.setAside).toEqual(expect.arrayContaining(["amadeus", "stripe_api_keys"]));
+  });
+});
+
+describe("credentials.sweep", () => {
+  /** Waits until no submission of the file is open, so a sweep acts on this test's submissions only. */
+  async function noOpenSubmission(): Promise<void> {
+    await vi.waitFor(async () => {
+      expect(
+        await rowsOf(
+          "SELECT id, status FROM platform.credential_submissions WHERE status IN ('pending', 'verifying')",
+          [],
+        ),
+      ).toEqual([]);
+    }, WAIT);
+  }
+
+  /** Removes the BullMQ job of a submission: what a lost enqueue, or a worker that died with its job, leaves. */
+  async function loseJob(submissionId: string): Promise<void> {
+    await (await connectionsQueue.getJob(submissionId))?.remove();
+    expect(await connectionsQueue.getJob(submissionId)).toBeUndefined();
+  }
+
+  /** A promise and the function that settles it: a verifier call held until the test releases it. */
+  function gate(): { readonly opened: Promise<void>; readonly open: () => void } {
+    let open: () => void = () => undefined;
+    const opened = new Promise<void>((resolveGate) => {
+      open = resolveGate;
+    });
+    return { opened, open };
+  }
+
+  it("[FIX-W38-PLATFORM AC5] the worker registers one credentials.sweep job scheduler on platform-connections, every 5 minutes", () => {
+    expect(schedulersAtStart).toEqual([
+      expect.objectContaining({
+        key: CREDENTIALS_SWEEP_JOB,
+        name: CREDENTIALS_SWEEP_JOB,
+        every: CREDENTIALS_SWEEP_EVERY_MS,
+      }),
+    ]);
+    expect(CREDENTIALS_SWEEP_EVERY_MS).toBe(5 * 60_000);
+  });
+
+  it("[FIX-W38-PLATFORM AC5] queues credentials.verify again for a submission pending longer than 10 minutes, once, and the worker applies it", async () => {
+    await noOpenSubmission();
+    const ota = await arrangeOta();
+    await pauseWorker();
+    const { row } = await submit(ota, "amadeus", "test");
+    await loseJob(row.id);
+
+    // Ten minutes exactly is not longer than ten minutes.
+    t.clock.advance(SWEEP_PENDING_AGE_MS);
+    expect(await sweep.run()).toEqual({ requeued: 0, failed: 0 });
+    expect(await connectionsQueue.getJob(row.id)).toBeUndefined();
+
+    t.clock.advance(1000);
+    expect(await sweep.run()).toEqual({ requeued: 1, failed: 0 });
+    const job = await connectionsQueue.getJob(row.id);
+    expect([job?.name, job?.data, await job?.getState()]).toEqual([
+      CREDENTIALS_VERIFY_JOB,
+      { submissionId: row.id },
+      "waiting",
+    ]);
+    // A second sweep while that job waits queues nothing twice (job id = submission id).
+    expect(await sweep.run()).toEqual({ requeued: 0, failed: 0 });
+    const jobsOfSubmission = (
+      await connectionsQueue.getJobs(["waiting", "active", "delayed", "prioritized", "completed", "failed"])
+    ).filter((each) => each?.id === row.id);
+    expect(jobsOfSubmission).toHaveLength(1);
+    expect(await submissionRow(row.id)).toMatchObject({ status: "pending", attempts: 0 });
+
+    await resumeWorker();
+
+    expect(await waitForStatus(row.id, "applied")).toMatchObject({
+      attempts: 1,
+      secret_ciphertext: null,
+      webhook_secret_ciphertext: null,
+    });
+    expect(await markerOf(ota.tenant.id)).toBe(`applied ${row.id}`);
+    expect(
+      [...t.logs.lines, ...workerLogs.lines].filter((line) => line["msg"] === "credentials.sweep_requeued"),
+    ).toEqual([expect.objectContaining({ submissionId: row.id })]);
+  });
+
+  it("[FIX-W38-PLATFORM AC5] fails a submission verifying longer than 1 hour with PROVIDER_UNAVAILABLE: both secrets null, audited, the submitter e-mailed, nothing logged", async () => {
+    await noOpenSubmission();
+    const ota = await arrangeOta();
+    await pauseWorker();
+    const { row } = await submit(ota, "stripe_api_keys", "live");
+    // What a worker that died during an attempt leaves behind: the submission verifying, its job gone with it.
+    await loseJob(row.id);
+    await pool.query(
+      "UPDATE platform.credential_submissions SET status = 'verifying', attempts = 2, updated_at = $2 WHERE id = $1",
+      [row.id, t.clock.now()],
+    );
+
+    // An hour exactly is not longer than an hour.
+    t.clock.advance(SWEEP_VERIFYING_AGE_MS);
+    expect(await sweep.run()).toEqual({ requeued: 0, failed: 0 });
+    expect(await submissionRow(row.id)).toMatchObject({ status: "verifying" });
+
+    t.clock.advance(1000);
+    expect(await sweep.run()).toEqual({ requeued: 0, failed: 1 });
+
+    const failed = await submissionRow(row.id);
+    expect(failed).toMatchObject({
+      status: "failed",
+      error_code: PROVIDER_UNAVAILABLE,
+      error_message: VERIFICATION_INCOMPLETE_MESSAGE,
+      secret_ciphertext: null,
+      webhook_secret_ciphertext: null,
+      attempts: 2,
+    });
+    expect(failed["finished_at"]).toEqual(t.clock.now());
+    expect(verifier.checks).toEqual([]);
+    expect(await markerOf(ota.tenant.id)).toBeNull();
+    const audit = await auditOf(row.id);
+    expect(audit.map((entry) => entry["action"])).toEqual([
+      "payments.api_keys_submitted",
+      "payments.api_keys_rejected",
+    ]);
+    expect(audit[1]).toMatchObject({
+      actor_type: "system",
+      actor_label: CREDENTIALS_SWEEP_JOB,
+      tenant_id: ota.tenant.id,
+    });
+    expect(audit[1]?.["details"]).toMatchObject({
+      kind: "stripe_api_keys",
+      environment: "live",
+      attempt: 2,
+      errorMessage: VERIFICATION_INCOMPLETE_MESSAGE,
+      reason: VERIFICATION_TIMEOUT_REASON,
+      before: { status: "verifying" },
+      after: { status: "failed", errorCode: PROVIDER_UNAVAILABLE },
+    });
+    const [email] = await emailsOf(ota.tenant.id);
+    expect(email).toMatchObject({ template: "connection.credentials_failed", to_email: ota.owner.email });
+    expect(email?.["data"]).toMatchObject({
+      errorCode: PROVIDER_UNAVAILABLE,
+      reason: VERIFICATION_INCOMPLETE_MESSAGE,
+      environment: "live",
+    });
+    const message = await waitForMessage({ to: ota.owner.email, timeoutMs: MAIL_WAIT_MS });
+    expect(message.Subject).toBe(`Stripe API keys not verified for ${ota.tenant.name} (live)`);
+    expect(
+      [...t.logs.lines, ...workerLogs.lines].filter((line) => line["msg"] === "credentials.sweep_failed"),
+    ).toEqual([
+      expect.objectContaining({
+        submissionId: row.id,
+        tenantId: ota.tenant.id,
+        errorCode: PROVIDER_UNAVAILABLE,
+      }),
+    ]);
+    // Nothing more for the next sweep; no secret in any log line, Redis value or row (checked after every test too).
+    expect(await sweep.run()).toEqual({ requeued: 0, failed: 0 });
+    await expectNoSecretAnywhere();
+  });
+
+  it("[FIX-W38-PLATFORM AC5] the processor of platform-connections runs a credentials.sweep job", async () => {
+    await noOpenSubmission();
+    const ota = await arrangeOta();
+    await pauseWorker();
+    const { row } = await submit(ota, "amadeus", "live");
+    await loseJob(row.id);
+    await pool.query(
+      "UPDATE platform.credential_submissions SET status = 'verifying', attempts = 1, updated_at = $2 WHERE id = $1",
+      [row.id, t.clock.now()],
+    );
+    t.clock.advance(SWEEP_VERIFYING_AGE_MS + 1000);
+    await resumeWorker();
+
+    const added = await connectionsQueue.add(CREDENTIALS_SWEEP_JOB, {});
+
+    const done = await vi.waitFor(async () => {
+      const job = await connectionsQueue.getJob(added.id ?? "");
+      expect(await job?.getState()).toBe("completed");
+      return job as Job;
+    }, WAIT);
+    expect(done.returnvalue).toEqual({ requeued: 0, failed: 1 });
+    expect(await submissionRow(row.id)).toMatchObject({
+      status: "failed",
+      error_code: PROVIDER_UNAVAILABLE,
+      secret_ciphertext: null,
+    });
+  });
+
+  it("[FIX-W38-PLATFORM AC5] a job that commits first wins: the sweep's status guard then writes nothing", async () => {
+    await noOpenSubmission();
+    const ota = await arrangeOta();
+    const held = gate();
+    verifier.onApply = async (trx, input) => {
+      // The job's final transaction holds the submission's row lock while its apply waits here.
+      await held.opened;
+      return writeMarker(trx, input);
+    };
+    const { row } = await submit(ota, "amadeus", "test");
+    await vi.waitFor(() => {
+      expect(verifier.applies).toHaveLength(1);
+    }, WAIT);
+    // The attempt started an hour and more ago, as far as the sweep can tell.
+    t.clock.advance(SWEEP_VERIFYING_AGE_MS + 1000);
+
+    const swept = sweep.run();
+    // The sweep picked the submission and now waits for its row lock behind the job's transaction.
+    await vi.waitFor(async () => {
+      const waiting = await rowsOf(
+        "SELECT pid FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'",
+        [],
+      );
+      expect(waiting.length).toBeGreaterThan(0);
+    }, WAIT);
+    held.open();
+
+    expect(await swept).toEqual({ requeued: 0, failed: 0 });
+    expect(await waitForStatus(row.id, "applied")).toMatchObject({
+      error_code: null,
+      secret_ciphertext: null,
+    });
+    expect(await markerOf(ota.tenant.id)).toBe(`applied ${row.id}`);
+    expect((await auditOf(row.id)).map((entry) => entry["action"])).toEqual([
+      "amadeus.credentials_submitted",
+      "amadeus.credentials_applied",
+    ]);
+    expect((await emailsOf(ota.tenant.id)).map((email) => email["template"])).toEqual([
+      "connection.credentials_applied",
+    ]);
+  });
+
+  it("[FIX-W38-PLATFORM AC5] a sweep that commits first wins: the job's final transaction then writes nothing", async () => {
+    await noOpenSubmission();
+    const ota = await arrangeOta();
+    const held = gate();
+    verifier.onCheck = async () => {
+      // The attempt waits for the provider, outside any transaction, while the sweep fails the submission.
+      await held.opened;
+      return { outcome: "verified", result: { accountId: "acct_testlate" } };
+    };
+    const { row } = await submit(ota, "stripe_api_keys", "test");
+    await vi.waitFor(() => {
+      expect(verifier.checks).toHaveLength(1);
+    }, WAIT);
+    t.clock.advance(SWEEP_VERIFYING_AGE_MS + 1000);
+
+    expect(await sweep.run()).toEqual({ requeued: 0, failed: 1 });
+    held.open();
+
+    // The verified answer arrives too late: the job finds the submission failed and applies nothing; its result names
+    // the status the sweep gave the submission, not "superseded".
+    const job = await waitForJob(row.id, "completed");
+    expect(job.returnvalue).toEqual({ submissionId: row.id, status: "failed" });
+    expect(
+      [...t.logs.lines, ...workerLogs.lines].filter(
+        (line) => line["msg"] === "credentials.verify_superseded" && line["submissionId"] === row.id,
+      ),
+    ).toEqual([expect.objectContaining({ status: "failed" })]);
+    expect(verifier.applies).toEqual([]);
+    expect(await markerOf(ota.tenant.id)).toBeNull();
+    expect(await submissionRow(row.id)).toMatchObject({
+      status: "failed",
+      error_code: PROVIDER_UNAVAILABLE,
+      secret_ciphertext: null,
+      webhook_secret_ciphertext: null,
+    });
+    const audit = await auditOf(row.id);
+    expect(audit.map((entry) => [entry["action"], entry["actor_type"]])).toEqual([
+      ["payments.api_keys_submitted", "account"],
+      ["payments.api_keys_rejected", "system"],
+    ]);
+    expect(audit[1]?.["actor_label"]).toBe(CREDENTIALS_SWEEP_JOB);
+    expect((await emailsOf(ota.tenant.id)).map((email) => email["template"])).toEqual([
+      "connection.credentials_failed",
+    ]);
   });
 });

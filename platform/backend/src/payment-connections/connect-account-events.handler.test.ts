@@ -3,8 +3,9 @@
 // older than the connection, which Stripe errors mean the account is out of reach, the handler's declaration for the
 // inbox processor, the rounds of `account.updated` (a write is confirmed by a re-fetch after its commit), and the
 // audit row of a deauthorisation that finds connections a platform admin disabled (FIX-W37-PLATFORM, lead decision (2k)
-// of 2026-10-31) over stand-ins of the repository, the audit log, the outbox, the database and Stripe. The writes
-// themselves run against PostgreSQL in test/integration/connections/connect-events.int.test.ts.
+// of 2026-10-31) and the STALE_EVENT outcome of one older than them (FIX-W38-PLATFORM, lead decision (2b) of
+// 2026-10-31, second batch), over stand-ins of the repository, the audit log, the outbox, the database and Stripe. The
+// writes themselves run against PostgreSQL in test/integration/connections/connect-events.int.test.ts.
 import { Reflector } from "@nestjs/core";
 import { FakeClock } from "@velexis/testing";
 import type { PinoLogger } from "nestjs-pino";
@@ -50,6 +51,13 @@ const NOT_YET = { chargesEnabled: false, payoutsEnabled: false, detailsSubmitted
 const AT = new Date("2026-01-15T10:00:00.000Z");
 const TENANT = "ten_01JA2ZA1C5E9G3J7K2M6P00001";
 const ACCOUNT = "acct_1QTestAgency";
+const DAY = 24 * 60 * 60 * 1000;
+/** The outcome of a deauthorisation older than every connection it could concern. */
+const STALE_OUTCOME = {
+  status: "ignored",
+  reason: "STALE_EVENT: the account was connected again after this deauthorisation",
+  tenantId: TENANT,
+} as const;
 
 /** A `connect_standard` connection of ACCOUNT as the repository reads it: `pending`, charges not enabled yet. */
 function connectRow(
@@ -550,7 +558,9 @@ describe("account.application.deauthorized of connections a platform admin disab
     ];
     const before = structuredClone(h.rows);
 
-    expect(await h.handler.handle(DEAUTHORIZED_EVENT)).toEqual({ status: "processed", tenantId: TENANT });
+    // Ignored as stale, like the handler's other stale events (FIX-W38-PLATFORM, lead decision (2b) of 2026-10-31,
+    // second batch: this outcome was `processed` before).
+    expect(await h.handler.handle(DEAUTHORIZED_EVENT)).toEqual(STALE_OUTCOME);
 
     expect([h.rows, h.audit, h.queued, h.events]).toEqual([before, [], [], []]);
     // Connected in the same second as the event's `created`: not newer than the event, so the row is written.
@@ -582,5 +592,41 @@ describe("account.application.deauthorized of connections a platform admin disab
       }),
     ]);
     expect(h.events).toEqual([{ v: 1, type: "connection", tenantId: TENANT }]);
+  });
+
+  it("[FIX-W38-PLATFORM AC2] ends a deauthorisation older than the admin-disabled connections ignored with STALE_EVENT, writing nothing", async () => {
+    const h = new RoundsHarness();
+    const reconnectedAt = new Date(AT.getTime() + 1000);
+    // The test connection an admin disabled after a reconnect; the live one deauthorised by an earlier event.
+    h.rows = [
+      connectRow("test", { status: "disabled", connected_at: reconnectedAt }),
+      connectRow("live", { status: "disabled", disconnected_at: new Date(AT.getTime() - DAY) }),
+    ];
+    const before = structuredClone(h.rows);
+
+    expect(await h.handler.handle(DEAUTHORIZED_EVENT)).toEqual(STALE_OUTCOME);
+
+    // No write of any kind: connections, audit rows, e-mails, invalidations; and not the admin-disabled warning,
+    // since the event says nothing about the connection the admin disabled.
+    expect([h.rows, h.audit, h.queued, h.events, h.warnings]).toEqual([before, [], [], [], []]);
+    expect(h.retrieves).toBe(0);
+  });
+
+  it("[FIX-W38-PLATFORM AC2] ends processed when it audits an admin-disabled connection it concerns next to a stale one", async () => {
+    const h = new RoundsHarness();
+    // The test connection an admin disabled before the event; the live one connected again after it.
+    h.rows = [
+      connectRow("test", { status: "disabled" }),
+      connectRow("live", { status: "active", connected_at: new Date(AT.getTime() + 1000) }),
+    ];
+
+    expect(await h.handler.handle(DEAUTHORIZED_EVENT)).toEqual({ status: "processed", tenantId: TENANT });
+
+    expect(h.audit).toEqual([recorded("test")]);
+    expect(h.states()).toEqual([
+      ["disabled", 1],
+      ["active", 1],
+    ]);
+    expect([h.queued, h.events]).toEqual([[], []]);
   });
 });

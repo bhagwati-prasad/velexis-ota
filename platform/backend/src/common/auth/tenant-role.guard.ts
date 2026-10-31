@@ -16,7 +16,7 @@
 //
 // The membership stays on the request for the handler (`@CurrentMembership()`, `tenantMembershipOf`), so `getTenant`
 // answers the caller's `myRole` without a second read. The guard runs after the auth guards and the per-account rate
-// limits and before RecentMfaGuard and FeatureGuard (API_GUARDS of common.module.ts): a non-member learns nothing about
+// limits and before FeatureGuard and RecentMfaGuard (API_GUARDS of common.module.ts): a non-member learns nothing about
 // the OTA's switches or the step-up of the operation, only `404`. Handlers without `@TenantRoles` pass untouched.
 //
 // The read is the MembershipsModule's (layer 1): this layer-0 guard depends on the abstract TenantMembershipLookup,

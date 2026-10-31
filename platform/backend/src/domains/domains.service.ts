@@ -1,9 +1,10 @@
 // The domain use cases of the portal (platform/docs/api-inventory-resources.md §2, flows/custom-domains.md steps 1, 5
 // and 7, PADR-0004; scope PF-40 and PF-41): `listDomains` (PBE-027) answers the OTA's storefront hosts to any member;
 // `addDomain`, `makeDomainPrimary` and `removeDomain` (PBE-049) let owners and admins manage custom storefront domains.
-// Who may call them is TenantRoleGuard's (the membership arrives here checked), and `addDomain`'s `x-feature:
-// custom_domains` is FeatureGuard's (`403 FEATURE_DISABLED` while FEATURE_CUSTOM_DOMAINS is off). This service owns
-// the transactions, their audit rows and the work after the commit (architecture §4).
+// Who may call them is TenantRoleGuard's (the membership arrives here checked), and the `x-feature: custom_domains` of
+// `addDomain` and `makeDomainPrimary` is FeatureGuard's (`403 FEATURE_DISABLED` while FEATURE_CUSTOM_DOMAINS is off;
+// `makeDomainPrimary` since FIX-W38-PLATFORM, lead decision (2e) of 2026-10-31). This service owns the transactions,
+// their audit rows and the work after the commit (architecture §4).
 //
 // DNS records (PADR-0004 item 2): the Velexis sub-domain `<key>.<STOREFRONT_BASE_DOMAIN>` needs none; a custom domain
 // lists the ownership record `TXT _velexis.<host>` with the row's verification value, and both routing options, the
@@ -20,9 +21,11 @@
 //   addition wins the unique index). The row is `pending` with a new verification value and a deadline 72 hours ahead.
 //   Nothing is announced: neither the OTA backend nor TLS `ask` serves a pending domain (architecture §6.3 publishes
 //   `domain` when a domain is verified, failed, removed or its primary flag moves).
-// - `makeDomainPrimary`: a verified domain only (`409 DOMAIN_NOT_VERIFIED`); the other primary storefront host loses
-//   the flag before this one gets it (the partial unique index keeps one primary), and `domain` invalidations for both
-//   hosts follow the commit. The primary domain answers unchanged, with no write.
+// - `makeDomainPrimary`: the plan must have custom domains, as for `addDomain` (`403 FEATURE_DISABLED`, for the
+//   sub-domain too, and nothing is written; FIX-W38-PLATFORM, lead decision (2e) of 2026-10-31); a verified domain only
+//   (`409 DOMAIN_NOT_VERIFIED`); the other primary storefront host loses the flag before this one gets it (the partial
+//   unique index keeps one primary), and `domain` invalidations for both hosts follow the commit. The primary domain
+//   answers unchanged, with no write.
 // - `removeDomain`: custom domains only (`409 CONFLICT`, `details.reason = "subdomain"`); the row is deleted and, when
 //   it was primary, the sub-domain becomes primary again; after the commit `domain` invalidations for the host (and the
 //   sub-domain when the flag moved) are published and the cached `tlsask:<host>` answer is deleted (PADR-0004 item 6:
@@ -142,6 +145,19 @@ export function toDomain(row: DomainListRow, baseDomain: string, addresses: Stor
 }
 
 /**
+ * The plan's `limits.customDomains` of a tenant whose plan has custom domains; `403 FEATURE_DISABLED` with
+ * `details.feature = custom_domains` (the answer of the switch) for a plan without them (0 or not set). `addDomain`
+ * and `makeDomainPrimary` ask it (PADR-0015 item 2: the switch and the plan's limits together).
+ */
+function customDomainLimitOrThrow(tenant: Pick<DomainTenantState, "limits">): number {
+  const limit = customDomainLimit(tenant.limits);
+  if (limit === 0) {
+    throw new AppError("FEATURE_DISABLED", { details: { feature: "custom_domains" } });
+  }
+  return limit;
+}
+
+/**
  * True when `error` is the unique violation of a host name that a concurrent addition took between the check and the
  * insert (the `pg` error that Kysely passes through, with the name of the index).
  */
@@ -198,10 +214,7 @@ export class DomainsService {
     return runInTransaction(this.db, async (trx) => {
       await this.domains.lockTenantDomains(trx, tenantId);
       const tenant = await this.writableTenant(trx, tenantId);
-      const limit = customDomainLimit(tenant.limits);
-      if (limit === 0) {
-        throw new AppError("FEATURE_DISABLED", { details: { feature: "custom_domains" } });
-      }
+      const limit = customDomainLimitOrThrow(tenant);
       const used = await this.domains.countCustom(trx, tenantId);
       if (used >= limit) {
         throw new AppError("PLAN_LIMIT_REACHED", { details: { limit, used } });
@@ -243,7 +256,8 @@ export class DomainsService {
   /**
    * `makeDomainPrimary`: the verified domain becomes the primary storefront host and the previous one loses the flag,
    * with a `domain.primary_changed` audit row and `domain` invalidations for both hosts after the commit. The primary
-   * domain answers as it is.
+   * domain answers as it is. A plan without custom domains answers `403 FEATURE_DISABLED` before anything is written,
+   * as `addDomain` does (FIX-W38-PLATFORM, lead decision (2e) of 2026-10-31).
    */
   async makePrimary(membership: TenantMembership, domainId: string): Promise<Domain> {
     const { tenantId, accountId } = membership;
@@ -251,7 +265,7 @@ export class DomainsService {
     return runInTransaction(this.db, async (trx) => {
       await this.domains.lockTenantDomains(trx, tenantId);
       const domain = await this.lockedDomain(trx, tenantId, domainId);
-      await this.writableTenant(trx, tenantId);
+      customDomainLimitOrThrow(await this.writableTenant(trx, tenantId));
       if (domain.verification_status !== "verified") {
         throw new AppError("DOMAIN_NOT_VERIFIED");
       }

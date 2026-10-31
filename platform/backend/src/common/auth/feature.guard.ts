@@ -1,7 +1,9 @@
-// FeatureGuard (platform/docs/architecture.md §3 step 8, PADR-0015 item 2): an operation whose `x-feature` (or
+// FeatureGuard (platform/docs/architecture.md §3 step 7, PADR-0015 item 2): an operation whose `x-feature` (or
 // `@Feature(…)`) names a milestone switch that is off answers `403 FEATURE_DISABLED` with `details.feature` (the
 // switch, for example `custom_domains`), so half-finished M5 endpoints cannot be reached in production. It runs after
-// the auth guards: an unauthenticated caller learns nothing about the switches.
+// the auth guards and TenantRoleGuard: an unauthenticated caller or a non-member learns nothing about the switches. It
+// runs before RecentMfaGuard (FIX-W38-PLATFORM, lead decision (2i) of 2026-10-31, second batch): an operation that is
+// switched off answers `FEATURE_DISABLED` before any step-up is asked for.
 //
 // PADR-0015 item 2 also combines the plan's `limits` and `features` (for example `customDomains > 0`) with the
 // switches. Those depend on the tenant of the request, so they are not checked here yet: the M5 operations that need

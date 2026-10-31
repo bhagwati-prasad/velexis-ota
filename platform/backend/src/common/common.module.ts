@@ -61,9 +61,13 @@ export const API_REQUEST_MIDDLEWARE = [jsonBodyParser, ClsMiddleware, EndUserMid
  * 3. AccountRateLimitGuard: the per-account rate limits, which need the account the auth guards put into the
  *    request context (PBE-009);
  * 4. TenantRoleGuard for `@TenantRoles(...)`: the caller's active membership of `{tenantId}` (step 6, PBE-017), so a
- *    non-member gets `404` before any step-up or switch says anything about the operation;
- * 5. RecentMfaGuard for `x-mfa-step-up`;
- * 6. FeatureGuard for `x-feature`.
+ *    non-member gets `404` before any switch or step-up says anything about the operation;
+ * 5. FeatureGuard for `x-feature`;
+ * 6. RecentMfaGuard for `x-mfa-step-up`.
+ *
+ * The switch comes before the step-up (FIX-W38-PLATFORM, lead decision (2i) of 2026-10-31, second batch): an operation
+ * whose milestone switch is off answers `403 FEATURE_DISABLED` whatever the caller's MFA state, so nobody is asked
+ * for a TOTP code to reach an endpoint that is off.
  *
  * The Stripe signature guard of the `webhook` scope (M5) goes with the auth guards.
  */
@@ -74,8 +78,8 @@ export const API_GUARDS = [
   AdminAuthGuard,
   AccountRateLimitGuard,
   TenantRoleGuard,
-  RecentMfaGuard,
   FeatureGuard,
+  RecentMfaGuard,
 ] as const;
 
 @Global()
