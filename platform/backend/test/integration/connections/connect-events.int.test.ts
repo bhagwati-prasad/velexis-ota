@@ -11,7 +11,9 @@
 // until its inbox row is done. The worker's milestone switches are a set this file changes (`own_stripe` on unless a
 // test turns it off), and its job schedulers are not registered (JobSchedulerRegistry replaced). The worker's e-mail
 // processor sends the owners' e-mails to Mailpit; every address is a `uniqueEmail` of this file. The Stripe settings are
-// the development values of `.env.example`, with this file's Connect signing secret.
+// the development values of `.env.example`, with this file's Connect signing secret. FIX-W37-PLATFORM (lead decision
+// (2k) of 2026-10-31): a deauthorisation of connections an admin disabled writes one audit row per connection and
+// event (none for one older than the connections), and changes nothing else.
 import { randomBytes } from "node:crypto";
 import { Test, type TestingModule } from "@nestjs/testing";
 import { INVALIDATION_CHANNEL, type InvalidationEvent } from "@velexis/api-types/jobs";
@@ -21,6 +23,7 @@ import { signedStripeEvent, stripeFixture } from "@velexis/testing/stripe";
 import { Redis } from "ioredis";
 import type Stripe from "stripe";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { StripeEventsProcessor } from "../../../src/billing/sync/stripe-events.processor";
 import { Clock } from "../../../src/common/clock";
 import { PLATFORM_POOL, type PlatformPool } from "../../../src/common/database";
 import { FeatureSwitches, type Feature } from "../../../src/common/features";
@@ -544,6 +547,67 @@ describe("account.application.deauthorized", () => {
         expect.objectContaining({ tenantId: adminDisabled.tenant.id, connectionId: adminDisabled.test.id }),
       ]),
     );
+  });
+
+  it("[FIX-W37-PLATFORM AC5] records the deauthorisation of connections an admin disabled in one audit row each, and changes nothing else", async () => {
+    const ota = await arrangeOta({ status: "disabled" });
+    const delivery = connectEvent("account.application.deauthorized", ota.accountReference);
+
+    const row = await deliver(delivery);
+
+    expect(row).toMatchObject({ status: "processed", last_error: null, tenant_id: ota.tenant.id });
+    // The admin's disable holds: status, disconnected_at and version as they were.
+    for (const connection of await connectionsOfTenant(ota.tenant.id)) {
+      expect(connection).toMatchObject({ status: "disabled", disconnected_at: null, version: 1 });
+    }
+    const audit = await auditOf(ota.tenant.id, "payments.connect_deauthorized_while_disabled");
+    expect(audit.map((entry) => entry["target_id"])).toEqual([ota.test.id, ota.live.id].sort());
+    for (const entry of audit) {
+      expect(entry).toMatchObject({
+        actor_type: "system",
+        actor_account_id: null,
+        actor_label: "stripe.connect_events",
+        target_type: "payment_connection",
+        tenant_key: ota.tenant.key,
+      });
+      // Exactly these facts: no before or after (nothing changed), no payload, token or e-mail address.
+      expect(entry["details"]).toEqual({
+        environment: entry["target_id"] === ota.test.id ? "test" : "live",
+        accountReference: ota.accountReference,
+        eventId: delivery.eventId,
+        eventType: "account.application.deauthorized",
+        status: "disabled",
+      });
+    }
+    expect(await auditOf(ota.tenant.id, "payments.connect_disconnected")).toEqual([]);
+    expect(await emailsOf(ota.tenant.id)).toEqual([]);
+    expect(invalidationsOf(ota.tenant.id)).toEqual([]);
+    expect(stripe.calls).toEqual([]);
+
+    // The inbox runs the same event again (its row stayed processing after the handler's commit): no second row.
+    await pool.query("UPDATE platform.stripe_events SET status = 'processing' WHERE id = $1", [
+      delivery.eventId,
+    ]);
+    expect(
+      await worker
+        .get(StripeEventsProcessor, { strict: false })
+        .processEvent(delivery.eventId, { attemptsMade: 0, opts: { attempts: 5 } }),
+    ).toEqual({ eventId: delivery.eventId, status: "processed" });
+    expect(await auditOf(ota.tenant.id, "payments.connect_deauthorized_while_disabled")).toHaveLength(2);
+    expect(await emailsOf(ota.tenant.id)).toEqual([]);
+    for (const connection of await connectionsOfTenant(ota.tenant.id)) {
+      expect(connection).toMatchObject({ status: "disabled", disconnected_at: null, version: 1 });
+    }
+
+    // A late delivery of a deauthorisation older than the connections (connected a day ago): it revoked an earlier
+    // connection, so it writes no row.
+    const older = await deliver(
+      connectEvent("account.application.deauthorized", ota.accountReference, {
+        created: nowSeconds() - 2 * 24 * 3600,
+      }),
+    );
+    expect(older).toMatchObject({ status: "processed", tenant_id: ota.tenant.id });
+    expect(await auditOf(ota.tenant.id, "payments.connect_deauthorized_while_disabled")).toHaveLength(2);
   });
 });
 

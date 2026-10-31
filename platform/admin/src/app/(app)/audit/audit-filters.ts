@@ -94,6 +94,7 @@ export const AUDIT_ACTIONS: readonly string[] = Object.freeze([
   "payments.connect_connected",
   "payments.connect_status_changed",
   "payments.connect_disconnected",
+  "payments.connect_deauthorized_while_disabled",
   "payments.api_keys_submitted",
   "payments.api_keys_applied",
   "payments.api_keys_rejected",

@@ -1654,6 +1654,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - A signed `account.application.deauthorized` fixture disables the row and e-mails the owners, and the mode stays `connect_standard` [PF-61 AC2].
   - `account.updated` with charges enabled turns a `pending` row `active`.
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int connections`
+- **Note (2026-10-31, lead decisions (2h) and (2k), FIX-W37-PLATFORM):** step 2's e-mail key is `connection.stripe_disconnected`, as [PADR-0013](../adr/0013-platform-email-outbox.md) item 5 names it (template keys follow PADR-0013 item 5 over plan text), not `payments.stripe_disconnected`. Step 1's inbox endpoint value is `connect_accounts` (the `stripe_events.endpoint` CHECK and `@HandlesStripeEvents("connect_accounts", …)`); `connect-accounts` is only the URL (`/webhooks/stripe/connect-accounts`). Since lead decision (2k), a deauthorisation that finds a connection a platform admin disabled also writes one `payments.connect_deauthorized_while_disabled` audit row per connection and event, leaving its status, `disconnected_at` and e-mails unchanged ([PADR-0011](../adr/0011-stripe-connect-standard-and-api-key-connections.md) item 3 note).
 
 ### PBE-057 · Implement Stripe API-key connections and the return to Velexis payments
 - **Component:** platform-backend
@@ -1722,6 +1723,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - Approve, mark paid and void follow the state rules, with step-up and reasons where listed [PF-91, PF-63 AC2].
   - Owners and finance get the paid e-mail; the portal lists the statement but never a draft, and the CSV has the documented columns [PF-63 AC3].
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int settlements`
+- **Note (2026-10-31, lead decisions (2h), (2i) and (2j), FIX-W37-PLATFORM):** step 2's e-mail key is `settlement.paid`, as [PADR-0013](../adr/0013-platform-email-outbox.md) item 5 names it (template keys follow PADR-0013 item 5 over plan text), not `settlements.paid`. The approval's `409 SETTLEMENT_STATE_INVALID` with `details.reason = carry_forward_changed` has its row in the failure table of [`stripe-payments-account.md`](../flows/stripe-payments-account.md) ("Failure handling"), and since lead decision (2j) an adjustment whose amount has more decimals than the statement currency's exponent answers `422 UNPROCESSABLE` with `details.reason = amount_precision` and writes nothing.
 
 ### PBE-061 · Implement go-live and live API keys
 - **Component:** platform-backend

@@ -1355,7 +1355,7 @@ export interface paths {
          * @description The portal's callback page (`/connect/stripe/callback`, signed-in user) posts what Stripe sent back (M5, PADR-0011), while `FEATURE_OWN_STRIPE` is on (`403 FEATURE_DISABLED`, as for `startStripeConnect`; the state is not taken then); the OTA is the one of the state, so the path names none. The API takes the state with `GETDEL`, so it works once: an unknown, expired or used state, or one that another account started, answers `400 CONNECT_STATE_INVALID`. The account that started must still be an owner or admin of the OTA (`403 FORBIDDEN`), and the OTA must be `active` (`409 TENANT_NOT_ACTIVE`). A callback never re-enables a payment connection a platform admin disabled (`adminSetConnectionStatus`): while one of the OTA's payment connections is `disabled` without a Stripe disconnection (`disconnectedAt` empty), it answers `409 CONFLICT` with `details.reason = connection_disabled` before Stripe is asked anything (whether a code or an error came back), and writes nothing; a connection an admin disables while the code is being exchanged gets the same answer and nothing is written either. A connection disabled because the OTA disconnected Velexis in Stripe can be connected again.
          *
          *     - `{state, error}`: Stripe reported an error and nothing changes: `422 UNPROCESSABLE` with `details.reason = access_denied` when the person declined, `oauth_error` for any other error.
-         *     - `{state, code}`: the code is exchanged with `stripe.oauth.token` using Velexis's secret key. Only the connected account id (`acct_…`) and `livemode` are kept; the access and refresh tokens Stripe returns are discarded, because charges use Velexis's key with `Stripe-Account`. A code Stripe refuses (`invalid_grant`: unknown, expired or used) answers `422 UNPROCESSABLE` with `details.reason = oauth_error`, never Stripe's message. `livemode` must match the deployment (live in production, test elsewhere): otherwise Velexis is disconnected from that account again (`stripe.oauth.deauthorize`, best effort: a failure is logged without any token, and an account an OTA's connection holds is left connected) and the answer is `422 UNPROCESSABLE`, `details.reason = livemode_mismatch`. An account connected to another OTA answers `409 STRIPE_ACCOUNT_ALREADY_CONNECTED`. The account's `charges_enabled`, `payouts_enabled` and `details_submitted` are read from Stripe. Any other Stripe failure answers `502 PROVIDER_ERROR`.
+         *     - `{state, code}`: the code is exchanged with `stripe.oauth.token` using Velexis's secret key. Only the connected account id (`acct_…`) and `livemode` are kept; the access and refresh tokens Stripe returns are discarded, because charges use Velexis's key with `Stripe-Account`. A code Stripe refuses (`invalid_grant`: unknown, expired or used) answers `422 UNPROCESSABLE` with `details.reason = oauth_error`, never Stripe's message. `livemode` must match the deployment (live in production, test elsewhere): otherwise Velexis is disconnected from that account again (`stripe.oauth.deauthorize`, best effort: a failure is logged without any token, and an account that a Connect connection of any OTA still holds, `disconnectedAt` empty, is left connected, as it is when that cannot be read; connections disabled by a Stripe deauthorisation no longer hold it) and the answer is `422 UNPROCESSABLE`, `details.reason = livemode_mismatch`. An account connected to another OTA answers `409 STRIPE_ACCOUNT_ALREADY_CONNECTED`. The account's `charges_enabled`, `payouts_enabled` and `details_submitted` are read from Stripe. Any other Stripe failure answers `502 PROVIDER_ERROR`.
          *
          *     **Effect**, in one transaction: the test payment connection becomes `connect_standard` with the account id, no publishable key and no secrets, the account's capabilities, `connectedAt`, and `active` when charges are enabled (`pending` otherwise, until `account.updated` says so); the live connection the same when the OTA is live, otherwise go-live creates it in this mode. Writes the audit row `payments.connect_connected` and, after commit, publishes `connection` invalidations. Existing payments stay on the account they were taken with. `code` and `state` are write-only: never logged and never answered. `503 SERVICE_UNAVAILABLE` while Redis is down, because the state lives only there.
          */
@@ -2716,7 +2716,7 @@ export interface paths {
         put?: never;
         /**
          * Add a manual adjustment line to a draft
-         * @description Adds a manual `adjustment` line to a **draft** (M5, PADR-0003 item 5): a signed amount in the statement's currency (positive is owed to the OTA; another currency answers `400 VALIDATION_FAILED`), a `description` that the OTA sees on the line (stored trimmed: one of only white space answers `400 VALIDATION_FAILED`), and a written `reason` of 5–500 characters after trimming that the audit row keeps. The totals are recomputed in the same transaction (`adjustmentsAmount`, `netAmount`, `lineCount`) and the statement's version rises. Any other status answers `409 SETTLEMENT_STATE_INVALID`: approved, paid and carried-forward statements are immutable. A regeneration of the draft keeps no adjustment, as it rebuilds every line.
+         * @description Adds a manual `adjustment` line to a **draft** (M5, PADR-0003 item 5): a signed amount in the statement's currency (positive is owed to the OTA; another currency answers `400 VALIDATION_FAILED`), a `description` that the OTA sees on the line (stored trimmed: one of only white space answers `400 VALIDATION_FAILED`), and a written `reason` of 5–500 characters after trimming that the audit row keeps. The amount may have no more decimals than the currency has minor units (its exponent in `reference.currencies`, as the settlement generator reads it: 2 for EUR, 0 for JPY, 3 for KWD; trailing zeros do not count, so `1500.00` JPY is 1500 yen and passes): `1500.5` JPY answers `422 UNPROCESSABLE` with `details.reason = amount_precision`, `details.path = /amount/amount` (the JSON pointer of the refused field), `details.currency` and `details.decimals` (the exponent), and nothing is written (FIX-W37-PLATFORM, lead decision (2j) of 2026-10-31). The schema's two decimals (`numeric(12,2)`) still bound every currency. The totals are recomputed in the same transaction (`adjustmentsAmount`, `netAmount`, `lineCount`) and the statement's version rises. Any other status answers `409 SETTLEMENT_STATE_INVALID`: approved, paid and carried-forward statements are immutable. A regeneration of the draft keeps no adjustment, as it rebuilds every line.
          */
         post: operations["adminAddSettlementAdjustment"];
         delete?: never;
@@ -3320,7 +3320,7 @@ export interface components {
             /** @description HTTP status. */
             status: number;
             requestId: string;
-            /** @description Code-specific structured details, for example `reason` for FORBIDDEN, CONFLICT and UNPROCESSABLE, `status` for TENANT_NOT_ACTIVE and SETTLEMENT_STATE_INVALID, `limit` and `used` for PLAN_LIMIT_REACHED, `missing` for LIVE_PRECONDITIONS_UNMET, `feature` for FEATURE_DISABLED and `provider` for PROVIDER_ERROR. */
+            /** @description Code-specific structured details, for example `reason` for FORBIDDEN, CONFLICT and UNPROCESSABLE (with `path`, the JSON pointer of the refused field, for a refused field such as an adjustment's `amount_precision`), `status` for TENANT_NOT_ACTIVE and SETTLEMENT_STATE_INVALID, `limit` and `used` for PLAN_LIMIT_REACHED, `missing` for LIVE_PRECONDITIONS_UNMET, `feature` for FEATURE_DISABLED and `provider` for PROVIDER_ERROR. */
             details?: {
                 [key: string]: unknown;
             };
@@ -5572,7 +5572,7 @@ export interface components {
             periodStart: components["schemas"]["SettlementPeriodStart"];
             tenantId?: components["schemas"]["TenantId"];
         };
-        /** @description The signed amount of a manual line, not zero, with at most two decimals (`numeric(12,2)`); positive is owed to the OTA. Its currency must be the statement's, which the service checks (`400 VALIDATION_FAILED`). */
+        /** @description The signed amount of a manual line, not zero, with at most two decimals (`numeric(12,2)`); positive is owed to the OTA. Its currency must be the statement's, which the service checks (`400 VALIDATION_FAILED`), and its decimals must fit that currency's minor units (`422 UNPROCESSABLE`, `details.reason = amount_precision`: no decimals for JPY; trailing zeros do not count). */
         SettlementAdjustmentAmount: {
             /** @example -25.00 */
             amount: string;
@@ -13289,6 +13289,16 @@ export interface operations {
             401: components["responses"]["AdminUnauthenticated"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["SettlementStateInvalid"];
+            /** @description The amount has more decimals than the statement's currency has minor units (`details.reason = amount_precision`, with `details.path`, `details.currency` and `details.decimals`); nothing is written. Possible codes: UNPROCESSABLE. */
+            422: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
         };

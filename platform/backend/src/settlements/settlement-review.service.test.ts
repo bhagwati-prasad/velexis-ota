@@ -1,11 +1,14 @@
 // The pure rules of the settlement review (PBE-060; PADR-0003 item 7 and its note of 2026-10-30): the approval's check
 // that a draft's `carry_forward` line holds exactly the carried-forward balances it absorbs now, read from the text the
-// generator writes (settlement-generator.ts `carryForwardLine`, so a change of that text fails here first), and the
-// opaque cursors of the admin's lists. No database: the approval's locks and refusals are in
-// test/integration/settlements/settlement-review.int.test.ts.
+// generator writes (settlement-generator.ts `carryForwardLine`, so a change of that text fails here first), the
+// opaque cursors of the admin's lists, and an adjustment's decimals against its currency's exponent (FIX-W37-PLATFORM,
+// lead decision (2j) of 2026-10-31). No database: the approval's locks and refusals, and the adjustment's refusal
+// through HTTP, are in test/integration/settlements/settlement-review.int.test.ts.
+import { isAppError, toErrorEnvelope } from "@velexis/errors";
 import { describe, expect, it } from "vitest";
 import { carryForwardLine, settlementPeriod } from "./settlement-generator";
 import {
+  amountPrecisionError,
   carryForwardMatches,
   decodeIdCursor,
   encodeIdCursor,
@@ -112,5 +115,74 @@ describe("the cursors of the admin's lists", () => {
     }
     expect(decodeIdCursor("not a cursor", SETTLEMENT_ID)).toBeUndefined();
     expect(decodeIdCursor("", SETTLEMENT_ID)).toBeUndefined();
+  });
+});
+
+describe("amountPrecisionError", () => {
+  /** The `details` of the refusal of `amount` in `currency` with `decimals`, or `undefined` when it passes. */
+  const refusal = (amount: string, currency: string, decimals: number): unknown =>
+    amountPrecisionError(amount, currency, decimals)?.details;
+
+  it("[FIX-W37-PLATFORM AC4] lets EUR amounts have two decimals and no more", () => {
+    for (const amount of ["100", "100.5", "100.50", "-25.50", "0.01", "9999999999.99"]) {
+      expect([amount, refusal(amount, "EUR", 2)]).toEqual([amount, undefined]);
+    }
+    expect(refusal("1.005", "EUR", 2)).toEqual({
+      reason: "amount_precision",
+      path: "/amount/amount",
+      currency: "EUR",
+      decimals: 2,
+    });
+  });
+
+  it("[FIX-W37-PLATFORM AC4] refuses any decimal of a JPY amount, but not trailing zeros", () => {
+    for (const amount of ["1500", "-300", "1500.0", "1500.00"]) {
+      expect([amount, refusal(amount, "JPY", 0)]).toEqual([amount, undefined]);
+    }
+    for (const amount of ["1500.5", "1500.50", "-0.01", "0.10"]) {
+      expect([amount, refusal(amount, "JPY", 0)]).toEqual([
+        amount,
+        { reason: "amount_precision", path: "/amount/amount", currency: "JPY", decimals: 0 },
+      ]);
+    }
+  });
+
+  it("[FIX-W37-PLATFORM AC4] lets a three-decimal currency (KWD) have three decimals and refuses a fourth", () => {
+    for (const amount of ["12", "12.25", "12.255", "-0.001", "12.2500"]) {
+      expect([amount, refusal(amount, "KWD", 3)]).toEqual([amount, undefined]);
+    }
+    expect(refusal("12.2551", "KWD", 3)).toEqual({
+      reason: "amount_precision",
+      path: "/amount/amount",
+      currency: "KWD",
+      decimals: 3,
+    });
+  });
+
+  it("[FIX-W37-PLATFORM AC4] answers 422 UNPROCESSABLE whose message names the currency's rule, never the amount", () => {
+    const yen = amountPrecisionError("1500.5", "JPY", 0);
+    const dinar = amountPrecisionError("12.2551", "KWD", 3);
+
+    expect(isAppError(yen) && isAppError(dinar)).toBe(true);
+    expect([yen?.code, yen?.status, yen?.message]).toEqual([
+      "UNPROCESSABLE",
+      422,
+      "An amount in JPY has no decimals.",
+    ]);
+    expect(dinar?.message).toBe("An amount in KWD has at most 3 decimals.");
+    // A one-decimal exponent (none in ISO 4217 today, but reference.currencies decides) reads in the singular.
+    expect(amountPrecisionError("1.25", "XTS", 1)?.message).toBe("An amount in XTS has at most 1 decimal.");
+    // The envelope carries the details (UNPROCESSABLE takes no fieldErrors) and never the refused amount.
+    const { status, body } = toErrorEnvelope(yen, "req_01JA2Z9W5K7Q3M8N4P6R2T0V1X", {
+      exposeSupplier: false,
+    });
+    expect(status).toBe(422);
+    expect(body.error.details).toEqual({
+      reason: "amount_precision",
+      path: "/amount/amount",
+      currency: "JPY",
+      decimals: 0,
+    });
+    expect(JSON.stringify([body, dinar?.message])).not.toMatch(/1500\.5|12\.2551/);
   });
 });

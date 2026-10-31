@@ -5010,10 +5010,11 @@ paths:
         unknown, expired or used) answers `422 UNPROCESSABLE` with `details.reason = oauth_error`, never Stripe's
         message. `livemode` must match the deployment (live in production, test elsewhere): otherwise Velexis is
         disconnected from that account again (`stripe.oauth.deauthorize`, best effort: a failure is logged without
-        any token, and an account an OTA's connection holds is left connected) and the answer is `422 UNPROCESSABLE`,
-        `details.reason = livemode_mismatch`. An account connected to another OTA answers `409
-        STRIPE_ACCOUNT_ALREADY_CONNECTED`. The account's `charges_enabled`, `payouts_enabled` and `details_submitted`
-        are read from Stripe. Any other Stripe failure answers `502 PROVIDER_ERROR`.
+        any token, and an account that a Connect connection of any OTA still holds, `disconnectedAt` empty, is left
+        connected, as it is when that cannot be read; connections disabled by a Stripe deauthorisation no longer hold
+        it) and the answer is `422 UNPROCESSABLE`, `details.reason = livemode_mismatch`. An account connected to
+        another OTA answers `409 STRIPE_ACCOUNT_ALREADY_CONNECTED`. The account's `charges_enabled`, `payouts_enabled`
+        and `details_submitted` are read from Stripe. Any other Stripe failure answers `502 PROVIDER_ERROR`.
 
 
         **Effect**, in one transaction: the test payment connection becomes `connect_standard` with the account id, no
@@ -10495,10 +10496,16 @@ paths:
         Adds a manual `adjustment` line to a **draft** (M5, PADR-0003 item 5): a signed amount in the statement's
         currency (positive is owed to the OTA; another currency answers `400 VALIDATION_FAILED`), a `description` that
         the OTA sees on the line (stored trimmed: one of only white space answers `400 VALIDATION_FAILED`), and a
-        written `reason` of 5–500 characters after trimming that the audit row keeps. The totals are recomputed in the
-        same transaction (`adjustmentsAmount`, `netAmount`, `lineCount`) and the statement's version rises. Any other
-        status answers `409 SETTLEMENT_STATE_INVALID`: approved, paid and carried-forward statements are immutable. A
-        regeneration of the draft keeps no adjustment, as it rebuilds every line.
+        written `reason` of 5–500 characters after trimming that the audit row keeps. The amount may have no more
+        decimals than the currency has minor units (its exponent in `reference.currencies`, as the settlement generator
+        reads it: 2 for EUR, 0 for JPY, 3 for KWD; trailing zeros do not count, so `1500.00` JPY is 1500 yen and
+        passes): `1500.5` JPY answers `422 UNPROCESSABLE` with `details.reason = amount_precision`, `details.path =
+        /amount/amount` (the JSON pointer of the refused field), `details.currency` and `details.decimals` (the
+        exponent), and nothing is written (FIX-W37-PLATFORM, lead decision (2j) of 2026-10-31). The schema's two
+        decimals (`numeric(12,2)`) still bound every currency. The totals are recomputed in the same transaction
+        (`adjustmentsAmount`, `netAmount`, `lineCount`) and the statement's version rises. Any other status answers
+        `409 SETTLEMENT_STATE_INVALID`: approved, paid and carried-forward statements are immutable. A regeneration of
+        the draft keeps no adjustment, as it rebuilds every line.
       tags:
         - Admin settlements
       security:
@@ -10511,6 +10518,7 @@ paths:
         - TOKEN_EXPIRED
         - NOT_FOUND
         - SETTLEMENT_STATE_INVALID
+        - UNPROCESSABLE
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-platform-tables:
@@ -10598,6 +10606,32 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/SettlementStateInvalid'
+        '422':
+          description: >-
+            The amount has more decimals than the statement's currency has minor units (`details.reason =
+            amount_precision`, with `details.path`, `details.currency` and `details.decimals`); nothing is written.
+            Possible codes: UNPROCESSABLE.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                UNPROCESSABLE:
+                  summary: An amount of 1500.5 on a JPY statement (the yen has no minor unit)
+                  value:
+                    error:
+                      code: UNPROCESSABLE
+                      message: An amount in JPY has no decimals.
+                      status: 422
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: amount_precision
+                        path: /amount/amount
+                        currency: JPY
+                        decimals: 0
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -14364,9 +14398,11 @@ components:
           type: object
           additionalProperties: true
           description: >-
-            Code-specific structured details, for example `reason` for FORBIDDEN, CONFLICT and UNPROCESSABLE, `status`
-            for TENANT_NOT_ACTIVE and SETTLEMENT_STATE_INVALID, `limit` and `used` for PLAN_LIMIT_REACHED, `missing`
-            for LIVE_PRECONDITIONS_UNMET, `feature` for FEATURE_DISABLED and `provider` for PROVIDER_ERROR.
+            Code-specific structured details, for example `reason` for FORBIDDEN, CONFLICT and UNPROCESSABLE (with
+            `path`, the JSON pointer of the refused field, for a refused field such as an adjustment's
+            `amount_precision`), `status` for TENANT_NOT_ACTIVE and SETTLEMENT_STATE_INVALID, `limit` and `used` for
+            PLAN_LIMIT_REACHED, `missing` for LIVE_PRECONDITIONS_UNMET, `feature` for FEATURE_DISABLED and `provider`
+            for PROVIDER_ERROR.
         fieldErrors:
           type: array
           items:
@@ -19728,7 +19764,9 @@ components:
       type: object
       description: >-
         The signed amount of a manual line, not zero, with at most two decimals (`numeric(12,2)`); positive is owed to
-        the OTA. Its currency must be the statement's, which the service checks (`400 VALIDATION_FAILED`).
+        the OTA. Its currency must be the statement's, which the service checks (`400 VALIDATION_FAILED`), and its
+        decimals must fit that currency's minor units (`422 UNPROCESSABLE`, `details.reason = amount_precision`: no
+        decimals for JPY; trailing zeros do not count).
       additionalProperties: false
       required:
         - amount

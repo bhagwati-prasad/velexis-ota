@@ -102,6 +102,7 @@ export const AUDIT_ACTIONS = Object.freeze([
   "payments.connect_connected", // completeStripeConnect
   "payments.connect_status_changed", // account.updated Connect event (system)
   "payments.connect_disconnected", // account.application.deauthorized Connect event (system)
+  "payments.connect_deauthorized_while_disabled", // the same event for a connection an admin disabled: recorded only
   "payments.api_keys_submitted", // submitStripeApiKeys (never the keys)
   "payments.api_keys_applied", // credentials.verify job, success (system)
   "payments.api_keys_rejected", // credentials.verify job, failure (system)

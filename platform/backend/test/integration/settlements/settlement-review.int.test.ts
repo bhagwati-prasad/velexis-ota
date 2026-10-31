@@ -4,7 +4,8 @@
 // pipeline (createTestApp) on this file's database clone and this worker's Redis database:
 //
 // - the admin: the list (filters, order, cursor), the detail with the payout account status and its `ETag`, the lines
-//   (cursor) and their CSV; adjustments (a reason, drafts only, totals computed again), approval (step-up, `If-Match`,
+//   (cursor) and their CSV; adjustments (a reason, drafts only, totals computed again, no more decimals than the
+//   currency's exponent: `422 amount_precision`, FIX-W37-PLATFORM), approval (step-up, `If-Match`,
 //   `approved` with a verified payout account or `carried_forward`, a carried-forward balance absorbed once), payment
 //   (step-up, `If-Match`, approved only, the owners and finance members e-mailed `settlement.paid`) and void (a
 //   reason, drafts only, lines deleted); every write audited once, and a refused one changing nothing;
@@ -889,6 +890,87 @@ describe("adminAddSettlementAdjustment", () => {
       actor_account_id: admin.id,
       details: expect.objectContaining({ reason: body.reason, amount: "100.00", currency: "EUR" }),
     });
+  });
+
+  it("[FIX-W37-PLATFORM AC4] refuses an amount with more decimals than the currency's exponent: 422 amount_precision, nothing written", async () => {
+    // The yen (no minor unit) and the Kuwaiti dinar (three decimals), as the reference loader writes them; the test
+    // clones hold EUR, GBP and USD only.
+    await pool.query(
+      `INSERT INTO reference.currencies (code, numeric_code, name, symbol, minor_units)
+       VALUES ('JPY', '392', 'Japanese Yen', '¥', 0), ('KWD', '414', 'Kuwaiti Dinar', 'KWD', 3)
+       ON CONFLICT (code) DO NOTHING`,
+    );
+    const f = await fixture();
+    const eur = await statement(f.tenant, { month: 10, lines: OCTOBER_LINES });
+    const jpy = await statement(f.tenant, {
+      month: 10,
+      currency: "JPY",
+      lines: [{ type: "charge", amount: "120000.00", fee: "4200.00", day: 2 }],
+    });
+    const kwd = await statement(f.tenant, {
+      month: 10,
+      currency: "KWD",
+      lines: [{ type: "charge", amount: "250.50", fee: "7.50", day: 2 }],
+    });
+    const reason = "Agreed with the OTA's finance contact on 2026-11-09.";
+    const line = (amount: string, currency: string) => ({
+      amount: { amount, currency },
+      description: "Correction of a bank charge",
+      reason,
+    });
+    const before = await Promise.all(
+      [eur, jpy, kwd].map(async (draft) => snapshot(await stored(draft.row.id))),
+    );
+
+    const yen = [
+      await adjust(jpy.row.id, line("1500.5", "JPY")),
+      await adjust(jpy.row.id, line("-0.50", "JPY")),
+    ];
+    for (const res of yen) {
+      expect([outcomeOf(res), errorOf(res).details]).toEqual([
+        "422 UNPROCESSABLE",
+        { reason: "amount_precision", path: "/amount/amount", currency: "JPY", decimals: 0 },
+      ]);
+      expect(errorOf(res).fieldErrors).toBeUndefined();
+      expect(JSON.stringify(res.body)).not.toMatch(/1500\.5|-0\.50/);
+      expectResponseToMatch("adminAddSettlementAdjustment", res, { document: "platform" });
+    }
+    // Beyond two decimals the document's pattern (numeric(12,2)) answers first, for every currency.
+    const tooFine = [
+      await adjust(eur.row.id, line("1.005", "EUR")),
+      await adjust(kwd.row.id, line("12.255", "KWD")),
+    ];
+    expect(tooFine.map(outcomeOf)).toEqual(["400 VALIDATION_FAILED", "400 VALIDATION_FAILED"]);
+    // Nothing of the refusals was written: the totals, the version, the lines and the audit log are as they were.
+    expect(
+      await Promise.all([eur, jpy, kwd].map(async (draft) => snapshot(await stored(draft.row.id)))),
+    ).toEqual(before);
+    for (const draft of [eur, jpy, kwd]) {
+      expect(await storedLines(draft.row.id)).toHaveLength(draft.lines.length);
+      expect(await auditOf(draft.row.id, "settlement.adjusted")).toEqual([]);
+    }
+
+    // Within the exponent: two decimals in EUR, whole yen (trailing zeros do not count), two of KWD's three decimals.
+    const accepted = [
+      await adjust(eur.row.id, line("-25.50", "EUR")),
+      await adjust(jpy.row.id, line("-300", "JPY")),
+      await adjust(jpy.row.id, line("1500.00", "JPY")),
+      await adjust(kwd.row.id, line("12.25", "KWD")),
+    ];
+    for (const res of accepted) {
+      expect(outcomeOf(res)).toBe("200");
+      expectResponseToMatch("adminAddSettlementAdjustment", res, { document: "platform" });
+    }
+    expect(accepted.map((res) => (res.body as { adjustmentsAmount: unknown }).adjustmentsAmount)).toEqual([
+      { amount: "-25.50", currency: "EUR" },
+      { amount: "-300.00", currency: "JPY" },
+      { amount: "1200.00", currency: "JPY" },
+      { amount: "12.25", currency: "KWD" },
+    ]);
+    expect((await auditOf(jpy.row.id, "settlement.adjusted")).map((row) => row["details"])).toEqual([
+      expect.objectContaining({ amount: "-300.00", currency: "JPY" }),
+      expect.objectContaining({ amount: "1500.00", currency: "JPY" }),
+    ]);
   });
 });
 

@@ -15,8 +15,12 @@
 //   `occurredAt` order, cursor-paginated (the cursor is a line of that statement). `adminCsv`: every line as the
 //   admin's CSV file (settlement-csv.ts).
 // - `addAdjustment` (**reason**): a manual `adjustment` line on a **draft**, its amount in the statement's currency
-//   (another answers `400` on `/amount/currency`), its description trimmed (blank answers `400` on `/description`);
-//   the totals are computed again from every line with settlement-formula.ts (the statement's own `fee_bps`), so
+//   (another answers `400` on `/amount/currency`) with no more decimals than that currency has minor units (its
+//   exponent in `reference.currencies`, the generator's `minorUnits`: 2 for EUR, 0 for JPY, 3 for KWD; trailing zeros
+//   do not count), else `422 UNPROCESSABLE` with `details.reason = amount_precision`, `details.path =
+//   /amount/amount`, the currency and its exponent, and nothing written (`amountPrecisionError`; FIX-W37-PLATFORM,
+//   lead decision (2j) of 2026-10-31); its description trimmed (blank answers `400` on `/description`); the totals
+//   are computed again from every line with settlement-formula.ts (the statement's own `fee_bps`), so
 //   `settlements_net_ck` holds, and the version rises. Audited `settlement.adjusted` with the reason.
 // - `approve` (MFA step-up, `If-Match`): a **draft** with a positive net becomes `approved` and needs a `verified`
 //   payout account (`422 PAYOUT_ACCOUNT_REQUIRED`); a net of zero or less becomes `carried_forward`. **A carried-
@@ -129,6 +133,12 @@ export const DEFAULT_SETTLEMENT_PAGE_LIMIT = 50;
 
 /** The `details.reason` of an approval whose draft holds an out-of-date carried-forward balance. */
 export const CARRY_FORWARD_CHANGED = "carry_forward_changed";
+
+/** The `details.reason` of an adjustment whose amount has more decimals than its currency's exponent. */
+export const AMOUNT_PRECISION = "amount_precision";
+
+/** The JSON pointer of an adjustment's amount, as `details.path` of `amount_precision` names it. */
+export const ADJUSTMENT_AMOUNT_PATH = "/amount/amount";
 
 // ---- Cursors ----------------------------------------------------------------------------------------------------
 
@@ -332,6 +342,30 @@ function payoutAccountRequired(): AppError<"PAYOUT_ACCOUNT_REQUIRED"> {
   });
 }
 
+/**
+ * The refusal of an adjustment `amount` (a decimal string the document's pattern allowed) in `currency` whose exponent
+ * is `decimals` (`reference.currencies.minor_units`, as the generator reads it): `422 UNPROCESSABLE` with `details.reason
+ * = amount_precision`, `details.path`, the currency and its exponent when the amount has more decimals than that, or
+ * `undefined` when it fits. Trailing zeros do not count (`1500.00` JPY is 1500 yen); the message names the currency's
+ * rule, never the amount.
+ */
+export function amountPrecisionError(
+  amount: string,
+  currency: string,
+  decimals: number,
+): AppError<"UNPROCESSABLE"> | undefined {
+  if (toMoney(amount, "amount").decimalPlaces() <= decimals) {
+    return undefined;
+  }
+  return new AppError("UNPROCESSABLE", {
+    message:
+      decimals === 0
+        ? `An amount in ${currency} has no decimals.`
+        : `An amount in ${currency} has at most ${decimals} ${decimals === 1 ? "decimal" : "decimals"}.`,
+    details: { reason: AMOUNT_PRECISION, path: ADJUSTMENT_AMOUNT_PATH, currency, decimals },
+  });
+}
+
 function fieldError(path: string, code: string, message: string): AppError<"VALIDATION_FAILED"> {
   return new AppError("VALIDATION_FAILED", { fieldErrors: [{ path, code, message }] });
 }
@@ -456,6 +490,11 @@ export class SettlementReviewService {
           "currency_mismatch",
           `An adjustment is in the statement's currency, ${currency}.`,
         );
+      }
+      const precision = amountPrecisionError(body.amount.amount, currency, await this.decimalsOf(currency));
+      if (precision !== undefined) {
+        // Before any write: the transaction leaves nothing behind.
+        throw precision;
       }
       const amount = toStoredAmount(toMoney(body.amount.amount, "amount"));
       const now = this.clock.now();
@@ -698,11 +737,7 @@ export class SettlementReviewService {
     statement: SettlementRecord,
     tooLarge: () => Error,
   ): Promise<SettlementTotals> {
-    const currency = statement.currency.trim();
-    const decimals = (await this.settlements.minorUnits([currency])).get(currency);
-    if (decimals === undefined) {
-      throw new SettlementDataError(`currency ${currency} is not in reference.currencies`);
-    }
+    const decimals = await this.decimalsOf(statement.currency.trim());
     const lines = await this.review.lineAmounts(trx, statement.id);
     try {
       return settlementTotals(lines, { feeBps: statement.fee_bps, decimals });
@@ -712,6 +747,18 @@ export class SettlementReviewService {
       }
       throw error;
     }
+  }
+
+  /**
+   * The exponent of `currency` in `reference.currencies` (the generator's `minorUnits`: 2 for EUR, 0 for JPY, 3 for
+   * KWD); a currency it does not know is a data error (500), as for the generator.
+   */
+  private async decimalsOf(currency: string): Promise<number> {
+    const decimals = (await this.settlements.minorUnits([currency])).get(currency);
+    if (decimals === undefined) {
+      throw new SettlementDataError(`currency ${currency} is not in reference.currencies`);
+    }
+    return decimals;
   }
 
   /**

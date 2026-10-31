@@ -13,7 +13,8 @@
 // and writes. Connect Standard (PBE-055, flows/stripe-payments-account.md §C, PADR-0011 item 2) reads who starts it
 // and the OTA's state (`connectStarter`, `connectMember`, `tenantForShare`: the tenant, the membership and, for the
 // start only, the account, read only, as the operations' `x-platform-tables` say), finds an account connected to
-// another OTA (`connectedElsewhere`), and switches a locked row, or inserts a missing one, to `connect_standard` with
+// another OTA (`connectedElsewhere`) or still connected to any OTA (`connectedHolderOf`, for the livemode mismatch's
+// deauthorisation, FIX-W37-PLATFORM), and switches a locked row, or inserts a missing one, to `connect_standard` with
 // the OTA's `acct_…` and no key or secret (`applyConnectStandard`, `insertConnectStandard`). The Connect account events
 // (PBE-056, flows/stripe-payments-account.md §C item 5, PADR-0011 item 3) find the `connect_standard` rows of one
 // `acct_…` (`connectRowsOfAccount`, and `lockConnectRowsOfAccount` in the write's transaction), refresh their
@@ -341,6 +342,26 @@ export class PaymentConnectionsRepository {
       .where("account_mode", "=", "connect_standard")
       .where("account_reference", "=", accountReference)
       .where("tenant_id", "<>", tenantId)
+      .orderBy("id")
+      .executeTakeFirst();
+    return row?.tenant_id;
+  }
+
+  /**
+   * The tenant of a `connect_standard` Stripe connection that holds `accountReference` and is still connected
+   * (`disconnected_at` empty: active, pending, or disabled by a platform admin), of any OTA (the caller's too) and any
+   * environment; `undefined` when none does, in particular when every connection that names the account was disabled
+   * by a Stripe deauthorisation (`disconnected_at` set). Read on the pool. A livemode mismatch of the Connect callback
+   * deauthorises the account only when this is `undefined` (FIX-W37-PLATFORM, lead decision (2a) of 2026-10-31).
+   */
+  async connectedHolderOf(accountReference: string): Promise<string | undefined> {
+    const row = await this.db
+      .selectFrom("platform.payment_provider_connections")
+      .select("tenant_id")
+      .where("provider", "=", STRIPE_PROVIDER)
+      .where("account_mode", "=", "connect_standard")
+      .where("account_reference", "=", accountReference)
+      .where("disconnected_at", "is", null)
       .orderBy("id")
       .executeTakeFirst();
     return row?.tenant_id;

@@ -136,11 +136,16 @@ class Harness {
   tenant: ConnectTenant | undefined = { status: "active", storefront_environment: "test" };
   /** The tenant whose `connect_standard` connection holds an account, by account. */
   readonly elsewhere = new Map<string, string>();
+  /**
+   * The accounts of `elsewhere` whose holder's connections a Stripe deauthorisation disabled (`disconnected_at` set):
+   * they still hold the account for `connectedElsewhere`, no longer for `connectedHolderOf`.
+   */
+  readonly elsewhereDeauthorized = new Set<string>();
   /** A unique violation the next write throws (another OTA committed the account meanwhile). */
   conflictOnWrite = false;
   /** Runs when the transaction reads the tenant: what another request commits just before the switch locks the rows. */
   beforeSwitch: ((trx: Trx) => void) | undefined;
-  /** Set to make `connectedElsewhere` fail (the database). */
+  /** Set to make `connectedElsewhere` and `connectedHolderOf` fail (the database). */
   elsewhereDown: Error | undefined;
   readonly rows = new Map<PaymentEnvironment, PaymentConnectionView>([["test", rowOf("test")]]);
   readonly clock = new FakeClock("2026-10-30T09:15:00Z");
@@ -180,6 +185,23 @@ class Harness {
         }
         const holder = this.elsewhere.get(accountReference);
         return Promise.resolve(holder !== undefined && holder !== tenantId ? holder : undefined);
+      },
+      // Any OTA's still-connected holder (`disconnected_at` empty): this OTA's own rows first, then `elsewhere`.
+      connectedHolderOf: (accountReference: string) => {
+        if (this.elsewhereDown !== undefined) {
+          return Promise.reject(this.elsewhereDown);
+        }
+        const own = [...this.rows.values()].some(
+          (row) =>
+            row.account_mode === "connect_standard" &&
+            row.account_reference === accountReference &&
+            row.disconnected_at === null,
+        );
+        if (own) {
+          return Promise.resolve(TENANT);
+        }
+        const holder = this.elsewhere.get(accountReference);
+        return Promise.resolve(this.elsewhereDeauthorized.has(accountReference) ? undefined : holder);
       },
       lockForTenant: (trx: Trx, tenantId: string, environment: PaymentEnvironment) => {
         const row = tenantId === TENANT ? trx.rows.get(environment) : undefined;
@@ -993,6 +1015,59 @@ describe("StripeConnectService.complete", () => {
       ["stripe_connect.deauthorize_skipped", undefined],
       ["stripe_connect.deauthorize_skipped", undefined],
       ["stripe_connect.deauthorize_skipped", "Error"],
+    ]);
+  });
+
+  it("[FIX-W37-PLATFORM AC1] deauthorises an account of the other mode that only connections a Stripe deauthorisation disabled name", async () => {
+    const h = new Harness();
+    // This OTA's own connection named the account until the OTA deauthorised Velexis in Stripe (disconnected_at).
+    const deauthorized = rowOf("test", {
+      account_mode: "connect_standard",
+      account_reference: ACCOUNT,
+      status: "disabled",
+      disconnected_at: new Date("2026-10-20T08:00:00Z"),
+    });
+    h.rows.set("test", deauthorized);
+    h.granted(true);
+    let state = await h.started();
+    expect(await outcome(() => h.service.complete(OWNER, { state, code: CODE }))).toEqual({
+      code: "UNPROCESSABLE",
+      details: { reason: "livemode_mismatch" },
+    });
+    // Nothing is written: the deauthorised row stays as it was, and there is no audit row or event.
+    expect([h.rows.get("test"), h.audit, h.events]).toEqual([deauthorized, [], []]);
+    // Another OTA's connections name it, all of them deauthorised in Stripe.
+    h.rows.set("test", rowOf("test"));
+    h.elsewhere.set(ACCOUNT, OTHER_TENANT);
+    h.elsewhereDeauthorized.add(ACCOUNT);
+    h.granted(true);
+    state = await h.started();
+    expect(await outcome(() => h.service.complete(OWNER, { state, code: CODE }))).toEqual({
+      code: "UNPROCESSABLE",
+      details: { reason: "livemode_mismatch" },
+    });
+
+    expect(h.stripe.callsOf("oauth.deauthorize").map((call) => call.params)).toEqual([
+      { client_id: CLIENT_ID, stripe_user_id: ACCOUNT },
+      { client_id: CLIENT_ID, stripe_user_id: ACCOUNT },
+    ]);
+    expect(h.warnings).toEqual([]);
+    expect(h.infos.map((info) => info.message)).toEqual([
+      "stripe_connect.deauthorized",
+      "stripe_connect.deauthorized",
+    ]);
+
+    // Once another OTA's connection is still connected (disconnected_at empty), the account is left connected again.
+    h.elsewhereDeauthorized.clear();
+    h.granted(true);
+    state = await h.started();
+    expect(await outcome(() => h.service.complete(OWNER, { state, code: CODE }))).toEqual({
+      code: "UNPROCESSABLE",
+      details: { reason: "livemode_mismatch" },
+    });
+    expect(h.stripe.callsOf("oauth.deauthorize")).toHaveLength(2);
+    expect(h.warnings).toEqual([
+      { object: { tenantId: TENANT, stripeAccount: ACCOUNT }, message: "stripe_connect.deauthorize_skipped" },
     ]);
   });
 

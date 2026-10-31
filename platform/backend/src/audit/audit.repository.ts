@@ -3,9 +3,16 @@
 // item 1). The table is append-only by privilege: velexis_platform_app may insert and select, never update, delete or
 // truncate (migration 0002), so this class has no method that changes a row. The admin's audit search and CSV export
 // (adminListAudit, adminExportAudit) read the table through `audit-query.service.ts` (PBE-032); the recent rows of one
-// OTA, which the admin's tenant detail shows (PBE-029), are read here (`recentForTenant`).
+// OTA, which the admin's tenant detail shows (PBE-029), are read here (`recentForTenant`), and so is whether a Stripe
+// event's row was written already (`hasEventRow`, FIX-W37-PLATFORM).
 import { Injectable } from "@nestjs/common";
-import type { PlatformDatabase, ReferenceDatabase, Selectable, Transaction } from "@velexis/db";
+import {
+  sql,
+  type PlatformDatabase,
+  type ReferenceDatabase,
+  type Selectable,
+  type Transaction,
+} from "@velexis/db";
 import type { PlatformDb } from "../common/database";
 
 /** A transaction on the platform and reference schemas, opened by the caller (`platformDb.transaction()`). */
@@ -31,6 +38,15 @@ export interface AuditRowInsert {
   readonly userAgent: string | null;
   /** The JSON text of the `details` object (jsonb columns are written as JSON text). */
   readonly detailsJson: string;
+}
+
+/** The row of a Stripe event that `hasEventRow` looks for: its action, target and the event id in `details`. */
+export interface AuditEventRow {
+  readonly action: string;
+  readonly targetType: string;
+  readonly targetId: string;
+  /** `evt_…`, as `details.eventId` holds it. */
+  readonly eventId: string;
 }
 
 /** What the insert returns: the identity id (a decimal string, as the API shows it) and the time of the row. */
@@ -74,6 +90,25 @@ export class AuditRepository {
       .returning(["id", "created_at"])
       .executeTakeFirstOrThrow();
     return { id: inserted.id, createdAt: inserted.created_at };
+  }
+
+  /**
+   * True when `trx` sees a row of `action` about the target `targetType` `targetId` whose `details.eventId` is
+   * `eventId` (the index on the target finds it). A Stripe event handler whose only write is its audit row uses it to
+   * write that row once per event: the inbox runs an event again when the row it claimed stayed `processing` after
+   * the handler's commit.
+   */
+  async hasEventRow(trx: PlatformTransaction, row: AuditEventRow): Promise<boolean> {
+    const found = await trx
+      .selectFrom("platform.platform_audit_log")
+      .select("id")
+      .where("target_type", "=", row.targetType)
+      .where("target_id", "=", row.targetId)
+      .where("action", "=", row.action)
+      .where(sql<string>`details ->> 'eventId'`, "=", row.eventId)
+      .limit(1)
+      .executeTakeFirst();
+    return found !== undefined;
   }
 
   /**

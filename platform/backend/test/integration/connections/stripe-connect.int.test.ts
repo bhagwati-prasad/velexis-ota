@@ -17,6 +17,9 @@
 //   CONFLICT connection_disabled` with nothing asked or written, while a deauthorised one connects again; a code of the
 //   other mode deauthorises its account (best effort, a failure only logged; an account an OTA holds left connected)
 //   before `422 livemode_mismatch`.
+// - FIX-W37-PLATFORM (lead decision (2a) of 2026-10-31): the livemode mismatch skips the deauthorisation only while a
+//   `connect_standard` connection of any OTA still holds the account (`disconnected_at` empty, an admin-disabled one
+//   too) or when that cannot be read; connections a Stripe deauthorisation disabled no longer count.
 //
 // The milestone switch is a stand-in this file turns on (as payout-accounts.int.test.ts does). Every answer is checked
 // against the platform document. The application logs at `trace`, so "no code, state or OAuth token in a log line",
@@ -41,6 +44,7 @@ import {
 import Stripe from "stripe";
 import { StripeClient } from "../../../src/common/stripe/stripe.client";
 import { TENANT_ROLES, type TenantRole } from "../../../src/memberships/tenant-roles";
+import { PaymentConnectionsRepository } from "../../../src/payment-connections/payment-connections.repository";
 import {
   insertAccount,
   insertPaymentConnection,
@@ -878,6 +882,90 @@ describe("Stripe Connect Standard in a test deployment", () => {
     expect(logsOf(h, "stripe_connect.deauthorize_skipped", f.tenant.id)).toEqual([
       expect.objectContaining({ tenantId: f.tenant.id, stripeAccount: taken }),
     ]);
+  });
+
+  it("[FIX-W37-PLATFORM AC1] skips the deauthorisation only while a connection is still connected to the account, or when that cannot be read", async () => {
+    const f = await h.fixture();
+    const other = await h.fixture();
+    const before = await h.connections(f.tenant.id);
+    /** One mismatched callback of `f` for `account`: the 422 livemode_mismatch, checked against the document. */
+    const mismatch = async (account: string): Promise<void> => {
+      const res = await h.complete(f, "owner", { state: await h.started(f), code: h.grant(account, true) });
+      expect([outcomeOf(res), errorOf(res).details]).toEqual([
+        "422 UNPROCESSABLE",
+        { reason: "livemode_mismatch" },
+      ]);
+      expectResponseToMatch("completeStripeConnect", res, { document: "platform" });
+    };
+
+    // No connection names the account: it is deauthorised.
+    h.stripe.reset();
+    const unknown = newAccountId();
+    await mismatch(unknown);
+    expect(h.stripe.deauthorized).toEqual([unknown]);
+
+    // Another OTA's connection still holds it (disconnected_at empty): left connected, the skip logged.
+    const held = newAccountId();
+    h.account(held);
+    expect(
+      outcomeOf(await h.complete(other, "owner", { state: await h.started(other), code: h.grant(held) })),
+    ).toBe("200");
+    h.stripe.reset();
+    await mismatch(held);
+    expect(h.stripe.callsOf("oauth.deauthorize")).toEqual([]);
+    expect(logsOf(h, "stripe_connect.deauthorize_skipped", f.tenant.id)).toEqual([
+      expect.objectContaining({ tenantId: f.tenant.id, stripeAccount: held }),
+    ]);
+
+    // An admin disabled that connection (disabled, disconnected_at still empty): it still holds the account.
+    await h.pool.query(
+      "UPDATE platform.payment_provider_connections SET status = 'disabled' WHERE tenant_id = $1",
+      [other.tenant.id],
+    );
+    await mismatch(held);
+    expect(h.stripe.callsOf("oauth.deauthorize")).toEqual([]);
+    expect(logsOf(h, "stripe_connect.deauthorize_skipped", f.tenant.id)).toHaveLength(2);
+
+    // The OTA deauthorised Velexis in Stripe (disconnected_at set): the row no longer holds the account, so it is
+    // deauthorised, and the deauthorised row is left as it is.
+    await h.pool.query(
+      "UPDATE platform.payment_provider_connections SET disconnected_at = $2 WHERE tenant_id = $1",
+      [other.tenant.id, new Date("2026-10-20T08:00:00Z")],
+    );
+    const deauthorizedRows = await h.connections(other.tenant.id);
+    await mismatch(held);
+    expect(h.stripe.callsOf("oauth.deauthorize")).toEqual([
+      expect.objectContaining({ params: { client_id: "ca_replace_me", stripe_user_id: held } }),
+    ]);
+    expect(h.stripe.deauthorized).toEqual([held]);
+    expect(logsOf(h, "stripe_connect.deauthorized", f.tenant.id)).toEqual([
+      expect.objectContaining({ stripeAccount: unknown }),
+      expect.objectContaining({ stripeAccount: held }),
+    ]);
+    expect(await h.connections(other.tenant.id)).toEqual(deauthorizedRows);
+
+    // The holder cannot be read (the database fails): left connected, the skip logged with the failure's name only.
+    h.stripe.reset();
+    // On the prototype: more than one module of the graph provides the repository.
+    const lookup = vi
+      .spyOn(PaymentConnectionsRepository.prototype, "connectedHolderOf")
+      .mockRejectedValueOnce(new Error("Connection terminated unexpectedly"));
+    try {
+      await mismatch(newAccountId());
+    } finally {
+      lookup.mockRestore();
+    }
+    expect(h.stripe.callsOf("oauth.deauthorize")).toEqual([]);
+    expect(logsOf(h, "stripe_connect.deauthorize_skipped", f.tenant.id).at(-1)).toEqual(
+      expect.objectContaining({ level: 40, tenantId: f.tenant.id, failure: "Error" }),
+    );
+    expect(JSON.stringify(h.t.logs.withMessage("stripe_connect.deauthorize_skipped"))).not.toContain(
+      "Connection terminated",
+    );
+
+    // None of these callbacks changed f's connection or wrote an audit row.
+    expect(await h.connections(f.tenant.id)).toEqual(before);
+    expect(await h.audit(f.tenant.id)).toEqual([]);
   });
 });
 

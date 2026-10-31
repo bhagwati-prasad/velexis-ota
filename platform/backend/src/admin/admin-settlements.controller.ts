@@ -12,11 +12,12 @@
 //   `adminGetSettlement` (with the OTA and its payout account status; the version in `ETag`), `adminListSettlementLines`
 //   (cursor) and `adminDownloadSettlementLines` (the CSV file, `text/csv` with `Cache-Control: no-store` and an
 //   attachment named after the OTA, month and currency: the file holds an OTA's payment records). The writes answer the
-//   statement with its new version in `ETag`: `adminAddSettlementAdjustment` (**reason**, drafts only),
-//   `adminApproveSettlement` and `adminMarkSettlementPaid` (`x-mfa-step-up`: RecentMfaGuard answers `401
-//   REAUTH_REQUIRED` without a TOTP step-up in the last 15 minutes; `If-Match`), `adminVoidSettlement` (**reason**,
-//   drafts only). The request validation trims every admin reason before it counts its 5–500 characters
-//   (FIX-W35-PLATFORM).
+//   statement with its new version in `ETag`: `adminAddSettlementAdjustment` (**reason**, drafts only; an amount
+//   with more decimals than the statement currency's exponent answers `422 UNPROCESSABLE`, `details.reason =
+//   amount_precision`, from the service, FIX-W37-PLATFORM), `adminApproveSettlement` and `adminMarkSettlementPaid`
+//   (`x-mfa-step-up`: RecentMfaGuard answers `401 REAUTH_REQUIRED` without a TOTP step-up in the last 15 minutes;
+//   `If-Match`), `adminVoidSettlement` (**reason**, drafts only). The request validation trims every admin reason
+//   before it counts its 5–500 characters (FIX-W35-PLATFORM).
 import { Controller, Get, HttpCode, Post, Res, StreamableFile } from "@nestjs/common";
 import type { components } from "@velexis/api-types/platform";
 import type { AccessTokenClaims } from "../auth/token.service";

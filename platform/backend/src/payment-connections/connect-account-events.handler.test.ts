@@ -1,9 +1,10 @@
 // The rules of the Connect account events (PBE-056; connect-account-events.handler.ts): which connections an event
 // changes, how `account.updated` sets the status, when two reads of the connections differ, when a deauthorisation is
 // older than the connection, which Stripe errors mean the account is out of reach, the handler's declaration for the
-// inbox processor, and the rounds of `account.updated` (a write is confirmed by a re-fetch after its commit) over
-// stand-ins of the repository, the database and Stripe. The writes themselves run against PostgreSQL in
-// test/integration/connections/connect-events.int.test.ts.
+// inbox processor, the rounds of `account.updated` (a write is confirmed by a re-fetch after its commit), and the
+// audit row of a deauthorisation that finds connections a platform admin disabled (FIX-W37-PLATFORM, lead decision (2k)
+// of 2026-10-31) over stand-ins of the repository, the audit log, the outbox, the database and Stripe. The writes
+// themselves run against PostgreSQL in test/integration/connections/connect-events.int.test.ts.
 import { Reflector } from "@nestjs/core";
 import { FakeClock } from "@velexis/testing";
 import type { PinoLogger } from "nestjs-pino";
@@ -24,7 +25,9 @@ import type { OutboxService } from "../notifications/outbox.service";
 import {
   ACCOUNT_DEAUTHORIZED,
   ACCOUNT_UPDATED,
+  CONNECT_EVENTS_ACTOR_LABEL,
   ConnectAccountEventsHandler,
+  DEAUTHORIZED_WHILE_DISABLED_ACTION,
   isAccountUnreachable,
   isDeauthorized,
   isDisabledByAdmin,
@@ -94,6 +97,22 @@ const UPDATED_EVENT: StripeInboxEvent = {
   attempt: 1,
 };
 
+/** An `account.application.deauthorized` event of ACCOUNT as the inbox hands it to the handler. */
+const DEAUTHORIZED_EVENT: StripeInboxEvent = {
+  ...UPDATED_EVENT,
+  id: "evt_1QTestAccountDeauthorized",
+  type: ACCOUNT_DEAUTHORIZED,
+  objectType: "application",
+  objectId: "ca_TestConnectClient",
+};
+
+/** An audit entry as the stand-in of the audit service keeps it. */
+interface RecordedEntry {
+  readonly action: string;
+  readonly targetId: string | null;
+  readonly details?: Record<string, unknown>;
+}
+
 /**
  * The handler over stand-ins: the connections in memory (each write commits at once), Stripe answering the
  * capabilities of `answers` in turn (the last one again once they run out), and hooks that run before the n-th read of
@@ -112,6 +131,10 @@ class RoundsHarness {
   retrieves = 0;
   readonly audit: unknown[] = [];
   readonly events: unknown[] = [];
+  /** The e-mails queued to the owners. */
+  readonly queued: unknown[] = [];
+  /** The messages of the warning lines. */
+  readonly warnings: string[] = [];
   readonly handler: ConnectAccountEventsHandler;
 
   constructor() {
@@ -139,6 +162,20 @@ class RoundsHarness {
             }),
           ),
         ),
+      disconnectConnect: (_trx: unknown, id: string, now: Date) =>
+        Promise.resolve(
+          structuredClone(this.write(id, { status: "disabled", disconnected_at: now, updated_at: now })),
+        ),
+      tenantLabel: () =>
+        Promise.resolve({ name: "Agency Travel", key: "agency", status: "active", deleted_at: null }),
+      activeOwners: () =>
+        Promise.resolve([
+          {
+            account_id: "acc_01JA2ZA1C5E9G3J7K2M6P00001",
+            email: "anna.berg@example.com",
+            full_name: "Anna Berg",
+          },
+        ]),
     };
     const stripe = {
       api: () => ({
@@ -167,6 +204,25 @@ class RoundsHarness {
         this.audit.push(entry);
         return Promise.resolve({ id: String(this.audit.length), createdAt: AT });
       },
+      hasEventEntry: (
+        _trx: unknown,
+        entry: { readonly action: string; readonly targetId: string; readonly eventId: string },
+      ) =>
+        Promise.resolve(
+          (this.audit as RecordedEntry[]).some(
+            (row) =>
+              row.action === entry.action &&
+              row.targetId === entry.targetId &&
+              row.details?.["eventId"] === entry.eventId,
+          ),
+        ),
+    };
+    const outbox = {
+      portalLink: (path: string) => `https://platform.example.com${path}`,
+      queue: (_trx: unknown, message: unknown) => {
+        this.queued.push(message);
+        return Promise.resolve();
+      },
     };
     const invalidations = {
       publishAfterCommit: (_trx: unknown, event: unknown) => {
@@ -176,12 +232,17 @@ class RoundsHarness {
     const db = {
       transaction: () => ({ execute: <T>(work: (trx: object) => Promise<T>): Promise<T> => work({}) }),
     };
-    const logger = { info: () => undefined, warn: () => undefined };
+    const logger = {
+      info: () => undefined,
+      warn: (_object: unknown, message: string) => {
+        this.warnings.push(message);
+      },
+    };
     this.handler = new ConnectAccountEventsHandler(
       repository as unknown as PaymentConnectionsRepository,
       stripe as unknown as StripeClient,
       audit as unknown as AuditService,
-      {} as OutboxService,
+      outbox as unknown as OutboxService,
       invalidations as unknown as InvalidationPublisher,
       new FakeClock(AT),
       db as unknown as PlatformDb,
@@ -424,5 +485,102 @@ describe("Connect account event rules", () => {
         handlerKey("connect_accounts", "account.updated"),
       ].sort(),
     );
+  });
+});
+
+describe("account.application.deauthorized of connections a platform admin disabled", () => {
+  /** The audit entry the handler writes for `environment`'s admin-disabled connection and `event`. */
+  const recorded = (environment: PaymentEnvironment, event = DEAUTHORIZED_EVENT): unknown => ({
+    actorType: "system",
+    actorLabel: CONNECT_EVENTS_ACTOR_LABEL,
+    action: DEAUTHORIZED_WHILE_DISABLED_ACTION,
+    targetType: "payment_connection",
+    targetId: connectRow(environment).id,
+    tenantId: TENANT,
+    details: {
+      environment,
+      accountReference: ACCOUNT,
+      eventId: event.id,
+      eventType: ACCOUNT_DEAUTHORIZED,
+      status: "disabled",
+    },
+  });
+
+  it("[FIX-W37-PLATFORM AC5] audits the Stripe deauthorisation once per connection, and changes, e-mails and invalidates nothing", async () => {
+    const h = new RoundsHarness();
+    h.rows = [connectRow("test", { status: "disabled" }), connectRow("live", { status: "disabled" })];
+    const before = structuredClone(h.rows);
+
+    expect(await h.handler.handle(DEAUTHORIZED_EVENT)).toEqual({ status: "processed", tenantId: TENANT });
+
+    // The admin's disable holds: same status, no disconnected_at, same version.
+    expect(h.rows).toEqual(before);
+    expect(h.audit).toEqual([recorded("test"), recorded("live")]);
+    // Nothing changed, so no before and after; and no secret, payload or e-mail address in the row.
+    expect(JSON.stringify(h.audit)).not.toMatch(/before|after|@|sk_|whsec_/);
+    expect([h.queued, h.events]).toEqual([[], []]);
+    expect(h.warnings).toEqual([
+      "stripe_connect.deauthorized_admin_disabled",
+      "stripe_connect.deauthorized_admin_disabled",
+    ]);
+    expect(h.retrieves).toBe(0);
+
+    // The same event again (the inbox re-runs a row that stayed processing) writes no second row; another event does.
+    expect(await h.handler.handle(DEAUTHORIZED_EVENT)).toEqual({ status: "processed", tenantId: TENANT });
+    expect(h.audit).toHaveLength(2);
+    const later = { ...DEAUTHORIZED_EVENT, id: "evt_1QTestAccountDeauthorizedAgain" };
+    await h.handler.handle(later);
+    expect(h.audit).toEqual([
+      recorded("test"),
+      recorded("live"),
+      recorded("test", later),
+      recorded("live", later),
+    ]);
+    expect([h.rows, h.queued, h.events]).toEqual([before, [], []]);
+  });
+
+  it("[FIX-W37-PLATFORM AC5] writes no audit row for a deauthorisation older than the admin-disabled connection", async () => {
+    const h = new RoundsHarness();
+    // Connected again a second after the event's `created` (AT), then disabled by an admin: the late event revoked an
+    // earlier connection, so it says nothing about this one.
+    const reconnectedAt = new Date(AT.getTime() + 1000);
+    h.rows = [
+      connectRow("test", { status: "disabled", connected_at: reconnectedAt }),
+      connectRow("live", { status: "disabled", connected_at: reconnectedAt }),
+    ];
+    const before = structuredClone(h.rows);
+
+    expect(await h.handler.handle(DEAUTHORIZED_EVENT)).toEqual({ status: "processed", tenantId: TENANT });
+
+    expect([h.rows, h.audit, h.queued, h.events]).toEqual([before, [], [], []]);
+    // Connected in the same second as the event's `created`: not newer than the event, so the row is written.
+    h.rows = [connectRow("test", { status: "disabled", connected_at: AT })];
+    await h.handler.handle(DEAUTHORIZED_EVENT);
+    expect(h.audit).toEqual([recorded("test")]);
+  });
+
+  it("[FIX-W37-PLATFORM AC5] still disconnects, audits and e-mails for a connection of the account an admin did not disable", async () => {
+    const h = new RoundsHarness();
+    h.rows = [connectRow("test", { status: "disabled" }), connectRow("live", { status: "active" })];
+
+    expect(await h.handler.handle(DEAUTHORIZED_EVENT)).toEqual({ status: "processed", tenantId: TENANT });
+
+    expect(h.states()).toEqual([
+      ["disabled", 1],
+      ["disabled", 2],
+    ]);
+    expect(h.rows.map((row) => row.disconnected_at)).toEqual([null, AT]);
+    expect((h.audit as RecordedEntry[]).map((entry) => [entry.action, entry.targetId])).toEqual([
+      [DEAUTHORIZED_WHILE_DISABLED_ACTION, connectRow("test").id],
+      ["payments.connect_disconnected", connectRow("live").id],
+    ]);
+    // The owners hear of the live connection's disconnection, once; the admin-disabled one adds nothing.
+    expect(h.queued).toEqual([
+      expect.objectContaining({
+        templateKey: "connection.stripe_disconnected",
+        idempotencyKey: `stripe_disconnected:${TENANT}:${DEAUTHORIZED_EVENT.id}`,
+      }),
+    ]);
+    expect(h.events).toEqual([{ v: 1, type: "connection", tenantId: TENANT }]);
   });
 });

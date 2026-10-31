@@ -43,9 +43,13 @@
 //    account again with `stripe.oauth.deauthorize({client_id, stripe_user_id})` (idempotency key
 //    `connect_deauthorize:<sha256 of the state>`), best effort: a failure is logged as
 //    `stripe_connect.deauthorize_failed` with Stripe's type, status and code only (never a token or Stripe's
-//    message) and changes nothing, and an account that an OTA's `connect_standard` connection holds is not
-//    deauthorised (`stripe_connect.deauthorize_skipped`: that would cut the OTA off). Then `422 UNPROCESSABLE`,
-//    `livemode_mismatch` (FIX-W36-PLATFORM, lead decision (2h));
+//    message) and changes nothing, and an account that a `connect_standard` connection of any OTA (this one's too)
+//    still holds, `disconnected_at` empty (`connectedHolderOf`: active, pending, or disabled by an admin), is not
+//    deauthorised (`stripe_connect.deauthorize_skipped`: that would cut the OTA off). A connection a Stripe
+//    deauthorisation disabled (`disconnected_at` set) no longer holds it: Velexis's access to that account was already
+//    revoked once, so the account is deauthorised (FIX-W37-PLATFORM, lead decision (2a) of 2026-10-31). When the
+//    lookup fails, the account is left connected and the skip logged with the failure's name. Then `422
+//    UNPROCESSABLE`, `livemode_mismatch` (FIX-W36-PLATFORM, lead decision (2h));
 // 7. an `acct_…` that another OTA's `connect_standard` connection holds answers `409 STRIPE_ACCOUNT_ALREADY_CONNECTED`
 //    (one account per OTA: Connect events are routed by `event.account`);
 // 8. `stripe.accounts.retrieve(acct_…)` for `charges_enabled`, `payouts_enabled` and `details_submitted` (`502` when it
@@ -410,7 +414,7 @@ export class StripeConnectService {
     }
     const { accountReference, livemode } = await this.exchange(body.code, stateDigest);
     if (livemode !== this.live) {
-      await this.deauthorize(tenantId, accountReference, stateDigest, current);
+      await this.deauthorize(tenantId, accountReference, stateDigest);
       throw new AppError("UNPROCESSABLE", { details: { reason: "livemode_mismatch" } });
     }
     if ((await this.connections.connectedElsewhere(accountReference, tenantId)) !== undefined) {
@@ -465,22 +469,13 @@ export class StripeConnectService {
   /**
    * Step 6 of the file header: disconnects Velexis from the account of a code of the other mode, best effort. Never
    * throws: a refusal or failure is logged (Stripe's type, status and code only) and the callback answers its `422`.
-   * An account that an OTA's `connect_standard` connection holds (`current` are the OTA's own connections) is left
-   * connected.
+   * An account that a still-connected `connect_standard` connection of any OTA holds (`connectedHolderOf`:
+   * `disconnected_at` empty) is left connected, and so is one whose holder cannot be read.
    */
-  private async deauthorize(
-    tenantId: string,
-    accountReference: string,
-    stateDigest: string,
-    current: readonly PaymentConnectionView[],
-  ): Promise<void> {
+  private async deauthorize(tenantId: string, accountReference: string, stateDigest: string): Promise<void> {
     const fields = { tenantId, stripeAccount: accountReference };
     try {
-      const held =
-        current.some(
-          (row) => row.account_mode === "connect_standard" && row.account_reference === accountReference,
-        ) || (await this.connections.connectedElsewhere(accountReference, tenantId)) !== undefined;
-      if (held) {
+      if ((await this.connections.connectedHolderOf(accountReference)) !== undefined) {
         this.logger.warn(fields, "stripe_connect.deauthorize_skipped");
         return;
       }

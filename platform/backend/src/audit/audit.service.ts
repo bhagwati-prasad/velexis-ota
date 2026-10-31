@@ -26,6 +26,15 @@ import {
   type PlatformTransaction,
 } from "./audit.repository";
 
+/** The audit row of one Stripe event that `hasEventEntry` looks for. */
+export interface AuditEventEntry {
+  readonly action: AuditAction;
+  readonly targetType: AuditTargetType;
+  readonly targetId: string;
+  /** `evt_…`, recorded as `details.eventId`. */
+  readonly eventId: string;
+}
+
 /** A plain object of values to record (`before`, `after`); it is redacted before it is stored. */
 export type AuditValues = Readonly<Record<string, unknown>>;
 
@@ -169,6 +178,15 @@ export class AuditService {
       userAgent: context?.userAgent ?? null,
       detailsJson: JSON.stringify(auditDetails(entry)),
     });
+  }
+
+  /**
+   * True when `trx` sees the audit row of `entry`'s action about its target for the Stripe event `entry.eventId`
+   * (`details.eventId`), so a handler whose only write is that row writes it once per event (AuditRepository
+   * `hasEventRow`).
+   */
+  hasEventEntry(trx: PlatformTransaction, entry: AuditEventEntry): Promise<boolean> {
+    return this.repository.hasEventRow(trx, entry);
   }
 
   /**

@@ -48,7 +48,14 @@
 //   (`STALE_EVENT`);
 // - a connection a platform admin disabled (`disabled` without `disconnected_at`) is kept as it is, so the admin's
 //   disable still holds against the OTA's own reconnect (a callback refuses such a connection; FIX-W36-PLATFORM, lead
-//   decision (2h) of 2026-10-30); the skip is logged (`stripe_connect.deauthorized_admin_disabled`).
+//   decision (2h) of 2026-10-30); the skip is logged (`stripe_connect.deauthorized_admin_disabled`) and recorded in
+//   one audit row per connection and event, `payments.connect_deauthorized_while_disabled` (actor `system`, the
+//   environment, the `acct_…`, the event id and type, and the status it keeps; no `before` or `after`, since nothing
+//   changes), so the admin sees that the OTA also revoked Velexis in Stripe. Its status, `disconnected_at` and
+//   version stay, no e-mail is queued and nothing is invalidated (FIX-W37-PLATFORM, lead decision (2k) of
+//   2026-10-31). A re-run of the same event finds its row (`AuditService.hasEventEntry`) and writes none again. A
+//   deauthorisation older than such a connection (the stale rule above: it revoked an earlier connection, and Velexis
+//   was connected again since) writes no row, since it would tell the admin of a revocation that no longer holds.
 //
 // Each event resolves to the OTA of its connections (`stripe_events.tenant_id`). Log lines carry the event id, the OTA
 // and the `acct_…`; never a payload, a token or an e-mail address. "Now" is the injected Clock's time.
@@ -83,6 +90,9 @@ export const ACCOUNT_DEAUTHORIZED = "account.application.deauthorized";
 
 /** The `actorLabel` of the audit rows these events write (actor `system`). */
 export const CONNECT_EVENTS_ACTOR_LABEL = "stripe.connect_events";
+
+/** The audit action of a deauthorisation that finds a connection a platform admin disabled (nothing changes). */
+export const DEAUTHORIZED_WHILE_DISABLED_ACTION = "payments.connect_deauthorized_while_disabled";
 
 /** The e-mail to the owners of a deauthorised connection (PADR-0013 item 5). */
 export const STRIPE_DISCONNECTED_TEMPLATE = "connection.stripe_disconnected";
@@ -366,6 +376,7 @@ export class ConnectAccountEventsHandler implements StripeEventHandler {
             { ...context, stripeAccount: accountReference },
             "stripe_connect.deauthorized_admin_disabled",
           );
+          await this.recordDeauthorizedWhileDisabled(trx, event, accountReference, row);
           continue;
         }
         if (isStaleDeauthorization(event.stripeCreatedAt, row.connected_at)) {
@@ -420,6 +431,46 @@ export class ConnectAccountEventsHandler implements StripeEventHandler {
         "stripe_connect.account_deauthorized",
       );
       return { status: "processed", tenantId };
+    });
+  }
+
+  /**
+   * The audit row of a deauthorisation that found `row` disabled by a platform admin (file header): written once per
+   * connection and event, in `trx`, and not for a deauthorisation older than the connection (`isStaleDeauthorization`);
+   * the connection itself is not written.
+   */
+  private async recordDeauthorizedWhileDisabled(
+    trx: PlatformTransaction,
+    event: StripeInboxEvent,
+    accountReference: string,
+    row: PaymentConnectionView,
+  ): Promise<void> {
+    if (isStaleDeauthorization(event.stripeCreatedAt, row.connected_at)) {
+      return;
+    }
+    const target = { targetType: "payment_connection", targetId: row.id } as const;
+    if (
+      await this.audit.hasEventEntry(trx, {
+        action: DEAUTHORIZED_WHILE_DISABLED_ACTION,
+        ...target,
+        eventId: event.id,
+      })
+    ) {
+      return;
+    }
+    await this.audit.record(trx, {
+      actorType: "system",
+      actorLabel: CONNECT_EVENTS_ACTOR_LABEL,
+      action: DEAUTHORIZED_WHILE_DISABLED_ACTION,
+      ...target,
+      tenantId: row.tenant_id,
+      details: {
+        environment: row.environment,
+        accountReference,
+        eventId: event.id,
+        eventType: event.type,
+        status: row.status,
+      },
     });
   }
 
