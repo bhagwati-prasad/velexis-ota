@@ -9,7 +9,8 @@
 //   Amadeus connection routes (ConnectionsController over ConnectionsService: `listAmadeusConnections`, PBE-027, and
 //   the settings update `updateAmadeusConnection`, PBE-040).
 // - `SupplierConnectionsModule.forWorker()` (WorkerModule) adds the worker's side: the Amadeus token check
-//   (AmadeusOAuthGateway), the one processor of `platform-connections` (VerificationProcessor) and the
+//   (AmadeusOAuthGateway), the one processor of `platform-connections` (VerificationProcessor, which runs
+//   `credentials.verify` with CredentialsVerifyProcessor of `CredentialSubmissionsModule.forWorker()`, PBE-052) and the
 //   `amadeus.pool_level` handler of the `platform-maintenance` processor (PoolLevelScheduler), in a module of its own,
 //   so the worker gets none of the admin's services.
 //
@@ -17,6 +18,7 @@
 // RedisModule (InvalidationPublisher), AuditModule and NotificationsModule (the ops alert of the pool level).
 import { Module, type DynamicModule } from "@nestjs/common";
 import { AuditModule } from "../audit/audit.module";
+import { CredentialSubmissionsModule } from "../common/credentials/credential-submissions.module";
 import { QueuesModule } from "../common/queues/queues.module";
 import { NotificationsModule } from "../notifications/notifications.module";
 import { AmadeusAccountsRepository } from "./amadeus-accounts.repository";
@@ -38,7 +40,7 @@ const REPOSITORIES = [AmadeusAccountsRepository, AmadeusOfficesRepository, Suppl
  * processor of `platform-connections`, the token check it calls and the `amadeus.pool_level` handler.
  */
 @Module({
-  imports: [AuditModule, NotificationsModule, QueuesModule],
+  imports: [AuditModule, NotificationsModule, QueuesModule, CredentialSubmissionsModule.forWorker()],
   providers: [...REPOSITORIES, AmadeusOAuthGateway, VerificationProcessor, PoolLevelScheduler],
 })
 export class SupplierConnectionsWorkerModule {}

@@ -113,6 +113,30 @@ const SAMPLES: Readonly<Record<EmailTemplateKey, EmailVariables>> = {
     },
     secretData: {},
   },
+  "connection.credentials_applied": {
+    data: {
+      fullName: "Ana Lima",
+      tenantName: "Acme Travel",
+      tenantKey: "acme",
+      credentials: "Amadeus credentials",
+      environment: "live",
+      connectionUrl: "https://platform.example.com/otas/ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/amadeus",
+    },
+    secretData: {},
+  },
+  "connection.credentials_failed": {
+    data: {
+      fullName: "Ana Lima",
+      tenantName: "Acme Travel",
+      tenantKey: "acme",
+      credentials: "Stripe API keys",
+      environment: "test",
+      errorCode: "STRIPE_KEY_INVALID",
+      reason: "Stripe answered 401 (api_key_invalid).",
+      connectionUrl: "https://platform.example.com/otas/ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/payments",
+    },
+    secretData: {},
+  },
 };
 
 const templates = EmailTemplates.load();
@@ -165,6 +189,9 @@ describe("e-mail templates", () => {
         "settlement.paid",
         // M5: a Connect deauthorisation (PBE-056).
         "connection.stripe_disconnected",
+        // M5: the end of a credential verification (PBE-052).
+        "connection.credentials_applied",
+        "connection.credentials_failed",
       ].sort(),
     );
     for (const key of EMAIL_TEMPLATE_KEYS) {

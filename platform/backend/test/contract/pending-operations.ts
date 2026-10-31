@@ -40,12 +40,11 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   // the payout account and settlements, and invoices). createCheckoutSession and createCustomerPortalSession are bound
   // since PBE-044, getPayoutAccount and setPayoutAccount since PBE-058, startStripeConnect and completeStripeConnect
   // since PBE-055, listSettlements, getSettlement and downloadSettlementLines since PBE-060, addDomain, removeDomain and
-  // makeDomainPrimary since PBE-049.
+  // makeDomainPrimary since PBE-049, getCredentialSubmission since PBE-052.
   { operationId: "goLive", task: "PBE-061" },
   { operationId: "checkDomain", task: "PBE-050" },
   { operationId: "requestLiveAmadeus", task: "PBE-054" },
   { operationId: "submitAmadeusCredentials", task: "PBE-053" },
-  { operationId: "getCredentialSubmission", task: "PBE-052" },
   { operationId: "submitStripeApiKeys", task: "PBE-057" },
   { operationId: "useVelexisPayments", task: "PBE-057" },
   { operationId: "listInvoices", task: "PBE-046" },

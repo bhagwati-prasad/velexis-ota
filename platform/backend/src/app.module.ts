@@ -17,6 +17,7 @@ import { AuthModule } from "./auth/auth.module";
 import { BillingModule } from "./billing/billing.module";
 import { BillingSyncModule } from "./billing/sync/billing-sync.module";
 import { API_REQUEST_MIDDLEWARE, CommonModule } from "./common/common.module";
+import { CredentialSubmissionsModule } from "./common/credentials/credential-submissions.module";
 import { configModule, PLATFORM_PROCESSES, type PlatformBackendConfig } from "./config";
 import { DomainsModule } from "./domains/domains.module";
 import { HealthModule } from "./health/health.module";
@@ -57,6 +58,8 @@ export class AppModule implements NestModule {
         // The domain list and Caddy's TLS `ask` endpoint, whose cache listens to `vx:invalidate` (PBE-027).
         DomainsModule.forApi(),
         PaymentConnectionsModule.forApi(),
+        // The portal's read of a credential submission (PBE-052); the operations that submit join their modules.
+        CredentialSubmissionsModule.forApi(),
         // The payout account of the portal (PBE-058); the settlements join it in M5.
         SettlementsModule.forApi(),
         ProvisioningModule.forApi(),

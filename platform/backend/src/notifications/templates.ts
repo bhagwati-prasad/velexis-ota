@@ -37,6 +37,9 @@ export const EMAIL_TEMPLATE_KEYS = [
   "settlement.paid",
   // M5: the OTA disconnected Velexis in Stripe (PBE-056, `account.application.deauthorized`).
   "connection.stripe_disconnected",
+  // M5: the verification of the OTA's own credentials ended (PBE-052, `credentials.verify`; PADR-0013 item 5).
+  "connection.credentials_applied",
+  "connection.credentials_failed",
 ] as const;
 
 /** A key of EMAIL_TEMPLATE_KEYS. */
@@ -119,6 +122,23 @@ export const EMAIL_TEMPLATES: Readonly<Record<EmailTemplateKey, EmailTemplateDef
   "connection.stripe_disconnected": definition(
     "The OTA disconnected Velexis from its Stripe account in Stripe (Connect deauthorisation, to the owners)",
     ["fullName", "tenantName", "tenantKey", "paymentsUrl"],
+  ),
+  "connection.credentials_applied": definition(
+    "The OTA's own Amadeus credentials or Stripe API keys were verified and are in use (to the submitter)",
+    ["fullName", "tenantName", "tenantKey", "credentials", "environment", "connectionUrl"],
+  ),
+  "connection.credentials_failed": definition(
+    "The OTA's own Amadeus credentials or Stripe API keys could not be verified (to the submitter)",
+    [
+      "fullName",
+      "tenantName",
+      "tenantKey",
+      "credentials",
+      "environment",
+      "errorCode",
+      "reason",
+      "connectionUrl",
+    ],
   ),
 });
 

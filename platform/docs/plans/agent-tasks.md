@@ -1573,7 +1573,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - An admin removes an abusive domain with a reason and the owner gets an e-mail [PF-92].
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int domains admin`
 
-### PBE-052 · Add the credential submission framework
+### PBE-052 · Add the credential submission framework ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-041, PBE-009
@@ -1588,6 +1589,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - A new submission supersedes the open one and erases its secrets.
   - After `applied` or `failed`, both secret columns are null; no secret appears in logs or job data.
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int connections`
+- **Note (2026-10-31, lead addition to PBE-052):** the submitter's e-mails use the template keys of [PADR-0013](../adr/0013-platform-email-outbox.md) item 5, `connection.credentials_applied` and `connection.credentials_failed`, not `connections.credentials_verified` and `connections.credentials_failed` as step 2 says. No verifier exists yet: the registry `CredentialVerifiers` (`common/credentials/credentials-verify.processor.ts`) takes one verifier per kind, which PBE-053 (`amadeus`) and PBE-057 (`stripe_api_keys`) register from a worker module that imports `CredentialSubmissionsModule.forWorker()` (the one static worker module, so every importer shares the registry); `credentials.verify` runs from the one processor of `platform-connections` (`supplier-connections/verification.processor.ts`, by job name). `submit` writes the kind's `…_submitted` audit row (`amadeus.credentials_submitted`, `payments.api_keys_submitted`) and the job the `…_applied` or `…_rejected` row, so PBE-053 and PBE-057 write none of these themselves; an attempt that cannot complete (no verifier, a secret that does not decrypt, a verifier that throws) is retried and its last attempt fails with `PROVIDER_UNAVAILABLE`, so no submission keeps its secrets after its job.
 
 ### PBE-053 · Implement own Amadeus credentials
 - **Component:** platform-backend

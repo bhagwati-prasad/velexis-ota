@@ -1,8 +1,9 @@
 // The consumer of `platform-connections` (platform/docs/architecture.md §5, concurrency 2): the verification jobs of
 // supplier and payment credentials. BullMQ hands any job of a queue to any of its workers, so this is the queue's one
-// processor; it dispatches on the job name. Today it runs `amadeus_account.verify {amadeusAccountId}` (PBE-020,
-// flows/amadeus-connection.md §A step 2); `credentials.verify {submissionId}` joins it with the OTA's own credentials
-// (PBE-053). A job of another name fails at once (`UnrecoverableError`).
+// processor; it dispatches on the job name: `amadeus_account.verify {amadeusAccountId}` (PBE-020,
+// flows/amadeus-connection.md §A step 2) here, and `credentials.verify {submissionId}`, the verification of the OTA's
+// own credentials (PBE-052, PADR-0010), with CredentialsVerifyProcessor of common/credentials, whose registry holds the
+// verifier of each kind (PBE-053, PBE-057). A job of another name fails at once (`UnrecoverableError`).
 //
 // `amadeus_account.verify`, queued by the admin's create, update and verify of a Velexis Amadeus account:
 //
@@ -34,6 +35,11 @@ import { UnrecoverableError, type Job } from "bullmq";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { AuditService } from "../audit/audit.service";
 import { Clock } from "../common/clock";
+import { CREDENTIALS_VERIFY_JOB } from "../common/credentials/credential-submissions.service";
+import {
+  CredentialsVerifyProcessor,
+  type CredentialsVerifyResult,
+} from "../common/credentials/credentials-verify.processor";
 import { EnvelopeService } from "../common/crypto.provider";
 import { PLATFORM_DB, type PlatformDb } from "../common/database";
 import { PLATFORM_QUEUE, platformWorkerOptions } from "../common/queues/queue-names";
@@ -142,14 +148,17 @@ export class VerificationProcessor extends WorkerHost {
     private readonly clock: Clock,
     @Inject(PLATFORM_DB) private readonly db: PlatformDb,
     @InjectPinoLogger(VerificationProcessor.name) private readonly logger: PinoLogger,
+    private readonly credentials: CredentialsVerifyProcessor,
   ) {
     super();
   }
 
-  async process(job: Job): Promise<AmadeusAccountVerifyResult> {
+  async process(job: Job): Promise<AmadeusAccountVerifyResult | CredentialsVerifyResult> {
     switch (job.name) {
       case AMADEUS_ACCOUNT_VERIFY_JOB:
         return this.verifyAccount(job);
+      case CREDENTIALS_VERIFY_JOB:
+        return this.credentials.process(job);
       default:
         this.logger.error({ queue: PLATFORM_QUEUE.connections, job: job.name }, "connections.unknown_job");
         throw new UnrecoverableError("platform-connections has no job of this name");
