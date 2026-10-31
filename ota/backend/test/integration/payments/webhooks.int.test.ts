@@ -229,7 +229,12 @@ async function finishedJob(eventId: string): Promise<Job> {
       return undefined;
     }
     const state = await job.getState();
-    return state === "completed" || state === "failed" ? job : undefined;
+    if (state !== "completed" && state !== "failed") {
+      return undefined;
+    }
+    // getJob answers a copy read before getState: a job that finished between the two calls has no returnvalue or
+    // failedReason in that copy yet, so the finished job is read again.
+    return await stripeEvents.getJob(eventId);
   });
 }
 
