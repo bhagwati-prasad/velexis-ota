@@ -38,7 +38,12 @@
 //      or may have left PNRs out (it holds RECONCILE_QUEUE_LIST_MAX of them, or its `meta.count` says more); an entry
 //      that may be the order has no record locator or no readable names (it is not read: without the lead's name it
 //      may be any other PNR of the queue); the cap was reached; a read failed or timed out; or the order with the
-//      remark cannot be read. An incomplete search never proves the order absent.
+//      remark cannot be read. An incomplete search never proves the order absent. Both calls name the booking's
+//      queuing office (`orderOffice`, `reconcileCallContext`), the office its order was sent to: an order sent on a
+//      Velexis office before the tenant switched to its own Amadeus credentials is looked for through the Velexis
+//      account while that office is `assigned` or `releasing` for the tenant (the releasing-office rule of
+//      connection-resolver.ts, OBE-079), never read by reference with credentials that cannot see it (whose `404`
+//      would count as "not ours"); a released office answers `403 OFFICE_NOT_ALLOWED` before any call, a failed read.
 //   3. Decide (T2), with the booking locked again and still `pending` without an outcome:
 //      - found: the order is recorded as checkout.complete records it (order-recorder.ts: `confirmed` or `ticketed`,
 //        children, events, the `booking.confirmed` e-mail), `reconcile_outcome = found`, the checkout `completed`
@@ -1058,6 +1063,27 @@ export function transientFailure(error: unknown): boolean {
   );
 }
 
+/**
+ * The call context of an attempt's search (Queue List and the by-reference reads): the booking, and its queuing office
+ * as `orderOffice` when it has one, so the connection resolver picks the credentials that serve the office the order
+ * was sent to (the releasing-office rule, OBE-079; see the file header).
+ */
+export function reconcileCallContext(
+  tenantId: string,
+  environment: "test" | "live",
+  booking: Pick<ReconcileBookingRow, "id" | "queuingOfficeId">,
+  requestId: string,
+): AmadeusCallContext {
+  return {
+    tenantId,
+    environment,
+    operation: RECONCILE_OPERATION,
+    requestId,
+    bookingId: booking.id,
+    ...(booking.queuingOfficeId === null ? {} : { orderOffice: booking.queuingOfficeId }),
+  };
+}
+
 /** Why the claim of `row` is refused at `now`, or `undefined` when it may be claimed. */
 export function reconcileClaimSkip(row: ReconcileBookingRow, now: Date): ReconcileSkip | undefined {
   if (row.status !== "pending") {
@@ -1268,13 +1294,7 @@ export class ReconcileService {
       this.logger.error({ bookingId: claim.booking.id }, "bookings.reconcile_lead_unknown");
       return incomplete("lead_unknown", "INTERNAL_ERROR", false);
     }
-    const context: AmadeusCallContext = {
-      tenantId: tenant.id,
-      environment: claim.environment,
-      operation: RECONCILE_OPERATION,
-      requestId,
-      bookingId: claim.booking.id,
-    };
+    const context = reconcileCallContext(tenant.id, claim.environment, claim.booking, requestId);
     let listed: QueueCandidates | undefined;
     try {
       const reply = await this.amadeus.listQueue(context, {

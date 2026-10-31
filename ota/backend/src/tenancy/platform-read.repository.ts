@@ -5,7 +5,9 @@
 // in front of it, and when Redis is down the lookups come here directly. API keys joined in OBE-011 (`apiKeyByPrefix`,
 // for the key verifier), verified storefront domains in OBE-012 (`tenantIdByStorefrontHost`, for the tenant
 // resolver), the Amadeus connection and the shared Amadeus account in OBE-017 (`amadeusConnection`,
-// `amadeusAccountById`, for the connection resolver of src/amadeus/), the tenants a scheduled job fans out to in
+// `amadeusAccountById`, for the connection resolver of src/amadeus/; since OBE-079 with the Velexis account of the
+// connection's environment and the account's offices that serve a tenant, for the releasing-office rule of OTA-owned
+// credentials), the tenants a scheduled job fans out to in
 // OBE-024 (`tenantIdsByStatus`, for src/jobs/fan-out.ts), the default payment connection of an environment in OBE-038
 // (`paymentConnection`, for the Stripe gateway of src/payments/), a staff member's membership with its account in
 // OBE-059 (`staffMember`, for the staff sessions of src/identity/staff/), the account modes of a tenant's payment
@@ -156,6 +158,13 @@ export interface PlatformAmadeusConnection {
   readonly credentialSource: CredentialSource;
   /** `ama_` + ULID, the shared account of the environment (`velexis` only). */
   readonly amadeusAccountId: string | null;
+  /**
+   * `ama_` + ULID: the Velexis shared account of the connection's environment (`amadeus_accounts_environment_uq`: at
+   * most one), whatever the credential source, or `null` while there is none (OBE-079). After a switch to the OTA's own
+   * credentials it is the account whose `assigned` or `releasing` offices still serve the tenant's existing orders
+   * (PADR-0012 point 4); for a `velexis` connection it is `amadeusAccountId` (the composite foreign key).
+   */
+  readonly velexisAccountId: string | null;
   readonly baseUrl: string | null;
   readonly clientId: string | null;
   /** base64 of `client_secret_ciphertext` (`tenant` only). */
@@ -191,11 +200,34 @@ const AMADEUS_CONNECTION_COLUMNS = [
 type AmadeusConnectionRow = Pick<
   Selectable<PlatformDatabase["platform.supplier_connections"]>,
   (typeof AMADEUS_CONNECTION_COLUMNS)[number]
->;
+> & {
+  /** The id of the Velexis account of the row's environment (a scalar subquery), or `null`. */
+  readonly velexis_account_id: string | null;
+};
+
+/**
+ * The statuses of `platform.amadeus_offices` in which an office serves a tenant (PADR-0012 points 1 and 4): `assigned`,
+ * and `releasing` after the tenant switched to its own credentials, while its old orders may still need the office.
+ * `assigned_tenant_id` is set exactly in these two (`amadeus_offices_assignment_ck`).
+ */
+export const SERVING_OFFICE_STATUSES = ["assigned", "releasing"] as const;
+export type ServingOfficeStatus = (typeof SERVING_OFFICE_STATUSES)[number];
+
+/** An office of the shared account's pool that serves a tenant (`platform.amadeus_offices`, OBE-079). */
+export interface PlatformAmadeusAccountOffice {
+  /** The Amadeus office id (`NCE1A0955`). */
+  readonly officeId: string;
+  /** `assigned_tenant_id`: the tenant the office serves. */
+  readonly tenantId: string;
+  readonly status: ServingOfficeStatus;
+}
 
 /**
  * The Velexis shared Amadeus account of one environment (`platform.amadeus_accounts`, ADR-0012), as the connection
  * resolver relies on it: plain and JSON-safe for the `amadeus:acct:` cache, the client secret as base64 ciphertext.
+ * Since OBE-079 it carries the offices of its pool that serve a tenant, so the releasing-office rule reads them with
+ * the account, and the platform's `amadeus_account` invalidation, which follows every change of the account's offices
+ * (an assignment, the start of a release, a release, a retirement), drops both.
  */
 export interface PlatformAmadeusAccount {
   /** `ama_` + ULID: the credential id of every connection on the shared account. */
@@ -207,6 +239,8 @@ export interface PlatformAmadeusAccount {
   /** base64 of `client_secret_ciphertext`, encrypted by the platform for `platform.amadeus_accounts.<column>:<id>`. */
   readonly clientSecretCiphertext: string;
   readonly status: AmadeusCredentialStatus;
+  /** The account's `assigned` and `releasing` offices, in office id order. */
+  readonly offices: readonly PlatformAmadeusAccountOffice[];
 }
 
 /** The columns of `platform.amadeus_accounts` that `PlatformAmadeusAccount` maps. */
@@ -222,6 +256,12 @@ const AMADEUS_ACCOUNT_COLUMNS = [
 type AmadeusAccountRow = Pick<
   Selectable<PlatformDatabase["platform.amadeus_accounts"]>,
   (typeof AMADEUS_ACCOUNT_COLUMNS)[number]
+>;
+
+/** The columns of `platform.amadeus_offices` that `PlatformAmadeusAccountOffice` maps (and the row id, for errors). */
+type AmadeusOfficeRow = Pick<
+  Selectable<PlatformDatabase["platform.amadeus_offices"]>,
+  "id" | "office_id" | "assigned_tenant_id" | "status"
 >;
 
 /** A queue the queue poller reads (`platform.supplier_connections.monitored_queues`, the portal's list). */
@@ -700,8 +740,10 @@ export class PlatformReadRepository {
   /**
    * The tenant's Amadeus connection of `environment` (`platform.supplier_connections`, one row per tenant, provider
    * and environment), whatever its status, or `null` when there is none: status and credential source are the
-   * connection resolver's checks (OBE-017). A value that cannot be a tenant id or an environment is unknown without a
-   * query.
+   * connection resolver's checks (OBE-017). Since OBE-079 the row comes with the id of the Velexis shared account of
+   * its environment (`velexisAccountId`, a scalar subquery on `amadeus_accounts_environment_uq`), whose offices serve
+   * the tenant's existing orders after a switch to its own credentials. A value that cannot be a tenant id or an
+   * environment is unknown without a query.
    */
   async amadeusConnection(
     tenantId: string,
@@ -714,6 +756,17 @@ export class PlatformReadRepository {
       trx
         .selectFrom("platform.supplier_connections")
         .select(AMADEUS_CONNECTION_COLUMNS)
+        .select((eb) =>
+          eb
+            .selectFrom("platform.amadeus_accounts")
+            .select("platform.amadeus_accounts.id")
+            .whereRef(
+              "platform.amadeus_accounts.environment",
+              "=",
+              "platform.supplier_connections.environment",
+            )
+            .as("velexis_account_id"),
+        )
         .where("tenant_id", "=", tenantId)
         .where("provider", "=", "amadeus")
         .where("environment", "=", environment)
@@ -723,21 +776,34 @@ export class PlatformReadRepository {
   }
 
   /**
-   * The Velexis shared Amadeus account with this id (`ama_…`), whatever its status, or `null` when there is none. A
-   * value that cannot be an account id is unknown without a query.
+   * The Velexis shared Amadeus account with this id (`ama_…`), whatever its status, with the offices of its pool that
+   * serve a tenant (`assigned` or `releasing`, PADR-0012; OBE-079), read in the same read-only transaction, or `null`
+   * when there is none. A value that cannot be an account id is unknown without a query. An office status outside
+   * `SERVING_OFFICE_STATUSES` throws `UnexpectedPlatformValueError`.
    */
   async amadeusAccountById(id: string): Promise<PlatformAmadeusAccount | null> {
     if (!AMADEUS_ACCOUNT_ID_PATTERN.test(id)) {
       return null;
     }
-    const row = await this.read((trx) =>
-      trx
+    const found = await this.read(async (trx) => {
+      const account = await trx
         .selectFrom("platform.amadeus_accounts")
         .select(AMADEUS_ACCOUNT_COLUMNS)
         .where("id", "=", id)
-        .executeTakeFirst(),
-    );
-    return row === undefined ? null : toPlatformAmadeusAccount(row);
+        .executeTakeFirst();
+      if (account === undefined) {
+        return undefined;
+      }
+      const offices = await trx
+        .selectFrom("platform.amadeus_offices")
+        .select(["id", "office_id", "assigned_tenant_id", "status"])
+        .where("amadeus_account_id", "=", id)
+        .where("status", "in", [...SERVING_OFFICE_STATUSES])
+        .orderBy("office_id")
+        .execute();
+      return { account, offices };
+    });
+    return found === undefined ? null : toPlatformAmadeusAccount(found.account, found.offices);
   }
 
   /**
@@ -1041,6 +1107,7 @@ function toPlatformAmadeusConnection(row: AmadeusConnectionRow): PlatformAmadeus
     environment: oneOf(row.environment, AMADEUS_ENVIRONMENTS, column("environment"), row.id),
     credentialSource: oneOf(row.credential_source, CREDENTIAL_SOURCES, column("credential_source"), row.id),
     amadeusAccountId: row.amadeus_account_id,
+    velexisAccountId: row.velexis_account_id,
     baseUrl: row.base_url,
     clientId: row.client_id,
     clientSecretCiphertext:
@@ -1053,9 +1120,32 @@ function toPlatformAmadeusConnection(row: AmadeusConnectionRow): PlatformAmadeus
   });
 }
 
-/** Maps a `platform.amadeus_accounts` row, as `toPlatformAmadeusConnection` does. */
-function toPlatformAmadeusAccount(row: AmadeusAccountRow): PlatformAmadeusAccount {
+/**
+ * Maps a `platform.amadeus_accounts` row and its serving offices, as `toPlatformAmadeusConnection` does. An office
+ * without a tenant (the CHECK `amadeus_offices_assignment_ck` forbids it in these statuses) serves no one and is left
+ * out.
+ */
+function toPlatformAmadeusAccount(
+  row: AmadeusAccountRow,
+  officeRows: readonly AmadeusOfficeRow[],
+): PlatformAmadeusAccount {
   const column = (name: string) => `platform.amadeus_accounts.${name}`;
+  const offices = officeRows.flatMap((office) =>
+    office.assigned_tenant_id === null
+      ? []
+      : [
+          Object.freeze({
+            officeId: office.office_id,
+            tenantId: office.assigned_tenant_id,
+            status: oneOf(
+              office.status,
+              SERVING_OFFICE_STATUSES,
+              "platform.amadeus_offices.status",
+              office.id,
+            ),
+          }),
+        ],
+  );
   return Object.freeze({
     id: row.id,
     environment: oneOf(row.environment, AMADEUS_ENVIRONMENTS, column("environment"), row.id),
@@ -1063,6 +1153,7 @@ function toPlatformAmadeusAccount(row: AmadeusAccountRow): PlatformAmadeusAccoun
     clientId: row.client_id,
     clientSecretCiphertext: row.client_secret_ciphertext.toString("base64"),
     status: oneOf(row.status, AMADEUS_CREDENTIAL_STATUSES, column("status"), row.id),
+    offices: Object.freeze(offices),
   });
 }
 

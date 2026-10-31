@@ -1,16 +1,19 @@
-// ConnectionResolver against a fake platform cache and repository (OBE-017; OADR-0001 point 4, flows/amadeus-
-// connection-and-tokens.md §2): which credential set, base URL and offices serve a tenant, and every way a connection
-// is refused with 424. The resolver against PostgreSQL, Redis and the stub is test/integration/amadeus/
-// resolver.int.test.ts.
+// ConnectionResolver against a fake platform cache and repository (OBE-017, OBE-079; OADR-0001 point 4, flows/amadeus-
+// connection-and-tokens.md §2): which credential set, base URL and offices serve a tenant (on the Velexis shared
+// account or with its own credentials), which serve an existing order (the releasing-office rule), and every way a
+// connection is refused with 424. The resolver against PostgreSQL, Redis and the stub is test/integration/amadeus/
+// resolver.int.test.ts (the shared account) and own-credentials.int.test.ts (own credentials and the rule).
 import type { ConfigService } from "@nestjs/config";
 import { AppError } from "@velexis/errors";
 import { describe, expect, it, vi } from "vitest";
 import { newId } from "../common/ids";
+import { redisKeys } from "../common/redis/redis.keys";
 import type { ApiConfig } from "../config";
 import type { CacheParser, PlatformCache } from "../tenancy/platform-cache";
 import type {
   AmadeusEnvironment,
   PlatformAmadeusAccount,
+  PlatformAmadeusAccountOffice,
   PlatformAmadeusConnection,
   PlatformReadRepository,
 } from "../tenancy/platform-read.repository";
@@ -21,12 +24,18 @@ import {
   parseAmadeusAccount,
   parseAmadeusConnection,
   type ConnectionUnusableReason,
+  type ResolvedAmadeusConnection,
 } from "./connection-resolver";
 
 const OFFICE = "NCE1A0955";
 const OTHER_OFFICE = "PAR1A0911";
+/** Offices of the OTA's own Amadeus account (never offices of the Velexis pool). */
+const OWN_OFFICE = "LON1A2208";
+const OWN_OTHER_OFFICE = "LON1A2209";
 /** An envelope ciphertext as the repository returns it (base64 text); the resolver never decrypts it. */
 const CIPHERTEXT = Buffer.from("not a real envelope, never decrypted here").toString("base64");
+/** The OTA's own client secret's ciphertext, as the platform re-encrypted it for the connection's row. */
+const OWN_CIPHERTEXT = Buffer.from("the OTA's own envelope, never decrypted here").toString("base64");
 
 function account(overrides: Partial<PlatformAmadeusAccount> = {}): PlatformAmadeusAccount {
   return Object.freeze({
@@ -36,8 +45,18 @@ function account(overrides: Partial<PlatformAmadeusAccount> = {}): PlatformAmade
     clientId: "velexis-test-client",
     clientSecretCiphertext: CIPHERTEXT,
     status: "active",
+    offices: [],
     ...overrides,
   });
+}
+
+/** An office of the shared account's pool that serves `tenantId`. */
+function serving(
+  officeId: string,
+  tenantId: string,
+  status: PlatformAmadeusAccountOffice["status"] = "releasing",
+): PlatformAmadeusAccountOffice {
+  return Object.freeze({ officeId, tenantId, status });
 }
 
 function connection(
@@ -51,6 +70,7 @@ function connection(
     environment: shared?.environment ?? "test",
     credentialSource: "velexis",
     amadeusAccountId: shared?.id ?? null,
+    velexisAccountId: shared?.id ?? null,
     baseUrl: null,
     clientId: null,
     clientSecretCiphertext: null,
@@ -59,6 +79,30 @@ function connection(
     queuingOfficeId: OFFICE,
     ownerOfficeId: OFFICE,
     status: "active",
+    ...overrides,
+  });
+}
+
+/**
+ * A connection switched to the OTA's own credentials as the platform applies them (PBE-053): `tenant`, no account,
+ * the OTA's host, client id, re-encrypted secret and offices; `velexisAccountId` names the shared account of the
+ * environment (`shared`), whose offices may still serve its old orders.
+ */
+function ownConnection(
+  tenantId: string,
+  shared: PlatformAmadeusAccount | null,
+  overrides: Partial<PlatformAmadeusConnection> = {},
+): PlatformAmadeusConnection {
+  return connection(tenantId, shared, {
+    credentialSource: "tenant",
+    amadeusAccountId: null,
+    baseUrl: "https://own.amadeus.example.net",
+    clientId: "own-client-id",
+    clientSecretCiphertext: OWN_CIPHERTEXT,
+    officeIds: [OWN_OFFICE, OWN_OTHER_OFFICE],
+    defaultOfficeId: OWN_OFFICE,
+    queuingOfficeId: OWN_OFFICE,
+    ownerOfficeId: OWN_OFFICE,
     ...overrides,
   });
 }
@@ -268,6 +312,250 @@ describe("a connection on the Velexis shared account", () => {
   });
 });
 
+describe("a connection with the OTA's own credentials (OBE-079)", () => {
+  it("resolves to the connection's client id, secret, base URL and offices, keyed by the connection [OBE-079 AC1]", async () => {
+    const tenantId = newId("ten");
+    const shared = account({ offices: [serving(OFFICE, tenantId)] });
+    const row = ownConnection(tenantId, shared);
+    const { resolver, cache } = harness({ connections: [row], accounts: [shared] });
+
+    const resolved = await resolver.resolve(tenantId, "test");
+
+    expect(resolved).toEqual({
+      tenantId,
+      environment: "test",
+      connectionId: row.id,
+      credentialSource: "tenant",
+      credId: row.id,
+      clientId: "own-client-id",
+      encryptedSecret: {
+        ciphertext: OWN_CIPHERTEXT,
+        aad: `platform.supplier_connections.client_secret_ciphertext:${row.id}`,
+      },
+      baseUrl: "https://own.amadeus.example.net",
+      offices: { queuing: OWN_OFFICE, owner: OWN_OFFICE, queue: OWN_OFFICE, retrieval: OWN_OFFICE },
+      officeIds: [OWN_OFFICE, OWN_OTHER_OFFICE],
+    });
+    expect(Object.isFrozen(resolved)).toBe(true);
+    // A new search needs nothing of the Velexis account.
+    expect(cache.amadeusAccount).not.toHaveBeenCalled();
+  });
+
+  it("keys the token by the new credential id, so the shared account's token is never reused after a switch [OBE-079 AC1]", async () => {
+    const tenantId = newId("ten");
+    const shared = account();
+    const before = connection(tenantId, shared);
+    const after = ownConnection(tenantId, shared, { id: before.id });
+
+    const velexis = await harness({ connections: [before], accounts: [shared] }).resolver.resolve(
+      tenantId,
+      "test",
+    );
+    const own = await harness({ connections: [after], accounts: [shared] }).resolver.resolve(
+      tenantId,
+      "test",
+    );
+
+    expect([velexis.credId, own.credId]).toEqual([shared.id, before.id]);
+    expect(redisKeys.amadeusToken(own.credId, "test").key).not.toBe(
+      redisKeys.amadeusToken(velexis.credId, "test").key,
+    );
+    expect(redisKeys.amadeusBadCredentials(own.credId).key).not.toBe(
+      redisKeys.amadeusBadCredentials(velexis.credId).key,
+    );
+    expect(own.encryptedSecret.aad).not.toBe(velexis.encryptedSecret.aad);
+  });
+
+  it("uses AMADEUS_BASE_URL_<ENV> over the connection's base_url, and the official host when it has none", async () => {
+    const tenantId = newId("ten");
+    const rows = [
+      ownConnection(tenantId, null, { baseUrl: "https://own.amadeus.example.net/" }),
+      ownConnection(tenantId, null, { environment: "live", baseUrl: "" }),
+    ];
+
+    const plain = harness({ connections: rows }).resolver;
+    const stubbed = harness({
+      connections: rows,
+      overrides: { AMADEUS_BASE_URL_TEST: "http://127.0.0.1:4900" },
+    }).resolver;
+
+    expect((await plain.resolve(tenantId, "test")).baseUrl).toBe("https://own.amadeus.example.net");
+    expect((await plain.resolve(tenantId, "live")).baseUrl).toBe(AMADEUS_OFFICIAL_BASE_URLS.live);
+    expect((await stubbed.resolve(tenantId, "test")).baseUrl).toBe("http://127.0.0.1:4900");
+  });
+
+  const tenantId = newId("ten");
+  const OWN_CASES: ReadonlyArray<[string, PlatformAmadeusConnection, ConnectionUnusableReason]> = [
+    ...(["pending_verification", "invalid_credentials", "disabled"] as const).map(
+      (status): [string, PlatformAmadeusConnection, ConnectionUnusableReason] => [
+        `a connection in status ${status}`,
+        ownConnection(tenantId, null, { status }),
+        "connection_not_active",
+      ],
+    ),
+    ["no client id", ownConnection(tenantId, null, { clientId: null }), "no_tenant_credentials"],
+    [
+      "no client secret",
+      ownConnection(tenantId, null, { clientSecretCiphertext: null }),
+      "no_tenant_credentials",
+    ],
+    [
+      "offices outside its office_ids only",
+      ownConnection(tenantId, null, { officeIds: [OTHER_OFFICE] }),
+      "no_office",
+    ],
+  ];
+
+  it.each(OWN_CASES)("answers 424 SUPPLIER_NOT_CONFIGURED for %s", async (_case, row, reason) => {
+    const { resolver } = harness({ connections: [row] });
+
+    expect(await refusal(resolver.resolve(tenantId, "test"))).toEqual([
+      424,
+      "SUPPLIER_NOT_CONFIGURED",
+      reason,
+    ]);
+  });
+});
+
+describe("an existing order (the releasing-office rule, OBE-079)", () => {
+  /** The Velexis-served resolution of `office` for `row` on `shared`. */
+  const servedByVelexis = (
+    row: PlatformAmadeusConnection,
+    shared: PlatformAmadeusAccount,
+    office: string,
+  ): ResolvedAmadeusConnection => ({
+    tenantId: row.tenantId,
+    environment: "test",
+    connectionId: row.id,
+    credentialSource: "velexis",
+    credId: shared.id,
+    clientId: "velexis-test-client",
+    encryptedSecret: {
+      ciphertext: CIPHERTEXT,
+      aad: `platform.amadeus_accounts.client_secret_ciphertext:${shared.id}`,
+    },
+    baseUrl: "https://test.travel.api.amadeus.com",
+    offices: { queuing: office, owner: office, queue: office, retrieval: office },
+    officeIds: [office],
+  });
+
+  it.each(["releasing", "assigned"] as const)(
+    "is served by the Velexis account with its office alone while that office is %s for the tenant [OBE-079 AC1]",
+    async (status) => {
+      const tenantId = newId("ten");
+      const shared = account({ offices: [serving(OFFICE, tenantId, status)] });
+      const row = ownConnection(tenantId, shared);
+      const { resolver, cache } = harness({ connections: [row], accounts: [shared] });
+
+      const order = await resolver.resolve(tenantId, "test", OFFICE);
+      const search = await resolver.resolve(tenantId, "test");
+
+      expect(order).toEqual(servedByVelexis(row, shared, OFFICE));
+      expect(Object.isFrozen(order) && Object.isFrozen(order.officeIds)).toBe(true);
+      expect(cache.amadeusAccount).toHaveBeenCalledWith(shared.id, expect.any(Function), parseAmadeusAccount);
+      // Everything new uses the OTA's own credentials.
+      expect(search).toMatchObject({
+        credentialSource: "tenant",
+        credId: row.id,
+        officeIds: [OWN_OFFICE, OWN_OTHER_OFFICE],
+      });
+    },
+  );
+
+  it("is served by the OTA's own credentials once the office is available again (released) [OBE-079 AC2]", async () => {
+    const tenantId = newId("ten");
+    const released = account({ offices: [] });
+    const row = ownConnection(tenantId, released);
+    const { resolver } = harness({ connections: [row], accounts: [released] });
+
+    const resolved = await resolver.resolve(tenantId, "test", OFFICE);
+
+    // The client then refuses the office, which is not the OTA's own, with 403 OFFICE_NOT_ALLOWED.
+    expect(resolved).toMatchObject({ credentialSource: "tenant", credId: row.id });
+    expect(resolved.officeIds).not.toContain(OFFICE);
+  });
+
+  it("never routes to an office that serves another tenant: the shared account's other offices are other OTAs' [OBE-079 AC2]", async () => {
+    const [tenantId, otherTenant] = [newId("ten"), newId("ten")];
+    const shared = account({
+      offices: [serving(OFFICE, otherTenant, "assigned"), serving(OTHER_OFFICE, otherTenant, "releasing")],
+    });
+    const row = ownConnection(tenantId, shared);
+    const { resolver } = harness({ connections: [row], accounts: [shared] });
+
+    for (const office of [OFFICE, OTHER_OFFICE]) {
+      expect(await resolver.resolve(tenantId, "test", office)).toMatchObject({
+        credentialSource: "tenant",
+        officeIds: [OWN_OFFICE, OWN_OTHER_OFFICE],
+      });
+    }
+  });
+
+  it("serves the OTA's own offices with its own credentials, and ignores an office that is not an office id", async () => {
+    const tenantId = newId("ten");
+    const shared = account({ offices: [serving(OFFICE, tenantId)] });
+    const row = ownConnection(tenantId, shared);
+    const { resolver } = harness({ connections: [row], accounts: [shared] });
+
+    for (const office of [OWN_OTHER_OFFICE, OFFICE.toLowerCase()]) {
+      expect(await resolver.resolve(tenantId, "test", office)).toMatchObject({
+        credentialSource: "tenant",
+        credId: row.id,
+      });
+    }
+  });
+
+  it("keeps the OTA's own credentials when the environment has no Velexis account", async () => {
+    const tenantId = newId("ten");
+    const row = ownConnection(tenantId, null);
+    const { resolver, cache } = harness({ connections: [row] });
+
+    expect(await resolver.resolve(tenantId, "test", OFFICE)).toMatchObject({ credentialSource: "tenant" });
+    expect(cache.amadeusAccount).not.toHaveBeenCalled();
+  });
+
+  it("serves a velexis connection's own office as the connection does, and another office of the tenant alone", async () => {
+    const tenantId = newId("ten");
+    // An admin moved the tenant to OFFICE; its old office OTHER_OFFICE is releasing.
+    const shared = account({
+      offices: [serving(OFFICE, tenantId, "assigned"), serving(OTHER_OFFICE, tenantId)],
+    });
+    const row = connection(tenantId, shared);
+    const { resolver } = harness({ connections: [row], accounts: [shared] });
+
+    expect(await resolver.resolve(tenantId, "test", OFFICE)).toEqual(
+      await resolver.resolve(tenantId, "test"),
+    );
+    expect(await resolver.resolve(tenantId, "test", OTHER_OFFICE)).toEqual(
+      servedByVelexis(row, shared, OTHER_OFFICE),
+    );
+  });
+
+  it("answers 424 when the Velexis account cannot serve the order, and for a connection that is not active", async () => {
+    const tenantId = newId("ten");
+    const disabledAccount = account({ status: "disabled", offices: [serving(OFFICE, tenantId)] });
+    const shared = account({ offices: [serving(OFFICE, tenantId)] });
+
+    expect(
+      await refusal(
+        harness({
+          connections: [ownConnection(tenantId, disabledAccount)],
+          accounts: [disabledAccount],
+        }).resolver.resolve(tenantId, "test", OFFICE),
+      ),
+    ).toEqual([424, "SUPPLIER_NOT_CONFIGURED", "amadeus_account_not_active"]);
+    // A connection the platform disabled serves nothing, not even an order of a Velexis office (rule 1 first).
+    expect(
+      await refusal(
+        harness({
+          connections: [ownConnection(tenantId, shared, { status: "disabled" })],
+          accounts: [shared],
+        }).resolver.resolve(tenantId, "test", OFFICE),
+      ),
+    ).toEqual([424, "SUPPLIER_NOT_CONFIGURED", "connection_not_active"]);
+  });
+});
+
 describe("a connection that cannot serve calls", () => {
   const tenantId = newId("ten");
   const shared = account();
@@ -289,21 +577,6 @@ describe("a connection that cannot serve calls", () => {
         "connection_not_active",
       ],
     ),
-    [
-      "the OTA's own credentials (OBE-079, M5)",
-      {
-        connections: [
-          connection(tenantId, null, {
-            credentialSource: "tenant",
-            baseUrl: "https://test.travel.api.amadeus.com",
-            clientId: "own-client",
-            clientSecretCiphertext: CIPHERTEXT,
-          }),
-        ],
-      },
-      "test",
-      "tenant_credentials_not_supported",
-    ],
     [
       "a missing shared account",
       { connections: [connection(tenantId, shared)] },
@@ -410,17 +683,31 @@ describe("a connection that cannot serve calls", () => {
 
 describe("the cached rows", () => {
   it("are read back only in the shape the repository returns, with the ciphertext as base64 text", () => {
-    const shared = account();
-    const row = connection(newId("ten"), shared);
+    const tenantId = newId("ten");
+    const shared = account({
+      offices: [serving(OFFICE, tenantId, "assigned"), serving(OTHER_OFFICE, tenantId)],
+    });
+    const row = connection(tenantId, shared);
+    const own = ownConnection(tenantId, shared);
 
     expect(parseAmadeusAccount(JSON.parse(JSON.stringify(shared)))).toEqual(shared);
     expect(parseAmadeusConnection(JSON.parse(JSON.stringify(row)))).toEqual(row);
+    expect(parseAmadeusConnection(JSON.parse(JSON.stringify(own)))).toEqual(own);
+    const { offices: _offices, ...withoutOffices } = shared;
+    const { velexisAccountId: _velexisAccountId, ...withoutVelexisAccount } = own;
     for (const broken of [
       { ...shared, clientSecretCiphertext: "not base64!" },
       { ...shared, clientSecretCiphertext: "" },
       { ...shared, status: "suspended" },
       { ...shared, environment: "staging" },
       { ...shared, baseUrl: null },
+      // Entries written before OBE-079, and offices of another shape.
+      withoutOffices,
+      { ...shared, offices: {} },
+      { ...shared, offices: [{ officeId: OFFICE, tenantId, status: "available" }] },
+      { ...shared, offices: [{ officeId: "nce1a0955", tenantId, status: "assigned" }] },
+      { ...shared, offices: [{ officeId: OFFICE, tenantId: null, status: "releasing" }] },
+      { ...shared, offices: [OFFICE] },
       null,
       [],
       "ama_x",
@@ -434,6 +721,9 @@ describe("the cached rows", () => {
       { ...row, clientSecretCiphertext: { type: "Buffer", data: [1, 2, 3] } },
       { ...row, status: undefined },
       { ...row, queuingOfficeId: 9 },
+      // An entry written before OBE-079.
+      withoutVelexisAccount,
+      { ...own, velexisAccountId: 7 },
     ]) {
       expect(parseAmadeusConnection(broken)).toBeUndefined();
     }

@@ -350,6 +350,7 @@ describe("permissions and environments", () => {
       environment: "test",
       credentialSource: "velexis",
       amadeusAccountId: "ama_01JA2Z9W5K7Q3M8N4P6R2T0V1H",
+      velexisAccountId: "ama_01JA2Z9W5K7Q3M8N4P6R2T0V1H",
       baseUrl: null,
       clientId: null,
       clientSecretCiphertext: null,

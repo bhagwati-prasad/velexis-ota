@@ -33,8 +33,10 @@ import {
   RECONCILE_FIRST_DELAY_MS,
   RECONCILE_JOB,
   RECONCILE_MAX_READS,
+  RECONCILE_OPERATION,
   RECONCILE_QUEUE_LIST_MAX,
   RECONCILE_WINDOW_MS,
+  reconcileCallContext,
   reconcileClaimSkip,
   reconcileDecision,
   reconcileJob,
@@ -490,6 +492,27 @@ describe("the booking.reconcile jobs", () => {
     expect(parseReconcileJobData({ tenantId, bookingId: BOOKING_ID, extra: 1 })).toBeUndefined();
     expect(parseReconcileJobData({ tenantId, bookingId: "chk_01JA4CH2F0J3M6Q9T2W5Z8C1E4" })).toBeUndefined();
     expect(parseReconcileJobData(null)).toBeUndefined();
+  });
+});
+
+describe("the search's Amadeus calls", () => {
+  it("name the booking's queuing office, so an order sent before a switch to own credentials is looked for with the Velexis account [OBE-079 AC1]", () => {
+    const tenantId = "ten_01JALPHA0000000000000000AA";
+
+    // Queue List and every by-reference read of the attempt take this context: the client resolves the credentials
+    // of the order's office with it (amadeus.client.ts `existingOrderOffice`, the releasing-office rule).
+    expect(reconcileCallContext(tenantId, "live", bookingRow(), "req-reconcile-0001")).toEqual({
+      tenantId,
+      environment: "live",
+      operation: RECONCILE_OPERATION,
+      requestId: "req-reconcile-0001",
+      bookingId: BOOKING_ID,
+      orderOffice: "NCE1A0955",
+    });
+    // A booking without a queuing office names none: the connection's current credentials and offices.
+    expect(
+      reconcileCallContext(tenantId, "test", bookingRow({ queuingOfficeId: null }), "req-reconcile-0002"),
+    ).not.toHaveProperty("orderOffice");
   });
 });
 

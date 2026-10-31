@@ -6,7 +6,10 @@
 // Every call, in order:
 //   1. checks the call context, and that it names the tenant of the request or job context (the row of step 6 goes to
 //      that tenant's schema);
-//   2. resolves the tenant's connection (connection-resolver.ts: 424 SUPPLIER_NOT_CONFIGURED without one);
+//   2. resolves the tenant's connection (connection-resolver.ts: 424 SUPPLIER_NOT_CONFIGURED without one), for a call
+//      on an existing order with the order's office, so a Velexis office `assigned` or `releasing` for the tenant is
+//      still served by the Velexis account after a switch to the OTA's own credentials (the releasing-office rule,
+//      OBE-079; `existingOrderOffice`);
 //   3. applies the offices (OADR-0001 point 10): a caller-provided office outside the connection's `officeIds` (an
 //      order office, `queuingOfficeId`/`ownerOfficeId`/`automatedProcess[].officeId` of an order, Queue List's
 //      `officeId`) answers 403 OFFICE_NOT_ALLOWED before any call; missing ones are filled from the connection;
@@ -505,7 +508,11 @@ export class AmadeusClient {
     const spec = AMADEUS_OPERATIONS[name];
     const context = checkCallContext(rawContext);
     this.requireTenant(context);
-    const connection = await this.resolver.resolve(context.tenantId, context.environment);
+    const connection = await this.resolver.resolve(
+      context.tenantId,
+      context.environment,
+      existingOrderOffice(spec, context, request),
+    );
     const prepared = prepareOffices(spec, connection, context, request, options.redactedRequest);
     const path = requestPath(spec.path, request.pathParams, prepared.query);
     const scenario = forwardedStubScenario(this.appEnv, context, this.requestScenarioHeader());
@@ -810,6 +817,33 @@ function parse(attempt: Attempt): Result {
     correlationId,
     durationMs,
   };
+}
+
+/**
+ * The office of the existing order a call is about, which picks its credential set (the releasing-office rule of
+ * connection-resolver.ts, OBE-079): the order's office (`orderOffice`) for a call on an order (Management GET, PATCH,
+ * DELETE, Order Issue) and for a by-reference read that names one (the timeout reconciliation looks for the order of a
+ * pending booking in the booking's office; a PNR lookup or import names none), and for Queue List the office whose
+ * queue it reads (its `officeId`, else `orderOffice`). Nothing for shopping and Flight Create Orders: everything new
+ * uses the connection's current credentials.
+ */
+function existingOrderOffice(
+  spec: AmadeusOperationSpec,
+  context: AmadeusCallContext,
+  request: OutgoingRequest,
+): string | undefined {
+  switch (spec.office) {
+    case "order":
+    case "retrieval":
+      return context.orderOffice;
+    case "queue": {
+      const requested = isRecord(request.query) ? request.query["officeId"] : undefined;
+      return typeof requested === "string" ? requested : context.orderOffice;
+    }
+    case "shopping":
+    case "create":
+      return undefined;
+  }
 }
 
 /** True when `office` is one the connection may act for. */

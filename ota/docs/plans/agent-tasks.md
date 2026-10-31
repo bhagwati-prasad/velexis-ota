@@ -2432,7 +2432,8 @@ The platform turns on own Stripe, own Amadeus credentials, custom domains and go
   - Forged metadata: a correctly signed Connect event from tenant A's account, and a `c/<ppc_id>` event of tenant A, each carrying `metadata.velexis_tenant_id` of tenant B, write no `payment_events` row in either schema, raise no staff alert and log a security event; a `livemode` mismatch behaves the same.
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int payments`
 
-### OBE-079 · Use OTA-owned Amadeus credentials and the releasing-office rule
+### OBE-079 · Use OTA-owned Amadeus credentials and the releasing-office rule ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M5
 - **Depends on:** OBE-017, OBE-063

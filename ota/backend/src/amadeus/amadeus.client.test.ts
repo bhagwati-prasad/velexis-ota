@@ -670,6 +670,48 @@ describe("offices", () => {
     expect(rows).toEqual([]);
   });
 
+  it("resolves a call on an existing order with the order's office, everything new without one [OBE-079 AC1]", async () => {
+    // Every operation with an order office in its context (CALLS reads `context` when it runs).
+    context = { ...context, orderOffice: SECOND_OFFICE };
+    const offices: Partial<Record<AmadeusOperationName, unknown>> = {};
+    for (const name of OPERATION_NAMES) {
+      resolver.resolve.mockClear();
+      await CALLS[name](client());
+      offices[name] = resolver.resolve.mock.calls[0]?.[2];
+      expect(resolver.resolve.mock.calls[0]?.slice(0, 2)).toEqual([tenantId, "test"]);
+    }
+    resolver.resolve.mockClear();
+    await client().listQueue(
+      { ...context, orderOffice: undefined },
+      { queueId: 8, query: { officeId: OFFICE } },
+    );
+    await client().listQueue({ ...context, orderOffice: undefined }, { queueId: 8 });
+    await client().getFlightOrderByReference(
+      { ...context, orderOffice: undefined },
+      { query: { reference: "SYN001", originSystemCode: "GDS" } },
+    );
+
+    // The releasing-office rule picks the credential set of an order's office (connection-resolver.ts): sync, issue,
+    // patch, cancel, queue reads and a by-reference read that names the booking's office (the timeout reconciliation);
+    // searches, pricing and new orders use the current one.
+    expect(offices).toEqual({
+      searchFlightOffers: undefined,
+      getFlightOffers: undefined,
+      searchFlightAvailabilities: undefined,
+      upsellAirOffers: undefined,
+      quoteAirOffers: undefined,
+      createFlightOrders: undefined,
+      issueFlightOrder: SECOND_OFFICE,
+      getFlightOrder: SECOND_OFFICE,
+      patchFlightOrder: SECOND_OFFICE,
+      cancelFlightOrder: SECOND_OFFICE,
+      getFlightOrderByReference: SECOND_OFFICE,
+      listQueue: SECOND_OFFICE,
+    });
+    // Queue List: the office whose queue it reads; a by-reference read without an office (a PNR lookup): none.
+    expect(resolver.resolve.mock.calls.map((call) => call[2])).toEqual([OFFICE, undefined, undefined]);
+  });
+
   it("lists the tenant's queue office, or another of its offices, and records the order office", async () => {
     await CALLS.listQueue(client());
     await client().listQueue(context, { queueId: 8, query: { officeId: SECOND_OFFICE, max: 5 } });
