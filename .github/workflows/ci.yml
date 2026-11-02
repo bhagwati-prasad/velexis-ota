@@ -313,7 +313,9 @@ jobs:
   build-test:
     name: Build and test
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # About 21 minutes on a usual runner; runs 116 on 2026-10-31 needed more than 30 on slower runners, every step
+    # about 1.5 times slower, so the budget leaves room for that (owner's decision of 2026-11-02).
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16
