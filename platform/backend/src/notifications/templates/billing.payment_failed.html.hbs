@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>A payment to Velexis failed</title>
+  </head>
+  <body style="margin: 0; padding: 24px; font-family: Arial, Helvetica, sans-serif; font-size: 15px; line-height: 1.5; color: #1f2933; background-color: #ffffff;">
+    <p>Hello {{fullName}},</p>
+    <p>We could not collect the payment of Velexis invoice {{invoiceNumber}} ({{amountDue}}) for your OTA {{tenantName}} ({{tenantKey}}). Stripe also e-mails the billing address of the subscription about it and tries the payment again over the next days.</p>
+    <p>To pay it, update the card or payment method in &quot;Manage billing&quot; on the billing page: <a href="{{billingUrl}}">{{billingUrl}}</a></p>
+    <p>If the payment keeps failing, your OTA's subscription becomes unpaid and the OTA is suspended until it is paid.</p>
+    <p>The Velexis team</p>
+  </body>
+</html>

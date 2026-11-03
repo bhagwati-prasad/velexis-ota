@@ -50,6 +50,9 @@ export const EMAIL_TEMPLATE_KEYS = [
   // M5: a platform admin removed an abusive custom domain (PBE-051, adminRemoveDomain; PADR-0013 item 5, note of
   // 2026-11-03).
   "domain.removed",
+  // M5: Stripe could not collect an invoice of Velexis's subscription (PBE-046, `invoice.payment_failed`; PADR-0013
+  // item 5).
+  "billing.payment_failed",
 ] as const;
 
 /** A key of EMAIL_TEMPLATE_KEYS. */
@@ -172,6 +175,10 @@ export const EMAIL_TEMPLATES: Readonly<Record<EmailTemplateKey, EmailTemplateDef
     "hostname",
     "domainsUrl",
   ]),
+  "billing.payment_failed": definition(
+    "Stripe could not collect the payment of an invoice of the OTA's Velexis subscription (to the owners)",
+    ["fullName", "tenantName", "tenantKey", "invoiceNumber", "amountDue", "billingUrl"],
+  ),
 });
 
 /** Variables every template may use, filled in by the renderer from the configuration (PADR-0013 item 7). */

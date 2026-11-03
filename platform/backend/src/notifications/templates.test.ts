@@ -179,6 +179,17 @@ const SAMPLES: Readonly<Record<EmailTemplateKey, EmailVariables>> = {
     },
     secretData: {},
   },
+  "billing.payment_failed": {
+    data: {
+      fullName: "Ana Lima",
+      tenantName: "Acme Travel",
+      tenantKey: "acme",
+      invoiceNumber: "VX-2027-000184",
+      amountDue: "49.00 EUR",
+      billingUrl: "https://platform.example.com/otas/ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/billing",
+    },
+    secretData: {},
+  },
 };
 
 const templates = EmailTemplates.load();
@@ -241,6 +252,8 @@ describe("e-mail templates", () => {
         "amadeus.live_ready",
         // M5: a custom domain removed by a platform admin (PBE-051).
         "domain.removed",
+        // M5: a failed payment of an invoice of the OTA's subscription (PBE-046).
+        "billing.payment_failed",
       ].sort(),
     );
     for (const key of EMAIL_TEMPLATE_KEYS) {

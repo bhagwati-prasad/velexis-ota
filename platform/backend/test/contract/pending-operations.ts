@@ -37,13 +37,12 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   // createConsoleToken since PBE-039, updateAmadeusConnection since PBE-040).
 
   // PBE-041: the M5 tenant resources (go-live, custom domains, own Amadeus credentials, Stripe Connect and API keys,
-  // the payout account and settlements, and invoices). createCheckoutSession and createCustomerPortalSession are bound
-  // since PBE-044, getPayoutAccount and setPayoutAccount since PBE-058, startStripeConnect and completeStripeConnect
-  // since PBE-055, listSettlements, getSettlement and downloadSettlementLines since PBE-060, addDomain, removeDomain and
-  // makeDomainPrimary since PBE-049, getCredentialSubmission since PBE-052, checkDomain since PBE-050,
-  // submitAmadeusCredentials since PBE-053, requestLiveAmadeus since PBE-054, submitStripeApiKeys and
-  // useVelexisPayments since PBE-057, goLive since PBE-061.
-  { operationId: "listInvoices", task: "PBE-046" },
+  // the payout account and settlements, and invoices) are all bound (createCheckoutSession and
+  // createCustomerPortalSession since PBE-044, getPayoutAccount and setPayoutAccount since PBE-058, startStripeConnect
+  // and completeStripeConnect since PBE-055, listSettlements, getSettlement and downloadSettlementLines since PBE-060,
+  // addDomain, removeDomain and makeDomainPrimary since PBE-049, getCredentialSubmission since PBE-052, checkDomain
+  // since PBE-050, submitAmadeusCredentials since PBE-053, requestLiveAmadeus since PBE-054, submitStripeApiKeys and
+  // useVelexisPayments since PBE-057, goLive since PBE-061, listInvoices since PBE-046).
 
   // PBE-042: the M5 admin operations (billing, the office release, settlements and payout accounts, domains) and the
   // two Stripe webhook receivers. adminUpdatePlan, extended with the Stripe ids, stays bound by PBE-033; PBE-048

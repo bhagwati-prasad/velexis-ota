@@ -2,10 +2,11 @@
 // and 5, PADR-0015 item 4): `POST /webhooks/stripe/billing` of the API (createTestApp) on this file's database clone
 // and Redis database, then the worker's module graph (WorkerModule, as dist/worker.js builds it) on the same ones, with
 // the FakeClock of the API, the FakeStripe of test/support/fake-stripe.ts and a test handler of
-// `customer.subscription.updated`. The worker's own billing handlers (PBE-045, billing-events.int.test.ts) are
-// replaced by inert values, so the test handler is the one handler of its type and the inbox's routing is what these
-// tests see. The events are the X-028 fixtures of the billing endpoint, signed here with a secret made for this file
-// (`@velexis/testing/stripe`), at the FakeClock's time.
+// `customer.subscription.updated`. The worker's own billing handlers (PBE-045, billing-events.int.test.ts; PBE-046's
+// invoice handler, invoices.int.test.ts) are replaced by inert values, so the test handler is the one handler of its
+// type, `invoice.paid` stays a type without a handler, and the inbox's routing is what these tests see. The events are
+// the X-028 fixtures of the billing endpoint, signed here with a secret made for this file (`@velexis/testing/stripe`),
+// at the FakeClock's time.
 //
 // The intake tests run before the worker starts, so the queue shows exactly what the receiver queued. The worker's
 // milestone switches are a set the tests change (FeatureSwitches replaced), and its job schedulers are not registered
@@ -20,6 +21,7 @@ import { signedStripeEvent, type StripeFixtureEventType } from "@velexis/testing
 import { UnrecoverableError, type Job, type Queue } from "bullmq";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { CheckoutSessionCompletedHandler } from "../../../src/billing/sync/handlers/checkout-session-completed.handler";
+import { InvoiceHandler } from "../../../src/billing/sync/handlers/invoice.handler";
 import { SubscriptionChangedHandler } from "../../../src/billing/sync/handlers/subscription-changed.handler";
 import { StripeEventsProcessor } from "../../../src/billing/sync/stripe-events.processor";
 import {
@@ -345,6 +347,8 @@ describe("the worker: stripe.event and stripe_events.sweep", () => {
       .overrideProvider(SubscriptionChangedHandler)
       .useValue({})
       .overrideProvider(CheckoutSessionCompletedHandler)
+      .useValue({})
+      .overrideProvider(InvoiceHandler)
       .useValue({})
       .compile();
     await worker.init();

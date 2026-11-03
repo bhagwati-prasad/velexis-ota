@@ -1473,7 +1473,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - `past_due` sets the banner state [PF-74 AC1]; `unpaid` suspends with reason `billing` and a later `active` resumes it, while an `abuse` suspension is not resumed [PF-74 AC2].
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int billing`
 
-### PBE-046 · Sync and list invoices
+### PBE-046 · Sync and list invoices ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-045
