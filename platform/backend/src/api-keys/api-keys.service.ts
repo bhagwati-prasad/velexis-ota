@@ -6,11 +6,17 @@
 // Rules on top of the OpenAPI validation:
 // - the origins and scopes of api-key-rules.ts (`400 VALIDATION_FAILED`), and an `expiresAt` in the future;
 // - writes need an `active` OTA (`409 TENANT_NOT_ACTIVE`, PADR-0014 item 5: a suspended OTA's keys are read-only);
-// - `live` keys only once the OTA is live (`422 LIVE_MODE_NOT_ENABLED`), and a live secret key, created or rolled,
-//   needs a TOTP step-up within 15 minutes (`403 MFA_REQUIRED`, `401 REAUTH_REQUIRED`; PADR-0005 item 9). The
-//   account's MFA state is read before the transaction opens: AccountAuthStates reads on the pool, and a read there
-//   while the transaction holds a connection (and the tenant's key lock) could wait for a connection that the
-//   requests queued behind the lock never give back;
+// - `live` keys, created or rolled, need the live switch (PBE-061, PADR-0015: `FEATURE_LIVE_SWITCH` enables live
+//   keys; off, `403 FEATURE_DISABLED` with `details.feature = live_switch`). The operations carry no `x-feature`,
+//   because test keys work with the switch off, so the service checks it: first of all for a creation (the
+//   environment is in the request, as FeatureGuard would answer before the handler), and for a roll as soon as the
+//   key is found (its environment is the key's). Either way before the step-up (FIX-W38-PLATFORM, lead decision (2i)
+//   of 2026-10-31: the switch answers before the step-up);
+// - `live` keys only once the OTA is live (`422 LIVE_MODE_NOT_ENABLED`, a creation and, since PBE-061, a roll), and a
+//   live secret key, created or rolled, needs a TOTP step-up within 15 minutes (`403 MFA_REQUIRED`, `401
+//   REAUTH_REQUIRED`; PADR-0005 item 9). The account's MFA state is read before the transaction opens:
+//   AccountAuthStates reads on the pool, and a read there while the transaction holds a connection (and the tenant's
+//   key lock) could wait for a connection that the requests queued behind the lock never give back;
 // - keys that are neither revoked nor expired count against `plans.limits.apiKeys` (`422 PLAN_LIMIT_REACHED` with
 //   `details.limit` and `details.used`); a roll that keeps the old key working needs room for both, while a roll
 //   with `now` replaces a working key one for one and needs none (an OTA over its limit after a downgrade can still
@@ -30,6 +36,7 @@ import { assertRecentMfa } from "../common/auth/recent-mfa.guard";
 import type { TenantMembership } from "../common/auth/tenant-role.guard";
 import { Clock } from "../common/clock";
 import { PLATFORM_DB, type PlatformDb } from "../common/database";
+import { FeatureSwitches } from "../common/features";
 import { InvalidationPublisher, runInTransaction } from "../common/redis/invalidation.publisher";
 import { ApiKeyGenerator, apiKeyAuditFacts } from "./api-key-generator";
 import { apiKeyAccess, originProblems, type ApiKeyEnvironment, type ApiKeyKind } from "./api-key-rules";
@@ -126,6 +133,7 @@ export class ApiKeysService {
     private readonly audit: AuditService,
     private readonly invalidations: InvalidationPublisher,
     private readonly accounts: AccountAuthStates,
+    private readonly switches: FeatureSwitches,
     private readonly clock: Clock,
     @Inject(PLATFORM_DB) private readonly db: PlatformDb,
   ) {}
@@ -145,6 +153,7 @@ export class ApiKeysService {
     claims: Pick<AccessTokenClaims, "sub" | "mfa_at">,
     request: CreateApiKeyRequest,
   ): Promise<ApiKeyCreated> {
+    this.assertLiveSwitch(request.environment);
     const now = this.clock.now();
     const { access, fieldErrors } = apiKeyAccess(request);
     const expiresAt = request.expiresAt === undefined ? null : new Date(request.expiresAt);
@@ -162,9 +171,7 @@ export class ApiKeysService {
     return runInTransaction(this.db, async (trx) => {
       await this.keys.lockTenantKeys(trx, tenantId);
       const tenant = await this.writableTenant(trx, tenantId);
-      if (request.environment === "live" && tenant.storefront_environment !== "live") {
-        throw new AppError("LIVE_MODE_NOT_ENABLED");
-      }
+      assertLiveMode(request.environment, tenant);
       assertStepUp(request.kind, request.environment, account, claims, now);
       await this.checkLimit(trx, tenantId, tenant.limits, now, 1);
       const issued = await this.generator.issue(trx, {
@@ -254,10 +261,12 @@ export class ApiKeysService {
     return runInTransaction(this.db, async (trx) => {
       await this.keys.lockTenantKeys(trx, tenantId);
       const old = await this.lockedKey(trx, tenantId, keyId);
-      const tenant = await this.writableTenant(trx, tenantId);
-      assertNotRevoked(old);
       const kind = old.kind as ApiKeyKind;
       const environment = old.environment as ApiKeyEnvironment;
+      this.assertLiveSwitch(environment);
+      const tenant = await this.writableTenant(trx, tenantId);
+      assertNotRevoked(old);
+      assertLiveMode(environment, tenant);
       assertStepUp(kind, environment, account, claims, now);
       // Expiring a working key at once replaces it one for one: no room needed. Otherwise the new key counts, next
       // to the old one while it works (an expired key counts no more, so its roll adds a key).
@@ -321,6 +330,16 @@ export class ApiKeysService {
     });
   }
 
+  /**
+   * `403 FEATURE_DISABLED` (`details.feature = live_switch`) for a `live` key while the live switch is off (PADR-0015:
+   * `FEATURE_LIVE_SWITCH` enables live keys); test keys need no switch.
+   */
+  private assertLiveSwitch(environment: ApiKeyEnvironment): void {
+    if (environment === "live" && !this.switches.isEnabled("live_switch")) {
+      throw new AppError("FEATURE_DISABLED", { details: { feature: "live_switch" } });
+    }
+  }
+
   /** The tenant's state for a write: `404` when it is gone, `409 TENANT_NOT_ACTIVE` unless it is `active`. */
   private async writableTenant(trx: PlatformTransaction, tenantId: string) {
     const tenant = await this.keys.tenantState(trx, tenantId);
@@ -372,6 +391,19 @@ export class ApiKeysService {
     if (used + added > limit) {
       throw new AppError("PLAN_LIMIT_REACHED", { details: { limit, used } });
     }
+  }
+}
+
+/**
+ * `422 LIVE_MODE_NOT_ENABLED` for a `live` key of an OTA whose storefront is not live yet: live keys exist once the
+ * OTA went live (`goLive`, PBE-061).
+ */
+export function assertLiveMode(
+  environment: ApiKeyEnvironment,
+  tenant: { readonly storefront_environment: string },
+): void {
+  if (environment === "live" && tenant.storefront_environment !== "live") {
+    throw new AppError("LIVE_MODE_NOT_ENABLED");
   }
 }
 

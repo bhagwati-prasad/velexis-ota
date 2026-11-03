@@ -4,13 +4,12 @@
 // version and the activation, and the failure of a provisioning and the owner's retry (PBE-023), the platform
 // admin's OTA search and its edit of the legal name and the internal notes (PBE-029), the plan that follows the
 // admin's change of a manual subscription (PBE-033), the status switch of a suspension and a resume (PBE-030,
-// PADR-0014), and the billing banner that billing sync keeps (PBE-045). Kysely on the process's `PLATFORM_DB`,
-// schema-qualified tables
-// (ADR-0005). The reads join what an answer shows next to the tenant row: the caller's role from the active
-// membership (listTenants), the oldest active owner's e-mail address (the admin search) and the primary storefront
-// host from `tenant_domains`, read only. `reference.countries`,
-// `reference.currencies` and `reference.time_zones` are read for the checks of a new OTA and a profile update (the
-// reference tables are read directly, architecture §2.1).
+// PADR-0014), the billing banner that billing sync keeps (PBE-045), and the switch of the storefront to live
+// (PBE-061, `goLive`). Kysely on the process's `PLATFORM_DB`, schema-qualified tables (ADR-0005). The reads join what
+// an answer shows next to the tenant row: the caller's role from the active membership (listTenants), the oldest
+// active owner's e-mail address (the admin search) and the primary storefront host from `tenant_domains`, read only.
+// `reference.countries`, `reference.currencies` and `reference.time_zones` are read for the checks of a new OTA and a
+// profile update (the reference tables are read directly, architecture §2.1).
 import { Inject, Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -282,6 +281,23 @@ export class TenantsRepository {
   }
 
   /**
+   * The tenant row, locked for the rest of the caller's transaction `FOR NO KEY UPDATE` (PBE-061, `goLive`): it waits
+   * for and holds off every other lock of the row (`FOR SHARE`, `FOR NO KEY UPDATE`, `FOR UPDATE`) but the `KEY SHARE`
+   * lock of a foreign key check. A transaction that locked another row of the tenant first (its payout account, a
+   * payment connection) and then writes a row that references the tenant (its audit row) therefore never waits for
+   * the holder, so the two cannot deadlock. The holder may change every column of the row but the unique ones (`id`,
+   * `key`, `schema_name`), which never change.
+   */
+  async lockForNoKeyUpdate(trx: PlatformTransaction, tenantId: string): Promise<TenantRecord | undefined> {
+    return trx
+      .selectFrom("platform.tenants")
+      .selectAll()
+      .where("id", "=", tenantId)
+      .forNoKeyUpdate()
+      .executeTakeFirst();
+  }
+
+  /**
    * Writes the profile `changes` of a row locked by `lockForUpdate`, with `version + 1` and `updated_at = now`, in
    * `trx`. Returns the new version.
    */
@@ -479,6 +495,34 @@ export class TenantsRepository {
       .where("id", "=", tenantId)
       .execute();
     return current.plan_code;
+  }
+
+  /**
+   * The switch of the tenant's hosted storefront to live (PBE-061, `goLive`) in `trx`, on a row locked by
+   * `lockForNoKeyUpdate`: `storefront_environment = 'live'`, `live_enabled_at = now`, `live_enabled_by_account_id`,
+   * `version + 1`, only while the tenant is `active` and still `test`. True when this call changed the tenant.
+   */
+  async switchToLive(
+    trx: PlatformTransaction,
+    tenantId: string,
+    accountId: string,
+    now: Date,
+  ): Promise<boolean> {
+    const row = await trx
+      .updateTable("platform.tenants")
+      .set({
+        storefront_environment: "live",
+        live_enabled_at: now,
+        live_enabled_by_account_id: accountId,
+        version: sql<number>`version + 1`,
+        updated_at: now,
+      })
+      .where("id", "=", tenantId)
+      .where("status", "=", "active")
+      .where("storefront_environment", "=", "test")
+      .returning("id")
+      .executeTakeFirst();
+    return row !== undefined;
   }
 
   /**

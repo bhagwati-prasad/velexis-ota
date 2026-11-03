@@ -118,6 +118,11 @@ export interface ConnectStandardInsert extends ConnectStandardWrite {
   readonly tenantId: string;
   readonly environment: PaymentEnvironment;
   readonly statementDescriptorSuffix: string | null;
+  /**
+   * When the OAuth that connected the account happened; `now` when absent. Go-live's copy of the test connection
+   * (PBE-061) keeps the test connection's, since one OAuth serves both.
+   */
+  readonly connectedAt?: Date;
 }
 
 /** A Connect OAuth's member: the account's active membership (`stf_…`) and role, and the OTA's status. */
@@ -457,8 +462,8 @@ export class PaymentConnectionsRepository {
 
   /**
    * Inserts the tenant's Stripe connection of an environment that has none yet, in Connect Standard mode, in `trx`:
-   * the columns of `applyConnectStandard`, `manual` capture and the default connection of the environment. The row
-   * comes back without the ciphertexts.
+   * the columns of `applyConnectStandard` (`connected_at` from `row.connectedAt` when given), `manual` capture and the
+   * default connection of the environment. The row comes back without the ciphertexts.
    */
   async insertConnectStandard(
     trx: PlatformTransaction,
@@ -478,7 +483,7 @@ export class PaymentConnectionsRepository {
         status: row.status,
         statement_descriptor_suffix: row.statementDescriptorSuffix,
         capabilities: JSON.stringify(row.capabilities),
-        connected_at: row.now,
+        connected_at: row.connectedAt ?? row.now,
         created_by_account_id: row.connectedByAccountId,
         created_at: row.now,
         updated_at: row.now,

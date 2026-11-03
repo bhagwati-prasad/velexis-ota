@@ -3,7 +3,7 @@
 // stay simple (architecture §2.2). PBE-018 brings the create-OTA transaction, PBE-019 the dispatch to the OTA worker,
 // PBE-022 the tenant-event consumer and the post-steps, PBE-023 the failure handler, the reconciler, the purge of
 // unrevealed keys and the portal's setup progress, retry and one-time key reveal, PBE-030 the suspension, resume and
-// migration of an OTA and the switch of its connections (SuspensionService, MigrateService); go-live (M5) follows.
+// migration of an OTA and the switch of its connections (SuspensionService, MigrateService), PBE-061 go-live.
 //
 // - The static module holds what the API uses: the jobs repository, ProvisioningDispatcher (on the `ota-tenant-ops`
 //   queue of QueuesModule), SuspensionService and MigrateService (exported for the platform admin's routes and, from
@@ -11,8 +11,10 @@
 //   account, TenantsModule, the global MembershipsModule, BillingModule, DomainsModule, SupplierConnectionsModule and
 //   PaymentConnectionsModule for the connections), NotificationsModule (the owners' e-mails, the ops alerts) and
 //   AuditModule.
-// - `ProvisioningModule.forApi()` (AppModule) adds the portal's lifecycle routes, LifecycleService, and
-//   OnboardingService with its read-only OnboardingRepository (the checklist of PADR-0018, PBE-024).
+// - `ProvisioningModule.forApi()` (AppModule) adds the portal's lifecycle routes, LifecycleService,
+//   OnboardingService with its read-only OnboardingRepository (the checklist of PADR-0018, PBE-024), and GoLiveService
+//   with its read-only GoLiveRepository (PBE-061: the switch of the storefront to live through TenantsRepository and
+//   the live payment connection through PaymentConnectionsRepository).
 // - `ProvisioningModule.forWorker()` (WorkerModule) is the worker's part, in a module of its own (ProvisioningWorker-
 //   Module), so the worker gets none of the portal's routes and services: the one processor of
 //   `platform-tenant-events` (TenantEventsProcessor), the post-steps it runs (PostStepsRunner and the six steps of
@@ -46,6 +48,8 @@ import { TenantsModule } from "../tenants/tenants.module";
 import { TenantsRepository } from "../tenants/tenants.repository";
 import { ProvisioningDispatcher } from "./dispatcher";
 import { ProvisioningFailureHandler } from "./failure-handler";
+import { GoLiveRepository } from "./go-live.repository";
+import { GoLiveService } from "./go-live.service";
 import { LifecycleController } from "./lifecycle.controller";
 import { LifecycleService } from "./lifecycle.service";
 import { MigrateService } from "./migrate.service";
@@ -133,7 +137,7 @@ export class ProvisioningModule {
     ProvisioningModule.apiModule ??= {
       module: ProvisioningModule,
       controllers: [LifecycleController],
-      providers: [LifecycleService, OnboardingService, OnboardingRepository],
+      providers: [LifecycleService, OnboardingService, OnboardingRepository, GoLiveService, GoLiveRepository],
     };
     return ProvisioningModule.apiModule;
   }

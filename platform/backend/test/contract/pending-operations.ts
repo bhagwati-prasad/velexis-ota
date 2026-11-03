@@ -42,8 +42,7 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   // since PBE-055, listSettlements, getSettlement and downloadSettlementLines since PBE-060, addDomain, removeDomain and
   // makeDomainPrimary since PBE-049, getCredentialSubmission since PBE-052, checkDomain since PBE-050,
   // submitAmadeusCredentials since PBE-053, requestLiveAmadeus since PBE-054, submitStripeApiKeys and
-  // useVelexisPayments since PBE-057.
-  { operationId: "goLive", task: "PBE-061" },
+  // useVelexisPayments since PBE-057, goLive since PBE-061.
   { operationId: "listInvoices", task: "PBE-046" },
 
   // PBE-042: the M5 admin operations (billing, the office release, settlements and payout accounts, domains) and the

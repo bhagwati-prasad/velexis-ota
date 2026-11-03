@@ -50,6 +50,8 @@ sequenceDiagram
 2. At **go-live** (M5), if the test row is in `velexis` mode, the API inserts the matching **live** row in `velexis` mode. Go-live requires a **verified payout account** in this case, because Velexis must be able to pay the OTA (`PAYOUT_ACCOUNT_REQUIRED`).
 3. Owners and admins can edit the statement descriptor suffix (`updatePaymentConnection`, M3).
 
+*Note (2026-11-03, PBE-061, lead additions of 2026-11-02).* Go-live (`goLive`, [`../api-inventory.md`](../api-inventory.md) §7) takes the live payment mode of its `payments_live` precondition from the **live** connection when the OTA has one, in any of the three modes (live API keys verified before going live, §D, included: go-live keeps that connection and creates none), otherwise from the **test** connection it copies: `velexis` (step 2, which also needs the verified payout account, `payout_account`) or `connect_standard` (§C item 4: copied with its `acct_…`, capabilities, status, `connected_at` and statement descriptor suffix; one OAuth serves both rows, so a deauthorisation older than that OAuth that reaches the platform after go-live disables the copy too instead of passing for stale, §C note of 2026-10-31 on lead decision (2k)). Test API keys cannot take live payments. The connection that decides must be `active`: a `pending` one (charges not enabled yet) or a `disabled` one (by a platform admin or by a Stripe deauthorisation) leaves `payments_live` in `details.missing` of `422 LIVE_PRECONDITIONS_UNMET`, and nothing is written.
+
 ### B. Payout account (velexis mode, M5)
 
 1. The owner enters holder name, country, currency and either an IBAN (+ BIC) or local account and routing numbers. IBANs are checked with the mod-97 checksum. The action needs an MFA step-up.

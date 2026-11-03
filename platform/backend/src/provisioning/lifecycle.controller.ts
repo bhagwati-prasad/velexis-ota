@@ -1,19 +1,24 @@
 // The tenant lifecycle routes of the portal (platform/docs/api-inventory.md §7): `createTenant` (PBE-018), the setup
-// page's progress, retry and one-time key reveal (PBE-023), and the onboarding checklist (PBE-024). Thin: each handler
-// binds its operation, reads the validated request and makes one service call. `POST /v1/tenants` is no tenant route
-// (there is no tenant yet), so it has no `@TenantRoles`: PortalAuthGuard needs a verified portal account
-// (`x-scope: portal`), and the global IdempotencyInterceptor makes it idempotent (`x-idempotent: true`). The routes
-// under `/v1/tenants/{tenantId}` declare their roles from the role matrix (`tenantRolesOf`): any member reads the
-// progress and the checklist, owners retry and reveal; TenantRoleGuard answers `404` to non-members before the handler
-// runs. The reveal's answer holds the full keys once, so it is sent with `Cache-Control: no-store`; nothing here logs
-// a body.
+// page's progress, retry and one-time key reveal (PBE-023), the onboarding checklist (PBE-024), and go-live (PBE-061).
+// Thin: each handler binds its operation, reads the validated request and makes one service call. `POST /v1/tenants`
+// is no tenant route (there is no tenant yet), so it has no `@TenantRoles`: PortalAuthGuard needs a verified portal
+// account (`x-scope: portal`), and the global IdempotencyInterceptor makes it idempotent (`x-idempotent: true`). The
+// routes under `/v1/tenants/{tenantId}` declare their roles from the role matrix (`tenantRolesOf`): any member reads
+// the progress and the checklist, owners retry, reveal and go live; TenantRoleGuard answers `404` to non-members before
+// the handler runs. `goLive` is `x-feature: live_switch` and `x-mfa-step-up`, so FeatureGuard and then RecentMfaGuard
+// refuse a switched-off or stale call before its handler; its answer is the live tenant with its version in `ETag`.
+// The reveal's answer holds the full keys once, so it is sent with `Cache-Control: no-store`; nothing here logs a
+// body.
 import { Controller, Get, HttpCode, Post, Res } from "@nestjs/common";
 import type { AccessTokenClaims } from "../auth/token.service";
 import { AccessToken } from "../common/auth/decorators";
 import { CurrentMembership, TenantRoles, type TenantMembership } from "../common/auth/tenant-role.guard";
 import { IDEMPOTENCY_KEY_HEADER } from "../common/http/idempotency.interceptor";
+import { etagOf } from "../common/http/if-match";
 import { OpenApiOperation, Validated } from "../common/http/openapi-operation.decorator";
 import { tenantRolesOf } from "../memberships/tenant-roles";
+import type { Tenant } from "../tenants/tenants.service";
+import { GoLiveService } from "./go-live.service";
 import {
   LifecycleService,
   type CreateTenantRequest,
@@ -34,6 +39,7 @@ export class LifecycleController {
   constructor(
     private readonly lifecycle: LifecycleService,
     private readonly onboarding: OnboardingService,
+    private readonly golive: GoLiveService,
   ) {}
 
   @Post()
@@ -81,5 +87,19 @@ export class LifecycleController {
   @TenantRoles(...tenantRolesOf("getOnboarding"))
   getOnboarding(@CurrentMembership() membership: TenantMembership): Promise<OnboardingChecklist> {
     return this.onboarding.get(membership);
+  }
+
+  @Post(":tenantId/go-live")
+  @HttpCode(200)
+  @OpenApiOperation("goLive")
+  @TenantRoles(...tenantRolesOf("goLive"))
+  async goLive(
+    @CurrentMembership() membership: TenantMembership,
+    @Res({ passthrough: true }) res: HeaderTarget,
+  ): Promise<Tenant> {
+    // The body is `{confirm: true}` and nothing else, as the request validation has checked.
+    const tenant = await this.golive.goLive(membership);
+    res.setHeader("ETag", etagOf(tenant.version));
+    return tenant;
   }
 }

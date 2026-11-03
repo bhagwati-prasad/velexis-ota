@@ -1737,7 +1737,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int settlements`
 - **Note (2026-10-31, lead decisions (2h), (2i) and (2j), FIX-W37-PLATFORM):** step 2's e-mail key is `settlement.paid`, as [PADR-0013](../adr/0013-platform-email-outbox.md) item 5 names it (template keys follow PADR-0013 item 5 over plan text), not `settlements.paid`. The approval's `409 SETTLEMENT_STATE_INVALID` with `details.reason = carry_forward_changed` has its row in the failure table of [`stripe-payments-account.md`](../flows/stripe-payments-account.md) ("Failure handling"), and since lead decision (2j) an adjustment whose amount has more decimals than the statement currency's exponent answers `422 UNPROCESSABLE` with `details.reason = amount_precision` and writes nothing.
 
-### PBE-061 · Implement go-live and live API keys
+### PBE-061 · Implement go-live and live API keys ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-054, PBE-057, PBE-058, PBE-045

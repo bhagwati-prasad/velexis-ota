@@ -611,9 +611,9 @@ export interface paths {
          * Switch the OTA's storefront to live
          * @description Owners only (M5), with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without MFA) and `FEATURE_LIVE_SWITCH` on (`403 FEATURE_DISABLED`, `details.feature = live_switch`). The body only confirms the switch (`{confirm: true}`). The OTA must be `active` (`409 TENANT_NOT_ACTIVE` with `details.status`).
          *
-         *     **Preconditions** (platform/docs/scope.md PF-14). The service checks every one and answers `422 LIVE_PRECONDITIONS_UNMET` with all the missing ones in `details.missing`, so the portal can show a checklist: `amadeus_live` (an `active` live Amadeus connection), `payments_live` (a live payment mode that can charge: the Velexis Stripe account, a connected account whose charges are enabled, or verified live API keys), `payout_account` (a `verified` payout account, when the payments stay in `velexis` mode), `plan_live_mode` (the plan's `limits.liveMode`), `subscription` (a Stripe subscription that is `trialing` or `active`) and `mfa` (the account still has MFA on, read again inside the transaction).
+         *     **Preconditions** (platform/docs/scope.md PF-14). The service checks every one and answers `422 LIVE_PRECONDITIONS_UNMET` with all the missing ones in `details.missing`, so the portal can show a checklist: `amadeus_live` (an `active` live Amadeus connection), `payments_live` (a live payment mode that can charge: the Velexis Stripe account, a connected account whose charges are enabled, or verified live API keys), `payout_account` (a `verified` payout account, when the payments stay in `velexis` mode), `plan_live_mode` (the plan's `limits.liveMode`), `subscription` (a Stripe subscription that is `trialing` or `active`) and `mfa` (the account still has MFA on, read again inside the transaction). The live payment mode is the live connection's when the OTA has one (in any of the three modes, for example verified live API keys submitted before going live), otherwise the test connection's that go-live copies (`velexis` or `connect_standard`; test API keys cannot take live payments); it can charge when that connection is `active` (a connection that is `pending`, or `disabled` by a platform admin or by a Stripe deauthorisation, cannot).
          *
-         *     **Effect**, in one transaction: `storefront_environment = live`, `live_enabled_at`, `live_enabled_by_account_id` and `version + 1`; when the test payment connection is in `velexis` mode the live one is created in that mode, and a `connect_standard` test connection is copied to live; the audit row `tenant.went_live`. After commit it publishes `tenant` and `connection` invalidations, so the hosted storefront serves live within 60 seconds. An OTA that is live already answers `200` with the tenant unchanged. Live API keys can be created from then on (`createApiKey`).
+         *     **Effect**, in one transaction: `storefront_environment = live`, `live_enabled_at`, `live_enabled_by_account_id` and `version + 1`; without a live payment connection, the live one is created from the test one: in `velexis` mode when the test payment connection is in `velexis` mode, and a `connect_standard` test connection is copied to live (its account, capabilities, status and `connectedAt`: one OAuth serves both); a live connection the OTA has, in any mode, is kept; the audit row `tenant.went_live`. After commit it publishes `tenant` and `connection` invalidations, so the hosted storefront serves live within 60 seconds. An OTA that is live already answers `200` with the tenant unchanged. Live API keys can be created from then on (`createApiKey`).
          */
         post: operations["goLive"];
         delete?: never;
@@ -868,7 +868,7 @@ export interface paths {
          * Create an API key, shown once
          * @description Owners and admins create a key of an `active` OTA (`409 TENANT_NOT_ACTIVE` otherwise). The key is `<pk|sk>_<environment>_` plus 40 base62 characters from the CSPRNG; the platform stores its prefix, `last4` and HMAC-SHA-256 with the server pepper, never the key itself (PADR-0005). The answer carries the full key **once**, with `Cache-Control: no-store`; it is never logged and never stored for a replay.
          *
-         *     **Rules.** A publishable key takes `allowedOrigins` (exact `https://host[:port]` origins; `http://localhost:<port>` and `http://127.0.0.1:<port>` only on test keys; no wildcards, paths or trailing slashes; at most 20) and no scopes. A secret key takes `scopes` from the OTA contract's `ConsoleApiKeyScope` and `StaffPermission`, checked by the service against the generated OTA types (PADR-0005 item 6): default `["storefront"]`; `storefront` excludes the console scopes; `console:automation` needs at least one permission, and permissions are allowed only with it. A broken rule answers `400 VALIDATION_FAILED` with field errors. Kind, environment and scopes never change later; roll the key instead. Keys that are neither revoked nor expired count against the plan's `apiKeys` limit (`422 PLAN_LIMIT_REACHED`). `live` keys exist only once the OTA is live (`422 LIVE_MODE_NOT_ENABLED`), and a **live secret key needs a TOTP step-up** within 15 minutes (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without MFA); test keys do not, so the operation carries no `x-mfa-step-up`. Writes an audit row with the prefix, kind, environment and scopes, never the key.
+         *     **Rules.** A publishable key takes `allowedOrigins` (exact `https://host[:port]` origins; `http://localhost:<port>` and `http://127.0.0.1:<port>` only on test keys; no wildcards, paths or trailing slashes; at most 20) and no scopes. A secret key takes `scopes` from the OTA contract's `ConsoleApiKeyScope` and `StaffPermission`, checked by the service against the generated OTA types (PADR-0005 item 6): default `["storefront"]`; `storefront` excludes the console scopes; `console:automation` needs at least one permission, and permissions are allowed only with it. A broken rule answers `400 VALIDATION_FAILED` with field errors. Kind, environment and scopes never change later; roll the key instead. Keys that are neither revoked nor expired count against the plan's `apiKeys` limit (`422 PLAN_LIMIT_REACHED`). `live` keys need the live switch (`FEATURE_LIVE_SWITCH` off: `403 FEATURE_DISABLED` with `details.feature = live_switch`, answered before any other rule of the request, as an operation with `x-feature` answers it; test keys work with the switch off, so the operation carries no `x-feature`), exist only once the OTA is live (`422 LIVE_MODE_NOT_ENABLED`), and a **live secret key needs a TOTP step-up** within 15 minutes (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without MFA); test keys do not, so the operation carries no `x-mfa-step-up`. Writes an audit row with the prefix, kind, environment and scopes, never the key.
          */
         post: operations["createApiKey"];
         delete?: never;
@@ -930,7 +930,7 @@ export interface paths {
         put?: never;
         /**
          * Replace an API key with a new one, shown once
-         * @description Owners and admins create a new key with the same name, kind, environment, origins and scopes, answered once with `Cache-Control: no-store` (never logged, never stored for a replay), and set the old key's `expiresAt` to now or 1 hour, 24 hours or 7 days ahead, so deployments can switch without downtime. A revoked key answers `409 CONFLICT` (`details.reason = revoked`) and a tenant that is not `active` `409 TENANT_NOT_ACTIVE`. While the old key keeps working (`expireOldIn` other than `now`) both count against the plan's `apiKeys` limit (`422 PLAN_LIMIT_REACHED`). Rolling a **live secret key needs a TOTP step-up**, as in `createApiKey`. Writes an audit row and, after commit, publishes an `api_key` invalidation for the old prefix.
+         * @description Owners and admins create a new key with the same name, kind, environment, origins and scopes, answered once with `Cache-Control: no-store` (never logged, never stored for a replay), and set the old key's `expiresAt` to now or 1 hour, 24 hours or 7 days ahead, so deployments can switch without downtime. A revoked key answers `409 CONFLICT` (`details.reason = revoked`) and a tenant that is not `active` `409 TENANT_NOT_ACTIVE`. While the old key keeps working (`expireOldIn` other than `now`) both count against the plan's `apiKeys` limit (`422 PLAN_LIMIT_REACHED`). A **live key** is rolled as `createApiKey` creates one: with the live switch on (`403 FEATURE_DISABLED`, `details.feature = live_switch`, answered once the key is found and before any other rule), for a live OTA (`422 LIVE_MODE_NOT_ENABLED`), and a live secret key needs a TOTP step-up (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without MFA). Writes an audit row and, after commit, publishes an `api_key` invalidation for the old prefix.
          */
         post: operations["rollApiKey"];
         delete?: never;
@@ -5931,6 +5931,26 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
+        /** @description The e-mail address is not verified, the caller's role in the OTA does not allow the operation, a live key was asked for while the live switch is off (`details.feature = live_switch`), or a live secret key needs a step-up and MFA is not enabled. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED, MFA_REQUIRED. */
+        ApiKeyForbidden: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description The plan's API key limit is reached (`details.limit` and `details.used`), or a live key was asked for before the OTA is live. Possible codes: PLAN_LIMIT_REACHED, LIVE_MODE_NOT_ENABLED. */
+        ApiKeyUnprocessable: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
         /** @description The OTA is not active: it is being set up, suspended or failed (`details.status`). Possible codes: TENANT_NOT_ACTIVE. */
         TenantNotActive: {
             headers: {
@@ -7616,7 +7636,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["StepUpUnauthorized"];
-            /** @description The e-mail address is not verified, the caller is not an owner, MFA is not enabled, or the live switch is off or not in the plan. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED. */
+            /** @description The e-mail address is not verified, the caller is not an owner, MFA is not enabled, or the live switch is off (a plan without live mode is the missing precondition `plan_live_mode` of the `422`). Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED. */
             403: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -8309,19 +8329,10 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["StepUpUnauthorized"];
-            403: components["responses"]["TenantRoleOrStepUpForbidden"];
+            403: components["responses"]["ApiKeyForbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["TenantNotActive"];
-            /** @description The plan's API key limit is reached, or a live key was asked for before the OTA is live. Possible codes: PLAN_LIMIT_REACHED, LIVE_MODE_NOT_ENABLED. */
-            422: {
-                headers: {
-                    "X-Request-Id": components["headers"]["X-Request-Id"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
+            422: components["responses"]["ApiKeyUnprocessable"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
         };
@@ -8448,10 +8459,10 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["StepUpUnauthorized"];
-            403: components["responses"]["TenantRoleOrStepUpForbidden"];
+            403: components["responses"]["ApiKeyForbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["ApiKeyConflict"];
-            422: components["responses"]["PlanLimitReached"];
+            422: components["responses"]["ApiKeyUnprocessable"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
         };

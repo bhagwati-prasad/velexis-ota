@@ -89,8 +89,10 @@ const watched = new Set<string>();
 const answeredKeys: string[] = [];
 
 beforeAll(async () => {
-  // Every line at every level is captured, so "no log line holds the key" covers the debug and trace lines too.
-  t = await createTestApp({ env: { LOG_LEVEL: "trace" } });
+  // Every line at every level is captured, so "no log line holds the key" covers the debug and trace lines too. The
+  // live switch is on, so the live keys of the tests below reach their rules (since PBE-061 a live key needs it; the
+  // switch itself is proven in test/integration/provisioning/go-live.int.test.ts).
+  t = await createTestApp({ env: { LOG_LEVEL: "trace", FEATURE_LIVE_SWITCH: "true" } });
   pool = t.app.get<PlatformPool>(PLATFORM_POOL);
   tokens = t.app.get(TokenService);
   const read = readKeyFile(t.config.API_KEY_PEPPER_FILE, { minBytes: 32 });

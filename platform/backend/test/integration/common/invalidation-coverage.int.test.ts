@@ -497,6 +497,54 @@ const COVERAGE: readonly CoverageRow[] = [
       };
     },
   },
+  {
+    // PBE-061: go-live switches the storefront environment and gives the OTA its live payment connection (here the
+    // copy of its Connect Standard test connection), so the OTA backend drops its cached tenant and any cached "no
+    // live connection". Every precondition is met: a plan with live mode, a Stripe subscription, an active live
+    // Amadeus connection and payments that can charge; the live switch is on in this file's application.
+    change: "go-live (storefront environment test → live, the live payment connection)",
+    operationId: "goLive",
+    publishes: ["tenant", "connection"],
+    async arrange() {
+      const plan = await insertPlan(pool, {
+        code: planCode(),
+        limits: { staffSeats: 5, apiKeys: 10, customDomains: 0, liveMode: true },
+      });
+      const owner = await person(withMfa());
+      const { tenant } = await ota({
+        tenant: { plan_code: plan.code },
+        members: [[owner, "owner"]],
+        subscription: {
+          plan_code: plan.code,
+          status: "active",
+          billing_provider: "stripe",
+          provider_subscription_id: `sub_cov${randomBytes(6).toString("hex")}`,
+        },
+      });
+      await insertSupplierConnection(pool, tenant, {
+        id: ids.new("sc"),
+        environment: "live",
+        base_url: "https://travel.api.amadeus.com",
+        status: "active",
+      });
+      await insertPaymentConnection(pool, tenant, {
+        id: ids.new("ppc"),
+        account_mode: "connect_standard",
+        account_reference: `acct_1Cov${randomBytes(6).toString("hex")}`,
+        capabilities: { chargesEnabled: true, payoutsEnabled: true, detailsSubmitted: true },
+        statement_descriptor_suffix: null,
+      });
+      const headers = await steppedUp(owner.id);
+      return {
+        send: () => t.http.post(`/v1/tenants/${tenant.id}/go-live`).set(headers).send({ confirm: true }),
+        status: 200,
+        events: [
+          { v: 1, type: "tenant", id: tenant.id },
+          { v: 1, type: "connection", tenantId: tenant.id },
+        ],
+      };
+    },
+  },
 
   // ---- api_key: revoked, expiry set, origins changed ------------------------------------------------------------
   {
@@ -1153,8 +1201,8 @@ const COVERAGE: readonly CoverageRow[] = [
 beforeAll(async () => {
   // FEATURE_CUSTOM_DOMAINS on (with the storefront address it requires, a documentation address of RFC 5737), so the
   // rows of makeDomainPrimary (a custom domain needs the switch, FIX-W38-PLATFORM and FIX-W39-PLATFORM) and checkDomain
-  // (`x-feature: custom_domains` since FIX-W39-PLATFORM) reach their handlers, and FEATURE_LIVE_SWITCH on, so the row
-  // of requestLiveAmadeus (`x-feature: live_switch`, PBE-054) reaches its handler.
+  // (`x-feature: custom_domains` since FIX-W39-PLATFORM) reach their handlers, and FEATURE_LIVE_SWITCH on, so the rows
+  // of requestLiveAmadeus (PBE-054) and goLive (PBE-061), both `x-feature: live_switch`, reach their handlers.
   t = await createTestApp({
     env: { FEATURE_CUSTOM_DOMAINS: "true", STOREFRONT_IPV4: "203.0.113.10", FEATURE_LIVE_SWITCH: "true" },
   });
