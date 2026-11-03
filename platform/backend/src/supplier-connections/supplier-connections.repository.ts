@@ -11,7 +11,9 @@
 // the two orders cannot deadlock.
 //
 // `listForTenant` reads a tenant's connections without the ciphertext column (the portal's list, PBE-027), and
-// `toAmadeusConnection` is the API's `AmadeusConnection` of a row: never the client secret or any ciphertext.
+// `toAmadeusConnection` is the API's `AmadeusConnection` of a row: never the client secret or any ciphertext, with the
+// `pendingSubmission` its caller read (CredentialSubmissionsService.pendingByEnvironment: every answer that carries a
+// connection fills it, FIX-W39-PLATFORM).
 // `tenantForLiveRequest` (the tenant `FOR SHARE` with its plan's limits) and `activeOwners` are the live office's reads
 // (PBE-054: `requestLiveAmadeus`, and the `amadeus.live_ready` e-mail of a live assignment), read only, as the
 // operations' `x-platform-tables` say.
@@ -24,6 +26,7 @@ import { Inject, Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types/platform";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
+import { pendingSubmissionOf, type PendingSubmissions } from "../common/credentials/pending-submissions";
 import { PLATFORM_DB, type PlatformDb } from "../common/database";
 import type { AmadeusEnvironment } from "./amadeus-accounts.repository";
 
@@ -243,6 +246,24 @@ export class SupplierConnectionsRepository {
   }
 
   /**
+   * The tenant's Amadeus connection of `environment` without the client secret's ciphertext (never selected), read on
+   * `db` without a lock: `submitAmadeusCredentials` refuses an admin-disabled one up front (FIX-W39-PLATFORM).
+   */
+  async findViewForTenant(
+    tenantId: string,
+    environment: AmadeusEnvironment,
+    db: PlatformDb | PlatformTransaction = this.db,
+  ): Promise<SupplierConnectionView | undefined> {
+    return db
+      .selectFrom("platform.supplier_connections")
+      .select(SUPPLIER_CONNECTION_VIEW_COLUMNS)
+      .where("tenant_id", "=", tenantId)
+      .where("provider", "=", AMADEUS_PROVIDER)
+      .where("environment", "=", environment)
+      .executeTakeFirst();
+  }
+
+  /**
    * The tenant's Amadeus connections, `test` first, then `live`, read on `db` without the client secret's ciphertext
    * (the column is never selected).
    */
@@ -358,19 +379,23 @@ export class SupplierConnectionsRepository {
   /**
    * Switches a connection locked by `lockForTenant` to the OTA's own credentials (PBE-053, flows/amadeus-connection.md
    * §D item 3): `credential_source = 'tenant'`, no Velexis account, the host, client id and re-encrypted secret, the
-   * offices, `active` and verified now, no error, `version + 1`. Ticketing defaults and monitored queues keep what the
-   * OTA set. The row comes back without the client secret's ciphertext.
+   * offices, `active` and verified now, no error, `version + 1`. Monitored queues keep what the OTA set, and so do the
+   * ticketing defaults unless `ticketingDefaults` replaces them (the apply drops the `automatedProcess` entries of
+   * offices the credentials do not hold, FIX-W39-PLATFORM). The row comes back without the client secret's ciphertext.
    */
   async switchToTenant(
     trx: PlatformTransaction,
     id: string,
     credentials: TenantCredentials,
     now: Date,
+    ticketingDefaults?: AmadeusConnection["ticketingDefaults"],
   ): Promise<SupplierConnectionView> {
     return trx
       .updateTable("platform.supplier_connections")
       .set((eb) => ({
         ...tenantCredentialColumns(credentials, now),
+        // jsonb columns are written as JSON text.
+        ...(ticketingDefaults === undefined ? {} : { ticketing_defaults: JSON.stringify(ticketingDefaults) }),
         version: eb("version", "+", 1),
         updated_at: now,
       }))
@@ -401,6 +426,34 @@ export class SupplierConnectionsRepository {
         created_at: row.now,
         updated_at: row.now,
       })
+      .returning(SUPPLIER_CONNECTION_VIEW_COLUMNS)
+      .executeTakeFirstOrThrow();
+  }
+
+  /**
+   * Takes the released office `officeId` out of a `velexis` connection locked by `lockForTenant` (FIX-W39-PLATFORM, lead
+   * decision (2l) of 2026-11-02: `adminReleaseAmadeusOffice` of an office an admin-disabled connection still holds):
+   * out of `office_ids`, and the default, queuing and owner offices that named it become `null`, `version + 1`, in
+   * `trx`. Status, settings and account stay; the row comes back without the client secret's ciphertext.
+   */
+  async removeVelexisOffice(
+    trx: PlatformTransaction,
+    id: string,
+    officeId: string,
+    now: Date,
+  ): Promise<SupplierConnectionView> {
+    return trx
+      .updateTable("platform.supplier_connections")
+      .set((eb) => ({
+        office_ids: sql<string[]>`array_remove(office_ids, ${officeId})`,
+        default_office_id: sql<string | null>`NULLIF(default_office_id, ${officeId})`,
+        queuing_office_id: sql<string | null>`NULLIF(queuing_office_id, ${officeId})`,
+        owner_office_id: sql<string | null>`NULLIF(owner_office_id, ${officeId})`,
+        version: eb("version", "+", 1),
+        updated_at: now,
+      }))
+      .where("id", "=", id)
+      .where("credential_source", "=", "velexis")
       .returning(SUPPLIER_CONNECTION_VIEW_COLUMNS)
       .executeTakeFirstOrThrow();
   }
@@ -517,11 +570,15 @@ const iso = (value: Date | null): string | null => (value === null ? null : valu
 
 /**
  * The API's `AmadeusConnection` of a row: the office fields, settings and verification state, never the client
- * secret or its ciphertext; `clientId` only for the OTA's own credentials. `pendingSubmission` is `null` here:
- * `listAmadeusConnections` replaces it with the latest submission of own credentials for the connection's environment
- * while it is open or after it failed (PBE-053, AmadeusCredentialsService.listConnections).
+ * secret or its ciphertext; `clientId` only for the OTA's own credentials. `pendingSubmission` is the latest submission
+ * of own credentials of the connection's environment while it is open or after it failed, from `pending`
+ * (`CredentialSubmissionsService.pendingByEnvironment(tenantId, "amadeus")`, PBE-053): every answer that carries a
+ * connection reads it, the portal's and the admin's alike (FIX-W39-PLATFORM, lead decision (2k) of 2026-11-02).
  */
-export function toAmadeusConnection(row: SupplierConnectionView): AmadeusConnection {
+export function toAmadeusConnection(
+  row: SupplierConnectionView,
+  pending: PendingSubmissions,
+): AmadeusConnection {
   return {
     id: row.id,
     environment: row.environment as AmadeusConnection["environment"],
@@ -536,7 +593,7 @@ export function toAmadeusConnection(row: SupplierConnectionView): AmadeusConnect
     monitoredQueues: row.monitored_queues as AmadeusConnection["monitoredQueues"],
     lastVerifiedAt: iso(row.last_verified_at),
     lastError: row.last_error,
-    pendingSubmission: null,
+    pendingSubmission: pendingSubmissionOf(pending, row.environment),
     version: row.version,
   };
 }

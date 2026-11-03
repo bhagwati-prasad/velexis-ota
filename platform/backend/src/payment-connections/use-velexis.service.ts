@@ -36,8 +36,9 @@
 //    "connection", tenantId}` after the commit of a switch.
 //
 // Switching never moves existing payments: the OTA backend keeps capturing and refunding each payment on the account
-// recorded with it (PADR-0011 item 7). The answer is the row without its ciphertexts; the controller maps it with
-// `toPaymentConnection` and sets `ETag`. "Now" is the injected Clock's time.
+// recorded with it (PADR-0011 item 7). The answer is the row without its ciphertexts; the controller maps it as the list
+// does (`toPaymentConnection` with its pending submission, StripeApiKeysService.connectionOf) and sets `ETag`. "Now" is
+// the injected Clock's time.
 import { Inject, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { AppError } from "@velexis/errors";

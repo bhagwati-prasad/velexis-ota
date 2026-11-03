@@ -16,6 +16,8 @@
 //   invalidations. A tenant that is gone (`deleted`, `deprovisioning`) or unknown answers `404`. A live office (M5,
 //   PBE-054) completes the live connection the owner requested (`requestLiveAmadeus`, LiveOfficeService) or creates it,
 //   and the owners get the e-mail `amadeus.live_ready` in the same transaction (`LiveOfficeService.notifyLiveReady`).
+//   The answered connection carries its `pendingSubmission`, read in the transaction (FIX-W39-PLATFORM, lead decision
+//   (2k) of 2026-11-02).
 // - Release (M5, PBE-054; PADR-0012 item 5): the body carries `confirmNoOpenBookings: true` and the admin's reason
 //   (5–500 characters, trimmed by the validation interceptor). A `releasing` office (the OTA moved to its own
 //   credentials) is released. An `assigned` office is released only when it backs no active `velexis` connection of its
@@ -25,7 +27,13 @@
 //   (`connection_active`); a disabled one (PADR-0012 item 8) does not. An `available` or `retired` office answers `409
 //   CONFLICT` (`not_assigned`). The office becomes `available` with `released_at` and no tenant, with the audit row
 //   `amadeus_office.released` (the reason, the confirmation and the OTA it left), and an `amadeus_account`
-//   invalidation after the commit (the OTA backend stops using the office for that OTA's old orders).
+//   invalidation after the commit (the OTA backend stops using the office for that OTA's old orders). An `assigned`
+//   office that a disabled `velexis` connection of its OTA still holds (on the office's account) also leaves that
+//   connection in the same transaction (FIX-W39-PLATFORM, lead decision (2l) of 2026-11-02): out of `office_ids`, and
+//   the default, queuing and owner offices that named it become `null` (`version + 1`, `removeVelexisOffice`), so the
+//   pool never hands one office to two OTAs and re-enabling the connection (`adminSetConnectionStatus`) answers `409
+//   CONFLICT` (`no_office`) until an office is assigned again. The audit row adds the connection, its status and its
+//   offices before and after, and a `connection` invalidation follows the commit.
 // - Retire: only an `available` office (`409 CONFLICT`, `not_available`), with the admin's reason in the audit row;
 //   `amadeus_account` invalidation (an office status changed, platform architecture §6.3).
 import { Inject, Injectable } from "@nestjs/common";
@@ -35,6 +43,7 @@ import type { PlatformTransaction } from "../audit/audit.repository";
 import { AuditService } from "../audit/audit.service";
 import type { AccessTokenClaims } from "../auth/token.service";
 import { Clock } from "../common/clock";
+import { CredentialSubmissionsService } from "../common/credentials/credential-submissions.service";
 import { PLATFORM_DB, type PlatformDb } from "../common/database";
 import { IdGenerator } from "../common/ids";
 import { InvalidationPublisher, runInTransaction } from "../common/redis/invalidation.publisher";
@@ -53,6 +62,7 @@ import {
   SupplierConnectionsRepository,
   toAmadeusConnection,
   type SupplierConnectionRecord,
+  type SupplierConnectionView,
 } from "./supplier-connections.repository";
 
 export type AdminAmadeusOffice = components["schemas"]["AdminAmadeusOffice"];
@@ -100,6 +110,23 @@ export function toAdminAmadeusOffice(row: AmadeusOfficeView): AdminAmadeusOffice
     notes: row.notes,
     createdAt: row.created_at.toISOString(),
     version: row.version,
+  };
+}
+
+/** A connection's status and offices in the audit row of a release that took the office from it (FIX-W39-PLATFORM). */
+function connectionAuditValues(
+  row: Pick<
+    SupplierConnectionView,
+    "status" | "office_ids" | "default_office_id" | "queuing_office_id" | "owner_office_id" | "version"
+  >,
+): Record<string, unknown> {
+  return {
+    connectionStatus: row.status,
+    connectionOfficeIds: [...row.office_ids],
+    connectionDefaultOfficeId: row.default_office_id,
+    connectionQueuingOfficeId: row.queuing_office_id,
+    connectionOwnerOfficeId: row.owner_office_id,
+    connectionVersion: row.version,
   };
 }
 
@@ -159,6 +186,7 @@ export class AmadeusOfficesService {
     private readonly accounts: AmadeusAccountsRepository,
     private readonly connections: SupplierConnectionsRepository,
     private readonly liveOffices: LiveOfficeService,
+    private readonly submissions: CredentialSubmissionsService,
     private readonly audit: AuditService,
     private readonly invalidations: InvalidationPublisher,
     private readonly ids: IdGenerator,
@@ -357,7 +385,10 @@ export class AmadeusOfficesService {
       this.invalidations.publishAfterCommit(trx, { v: 1, type: "amadeus_account", id: account.id });
       return {
         office: toAdminAmadeusOffice(await this.view(trx, office.id)),
-        connection: toAmadeusConnection(connection),
+        connection: toAmadeusConnection(
+          connection,
+          await this.submissions.pendingByEnvironment(tenantId, "amadeus", trx),
+        ),
       };
     });
   }
@@ -394,11 +425,14 @@ export class AmadeusOfficesService {
         throw new AppError("NOT_FOUND");
       }
       const environment = account.environment as AmadeusEnvironment;
+      /** The OTA's connection of the environment, locked, when the office is `assigned`. */
+      let holder: SupplierConnectionRecord | undefined;
       if (office.status === "assigned") {
         // The office changed hands between the read and the lock only when it was released and assigned again
         // meanwhile; its new tenant's connection is then locked after the office row.
         const { connection } =
           locked?.tenantId === tenantId ? locked : await this.lockedConnection(trx, tenantId, environment);
+        holder = connection;
         if (
           connection !== undefined &&
           connection.credential_source === "velexis" &&
@@ -409,6 +443,17 @@ export class AmadeusOfficesService {
           throw new AppError("CONFLICT", { details: { reason: "connection_active" } });
         }
       }
+
+      // The disabled `velexis` connection that still holds an assigned office loses it (lead decision (2l)): the
+      // connection was locked above (an active one answered `connection_active`).
+      const emptied =
+        holder !== undefined &&
+        holder.credential_source === "velexis" &&
+        holder.status === "disabled" &&
+        holder.amadeus_account_id === account.id &&
+        holder.office_ids.includes(office.office_id)
+          ? await this.connections.removeVelexisOffice(trx, holder.id, office.office_id, now)
+          : undefined;
 
       await this.offices.release(trx, office.id, now);
       await this.audit.record(trx, {
@@ -423,16 +468,26 @@ export class AmadeusOfficesService {
           tenantId,
           assignedAt: office.assigned_at?.toISOString() ?? null,
           releaseRequestedAt: office.release_requested_at?.toISOString() ?? null,
+          ...(holder === undefined || emptied === undefined ? {} : connectionAuditValues(holder)),
         },
-        after: { status: "available", tenantId: null, releasedAt: now.toISOString() },
+        after: {
+          status: "available",
+          tenantId: null,
+          releasedAt: now.toISOString(),
+          ...(emptied === undefined ? {} : connectionAuditValues(emptied)),
+        },
         details: {
           officeId: office.office_id,
           environment,
           reason: request.reason,
           confirmNoOpenBookings: request.confirmNoOpenBookings,
+          ...(emptied === undefined ? {} : { connectionId: emptied.id }),
         },
       });
       this.invalidations.publishAfterCommit(trx, { v: 1, type: "amadeus_account", id: account.id });
+      if (emptied !== undefined) {
+        this.invalidations.publishAfterCommit(trx, { v: 1, type: "connection", tenantId });
+      }
       return toAdminAmadeusOffice(await this.view(trx, office.id));
     });
   }

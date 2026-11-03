@@ -14,7 +14,11 @@
 //   could start. `credentials.verify {submissionId}` is queued again with the submission id as the job id, so a job
 //   that still waits, is delayed or runs is left alone (the submission is its), and two sweeps never queue one twice;
 //   a finished job of the id (completed, or failed for good) is removed first, because BullMQ ignores an add whose job
-//   id it still keeps.
+//   id it still keeps. **A kind whose switch is off** (FIX-W39-PLATFORM, lead decision (2b) of 2026-11-02:
+//   FEATURE_OWN_AMADEUS for `amadeus`, FEATURE_OWN_STRIPE for `stripe_api_keys`) is not queued again, since its job
+//   would refuse to apply it: the submission fails with FEATURE_DISABLED (`CredentialsVerifyProcessor.failSwitchedOff`:
+//   both secret columns erased, the kind's `*_rejected` audit row with `reason: feature_disabled`, the submitter's
+//   `connection.credentials_failed` e-mail, under the same lock and status guard as below).
 // - **Verifying for more than 1 hour** (`updated_at`, which every attempt's first step sets: the five attempts and
 //   their backoff of 30 s to 240 s take minutes): the job died with the submission `verifying`. It fails with
 //   PROVIDER_UNAVAILABLE (`CredentialsVerifyProcessor.failStuck`): both secret columns erased, the kind's `*_rejected`
@@ -22,7 +26,7 @@
 //   status guard (still `verifying`, no attempt started since), so a job that finishes at the same time wins or loses
 //   cleanly.
 //
-// At most CREDENTIALS_SWEEP_BATCH_SIZE submissions of each kind per run, oldest first; the next run takes the rest.
+// At most CREDENTIALS_SWEEP_BATCH_SIZE submissions of each status per run, oldest first; the next run takes the rest.
 // Nothing here decrypts a secret: the sweep reads ids, and its log lines (`credentials.sweep_requeued`,
 // `credentials.sweep_failed`, `credentials.sweep`) carry ids, the tenant, kind, environment and counts only. "Now" is
 // the injected Clock's time.
@@ -32,7 +36,10 @@ import type { Queue } from "bullmq";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { Clock } from "../clock";
 import { PLATFORM_QUEUE } from "../queues/queue-names";
-import { CredentialSubmissionsRepository } from "./credential-submissions.repository";
+import {
+  CredentialSubmissionsRepository,
+  type CredentialSubmissionView,
+} from "./credential-submissions.repository";
 import {
   CREDENTIALS_SWEEP_JOB,
   CREDENTIALS_VERIFY_JOB,
@@ -49,7 +56,7 @@ export const SWEEP_PENDING_AGE_MS = 10 * 60_000;
 /** A `verifying` submission unchanged for longer than this fails with PROVIDER_UNAVAILABLE. */
 export const SWEEP_VERIFYING_AGE_MS = 60 * 60_000;
 
-/** The most submissions of each kind (pending, verifying) one run handles; the next run takes the rest. */
+/** The most submissions of each status (pending, verifying) one run handles; the next run takes the rest. */
 export const CREDENTIALS_SWEEP_BATCH_SIZE = 100;
 
 /** The states in which a BullMQ job will still run: the sweep leaves its submission to it. */
@@ -65,7 +72,10 @@ const LIVE_JOB_STATES: ReadonlySet<string> = new Set([
 export interface CredentialsSweepResult {
   /** `credentials.verify` jobs queued again for `pending` submissions. */
   readonly requeued: number;
-  /** `verifying` submissions failed with PROVIDER_UNAVAILABLE. */
+  /**
+   * Submissions failed: `verifying` ones with PROVIDER_UNAVAILABLE, and `pending` ones of a switched-off kind with
+   * FEATURE_DISABLED.
+   */
   readonly failed: number;
 }
 
@@ -86,19 +96,26 @@ export class CredentialsSweep {
     const verifyingBefore = new Date(now - SWEEP_VERIFYING_AGE_MS);
 
     let requeued = 0;
-    for (const submissionId of await this.submissions.staleIds(
+    let failed = 0;
+    for (const { id: submissionId, kind } of await this.submissions.stale(
       "pending",
       pendingBefore,
       CREDENTIALS_SWEEP_BATCH_SIZE,
     )) {
-      if (await this.requeue(submissionId)) {
+      if (!this.verify.kindEnabled(kind)) {
+        // Its job would refuse to apply it (the kind's switch is off): failed now instead of queued again.
+        const row = await this.verify.failSwitchedOff(submissionId, pendingBefore);
+        if (row !== undefined) {
+          failed += 1;
+          this.logFailed(row);
+        }
+      } else if (await this.requeue(submissionId)) {
         requeued += 1;
         this.logger.info({ submissionId }, "credentials.sweep_requeued");
       }
     }
 
-    let failed = 0;
-    for (const submissionId of await this.submissions.staleIds(
+    for (const { id: submissionId } of await this.submissions.stale(
       "verifying",
       verifyingBefore,
       CREDENTIALS_SWEEP_BATCH_SIZE,
@@ -106,16 +123,7 @@ export class CredentialsSweep {
       const row = await this.verify.failStuck(submissionId, verifyingBefore);
       if (row !== undefined) {
         failed += 1;
-        this.logger.warn(
-          {
-            submissionId,
-            tenantId: row.tenant_id,
-            kind: row.kind,
-            environment: row.environment,
-            errorCode: row.error_code,
-          },
-          "credentials.sweep_failed",
-        );
+        this.logFailed(row);
       }
     }
 
@@ -123,6 +131,20 @@ export class CredentialsSweep {
       this.logger.info({ requeued, failed }, "credentials.sweep");
     }
     return { requeued, failed };
+  }
+
+  /** The log line of a submission the sweep failed: ids, the tenant, kind, environment and error code only. */
+  private logFailed(row: CredentialSubmissionView): void {
+    this.logger.warn(
+      {
+        submissionId: row.id,
+        tenantId: row.tenant_id,
+        kind: row.kind,
+        environment: row.environment,
+        errorCode: row.error_code,
+      },
+      "credentials.sweep_failed",
+    );
   }
 
   /**

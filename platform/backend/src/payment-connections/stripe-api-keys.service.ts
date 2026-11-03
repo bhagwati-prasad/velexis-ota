@@ -17,27 +17,34 @@
 //    advisory lock (CredentialSubmissionsService.lockSlot, the lock `submit` takes again), so two submissions of the
 //    environment at the same moment (a double click) run one after the other and the second reads what the first
 //    stored; the connection of the environment is read without a lock (the worker's apply locks the submission, then
-//    the connection: lock order of credentials-verify.processor.ts). Its id names the webhook URL; an environment
-//    without a connection keeps the id of its latest submission of own Stripe keys, or gets a new `ppc_…`, which the
-//    verification gives the connection it creates (so a submission typed again, or twice at once, keeps the URL the
-//    owner configured in Stripe). Then
+//    the connection: lock order of credentials-verify.processor.ts). A connection a platform admin disabled
+//    (`disabled` with no `disconnected_at`, `adminSetConnectionStatus`) answers `409 CONFLICT` with `details.reason =
+//    connection_disabled` and nothing is written (FIX-W39-PLATFORM, lead decision (2i) of 2026-11-02; one a Stripe
+//    deauthorisation disabled may take keys, and the worker's apply refuses an admin's later disable again with
+//    CONNECTION_DISABLED). Its id names the webhook URL; an environment without a connection keeps the id of its
+//    latest submission of own Stripe keys, or gets a new `ppc_…`, which the verification gives the connection it
+//    creates (so a submission typed again, or twice at once, keeps the URL the owner configured in Stripe). Then
 //    CredentialSubmissionsService.submit (PBE-052) with `kind = 'stripe_api_keys'`: it supersedes the open submission
 //    of that environment (its secrets erased), stores `public_data = {publishableKey, connectionId}` and both secrets
 //    envelope-encrypted with the submission's associated data, writes the audit row `payments.api_keys_submitted`
 //    (no secret; this service writes none of its own, lead decision (1f) of 2026-10-31) and, after the commit,
 //    enqueues `credentials.verify {submissionId}`.
 // 3. The answer is `202 {submission, webhookUrl, webhookEvents}`: the submission as `getCredentialSubmission` answers
-//    it (`pending`), the OTA backend's receiver of this connection,
-//    `https://api.<STOREFRONT_BASE_DOMAIN>/webhooks/stripe/c/<ppc_id>` (the OTA API's host of decisions.md §4,
-//    `api.ota.example.com`), and the payment events to enable in the OTA's Stripe dashboard. The webhook secret is only
-//    proved by Stripe's first delivery to the OTA backend; the portal asks the owner to send a test event.
+//    it (`pending`), the OTA backend's receiver of this connection, `<PUBLIC_OTA_API_URL>/webhooks/stripe/c/<ppc_id>`
+//    (`stripeWebhookUrl`: the OTA API's public URL of the platform's configuration, `https://api.ota.example.com` in
+//    production; FIX-W39-PLATFORM, lead decision (2m) of 2026-11-02, in place of `api.<STOREFRONT_BASE_DOMAIN>`), and
+//    the payment events to enable in the OTA's Stripe dashboard. The webhook secret is only proved by Stripe's first
+//    delivery to the OTA backend; the portal asks the owner to send a test event.
 //
 // The worker's side, `GET /v1/account` and the switch of the connection, is stripe-api-keys.verifier.ts.
 //
 // `listConnections` (`listPaymentConnections`, PBE-027) answers the OTA's connections without their ciphertexts
-// (`toPaymentConnectionWith`), with the webhook URL of an `api_keys` connection and each connection's
-// `pendingSubmission`: the latest submission of own Stripe keys of its environment while it is open or after it failed,
-// so the portal shows a rejection next to the connection it left untouched.
+// (`toPaymentConnection`, payment-connection.mapper.ts), with the webhook URL of an `api_keys` connection and each
+// connection's `pendingSubmission`: the latest submission of own Stripe keys of its environment while it is open or
+// after it failed (CredentialSubmissionsService.pendingByEnvironment), so the portal shows a rejection next to the
+// connection it left untouched. `connectionsOf` and `connectionOf` map other answers' connections the same way
+// (`updatePaymentConnection`, `useVelexisPayments`, `completeStripeConnect`; FIX-W39-PLATFORM, lead decision (2k) of
+// 2026-11-02: every answered connection carries its `pendingSubmission`).
 import { Inject, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type { components } from "@velexis/api-types/platform";
@@ -51,28 +58,16 @@ import { PLATFORM_DB, type PlatformDb } from "../common/database";
 import { IdGenerator } from "../common/ids";
 import { runInTransaction } from "../common/redis/invalidation.publisher";
 import type { PlatformBackendConfig } from "../config";
+import { stripeWebhookUrl, toPaymentConnection, type PaymentConnection } from "./payment-connection.mapper";
 import {
   PaymentConnectionsRepository,
-  type ApiKeysSubmissionSummary,
   type PaymentConnectionView,
   type PaymentEnvironment,
 } from "./payment-connections.repository";
+import { disabledByAdmin } from "./stripe-connect.service";
 
 export type SubmitStripeApiKeysRequest = components["schemas"]["SubmitStripeApiKeysRequest"];
 export type StripeApiKeysSubmitted = components["schemas"]["StripeApiKeysSubmitted"];
-export type PendingCredentialSubmission = components["schemas"]["PendingCredentialSubmission"];
-
-/** What a connection's answer adds to its row: the webhook URL (`api_keys` mode) and the pending submission. */
-export interface PaymentConnectionExtras {
-  readonly webhookUrl?: string | null;
-  readonly pendingSubmission?: PendingCredentialSubmission | null;
-}
-
-/** A connection of `listConnections`: the row, read without its ciphertexts, and what its answer adds. */
-export interface ListedPaymentConnection {
-  readonly row: PaymentConnectionView;
-  readonly extras: PaymentConnectionExtras;
-}
 
 /**
  * The OTA backend's rule for a Stripe webhook signing secret (`STRIPE_WEBHOOK_SECRET_PATTERN` of
@@ -99,9 +94,6 @@ export interface StripeApiKeysPublicData {
   /** `ppc_…`: the connection the keys are for, the one the answered webhook URL names. */
   readonly connectionId: string;
 }
-
-/** The statuses a `pendingSubmission` shows: an open submission, or one that failed (the portal shows why). */
-const PENDING_SUBMISSION_STATUSES: ReadonlySet<string> = new Set(["pending", "verifying", "failed"]);
 
 const VISIBLE_STATUSES: ReadonlySet<string> = new Set(MEMBER_VISIBLE_TENANT_STATUSES);
 
@@ -143,43 +135,10 @@ export function stripeKeyProblems(
   return problems;
 }
 
-/**
- * The OTA backend's webhook receiver of the connection `connectionId`: `https://api.<storefrontBaseDomain>/webhooks/
- * stripe/c/<ppc_id>` (decisions.md §4: the OTA API is `api.ota.example.com` next to the `<key>.ota.example.com`
- * storefronts). Stripe needs an HTTPS endpoint.
- */
-export function stripeWebhookUrl(storefrontBaseDomain: string, connectionId: string): string {
-  return `https://api.${storefrontBaseDomain}/webhooks/stripe/c/${connectionId}`;
-}
-
-/**
- * The `webhookUrl` of a connection's answer (`PaymentConnection.webhookUrl`): its receiver (`stripeWebhookUrl`) in
- * `api_keys` mode, `null` in the other modes. Every answer of a connection shows it, the portal's and the admin's.
- */
-export function paymentConnectionWebhookUrl(
-  storefrontBaseDomain: string,
-  row: Pick<PaymentConnectionView, "id" | "account_mode">,
-): string | null {
-  return row.account_mode === "api_keys" ? stripeWebhookUrl(storefrontBaseDomain, row.id) : null;
-}
-
-/** The `pendingSubmission` of a submission summary: shown while it is open or after it failed, else `null`. */
-export function pendingSubmissionOf(
-  summary: ApiKeysSubmissionSummary | undefined,
-): PendingCredentialSubmission | null {
-  if (summary === undefined || !PENDING_SUBMISSION_STATUSES.has(summary.status)) {
-    return null;
-  }
-  return {
-    id: summary.id,
-    status: summary.status as PendingCredentialSubmission["status"],
-    errorCode: summary.status === "failed" ? summary.error_code : null,
-  };
-}
-
 @Injectable()
 export class StripeApiKeysService {
-  private readonly storefrontBaseDomain: string;
+  /** PUBLIC_OTA_API_URL: where the webhook URLs start. */
+  private readonly otaApiUrl: string;
 
   constructor(
     private readonly submissions: CredentialSubmissionsService,
@@ -188,12 +147,12 @@ export class StripeApiKeysService {
     @Inject(PLATFORM_DB) private readonly db: PlatformDb,
     config: ConfigService<PlatformBackendConfig, true>,
   ) {
-    this.storefrontBaseDomain = config.get("STOREFRONT_BASE_DOMAIN", { infer: true });
+    this.otaApiUrl = config.get("PUBLIC_OTA_API_URL", { infer: true });
   }
 
   /** The OTA backend's webhook receiver of the connection `connectionId` (see `stripeWebhookUrl`). */
   webhookUrlOf(connectionId: string): string {
-    return stripeWebhookUrl(this.storefrontBaseDomain, connectionId);
+    return stripeWebhookUrl(this.otaApiUrl, connectionId);
   }
 
   /** submitStripeApiKeys: a new submission of the OTA's own Stripe keys for `environment` (see the file header). */
@@ -219,6 +178,9 @@ export class StripeApiKeysService {
       // at the same moment (a double click) waits for this one and reads the connection id it stored.
       await this.submissions.lockSlot(trx, { tenantId, kind: "stripe_api_keys", environment });
       const existing = await this.connections.findViewForTenant(tenantId, environment, trx);
+      if (existing !== undefined && disabledByAdmin(existing)) {
+        throw new AppError("CONFLICT", { details: { reason: "connection_disabled" } });
+      }
       const id =
         existing?.id ??
         (await this.connections.latestApiKeysConnectionId(trx, tenantId, environment)) ??
@@ -244,37 +206,30 @@ export class StripeApiKeysService {
     };
   }
 
-  /** The webhook URL a connection's answer shows: its receiver in `api_keys` mode, `null` in the other modes. */
-  webhookUrlFor(row: Pick<PaymentConnectionView, "id" | "account_mode">): string | null {
-    return paymentConnectionWebhookUrl(this.storefrontBaseDomain, row);
-  }
-
   /**
    * listPaymentConnections: the tenant's Stripe connections, `test` first, read without the ciphertexts, with the
-   * webhook URL of an `api_keys` connection and each one's `pendingSubmission` (see the file header); the controller
-   * maps them with `toPaymentConnectionWith`.
+   * webhook URL of an `api_keys` connection and each one's `pendingSubmission` (see the file header).
    */
-  async listConnections(tenantId: string): Promise<ListedPaymentConnection[]> {
-    const [rows, latest] = await Promise.all([
+  async listConnections(tenantId: string): Promise<PaymentConnection[]> {
+    const [rows, pending] = await Promise.all([
       this.connections.listForTenant(tenantId),
-      this.connections.latestApiKeysSubmissions(tenantId),
+      this.submissions.pendingByEnvironment(tenantId, "stripe_api_keys"),
     ]);
-    const byEnvironment = new Map(latest.map((summary) => [summary.environment, summary]));
-    return rows.map((row) => ({
-      row,
-      extras: {
-        webhookUrl: this.webhookUrlFor(row),
-        pendingSubmission: pendingSubmissionOf(byEnvironment.get(row.environment)),
-      },
-    }));
+    return rows.map((row) => toPaymentConnection(row, { otaApiUrl: this.otaApiUrl, pending }));
   }
 
-  /** The pending submission of own Stripe keys of the tenant's `environment`, as a connection's answer shows it. */
-  async pendingSubmissionFor(
+  /** The tenant's connections `rows` as the list maps them, with their pending submissions read now. */
+  async connectionsOf(
     tenantId: string,
-    environment: PaymentEnvironment,
-  ): Promise<PendingCredentialSubmission | null> {
-    const latest = await this.connections.latestApiKeysSubmissions(tenantId);
-    return pendingSubmissionOf(latest.find((summary) => summary.environment === environment));
+    rows: readonly PaymentConnectionView[],
+  ): Promise<PaymentConnection[]> {
+    const pending = await this.submissions.pendingByEnvironment(tenantId, "stripe_api_keys");
+    return rows.map((row) => toPaymentConnection(row, { otaApiUrl: this.otaApiUrl, pending }));
+  }
+
+  /** The tenant's connection `row` as the list maps it, with its pending submission read now. */
+  async connectionOf(tenantId: string, row: PaymentConnectionView): Promise<PaymentConnection> {
+    const pending = await this.submissions.pendingByEnvironment(tenantId, "stripe_api_keys");
+    return toPaymentConnection(row, { otaApiUrl: this.otaApiUrl, pending });
   }
 }

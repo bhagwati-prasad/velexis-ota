@@ -22,6 +22,11 @@
 // 1. The submission becomes `verifying` with `attempts + 1` (`startAttempt`): a `pending` one, or one left `verifying`
 //    by a crash or by an earlier attempt, so a retry always finds it. A final or missing submission is left alone
 //    (`credentials.verify_skipped`): a newer submission superseded it, or an earlier attempt finished it.
+//    **The kind's switch** (FIX-W39-PLATFORM, lead decision (2b) of 2026-11-02): while the milestone switch of the kind
+//    is off in this worker (`amadeus`: FEATURE_OWN_AMADEUS, `stripe_api_keys`: FEATURE_OWN_STRIPE; SUBMISSION_FEATURES),
+//    the submission is not applied: nothing is decrypted, the provider is not asked, and the attempt goes straight to
+//    step 3's failure with FEATURE_DISABLED (final at once, as a rejection; audit details `reason: feature_disabled`
+//    and the switch), its secrets erased.
 // 2. Outside any transaction, the secrets are decrypted (associated data
 //    `platform.credential_submissions.<column>:<id>`) and handed to the verifier's `check`, which asks the provider:
 //    - `verified` (with an optional `result` for `apply`);
@@ -52,7 +57,9 @@
 // **A lost job** (FIX-W38-PLATFORM, lead decision (2f) of 2026-10-31): the sweep of credentials-sweep.ts, every 5
 // minutes, queues `credentials.verify` again for a submission `pending` for more than 10 minutes, and fails one left
 // `verifying` for more than an hour with `failStuck` (PROVIDER_UNAVAILABLE, the secrets erased, the `*_rejected` audit
-// row and the `connection.credentials_failed` e-mail, under the same lock and status guard as step 3).
+// row and the `connection.credentials_failed` e-mail, under the same lock and status guard as step 3). A `pending` one
+// whose kind's switch is off is not queued again but failed with `failSwitchedOff` (FEATURE_DISABLED, the same writes;
+// FIX-W39-PLATFORM, lead decision (2b) of 2026-11-02).
 //
 // Neither a secret nor a provider body is logged, stored, queued or returned: the job data is the submission id, the
 // result is the id and the status, the errors BullMQ keeps are fixed texts, and the log lines carry ids, the kind,
@@ -69,9 +76,11 @@ import { MEMBER_VISIBLE_TENANT_STATUSES } from "../auth/tenant-role.guard";
 import { Clock } from "../clock";
 import { EnvelopeService } from "../crypto.provider";
 import { PLATFORM_DB, type PlatformDb } from "../database";
+import { FeatureSwitches } from "../features";
 import { runInTransaction } from "../redis/invalidation.publisher";
 import {
   CredentialSubmissionsRepository,
+  isCredentialKind,
   secretPlace,
   SECRET_COLUMNS,
   type CredentialEnvironment,
@@ -84,6 +93,7 @@ import {
   CREDENTIALS_SWEEP_JOB,
   CREDENTIALS_VERIFY_JOB,
   SUBMISSION_AUDIT_ACTIONS,
+  SUBMISSION_FEATURES,
   type CredentialSecrets,
   type CredentialsVerifyJobData,
 } from "./credential-submissions.service";
@@ -108,6 +118,23 @@ const ACTOR_LABEL = CREDENTIALS_VERIFY_JOB;
 
 /** The reason in the audit row of a submission the sweep failed (`failStuck`). */
 export const VERIFICATION_TIMEOUT_REASON = "verification_timeout";
+
+/**
+ * The error code of a submission whose kind's milestone switch was off when the worker took it (FIX-W39-PLATFORM, lead
+ * decision (2b) of 2026-11-02): the code the API answers for the switched-off operation.
+ */
+export const FEATURE_DISABLED = "FEATURE_DISABLED";
+
+/** The reason in the audit row of a submission failed because its kind's switch is off. */
+export const FEATURE_DISABLED_REASON = "feature_disabled";
+
+/** The stored message of a submission failed because its kind's switch is off, by kind. */
+export const FEATURE_DISABLED_MESSAGES: Readonly<Record<CredentialKind, string>> = Object.freeze({
+  amadeus:
+    "Own Amadeus credentials are switched off at Velexis, so these were not applied. Nothing changed; submit them again once they are switched on.",
+  stripe_api_keys:
+    "Own Stripe accounts are switched off at Velexis, so these keys were not applied. Nothing changed; submit them again once they are switched on.",
+});
 
 /** The e-mails to the submitter (PADR-0013 item 5). */
 export const CREDENTIALS_APPLIED_TEMPLATE = "connection.credentials_applied";
@@ -286,9 +313,17 @@ interface Verified {
   readonly input: CredentialCheckInput;
 }
 
-/** A rejection (final at once), or an attempt that could not complete (retried, then PROVIDER_UNAVAILABLE). */
+/**
+ * A rejection (final at once; `details` adds to the audit row), or an attempt that could not complete (retried, then
+ * PROVIDER_UNAVAILABLE).
+ */
 type Failure =
-  | { readonly kind: "rejected"; readonly errorCode: string; readonly errorMessage: string }
+  | {
+      readonly kind: "rejected";
+      readonly errorCode: string;
+      readonly errorMessage: string;
+      readonly details?: AuditDetails;
+    }
   | { readonly kind: "incomplete"; readonly reason: IncompleteReason; readonly errorMessage: string };
 
 /** The parts of a BullMQ job one attempt reads. */
@@ -303,9 +338,19 @@ export class CredentialsVerifyProcessor {
     private readonly audit: AuditService,
     private readonly outbox: OutboxService,
     private readonly clock: Clock,
+    private readonly features: FeatureSwitches,
     @Inject(PLATFORM_DB) private readonly db: PlatformDb,
     @InjectPinoLogger(CredentialsVerifyProcessor.name) private readonly logger: PinoLogger,
   ) {}
+
+  /**
+   * False while the milestone switch of `kind` is off in this worker (SUBMISSION_FEATURES): its submissions are not
+   * applied. The sweep asks it too (FIX-W39-PLATFORM, lead decision (2b) of 2026-11-02). A kind outside
+   * CREDENTIAL_KINDS has no switch (the table's CHECK allows none; an attempt fails it as `no_verifier`).
+   */
+  kindEnabled(kind: string): boolean {
+    return !isCredentialKind(kind) || this.features.isEnabled(SUBMISSION_FEATURES[kind]);
+  }
 
   /** One attempt of `credentials.verify` (see the file header). */
   async process(job: CredentialsVerifyJob): Promise<CredentialsVerifyResult> {
@@ -335,9 +380,15 @@ export class CredentialsVerifyProcessor {
     };
     this.logger.info(context, "credentials.verify_started");
 
-    const secrets = await this.decryptSecrets(started);
+    // A kind whose switch is off is never applied: no secret is decrypted and the provider is not asked.
+    const switchedOff =
+      this.kindEnabled(started.kind) || !isCredentialKind(started.kind)
+        ? undefined
+        : switchedOffFailure(started.kind);
+    const secrets = switchedOff === undefined ? await this.decryptSecrets(started) : undefined;
     const secretValues = secrets === undefined ? [] : secretTexts(secrets);
-    let decision = await this.decide(started, secrets, secretValues, { attempt, lastAttempt }, context);
+    let decision: Decision =
+      switchedOff ?? (await this.decide(started, secrets, secretValues, { attempt, lastAttempt }, context));
     if (decision.kind === "incomplete" && !lastAttempt) {
       throw this.retry(submissionId, attempt, decision.reason, context);
     }
@@ -616,7 +667,7 @@ export class CredentialsVerifyProcessor {
           environment: row.environment,
           attempt,
           errorMessage: decision.errorMessage,
-          ...(decision.kind === "incomplete" ? { reason: decision.reason } : {}),
+          ...(decision.kind === "incomplete" ? { reason: decision.reason } : decision.details),
         },
       });
       await this.notify(trx, row, CREDENTIALS_FAILED_TEMPLATE);
@@ -640,24 +691,64 @@ export class CredentialsVerifyProcessor {
     submissionId: string,
     verifyingBefore: Date,
   ): Promise<CredentialSubmissionView | undefined> {
+    return this.failFromSweep(submissionId, "verifying", verifyingBefore, () => ({
+      errorCode: PROVIDER_UNAVAILABLE,
+      errorMessage: VERIFICATION_INCOMPLETE_MESSAGE,
+      details: { reason: VERIFICATION_TIMEOUT_REASON },
+    }));
+  }
+
+  /**
+   * Fails a submission the sweep found `pending` since before `pendingBefore` while its kind's switch is off
+   * (credentials-sweep.ts; FIX-W39-PLATFORM, lead decision (2b) of 2026-11-02): it would never be applied, so it is not
+   * queued again, and its secrets must not wait for the switch. Under the same lock and status guard as `failStuck`
+   * (still `pending`, unchanged since `pendingBefore`, and the switch still off): `failed` with FEATURE_DISABLED and
+   * the kind's FEATURE_DISABLED_MESSAGES, both secret columns erased, the kind's `*_rejected` audit row (actor
+   * `system`, label `credentials.sweep`, reason `feature_disabled` and the switch) and the submitter's
+   * `connection.credentials_failed` e-mail. A job that starts its attempt meanwhile moves the row to `verifying`, and
+   * fails it the same way itself. No secret is decrypted. `undefined` when nothing was written.
+   */
+  async failSwitchedOff(
+    submissionId: string,
+    pendingBefore: Date,
+  ): Promise<CredentialSubmissionView | undefined> {
+    return this.failFromSweep(submissionId, "pending", pendingBefore, (current) =>
+      this.kindEnabled(current.kind) || !isCredentialKind(current.kind)
+        ? undefined
+        : switchedOffOutcome(current.kind),
+    );
+  }
+
+  /**
+   * The sweep's failure of one submission, in one transaction: the row locked, still in `status` and unchanged since
+   * `before`, and `outcomeOf` answering an outcome (else nothing is written); then `failed` with its code and message,
+   * both secret columns erased, the kind's `*_rejected` audit row (actor `system`, label `credentials.sweep`, the
+   * outcome's details) and the submitter's `connection.credentials_failed` e-mail.
+   */
+  private async failFromSweep(
+    submissionId: string,
+    status: "pending" | "verifying",
+    before: Date,
+    outcomeOf: (current: CredentialSubmissionView) => SweepOutcome | undefined,
+  ): Promise<CredentialSubmissionView | undefined> {
     return runInTransaction(this.db, async (trx) => {
       const current = await this.submissions.lock(trx, submissionId);
       if (
         current === undefined ||
-        current.status !== "verifying" ||
-        current.updated_at.getTime() >= verifyingBefore.getTime()
+        current.status !== status ||
+        current.updated_at.getTime() >= before.getTime()
       ) {
+        return undefined;
+      }
+      const outcome = outcomeOf(current);
+      if (outcome === undefined) {
         return undefined;
       }
       const kind = current.kind as CredentialKind;
       const row = await this.submissions.finish(
         trx,
         submissionId,
-        {
-          status: "failed",
-          errorCode: PROVIDER_UNAVAILABLE,
-          errorMessage: VERIFICATION_INCOMPLETE_MESSAGE,
-        },
+        { status: "failed", errorCode: outcome.errorCode, errorMessage: outcome.errorMessage },
         this.clock.now(),
       );
       await this.audit.record(trx, {
@@ -668,13 +759,13 @@ export class CredentialsVerifyProcessor {
         targetId: submissionId,
         tenantId: current.tenant_id,
         before: { status: current.status },
-        after: { status: row.status, errorCode: PROVIDER_UNAVAILABLE },
+        after: { status: row.status, errorCode: outcome.errorCode },
         details: {
           kind,
           environment: row.environment,
           attempt: row.attempts,
-          errorMessage: VERIFICATION_INCOMPLETE_MESSAGE,
-          reason: VERIFICATION_TIMEOUT_REASON,
+          errorMessage: outcome.errorMessage,
+          ...outcome.details,
         },
       });
       await this.notify(trx, row, CREDENTIALS_FAILED_TEMPLATE);
@@ -728,6 +819,28 @@ export class CredentialsVerifyProcessor {
       idempotencyKey: `credentials:${row.id}`,
     });
   }
+}
+
+/** What the sweep writes when it fails a submission: the code, the stored message and the audit row's details. */
+interface SweepOutcome {
+  readonly errorCode: string;
+  readonly errorMessage: string;
+  readonly details: AuditDetails;
+}
+
+/** The outcome of a submission whose kind's switch is off: FEATURE_DISABLED, its message, the switch in the audit row. */
+function switchedOffOutcome(kind: CredentialKind): SweepOutcome {
+  return {
+    errorCode: FEATURE_DISABLED,
+    errorMessage: FEATURE_DISABLED_MESSAGES[kind],
+    details: { reason: FEATURE_DISABLED_REASON, feature: SUBMISSION_FEATURES[kind] },
+  };
+}
+
+/** The failure of an attempt whose kind's switch is off: a rejection with FEATURE_DISABLED (final at once). */
+function switchedOffFailure(kind: CredentialKind): Failure {
+  const outcome = switchedOffOutcome(kind);
+  return { kind: "rejected", ...outcome };
 }
 
 /** The clear secrets of a submission, for scrubbing texts. */

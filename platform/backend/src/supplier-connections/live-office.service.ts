@@ -16,7 +16,9 @@
 // 4. otherwise the live `velexis` connection is inserted on the live account without an office (`office_ids = {}`,
 //    `pending_verification`, `insertPendingVelexis`), with the audit row `amadeus.live_requested` (the optional note in
 //    `details`), an `ops.alert` to OPS_ALERT_EMAIL with the note, and after the commit a `connection` invalidation (the
-//    OTA backend may hold a cached "no live connection"). The answer is `202` with the connection, as the list maps it.
+//    OTA backend may hold a cached "no live connection"). The answer is `202` with the connection, as the list maps it:
+//    with its `pendingSubmission`, the latest submission of own live credentials while it is open or after it failed,
+//    read in the transaction (FIX-W39-PLATFORM, lead decision (2k) of 2026-11-02).
 //
 // A platform admin then completes the commercial onboarding outside the system and assigns a live office
 // (`adminAssignAmadeusOffice`, AmadeusOfficesService), which makes the connection `active` and calls `notifyLiveReady`
@@ -28,6 +30,7 @@ import type { PlatformTransaction } from "../audit/audit.repository";
 import { AuditService } from "../audit/audit.service";
 import { MEMBER_VISIBLE_TENANT_STATUSES, type TenantMembership } from "../common/auth/tenant-role.guard";
 import { Clock } from "../common/clock";
+import { CredentialSubmissionsService } from "../common/credentials/credential-submissions.service";
 import { PLATFORM_DB, type PlatformDb } from "../common/database";
 import { IdGenerator } from "../common/ids";
 import { InvalidationPublisher, runInTransaction } from "../common/redis/invalidation.publisher";
@@ -123,6 +126,7 @@ export class LiveOfficeService {
   constructor(
     private readonly connections: SupplierConnectionsRepository,
     private readonly accounts: AmadeusAccountsRepository,
+    private readonly submissions: CredentialSubmissionsService,
     private readonly outbox: OutboxService,
     private readonly audit: AuditService,
     private readonly invalidations: InvalidationPublisher,
@@ -185,7 +189,8 @@ export class LiveOfficeService {
         idempotencyKey: `amadeus.live_requested:${connection.id}`,
       });
       this.invalidations.publishAfterCommit(trx, { v: 1, type: "connection", tenantId });
-      return { kind: "requested", connection: toAmadeusConnection(connection) };
+      const pending = await this.submissions.pendingByEnvironment(tenantId, "amadeus", trx);
+      return { kind: "requested", connection: toAmadeusConnection(connection, pending) };
     });
     if (outcome.kind === "live_account_missing") {
       throw new AppError("CONFLICT", { details: { reason: "live_account_missing" } });

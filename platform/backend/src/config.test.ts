@@ -76,7 +76,18 @@ const REQUIRED = {
   PUBLIC_PORTAL_URL: DEVELOPMENT.PUBLIC_PORTAL_URL,
   PUBLIC_PLATFORM_ADMIN_URL: DEVELOPMENT.PUBLIC_PLATFORM_ADMIN_URL,
   PUBLIC_OTA_ADMIN_URL: DEVELOPMENT.PUBLIC_OTA_ADMIN_URL,
+  PUBLIC_OTA_API_URL: DEVELOPMENT.PUBLIC_OTA_API_URL,
   STOREFRONT_BASE_DOMAIN: DEVELOPMENT.STOREFRONT_BASE_DOMAIN,
+} as const;
+
+/**
+ * REQUIRED as a production deployment has it: APP_ENV=production needs an `https:` PUBLIC_OTA_API_URL (FIX-W39-PLATFORM,
+ * `publicOtaApiUrlProblems`), the other variables keep their development values.
+ */
+const PRODUCTION = {
+  ...REQUIRED,
+  APP_ENV: "production",
+  PUBLIC_OTA_API_URL: "https://api.ota.example.com",
 } as const;
 
 /** The variables PBE-011 adds, in the order of the schema. */
@@ -92,6 +103,9 @@ const MAIL_AND_KEY_VARIABLES = [
 
 /** The SSO hand-off target PBE-039 adds, right after MAIL_AND_KEY_VARIABLES in the schema. */
 const OTA_ADMIN_URL = "PUBLIC_OTA_ADMIN_URL";
+
+/** The OTA API's public URL FIX-W39-PLATFORM adds, right after OTA_ADMIN_URL in the schema (lead decision (2m)). */
+const OTA_API_URL = "PUBLIC_OTA_API_URL";
 
 /** The Stripe variables PBE-043 adds, in the order of the schema. */
 const STRIPE_VARIABLES = [
@@ -212,6 +226,7 @@ describe("parseConfig", () => {
       PUBLIC_PORTAL_URL: "http://localhost:3000",
       PUBLIC_PLATFORM_ADMIN_URL: "http://localhost:3001",
       PUBLIC_OTA_ADMIN_URL: "http://localhost:3002",
+      PUBLIC_OTA_API_URL: "http://localhost:4000",
       STOREFRONT_BASE_DOMAIN: "ota.example.com",
       DNS_RESOLVERS: ["1.1.1.1", "8.8.8.8"],
       MAX_TENANTS_PER_ACCOUNT: 3,
@@ -247,6 +262,7 @@ describe("parseConfig", () => {
       PUBLIC_PORTAL_URL: "ftp://secret-value-15.example.com",
       PUBLIC_PLATFORM_ADMIN_URL: "secret-value-16",
       PUBLIC_OTA_ADMIN_URL: "mailto:secret-value-18@example.com",
+      PUBLIC_OTA_API_URL: "file:///secret-value-19",
       STOREFRONT_BASE_DOMAIN: "https://ota.example.com/domain-value-10",
       MAX_TENANTS_PER_ACCOUNT: "many-value-8",
       FEATURE_CUSTOM_DOMAINS: "maybe-value-9",
@@ -264,6 +280,7 @@ describe("parseConfig", () => {
       "API_KEY_PEPPER_FILE",
       ...MAIL_AND_KEY_VARIABLES,
       OTA_ADMIN_URL,
+      OTA_API_URL,
       "STOREFRONT_BASE_DOMAIN",
       "MAX_TENANTS_PER_ACCOUNT",
       "FEATURE_CUSTOM_DOMAINS",
@@ -288,6 +305,7 @@ describe("parseConfig", () => {
       "secret-value-16",
       "secret-value-17",
       "secret-value-18",
+      "secret-value-19",
       "domain-value-10",
     ]) {
       expect(error.message).not.toContain(value);
@@ -355,6 +373,7 @@ describe("parseConfig", () => {
       "API_KEY_PEPPER_FILE",
       ...MAIL_AND_KEY_VARIABLES,
       OTA_ADMIN_URL,
+      OTA_API_URL,
       "STOREFRONT_BASE_DOMAIN",
       "TRUST_PROXY",
     ]);
@@ -480,6 +499,7 @@ describe("parseConfig", () => {
       "API_KEY_PEPPER_FILE",
       ...MAIL_AND_KEY_VARIABLES,
       OTA_ADMIN_URL,
+      OTA_API_URL,
       "STOREFRONT_BASE_DOMAIN",
       ...STOREFRONT_ADDRESS_VARIABLES,
       "DNS_RESOLVERS",
@@ -743,6 +763,91 @@ describe("parseConfig: the OTA admin's URL (PBE-039)", () => {
   });
 });
 
+describe("parseConfig: the OTA API's public URL (FIX-W39-PLATFORM)", () => {
+  it("[FIX-W39-PLATFORM AC9] requires PUBLIC_OTA_API_URL, an http(s) URL, without echoing a refused value", () => {
+    expect(configError({ ...REQUIRED, [OTA_API_URL]: undefined }).problems).toEqual([
+      { variable: OTA_API_URL, reason: "is required but missing" },
+    ]);
+    for (const url of ["https://api.ota.example.com", "http://localhost:4000", "http://127.0.0.1:4000/"]) {
+      expect(parseConfig({ ...REQUIRED, [OTA_API_URL]: url }).PUBLIC_OTA_API_URL).toBe(url);
+    }
+    for (const url of ["api.ota.example.com", "javascript:alert(1)", "ftp://api-value-1.example.com", ""]) {
+      const error = configError({ ...REQUIRED, [OTA_API_URL]: url });
+
+      expect(
+        error.problems.map((p) => p.variable),
+        url,
+      ).toEqual([OTA_API_URL]);
+      if (url !== "") {
+        expect(error.message).not.toContain(url);
+      }
+    }
+  });
+
+  it("[FIX-W39-PLATFORM AC9] accepts http in development and tests and only https with APP_ENV=production", () => {
+    for (const appEnv of ["development", "test"]) {
+      expect(
+        parseConfig({ ...REQUIRED, APP_ENV: appEnv, [OTA_API_URL]: "http://localhost:4000" })
+          .PUBLIC_OTA_API_URL,
+        appEnv,
+      ).toBe("http://localhost:4000");
+    }
+    expect(parseConfig(PRODUCTION).PUBLIC_OTA_API_URL).toBe("https://api.ota.example.com");
+    const error = configError({ ...PRODUCTION, [OTA_API_URL]: "http://api-value-2.example.com" });
+
+    expect(error.problems).toEqual([
+      { variable: OTA_API_URL, reason: "must be an https URL with APP_ENV=production" },
+    ]);
+    expect(error.message).not.toContain("api-value-2");
+  });
+
+  it("[FIX-W39-PLATFORM AC9] refuses a PUBLIC_OTA_API_URL the webhook path cannot follow: credentials, a query or a fragment", () => {
+    // A base URL with a path stays allowed: the webhook URL's pattern admits it.
+    expect(
+      parseConfig({ ...PRODUCTION, [OTA_API_URL]: "https://ota.example.com/api" }).PUBLIC_OTA_API_URL,
+    ).toBe("https://ota.example.com/api");
+    for (const url of [
+      "https://user-value-3:pass-value-3@api.ota.example.com",
+      "https://user-value-4@api.ota.example.com",
+      "https://api.ota.example.com/?query-value-5=1",
+      "https://api.ota.example.com/?",
+      "https://api.ota.example.com/#fragment-value-6",
+      "http://localhost:4000#",
+    ]) {
+      for (const source of [PRODUCTION, REQUIRED]) {
+        const error = configError({ ...source, [OTA_API_URL]: url });
+
+        expect(error.problems, url).toEqual([
+          { variable: OTA_API_URL, reason: "must be a base URL without credentials, query or fragment" },
+        ]);
+        expect(error.message).not.toMatch(/value-\d/);
+      }
+    }
+  });
+
+  it("[FIX-W39-PLATFORM AC9] declares PUBLIC_OTA_API_URL in every env template: the local OTA API, the VM's on https", () => {
+    for (const [file, expected] of [
+      [".env.example", "http://localhost:4000"],
+      ["platform/backend/.env.example", "http://localhost:4000"],
+      ["deploy/env/platform-backend.env.example", "https://api.ota.example.com"],
+    ] as const) {
+      const values = readEnvFile(join(REPO_ROOT, file));
+
+      expect(values[OTA_API_URL], file).toBe(expected);
+      expect(parseConfig({ ...REQUIRED, [OTA_API_URL]: values[OTA_API_URL] }).PUBLIC_OTA_API_URL).toBe(
+        expected,
+      );
+    }
+    // The webhook URL the platform answers is the OTA backend's own receiver: the same value on both sides.
+    expect(readEnvFile(join(REPO_ROOT, "ota/backend/.env.example"))[OTA_API_URL]).toBe(
+      readEnvFile(join(APP_DIR, ".env.example"))[OTA_API_URL],
+    );
+    expect(readEnvFile(join(REPO_ROOT, "deploy/env/ota-backend.env.example"))[OTA_API_URL]).toBe(
+      readEnvFile(join(REPO_ROOT, "deploy/env/platform-backend.env.example"))[OTA_API_URL],
+    );
+  });
+});
+
 describe("parseConfig: Stripe (PBE-043)", () => {
   it("[PBE-043] leaves the four Stripe variables optional while Stripe Billing, the OTA's own Stripe and settlements are off", () => {
     const config = parseConfig(REQUIRED);
@@ -790,8 +895,7 @@ describe("parseConfig: Stripe (PBE-043)", () => {
     // A production deployment with settlements on needs a live-mode key.
     expect(
       configError({
-        ...REQUIRED,
-        APP_ENV: "production",
+        ...PRODUCTION,
         FEATURE_SETTLEMENTS: "true",
         STRIPE_SECRET_KEY: STRIPE_TEST_VALUES.STRIPE_SECRET_KEY,
       }).problems.map((problem) => problem.variable),
@@ -847,7 +951,7 @@ describe("parseConfig: Stripe (PBE-043)", () => {
   it("[PBE-043] accepts only test-mode keys outside production and only live-mode keys in production", () => {
     for (const key of ["sk_test_dummy", "rk_test_dummy"]) {
       expect(parseConfig({ ...REQUIRED, STRIPE_SECRET_KEY: key }).STRIPE_SECRET_KEY).toBe(key);
-      expect(configError({ ...REQUIRED, APP_ENV: "production", STRIPE_SECRET_KEY: key }).problems).toEqual([
+      expect(configError({ ...PRODUCTION, STRIPE_SECRET_KEY: key }).problems).toEqual([
         {
           variable: "STRIPE_SECRET_KEY",
           reason: "must be a live-mode key with APP_ENV=production and a test-mode key otherwise",
@@ -855,9 +959,7 @@ describe("parseConfig: Stripe (PBE-043)", () => {
       ]);
     }
     for (const key of ["sk_live_dummy", "rk_live_dummy"]) {
-      expect(
-        parseConfig({ ...REQUIRED, APP_ENV: "production", STRIPE_SECRET_KEY: key }).STRIPE_SECRET_KEY,
-      ).toBe(key);
+      expect(parseConfig({ ...PRODUCTION, STRIPE_SECRET_KEY: key }).STRIPE_SECRET_KEY).toBe(key);
       for (const appEnv of ["development", "test"]) {
         expect(
           configError({ ...REQUIRED, APP_ENV: appEnv, STRIPE_SECRET_KEY: key }).problems.map(
@@ -1107,7 +1209,7 @@ describe("parseConfig: the Amadeus hosts of own credentials (PBE-053)", () => {
   });
 
   it("[PBE-053] accepts only the official hosts with APP_ENV=production (an override is for development and tests)", () => {
-    const production = { ...REQUIRED, APP_ENV: "production" };
+    const production = PRODUCTION;
 
     expect(amadeusUrlsOf(parseConfig(production))).toEqual(AMADEUS_OFFICIAL_BASE_URLS);
     expect(

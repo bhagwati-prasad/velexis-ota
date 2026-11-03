@@ -12,12 +12,16 @@
 //    two optional offices default to the default office, as provisioning sets them for a Velexis office.
 // 2. One transaction (`runInTransaction`): the tenant's row with `FOR SHARE` (gone, or not visible to members: `404
 //    NOT_FOUND`; not `active`: `409 TENANT_NOT_ACTIVE` with `details.status`, PADR-0014 item 5), so a suspension waits
-//    for the submission or the submission sees it; then CredentialSubmissionsService.submit (PBE-052) with `kind =
+//    for the submission or the submission sees it; a connection of the environment that a platform admin disabled
+//    (`adminSetConnectionStatus`, PADR-0012 item 8) answers `409 CONFLICT` with `details.reason = connection_disabled`
+//    and nothing is written (FIX-W39-PLATFORM, lead decision (2i) of 2026-11-02; the row is read without a lock, and the
+//    worker's apply refuses it again with CONNECTION_DISABLED if the admin disables it later); then
+//    CredentialSubmissionsService.submit (PBE-052) with `kind =
 //    'amadeus'`: it supersedes the open submission of that environment (its secret erased), stores the non-secret fields
 //    in `public_data` (`clientId`, `officeIds`, `defaultOfficeId`, `queuingOfficeId`, `ownerOfficeId`) and the client
 //    secret envelope-encrypted, writes the audit row `amadeus.credentials_submitted` (no secret; this service writes
-//    none of its own) and, after the commit, enqueues `credentials.verify {submissionId}`. The connection row is neither
-//    read nor locked here: the worker's apply locks the submission, then the connection (lock order of
+//    none of its own) and, after the commit, enqueues `credentials.verify {submissionId}`. The connection row is read
+//    but never locked here: the worker's apply locks the submission, then the connection (lock order of
 //    credentials-verify.processor.ts), and the environment needs no connection yet (flow §D item 4).
 // 3. The answer is `202 {submission}`, the submission as `getCredentialSubmission` answers it (`pending`).
 //
@@ -26,7 +30,9 @@
 // `listConnections` (`listAmadeusConnections`, PBE-027) answers the OTA's connections without the client secret's
 // ciphertext (`toAmadeusConnection`), each with its `pendingSubmission`: the latest submission of its environment while
 // it is open or after it failed (CredentialSubmissionsService.pendingByEnvironment), so the portal shows a rejection
-// next to the connection it left untouched.
+// next to the connection it left untouched. `connectionOf` maps one connection the same way, for the answer of
+// `updateAmadeusConnection` (FIX-W39-PLATFORM, lead decision (2k) of 2026-11-02: every answered connection carries its
+// `pendingSubmission`).
 import { Inject, Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types/platform";
 import { AppError, type FieldError } from "@velexis/errors";
@@ -42,6 +48,7 @@ import {
   SupplierConnectionsRepository,
   toAmadeusConnection,
   type AmadeusConnection,
+  type SupplierConnectionView,
 } from "./supplier-connections.repository";
 
 export type SubmitAmadeusCredentialsRequest = components["schemas"]["SubmitAmadeusCredentialsRequest"];
@@ -121,6 +128,11 @@ export class AmadeusCredentialsService {
       if (tenantStatus !== "active") {
         throw new AppError("TENANT_NOT_ACTIVE", { details: { status: tenantStatus } });
       }
+      // Read without a lock (lock order: submission, then connection, in the worker's apply).
+      const connection = await this.connections.findViewForTenant(tenantId, environment, trx);
+      if (connection?.status === "disabled") {
+        throw new AppError("CONFLICT", { details: { reason: "connection_disabled" } });
+      }
       return this.submissions.submit(trx, {
         tenantId,
         kind: "amadeus",
@@ -142,9 +154,11 @@ export class AmadeusCredentialsService {
       this.connections.listForTenant(tenantId),
       this.submissions.pendingByEnvironment(tenantId, "amadeus"),
     ]);
-    return rows.map((row) => ({
-      ...toAmadeusConnection(row),
-      pendingSubmission: pending[row.environment as AmadeusEnvironment] ?? null,
-    }));
+    return rows.map((row) => toAmadeusConnection(row, pending));
+  }
+
+  /** The tenant's connection `row` as the list maps it, with its `pendingSubmission` read now (see the header). */
+  async connectionOf(tenantId: string, row: SupplierConnectionView): Promise<AmadeusConnection> {
+    return toAmadeusConnection(row, await this.submissions.pendingByEnvironment(tenantId, "amadeus"));
   }
 }

@@ -15,6 +15,10 @@
 // (CredentialsSweep, and one job through the queue) with the FakeClock moved past its ages; the job scheduler the
 // worker registers is checked once and removed in the set-up, so no scheduled run races a test.
 //
+// The worker graph's milestone switches are a stand-in (WorkerSwitches) with both kinds' switches on, which a test
+// turns off: a kind whose switch is off is never applied, by a job or by the sweep (FIX-W39-PLATFORM, lead decision
+// (2b) of 2026-11-02).
+//
 // The secrets are random per test, and after every test no log line of either process (at `trace`), no Redis value
 // (the BullMQ jobs, their data, results and errors) and no audit or outbox row holds one. Every address is a
 // `uniqueEmail` of this file, and the worker's e-mail processor sends to Mailpit. A delayed retry is promoted at once
@@ -52,6 +56,9 @@ import {
 import {
   CredentialRejection,
   CredentialVerifiers,
+  FEATURE_DISABLED,
+  FEATURE_DISABLED_MESSAGES,
+  FEATURE_DISABLED_REASON,
   PROVIDER_UNAVAILABLE,
   SECRET_PLACEHOLDER,
   VERIFICATION_INCOMPLETE_MESSAGE,
@@ -64,6 +71,7 @@ import {
 } from "../../../src/common/credentials/credentials-verify.processor";
 import { associatedData, EnvelopeService } from "../../../src/common/crypto.provider";
 import { PLATFORM_DB, PLATFORM_POOL, type PlatformDb, type PlatformPool } from "../../../src/common/database";
+import { FeatureSwitches, type Feature } from "../../../src/common/features";
 import { PLATFORM_QUEUE } from "../../../src/common/queues/queue-names";
 import { JobSchedulerRegistry } from "../../../src/common/queues/scheduler.registry";
 import { runInTransaction } from "../../../src/common/redis/invalidation.publisher";
@@ -154,6 +162,20 @@ async function writeMarker(
 const verifier = new TestVerifier();
 
 /**
+ * The worker graph's milestone switches (FeatureSwitches, which CredentialsVerifyProcessor asks for the kind's switch):
+ * both own-credential switches on unless a test turns one off (FIX-W39-PLATFORM, lead decision (2b) of 2026-11-02).
+ */
+class WorkerSwitches {
+  readonly off = new Set<Feature>();
+
+  isEnabled(feature: Feature): boolean {
+    return (feature === "own_amadeus" || feature === "own_stripe") && !this.off.has(feature);
+  }
+}
+
+const workerSwitches = new WorkerSwitches();
+
+/**
  * The worker graph's verifier registry in this file (FIX-W38-PLATFORM, lead decision (2f) of 2026-10-31): it replaces
  * CredentialVerifiers (`overrideProvider(…).useClass(…)`, so still one instance per module that provides it, and the
  * one-registry proof of TestVerifierModule below holds), keeps the test verifier when TestVerifierModule registers it,
@@ -232,6 +254,8 @@ beforeAll(async () => {
     .useValue({})
     .overrideProvider(CredentialVerifiers)
     .useClass(TestVerifierRegistry)
+    .overrideProvider(FeatureSwitches)
+    .useValue(workerSwitches)
     .compile();
   await worker.init();
   verifiers = worker.get(CredentialVerifiers, { strict: false });
@@ -268,6 +292,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   verifier.reset();
+  workerSwitches.off.clear();
   secretsOfTest.length = 0;
 });
 
@@ -1003,6 +1028,61 @@ describe("credentials.verify", () => {
   });
 });
 
+describe("credentials.verify with the kind's switch off (FIX-W39-PLATFORM, lead decision (2b) of 2026-11-02)", () => {
+  for (const [kind, feature, action, credentials] of [
+    ["amadeus", "own_amadeus", "amadeus.credentials_rejected", "Amadeus credentials"],
+    ["stripe_api_keys", "own_stripe", "payments.api_keys_rejected", "Stripe API keys"],
+  ] as const) {
+    it(`[FIX-W39-PLATFORM AC2] fails a ${kind} submission with FEATURE_DISABLED while ${feature} is off: both secrets null, nothing applied, audited, the submitter e-mailed`, async () => {
+      const ota = await arrangeOta();
+      workerSwitches.off.add(feature);
+
+      const { row } = await submit(ota, kind, "test");
+      const failed = await waitForStatus(row.id, "failed");
+
+      expect(failed).toMatchObject({
+        secret_ciphertext: null,
+        webhook_secret_ciphertext: null,
+        error_code: FEATURE_DISABLED,
+        error_message: FEATURE_DISABLED_MESSAGES[kind],
+        attempts: 1,
+      });
+      // Nothing was decrypted for the provider, and nothing applied.
+      expect([verifier.checks, verifier.applies]).toEqual([[], []]);
+      expect(await markerOf(ota.tenant.id)).toBeNull();
+      const audit = (await auditOf(row.id)).find((entry) => entry["action"] === action);
+      expect(audit).toMatchObject({ actor_type: "system", actor_label: CREDENTIALS_VERIFY_JOB });
+      expect(audit?.["details"]).toMatchObject({
+        kind,
+        environment: "test",
+        errorMessage: FEATURE_DISABLED_MESSAGES[kind],
+        reason: FEATURE_DISABLED_REASON,
+        feature,
+        after: { status: "failed", errorCode: FEATURE_DISABLED },
+      });
+      const [email] = await emailsOf(ota.tenant.id);
+      expect(email).toMatchObject({ template: "connection.credentials_failed", to_email: ota.owner.email });
+      expect(email?.["data"]).toMatchObject({ errorCode: FEATURE_DISABLED, environment: "test" });
+      const message = await waitForMessage({ to: ota.owner.email, timeoutMs: MAIL_WAIT_MS });
+      expect(message.Subject).toBe(`${credentials} not verified for ${ota.tenant.name} (test)`);
+      expect((await waitForJob(row.id, "completed")).returnvalue).toEqual({
+        submissionId: row.id,
+        status: "failed",
+      });
+    });
+  }
+
+  it("[FIX-W39-PLATFORM AC2] applies the other kind, whose switch is on, as before", async () => {
+    const ota = await arrangeOta();
+    workerSwitches.off.add("own_stripe");
+
+    const { row } = await submit(ota, "amadeus", "test");
+
+    expect(await waitForStatus(row.id, "applied")).toMatchObject({ error_code: null, attempts: 1 });
+    expect(await markerOf(ota.tenant.id)).toBe(`applied ${row.id}`);
+  });
+});
+
 describe("GET /v1/tenants/{tenantId}/credential-submissions/{submissionId} (getCredentialSubmission)", () => {
   it("[PBE-052] answers owners and admins the status and error, never a secret; other roles 403, others 404", async () => {
     const ota = await arrangeOta();
@@ -1250,6 +1330,91 @@ describe("credentials.sweep", () => {
     // Nothing more for the next sweep; no secret in any log line, Redis value or row (checked after every test too).
     expect(await sweep.run()).toEqual({ requeued: 0, failed: 0 });
     await expectNoSecretAnywhere();
+  });
+
+  it("[FIX-W39-PLATFORM AC2] fails a pending submission of a switched-off kind instead of queuing it again: FEATURE_DISABLED, both secrets null, audited, the submitter e-mailed", async () => {
+    await noOpenSubmission();
+    const ota = await arrangeOta();
+    const other = await arrangeOta();
+    await pauseWorker();
+    const { row } = await submit(ota, "stripe_api_keys", "live");
+    const { row: amadeus } = await submit(other, "amadeus", "test");
+    await loseJob(row.id);
+    await loseJob(amadeus.id);
+    workerSwitches.off.add("own_stripe");
+
+    t.clock.advance(SWEEP_PENDING_AGE_MS + 1000);
+    // The Stripe keys fail (their switch is off); the Amadeus credentials, whose switch is on, are queued again.
+    expect(await sweep.run()).toEqual({ requeued: 1, failed: 1 });
+
+    expect(await connectionsQueue.getJob(row.id)).toBeUndefined();
+    const failed = await submissionRow(row.id);
+    expect(failed).toMatchObject({
+      status: "failed",
+      error_code: FEATURE_DISABLED,
+      error_message: FEATURE_DISABLED_MESSAGES.stripe_api_keys,
+      secret_ciphertext: null,
+      webhook_secret_ciphertext: null,
+      attempts: 0,
+    });
+    expect(failed["finished_at"]).toEqual(t.clock.now());
+    const audit = await auditOf(row.id);
+    expect(audit.map((entry) => entry["action"])).toEqual([
+      "payments.api_keys_submitted",
+      "payments.api_keys_rejected",
+    ]);
+    expect(audit[1]).toMatchObject({ actor_type: "system", actor_label: CREDENTIALS_SWEEP_JOB });
+    expect(audit[1]?.["details"]).toMatchObject({
+      kind: "stripe_api_keys",
+      environment: "live",
+      reason: FEATURE_DISABLED_REASON,
+      feature: "own_stripe",
+      before: { status: "pending" },
+      after: { status: "failed", errorCode: FEATURE_DISABLED },
+    });
+    const [email] = await emailsOf(ota.tenant.id);
+    expect(email).toMatchObject({ template: "connection.credentials_failed", to_email: ota.owner.email });
+    expect(email?.["data"]).toMatchObject({ errorCode: FEATURE_DISABLED, environment: "live" });
+    await waitForMessage({ to: ota.owner.email, timeoutMs: MAIL_WAIT_MS });
+    // The logs of the file hold the earlier tests' lines too: this submission's only.
+    expect(
+      [...t.logs.lines, ...workerLogs.lines].filter(
+        (line) => line["msg"] === "credentials.sweep_failed" && line["submissionId"] === row.id,
+      ),
+    ).toEqual([
+      expect.objectContaining({ submissionId: row.id, tenantId: ota.tenant.id, errorCode: FEATURE_DISABLED }),
+    ]);
+
+    await resumeWorker();
+    expect(await waitForStatus(amadeus.id, "applied")).toMatchObject({ attempts: 1 });
+    // Nothing more for the next sweep.
+    expect(await sweep.run()).toEqual({ requeued: 0, failed: 0 });
+  });
+
+  it("[FIX-W39-PLATFORM AC2] leaves a submission of a switched-off kind verifying for less than an hour as it is, and fails it with PROVIDER_UNAVAILABLE past the hour, as before", async () => {
+    await noOpenSubmission();
+    const ota = await arrangeOta();
+    await pauseWorker();
+    const { row } = await submit(ota, "amadeus", "test");
+    await loseJob(row.id);
+    await pool.query(
+      "UPDATE platform.credential_submissions SET status = 'verifying', attempts = 1, updated_at = $2 WHERE id = $1",
+      [row.id, t.clock.now()],
+    );
+    workerSwitches.off.add("own_amadeus");
+
+    t.clock.advance(SWEEP_PENDING_AGE_MS + 1000);
+    expect(await sweep.run()).toEqual({ requeued: 0, failed: 0 });
+    expect(await submissionRow(row.id)).toMatchObject({ status: "verifying" });
+
+    t.clock.advance(SWEEP_VERIFYING_AGE_MS);
+    expect(await sweep.run()).toEqual({ requeued: 0, failed: 1 });
+    expect(await submissionRow(row.id)).toMatchObject({
+      status: "failed",
+      error_code: PROVIDER_UNAVAILABLE,
+      secret_ciphertext: null,
+    });
+    await resumeWorker();
   });
 
   it("[FIX-W38-PLATFORM AC5] the processor of platform-connections runs a credentials.sweep job", async () => {

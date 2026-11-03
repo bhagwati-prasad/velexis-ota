@@ -14,9 +14,11 @@
 //   answers `400 VALIDATION_FAILED` on `/query/cursor`.
 // - adminGetTenant (`get`): the OTA, its active members (oldest first), its pending invitations (newest first), the
 //   subscription the portal shows (`null` when there is none), its Amadeus and payment connections (`test` before
-//   `live`; an `api_keys` connection with its webhook URL, as the portal's list shows it, PBE-057), its domains, its
-//   last 20 jobs and its last 50 audit rows (newest first). An unknown id, or a tenant being
-//   deprovisioned or deleted (no `TenantStatus`), answers `404 NOT_FOUND`.
+//   `live`; as the portal's lists show them: an `api_keys` connection with its webhook URL, PBE-057, and each with its
+//   `pendingSubmission`, FIX-W39-PLATFORM), its domains, its last 20 jobs and its last 50 audit rows (newest first). An
+//   unknown id, or a tenant being deprovisioned or deleted (no `TenantStatus`), answers `404 NOT_FOUND`.
+// - adminSetConnectionStatus's answer (`connectionOf`): the switched connection mapped the same way, with its
+//   `pendingSubmission` (FIX-W39-PLATFORM, lead decision (2k) of 2026-11-02).
 // - adminUpdateTenant (`update`): `notes` (`tenants.metadata.notes`, never shown to the OTA) and `legalName`, `null`
 //   clearing either, in every tenant status, with `If-Match` (`412 PRECONDITION_FAILED`). One transaction locks the row,
 //   writes the change (`version + 1`) and one `tenant.updated` audit row (`actor_type = 'platform_admin'`, the changed
@@ -32,6 +34,7 @@ import { toSubscription } from "../billing/subscriptions.controller";
 import { SubscriptionsRepository } from "../billing/subscriptions.repository";
 import { MEMBER_VISIBLE_TENANT_STATUSES, type TenantStatus } from "../common/auth/tenant-role.guard";
 import { Clock } from "../common/clock";
+import { CredentialSubmissionsService } from "../common/credentials/credential-submissions.service";
 import { PLATFORM_DB, type PlatformDb } from "../common/database";
 import { InvalidationPublisher, runInTransaction } from "../common/redis/invalidation.publisher";
 import type { PlatformBackendConfig } from "../config";
@@ -41,10 +44,10 @@ import { InvitationsRepository } from "../memberships/invitations.repository";
 import { toInvitation } from "../memberships/invitations.service";
 import { toMember } from "../memberships/members.service";
 import { MembershipsRepository } from "../memberships/memberships.repository";
-import { toPaymentConnectionWith } from "../payment-connections/payment-connections.controller";
+import { toPaymentConnection } from "../payment-connections/payment-connection.mapper";
 import { PaymentConnectionsRepository } from "../payment-connections/payment-connections.repository";
-import { paymentConnectionWebhookUrl } from "../payment-connections/stripe-api-keys.service";
 import { ProvisioningJobsRepository } from "../provisioning/provisioning-jobs.repository";
+import type { ConnectionStatusResult } from "../provisioning/suspension.service";
 import {
   SupplierConnectionsRepository,
   toAmadeusConnection,
@@ -63,6 +66,7 @@ export type { AdminTenant };
 export type AdminTenantList = components["schemas"]["AdminTenantList"];
 export type AdminTenantDetail = components["schemas"]["AdminTenantDetail"];
 export type UpdateAdminTenantRequest = components["schemas"]["UpdateAdminTenantRequest"];
+export type AdminConnection = components["schemas"]["AdminConnection"];
 
 /** The query of adminListTenants, as the validation interceptor passes it on (`limit` defaults to 50). */
 export interface ListAdminTenantsQuery {
@@ -121,6 +125,8 @@ function isShownStatus(status: string): status is TenantStatus {
 export class AdminTenantsService {
   private readonly baseDomain: string;
   private readonly storefrontAddresses: StorefrontAddresses;
+  /** PUBLIC_OTA_API_URL: where the webhook URL of an `api_keys` connection starts. */
+  private readonly otaApiUrl: string;
 
   constructor(
     private readonly tenants: TenantsRepository,
@@ -129,6 +135,7 @@ export class AdminTenantsService {
     private readonly subscriptions: SubscriptionsRepository,
     private readonly amadeusConnections: SupplierConnectionsRepository,
     private readonly paymentConnections: PaymentConnectionsRepository,
+    private readonly submissions: CredentialSubmissionsService,
     private readonly domains: DomainsRepository,
     private readonly jobs: ProvisioningJobsRepository,
     private readonly audit: AuditService,
@@ -139,6 +146,7 @@ export class AdminTenantsService {
   ) {
     this.baseDomain = config.get("STOREFRONT_BASE_DOMAIN", { infer: true });
     this.storefrontAddresses = storefrontAddressesOf(config);
+    this.otaApiUrl = config.get("PUBLIC_OTA_API_URL", { infer: true });
   }
 
   /** adminListTenants: one page of OTAs, newest first, with the filters of the query. */
@@ -180,7 +188,9 @@ export class AdminTenantsService {
     const invitations = await this.invitations.listPending(tenantId);
     const subscription = await this.subscriptions.findShownForTenant(tenantId);
     const amadeusConnections = await this.amadeusConnections.listForTenant(tenantId);
+    const amadeusPending = await this.submissions.pendingByEnvironment(tenantId, "amadeus");
     const paymentConnections = await this.paymentConnections.listForTenant(tenantId);
+    const paymentPending = await this.submissions.pendingByEnvironment(tenantId, "stripe_api_keys");
     const domains = await this.domains.listForTenant(tenantId);
     const jobs = await this.jobs.recentForTenant(tenantId, RECENT_JOBS_LIMIT);
     const auditRows = await this.audit.recentForTenant(this.db, tenantId, RECENT_AUDIT_LIMIT);
@@ -189,16 +199,33 @@ export class AdminTenantsService {
       members: members.map(toMember),
       invitations: invitations.map(toInvitation),
       subscription: subscription === undefined ? null : toSubscription(subscription),
-      amadeusConnections: amadeusConnections.map(toAmadeusConnection),
+      amadeusConnections: amadeusConnections.map((connection) =>
+        toAmadeusConnection(connection, amadeusPending),
+      ),
       paymentConnections: paymentConnections.map((connection) =>
-        toPaymentConnectionWith(connection, {
-          webhookUrl: paymentConnectionWebhookUrl(this.baseDomain, connection),
-        }),
+        toPaymentConnection(connection, { otaApiUrl: this.otaApiUrl, pending: paymentPending }),
       ),
       domains: domains.map((domain) => toDomain(domain, this.baseDomain, this.storefrontAddresses)),
       recentJobs: jobs.map(toAdminProvisioningJob),
       recentAudit: auditRows.map(toAuditEntry),
     };
+  }
+
+  /**
+   * adminSetConnectionStatus's answer: the connection SuspensionService switched, as adminGetTenant shows it, with its
+   * `pendingSubmission` read now (see the file header).
+   */
+  async connectionOf(tenantId: string, result: ConnectionStatusResult): Promise<AdminConnection> {
+    if (result.kind === "amadeus") {
+      return toAmadeusConnection(
+        result.connection,
+        await this.submissions.pendingByEnvironment(tenantId, "amadeus"),
+      );
+    }
+    return toPaymentConnection(result.connection, {
+      otaApiUrl: this.otaApiUrl,
+      pending: await this.submissions.pendingByEnvironment(tenantId, "stripe_api_keys"),
+    });
   }
 
   /**

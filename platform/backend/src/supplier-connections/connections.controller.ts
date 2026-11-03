@@ -9,15 +9,15 @@
 //   while it is open or after it failed (AmadeusCredentialsService.listConnections, PBE-053).
 // - `updateAmadeusConnection` (`PATCH …/amadeus-connections/{environment}`, `If-Match`): owners and admins change the
 //   office defaults, the ticketing defaults and the monitored queues (connections.service.ts); the answer is the
-//   connection mapped by `toAmadeusConnection`, with its new version in `ETag`. Its `pendingSubmission` is `null`:
-//   only the list reads the submissions (the portal's Amadeus page reloads the list after a save).
+//   connection as the list maps it, with its `pendingSubmission` (AmadeusCredentialsService.connectionOf;
+//   FIX-W39-PLATFORM, lead decision (2k) of 2026-11-02) and its new version in `ETag`.
 // - `submitAmadeusCredentials` (`PUT …/amadeus-connections/{environment}/credentials`): owners and admins with a TOTP
 //   step-up (RecentMfaGuard) while `FEATURE_OWN_AMADEUS` is on (FeatureGuard) submit the OTA's own client id, client
 //   secret and offices; the answer is `202 {submission}`, `pending` until the worker verifies it
 //   (amadeus-credentials.service.ts, amadeus-credentials.verifier.ts). The secret is never answered or logged.
 // - `requestLiveAmadeus` (`POST …/amadeus-connections/live/request`, since PBE-054): owners ask Velexis for a live
 //   office while `FEATURE_LIVE_SWITCH` is on (FeatureGuard); the answer is `202` with the live connection, waiting for
-//   an office (live-office.service.ts). The optional body holds a note for ops.
+//   an office, with its `pendingSubmission` (live-office.service.ts). The optional body holds a note for ops.
 //
 // TenantRoleGuard answers `404` to non-members and `403` to the other roles before a handler runs.
 import { Controller, Get, HttpCode, Patch, Post, Put, Res } from "@nestjs/common";
@@ -34,7 +34,7 @@ import {
 } from "./amadeus-credentials.service";
 import { ConnectionsService, type UpdateAmadeusConnectionRequest } from "./connections.service";
 import { LiveOfficeService, type RequestLiveAmadeusRequest } from "./live-office.service";
-import { toAmadeusConnection, type AmadeusConnection } from "./supplier-connections.repository";
+import type { AmadeusConnection } from "./supplier-connections.repository";
 
 export type AmadeusConnectionList = components["schemas"]["AmadeusConnectionList"];
 
@@ -77,7 +77,7 @@ export class ConnectionsController {
       body,
     );
     res.setHeader("ETag", etagOf(row.version));
-    return toAmadeusConnection(row);
+    return this.credentials.connectionOf(membership.tenantId, row);
   }
 
   @Put(":environment/credentials")

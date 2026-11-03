@@ -144,7 +144,7 @@ BullMQ gives any job of a queue to any of its workers, so `platform-maintenance`
 | `api_keys.flush_usage` | every 5 min | Move `apikey:used:<keyId>` counters into `api_keys.last_used_at` / `last_used_ip` | M1 |
 | `invitations.expire` | hourly | Pending invitations past `expires_at` → `expired` | M1 |
 | `provisioning.purge_reveals` | hourly | Erase reveal-once key ciphertext older than 24 h | M1 |
-| `purge.daily` | 02:50 | Consumed or expired `account_tokens` > 7 days, `account_sessions` expired > 30 days, sent `email_outbox` > 30 days, processed `stripe_events` > 90 days, final `credential_submissions` > 90 days | M1 |
+| `purge.daily` | 02:50 | Consumed or expired `account_tokens` > 7 days, `account_sessions` expired > 30 days, sent `email_outbox` > 30 days, processed `stripe_events` > 90 days, final `credential_submissions` > 90 days; `failed` custom `tenant_domains` > 7 days after their failure, each audited `domain.removed` and invalidated (M5, 2026-11-02, lead decision (2g), FIX-W39-PLATFORM; [PADR-0004](adr/0004-custom-domain-verification.md) item 4) | M1, M5 |
 | `amadeus.pool_level` | 06:55 | E-mail ops when fewer than 3 `available` offices remain per environment | M1 |
 | `domains.verify_pending` | every 5 min | `domain.verify` for each pending custom domain; `failed` past the 72 h deadline | M5 |
 | `domains.recheck_verified` | 04:10 | `domain.recheck` for each verified custom domain | M5 |

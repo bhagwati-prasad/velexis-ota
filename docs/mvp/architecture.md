@@ -483,7 +483,7 @@ Every Node app reads its configuration through `@velexis/config`, which validate
 | `PUBLIC_PORTAL_URL` | ✓ | ✓ | ✓ | | ✓ | | `https://platform.example.com` (platform admin: the "enable MFA in the portal" link) |
 | `PUBLIC_PLATFORM_ADMIN_URL` | ✓ | | ✓ | | | | `https://admin.platform.example.com` |
 | `PUBLIC_OTA_ADMIN_URL` | ✓ | ✓ | | worker | ✓ | | `https://admin.ota.example.com` (OTA worker: the links of staff alert e-mails) |
-| `PUBLIC_OTA_API_URL` | | | | ✓ | | | `https://api.ota.example.com` |
+| `PUBLIC_OTA_API_URL` | ✓ | | | ✓ | | | `https://api.ota.example.com`. OTA: the absolute URLs of key callers (assets, files). Platform (M5): the webhook URL of an OTA's own Stripe keys, `<PUBLIC_OTA_API_URL>/webhooks/stripe/c/<ppc_id>`; an `https` URL with `APP_ENV=production`, `http` allowed in development and tests (2026-11-02, lead decision (2m), FIX-W39-PLATFORM) |
 | `STOREFRONT_BASE_DOMAIN` | ✓ | ✓ | | ✓ | | | `ota.example.com` |
 | `STOREFRONT_IPV4`, `STOREFRONT_IPV6` | ✓ | | | | | | The VM's public addresses (M5): the `A`/`AAAA` records of a custom domain at a zone apex, shown to owners and checked by DNS verification ([PADR-0004](../../platform/docs/adr/0004-custom-domain-verification.md)). `STOREFRONT_IPV4` is required when `FEATURE_CUSTOM_DOMAINS` is on; `STOREFRONT_IPV6` is optional (no `AAAA` record without it) |
 | `DNS_RESOLVERS` | worker | | | | | | `1.1.1.1,8.8.8.8` (the default): the public resolvers of custom domain verification (M5), never the VM's own resolver ([PADR-0004](../../platform/docs/adr/0004-custom-domain-verification.md) item 3); 1 to 4 IP addresses with optional ports. The API validates it too, since both read `platform-backend.env` |

@@ -12,8 +12,8 @@
 // - **Secrets are erased** in the same UPDATE that sets a final status (`applied`, `failed`, `superseded`), as the
 //   CHECK `credential_submissions_secret_purge_ck` requires.
 // - Every read that answers the API selects the row without its ciphertexts (`CredentialSubmissionView`); only
-//   `startAttempt`, the worker's first step of a verification attempt, returns them. The sweep reads ids only
-//   (`staleIds`, FIX-W38-PLATFORM).
+//   `startAttempt`, the worker's first step of a verification attempt, returns them. The sweep reads ids and kinds
+//   only (`stale`, FIX-W38-PLATFORM; the kind since FIX-W39-PLATFORM).
 // - The submitter's e-mail reads the account and its active membership of the tenant, and the OTA's name and key, read
 //   only (`emailRecipient`, `tenantLabel`), as payout-accounts.repository.ts reads the owners.
 import { Inject, Injectable } from "@nestjs/common";
@@ -116,6 +116,12 @@ export type CredentialSubmissionOutcome =
 export interface SupersededSubmission {
   readonly id: string;
   readonly previousStatus: string;
+}
+
+/** A candidate of the sweep: a submission's id and kind. */
+export interface StaleSubmission {
+  readonly id: string;
+  readonly kind: CredentialKind;
 }
 
 /** The submitter of a submission, as its e-mail addresses them. */
@@ -235,10 +241,16 @@ export class CredentialSubmissionsRepository {
 
   /**
    * The tenant's latest submission of `kind` in each environment (`created_at`, then id), without its ciphertexts, at
-   * most one per environment (PBE-053: the `pendingSubmission` of the connection lists).
+   * most one per environment, read on `db` (the pool, or the caller's transaction): the one query of every answered
+   * connection's `pendingSubmission`, Amadeus and Stripe alike (PBE-053, PBE-057; FIX-W39-PLATFORM, lead decision (2k)
+   * of 2026-11-02).
    */
-  async latestByEnvironment(tenantId: string, kind: CredentialKind): Promise<CredentialSubmissionView[]> {
-    return this.db
+  async latestByEnvironment(
+    tenantId: string,
+    kind: CredentialKind,
+    db: PlatformDb | PlatformTransaction = this.db,
+  ): Promise<CredentialSubmissionView[]> {
+    return db
       .selectFrom("platform.credential_submissions")
       .distinctOn("environment")
       .select(VIEW_COLUMNS)
@@ -282,20 +294,21 @@ export class CredentialSubmissionsRepository {
   }
 
   /**
-   * The ids of the submissions in `status` unchanged since before `before` (`updated_at`), oldest first, at most
-   * `limit`: the sweep's candidates (credentials-sweep.ts). Ids only, never a ciphertext.
+   * The submissions in `status` unchanged since before `before` (`updated_at`), oldest first, at most `limit`: the
+   * sweep's candidates (credentials-sweep.ts), by id and kind (the sweep fails a `pending` one whose kind's switch is
+   * off, FIX-W39-PLATFORM). Never a ciphertext.
    */
-  async staleIds(status: "pending" | "verifying", before: Date, limit: number): Promise<string[]> {
+  async stale(status: "pending" | "verifying", before: Date, limit: number): Promise<StaleSubmission[]> {
     const rows = await this.db
       .selectFrom("platform.credential_submissions")
-      .select("id")
+      .select(["id", "kind"])
       .where("status", "=", status satisfies CredentialSubmissionStatus)
       .where("updated_at", "<", before)
       .orderBy("updated_at")
       .orderBy("id")
       .limit(limit)
       .execute();
-    return rows.map((row) => row.id);
+    return rows.map((row) => ({ id: row.id, kind: row.kind as CredentialKind }));
   }
 
   /** The submission without its ciphertexts, locked for the rest of `trx` (`FOR UPDATE`). */

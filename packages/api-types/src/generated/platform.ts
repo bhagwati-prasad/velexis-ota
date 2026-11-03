@@ -1058,6 +1058,8 @@ export interface paths {
         /**
          * Check the DNS records of a custom domain now
          * @description Owners and admins ask for the DNS check of a custom domain that is not verified yet (M5), instead of waiting for the next 5-minute run: the API enqueues a `domain.verify` job on `platform-domains` and answers at once with the domain as it is now; the result shows in `listDomains` within seconds (`verificationStatus`, `lastCheckedAt`, `lastCheckError`). A `failed` domain first gets a new 72-hour window with the same token, so it is `pending` again in the answer, and an audit row records the restart. Only `pending` and `failed` custom domains can be checked: the sub-domain has no records (`409 CONFLICT`, `details.reason = subdomain`) and a verified domain has nothing left to prove (`details.reason = already_verified`; the daily re-check watches it). Rate limited to 1 call per domain per minute (`429 RATE_LIMITED`). The OTA must be `active` (`409 TENANT_NOT_ACTIVE`). `503 SERVICE_UNAVAILABLE` while Redis is down, because the job is the operation's effect.
+         *
+         *     **Switch and plan** (2026-11-02, lead decision (2h), FIX-W39-PLATFORM): like `addDomain`, it needs `FEATURE_CUSTOM_DOMAINS` and a plan with custom domains (`limits.customDomains` above 0); otherwise `403 FEATURE_DISABLED` with `details.feature = custom_domains`, and nothing is written or queued (a failed domain keeps its status and window). The switch answers before the handler runs; the plan is read in the domain transaction after the OTA's status (`409 TENANT_NOT_ACTIVE` first) and before the domain's own rules.
          */
         post: operations["checkDomain"];
         delete?: never;
@@ -1088,7 +1090,9 @@ export interface paths {
         put?: never;
         /**
          * Make a verified domain the primary storefront host
-         * @description Owners and admins choose the primary storefront host (M5), which links and e-mails use: in one transaction the OTA's other storefront host loses `isPrimary` and this one gets it (the partial unique index keeps exactly one primary), then `domain` invalidations for both hosts are published. Like `addDomain`, it needs `FEATURE_CUSTOM_DOMAINS` and a plan with custom domains (`limits.customDomains` above 0); otherwise `403 FEATURE_DISABLED` with `details.feature = custom_domains`, for the sub-domain too, and nothing is written (`removeDomain` still makes the sub-domain primary again when it removes the primary custom domain). Only a verified domain can be primary (`409 DOMAIN_NOT_VERIFIED`); making the sub-domain primary again is allowed, and the primary domain answers `200` unchanged. The OTA must be `active` (`409 TENANT_NOT_ACTIVE`, PADR-0014 item 5). Writes an audit row. Redirecting the sub-domain to the primary host is a follow-up of ADR-0018.
+         * @description Owners and admins choose the primary storefront host (M5), which links and e-mails use: in one transaction the OTA's other storefront host loses `isPrimary` and this one gets it (the partial unique index keeps exactly one primary), then `domain` invalidations for both hosts are published. Only a verified domain can be primary (`409 DOMAIN_NOT_VERIFIED`), and the primary domain answers `200` unchanged. The OTA must be `active` (`409 TENANT_NOT_ACTIVE`, PADR-0014 item 5). Writes an audit row. Redirecting the sub-domain to the primary host is a follow-up of ADR-0018.
+         *
+         *     **Switch and plan** (2026-11-02, lead decision (2a), FIX-W39-PLATFORM, replacing the `x-feature` of FIX-W38-PLATFORM): making the OTA's **sub-domain** primary again is always allowed, whatever `FEATURE_CUSTOM_DOMAINS` or the plan says, so an OTA whose custom domains were switched off or left its plan can always go back to its own sub-domain. A **custom domain** still needs `FEATURE_CUSTOM_DOMAINS` and a plan with custom domains (`limits.customDomains` above 0), as for `addDomain`; otherwise `403 FEATURE_DISABLED` with `details.feature = custom_domains`, and nothing is written (no flag moves, no audit row, no invalidation). The operation therefore has no `x-feature`: the service checks the switch once it has read the domain (an unknown domain answers `404 NOT_FOUND`), then the OTA's status (`409 TENANT_NOT_ACTIVE`), then the plan, then the verification (`409 DOMAIN_NOT_VERIFIED`).
          */
         post: operations["makeDomainPrimary"];
         delete?: never;
@@ -1209,7 +1213,7 @@ export interface paths {
          * Submit the OTA's own Amadeus credentials for verification
          * @description Owners and admins switch the Amadeus connection of an environment to the OTA's own credentials (M5, ADR-0012, PADR-0010), with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without MFA) and `FEATURE_OWN_AMADEUS` on (`403 FEATURE_DISABLED`). Nothing changes on the connection yet: the credentials wait in a credential submission, the client secret envelope-encrypted, and a platform worker job verifies them with an OAuth token request to the Amadeus host of the environment. Success switches the connection in one transaction (`credentialSource: tenant`, the secret re-encrypted for the connection, the offices of the body, `active`), moves the Velexis office of that environment to `releasing`, and e-mails the submitter; a rejection (`AMADEUS_CREDENTIALS_INVALID`) or an unreachable Amadeus (`PROVIDER_UNAVAILABLE`, after retries) leaves the working connection untouched. The portal follows the submission with `getCredentialSubmission`; `listAmadeusConnections` shows it as `pendingSubmission`.
          *
-         *     **Rules.** Office ids are 9 upper-case letters and digits, each at most once; `defaultOfficeId` and, when sent, `queuingOfficeId` and `ownerOfficeId` must be among `officeIds` (`400 VALIDATION_FAILED` with a field error); the two optional offices default to `defaultOfficeId`. An open submission of the same environment is superseded and its secret erased. The environment needs no connection yet: an OTA may bring its own live credentials before it asks for a Velexis live office, and the connection is then created on success. The OTA must be `active` (`409 TENANT_NOT_ACTIVE`, PADR-0014 item 5).
+         *     **Rules.** Office ids are 9 upper-case letters and digits, each at most once; `defaultOfficeId` and, when sent, `queuingOfficeId` and `ownerOfficeId` must be among `officeIds` (`400 VALIDATION_FAILED` with a field error); the two optional offices default to `defaultOfficeId`. An open submission of the same environment is superseded and its secret erased. The environment needs no connection yet: an OTA may bring its own live credentials before it asks for a Velexis live office, and the connection is then created on success. The OTA must be `active` (`409 TENANT_NOT_ACTIVE`, PADR-0014 item 5). A connection of the environment that a platform admin disabled (`adminSetConnectionStatus`, PADR-0012 item 8) is refused up front with `409 CONFLICT` and `details.reason = connection_disabled`, and nothing is written: no submission, no audit row, no job (2026-11-02, lead decision (2i), FIX-W39-PLATFORM). The worker's apply refuses it again if the admin disables it after the submission (`CONNECTION_DISABLED`, PADR-0010 item 6).
          *
          *     **The secret.** `clientSecret` is write-only: it is never logged (the logger redacts it), never answered and never put in a queue message, and it is erased from the submission when the submission ends. The operation is not idempotent, so no body is stored for a replay. Writes the audit row `amadeus.credentials_submitted` without the secret, then enqueues `credentials.verify` with the submission id only.
          */
@@ -1389,9 +1393,9 @@ export interface paths {
          * Submit the OTA's own Stripe API keys for verification
          * @description Owners and admins switch the payment connection of an environment to the OTA's own Stripe account by its API keys (`api_keys` mode, M5, PADR-0011), with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without MFA) and `FEATURE_OWN_STRIPE` on (`403 FEATURE_DISABLED`). As for own Amadeus credentials (PADR-0010), nothing changes yet: the keys wait in a credential submission, the secret key and the webhook secret envelope-encrypted, and a platform worker job verifies them with `GET /v1/account`, which must succeed with a `livemode` that matches the environment. Success switches the connection in one transaction (`api_keys`, the account id, the publishable key, both secrets re-encrypted for the connection, `active`) and e-mails the submitter; a failure (`STRIPE_KEY_INVALID`, `STRIPE_LIVEMODE_MISMATCH`, `PROVIDER_UNAVAILABLE`) leaves the connection untouched. Follow it with `getCredentialSubmission`.
          *
-         *     **Rules.** Every key must belong to the environment: `pk_test_` and `sk_test_` or `rk_test_` on `test`, `pk_live_` and `sk_live_` or `rk_live_` on `live`; another prefix answers `400 VALIDATION_FAILED` with a field error that never holds the key. A restricted key (`rk_`) needs write access to PaymentIntents and Refunds and read access to Charges and Disputes. An open submission of the same environment is superseded and its secrets erased. The OTA must be `active` (`409 TENANT_NOT_ACTIVE`, PADR-0014 item 5).
+         *     **Rules.** Every key must belong to the environment: `pk_test_` and `sk_test_` or `rk_test_` on `test`, `pk_live_` and `sk_live_` or `rk_live_` on `live`; another prefix answers `400 VALIDATION_FAILED` with a field error that never holds the key. A restricted key (`rk_`) needs write access to PaymentIntents and Refunds and read access to Charges and Disputes, and read access to the Account, because the verification calls `GET /v1/account` with it (2026-11-02, lead decision (2m), FIX-W39-PLATFORM; a real restricted key's access is checked by hand, PBE-057). An open submission of the same environment is superseded and its secrets erased. The OTA must be `active` (`409 TENANT_NOT_ACTIVE`, PADR-0014 item 5). A connection of the environment that a platform admin disabled (`adminSetConnectionStatus`: `disabled` with no `disconnectedAt`) is refused up front with `409 CONFLICT` and `details.reason = connection_disabled`, and nothing is written: no submission, no audit row, no job (2026-11-02, lead decision (2i), FIX-W39-PLATFORM); one that a Stripe deauthorisation disabled (`disconnectedAt` set) may take keys. The worker's apply refuses it again if the admin disables it after the submission (`CONNECTION_DISABLED`, PADR-0010 item 6).
          *
-         *     **Answer**: the submission, and the webhook endpoint to create in the OTA's Stripe dashboard: `webhookUrl` (`https://api.ota.example.com/webhooks/stripe/c/<ppc_id>`, stable because the connection row is updated in place; when the environment has no connection yet, the submission keeps the id that the connection gets) and the events to enable. The webhook secret can only be tested when Stripe sends an event to the OTA backend, so the portal asks the owner to send a test event.
+         *     **Answer**: the submission, and the webhook endpoint to create in the OTA's Stripe dashboard: `webhookUrl` (`<PUBLIC_OTA_API_URL>/webhooks/stripe/c/<ppc_id>`, the OTA API's public URL of the platform's configuration, `https://api.ota.example.com` in production; stable because the connection row is updated in place; when the environment has no connection yet, the submission keeps the id that the connection gets) and the events to enable. The webhook secret can only be tested when Stripe sends an event to the OTA backend, so the portal asks the owner to send a test event.
          *
          *     **Secrets.** `secretKey` and `webhookSecret` are write-only: never logged (the logger redacts them), never answered, never put in a queue message, and erased from the submission when it ends. The operation is not idempotent, so no body is stored for a replay. Writes an audit row without them.
          */
@@ -2545,6 +2549,8 @@ export interface paths {
          * @description Returns an office to `available` (M5, PADR-0012 item 5): it keeps no OTA and gets `releasedAt`. This is the manual step after an OTA moved to its own Amadeus credentials, which left the Velexis office `releasing` so the OTA backend can still service the orders created through it. The admin releases it only once the OTA confirmed, from its bookings console filtered by office, that no booking with future travel remains on it: the body carries `confirmNoOpenBookings: true` and a written `reason` of 5–500 characters after trimming that the audit row keeps. There is no automatic timer.
          *
          *     A `releasing` office is released. An `assigned` office is released only when it backs no active `velexis` connection of its OTA (for example after the connection was disabled for abuse, PADR-0012 item 8); one that does answers `409 CONFLICT` (`details.reason = connection_active`). An `available` or `retired` office answers `409 CONFLICT` (`details.reason = not_assigned`). Writes an audit row and, after commit, publishes the `amadeus_account` invalidation.
+         *
+         *     **A disabled connection loses the office** (2026-11-02, lead decision (2l), FIX-W39-PLATFORM): when the released office is one of the offices of the OTA's `velexis` connection that a platform admin disabled (on the office's account), the same transaction removes it from that connection: out of `officeIds`, and the default, queuing and owner offices that named it become `null` (`version + 1`). The audit row adds the connection, its offices before and after; a `connection` invalidation follows the commit. Re-enabling that connection with `adminSetConnectionStatus` then answers `409 CONFLICT` with `details.reason = no_office` until an office is assigned again (`adminAssignAmadeusOffice`).
          */
         post: operations["adminReleaseAmadeusOffice"];
         delete?: never;
@@ -4137,7 +4143,10 @@ export interface components {
             verificationDeadlineAt: string | null;
             /** Format: date-time */
             lastCheckedAt: string | null;
-            /** @description What the last DNS check found missing, safe to show. */
+            /**
+             * @description What the last DNS check found missing, as a code the portal turns into words (PADR-0004 item 2; note of 2026-11-02, lead decision (2h), FIX-W39-PLATFORM): `txt_missing` (no TXT record at `_velexis.<host>`), `txt_mismatch` (TXT records there, none with the verification token), `cname_missing` (no CNAME and no address records at the host), `cname_wrong_target` (the CNAME chain does not end at the OTA's sub-domain), `a_wrong_address` (an `A` or `AAAA` record outside the storefront addresses) or `dns_timeout` (a lookup the check needs did not complete; the next run asks again). `null` after a passed check and before the first one.
+             * @example txt_missing
+             */
             lastCheckError: string | null;
             /** @enum {string} */
             tlsStatus: "pending" | "issued" | "failed" | "expired";
@@ -4296,7 +4305,7 @@ export interface components {
              * @enum {string}
              */
             status: "pending" | "verifying" | "applied" | "failed" | "superseded";
-            /** @description Why the verification failed, a stable code for the portal: `AMADEUS_CREDENTIALS_INVALID`, `STRIPE_KEY_INVALID`, `STRIPE_LIVEMODE_MISMATCH` or `PROVIDER_UNAVAILABLE`; `null` unless `failed`. These are verification results, not error codes of the API. */
+            /** @description Why the verification failed, a stable code for the portal: `AMADEUS_CREDENTIALS_INVALID`, `STRIPE_KEY_INVALID`, `STRIPE_LIVEMODE_MISMATCH` or `PROVIDER_UNAVAILABLE`, and the refusals of the apply (note of 2026-11-02, lead decisions (2b), (2i) and (2m), FIX-W39-PLATFORM; PADR-0010 item 6): `TENANT_NOT_ACTIVE` (the OTA stopped being `active` after it submitted), `CONNECTION_DISABLED` (a platform admin disabled the connection), `CONNECTION_CHANGED` (own Stripe API keys: a connection was created for the environment after the submission, so the webhook URL the submission answered names no connection) and `FEATURE_DISABLED` (the switch of the kind, `FEATURE_OWN_AMADEUS` or `FEATURE_OWN_STRIPE`, was off when the worker took the submission); each leaves the connection as it was. `null` unless `failed`. These are verification results, not error codes of the API. */
             errorCode: string | null;
             /** @description The sanitised reason: the provider's HTTP status and error code, never a provider body or a secret; `null` unless `failed`. */
             errorMessage: string | null;
@@ -4353,7 +4362,7 @@ export interface components {
             disconnectedAt: string | null;
             /**
              * Format: uri
-             * @description The webhook URL to configure in the OTA's Stripe account (`api_keys` mode); `null` otherwise.
+             * @description The webhook URL to configure in the OTA's Stripe account (`api_keys` mode), `<PUBLIC_OTA_API_URL>/webhooks/stripe/c/<ppc_id>` as `submitStripeApiKeys` answers it; `null` otherwise.
              */
             webhookUrl: string | null;
             pendingSubmission: components["schemas"]["PendingCredentialSubmission"] | null;
@@ -4425,7 +4434,7 @@ export interface components {
             submission: components["schemas"]["CredentialSubmission"];
             /**
              * Format: uri
-             * @description The endpoint URL to enter in Stripe: the OTA backend's webhook receiver for this connection, `https://api.ota.example.com/webhooks/stripe/c/<ppc_id>`.
+             * @description The endpoint URL to enter in Stripe: the OTA backend's webhook receiver for this connection, `<PUBLIC_OTA_API_URL>/webhooks/stripe/c/<ppc_id>` (`https://api.ota.example.com/webhooks/stripe/c/<ppc_id>` in production, where PUBLIC_OTA_API_URL must be an `https` URL; `http`, such as `http://localhost:4000`, only in development and tests). 2026-11-02, lead decision (2m), FIX-W39-PLATFORM: built from the platform's PUBLIC_OTA_API_URL instead of `api.<STOREFRONT_BASE_DOMAIN>`, so the pattern admits the `http` URL of development and tests and a base URL with a path.
              */
             webhookUrl: string;
             /** @description The events to enable on the endpoint. */
@@ -5653,7 +5662,10 @@ export interface components {
             verificationDeadlineAt: string | null;
             /** Format: date-time */
             lastCheckedAt: string | null;
-            /** @description What the last DNS check found missing, safe to show. */
+            /**
+             * @description What the last DNS check found missing, as a code the portal turns into words (PADR-0004 item 2; note of 2026-11-02, lead decision (2h), FIX-W39-PLATFORM): `txt_missing` (no TXT record at `_velexis.<host>`), `txt_mismatch` (TXT records there, none with the verification token), `cname_missing` (no CNAME and no address records at the host), `cname_wrong_target` (the CNAME chain does not end at the OTA's sub-domain), `a_wrong_address` (an `A` or `AAAA` record outside the storefront addresses) or `dns_timeout` (a lookup the check needs did not complete; the next run asks again). `null` after a passed check and before the first one.
+             * @example txt_missing
+             */
             lastCheckError: string | null;
             /** @description Consecutive failed daily re-checks of a verified domain; 3 set it `failed`. */
             checkFailures: number;
@@ -8576,7 +8588,7 @@ export interface operations {
                      *           ],
                      *           "verificationDeadlineAt": "2026-11-21T10:00:00Z",
                      *           "lastCheckedAt": "2026-11-18T10:05:00Z",
-                     *           "lastCheckError": "The TXT record _velexis.travel.acme-travel.example.com was not found.",
+                     *           "lastCheckError": "txt_missing",
                      *           "tlsStatus": "pending",
                      *           "tlsExpiresAt": null,
                      *           "createdAt": "2026-11-18T10:00:00Z"
@@ -8809,7 +8821,7 @@ export interface operations {
                      *       ],
                      *       "verificationDeadlineAt": "2026-11-21T10:00:00Z",
                      *       "lastCheckedAt": "2026-11-18T10:05:00Z",
-                     *       "lastCheckError": "The TXT record _velexis.travel.acme-travel.example.com was not found.",
+                     *       "lastCheckError": "txt_missing",
                      *       "tlsStatus": "pending",
                      *       "tlsExpiresAt": null,
                      *       "createdAt": "2026-11-18T10:00:00Z"
@@ -8820,7 +8832,16 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["Unauthenticated"];
-            403: components["responses"]["TenantRoleForbidden"];
+            /** @description The e-mail address is not verified, the caller's role does not allow it, or custom domains are off or not in the plan. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED. */
+            403: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             404: components["responses"]["NotFound"];
             /** @description The domain is the sub-domain or is verified already (`details.reason`), or the OTA is not active. Possible codes: CONFLICT, TENANT_NOT_ACTIVE. */
             409: {
@@ -9238,7 +9259,16 @@ export interface operations {
                 };
             };
             404: components["responses"]["NotFound"];
-            409: components["responses"]["TenantNotActive"];
+            /** @description The OTA is not active, or a platform admin disabled the Amadeus connection of the environment (`details.reason = connection_disabled`). Possible codes: TENANT_NOT_ACTIVE, CONFLICT. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
         };
@@ -9636,7 +9666,16 @@ export interface operations {
                 };
             };
             404: components["responses"]["NotFound"];
-            409: components["responses"]["TenantNotActive"];
+            /** @description The OTA is not active, or a platform admin disabled the payment connection of the environment (`details.reason = connection_disabled`). Possible codes: TENANT_NOT_ACTIVE, CONFLICT. */
+            409: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
         };

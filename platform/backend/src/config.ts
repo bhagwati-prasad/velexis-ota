@@ -293,6 +293,15 @@ export const PLATFORM_BACKEND_CONFIG_SCHEMA = {
    */
   PUBLIC_OTA_ADMIN_URL: env.url({ protocols: ["http:", "https:"] }),
   /**
+   * The OTA API's public base URL (`https://api.ota.example.com`), the OTA backend's own PUBLIC_OTA_API_URL: the
+   * webhook URL of an OTA's own Stripe keys, `<PUBLIC_OTA_API_URL>/webhooks/stripe/c/<ppc_id>`, starts with it
+   * (`submitStripeApiKeys` and every answered `api_keys` connection, PBE-057; FIX-W39-PLATFORM, lead decision (2m) of
+   * 2026-11-02), never with a host taken from a request. An `https:` URL with `APP_ENV=production` (Stripe needs an
+   * HTTPS endpoint, `publicOtaApiUrlProblems`); `http:` is allowed in development and tests (`http://localhost:4000`).
+   * A base URL (a path is allowed), never with credentials, a query or a fragment. The API reads it; the worker and the CLI validate it too, because the three read `platform-backend.env`.
+   */
+  PUBLIC_OTA_API_URL: env.url({ protocols: ["http:", "https:"] }),
+  /**
    * The parent domain of every OTA's storefront sub-domain, `<key>.<STOREFRONT_BASE_DOMAIN>` (`ota.example.com`):
    * the host the key check shows (`checkTenantKey`), the sub-domain row of a new OTA and the TLS `ask` rule. No
    * default: a wrong domain in production would hand out hosts Velexis does not serve.
@@ -550,6 +559,35 @@ function amadeusBaseUrlProblems(source: EnvSource | undefined): ConfigProblem[] 
 }
 
 /**
+ * The PUBLIC_OTA_API_URL rules that a schema entry cannot express (FIX-W39-PLATFORM, lead decision (2m) of
+ * 2026-11-02): a base URL the webhook path can follow, so without user name, password, query or fragment (the
+ * `webhookUrl` of the contract admits none), in every environment; and with `APP_ENV=production` an `https:` URL,
+ * because Stripe sends the webhooks of an OTA's own keys there and accepts no other endpoint. A value that is invalid
+ * on its own is reported by the schema, not here; the reasons never hold the value.
+ */
+function publicOtaApiUrlProblems(source: EnvSource | undefined): ConfigProblem[] {
+  const appEnv = validValues({ APP_ENV: PLATFORM_BACKEND_CONFIG_SCHEMA.APP_ENV }, source)?.APP_ENV;
+  const url = validValues(
+    { PUBLIC_OTA_API_URL: PLATFORM_BACKEND_CONFIG_SCHEMA.PUBLIC_OTA_API_URL },
+    source,
+  )?.PUBLIC_OTA_API_URL;
+  if (url === undefined) {
+    return [];
+  }
+  // The schema has parsed the value: `new URL` does not throw here. An empty `?` or `#` leaves `search` and `hash`
+  // empty, so the text itself is checked for them.
+  const parsed = new URL(url);
+  if (parsed.username !== "" || parsed.password !== "" || url.includes("?") || url.includes("#")) {
+    return [
+      { variable: "PUBLIC_OTA_API_URL", reason: "must be a base URL without credentials, query or fragment" },
+    ];
+  }
+  return appEnv === "production" && parsed.protocol !== "https:"
+    ? [{ variable: "PUBLIC_OTA_API_URL", reason: "must be an https URL with APP_ENV=production" }]
+    : [];
+}
+
+/**
  * Validates the configuration in `source` (default: the process environment) and returns it deep-frozen. Throws one
  * `ConfigError` that names every invalid variable and the reason, never a value.
  */
@@ -560,6 +598,7 @@ export function parseConfig(source?: EnvSource): PlatformBackendConfig {
     ...storefrontAddressProblems(source),
     ...dnsResolverProblems(source),
     ...amadeusBaseUrlProblems(source),
+    ...publicOtaApiUrlProblems(source),
   ];
   try {
     const config = defineConfig(PLATFORM_BACKEND_CONFIG_SCHEMA, source);

@@ -32,8 +32,9 @@
 //    uses the new settings within seconds. A body that changes nothing writes, audits and publishes nothing, and the
 //    connection is answered as it is (as updatePaymentConnection and updateTenant do).
 //
-// The answer is the row without its ciphertext; the controller maps it with `toAmadeusConnection` (never the secret)
-// and sets `ETag`. "Now" is the injected Clock's time.
+// The answer is the row without its ciphertext; the controller maps it as the list does (`toAmadeusConnection` with its
+// `pendingSubmission`, AmadeusCredentialsService.connectionOf; never the secret) and sets `ETag`. "Now" is the injected
+// Clock's time.
 import { isDeepStrictEqual } from "node:util";
 import { Inject, Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types/platform";

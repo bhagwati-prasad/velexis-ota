@@ -6,9 +6,10 @@
 // re-reads the account first; the reasons of the **reason** operations were checked by the validation interceptor.
 // Thin: each handler binds its operation, reads the validated request, makes one service call and maps its rows with
 // the admin's mappers (`toAdminTenant`, `toAdminProvisioningJob`) or the portal's masked connection shapes
-// (`toAmadeusConnection`, `toPaymentConnectionWith` with an `api_keys` connection's webhook URL, PBE-057), as the tenant
-// detail shows them. The versioned answers of the tenant views carry the tenant's version in `ETag`, which
-// adminUpdateTenant takes back in `If-Match`.
+// (AdminTenantsService.connectionOf: `toAmadeusConnection` and `toPaymentConnection`, with an `api_keys` connection's
+// webhook URL, PBE-057, and the connection's `pendingSubmission`, FIX-W39-PLATFORM), as the tenant detail shows them.
+// The versioned answers of the tenant views carry the tenant's version in `ETag`, which adminUpdateTenant takes back in
+// `If-Match`.
 import { Controller, Get, HttpCode, Patch, Post, Res } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type { components } from "@velexis/api-types/platform";
@@ -17,8 +18,6 @@ import { AccessToken } from "../common/auth/decorators";
 import { etagOf, versionOfIfMatch } from "../common/http/if-match";
 import { OpenApiOperation, Validated } from "../common/http/openapi-operation.decorator";
 import type { PlatformBackendConfig } from "../config";
-import { toPaymentConnectionWith } from "../payment-connections/payment-connections.controller";
-import { paymentConnectionWebhookUrl } from "../payment-connections/stripe-api-keys.service";
 import { MigrateService } from "../provisioning/migrate.service";
 import {
   SuspensionService,
@@ -26,10 +25,10 @@ import {
   type ConnectionTargetStatus,
   type TenantLifecycleResult,
 } from "../provisioning/suspension.service";
-import { toAmadeusConnection } from "../supplier-connections/supplier-connections.repository";
 import { toAdminProvisioningJob, toAdminTenant } from "./admin-tenants.mapper";
 import {
   AdminTenantsService,
+  type AdminConnection,
   type AdminTenant,
   type AdminTenantDetail,
   type AdminTenantList,
@@ -43,7 +42,6 @@ export type MigrateTenantRequest = components["schemas"]["MigrateTenantRequest"]
 export type SetConnectionStatusRequest = components["schemas"]["SetConnectionStatusRequest"];
 export type TenantLifecycleAccepted = components["schemas"]["TenantLifecycleAccepted"];
 export type AdminProvisioningJobResult = components["schemas"]["AdminProvisioningJobResult"];
-export type AdminConnection = components["schemas"]["AdminConnection"];
 
 /** The part of the Express response the handlers write. */
 interface HeaderTarget {
@@ -153,8 +151,9 @@ export class AdminTenantsController {
     @Validated("path") path: RequestParameters,
     @Validated("body") body: SetConnectionStatusRequest,
   ): Promise<AdminConnection> {
+    const tenantId = path["tenantId"] as string;
     const result = await this.suspensions.setConnectionStatus(
-      path["tenantId"] as string,
+      tenantId,
       {
         kind: path["kind"] as ConnectionKind,
         environment: path["environment"] as "test" | "live",
@@ -163,11 +162,7 @@ export class AdminTenantsController {
       },
       token.sub,
     );
-    return result.kind === "amadeus"
-      ? toAmadeusConnection(result.connection)
-      : toPaymentConnectionWith(result.connection, {
-          webhookUrl: paymentConnectionWebhookUrl(this.baseDomain, result.connection),
-        });
+    return this.tenants.connectionOf(tenantId, result);
   }
 
   /** The `202` answer of a suspend or resume. */

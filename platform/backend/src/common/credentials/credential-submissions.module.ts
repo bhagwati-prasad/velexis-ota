@@ -17,13 +17,15 @@
 //   `platform-connections` (credential-submissions.int.test.ts registers its verifier from a module of its own).
 //   It also holds the sweep of lost `credentials.verify` jobs (CredentialsSweep, run by the same processor) and the
 //   job scheduler of `credentials.sweep` (CredentialsSweepScheduler; FIX-W38-PLATFORM, lead decision (2f) of
-//   2026-10-31).
+//   2026-10-31), and the worker's milestone switches (FeatureSwitches, from the configuration), which refuse to apply a
+//   kind whose switch is off (FIX-W39-PLATFORM, lead decision (2b) of 2026-11-02).
 //
 // It uses the global CommonModule (Clock, IdGenerator, PLATFORM_DB, EnvelopeService), AuditModule, the queues of
 // QueuesModule and, in the worker, NotificationsModule (the submitter's e-mail).
 import { Module, type DynamicModule, type Type } from "@nestjs/common";
 import { AuditModule } from "../../audit/audit.module";
 import { NotificationsModule } from "../../notifications/notifications.module";
+import { FeatureSwitches } from "../features";
 import { QueuesModule } from "../queues/queues.module";
 import { CredentialSubmissionsController } from "./credential-submissions.controller";
 import { CredentialSubmissionsRepository } from "./credential-submissions.repository";
@@ -43,6 +45,7 @@ import { CredentialsVerifyProcessor, CredentialVerifiers } from "./credentials-v
     CredentialsVerifyProcessor,
     CredentialsSweep,
     CredentialsSweepScheduler,
+    FeatureSwitches,
   ],
   exports: [CredentialVerifiers, CredentialsVerifyProcessor, CredentialsSweep],
 })

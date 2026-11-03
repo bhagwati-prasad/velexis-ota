@@ -61,6 +61,7 @@ import {
   insertTenantDomain,
   PLACEHOLDER_CIPHERTEXT,
   PLACEHOLDER_KEK_ID,
+  velexisSource,
   type AccountRow,
   type PlatformRow,
   type SubscriptionRow,
@@ -997,6 +998,43 @@ const COVERAGE: readonly CoverageRow[] = [
     },
   },
 
+  {
+    // FIX-W39-PLATFORM (lead decision (2l) of 2026-11-02): the office also leaves the OTA's connection an admin disabled,
+    // which the OTA backend drops from its cache with the `connection` event.
+    change: "office released from an admin-disabled velexis connection",
+    operationId: "adminReleaseAmadeusOffice",
+    publishes: ["amadeus_account", "connection"],
+    async arrange() {
+      const { tenant } = await ota();
+      const office = await insertAmadeusOffice(pool, amadeusAccount, {
+        id: ids.new("amo"),
+        status: "assigned",
+        assigned_tenant_id: tenant.id,
+        assigned_at: daysAfterNow(-90),
+      });
+      await insertSupplierConnection(pool, tenant, {
+        ...velexisSource(amadeusAccount),
+        id: ids.new("sc"),
+        status: "disabled",
+        office_ids: [office.office_id],
+        default_office_id: office.office_id,
+      });
+      const headers = await adminHeaders();
+      return {
+        send: () =>
+          t.http
+            .post(`/v1/admin/amadeus-offices/${office.id}/release`)
+            .set(headers)
+            .send({ confirmNoOpenBookings: true, reason: REASON }),
+        status: 200,
+        events: [
+          { v: 1, type: "amadeus_account", id: amadeusAccount.id },
+          { v: 1, type: "connection", tenantId: tenant.id },
+        ],
+      };
+    },
+  },
+
   // ---- domain: verified, failed, removed, primary changed ---------------------------------------------------------
   {
     change: "primary domain changed (both hosts)",
@@ -1062,7 +1100,13 @@ const COVERAGE: readonly CoverageRow[] = [
     publishes: [],
     async arrange() {
       const owner = await person();
-      const { tenant } = await ota({ members: [[owner, "owner"]] });
+      // A plan with custom domains: checkDomain answers 403 FEATURE_DISABLED without one, as addDomain does
+      // (FIX-W39-PLATFORM, lead decision (2h) of 2026-11-02); the switch is on in this file's application.
+      const plan = await insertPlan(pool, {
+        code: planCode(),
+        limits: { staffSeats: 5, apiKeys: 10, customDomains: 1 },
+      });
+      const { tenant } = await ota({ tenant: { plan_code: plan.code }, members: [[owner, "owner"]] });
       const custom = await insertTenantDomain(pool, tenant, {
         id: ids.new("dom"),
         hostname: mine(`cov-${randomBytes(6).toString("hex")}.example.net`),
@@ -1108,8 +1152,9 @@ const COVERAGE: readonly CoverageRow[] = [
 
 beforeAll(async () => {
   // FEATURE_CUSTOM_DOMAINS on (with the storefront address it requires, a documentation address of RFC 5737), so the
-  // row of makeDomainPrimary, `x-feature: custom_domains` since FIX-W38-PLATFORM, reaches its handler, and
-  // FEATURE_LIVE_SWITCH on, so the row of requestLiveAmadeus (`x-feature: live_switch`, PBE-054) reaches its handler.
+  // rows of makeDomainPrimary (a custom domain needs the switch, FIX-W38-PLATFORM and FIX-W39-PLATFORM) and checkDomain
+  // (`x-feature: custom_domains` since FIX-W39-PLATFORM) reach their handlers, and FEATURE_LIVE_SWITCH on, so the row
+  // of requestLiveAmadeus (`x-feature: live_switch`, PBE-054) reaches its handler.
   t = await createTestApp({
     env: { FEATURE_CUSTOM_DOMAINS: "true", STOREFRONT_IPV4: "203.0.113.10", FEATURE_LIVE_SWITCH: "true" },
   });

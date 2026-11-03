@@ -267,8 +267,9 @@ describe("listAmadeusConnections and listPaymentConnections", () => {
           capabilities: { chargesEnabled: true, payoutsEnabled: false, detailsSubmitted: true },
           connectedAt: "2026-10-05T08:00:00.000Z",
           disconnectedAt: null,
-          // The OTA backend's receiver of this connection, to configure in the OTA's Stripe dashboard (PBE-057).
-          webhookUrl: `https://api.${TEST_BASE_DOMAIN}/webhooks/stripe/c/${liveConnectionId}`,
+          // The OTA backend's receiver of this connection, to configure in the OTA's Stripe dashboard (PBE-057), on
+          // PUBLIC_OTA_API_URL (FIX-W39-PLATFORM AC9).
+          webhookUrl: `${t.config.PUBLIC_OTA_API_URL}/webhooks/stripe/c/${liveConnectionId}`,
           pendingSubmission: null,
           version: 1,
         },

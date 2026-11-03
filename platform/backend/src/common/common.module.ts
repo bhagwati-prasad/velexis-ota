@@ -12,6 +12,7 @@
 import { Global, Module, type DynamicModule } from "@nestjs/common";
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, DiscoveryModule } from "@nestjs/core";
 import { ClsMiddleware } from "nestjs-cls";
+import { AuditModule } from "../audit/audit.module";
 import { TokenService } from "../auth/token.service";
 import { AccountAuthStates, AdminAuthGuard } from "./auth/admin-auth.guard";
 import { OperationPolicies } from "./auth/decorators";
@@ -137,7 +138,8 @@ export class CommonModule {
   static forWorker(): DynamicModule {
     return {
       module: CommonModule,
-      imports: [RedisModule],
+      // AuditModule: the audit rows of the failed custom domains `purge.daily` deletes (FIX-W39-PLATFORM).
+      imports: [RedisModule, AuditModule],
       providers: [
         Clock,
         IdGenerator,

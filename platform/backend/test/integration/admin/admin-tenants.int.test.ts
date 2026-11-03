@@ -539,10 +539,11 @@ describe("adminGetTenant", () => {
       ["test", "velexis"],
       ["live", "tenant"],
     ]);
-    // The portal's masked shape: the `api_keys` connection with the webhook URL its owner configures (PBE-057).
+    // The portal's masked shape: the `api_keys` connection with the webhook URL its owner configures (PBE-057), on
+    // PUBLIC_OTA_API_URL (FIX-W39-PLATFORM AC9).
     expect(body.paymentConnections.map((c) => [c.environment, c.accountMode, c.webhookUrl])).toEqual([
       ["test", "velexis", null],
-      ["live", "api_keys", `https://api.${TEST_BASE_DOMAIN}/webhooks/stripe/c/${full.apiKeysConnectionId}`],
+      ["live", "api_keys", `${t.config.PUBLIC_OTA_API_URL}/webhooks/stripe/c/${full.apiKeysConnectionId}`],
     ]);
     expect(body.domains.map(({ hostname }) => hostname).sort()).toEqual(
       [`${tenant.key}.${TEST_BASE_DOMAIN}`, "travel.acme.example.net"].sort(),

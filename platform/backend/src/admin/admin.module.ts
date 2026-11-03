@@ -19,9 +19,10 @@
 // - AdminTenantsController and AdminTenantsService: the OTA search, the control-plane view of one OTA and the edit of
 //   its notes and legal name (PBE-029), over the exported repositories of TenantsModule, the global MembershipsModule
 //   (members and invitations), BillingModule (the subscription), SupplierConnectionsModule and PaymentConnectionsModule
-//   (the connections), DomainsModule, ProvisioningModule's jobs repository and AuditModule (the audit rows); and the
-//   lifecycle actions (suspend, resume, migrate, connection status; PBE-030) over ProvisioningModule's exported
-//   SuspensionService and MigrateService.
+//   (the connections), CredentialSubmissionsModule (the `pendingSubmission` of each connection, FIX-W39-PLATFORM),
+//   DomainsModule, ProvisioningModule's jobs repository and AuditModule (the audit rows); and the lifecycle actions
+//   (suspend, resume, migrate, connection status; PBE-030) over ProvisioningModule's exported SuspensionService and
+//   MigrateService.
 // - AdminJobsController and AdminJobsService: the tenant jobs (list, detail, retry, cancel) over ProvisioningModule's
 //   repository and dispatcher and TenantsModule's repository, and the queues of both backends through QueueInspector
 //   (BullMQ read-only on RedisModule's command client, but for the retry of a failed platform job) (PBE-031).
@@ -46,6 +47,7 @@ import { AuditModule } from "../audit/audit.module";
 import { AuthModule } from "../auth/auth.module";
 import { BillingModule } from "../billing/billing.module";
 import { SubscriptionsService } from "../billing/subscriptions.service";
+import { CredentialSubmissionsModule } from "../common/credentials/credential-submissions.module";
 import { QueuesModule } from "../common/queues/queues.module";
 import { DomainsModule } from "../domains/domains.module";
 import { NotificationsModule } from "../notifications/notifications.module";
@@ -87,6 +89,7 @@ import { QueueInspector } from "./queue-inspector";
     BillingModule,
     DomainsModule,
     PaymentConnectionsModule,
+    CredentialSubmissionsModule,
     SettlementsModule,
   ],
   controllers: [

@@ -6,17 +6,26 @@
 // `updated_at` only without it; a rotation family goes generation by generation. `platform_audit_log` is never
 // touched. Rows are written with times relative to the FakeClock, which the tests move instead of waiting.
 //
+// Failed custom domains (FIX-W39-PLATFORM, lead decision (2g) of 2026-11-02; PADR-0004 item 4) go 7 days after their
+// failure (the check that failed them, else `updated_at`), each with one `domain.removed` audit row and a `domain`
+// invalidation (read here on `vx:invalidate`); the sub-domain, pending and verified domains and younger failures stay.
+//
 // The job runs through the `platform-maintenance` queue and its one processor, as the job scheduler would start it, or
 // by calling the handler. The worker's job schedulers are not registered here (JobSchedulerRegistry is replaced), so
 // no run starts on its own during a test.
+import { randomBytes } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { getQueueToken } from "@nestjs/bullmq";
 import { Test, type TestingModule } from "@nestjs/testing";
+import { INVALIDATION_CHANNEL, type InvalidationEvent } from "@velexis/api-types/jobs";
 import type { Job, Queue } from "bullmq";
+import { Redis } from "ioredis";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Clock } from "../../../src/common/clock";
 import { PLATFORM_POOL, type PlatformPool } from "../../../src/common/database";
 import { PurgeRepository, type PurgeTable } from "../../../src/common/purge.repository";
 import {
+  FAILED_DOMAIN_PURGE_REASON,
   PURGE_BATCH_SIZE,
   PURGE_DAILY_JOB,
   PURGE_MAX_BATCHES,
@@ -30,6 +39,7 @@ import { WorkerModule } from "../../../src/worker.module";
 import {
   insertAccount,
   insertRow,
+  insertTenantDomain,
   PLACEHOLDER_CIPHERTEXT,
   PLACEHOLDER_KEK_ID,
   testId,
@@ -402,6 +412,8 @@ describe("purge.daily", () => {
       email_outbox: due.email_outbox.length,
       stripe_events: due.stripe_events.length,
       credential_submissions: due.credential_submissions.length,
+      // No failed custom domain in this group: its own group follows (FIX-W39-PLATFORM).
+      tenant_domains: 0,
     });
   });
 
@@ -534,5 +546,209 @@ describe("purge.daily with a backlog beyond one run", () => {
       deleted: PURGE_MAX_BATCHES * PURGE_BATCH_SIZE,
       batches: PURGE_MAX_BATCHES,
     });
+  });
+});
+
+describe("purge.daily: failed custom domains (FIX-W39-PLATFORM, lead decision (2g) of 2026-11-02)", () => {
+  /** A verification value of the shape addDomain gives: it never reaches an audit row. */
+  const TOKEN = "vx-verify-K7Q4M2XP9TRWH5ZDB3NV8QKE1MZT6RYC";
+  const due: string[] = [];
+  const kept: string[] = [];
+  const hosts = new Map<string, string>();
+  let primaryTenant = "";
+  let primaryDomain = "";
+  let subdomainHost = "";
+  let failedSubdomain = "";
+  let result: PurgeDailyResult;
+  let events: InvalidationEvent[] = [];
+  let auditBefore: string[];
+
+  /** A custom domain of `tenantId` in `status`, last checked at `lastCheckedAt`, changed at `updatedAt`. */
+  async function domain(
+    tenantId: string,
+    status: "pending" | "verified" | "failed",
+    lastCheckedAt: Date | null,
+    options: { updatedAt?: Date; primary?: boolean } = {},
+  ): Promise<string> {
+    const hostname = `purge-${randomBytes(5).toString("hex")}.example.net`;
+    const row = await insertTenantDomain(
+      pool,
+      { id: tenantId },
+      {
+        id: testId("dom", n()),
+        hostname,
+        kind: "custom",
+        is_primary: options.primary ?? false,
+        verification_status: status,
+        verification_token: TOKEN,
+        verification_deadline_at: ago(20),
+        verified_at: status === "verified" ? ago(30) : null,
+        last_checked_at: lastCheckedAt,
+        last_check_error: status === "failed" ? "txt_missing" : null,
+        created_at: ago(30),
+        updated_at: options.updatedAt ?? lastCheckedAt ?? ago(30),
+      },
+    );
+    hosts.set(row.id, hostname);
+    return row.id;
+  }
+
+  beforeAll(async () => {
+    const [first = "", second = ""] = tenantIds;
+    due.push(
+      await domain(first, "failed", ago(8)), // failed 8 days ago
+      await domain(first, "failed", ago(7, MINUTE_MS)), // 7 days and a minute ago
+      await domain(first, "failed", null, { updatedAt: ago(8) }), // no check: updated_at stands in
+      await domain(first, "failed", ago(9), { updatedAt: ago(1) }), // the failing check counts, not a later write
+    );
+    kept.push(
+      await domain(second, "failed", ago(6)), // failed 6 days ago
+      await domain(second, "failed", ago(7, -MINUTE_MS)), // a minute short of 7 days
+      await domain(second, "failed", null, { updatedAt: ago(6) }),
+      await domain(second, "pending", ago(30)), // pending, however old
+      await domain(second, "verified", ago(30)), // verified, however old
+    );
+    // A failed primary custom domain: the sub-domain becomes primary again, as removeDomain makes it.
+    const ota = await insertOta(pool);
+    primaryTenant = ota.tenant.id;
+    subdomainHost = ota.domain.hostname;
+    await pool.query("UPDATE platform.tenant_domains SET is_primary = false WHERE id = $1", [ota.domain.id]);
+    primaryDomain = await domain(primaryTenant, "failed", ago(10), { primary: true });
+    due.push(primaryDomain);
+    // The sub-domain is never deleted, whatever its row says.
+    const other = await insertOta(pool);
+    failedSubdomain = other.domain.id;
+    await pool.query(
+      "UPDATE platform.tenant_domains SET verification_status = 'failed', last_checked_at = $2, updated_at = $2 " +
+        "WHERE id = $1",
+      [failedSubdomain, ago(30)],
+    );
+    kept.push(failedSubdomain);
+
+    const watched = new Set([...hosts.values(), subdomainHost, other.domain.hostname]);
+    const subscriber = new Redis(t.redis.url, { lazyConnect: true });
+    subscriber.on("message", (_channel: string, message: string) => {
+      const event = JSON.parse(message) as InvalidationEvent;
+      if (event.type === "domain" && watched.has(event.hostname)) {
+        events.push(event);
+      }
+    });
+    await subscriber.connect();
+    await subscriber.subscribe(INVALIDATION_CHANNEL);
+    try {
+      auditBefore = (await auditLog()).map((row) => row.id);
+      events = [];
+      result = (await runScheduledJob()).returnvalue as PurgeDailyResult;
+      // The invalidations go out after each commit, before the job completes; pub/sub takes milliseconds.
+      await vi.waitFor(() => expect(events.length).toBeGreaterThanOrEqual(due.length + 1), {
+        timeout: 3_000,
+        interval: 20,
+      });
+      await delay(50);
+    } finally {
+      await subscriber.quit();
+    }
+  }, GROUP_SETUP_TIMEOUT_MS);
+
+  /** Which of `ids` are still domain rows. */
+  async function remainingDomains(ids: readonly string[]): Promise<string[]> {
+    const { rows } = await pool.query<{ id: string }>(
+      "SELECT id FROM platform.tenant_domains WHERE id = ANY($1::text[]) ORDER BY id",
+      [[...ids]],
+    );
+    return rows.map((row) => row.id);
+  }
+
+  it("[FIX-W39-PLATFORM AC3] deletes the custom domains failed more than 7 days ago, and keeps younger failures, pending and verified domains and every sub-domain", async () => {
+    expect(await remainingDomains([...due, ...kept])).toEqual(sorted(kept));
+    expect(result.deleted.tenant_domains).toBe(due.length);
+    // The flag of the deleted primary domain went back to the sub-domain: exactly one primary.
+    const { rows } = await pool.query<{ hostname: string }>(
+      "SELECT hostname FROM platform.tenant_domains WHERE tenant_id = $1 AND is_primary",
+      [primaryTenant],
+    );
+    expect(rows.map((row) => row.hostname)).toEqual([subdomainHost]);
+  });
+
+  it("[FIX-W39-PLATFORM AC3] writes one domain.removed audit row per deleted domain, without the verification value", async () => {
+    const { rows } = await pool.query<Record<string, unknown>>(
+      "SELECT id::text AS id, actor_type, actor_label, action, target_type, target_id, tenant_id, details " +
+        "FROM platform.platform_audit_log WHERE NOT (id::text = ANY($1::text[])) ORDER BY id",
+      [auditBefore],
+    );
+    expect(rows.map((row) => row["target_id"]).sort()).toEqual(sorted(due));
+    for (const row of rows) {
+      const id = String(row["target_id"]);
+      expect(row).toMatchObject({
+        actor_type: "system",
+        actor_label: PURGE_DAILY_JOB,
+        action: "domain.removed",
+        target_type: "domain",
+      });
+      expect(row["details"]).toMatchObject({
+        reason: FAILED_DOMAIN_PURGE_REASON,
+        before: {
+          hostname: hosts.get(id),
+          verificationStatus: "failed",
+          isPrimary: id === primaryDomain,
+          lastCheckError: "txt_missing",
+        },
+      });
+    }
+    expect(rows.find((row) => row["target_id"] === primaryDomain)?.["details"]).toMatchObject({
+      primaryHostname: subdomainHost,
+    });
+    expect(JSON.stringify(rows)).not.toContain(TOKEN);
+  });
+
+  it("[FIX-W39-PLATFORM AC3] publishes a domain invalidation for each deleted host after its commit, and for the sub-domain that is primary again", () => {
+    const hostnames = events.map((event) => (event.type === "domain" ? event.hostname : ""));
+    expect(sorted(hostnames)).toEqual(sorted([...due.map((id) => hosts.get(id) ?? ""), subdomainHost]));
+  });
+
+  it("[FIX-W39-PLATFORM AC3] frees the host name: another OTA may add it again", async () => {
+    const freed = hosts.get(due[0] ?? "") ?? "";
+    const row = await insertTenantDomain(
+      pool,
+      { id: tenantIds[2] ?? "" },
+      {
+        id: testId("dom", n()),
+        hostname: freed,
+        kind: "custom",
+        verification_status: "pending",
+        verification_token: TOKEN,
+      },
+    );
+    expect(row.hostname).toBe(freed);
+  });
+
+  it("[FIX-W39-PLATFORM AC3] keeps a candidate whose window checkDomain restarted between the read and its lock", async () => {
+    const [, second = ""] = tenantIds;
+    const restarted = await domain(second, "failed", ago(10));
+    const auditIds = (await auditLog()).map((row) => row.id);
+    // The read saw it failed; `checkDomain` then made it `pending` with a new window (domains.repository.ts), before
+    // the purge took the tenant's domain lock and the row.
+    const read = vi
+      .spyOn(repository, "failedCustomDomains")
+      .mockResolvedValueOnce([{ id: restarted, tenant_id: second }]);
+    await pool.query(
+      "UPDATE platform.tenant_domains SET verification_status = 'pending', verification_deadline_at = $2, " +
+        "updated_at = $3 WHERE id = $1",
+      [restarted, new Date(t.clock.now().getTime() + 3 * DAY_MS), t.clock.now()],
+    );
+
+    try {
+      const outcome = await purge.run();
+
+      expect(outcome.deleted.tenant_domains).toBe(0);
+    } finally {
+      read.mockRestore();
+    }
+    const { rows } = await pool.query<{ verification_status: string }>(
+      "SELECT verification_status FROM platform.tenant_domains WHERE id = $1",
+      [restarted],
+    );
+    expect(rows).toEqual([{ verification_status: "pending" }]);
+    expect((await auditLog()).filter((row) => !auditIds.includes(row.id))).toEqual([]);
   });
 });

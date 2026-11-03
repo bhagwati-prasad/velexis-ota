@@ -2,9 +2,11 @@
 // and 7, PADR-0004; scope PF-40 and PF-41): `listDomains` (PBE-027) answers the OTA's storefront hosts to any member;
 // `addDomain`, `makeDomainPrimary` and `removeDomain` (PBE-049) let owners and admins manage custom storefront domains.
 // Who may call them is TenantRoleGuard's (the membership arrives here checked), and the `x-feature: custom_domains` of
-// `addDomain` and `makeDomainPrimary` is FeatureGuard's (`403 FEATURE_DISABLED` while FEATURE_CUSTOM_DOMAINS is off;
-// `makeDomainPrimary` since FIX-W38-PLATFORM, lead decision (2e) of 2026-10-31). This service owns the transactions,
-// their audit rows and the work after the commit (architecture §4).
+// `addDomain` and `checkDomain` is FeatureGuard's (`403 FEATURE_DISABLED` while FEATURE_CUSTOM_DOMAINS is off;
+// `checkDomain` since FIX-W39-PLATFORM, lead decision (2h) of 2026-11-02). `makeDomainPrimary` has no `x-feature` since
+// that lead's decision (2a): the sub-domain is always allowed, so this service refuses a custom domain while the switch
+// is off (FeatureSwitches). This service owns the transactions, their audit rows and the work after the commit
+// (architecture §4).
 //
 // DNS records (PADR-0004 item 2): the Velexis sub-domain `<key>.<STOREFRONT_BASE_DOMAIN>` needs none; a custom domain
 // lists the ownership record `TXT _velexis.<host>` with the row's verification value, and both routing options, the
@@ -21,17 +23,21 @@
 //   addition wins the unique index). The row is `pending` with a new verification value and a deadline 72 hours ahead.
 //   Nothing is announced: neither the OTA backend nor TLS `ask` serves a pending domain (architecture §6.3 publishes
 //   `domain` when a domain is verified, failed, removed or its primary flag moves).
-// - `makeDomainPrimary`: the plan must have custom domains, as for `addDomain` (`403 FEATURE_DISABLED`, for the
-//   sub-domain too, and nothing is written; FIX-W38-PLATFORM, lead decision (2e) of 2026-10-31); a verified domain only
-//   (`409 DOMAIN_NOT_VERIFIED`); the other primary storefront host loses the flag before this one gets it (the partial
-//   unique index keeps one primary), and `domain` invalidations for both hosts follow the commit. The primary domain
-//   answers unchanged, with no write.
+// - `makeDomainPrimary`: making the OTA's sub-domain primary again is always allowed, whatever the switch or the plan
+//   says (FIX-W39-PLATFORM, lead decision (2a) of 2026-11-02). A custom domain needs FEATURE_CUSTOM_DOMAINS (checked once
+//   the domain is read) and a plan with custom domains (after the tenant's status), as for `addDomain` (`403
+//   FEATURE_DISABLED` with `details.feature = custom_domains`, nothing written; FIX-W38-PLATFORM, lead decision (2e) of
+//   2026-10-31); a verified domain only (`409 DOMAIN_NOT_VERIFIED`); the other primary storefront host loses the flag
+//   before this one gets it (the partial unique index keeps one primary), and `domain` invalidations for both hosts
+//   follow the commit. The primary domain answers unchanged, with no write.
 // - `removeDomain`: custom domains only (`409 CONFLICT`, `details.reason = "subdomain"`); the row is deleted and, when
 //   it was primary, the sub-domain becomes primary again; after the commit `domain` invalidations for the host (and the
 //   sub-domain when the flag moved) are published and the cached `tlsask:<host>` answer is deleted (PADR-0004 item 6:
 //   the platform deletes it itself, besides the invalidation), so neither the storefront nor the TLS gate serves the
 //   host any more. The host name is then free for another tenant.
-// - `checkDomain` (PBE-050), which owners and admins call to have a domain's DNS records checked now: a `pending` or
+// - `checkDomain` (PBE-050), which owners and admins call to have a domain's DNS records checked now: the plan must have
+//   custom domains, as for `addDomain` (`403 FEATURE_DISABLED` after the tenant's status, nothing written or queued;
+//   FIX-W39-PLATFORM, lead decision (2h) of 2026-11-02); a `pending` or
 //   `failed` custom domain only (`409 CONFLICT` with `details.reason = "subdomain"` for the sub-domain,
 //   `"already_verified"` for a verified domain, which the daily re-check watches); a `failed` domain first gets a new
 //   72-hour window with the same token (`pending` again, audit row `domain.verification_restarted`). After the commit
@@ -54,6 +60,7 @@ import { AuditService } from "../audit/audit.service";
 import type { TenantMembership } from "../common/auth/tenant-role.guard";
 import { Clock } from "../common/clock";
 import { PLATFORM_DB, type PlatformDb } from "../common/database";
+import { FeatureSwitches } from "../common/features";
 import { IdGenerator } from "../common/ids";
 import { afterCommit, InvalidationPublisher, runInTransaction } from "../common/redis/invalidation.publisher";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
@@ -156,8 +163,9 @@ export function toDomain(row: DomainListRow, baseDomain: string, addresses: Stor
 
 /**
  * The plan's `limits.customDomains` of a tenant whose plan has custom domains; `403 FEATURE_DISABLED` with
- * `details.feature = custom_domains` (the answer of the switch) for a plan without them (0 or not set). `addDomain`
- * and `makeDomainPrimary` ask it (PADR-0015 item 2: the switch and the plan's limits together).
+ * `details.feature = custom_domains` (the answer of the switch) for a plan without them (0 or not set). `addDomain`,
+ * `checkDomain` and `makeDomainPrimary` of a custom domain ask it (PADR-0015 item 2: the switch and the plan's limits
+ * together).
  */
 function customDomainLimitOrThrow(tenant: Pick<DomainTenantState, "limits">): number {
   const limit = customDomainLimit(tenant.limits);
@@ -192,6 +200,7 @@ export class DomainsService {
     private readonly invalidations: InvalidationPublisher,
     private readonly ids: IdGenerator,
     private readonly clock: Clock,
+    private readonly features: FeatureSwitches,
     @Inject(PLATFORM_DB) private readonly db: PlatformDb,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @InjectPinoLogger(DomainsService.name) private readonly logger: PinoLogger,
@@ -267,8 +276,9 @@ export class DomainsService {
   /**
    * `makeDomainPrimary`: the verified domain becomes the primary storefront host and the previous one loses the flag,
    * with a `domain.primary_changed` audit row and `domain` invalidations for both hosts after the commit. The primary
-   * domain answers as it is. A plan without custom domains answers `403 FEATURE_DISABLED` before anything is written,
-   * as `addDomain` does (FIX-W38-PLATFORM, lead decision (2e) of 2026-10-31).
+   * domain answers as it is. The OTA's sub-domain is always allowed (FIX-W39-PLATFORM, lead decision (2a) of
+   * 2026-11-02); a custom domain answers `403 FEATURE_DISABLED` before anything is written while FEATURE_CUSTOM_DOMAINS
+   * is off or the plan has no custom domains, as `addDomain` does (FIX-W38-PLATFORM, lead decision (2e) of 2026-10-31).
    */
   async makePrimary(membership: TenantMembership, domainId: string): Promise<Domain> {
     const { tenantId, accountId } = membership;
@@ -276,7 +286,14 @@ export class DomainsService {
     return runInTransaction(this.db, async (trx) => {
       await this.domains.lockTenantDomains(trx, tenantId);
       const domain = await this.lockedDomain(trx, tenantId, domainId);
-      customDomainLimitOrThrow(await this.writableTenant(trx, tenantId));
+      const custom = domain.kind !== "subdomain";
+      if (custom) {
+        this.customDomainsSwitchOrThrow();
+      }
+      const tenant = await this.writableTenant(trx, tenantId);
+      if (custom) {
+        customDomainLimitOrThrow(tenant);
+      }
       if (domain.verification_status !== "verified") {
         throw new AppError("DOMAIN_NOT_VERIFIED");
       }
@@ -308,7 +325,9 @@ export class DomainsService {
 
   /**
    * `checkDomain`: queues the DNS check of a pending or failed custom domain now, after restarting a failed domain's
-   * window with the same token (a `domain.verification_restarted` audit row), and answers the domain as it is.
+   * window with the same token (a `domain.verification_restarted` audit row), and answers the domain as it is. A plan
+   * without custom domains answers `403 FEATURE_DISABLED` before anything is written or queued, as `addDomain` does
+   * (FIX-W39-PLATFORM, lead decision (2h) of 2026-11-02; the switch is the operation's `x-feature`).
    */
   async check(membership: TenantMembership, domainId: string): Promise<Domain> {
     const { tenantId, accountId } = membership;
@@ -316,7 +335,7 @@ export class DomainsService {
     const domain = await runInTransaction(this.db, async (trx) => {
       await this.domains.lockTenantDomains(trx, tenantId);
       const locked = await this.lockedDomain(trx, tenantId, domainId);
-      await this.writableTenant(trx, tenantId);
+      customDomainLimitOrThrow(await this.writableTenant(trx, tenantId));
       if (locked.kind !== "custom") {
         throw new AppError("CONFLICT", { details: { reason: "subdomain" } });
       }
@@ -392,6 +411,16 @@ export class DomainsService {
       }
       afterCommit(trx, () => this.forgetTlsAsk(domain.hostname));
     });
+  }
+
+  /**
+   * `403 FEATURE_DISABLED` with `details.feature = custom_domains` while FEATURE_CUSTOM_DOMAINS is off: the answer
+   * FeatureGuard gives the operations whose `x-feature` names the switch, for `makeDomainPrimary` of a custom domain.
+   */
+  private customDomainsSwitchOrThrow(): void {
+    if (!this.features.isEnabled("custom_domains")) {
+      throw new AppError("FEATURE_DISABLED", { details: { feature: "custom_domains" } });
+    }
   }
 
   /** The `Domain` of a row, with this deployment's base domain and storefront addresses. */

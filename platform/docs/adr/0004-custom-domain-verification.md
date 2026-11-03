@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Platform tech lead. Decided during planning; revisit when sign-ups approach 30 per week (wildcard certificate, ADR-0018 follow-up), or when OTAs ask for API or console hosts on their own domains.
-**Revisions:** 2026-10-12 (planning review): point 6 validates the host before any lookup and caches only positive answers in Redis, because the catch-all site lets any client put any name in a TLS handshake.
+**Revisions:** 2026-10-12 (planning review): point 6 validates the host before any lookup and caches only positive answers in Redis, because the catch-all site lets any client put any name in a TLS handshake. 2026-11-02 (lead decisions (2g) and (2h) of 2026-11-02, recorded with FIX-W39-PLATFORM): how item 4's deletion of failed domains and its "Check now" work (dated note under item 4).
 
 ## Context
 
@@ -17,6 +17,7 @@
    - **Routing:** the CNAME chain of `<host>` ends at `<key>.ota.example.com`, **or** its `A`/`AAAA` records are all within `STOREFRONT_IPV4` / `STOREFRONT_IPV6` (apex domains cannot have a CNAME). The portal shows both options.
 3. **Resolver.** `node:dns` `Resolver` with `DNS_RESOLVERS` (public resolvers such as `1.1.1.1, 8.8.8.8`), 5 s timeout, no use of the VM's caching resolver, so a fresh record is seen quickly and a stale local cache never verifies a domain.
 4. **Window.** `verification_deadline_at = created + 72 h`. Pending domains are checked every 5 minutes (one job per domain, concurrency 4) and on "Check now" (1 per minute per domain). Past the deadline → `failed`; "Check now" restarts the window with the same token. Failed domains older than 7 days are deleted so the host name is free again.
+   - *Note (2026-11-02, lead decisions (2g) and (2h), FIX-W39-PLATFORM).* The deletion is part of the worker's `purge.daily` (02:50 UTC): a custom domain `failed` for more than 7 days (counted from its last check, else from its last change) is deleted, the sub-domain never, each in a transaction of its own under the tenant's domain lock with its conditions checked again, with one `domain.removed` audit row (actor `system`, label `purge.daily`, `details.reason = failed_expired`; never the verification token) and a `domain` invalidation for the host after the commit. "Check now" (`checkDomain`) is behind `FEATURE_CUSTOM_DOMAINS` and the plan's `limits.customDomains` like `addDomain` (`403 FEATURE_DISABLED`), so a window cannot be restarted for a domain the OTA may no longer serve.
 5. **Re-check.** Verified domains are re-checked daily; three consecutive failures → `failed`, the primary flag returns to the sub-domain, owners are e-mailed. One success resets the counter. This tolerates short DNS incidents and stops serving hosts that no longer point to Velexis.
 6. **`ask` endpoint** answers `200` for: sub-domains of tenants in `provisioning`, `active` or `suspended`; verified custom storefront domains of `active` tenants whose plan has `customDomains > 0`, with `FEATURE_CUSTOM_DOMAINS` on. Everything else, including malformed input, is `404`.
    - **Input first.** The `domain` value is checked before any cache or database access: lower-cased, at most 253 characters, labels of 1–63 characters of `a-z`, `0-9` and inner `-` (punycode allowed), at least two labels, not an IP address. A failure answers `404` at once and is not cached anywhere.

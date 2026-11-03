@@ -13,7 +13,9 @@
 //   runs: the service checks the state's account, the membership, the OTA and its connections. The operation is
 //   `x-feature: own_stripe` too (FIX-W36-PLATFORM, lead decision (2h) of 2026-10-30), so FeatureGuard answers `403
 //   FEATURE_DISABLED` while the switch is off, before the handler takes the state. The answer is the OTA and its
-//   connections as `listPaymentConnections` maps them. `code` and `state` are write-only: nothing here logs the body.
+//   connections as `listPaymentConnections` maps them, each with its `pendingSubmission` (StripeApiKeysService
+//   .connectionsOf; FIX-W39-PLATFORM, lead decision (2k) of 2026-11-02). `code` and `state` are write-only: nothing here
+//   logs the body.
 import { Controller, HttpCode, Post, Res } from "@nestjs/common";
 import type { components } from "@velexis/api-types/platform";
 import type { AccessTokenClaims } from "../auth/token.service";
@@ -21,7 +23,7 @@ import { AccessToken } from "../common/auth/decorators";
 import { CurrentMembership, TenantRoles, type TenantMembership } from "../common/auth/tenant-role.guard";
 import { OpenApiOperation, Validated } from "../common/http/openapi-operation.decorator";
 import { tenantRolesOf } from "../memberships/tenant-roles";
-import { toPaymentConnection } from "./payment-connections.controller";
+import { StripeApiKeysService } from "./stripe-api-keys.service";
 import {
   StripeConnectService,
   type CompleteStripeConnectRequest,
@@ -37,7 +39,10 @@ interface HeaderTarget {
 
 @Controller()
 export class StripeConnectController {
-  constructor(private readonly connect: StripeConnectService) {}
+  constructor(
+    private readonly connect: StripeConnectService,
+    private readonly apiKeys: StripeApiKeysService,
+  ) {}
 
   @Post("v1/tenants/:tenantId/payment-connections/stripe-connect/start")
   @HttpCode(200)
@@ -59,6 +64,9 @@ export class StripeConnectController {
     @Validated("body") body: CompleteStripeConnectRequest,
   ): Promise<StripeConnectCompleted> {
     const completed = await this.connect.complete(token.sub, body);
-    return { tenantId: completed.tenantId, connections: completed.connections.map(toPaymentConnection) };
+    return {
+      tenantId: completed.tenantId,
+      connections: await this.apiKeys.connectionsOf(completed.tenantId, completed.connections),
+    };
   }
 }

@@ -1,6 +1,7 @@
 // The pure parts of the OTA's own Amadeus credentials (PBE-053) without a database, Redis or Amadeus: the submission's
 // office rules and `public_data` (amadeus-credentials.service.ts), and how the verifier reads `public_data` back and
-// turns a token answer into the verdict of `credentials.verify` (amadeus-credentials.verifier.ts). The end-to-end
+// turns a token answer into the verdict of `credentials.verify` (amadeus-credentials.verifier.ts), and the ticketing
+// defaults a switch keeps for the new offices (FIX-W39-PLATFORM, lead decision (2j) of 2026-11-02). The end-to-end
 // behaviour is in test/integration/supplier-connections/own-credentials.int.test.ts.
 import { describe, expect, it } from "vitest";
 import { SUBMISSION_ERROR_CODE } from "../common/credentials/credentials-verify.processor";
@@ -19,6 +20,7 @@ import {
   InvalidAmadeusSubmissionError,
   refusesCredentials,
   TENANT_NOT_ACTIVE,
+  ticketingDefaultsForOffices,
 } from "./amadeus-credentials.verifier";
 
 const REQUEST: SubmitAmadeusCredentialsRequest = {
@@ -142,5 +144,42 @@ describe("connectionSecretPlace", () => {
       column: "client_secret_ciphertext",
       rowId: "sc_01JATESTRW0000000000000001",
     });
+  });
+});
+
+describe("ticketingDefaultsForOffices", () => {
+  const defaults = {
+    ticketingAgreement: { option: "DELAY_TO_CANCEL", delay: "2D" },
+    automatedProcess: [
+      { code: "DELAYED", officeId: "VLXS00001", delay: "1D" },
+      { code: "IMMEDIATE", officeId: "OSLN12345", queue: { number: "7", category: "1" } },
+      { code: "ERROR", text: "No office named" },
+    ],
+    issue: false,
+  };
+
+  it("[FIX-W39-PLATFORM AC6] drops the automatedProcess entries of offices the new credentials do not hold, and keeps the rest", () => {
+    expect(ticketingDefaultsForOffices(defaults, ["OSLN12345", "OSLN12346"])).toEqual({
+      ticketingDefaults: {
+        ticketingAgreement: { option: "DELAY_TO_CANCEL", delay: "2D" },
+        automatedProcess: [
+          { code: "IMMEDIATE", officeId: "OSLN12345", queue: { number: "7", category: "1" } },
+          { code: "ERROR", text: "No office named" },
+        ],
+        issue: false,
+      },
+      droppedOfficeIds: ["VLXS00001"],
+    });
+    expect(ticketingDefaultsForOffices(defaults, ["OSLN12346"])).toMatchObject({
+      ticketingDefaults: { automatedProcess: [{ code: "ERROR", text: "No office named" }] },
+      droppedOfficeIds: ["VLXS00001", "OSLN12345"],
+    });
+  });
+
+  it("[FIX-W39-PLATFORM AC6] answers undefined when nothing is dropped: no entry, every office held, or no defaults", () => {
+    expect(ticketingDefaultsForOffices(defaults, ["VLXS00001", "OSLN12345"])).toBeUndefined();
+    expect(ticketingDefaultsForOffices({}, ["OSLN12345"])).toBeUndefined();
+    expect(ticketingDefaultsForOffices({ issue: true }, ["OSLN12345"])).toBeUndefined();
+    expect(ticketingDefaultsForOffices(null, ["OSLN12345"])).toBeUndefined();
   });
 });

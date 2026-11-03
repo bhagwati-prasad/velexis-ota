@@ -21,9 +21,10 @@
 // capabilities and status (`refreshConnectAccount`), disable them with `disconnected_at` (`disconnectConnect`), and
 // read the OTA's name and key and its active owners for the owners' e-mail (`tenantLabel`, `activeOwners`, read only).
 // The API-key mode and the return to Velexis payments (PBE-057, flows/stripe-payments-account.md §D and §E, PADR-0011
-// items 5 and 6) read a connection without its ciphertexts (`findViewForTenant`), the latest submission of own Stripe
-// keys of each environment and the connection id it carries (`latestApiKeysSubmissions`,
-// `latestApiKeysConnectionId`: `credential_submissions` read only, never a ciphertext) and the payout account's review
+// items 5 and 6) read a connection without its ciphertexts (`findViewForTenant`), the connection id the latest
+// submission of own Stripe keys of an environment carries (`latestApiKeysConnectionId`: `credential_submissions` read
+// only, never a ciphertext; the pending submissions of the answers are CredentialSubmissionsService
+// .pendingByEnvironment's, FIX-W39-PLATFORM) and the payout account's review
 // status (`payoutAccountStatus`, `payoutAccountStatusForShare`: `tenant_payout_accounts` read only); they switch a
 // locked row, or insert a missing one, to `api_keys` with the secrets sealed for the row (`applyApiKeys`,
 // `insertApiKeys`), and switch a locked row back to `velexis` with every account reference, key and secret cleared
@@ -185,14 +186,6 @@ export interface ApiKeysInsert extends ApiKeysWrite {
   readonly tenantId: string;
   readonly environment: PaymentEnvironment;
   readonly statementDescriptorSuffix: string | null;
-}
-
-/** The latest submission of own Stripe keys of one environment: what `pendingSubmission` is made of. */
-export interface ApiKeysSubmissionSummary {
-  readonly id: string;
-  readonly environment: string;
-  readonly status: string;
-  readonly error_code: string | null;
 }
 
 /** What the return to Velexis payments writes on a connection (PADR-0011 item 6). */
@@ -573,23 +566,6 @@ export class PaymentConnectionsRepository {
       .where("provider", "=", STRIPE_PROVIDER)
       .where("environment", "=", environment)
       .executeTakeFirst();
-  }
-
-  /**
-   * The tenant's latest submission of own Stripe keys (`stripe_api_keys`) in each environment (`created_at`, then id),
-   * at most one per environment: its id, status and error code, read on the pool (never a ciphertext or public field).
-   */
-  async latestApiKeysSubmissions(tenantId: string): Promise<ApiKeysSubmissionSummary[]> {
-    return this.db
-      .selectFrom("platform.credential_submissions")
-      .distinctOn("environment")
-      .select(["id", "environment", "status", "error_code"])
-      .where("tenant_id", "=", tenantId)
-      .where("kind", "=", "stripe_api_keys")
-      .orderBy("environment")
-      .orderBy("created_at", "desc")
-      .orderBy("id", "desc")
-      .execute();
   }
 
   /**

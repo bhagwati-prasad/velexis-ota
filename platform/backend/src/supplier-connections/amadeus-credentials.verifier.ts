@@ -30,17 +30,21 @@
 //    `platform.supplier_connections.client_secret_ciphertext:<sc_id>`, ADR-0010; the OTA backend opens it with exactly
 //    that), and the connection becomes `credential_source = 'tenant'`, without a Velexis account, with the host, the
 //    client id, the new ciphertext and its KEK, the offices of the submission, `active`, `last_verified_at` now and
-//    `version + 1` (`switchToTenant`; ticketing defaults and monitored queues stay as the OTA set them). Without a
-//    connection for the environment (own credentials before any Velexis connection, flow §D item 4) it is inserted
-//    (`insertTenant`, created by the submitter).
+//    `version + 1` (`switchToTenant`). The monitored queues stay as the OTA set them (a queue of a `releasing` office
+//    stays usable for the old orders), and so do the ticketing defaults, except the `automatedProcess` entries whose
+//    `officeId` is not one of the new offices, which are dropped (FIX-W39-PLATFORM, lead decision (2j) of 2026-11-02:
+//    ADR-0012 office isolation, the rule PBE-040's `updateAmadeusConnection` applies to every entry it takes; an entry
+//    without an office stays). Without a connection for the environment (own credentials before any Velexis
+//    connection, flow §D item 4) it is inserted (`insertTenant`, created by the submitter).
 // 4. Every Velexis office assigned to the OTA in that environment becomes `releasing` with `release_requested_at`,
 //    keeping its tenant (PADR-0012 item 4: the OTA backend still services the orders owned by it with the Velexis
 //    account), each with an audit row `amadeus_office.released` (actor `system`, label `credentials.verify`).
 // 5. After the commit, `vx:invalidate {type: "connection", tenantId}` and an `amadeus_account` invalidation for the
 //    Velexis account of each office set `releasing` and of the connection's former account, so the OTA backend drops
 //    its cached rows at once.
-// The answer adds the connection's values before and after (ids, source, status, offices, host and client id, never a
-// secret or a ciphertext) and the offices set `releasing` to the audit row of the processor.
+// The answer adds the connection's values before and after (ids, source, status, offices, ticketing defaults, host and
+// client id, never a secret or a ciphertext), the offices set `releasing` and the offices of the dropped
+// `automatedProcess` entries to the audit row of the processor.
 import { Injectable, type OnModuleInit } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -64,6 +68,7 @@ import { AmadeusOAuthGateway, type AmadeusTokenCheck } from "./amadeus-oauth.gat
 import { AmadeusOfficesRepository } from "./amadeus-offices.repository";
 import {
   SupplierConnectionsRepository,
+  type AmadeusConnection,
   type SupplierConnectionView,
   type TenantCredentials,
 } from "./supplier-connections.repository";
@@ -161,7 +166,10 @@ export function credentialCheckOf(answer: AmadeusTokenCheck, baseUrl: string): C
   };
 }
 
-/** The connection's values in the audit row: ids, source, status, offices, host and client id; never a secret. */
+/**
+ * The connection's values in the audit row: ids, source, status, offices, ticketing defaults, host and client id;
+ * never a secret.
+ */
 function auditValuesOf(row: SupplierConnectionView): Record<string, unknown> {
   return {
     connectionId: row.id,
@@ -174,7 +182,54 @@ function auditValuesOf(row: SupplierConnectionView): Record<string, unknown> {
     defaultOfficeId: row.default_office_id,
     queuingOfficeId: row.queuing_office_id,
     ownerOfficeId: row.owner_office_id,
+    ticketingDefaults: row.ticketing_defaults,
     version: row.version,
+  };
+}
+
+/** The ticketing defaults a switch writes, and the offices of the `automatedProcess` entries it dropped. */
+export interface OfficeBoundTicketingDefaults {
+  readonly ticketingDefaults: AmadeusConnection["ticketingDefaults"];
+  readonly droppedOfficeIds: string[];
+}
+
+/**
+ * The stored ticketing defaults without the `automatedProcess` entries whose `officeId` is not one of `officeIds`
+ * (FIX-W39-PLATFORM, lead decision (2j) of 2026-11-02; ADR-0012 office isolation, PBE-040's rule): an entry without an
+ * office and every other setting stay. `undefined` when no entry is dropped (nothing to write).
+ */
+export function ticketingDefaultsForOffices(
+  stored: unknown,
+  officeIds: readonly string[],
+): OfficeBoundTicketingDefaults | undefined {
+  if (stored === null || typeof stored !== "object" || Array.isArray(stored)) {
+    return undefined;
+  }
+  const defaults = stored as Record<string, unknown>;
+  const entries = defaults["automatedProcess"];
+  if (!Array.isArray(entries)) {
+    return undefined;
+  }
+  const allowed = new Set(officeIds);
+  const kept: unknown[] = [];
+  const droppedOfficeIds: string[] = [];
+  for (const entry of entries as unknown[]) {
+    const officeId: unknown =
+      entry !== null && typeof entry === "object"
+        ? (entry as Record<string, unknown>)["officeId"]
+        : undefined;
+    if (typeof officeId === "string" && !allowed.has(officeId)) {
+      droppedOfficeIds.push(officeId);
+    } else {
+      kept.push(entry);
+    }
+  }
+  if (droppedOfficeIds.length === 0) {
+    return undefined;
+  }
+  return {
+    ticketingDefaults: { ...defaults, automatedProcess: kept } as AmadeusConnection["ticketingDefaults"],
+    droppedOfficeIds,
   };
 }
 
@@ -245,6 +300,11 @@ export class AmadeusCredentialsVerifier implements CredentialVerifier, OnModuleI
     }
 
     const connectionId = existing?.id ?? this.ids.new("sc");
+    // ADR-0012 office isolation: no automated process of a new order on an office these credentials do not hold.
+    const officeBound =
+      existing === undefined
+        ? undefined
+        : ticketingDefaultsForOffices(existing.ticketing_defaults, data.officeIds);
     const sealed = await this.envelope.encrypt(input.secrets.secret, connectionSecretPlace(connectionId));
     const credentials: TenantCredentials = {
       baseUrl,
@@ -266,7 +326,13 @@ export class AmadeusCredentialsVerifier implements CredentialVerifier, OnModuleI
             createdByAccountId: input.submittedByAccountId,
             now,
           })
-        : await this.connections.switchToTenant(trx, existing.id, credentials, now);
+        : await this.connections.switchToTenant(
+            trx,
+            existing.id,
+            credentials,
+            now,
+            officeBound?.ticketingDefaults,
+          );
 
     const releasing = await this.offices.startReleasing(trx, tenantId, environment, now);
     for (const office of releasing) {
@@ -304,6 +370,9 @@ export class AmadeusCredentialsVerifier implements CredentialVerifier, OnModuleI
       details: {
         connectionCreated: existing === undefined,
         releasingOfficeIds: releasing.map((office) => office.office_id),
+        ...(officeBound === undefined
+          ? {}
+          : { droppedAutomatedProcessOfficeIds: officeBound.droppedOfficeIds }),
       },
     };
   }

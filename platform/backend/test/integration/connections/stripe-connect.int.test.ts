@@ -48,6 +48,7 @@ import { PaymentConnectionsRepository } from "../../../src/payment-connections/p
 import {
   insertAccount,
   insertPaymentConnection,
+  insertRow,
   testId,
   type PlatformRow,
 } from "../../builders/platform-rows";
@@ -432,6 +433,61 @@ describe("Stripe Connect Standard in a test deployment", () => {
     expectResponseToMatch("completeStripeConnect", again, { document: "platform" });
     expect(h.stripe.callsOf("oauth.token")).toHaveLength(1);
     expect(await h.audit(f.tenant.id)).toHaveLength(1);
+  });
+
+  it("[FIX-W39-PLATFORM AC7] answers each connection with its pendingSubmission, as listPaymentConnections, adminGetTenant and adminSetConnectionStatus do", async () => {
+    const f = await h.fixture();
+    const accountId = newAccountId();
+    h.account(accountId);
+    // An earlier submission of own Stripe keys of the environment that failed: the portal keeps showing why, also
+    // after the OTA connected its account through Connect instead.
+    const failed = await insertRow(h.pool, "credential_submissions", {
+      id: testId("crs", 55_901),
+      tenant_id: f.tenant.id,
+      kind: "stripe_api_keys",
+      environment: "test",
+      status: "failed",
+      error_code: "STRIPE_KEY_INVALID",
+      finished_at: h.t.clock.now(),
+    });
+
+    const res = await h.complete(f, "owner", { state: await h.started(f), code: h.grant(accountId) });
+
+    expect(outcomeOf(res)).toBe("200");
+    expectResponseToMatch("completeStripeConnect", res, { document: "platform" });
+    const pendingSubmission = { id: failed.id, status: "failed", errorCode: "STRIPE_KEY_INVALID" };
+    expect((res.body as { connections: unknown[] }).connections).toEqual([
+      expect.objectContaining({
+        id: f.connection.id,
+        accountMode: "connect_standard",
+        webhookUrl: null,
+        pendingSubmission,
+      }),
+    ]);
+    const listed = await h.t.http
+      .get(`/v1/tenants/${f.tenant.id}/payment-connections`)
+      .set(await h.portal(f, "owner", false));
+    expectResponseToMatch("listPaymentConnections", listed, { document: "platform" });
+    expect((listed.body as { data: unknown[] }).data).toEqual([
+      expect.objectContaining({ id: f.connection.id, pendingSubmission }),
+    ]);
+
+    // The platform admin's answers carry it too: the tenant detail and the switch of the connection.
+    const admin = await h.admin();
+    const detail = await h.t.http.get(`/v1/admin/tenants/${f.tenant.id}`).set(admin);
+    expectResponseToMatch("adminGetTenant", detail, { document: "platform" });
+    expect((detail.body as { paymentConnections: unknown[] }).paymentConnections).toEqual([
+      expect.objectContaining({ id: f.connection.id, webhookUrl: null, pendingSubmission }),
+    ]);
+    const disabled = await h.t.http
+      .post(`/v1/admin/tenants/${f.tenant.id}/connections/payment/test/status`)
+      .set(admin)
+      .send({ status: "disabled", reason: "The OTA asked us to stop card payments for now." });
+    expectResponseToMatch("adminSetConnectionStatus", disabled, { document: "platform" });
+    expect(disabled.status).toBe(200);
+    expect(disabled.body).toEqual(
+      expect.objectContaining({ id: f.connection.id, status: "disabled", pendingSubmission }),
+    );
   });
 
   it("[PBE-055 AC1] binds the state to the account that started it: another owner or admin is refused, and the state is spent", async () => {
@@ -996,7 +1052,13 @@ describe("Stripe Connect Standard in a live deployment (APP_ENV=production)", ()
   const h = new Harness();
 
   beforeAll(async () => {
-    await h.boot({ ...STRIPE_ENV, APP_ENV: "production", STRIPE_SECRET_KEY: "sk_live_dummy" });
+    await h.boot({
+      ...STRIPE_ENV,
+      APP_ENV: "production",
+      STRIPE_SECRET_KEY: "sk_live_dummy",
+      // APP_ENV=production takes an https OTA API URL only (FIX-W39-PLATFORM).
+      PUBLIC_OTA_API_URL: "https://api.ota.example.com",
+    });
   }, SETUP_TIMEOUT_MS);
 
   afterAll(async () => {

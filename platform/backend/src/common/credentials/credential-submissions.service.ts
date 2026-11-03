@@ -39,7 +39,9 @@
 //
 // `get(tenantId, submissionId)` answers the submission of `getCredentialSubmission` (`toCredentialSubmission`): status
 // and error, never a secret nor the public fields; a submission of another OTA answers `404 NOT_FOUND`.
-// `pendingByEnvironment(tenantId, kind)` gives the connection lists their `pendingSubmission` (PBE-053).
+// `pendingByEnvironment(tenantId, kind, db?)` reads what every answered connection shows as its `pendingSubmission`
+// (pending-submissions.ts: the one query and the one mapper of the Amadeus and the Stripe connections alike; PBE-053,
+// PBE-057, FIX-W39-PLATFORM).
 import { InjectQueue } from "@nestjs/bullmq";
 import { Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types/platform";
@@ -51,6 +53,8 @@ import { AuditService } from "../../audit/audit.service";
 import type { AuditAction } from "../../audit/audit-actions";
 import { Clock } from "../clock";
 import { EnvelopeService } from "../crypto.provider";
+import type { PlatformDb } from "../database";
+import type { Feature } from "../features";
 import { IdGenerator } from "../ids";
 import { PLATFORM_QUEUE } from "../queues/queue-names";
 import { afterCommit } from "../redis/invalidation.publisher";
@@ -64,15 +68,14 @@ import {
   type CredentialSubmissionView,
   type SupersededSubmission,
 } from "./credential-submissions.repository";
+import {
+  toPendingSubmission,
+  type PendingCredentialSubmission,
+  type PendingSubmissions,
+} from "./pending-submissions";
 
 /** A submission as `getCredentialSubmission` answers it. */
 export type CredentialSubmission = components["schemas"]["CredentialSubmission"];
-
-/** The latest submission of a connection's environment, as the connection lists answer it (`pendingSubmission`). */
-export type PendingCredentialSubmission = components["schemas"]["PendingCredentialSubmission"];
-
-/** The statuses a `pendingSubmission` shows: an open submission, or one that failed (the portal shows why). */
-const PENDING_SUBMISSION_STATUSES = Object.freeze(["pending", "verifying", "failed"] as const);
 
 /** The job that verifies a submission (PADR-0010 item 4). */
 export const CREDENTIALS_VERIFY_JOB = "credentials.verify";
@@ -90,6 +93,15 @@ export interface CredentialsVerifyJobData {
 
 /** How long the enqueue of a verification job may take before it is given up. */
 export const VERIFY_ENQUEUE_TIMEOUT_MS = 2000;
+
+/**
+ * The milestone switch of each kind (PADR-0015): the `x-feature` of the operation that submits it, and the switch
+ * without which the worker refuses to apply it (FIX-W39-PLATFORM, lead decision (2b) of 2026-11-02).
+ */
+export const SUBMISSION_FEATURES: Readonly<Record<CredentialKind, Feature>> = Object.freeze({
+  amadeus: "own_amadeus",
+  stripe_api_keys: "own_stripe",
+});
 
 /** The audit actions of each kind: submitted (the API), applied and rejected (the job). */
 export const SUBMISSION_AUDIT_ACTIONS: Readonly<
@@ -306,22 +318,21 @@ export class CredentialSubmissionsService {
   }
 
   /**
-   * The `pendingSubmission` of the tenant's connections of `kind`, by environment (PBE-053): the latest submission of
-   * the environment while it is `pending` or `verifying`, or after it `failed`; no entry once it was applied (or for an
-   * environment without submissions). Never a secret nor a public field.
+   * The `pendingSubmission` of the tenant's connections of `kind`, by environment (PBE-053, PBE-057): the latest
+   * submission of the environment while it is `pending` or `verifying`, or after it `failed` (`toPendingSubmission`);
+   * no entry once it was applied (or for an environment without submissions). Read on `db`: the pool, or the caller's
+   * transaction when the answer is built inside one. Never a secret nor a public field.
    */
   async pendingByEnvironment(
     tenantId: string,
     kind: CredentialKind,
-  ): Promise<Partial<Record<CredentialEnvironment, PendingCredentialSubmission>>> {
+    db?: PlatformDb | PlatformTransaction,
+  ): Promise<PendingSubmissions> {
     const pending: Partial<Record<CredentialEnvironment, PendingCredentialSubmission>> = {};
-    for (const row of await this.submissions.latestByEnvironment(tenantId, kind)) {
-      if ((PENDING_SUBMISSION_STATUSES as readonly string[]).includes(row.status)) {
-        pending[row.environment as CredentialEnvironment] = {
-          id: row.id,
-          status: row.status as PendingCredentialSubmission["status"],
-          errorCode: row.status === "failed" ? row.error_code : null,
-        };
+    for (const row of await this.submissions.latestByEnvironment(tenantId, kind, db)) {
+      const submission = toPendingSubmission(row);
+      if (submission !== null) {
+        pending[row.environment as CredentialEnvironment] = submission;
       }
     }
     return pending;

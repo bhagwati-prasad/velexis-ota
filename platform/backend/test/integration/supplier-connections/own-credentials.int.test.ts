@@ -80,7 +80,7 @@ const OWN_OFFICES = ["OSLN12345", "OSLN12346"] as const;
 
 type Row = Record<string, unknown>;
 
-/** The milestone switches of the API: `own_amadeus` on unless a test turns it off. */
+/** The milestone switches of the API and the worker: `own_amadeus` on unless a test turns it off. */
 class TestSwitches {
   readonly on = new Set<Feature>();
 
@@ -137,6 +137,10 @@ beforeAll(async () => {
     .useValue(t.clock)
     .overrideProvider(JobSchedulerRegistry)
     .useValue({})
+    // The worker refuses to apply a kind whose switch is off (FIX-W39-PLATFORM, lead decision (2b) of 2026-11-02):
+    // it reads the same switches as the API.
+    .overrideProvider(FeatureSwitches)
+    .useValue(switches)
     .compile();
   await worker.init();
 
@@ -620,12 +624,21 @@ describe("PUT /v1/tenants/{tenantId}/amadeus-connections/{environment}/credentia
     ]);
   });
 
-  it("[PBE-053 AC2] switches a connection already on the OTA's credentials again (a rotation): a new envelope and offices, the ticketing defaults, queues and releasing office kept", async () => {
+  it("[PBE-053 AC2] [FIX-W39-PLATFORM AC6] switches a connection already on the OTA's credentials again (a rotation): a new envelope and offices, the queues and releasing office kept, the automated processes of offices it no longer holds dropped", async () => {
     const ota = await arrangeOta();
-    // Settings the OTA made on its Velexis office (PBE-040): the switches keep them (PADR-0012 item 4, flow §D).
+    // Settings the OTA made on its Velexis office (PBE-040). The switches keep the monitored queues (PADR-0012 item 4,
+    // flow §D) and drop each automatedProcess entry of an office the new credentials do not hold (FIX-W39-PLATFORM,
+    // lead decision (2j) of 2026-11-02: ADR-0012 office isolation, PBE-040's rule); an entry without an office stays.
+    const velexisEntry = { code: "DELAYED", officeId: ota.office.office_id, delay: "1D" };
+    const firstOwnEntry = {
+      code: "IMMEDIATE",
+      officeId: OWN_OFFICES[0],
+      queue: { number: "7", category: "1" },
+    };
+    const officelessEntry = { code: "ERROR", text: "Ticketing failed" };
     const ticketingDefaults = {
       ticketingAgreement: { option: "DELAY_TO_CANCEL", delay: "2D" },
-      automatedProcess: [{ code: "DELAYED", officeId: ota.office.office_id, delay: "1D" }],
+      automatedProcess: [velexisEntry, firstOwnEntry, officelessEntry],
       issue: false,
     };
     const monitoredQueues = [{ officeId: ota.office.office_id, queueId: 7, category: 1 }];
@@ -638,6 +651,19 @@ describe("PUT /v1/tenants/{tenantId}/amadeus-connections/{environment}/credentia
     const switched = (await connectionOf(ota.tenant.id, "test")) as Row;
     const releasing = await officeRow(ota.office.id);
     expect([switched["credential_source"], releasing["status"]]).toEqual(["tenant", "releasing"]);
+    // The Velexis office's automated process is gone; the queue of the releasing office stays usable.
+    const afterFirst = { ...ticketingDefaults, automatedProcess: [firstOwnEntry, officelessEntry] };
+    expect([switched["ticketing_defaults"], switched["monitored_queues"]]).toEqual([
+      afterFirst,
+      monitoredQueues,
+    ]);
+    expect(
+      (await auditOf(first)).find((entry) => entry["action"] === "amadeus.credentials_applied")?.["details"],
+    ).toMatchObject({
+      droppedAutomatedProcessOfficeIds: [ota.office.office_id],
+      before: { ticketingDefaults },
+      after: { ticketingDefaults: afterFirst },
+    });
     t.clock.advance(60_000);
 
     const res = await submit(
@@ -650,6 +676,7 @@ describe("PUT /v1/tenants/{tenantId}/amadeus-connections/{environment}/credentia
     const second = submissionIdOf(res);
     await waitForStatus(second, "applied");
     const rotated = await connectionOf(ota.tenant.id, "test");
+    const afterRotation = { ...ticketingDefaults, automatedProcess: [officelessEntry] };
     expect(rotated).toMatchObject({
       id: ota.connection.id,
       credential_source: "tenant",
@@ -660,7 +687,7 @@ describe("PUT /v1/tenants/{tenantId}/amadeus-connections/{environment}/credentia
       default_office_id: OWN_OFFICES[1],
       queuing_office_id: OWN_OFFICES[1],
       owner_office_id: OWN_OFFICES[1],
-      ticketing_defaults: ticketingDefaults,
+      ticketing_defaults: afterRotation,
       monitored_queues: monitoredQueues,
       status: "active",
       last_verified_at: t.clock.now(),
@@ -682,15 +709,18 @@ describe("PUT /v1/tenants/{tenantId}/amadeus-connections/{environment}/credentia
     expect(applied?.["details"]).toMatchObject({
       connectionCreated: false,
       releasingOfficeIds: [],
+      droppedAutomatedProcessOfficeIds: [OWN_OFFICES[0]],
       before: {
         credentialSource: "tenant",
         amadeusAccountId: null,
         officeIds: [...OWN_OFFICES],
+        ticketingDefaults: afterFirst,
         version: switched["version"],
       },
       after: {
         credentialSource: "tenant",
         officeIds: [OWN_OFFICES[1]],
+        ticketingDefaults: afterRotation,
         version: (switched["version"] as number) + 1,
       },
     });
@@ -847,20 +877,55 @@ describe("credentials.verify of an amadeus submission (the worker's verifier)", 
     expect(await officeRow(ota.office.id)).toEqual(ota.office);
   });
 
-  it("[PBE-053] does not switch a connection a platform admin disabled (CONNECTION_DISABLED)", async () => {
+  it("[PBE-053] [FIX-W39-PLATFORM AC5] does not switch a connection a platform admin disabled after the submission (CONNECTION_DISABLED)", async () => {
     const ota = await arrangeOta();
+    // Disabled while the submission waits: the submit itself refuses a disabled connection up front (the next test).
+    await connectionsQueue.pause();
+    const submissionId = submissionIdOf(await submit(ota));
     await pool.query("UPDATE platform.supplier_connections SET status = 'disabled' WHERE id = $1", [
       ota.connection.id,
     ]);
     const disabled = await connectionOf(ota.tenant.id, "test");
 
-    const submissionId = submissionIdOf(await submit(ota));
+    await connectionsQueue.resume();
     const failed = await waitForStatus(submissionId, "failed");
 
     expect(failed).toMatchObject({ secret_ciphertext: null, error_code: "CONNECTION_DISABLED", attempts: 1 });
     expect(await connectionOf(ota.tenant.id, "test")).toEqual(disabled);
     expect(await officeRow(ota.office.id)).toEqual(ota.office);
     expect(await auditOf(ota.office.id)).toEqual([]);
+  });
+
+  it("[FIX-W39-PLATFORM AC5] refuses a connection a platform admin disabled up front with 409 CONFLICT connection_disabled, and writes nothing", async () => {
+    const ota = await arrangeOta();
+    await pool.query("UPDATE platform.supplier_connections SET status = 'disabled' WHERE id = $1", [
+      ota.connection.id,
+    ]);
+    const disabled = await connectionOf(ota.tenant.id, "test");
+
+    const res = await submit(ota);
+
+    expect([res.status, errorOf(res)]).toEqual([
+      409,
+      expect.objectContaining({ code: "CONFLICT", details: { reason: "connection_disabled" } }),
+    ]);
+    expectResponseToMatch("submitAmadeusCredentials", res, { document: "platform" });
+    // No submission, no audit row of one, no job: the connection and its office as they were.
+    expect(await submissionsOf(ota.tenant.id)).toEqual([]);
+    expect(
+      await rowsOf(
+        "SELECT id FROM platform.platform_audit_log WHERE tenant_id = $1 AND action = 'amadeus.credentials_submitted'",
+        [ota.tenant.id],
+      ),
+    ).toEqual([]);
+    expect(await connectionOf(ota.tenant.id, "test")).toEqual(disabled);
+    expect(await officeRow(ota.office.id)).toEqual(ota.office);
+    expect(stub.requests()).toEqual([]);
+
+    // Another environment of the OTA is not affected: its own credentials for live are taken.
+    const live = await submit(ota, body(), { environment: "live" });
+    expect(live.status).toBe(202);
+    await waitForStatus(submissionIdOf(live), "applied");
   });
 
   it("[PBE-053] keeps the connection of an OTA suspended after it submitted (TENANT_NOT_ACTIVE)", async () => {

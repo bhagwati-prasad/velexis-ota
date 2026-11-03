@@ -862,8 +862,10 @@ const SLICE_PBE041: readonly SliceOperation[] = [
 const SLICE_PBE041_FEATURES = {
   goLive: "live_switch",
   addDomain: "custom_domains",
-  // Refused with addDomain's switch and plan rule (FIX-W38-PLATFORM, lead decision (2e) of 2026-10-31, second batch).
-  makeDomainPrimary: "custom_domains",
+  // Refused with addDomain's switch and plan rule (FIX-W39-PLATFORM, lead decision (2h) of 2026-11-02). makeDomainPrimary
+  // has no switch of its own since that lead's decision (2a): the sub-domain is always allowed, and its service refuses
+  // a custom domain while the switch is off (the `x-feature` of FIX-W38-PLATFORM is gone).
+  checkDomain: "custom_domains",
   requestLiveAmadeus: "live_switch",
   submitAmadeusCredentials: "own_amadeus",
   startStripeConnect: "own_stripe",
@@ -3339,6 +3341,109 @@ describe("the M5 portal slice: go-live, domains, own credentials, payments, sett
     expect(objectAt(operation("checkDomain").spec, "responses")["503"]).toEqual({
       $ref: "#/components/responses/ServiceUnavailable",
     });
+  });
+
+  it("[FIX-W39-PLATFORM AC1] documents the switch and plan rules of the domain writes, the DNS check codes, the up-front connection_disabled of the submissions and the webhook URL on PUBLIC_OTA_API_URL", () => {
+    // makeDomainPrimary has no switch (the sub-domain is always allowed) but still names the custom domains' refusal;
+    // checkDomain has addDomain's switch and plan rule (lead decisions (2a) and (2h) of 2026-11-02).
+    const disabledFeatures = (operationId: string) =>
+      errorExamples(operationId, "403")
+        .filter((error) => error["code"] === "FEATURE_DISABLED")
+        .map((error) => objectAt(error, "details")["feature"]);
+    expect([
+      operation("makeDomainPrimary").spec["x-feature"],
+      operation("makeDomainPrimary").spec["x-error-codes"],
+      disabledFeatures("makeDomainPrimary"),
+    ]).toEqual([undefined, expect.arrayContaining(["FEATURE_DISABLED"]), ["custom_domains"]]);
+    expect([
+      operation("checkDomain").spec["x-feature"],
+      operation("checkDomain").spec["x-platform-tables"],
+      disabledFeatures("checkDomain"),
+    ]).toEqual(["custom_domains", expect.arrayContaining(["plans"]), ["custom_domains"]]);
+
+    // Domain.lastCheckError: the six codes of the DNS check, and an example that is one of them.
+    const lastCheckError = objectAt(objectAt(objectAt(schemas(), "Domain"), "properties"), "lastCheckError");
+    const codes = [
+      "txt_missing",
+      "txt_mismatch",
+      "cname_missing",
+      "cname_wrong_target",
+      "a_wrong_address",
+      "dns_timeout",
+    ];
+    for (const code of codes) {
+      expect([code, String(lastCheckError["description"]).includes(`\`${code}\``)]).toEqual([code, true]);
+    }
+    expect(codes).toContain(lastCheckError["example"]);
+    for (const operationId of ["listDomains", "checkDomain"] as const) {
+      const status = operationId === "listDomains" ? "200" : "202";
+      const domains = examplesAt(operationId, status).flatMap((example) => {
+        const data: unknown = (example as Json)["data"];
+        return Array.isArray(data) ? (data as Json[]) : [example as Json];
+      });
+      for (const domain of domains) {
+        const error: unknown = domain["lastCheckError"];
+        expect([operationId, error === null || codes.includes(String(error))]).toEqual([operationId, true]);
+      }
+    }
+
+    // Both submissions refuse a connection a platform admin disabled up front (lead decision (2i) of 2026-11-02).
+    for (const operationId of ["submitAmadeusCredentials", "submitStripeApiKeys"] as const) {
+      const conflicts = errorExamples(operationId, "409");
+      expect([operationId, operation(operationId).spec["x-error-codes"]]).toEqual([
+        operationId,
+        expect.arrayContaining(["CONFLICT", "TENANT_NOT_ACTIVE"]),
+      ]);
+      expect([
+        operationId,
+        conflicts.map((error) =>
+          error["code"] === "CONFLICT" ? objectAt(error, "details")["reason"] : error["code"],
+        ),
+      ]).toEqual([operationId, ["TENANT_NOT_ACTIVE", "connection_disabled"]]);
+    }
+
+    // CredentialSubmission.errorCode names the apply's refusals next to the verification codes (lead decision (2m)).
+    const errorCode = objectAt(
+      objectAt(objectAt(schemas(), "CredentialSubmission"), "properties"),
+      "errorCode",
+    );
+    for (const code of [
+      "AMADEUS_CREDENTIALS_INVALID",
+      "STRIPE_KEY_INVALID",
+      "STRIPE_LIVEMODE_MISMATCH",
+      "PROVIDER_UNAVAILABLE",
+      "TENANT_NOT_ACTIVE",
+      "CONNECTION_DISABLED",
+      "CONNECTION_CHANGED",
+      "FEATURE_DISABLED",
+    ]) {
+      expect([code, String(errorCode["description"]).includes(`\`${code}\``)]).toEqual([code, true]);
+    }
+
+    // The webhook URL of own Stripe keys starts with PUBLIC_OTA_API_URL: https in production, http in development and
+    // tests, with or without a path (lead decision (2m)); never another scheme, a query or another route.
+    const webhookUrl = objectAt(
+      objectAt(objectAt(schemas(), "StripeApiKeysSubmitted"), "properties"),
+      "webhookUrl",
+    );
+    const pattern = new RegExp(String(webhookUrl["pattern"]));
+    const ppc = "ppc_01JA2ZBA4D8F2H6K0N4Q8S2V6X";
+    for (const url of [
+      `https://api.ota.example.com/webhooks/stripe/c/${ppc}`,
+      `http://localhost:4000/webhooks/stripe/c/${ppc}`,
+      `https://ota.example.com/api/webhooks/stripe/c/${ppc}`,
+    ]) {
+      expect([url, pattern.test(url)]).toEqual([url, true]);
+    }
+    for (const url of [
+      `ftp://api.ota.example.com/webhooks/stripe/c/${ppc}`,
+      `https://api.ota.example.com/webhooks/stripe/c/${ppc}?x=1`,
+      `https://api.ota.example.com/webhooks/stripe/billing`,
+      `https://api.ota.example.com/webhooks/stripe/c/acct_1`,
+    ]) {
+      expect([url, pattern.test(url)]).toEqual([url, false]);
+    }
+    expect(String(webhookUrl["description"])).toContain("PUBLIC_OTA_API_URL");
   });
 
   it("verifies own credentials through a submission with the kinds and statuses of migration 0002", () => {

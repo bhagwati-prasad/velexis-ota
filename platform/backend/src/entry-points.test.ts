@@ -151,6 +151,8 @@ describe("the entry points as processes", () => {
           PLATFORM_BFF_KEY: BFF_KEY,
           JWT_PRIVATE_KEY_FILE: jwtKey.path,
           ...testCryptoAndMailEnv(masterKeys),
+          // APP_ENV=production takes an https OTA API URL only (FIX-W39-PLATFORM).
+          PUBLIC_OTA_API_URL: "https://api.ota.example.com",
           STOREFRONT_BASE_DOMAIN: "ota.example.com",
         }),
       );

@@ -2,11 +2,13 @@
 // steps 1, 5 and 7, PADR-0004; scope PF-41 AC1, AC4 and AC5) through the HTTP pipeline (createTestApp) on this file's
 // database clone and Redis database: `addDomain` (host name rules, both routing options, the plan limit, the plan and
 // the switch, a host taken by any OTA, concurrent additions), `makeDomainPrimary` (verified only, exactly one primary,
-// both hosts invalidated; the plan and the switch as for `addDomain` since FIX-W38-PLATFORM, lead decision (2e) of
-// 2026-10-31) and `removeDomain` (custom only, the sub-domain primary again, invalidations, the cached TLS
-// `ask` answer gone, the host free again), with their audit rows and the role and tenant-status rules, and the same DNS
-// records in the platform admin's view of the OTA (`adminGetTenant`). Every answer is checked against the platform
-// document.
+// both hosts invalidated; for a custom domain the plan and the switch as for `addDomain` since FIX-W38-PLATFORM, lead
+// decision (2e) of 2026-10-31, while the sub-domain is always allowed since FIX-W39-PLATFORM, lead decision (2a) of
+// 2026-11-02), `checkDomain`'s switch and plan (FIX-W39-PLATFORM, lead decision (2h); its DNS check is
+// domain-verification.int.test.ts's) and `removeDomain` (custom only, the sub-domain primary again, invalidations, the
+// cached TLS `ask` answer gone, the host free again), with their audit rows and the role and tenant-status rules, and
+// the same DNS records in the platform admin's view of the OTA (`adminGetTenant`). Every answer is checked against the
+// platform document.
 //
 // The milestone switches are a stand-in for FeatureSwitches whose `custom_domains` a test can turn off, as
 // onboarding.int.test.ts does, so the switch-off case needs no second application. OTAs, plans and verified or failed
@@ -15,8 +17,10 @@
 // `domain` events of this file's hosts and of its own markers only.
 import { randomBytes } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { getQueueToken } from "@nestjs/bullmq";
 import { INVALIDATION_CHANNEL, type InvalidationEvent } from "@velexis/api-types/jobs";
 import { expectResponseToMatch } from "@velexis/testing";
+import type { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import type { Response } from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -30,6 +34,7 @@ import {
   type Feature,
   type FeatureConfig,
 } from "../../../src/common/features";
+import { PLATFORM_QUEUE } from "../../../src/common/queues/queue-names";
 import { VERIFICATION_TOKEN_PATTERN } from "../../../src/domains/hostname-rules";
 import { insertAccount, insertPlan, insertTenantDomain, testId } from "../../builders/platform-rows";
 import { insertOta, TEST_BASE_DOMAIN, type InsertedOta } from "../../builders/tenants";
@@ -677,15 +682,16 @@ describe("makeDomainPrimary", () => {
     expect(await storedDomains(other.tenant.id)).toHaveLength(2);
   });
 
-  it("[FIX-W38-PLATFORM AC4] answers FEATURE_DISABLED while the custom_domains switch is off, and writes nothing", async () => {
+  it("[FIX-W38-PLATFORM AC4] [FIX-W39-PLATFORM AC1] refuses a custom domain while the custom_domains switch is off, but makes the sub-domain primary again", async () => {
     const owner = await ota(plans.two);
     const hostname = host("switch-off-primary");
     const verified = await customDomain(owner, hostname, "verified", true);
+    const other = await customDomain(owner, host("switch-off-other"));
     const before = await storedDomains(owner.tenant.id);
     switches.on.delete("custom_domains");
     try {
-      // A verified custom domain and the sub-domain alike: the operation is off.
-      for (const domainId of [verified, owner.domain.id]) {
+      // A custom domain, primary already or not: refused, nothing written (lead decision (2e) of 2026-10-31).
+      for (const domainId of [verified, other]) {
         const { res, invalidated } = await observe(() => makePrimary(owner.tenant.id, domainId));
         expect([res.status, errorOf(res), detailsOf(res), invalidated]).toEqual([
           403,
@@ -694,17 +700,36 @@ describe("makeDomainPrimary", () => {
           [],
         ]);
       }
+      expect(await storedDomains(owner.tenant.id)).toEqual(before);
+      expect([...(await auditRows(verified)), ...(await auditRows(other))]).toEqual([]);
+
+      // The sub-domain: always allowed (lead decision (2a) of 2026-11-02), so the OTA can go back to its own host.
+      const back = await observe(() => makePrimary(owner.tenant.id, owner.domain.id, "admin"));
+      expect([back.res.status, (back.res.body as DomainBody).isPrimary, back.invalidated]).toEqual([
+        200,
+        true,
+        [owner.domain.hostname, hostname].sort(),
+      ]);
     } finally {
       switches.on.add("custom_domains");
     }
-    expect(await storedDomains(owner.tenant.id)).toEqual(before);
-    expect(await primaryHosts(owner.tenant.id)).toEqual([hostname]);
-    expect([...(await auditRows(verified)), ...(await auditRows(owner.domain.id))]).toEqual([]);
+    expect(await primaryHosts(owner.tenant.id)).toEqual([owner.domain.hostname]);
+    expect(await auditRows(owner.domain.id)).toEqual([
+      expect.objectContaining({
+        action: "domain.primary_changed",
+        actor_account_id: people.admin,
+        tenant_id: owner.tenant.id,
+        details: {
+          before: { primaryDomainId: verified, primaryHostname: hostname },
+          after: { primaryDomainId: owner.domain.id, primaryHostname: owner.domain.hostname },
+        },
+      }),
+    ]);
   });
 
-  it("[FIX-W38-PLATFORM AC4] answers FEATURE_DISABLED to a plan without custom domains, as addDomain does, and writes nothing", async () => {
+  it("[FIX-W38-PLATFORM AC4] [FIX-W39-PLATFORM AC1] refuses a custom domain to a plan without custom domains, as addDomain does, but makes the sub-domain primary again", async () => {
     // The seeded early_access plan has customDomains 0; the other plan does not set it at all. A verified domain kept
-    // from an earlier plan (a downgrade) cannot be made primary, and the primary one cannot give the flag back.
+    // from an earlier plan (a downgrade) cannot be made primary; the sub-domain takes the flag back.
     for (const planCode of ["early_access", plans.unset]) {
       const owner = await ota(planCode);
       const primaryHost = host("downgraded-primary");
@@ -712,22 +737,149 @@ describe("makeDomainPrimary", () => {
       const other = await customDomain(owner, host("downgraded-other"));
       const before = await storedDomains(owner.tenant.id);
 
-      for (const domainId of [other, owner.domain.id]) {
-        const { res, invalidated } = await observe(() => makePrimary(owner.tenant.id, domainId, "admin"));
-        expect([planCode, res.status, errorOf(res), detailsOf(res), invalidated]).toEqual([
+      const refused = await observe(() => makePrimary(owner.tenant.id, other, "admin"));
+      expect([
+        planCode,
+        refused.res.status,
+        errorOf(refused.res),
+        detailsOf(refused.res),
+        refused.invalidated,
+      ]).toEqual([planCode, 403, "FEATURE_DISABLED", { feature: "custom_domains" }, []]);
+      expect(await storedDomains(owner.tenant.id)).toEqual(before);
+      expect([...(await auditRows(primary)), ...(await auditRows(other))]).toEqual([]);
+
+      const back = await observe(() => makePrimary(owner.tenant.id, owner.domain.id, "admin"));
+      expect([planCode, back.res.status, back.invalidated]).toEqual([
+        planCode,
+        200,
+        [owner.domain.hostname, primaryHost].sort(),
+      ]);
+      expect(await primaryHosts(owner.tenant.id)).toEqual([owner.domain.hostname]);
+      expect(await auditRows(owner.domain.id)).toEqual([
+        expect.objectContaining({ action: "domain.primary_changed", tenant_id: owner.tenant.id }),
+      ]);
+    }
+  });
+
+  it("[FIX-W39-PLATFORM AC1] answers TENANT_NOT_ACTIVE to the sub-domain of a suspended OTA, and 404 to a domain of another OTA while the switch is off", async () => {
+    const suspended = await ota(plans.two, "suspended");
+    const other = await ota(plans.two);
+    const othersDomain = await customDomain(other, host("switch-off-others"));
+    switches.on.delete("custom_domains");
+    try {
+      const notActive = await makePrimary(suspended.tenant.id, suspended.domain.id);
+      const unknown = await makePrimary(suspended.tenant.id, othersDomain);
+      expect([notActive.status, errorOf(notActive), detailsOf(notActive)]).toEqual([
+        409,
+        "TENANT_NOT_ACTIVE",
+        { status: "suspended" },
+      ]);
+      expect([unknown.status, errorOf(unknown)]).toEqual([404, "NOT_FOUND"]);
+    } finally {
+      switches.on.add("custom_domains");
+    }
+    expect(await primaryHosts(suspended.tenant.id)).toEqual([suspended.domain.hostname]);
+  });
+});
+
+// ---- checkDomain ---------------------------------------------------------------------------------------------------
+
+describe("checkDomain: the switch and the plan", () => {
+  /** `checkDomain` by `who` (an owner by default), checked against the document. */
+  async function check(
+    tenantId: string,
+    domainId: string,
+    who: keyof typeof people = "owner",
+  ): Promise<Response> {
+    const res = await t.http.post(`${domainsUrl(tenantId)}/${domainId}/check`).set(await bearer(who));
+    expectResponseToMatch("checkDomain", res, { document: "platform" });
+    return res;
+  }
+
+  /** The `domain.verify` jobs queued for `domainId` (job data is the domain id alone). */
+  async function verifyJobs(domainId: string): Promise<number> {
+    const queue = t.app.get<Queue>(getQueueToken(PLATFORM_QUEUE.domains), { strict: false });
+    const jobs = await queue.getJobs(["waiting", "active", "delayed", "completed", "failed", "paused"]);
+    return jobs.filter((job) => (job.data as { domainId?: unknown }).domainId === domainId).length;
+  }
+
+  /** A failed custom domain whose window ended an hour ago, as the builder writes it. */
+  async function failedDomain(owner: Pick<InsertedOta, "tenant">, label: string): Promise<string> {
+    const row = await insertTenantDomain(pool, owner.tenant, {
+      hostname: host(label),
+      kind: "custom",
+      verification_status: "failed",
+      verification_token: BUILDER_TOKEN,
+      verification_deadline_at: new Date(t.clock.now().getTime() - HOUR_MS),
+      verified_at: null,
+    });
+    return row.id;
+  }
+
+  it("[FIX-W39-PLATFORM AC4] answers FEATURE_DISABLED while the custom_domains switch is off, and writes or queues nothing", async () => {
+    const owner = await ota(plans.two);
+    const failed = await failedDomain(owner, "check-switch-off");
+    const before = await storedDomains(owner.tenant.id);
+    switches.on.delete("custom_domains");
+    try {
+      const res = await check(owner.tenant.id, failed);
+      expect([res.status, errorOf(res), detailsOf(res)]).toEqual([
+        403,
+        "FEATURE_DISABLED",
+        { feature: "custom_domains" },
+      ]);
+    } finally {
+      switches.on.add("custom_domains");
+    }
+    // The failed domain keeps its status and its window; no restart was audited and no job was queued.
+    expect(await storedDomains(owner.tenant.id)).toEqual(before);
+    expect(await auditRows(failed)).toEqual([]);
+    expect(await verifyJobs(failed)).toBe(0);
+  });
+
+  it("[FIX-W39-PLATFORM AC4] answers FEATURE_DISABLED to a plan without custom domains after the tenant's status, and writes or queues nothing", async () => {
+    for (const planCode of ["early_access", plans.unset]) {
+      const owner = await ota(planCode);
+      const failed = await failedDomain(owner, "check-no-plan");
+      const before = await storedDomains(owner.tenant.id);
+
+      // The plan comes before the domain's own rules: the sub-domain answers the plan's refusal too.
+      for (const domainId of [failed, owner.domain.id]) {
+        const res = await check(owner.tenant.id, domainId, "admin");
+        expect([planCode, res.status, errorOf(res), detailsOf(res)]).toEqual([
           planCode,
           403,
           "FEATURE_DISABLED",
           { feature: "custom_domains" },
-          [],
         ]);
       }
       expect(await storedDomains(owner.tenant.id)).toEqual(before);
-      expect(await primaryHosts(owner.tenant.id)).toEqual([primaryHost]);
-      for (const domainId of [primary, other, owner.domain.id]) {
-        expect(await auditRows(domainId)).toEqual([]);
-      }
+      expect(await auditRows(failed)).toEqual([]);
+      expect(await verifyJobs(failed)).toBe(0);
     }
+
+    // A suspended OTA hears about its status first, whatever its plan says.
+    const suspended = await ota(plans.unset, "suspended");
+    const domainId = await failedDomain(suspended, "check-suspended");
+    const res = await check(suspended.tenant.id, domainId);
+    expect([res.status, errorOf(res), detailsOf(res)]).toEqual([
+      409,
+      "TENANT_NOT_ACTIVE",
+      { status: "suspended" },
+    ]);
+  });
+
+  it("[FIX-W39-PLATFORM AC4] restarts a failed domain's window and queues its check on a plan with custom domains while the switch is on", async () => {
+    const owner = await ota(plans.one);
+    const failed = await failedDomain(owner, "check-allowed");
+
+    const res = await check(owner.tenant.id, failed);
+
+    expect([res.status, (res.body as DomainBody).verificationStatus]).toEqual([202, "pending"]);
+    expect(await auditRows(failed)).toEqual([
+      expect.objectContaining({ action: "domain.verification_restarted", tenant_id: owner.tenant.id }),
+    ]);
+    expect(await verifyJobs(failed)).toBe(1);
   });
 });
 

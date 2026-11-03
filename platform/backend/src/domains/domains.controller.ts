@@ -3,8 +3,9 @@
 // its operation, reads the validated request and makes one service call. Every member may list the domains
 // (`viewOverview` of the role matrix); owners and admins manage them (`manageDomains`). TenantRoleGuard answers `404`
 // to non-members and `403` to the other roles before the handler runs, and FeatureGuard answers `403
-// FEATURE_DISABLED` to `addDomain` and `makeDomainPrimary` (`x-feature: custom_domains`; the latter since
-// FIX-W38-PLATFORM) while FEATURE_CUSTOM_DOMAINS is off.
+// FEATURE_DISABLED` to `addDomain` and `checkDomain` (`x-feature: custom_domains`; the latter since FIX-W39-PLATFORM,
+// lead decision (2h) of 2026-11-02) while FEATURE_CUSTOM_DOMAINS is off. `makeDomainPrimary` has no switch since that
+// lead's decision (2a): the service refuses a custom domain while the switch is off and always allows the sub-domain.
 import { Controller, Delete, Get, HttpCode, Post } from "@nestjs/common";
 import { CurrentMembership, TenantRoles, type TenantMembership } from "../common/auth/tenant-role.guard";
 import { OpenApiOperation, Validated } from "../common/http/openapi-operation.decorator";

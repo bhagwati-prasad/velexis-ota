@@ -68,6 +68,7 @@ import {
 import { insertMember, insertOta } from "../../builders/tenants";
 import { createTestApp, LogSink, type TestApp } from "../../support/app";
 import { FakeStripe } from "../../support/fake-stripe";
+import { TEST_MAIL_ENV } from "../../support/master-key";
 
 /**
  * The database clone, the API's and the worker's Nest module graphs and the platform document of
@@ -89,13 +90,16 @@ const STRIPE_ENV = Object.freeze({
   STRIPE_CONNECT_CLIENT_ID: "ca_replace_me",
   STRIPE_CONNECT_WEBHOOK_SECRET: "whsec_replace_me",
 });
-/** The OTA API host of the test applications' STOREFRONT_BASE_DOMAIN (`ota.example.com`). */
-const WEBHOOK_BASE = "https://api.ota.example.com/webhooks/stripe/c/";
+/**
+ * The OTA backend's receivers on the test applications' PUBLIC_OTA_API_URL (`http://localhost:4000`, TEST_MAIL_ENV),
+ * never on `api.<STOREFRONT_BASE_DOMAIN>` (FIX-W39-PLATFORM AC9, lead decision (2m) of 2026-11-02).
+ */
+const WEBHOOK_BASE = `${TEST_MAIL_ENV.PUBLIC_OTA_API_URL}/webhooks/stripe/c/`;
 
 type Row = Record<string, unknown>;
 type Who = TenantRole | "ownerWithoutMfa" | "stranger";
 
-/** The milestone switches of the API: `own_stripe` on unless a test turns it off. */
+/** The milestone switches of the API and the worker: `own_stripe` on unless a test turns it off. */
 class TestSwitches {
   readonly on = new Set<Feature>();
 
@@ -151,6 +155,10 @@ beforeAll(async () => {
     .useValue({})
     .overrideProvider(StripeClient)
     .useValue(stripe)
+    // The worker refuses to apply a kind whose switch is off (FIX-W39-PLATFORM, lead decision (2b) of 2026-11-02):
+    // it reads the same switches as the API.
+    .overrideProvider(FeatureSwitches)
+    .useValue(switches)
     .compile();
   await worker.init();
 
@@ -753,9 +761,9 @@ describe("PUT /v1/tenants/{tenantId}/payment-connections/{environment}/api-keys 
     const first = await submitKeys(ota, newKeys("live"), "live");
     expect(outcomeOf(first)).toBe("202");
     const url = (first.body as { webhookUrl: string }).webhookUrl;
-    expect(url).toMatch(
-      /^https:\/\/api\.ota\.example\.com\/webhooks\/stripe\/c\/ppc_[0-9A-HJKMNP-TV-Z]{26}$/,
-    );
+    // The receiver on PUBLIC_OTA_API_URL (FIX-W39-PLATFORM AC9), named after the id the connection will get.
+    expect(url.startsWith(WEBHOOK_BASE)).toBe(true);
+    expect(url.slice(WEBHOOK_BASE.length)).toMatch(/^ppc_[0-9A-HJKMNP-TV-Z]{26}$/);
     expect(url).not.toBe(`${WEBHOOK_BASE}${ota.connection.id}`);
 
     // Typed again (the first submission superseded), the keys keep the URL the owner configured in Stripe.
@@ -826,7 +834,29 @@ describe("PUT /v1/tenants/{tenantId}/payment-connections/{environment}/api-keys 
     expect((await connectionsOf(ota.tenant.id))[0]).toMatchObject({ account_mode: "velexis", version: 1 });
   });
 
-  it("[PBE-057] never switches a connection a platform admin disabled (CONNECTION_DISABLED)", async () => {
+  it("[PBE-057] [FIX-W39-PLATFORM AC5] never switches a connection a platform admin disabled after the submission (CONNECTION_DISABLED)", async () => {
+    const ota = await arrangeOta();
+    const keys = newKeys();
+    stripe.grantOwnKey(keys.secretKey, { accountId: newAccountId() });
+    // Disabled while the submission waits: the submit itself refuses a disabled connection up front (the next test).
+    await connectionsQueue.pause();
+    const res = await submitKeys(ota, keys);
+    await pool.query("UPDATE platform.payment_provider_connections SET status = 'disabled' WHERE id = $1", [
+      ota.connection.id,
+    ]);
+
+    await connectionsQueue.resume();
+    const failed = await waitForStatus((res.body as { submission: { id: string } }).submission.id, "failed");
+    expect(failed).toMatchObject({ error_code: "CONNECTION_DISABLED", secret_ciphertext: null });
+    expect((await connectionsOf(ota.tenant.id))[0]).toMatchObject({
+      account_mode: "velexis",
+      status: "disabled",
+      secret_ciphertext: null,
+      version: 1,
+    });
+  });
+
+  it("[FIX-W39-PLATFORM AC5] refuses a connection a platform admin disabled up front with 409 CONFLICT connection_disabled, and writes nothing; a Stripe deauthorisation's disable takes keys", async () => {
     const ota = await arrangeOta();
     await pool.query("UPDATE platform.payment_provider_connections SET status = 'disabled' WHERE id = $1", [
       ota.connection.id,
@@ -836,14 +866,37 @@ describe("PUT /v1/tenants/{tenantId}/payment-connections/{environment}/api-keys 
 
     const res = await submitKeys(ota, keys);
 
-    const failed = await waitForStatus((res.body as { submission: { id: string } }).submission.id, "failed");
-    expect(failed).toMatchObject({ error_code: "CONNECTION_DISABLED", secret_ciphertext: null });
+    expect([res.status, (res.body as { error: { code: string; details?: unknown } }).error]).toEqual([
+      409,
+      expect.objectContaining({ code: "CONFLICT", details: { reason: "connection_disabled" } }),
+    ]);
+    expectResponseToMatch("submitStripeApiKeys", res, { document: "platform" });
+    expect(
+      await rowsOf("SELECT id FROM platform.credential_submissions WHERE tenant_id = $1", [ota.tenant.id]),
+    ).toEqual([]);
+    expect(
+      await rowsOf(
+        "SELECT id FROM platform.platform_audit_log WHERE tenant_id = $1 AND action = 'payments.api_keys_submitted'",
+        [ota.tenant.id],
+      ),
+    ).toEqual([]);
     expect((await connectionsOf(ota.tenant.id))[0]).toMatchObject({
       account_mode: "velexis",
       status: "disabled",
-      secret_ciphertext: null,
       version: 1,
     });
+
+    // A connection a Stripe deauthorisation disabled (disconnected_at set) may take keys, as it may connect again.
+    const other = await arrangeOta();
+    await pool.query(
+      "UPDATE platform.payment_provider_connections SET status = 'disabled', disconnected_at = $2 WHERE id = $1",
+      [other.connection.id, t.clock.now()],
+    );
+    const otherKeys = newKeys();
+    stripe.grantOwnKey(otherKeys.secretKey, { accountId: newAccountId() });
+    const taken = await submitKeys(other, otherKeys);
+    expect(taken.status).toBe(202);
+    await waitForStatus((taken.body as { submission: { id: string } }).submission.id, "applied");
   });
 
   it("[PBE-057] keeps the connection when the OTA was suspended meanwhile, or the environment got another connection", async () => {

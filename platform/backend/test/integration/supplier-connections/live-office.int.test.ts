@@ -4,7 +4,9 @@
 // invalidation, and the refusals: switch, plan, role, tenant status, an invalid body, an existing live connection, no
 // Velexis live account, two concurrent requests), the platform admin's assignment of a live office (the connection
 // `active`, the `amadeus.live_ready` e-mail to the owners) and `adminReleaseAmadeusOffice` (the confirmation and the
-// reason, the office back in the pool, `connection_active` and `not_assigned`). Every answer is checked against the
+// reason, the office back in the pool, `connection_active` and `not_assigned`), and the `pendingSubmission` that every
+// answered Amadeus connection carries (FIX-W39-PLATFORM, lead decision (2k) of 2026-11-02: the live request, the
+// assignment, the list, the settings update, the admin's switch and tenant detail). Every answer is checked against the
 // platform document.
 //
 // The worker's module graph (WorkerModule, with the same FakeClock) sends the queued e-mails through SMTP to Mailpit:
@@ -40,7 +42,10 @@ import {
   insertAmadeusAccount,
   insertAmadeusOffice,
   insertPlan,
+  insertRow,
   insertSupplierConnection,
+  PLACEHOLDER_CIPHERTEXT,
+  PLACEHOLDER_KEK_ID,
   SEEDED_PLAN_CODE,
   testId,
   velexisSource,
@@ -730,6 +735,154 @@ describe("adminReleaseAmadeusOffice", () => {
     ]);
   });
 
+  it("[FIX-W39-PLATFORM AC8] takes the released office out of the admin-disabled velexis connection that holds it: offices and defaults cleared, audited, invalidated, and re-enabling answers no_office", async () => {
+    const live = await velexisAccount("live");
+    const ota = await liveOta();
+    const office = await insertAmadeusOffice(pool, live, {
+      office_id: "OSL1A0311",
+      status: "assigned",
+      assigned_tenant_id: ota.tenant.id,
+      assigned_at: t.clock.now(),
+    });
+    const connection = await insertSupplierConnection(pool, ota.tenant, {
+      ...velexisSource(live),
+      status: "disabled",
+      office_ids: ["OSL1A0311"],
+      default_office_id: "OSL1A0311",
+      queuing_office_id: "OSL1A0311",
+      owner_office_id: "OSL1A0311",
+    });
+    await pool.query("UPDATE platform.supplier_connections SET monitored_queues = $2 WHERE id = $1", [
+      connection.id,
+      JSON.stringify([{ officeId: "OSL1A0311", queueId: 7, category: 0 }]),
+    ]);
+
+    const released = await release(office.id, { confirmNoOpenBookings: true, reason: REASON });
+
+    expect(released.status).toBe(200);
+    expect(released.body as OfficeBody).toMatchObject({ status: "available", assignedTenant: null });
+    const [stored] = await connectionsOf(ota.tenant.id);
+    expect(stored).toMatchObject({
+      id: connection.id,
+      credential_source: "velexis",
+      amadeus_account_id: live.id,
+      status: "disabled",
+      office_ids: [],
+      default_office_id: null,
+      queuing_office_id: null,
+      owner_office_id: null,
+      // The settings stay as the OTA set them; only the office fields name the released office no more.
+      monitored_queues: [{ officeId: "OSL1A0311", queueId: 7, category: 0 }],
+      version: connection.version + 1,
+    });
+    expect(await auditOf(ota.tenant.id, "amadeus_office.released")).toEqual([
+      expect.objectContaining({
+        actor_type: "platform_admin",
+        target_id: office.id,
+        details: expect.objectContaining({
+          connectionId: connection.id,
+          before: expect.objectContaining({
+            status: "assigned",
+            connectionStatus: "disabled",
+            connectionOfficeIds: ["OSL1A0311"],
+            connectionDefaultOfficeId: "OSL1A0311",
+            connectionVersion: connection.version,
+          }) as unknown,
+          after: expect.objectContaining({
+            status: "available",
+            connectionStatus: "disabled",
+            connectionOfficeIds: [],
+            connectionDefaultOfficeId: null,
+            connectionQueuingOfficeId: null,
+            connectionOwnerOfficeId: null,
+            connectionVersion: connection.version + 1,
+          }) as unknown,
+        }) as unknown,
+      }),
+    ]);
+    await invalidations([
+      { v: 1, type: "amadeus_account", id: live.id },
+      { v: 1, type: "connection", tenantId: ota.tenant.id },
+    ]);
+
+    // The connection has no office any more: an admin cannot enable it until an office is assigned again.
+    const enabled = await t.http
+      .post(`/v1/admin/tenants/${ota.tenant.id}/connections/amadeus/live/status`)
+      .set(await adminBearer())
+      .send({ status: "active", reason: REASON });
+    expectResponseToMatch("adminSetConnectionStatus", enabled, { document: "platform" });
+    expect([enabled.status, errorOf(enabled)]).toEqual([
+      409,
+      expect.objectContaining({ code: "CONFLICT", details: { reason: "no_office", status: "disabled" } }),
+    ]);
+    expect((await connectionsOf(ota.tenant.id))[0]).toMatchObject({
+      status: "disabled",
+      version: connection.version + 1,
+    });
+  });
+
+  it("[FIX-W39-PLATFORM AC8] leaves a disabled connection on another office, and an own-credential connection, as they are", async () => {
+    const live = await velexisAccount("live");
+    const ota = await liveOta();
+    // A releasing office of an OTA that moved to its own credentials: its tenant connection is never touched.
+    const releasing = await insertAmadeusOffice(pool, live, {
+      office_id: "OSL1A0312",
+      status: "releasing",
+      assigned_tenant_id: ota.tenant.id,
+      assigned_at: t.clock.now(),
+      release_requested_at: t.clock.now(),
+    });
+    // The builder's default is a `tenant` connection (the OTA's own credentials, placeholder ciphertext).
+    const own = await insertSupplierConnection(pool, ota.tenant, {
+      environment: "live",
+      status: "disabled",
+      office_ids: ["OSL1A0312"],
+      default_office_id: "OSL1A0312",
+    });
+
+    const released = await release(releasing.id, { confirmNoOpenBookings: true, reason: REASON });
+
+    expect(released.status).toBe(200);
+    const [stored] = await connectionsOf(ota.tenant.id);
+    expect(stored).toMatchObject({ id: own.id, office_ids: ["OSL1A0312"], version: own.version });
+    const [audit] = await auditOf(ota.tenant.id, "amadeus_office.released");
+    expect(audit?.["details"]).not.toHaveProperty("connectionId");
+
+    // An assigned office that the OTA's disabled `velexis` connection does not hold (it names another office; an OTA
+    // has one assigned office per environment, so that one is not in the pool): the connection keeps its office.
+    const other = await liveOta();
+    const held = "OSL1A0314";
+    const spare = await insertAmadeusOffice(pool, live, {
+      office_id: "OSL1A0313",
+      status: "assigned",
+      assigned_tenant_id: other.tenant.id,
+      assigned_at: t.clock.now(),
+    });
+    const disabled = await insertSupplierConnection(pool, other.tenant, {
+      ...velexisSource(live),
+      status: "disabled",
+      office_ids: [held],
+      default_office_id: held,
+      queuing_office_id: held,
+      owner_office_id: held,
+    });
+
+    const freed = await release(spare.id, { confirmNoOpenBookings: true, reason: REASON });
+
+    expect([freed.status, (freed.body as OfficeBody).status]).toEqual([200, "available"]);
+    expect((await connectionsOf(other.tenant.id))[0]).toMatchObject({
+      id: disabled.id,
+      status: "disabled",
+      office_ids: [held],
+      default_office_id: held,
+      queuing_office_id: held,
+      owner_office_id: held,
+      version: disabled.version,
+    });
+    const [otherAudit] = await auditOf(other.tenant.id, "amadeus_office.released");
+    expect(otherAudit?.["details"]).not.toHaveProperty("connectionId");
+  });
+
   it("waits for an own-credential apply that holds the OTA's connection lock, then releases the office it moved to releasing", async () => {
     const live = await velexisAccount("live");
     const ota = await liveOta();
@@ -797,5 +950,134 @@ describe("adminReleaseAmadeusOffice", () => {
     expect([unknown.status, errorOf(unknown).code]).toEqual([404, "NOT_FOUND"]);
     expect(await storedOffice(available.id)).toMatchObject({ status: "available", version: 1 });
     expect(await storedOffice(retired.id)).toMatchObject({ status: "retired", version: 1 });
+  });
+});
+
+// ---- The pendingSubmission of every answered connection ------------------------------------------------------------
+
+/** The last sequence number of this file's submissions (`testId("crs", …)`). */
+let submissionSeq = 54_900;
+
+/**
+ * A submission of the OTA's own Amadeus credentials for `environment`: `failed` as the worker leaves one (no secret,
+ * error code AMADEUS_CREDENTIALS_INVALID), or `pending` as the API leaves one (a placeholder ciphertext that nothing
+ * verifies: no job is queued, and this file's worker has no job scheduler). Each is newer than the ones before it.
+ */
+async function ownCredentialsSubmission(
+  tenantId: string,
+  environment: "test" | "live",
+  status: "pending" | "failed",
+): Promise<{ id: string; status: string; errorCode: string | null }> {
+  submissionSeq += 1;
+  const open = status === "pending";
+  const row = await insertRow(pool, "credential_submissions", {
+    id: testId("crs", submissionSeq),
+    tenant_id: tenantId,
+    kind: "amadeus",
+    environment,
+    status,
+    error_code: open ? null : "AMADEUS_CREDENTIALS_INVALID",
+    secret_ciphertext: open ? Buffer.from(PLACEHOLDER_CIPHERTEXT, "utf8") : null,
+    encryption_key_id: open ? PLACEHOLDER_KEK_ID : null,
+    finished_at: open ? null : t.clock.now(),
+    created_at: new Date(t.clock.now().getTime() + submissionSeq),
+  });
+  return { id: row.id, status, errorCode: row.error_code };
+}
+
+describe("the pendingSubmission of every answered Amadeus connection (FIX-W39-PLATFORM)", () => {
+  it("[FIX-W39-PLATFORM AC7] requestLiveAmadeus, adminAssignAmadeusOffice, updateAmadeusConnection, adminSetConnectionStatus and adminGetTenant answer it as listAmadeusConnections does", async () => {
+    const live = await velexisAccount("live");
+    const office = await insertAmadeusOffice(pool, live, { office_id: "OSL1A0401" });
+    const ota = await liveOta();
+    // The owner's own live credentials were refused before the OTA asked Velexis for a live office.
+    const failed = await ownCredentialsSubmission(ota.tenant.id, "live", "failed");
+
+    const requested = await requestLive(ota.tenant.id, ota.owner.id);
+    expect([requested.status, (requested.body as ConnectionBody).pendingSubmission]).toEqual([202, failed]);
+
+    const assigned = await assign(office.id, ota.tenant.id);
+    expect([
+      assigned.status,
+      (assigned.body as { connection: ConnectionBody }).connection.pendingSubmission,
+    ]).toEqual([200, failed]);
+
+    // A newer submission, still open, is what every answer shows from now on.
+    const pending = await ownCredentialsSubmission(ota.tenant.id, "live", "pending");
+    const listed = await t.http
+      .get(`/v1/tenants/${ota.tenant.id}/amadeus-connections`)
+      .set(await bearer(ota.owner.id));
+    expectResponseToMatch("listAmadeusConnections", listed, { document: "platform" });
+    expect(
+      (listed.body as { data: ConnectionBody[] }).data.map((c) => [c.environment, c.pendingSubmission]),
+    ).toEqual([["live", pending]]);
+
+    const [stored] = await connectionsOf(ota.tenant.id);
+    const updated = await t.http
+      .patch(`/v1/tenants/${ota.tenant.id}/amadeus-connections/live`)
+      .set(await bearer(ota.owner.id))
+      .set("If-Match", `"${stored?.version ?? 0}"`)
+      .send({ monitoredQueues: [] });
+    expectResponseToMatch("updateAmadeusConnection", updated, { document: "platform" });
+    expect([updated.status, (updated.body as ConnectionBody).pendingSubmission]).toEqual([200, pending]);
+
+    const disabled = await t.http
+      .post(`/v1/admin/tenants/${ota.tenant.id}/connections/amadeus/live/status`)
+      .set(await adminBearer())
+      .send({ status: "disabled", reason: REASON });
+    expectResponseToMatch("adminSetConnectionStatus", disabled, { document: "platform" });
+    expect([disabled.status, (disabled.body as ConnectionBody).pendingSubmission]).toEqual([200, pending]);
+
+    const detail = await t.http.get(`/v1/admin/tenants/${ota.tenant.id}`).set(await adminBearer());
+    expectResponseToMatch("adminGetTenant", detail, { document: "platform" });
+    expect(
+      (detail.body as { amadeusConnections: ConnectionBody[] }).amadeusConnections.map((c) => [
+        c.environment,
+        c.status,
+        c.pendingSubmission,
+      ]),
+    ).toEqual([["live", "disabled", pending]]);
+  });
+
+  it("[FIX-W39-PLATFORM AC7] shows each environment's own latest submission, and none once it was applied", async () => {
+    const test = await velexisAccount("test");
+    const live = await velexisAccount("live");
+    const ota = await liveOta();
+    await insertSupplierConnection(pool, ota.tenant, { ...velexisSource(test), status: "active" });
+    await insertSupplierConnection(pool, ota.tenant, { ...velexisSource(live), status: "active" });
+    const testFailed = await ownCredentialsSubmission(ota.tenant.id, "test", "failed");
+    await ownCredentialsSubmission(ota.tenant.id, "live", "failed");
+    // The latest live submission was applied: nothing is pending there any more.
+    submissionSeq += 1;
+    await insertRow(pool, "credential_submissions", {
+      id: testId("crs", submissionSeq),
+      tenant_id: ota.tenant.id,
+      kind: "amadeus",
+      environment: "live",
+      status: "applied",
+      finished_at: t.clock.now(),
+      created_at: new Date(t.clock.now().getTime() + submissionSeq),
+    });
+
+    const listed = await t.http
+      .get(`/v1/tenants/${ota.tenant.id}/amadeus-connections`)
+      .set(await bearer(ota.owner.id));
+    const detail = await t.http.get(`/v1/admin/tenants/${ota.tenant.id}`).set(await adminBearer());
+
+    expect(
+      (listed.body as { data: ConnectionBody[] }).data.map((c) => [c.environment, c.pendingSubmission]),
+    ).toEqual([
+      ["test", testFailed],
+      ["live", null],
+    ]);
+    expect(
+      (detail.body as { amadeusConnections: ConnectionBody[] }).amadeusConnections.map((c) => [
+        c.environment,
+        c.pendingSubmission,
+      ]),
+    ).toEqual([
+      ["test", testFailed],
+      ["live", null],
+    ]);
   });
 });
