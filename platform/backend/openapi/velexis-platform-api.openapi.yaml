@@ -2288,8 +2288,9 @@ paths:
         `amadeus_live` (an `active` live Amadeus connection), `payments_live` (a live payment mode that can charge: the
         Velexis Stripe account, a connected account whose charges are enabled, or verified live API keys),
         `payout_account` (a `verified` payout account, when the payments stay in `velexis` mode), `plan_live_mode`
-        (the plan's `limits.liveMode`), `subscription` (a Stripe subscription that is `trialing` or `active`) and
-        `mfa` (the account still has MFA on, read again inside the transaction). The live payment mode is the live
+        (the plan's `limits.liveMode`), `subscription` (a Stripe subscription that is `trialing` or `active`, or since
+        2026-11-03 a manual subscription that is `active`: see below) and `mfa` (the account still has MFA on, read
+        again inside the transaction). The live payment mode is the live
         connection's when the OTA has one (in any of the three modes, for example verified live API keys submitted
         before going live), otherwise the test connection's that go-live copies (`velexis` or `connect_standard`; test
         API keys cannot take live payments); it can charge when that connection is `active` (a connection that is
@@ -2303,6 +2304,12 @@ paths:
         OAuth serves both); a live connection the OTA has, in any mode, is kept; the audit row `tenant.went_live`. After commit it publishes `tenant` and `connection` invalidations, so the hosted storefront
         serves live within 60 seconds. An OTA that is live already answers `200` with the tenant unchanged. Live API
         keys can be created from then on (`createApiKey`).
+
+
+        **Manual subscriptions** (2026-11-03, lead decision (2c), FIX-W40-PLATFORM): the `subscription` precondition
+        is also met by a manual subscription (a platform admin bills the OTA outside Stripe, `billing_provider =
+        manual`) whose status is `active`. A manual trial (`trialing` on a manual subscription) still counts as
+        missing (`subscription` in `details.missing`).
       tags:
         - Tenants
       security:
@@ -4607,6 +4614,13 @@ paths:
         never put in a queue message, and it is erased from the submission when the submission ends. The operation is
         not idempotent, so no body is stored for a replay. Writes the audit row `amadeus.credentials_submitted` without
         the secret, then enqueues `credentials.verify` with the submission id only.
+
+
+        **The live environment** (2026-11-03, lead decision (2g), FIX-W40-PLATFORM): credentials for `live` also need
+        `FEATURE_LIVE_SWITCH`. While it is off, `environment = live` answers `403 FEATURE_DISABLED` with
+        `details.feature = live_switch`, checked by the service after the role, the step-up and `FEATURE_OWN_AMADEUS`,
+        before any other rule of the request, and nothing is written. The `test` environment works with the live switch
+        off.
       tags:
         - Connections
       security:
@@ -4675,8 +4689,10 @@ paths:
           $ref: '#/components/responses/StepUpUnauthorized'
         '403':
           description: >-
-            The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, or own Amadeus
-            credentials are off. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED.
+            The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, own Amadeus
+            credentials are off (`details.feature = own_amadeus`), or the environment is `live` while the live switch
+            is off (`details.feature = live_switch`). Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED,
+            FEATURE_DISABLED.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
@@ -4693,6 +4709,8 @@ paths:
                   $ref: '#/components/examples/MFA_REQUIRED'
                 FEATURE_DISABLED:
                   $ref: '#/components/examples/FeatureDisabledOwnAmadeus'
+                FEATURE_DISABLED_LIVE_SWITCH:
+                  $ref: '#/components/examples/FeatureDisabledLiveSwitch'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -5340,6 +5358,13 @@ paths:
         **Secrets.** `secretKey` and `webhookSecret` are write-only: never logged (the logger redacts them), never
         answered, never put in a queue message, and erased from the submission when it ends. The operation is not
         idempotent, so no body is stored for a replay. Writes an audit row without them.
+
+
+        **The live environment** (2026-11-03, lead decision (2g), FIX-W40-PLATFORM): keys for `live` also need
+        `FEATURE_LIVE_SWITCH`. While it is off, `environment = live` answers `403 FEATURE_DISABLED` with
+        `details.feature = live_switch`, checked by the service after the role, the step-up and `FEATURE_OWN_STRIPE`,
+        before any other rule of the request (the keys' prefixes included), and nothing is written. The `test`
+        environment works with the live switch off.
       tags:
         - Connections
       security:
@@ -5412,8 +5437,10 @@ paths:
           $ref: '#/components/responses/StepUpUnauthorized'
         '403':
           description: >-
-            The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, or own Stripe
-            accounts are off. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED.
+            The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, own Stripe
+            accounts are off (`details.feature = own_stripe`), or the environment is `live` while the live switch is off
+            (`details.feature = live_switch`). Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED,
+            FEATURE_DISABLED.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
@@ -5430,6 +5457,8 @@ paths:
                   $ref: '#/components/examples/MFA_REQUIRED'
                 FEATURE_DISABLED:
                   $ref: '#/components/examples/FeatureDisabledOwnStripe'
+                FEATURE_DISABLED_LIVE_SWITCH:
+                  $ref: '#/components/examples/FeatureDisabledLiveSwitch'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -10012,6 +10041,14 @@ paths:
         offices before and after; a `connection` invalidation follows the commit. Re-enabling that connection with
         `adminSetConnectionStatus` then answers `409 CONFLICT` with `details.reason = no_office` until an office is
         assigned again (`adminAssignAmadeusOffice`).
+
+
+        **Every connection that is not active loses the office** (2026-11-03, lead decision (2b), FIX-W40-PLATFORM):
+        the same holds for the OTA's `velexis` connection on the office's account that is `pending_verification` or
+        `invalid_credentials`, not only a disabled one: the office leaves `officeIds` and the default, queuing and owner
+        offices (`version + 1`), the connection keeps its status, the audit row names it and a `connection`
+        invalidation follows the commit. Only an active connection keeps its office (`409 CONFLICT`,
+        `connection_active`).
       tags:
         - Admin Amadeus
       security:
@@ -11497,6 +11534,13 @@ paths:
         probe only. The answer comes before the jobs run; reload the list to see
         `lastCheckedAt`, `lastCheckError` and the TLS state. Writes an audit row. `503 SERVICE_UNAVAILABLE` while Redis
         is unreachable, because the jobs are the whole effect.
+
+
+        **One strike a day** (2026-11-03, lead decision (2f), FIX-W40-PLATFORM): the re-check of a verified domain
+        counts toward the three consecutive failures that fail a domain at most once per UTC day. Its `domain.recheck`
+        shares the daily re-check's job of the domain and the UTC day: while that day's check is queued, running or
+        done (from the 04:10 run or an earlier click), a second re-check queues no second DNS check that day, so quick
+        repeated clicks cannot fail a domain; the TLS probe is queued every time.
       tags:
         - Admin domains
       security:

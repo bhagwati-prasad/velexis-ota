@@ -299,6 +299,8 @@ export const PLATFORM_BACKEND_CONFIG_SCHEMA = {
    * 2026-11-02), never with a host taken from a request. An `https:` URL with `APP_ENV=production` (Stripe needs an
    * HTTPS endpoint, `publicOtaApiUrlProblems`); `http:` is allowed in development and tests (`http://localhost:4000`).
    * A base URL (a path is allowed), never with credentials, a query or a fragment. The API reads it; the worker and the CLI validate it too, because the three read `platform-backend.env`.
+   * Its host, and every host below it, is a Velexis host that no OTA may add as a custom domain (`velexisHostsOf`,
+   * FIX-W40-PLATFORM, lead decision (2a) of 2026-11-03).
    */
   PUBLIC_OTA_API_URL: env.url({ protocols: ["http:", "https:"] }),
   /**

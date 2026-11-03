@@ -214,6 +214,7 @@ export class DomainsService {
         PUBLIC_PORTAL_URL: config.get("PUBLIC_PORTAL_URL", { infer: true }),
         PUBLIC_PLATFORM_ADMIN_URL: config.get("PUBLIC_PLATFORM_ADMIN_URL", { infer: true }),
         PUBLIC_OTA_ADMIN_URL: config.get("PUBLIC_OTA_ADMIN_URL", { infer: true }),
+        PUBLIC_OTA_API_URL: config.get("PUBLIC_OTA_API_URL", { infer: true }),
       }),
     };
   }

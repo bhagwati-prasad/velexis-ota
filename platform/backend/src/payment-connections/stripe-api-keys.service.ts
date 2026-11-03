@@ -5,6 +5,10 @@
 //
 // `submit` (`submitStripeApiKeys`, `PUT …/payment-connections/{environment}/api-keys`):
 //
+// 0. The `live` environment also needs the live switch (FIX-W40-PLATFORM, lead decision (2g) of 2026-11-03): while
+//    FEATURE_LIVE_SWITCH is off, `403 FEATURE_DISABLED` with `details.feature = live_switch`, checked here, after the
+//    guards and before any other rule of the request (the keys' prefixes included), so nothing is read or written; the
+//    `test` environment does not need it.
 // 1. The request validation has checked the body against `SubmitStripeApiKeysRequest` (`pk_(test|live)_…`,
 //    `(sk|rk)_(test|live)_…`, `whsec_…`, each at most 255 characters). Every key must belong to the path's environment:
 //    `pk_<env>_`, and `sk_<env>_` or `rk_<env>_`; the webhook signing secret must meet the OTA backend's own rule,
@@ -50,11 +54,13 @@ import { ConfigService } from "@nestjs/config";
 import type { components } from "@velexis/api-types/platform";
 import { AppError, type FieldError } from "@velexis/errors";
 import { MEMBER_VISIBLE_TENANT_STATUSES, type TenantMembership } from "../common/auth/tenant-role.guard";
+import { liveSwitchOrThrow } from "../common/credentials/live-switch";
 import {
   CredentialSubmissionsService,
   toCredentialSubmission,
 } from "../common/credentials/credential-submissions.service";
 import { PLATFORM_DB, type PlatformDb } from "../common/database";
+import { FeatureSwitches } from "../common/features";
 import { IdGenerator } from "../common/ids";
 import { runInTransaction } from "../common/redis/invalidation.publisher";
 import type { PlatformBackendConfig } from "../config";
@@ -144,6 +150,7 @@ export class StripeApiKeysService {
     private readonly submissions: CredentialSubmissionsService,
     private readonly connections: PaymentConnectionsRepository,
     private readonly ids: IdGenerator,
+    private readonly switches: FeatureSwitches,
     @Inject(PLATFORM_DB) private readonly db: PlatformDb,
     config: ConfigService<PlatformBackendConfig, true>,
   ) {
@@ -161,6 +168,7 @@ export class StripeApiKeysService {
     environment: PaymentEnvironment,
     request: SubmitStripeApiKeysRequest,
   ): Promise<StripeApiKeysSubmitted> {
+    liveSwitchOrThrow(this.switches, environment);
     const problems = stripeKeyProblems(request, environment);
     if (problems.length > 0) {
       throw new AppError("VALIDATION_FAILED", { fieldErrors: problems });

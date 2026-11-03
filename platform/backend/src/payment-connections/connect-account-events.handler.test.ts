@@ -135,8 +135,15 @@ class RoundsHarness {
   readonly beforeRead = new Map<number, () => void>();
   /** Runs after the n-th re-fetch (from 1) has its answer and before the handler gets it. */
   readonly afterRetrieve = new Map<number, () => void>();
+  /**
+   * Runs after the n-th lock of the connections (from 1) has its rows and before the handler gets them, as a writer
+   * whose commit the lock waited for: PostgreSQL's `SELECT … FOR UPDATE` answers the rows of the snapshot it started
+   * with, so a row inserted then is missing from its answer.
+   */
+  readonly whileLockWaits = new Map<number, () => void>();
   reads = 0;
   retrieves = 0;
+  locks = 0;
   readonly audit: unknown[] = [];
   readonly events: unknown[] = [];
   /** The e-mails queued to the owners. */
@@ -158,8 +165,12 @@ class RoundsHarness {
         this.beforeRead.get(this.reads)?.();
         return Promise.resolve(ofAccount(accountReference));
       },
-      lockConnectRowsOfAccount: (_trx: unknown, accountReference: string) =>
-        Promise.resolve(ofAccount(accountReference)),
+      lockConnectRowsOfAccount: (_trx: unknown, accountReference: string) => {
+        this.locks += 1;
+        const snapshot = ofAccount(accountReference);
+        this.whileLockWaits.get(this.locks)?.();
+        return Promise.resolve(snapshot);
+      },
       refreshConnectAccount: (_trx: unknown, id: string, refresh: ConnectAccountRefresh) =>
         Promise.resolve(
           structuredClone(
@@ -493,6 +504,67 @@ describe("Connect account event rules", () => {
         handlerKey("connect_accounts", "account.updated"),
       ].sort(),
     );
+  });
+});
+
+describe("a live copy created while the lock waited (FIX-W40-PLATFORM, lead decision (2d) of 2026-11-03)", () => {
+  /** Go-live's copy of the test connection to live, committed while the handler's first lock waited. */
+  const goLiveCopy = (h: RoundsHarness): (() => void) => {
+    return () => {
+      const test = h.rows.find((row) => row.environment === "test");
+      if (test === undefined) {
+        throw new Error("no test connection to copy");
+      }
+      h.rows.push({ ...structuredClone(test), id: connectRow("live").id, environment: "live", version: 1 });
+    };
+  };
+
+  it("[FIX-W40-PLATFORM AC4] a deauthorisation re-lists the account's connections after the lock and disconnects the copy too", async () => {
+    const h = new RoundsHarness();
+    h.rows = [connectRow("test", { status: "active", capabilities: { ...ENABLED } })];
+    h.whileLockWaits.set(1, goLiveCopy(h));
+
+    const outcome = await h.handler.handle(DEAUTHORIZED_EVENT);
+
+    expect(outcome).toEqual({ status: "processed", tenantId: TENANT });
+    expect(h.locks).toBe(2);
+    expect(h.rows.map((row) => [row.environment, row.status, row.disconnected_at])).toEqual([
+      ["test", "disabled", AT],
+      ["live", "disabled", AT],
+    ]);
+    expect((h.audit as RecordedEntry[]).map((entry) => [entry.action, entry.targetId])).toEqual([
+      ["payments.connect_disconnected", connectRow("test").id],
+      ["payments.connect_disconnected", connectRow("live").id],
+    ]);
+    // One e-mail to the owner and one invalidation for the OTA, as for any deauthorisation.
+    expect(h.queued).toHaveLength(1);
+    expect(h.events).toEqual([{ v: 1, type: "connection", tenantId: TENANT }]);
+  });
+
+  it("[FIX-W40-PLATFORM AC4] account.updated sees the copy as a change after the lock and refreshes both connections in the same event", async () => {
+    const h = new RoundsHarness();
+    h.rows = [connectRow("test", { status: "active", capabilities: { ...ENABLED } })];
+    // Stripe now says the account cannot take charges: both connections must become `pending`.
+    h.answers = [NOT_YET];
+    h.whileLockWaits.set(1, goLiveCopy(h));
+
+    const outcome = await h.handler.handle(UPDATED_EVENT);
+
+    expect(outcome).toEqual({ status: "processed", tenantId: TENANT });
+    // Round 1 found the rows changed after the lock (the copy) and wrote nothing; round 2 refreshed both; round 3
+    // confirmed them.
+    expect(h.retrieves).toBe(3);
+    expect(h.states()).toEqual([
+      ["pending", 2],
+      ["pending", 2],
+    ]);
+    expect((h.audit as RecordedEntry[]).map((entry) => entry.targetId)).toEqual([
+      connectRow("test").id,
+      connectRow("live").id,
+    ]);
+    // Both in one write: a single invalidation. A handler that missed the copy in round 1 would have refreshed the test
+    // connection alone there, and the copy only in round 2, with an invalidation each.
+    expect(h.events).toEqual([{ v: 1, type: "connection", tenantId: TENANT }]);
   });
 });
 

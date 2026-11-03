@@ -27,6 +27,7 @@ const DEVELOPMENT: VelexisHostConfig = {
   PUBLIC_PORTAL_URL: "http://localhost:3000",
   PUBLIC_PLATFORM_ADMIN_URL: "http://localhost:3001",
   PUBLIC_OTA_ADMIN_URL: "http://localhost:3002",
+  PUBLIC_OTA_API_URL: "http://localhost:4000",
 };
 
 /** A VM whose real hosts replaced the placeholders of decisions.md §4 (documentation names, RFC 2606). */
@@ -35,11 +36,22 @@ const VM: VelexisHostConfig = {
   PUBLIC_PORTAL_URL: "https://platform.velexis-travel.test",
   PUBLIC_PLATFORM_ADMIN_URL: "https://admin.platform.velexis-travel.test",
   PUBLIC_OTA_ADMIN_URL: "https://admin.shops.velexis-travel.test",
+  PUBLIC_OTA_API_URL: "https://api.shops.velexis-travel.test",
+};
+
+/**
+ * A VM whose OTA API lives on a host of its own, below none of the other Velexis hosts and under no placeholder name
+ * (a base path included, as PUBLIC_OTA_API_URL allows).
+ */
+const VM_OWN_API_HOST: VelexisHostConfig = {
+  ...VM,
+  PUBLIC_OTA_API_URL: "https://bookings-api.velexis-travel.test/ota",
 };
 
 const rulesOf = (config: VelexisHostConfig): HostnameRules => ({ velexisHosts: velexisHostsOf(config) });
 const DEV_RULES = rulesOf(DEVELOPMENT);
 const VM_RULES = rulesOf(VM);
+const VM_OWN_API_HOST_RULES = rulesOf(VM_OWN_API_HOST);
 
 /** The stored host of `input` under the development rules, or the problem. */
 function outcome(input: string, rules: HostnameRules = DEV_RULES): string {
@@ -198,6 +210,7 @@ describe("checkCustomHostname: refusals", () => {
       "platform.velexis-travel.test",
       "admin.platform.velexis-travel.test",
       "admin.shops.velexis-travel.test",
+      "api.shops.velexis-travel.test",
       ...DECISIONS_PLACEHOLDER_HOSTS,
     ]);
     for (const host of [
@@ -213,6 +226,46 @@ describe("checkCustomHostname: refusals", () => {
     }
     expect(outcome("velexis-travel.test", VM_RULES)).toBe("velexis-travel.test");
     expect(outcome("travel.acme.com", VM_RULES)).toBe("travel.acme.com");
+  });
+
+  it("[FIX-W40-PLATFORM AC1] refuses the host of PUBLIC_OTA_API_URL and every host below it, whatever its name", () => {
+    expect(velexisHostsOf(VM_OWN_API_HOST)).toEqual([
+      "shops.velexis-travel.test",
+      "platform.velexis-travel.test",
+      "admin.platform.velexis-travel.test",
+      "admin.shops.velexis-travel.test",
+      "bookings-api.velexis-travel.test",
+      ...DECISIONS_PLACEHOLDER_HOSTS,
+    ]);
+    for (const host of [
+      "bookings-api.velexis-travel.test",
+      "Bookings-API.velexis-travel.test.",
+      "webhooks.bookings-api.velexis-travel.test",
+      "a.b.bookings-api.velexis-travel.test",
+    ]) {
+      expect(outcome(host, VM_OWN_API_HOST_RULES), host).toBe("refused: velexis_host");
+      expect(errorCode(host, VM_OWN_API_HOST_RULES), host).toBe("DOMAIN_INVALID");
+    }
+    // Without the OTA API's host among the rules, the same names would be custom domains: the rule comes from
+    // PUBLIC_OTA_API_URL alone, not from another Velexis host or a placeholder.
+    const withoutApiHost: HostnameRules = {
+      velexisHosts: velexisHostsOf(VM_OWN_API_HOST).filter(
+        (host) => host !== "bookings-api.velexis-travel.test",
+      ),
+    };
+    expect(outcome("webhooks.bookings-api.velexis-travel.test", withoutApiHost)).toBe(
+      "webhooks.bookings-api.velexis-travel.test",
+    );
+    // Neighbours and lookalikes stay free.
+    for (const host of [
+      "bookings.velexis-travel.test",
+      "mybookings-api.velexis-travel.test",
+      "velexis-travel.test",
+    ]) {
+      expect(outcome(host, VM_OWN_API_HOST_RULES), host).toBe(host);
+    }
+    // The development OTA API (`http://localhost:4000`) adds `localhost`, already a Velexis host of the portal URL.
+    expect(velexisHostsOf(DEVELOPMENT).filter((host) => host === "localhost")).toEqual(["localhost"]);
   });
 
   it("refuses every shared suffix of the deny list and the hosts below it, and nothing that only ends like one", () => {

@@ -611,9 +611,11 @@ export interface paths {
          * Switch the OTA's storefront to live
          * @description Owners only (M5), with a TOTP step-up within the last 15 minutes (`401 REAUTH_REQUIRED`, or `403 MFA_REQUIRED` without MFA) and `FEATURE_LIVE_SWITCH` on (`403 FEATURE_DISABLED`, `details.feature = live_switch`). The body only confirms the switch (`{confirm: true}`). The OTA must be `active` (`409 TENANT_NOT_ACTIVE` with `details.status`).
          *
-         *     **Preconditions** (platform/docs/scope.md PF-14). The service checks every one and answers `422 LIVE_PRECONDITIONS_UNMET` with all the missing ones in `details.missing`, so the portal can show a checklist: `amadeus_live` (an `active` live Amadeus connection), `payments_live` (a live payment mode that can charge: the Velexis Stripe account, a connected account whose charges are enabled, or verified live API keys), `payout_account` (a `verified` payout account, when the payments stay in `velexis` mode), `plan_live_mode` (the plan's `limits.liveMode`), `subscription` (a Stripe subscription that is `trialing` or `active`) and `mfa` (the account still has MFA on, read again inside the transaction). The live payment mode is the live connection's when the OTA has one (in any of the three modes, for example verified live API keys submitted before going live), otherwise the test connection's that go-live copies (`velexis` or `connect_standard`; test API keys cannot take live payments); it can charge when that connection is `active` (a connection that is `pending`, or `disabled` by a platform admin or by a Stripe deauthorisation, cannot).
+         *     **Preconditions** (platform/docs/scope.md PF-14). The service checks every one and answers `422 LIVE_PRECONDITIONS_UNMET` with all the missing ones in `details.missing`, so the portal can show a checklist: `amadeus_live` (an `active` live Amadeus connection), `payments_live` (a live payment mode that can charge: the Velexis Stripe account, a connected account whose charges are enabled, or verified live API keys), `payout_account` (a `verified` payout account, when the payments stay in `velexis` mode), `plan_live_mode` (the plan's `limits.liveMode`), `subscription` (a Stripe subscription that is `trialing` or `active`, or since 2026-11-03 a manual subscription that is `active`: see below) and `mfa` (the account still has MFA on, read again inside the transaction). The live payment mode is the live connection's when the OTA has one (in any of the three modes, for example verified live API keys submitted before going live), otherwise the test connection's that go-live copies (`velexis` or `connect_standard`; test API keys cannot take live payments); it can charge when that connection is `active` (a connection that is `pending`, or `disabled` by a platform admin or by a Stripe deauthorisation, cannot).
          *
          *     **Effect**, in one transaction: `storefront_environment = live`, `live_enabled_at`, `live_enabled_by_account_id` and `version + 1`; without a live payment connection, the live one is created from the test one: in `velexis` mode when the test payment connection is in `velexis` mode, and a `connect_standard` test connection is copied to live (its account, capabilities, status and `connectedAt`: one OAuth serves both); a live connection the OTA has, in any mode, is kept; the audit row `tenant.went_live`. After commit it publishes `tenant` and `connection` invalidations, so the hosted storefront serves live within 60 seconds. An OTA that is live already answers `200` with the tenant unchanged. Live API keys can be created from then on (`createApiKey`).
+         *
+         *     **Manual subscriptions** (2026-11-03, lead decision (2c), FIX-W40-PLATFORM): the `subscription` precondition is also met by a manual subscription (a platform admin bills the OTA outside Stripe, `billing_provider = manual`) whose status is `active`. A manual trial (`trialing` on a manual subscription) still counts as missing (`subscription` in `details.missing`).
          */
         post: operations["goLive"];
         delete?: never;
@@ -1216,6 +1218,8 @@ export interface paths {
          *     **Rules.** Office ids are 9 upper-case letters and digits, each at most once; `defaultOfficeId` and, when sent, `queuingOfficeId` and `ownerOfficeId` must be among `officeIds` (`400 VALIDATION_FAILED` with a field error); the two optional offices default to `defaultOfficeId`. An open submission of the same environment is superseded and its secret erased. The environment needs no connection yet: an OTA may bring its own live credentials before it asks for a Velexis live office, and the connection is then created on success. The OTA must be `active` (`409 TENANT_NOT_ACTIVE`, PADR-0014 item 5). A connection of the environment that a platform admin disabled (`adminSetConnectionStatus`, PADR-0012 item 8) is refused up front with `409 CONFLICT` and `details.reason = connection_disabled`, and nothing is written: no submission, no audit row, no job (2026-11-02, lead decision (2i), FIX-W39-PLATFORM). The worker's apply refuses it again if the admin disables it after the submission (`CONNECTION_DISABLED`, PADR-0010 item 6).
          *
          *     **The secret.** `clientSecret` is write-only: it is never logged (the logger redacts it), never answered and never put in a queue message, and it is erased from the submission when the submission ends. The operation is not idempotent, so no body is stored for a replay. Writes the audit row `amadeus.credentials_submitted` without the secret, then enqueues `credentials.verify` with the submission id only.
+         *
+         *     **The live environment** (2026-11-03, lead decision (2g), FIX-W40-PLATFORM): credentials for `live` also need `FEATURE_LIVE_SWITCH`. While it is off, `environment = live` answers `403 FEATURE_DISABLED` with `details.feature = live_switch`, checked by the service after the role, the step-up and `FEATURE_OWN_AMADEUS`, before any other rule of the request, and nothing is written. The `test` environment works with the live switch off.
          */
         put: operations["submitAmadeusCredentials"];
         post?: never;
@@ -1398,6 +1402,8 @@ export interface paths {
          *     **Answer**: the submission, and the webhook endpoint to create in the OTA's Stripe dashboard: `webhookUrl` (`<PUBLIC_OTA_API_URL>/webhooks/stripe/c/<ppc_id>`, the OTA API's public URL of the platform's configuration, `https://api.ota.example.com` in production; stable because the connection row is updated in place; when the environment has no connection yet, the submission keeps the id that the connection gets) and the events to enable. The webhook secret can only be tested when Stripe sends an event to the OTA backend, so the portal asks the owner to send a test event.
          *
          *     **Secrets.** `secretKey` and `webhookSecret` are write-only: never logged (the logger redacts them), never answered, never put in a queue message, and erased from the submission when it ends. The operation is not idempotent, so no body is stored for a replay. Writes an audit row without them.
+         *
+         *     **The live environment** (2026-11-03, lead decision (2g), FIX-W40-PLATFORM): keys for `live` also need `FEATURE_LIVE_SWITCH`. While it is off, `environment = live` answers `403 FEATURE_DISABLED` with `details.feature = live_switch`, checked by the service after the role, the step-up and `FEATURE_OWN_STRIPE`, before any other rule of the request (the keys' prefixes included), and nothing is written. The `test` environment works with the live switch off.
          */
         put: operations["submitStripeApiKeys"];
         post?: never;
@@ -2551,6 +2557,8 @@ export interface paths {
          *     A `releasing` office is released. An `assigned` office is released only when it backs no active `velexis` connection of its OTA (for example after the connection was disabled for abuse, PADR-0012 item 8); one that does answers `409 CONFLICT` (`details.reason = connection_active`). An `available` or `retired` office answers `409 CONFLICT` (`details.reason = not_assigned`). Writes an audit row and, after commit, publishes the `amadeus_account` invalidation.
          *
          *     **A disabled connection loses the office** (2026-11-02, lead decision (2l), FIX-W39-PLATFORM): when the released office is one of the offices of the OTA's `velexis` connection that a platform admin disabled (on the office's account), the same transaction removes it from that connection: out of `officeIds`, and the default, queuing and owner offices that named it become `null` (`version + 1`). The audit row adds the connection, its offices before and after; a `connection` invalidation follows the commit. Re-enabling that connection with `adminSetConnectionStatus` then answers `409 CONFLICT` with `details.reason = no_office` until an office is assigned again (`adminAssignAmadeusOffice`).
+         *
+         *     **Every connection that is not active loses the office** (2026-11-03, lead decision (2b), FIX-W40-PLATFORM): the same holds for the OTA's `velexis` connection on the office's account that is `pending_verification` or `invalid_credentials`, not only a disabled one: the office leaves `officeIds` and the default, queuing and owner offices (`version + 1`), the connection keeps its status, the audit row names it and a `connection` invalidation follows the commit. Only an active connection keeps its office (`409 CONFLICT`, `connection_active`).
          */
         post: operations["adminReleaseAmadeusOffice"];
         delete?: never;
@@ -2925,6 +2933,8 @@ export interface paths {
         /**
          * Check a host's DNS records and certificate now
          * @description Queues the checks of one host on `platform-domains` now (M5, custom-domains flow steps 2, 4, 6 and 8), instead of waiting for the schedulers: the DNS check that fits a custom domain's status (`domain.verify`, the verification of a pending one; `domain.recheck`, the daily re-check of a verified one, whose failure counts like a daily one) and the TLS probe of the host at once (`domain.tls_probe`). The sub-domain has no DNS records, and a failed custom domain has no window to check in (its owners restart one with `checkDomain`), so both get the probe only. The answer comes before the jobs run; reload the list to see `lastCheckedAt`, `lastCheckError` and the TLS state. Writes an audit row. `503 SERVICE_UNAVAILABLE` while Redis is unreachable, because the jobs are the whole effect.
+         *
+         *     **One strike a day** (2026-11-03, lead decision (2f), FIX-W40-PLATFORM): the re-check of a verified domain counts toward the three consecutive failures that fail a domain at most once per UTC day. Its `domain.recheck` shares the daily re-check's job of the domain and the UTC day: while that day's check is queued, running or done (from the 04:10 run or an earlier click), a second re-check queues no second DNS check that day, so quick repeated clicks cannot fail a domain; the TLS probe is queued every time.
          */
         post: operations["adminRecheckDomain"];
         delete?: never;
@@ -9259,7 +9269,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["StepUpUnauthorized"];
-            /** @description The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, or own Amadeus credentials are off. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED. */
+            /** @description The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, own Amadeus credentials are off (`details.feature = own_amadeus`), or the environment is `live` while the live switch is off (`details.feature = live_switch`). Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED. */
             403: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -9666,7 +9676,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["StepUpUnauthorized"];
-            /** @description The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, or own Stripe accounts are off. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED. */
+            /** @description The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, own Stripe accounts are off (`details.feature = own_stripe`), or the environment is `live` while the live switch is off (`details.feature = live_switch`). Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED. */
             403: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];

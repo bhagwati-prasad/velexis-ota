@@ -167,6 +167,8 @@ afterAll(async () => {
 beforeEach(() => {
   switches.on.clear();
   switches.on.add("own_amadeus");
+  // Own credentials for the live environment also need the live switch (FIX-W40-PLATFORM, lead decision (2g)).
+  switches.on.add("live_switch");
   stub.setDefaultScenario("success");
   stub.clearRequests();
   secretsOfTest.length = 0;
@@ -820,6 +822,31 @@ describe("PUT /v1/tenants/{tenantId}/amadeus-connections/{environment}/credentia
     expect(off.status).toBe(403);
     expect(errorOf(off)).toMatchObject({ code: "FEATURE_DISABLED", details: { feature: "own_amadeus" } });
     expect(await submissionsOf(ota.tenant.id)).toEqual([]);
+  });
+
+  it("[FIX-W40-PLATFORM AC7] answers FEATURE_DISABLED (live_switch) for the live environment while the live switch is off, after the step-up; the test environment still works", async () => {
+    const ota = await arrangeOta();
+    switches.on.delete("live_switch");
+
+    // The guards come first: without a recent step-up the live submission answers REAUTH_REQUIRED.
+    const notSteppedUp = await submit(ota, body(), { environment: "live", stepUp: false });
+    const live = await submit(ota, body(), { environment: "live" });
+    // The switch is checked before any other rule of the request: offices outside officeIds are not even looked at.
+    const liveAndInvalid = await submit(ota, body({ defaultOfficeId: "NCE1A9998" }), { environment: "live" });
+
+    expect([notSteppedUp.status, errorOf(notSteppedUp).code]).toEqual([401, "REAUTH_REQUIRED"]);
+    for (const res of [live, liveAndInvalid]) {
+      expectResponseToMatch("submitAmadeusCredentials", res, { document: "platform" });
+      expect(res.status).toBe(403);
+      expect(errorOf(res)).toMatchObject({ code: "FEATURE_DISABLED", details: { feature: "live_switch" } });
+    }
+    expect(await submissionsOf(ota.tenant.id)).toEqual([]);
+    expect(await connectionOf(ota.tenant.id, "live")).toBeUndefined();
+
+    const test = await submit(ota, body(), { environment: "test" });
+    expect(test.status).toBe(202);
+    expectResponseToMatch("submitAmadeusCredentials", test, { document: "platform" });
+    expect(await submissionsOf(ota.tenant.id)).toHaveLength(1);
   });
 
   it("[PBE-053 AC1] refuses offices outside officeIds with a field error each, and an OTA that is not active", async () => {

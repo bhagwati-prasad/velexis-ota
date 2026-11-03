@@ -223,14 +223,18 @@ function ConnectOutcomeNotice({ outcome }: { readonly outcome: StripeConnectOutc
  * The OTA's own Stripe account (PFE-024; flows §C and §D; PF-61, PF-62), while `features.ownStripe` is on: "Connect
  * with Stripe" (one OAuth for both environments) and the own keys of each environment, for owners and admins; finance
  * members read that only owners and admins connect one. While the OTA is not `active`, or a platform admin disabled one
- * of its payment connections (the callback would refuse the connection), "Connect with Stripe" says why instead.
+ * of its payment connections (the callback would refuse the connection), "Connect with Stripe" says why instead. The
+ * live keys need the live switch as well (`features.liveSwitch`; the API answers `FEATURE_DISABLED` without it,
+ * FIX-W40-PLATFORM, lead decision (2g) of 2026-11-03): without it only the test keys are offered.
  */
 function OwnStripeSection({
   tenant,
   connections,
+  liveSwitch,
 }: {
   readonly tenant: Tenant;
   readonly connections: readonly PaymentConnection[];
+  readonly liveSwitch: boolean;
 }) {
   const titleId = "own-stripe-title";
   const connectTitleId = "connect-stripe-title";
@@ -282,7 +286,7 @@ function OwnStripeSection({
               <ConnectStripeForm tenantId={tenant.id} reconnect={reconnect} />
             )}
           </div>
-          {ENVIRONMENTS.map((environment) => (
+          {ENVIRONMENTS.filter((environment) => environment === "test" || liveSwitch).map((environment) => (
             <StripeKeysForm
               key={environment}
               tenantId={tenant.id}
@@ -366,7 +370,7 @@ export default async function PaymentsPage({
       )}
       {/* Without the connections the page cannot tell what the OTA has: the section waits for a page that has them. */}
       {features.ownStripe && connections.error === undefined ? (
-        <OwnStripeSection tenant={tenant} connections={ordered} />
+        <OwnStripeSection tenant={tenant} connections={ordered} liveSwitch={features.liveSwitch} />
       ) : null}
     </div>
   );

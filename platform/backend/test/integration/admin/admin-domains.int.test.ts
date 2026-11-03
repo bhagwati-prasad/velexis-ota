@@ -35,6 +35,7 @@ import {
   DomainJobs,
 } from "../../../src/domains/domain-checks.processor";
 import { ownershipRecordName, type DnsResolver } from "../../../src/domains/domain-checks";
+import { DAILY_SLOT_MS, dailyJobId } from "../../../src/domains/recheck.scheduler";
 import { TLS_PROBE_TARGET } from "../../../src/domains/tls-probe";
 import { WorkerModule } from "../../../src/worker.module";
 import {
@@ -501,6 +502,41 @@ describe("adminRecheckDomain", () => {
         details: { hostname, jobs: [DOMAIN_RECHECK_JOB, DOMAIN_TLS_PROBE_JOB] },
       },
     ]);
+  });
+
+  it("[FIX-W40-PLATFORM AC6] three quick re-checks of a verified domain whose DNS fails count one strike that day, and the next UTC day's counts again", async () => {
+    const ota = await arrangeOta();
+    const hostname = host("strikes");
+    const domainId = await customDomain(ota, hostname, "verified");
+    // No records: every DNS check of the host fails (`txt_missing`).
+
+    for (let click = 0; click < 3; click += 1) {
+      expect((await recheck(domainId)).status).toBe(202);
+    }
+
+    // One `domain.recheck` in the daily re-check's slot of the domain and the UTC day, and a TLS probe per click.
+    const names = await completedJobsFor(domainId, 4);
+    expect(names).toEqual([DOMAIN_RECHECK_JOB, ...Array<string>(3).fill(DOMAIN_TLS_PROBE_JOB)].sort());
+    const [dnsJob] = (await jobsFor(domainId)).filter((job) => job.name === DOMAIN_RECHECK_JOB);
+    expect(dnsJob?.id).toBe(dailyJobId(DOMAIN_RECHECK_JOB, domainId, t.clock.now()));
+    expect(await domainRow(domainId)).toMatchObject({
+      verification_status: "verified",
+      check_failures: 1,
+      last_check_error: "txt_missing",
+    });
+    // Every click is audited with the jobs it asked for.
+    expect(
+      (await auditOf(domainId)).filter((row) => row["action"] === "domain.recheck_requested"),
+    ).toHaveLength(3);
+
+    // The next UTC day has a slot of its own: a re-check counts again.
+    t.clock.advance(DAILY_SLOT_MS);
+    expect((await recheck(domainId)).status).toBe(202);
+
+    expect(await completedJobsFor(domainId, 6)).toEqual(
+      [DOMAIN_RECHECK_JOB, DOMAIN_RECHECK_JOB, ...Array<string>(4).fill(DOMAIN_TLS_PROBE_JOB)].sort(),
+    );
+    expect(await domainRow(domainId)).toMatchObject({ verification_status: "verified", check_failures: 2 });
   });
 
   it("[PBE-051 AC3] a pending domain gets its verification, the sub-domain and a failed domain the probe only", async () => {

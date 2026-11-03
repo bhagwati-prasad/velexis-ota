@@ -104,6 +104,7 @@ Billing never deletes data. Reactivation is a new Checkout (canceled) or a succe
 
 - Before M5, subscriptions are `trialing`, `billing_provider = 'manual'`, on `early_access`, with `trial_ends_at = created_at + 90 days`. Admins may change the date (`adminUpdateManualSubscription`). The edit locks the tenant's row, then the subscription's: the lock order of §D (FIX-W30-PLATFORM).
 - From M5, `billing.manual_trials` (daily) e-mails owners 14 and 3 days before `trial_ends_at` and sets `tenants.billing_notice = 'trial_ending'`; on the end date it sets the manual row `past_due`; 14 days later it sets it `canceled` and suspends the tenant (`billing`). Choosing a plan at any point goes through §B and replaces the manual row.
+- *Note (2026-11-03, lead decision (2c), FIX-W40-PLATFORM).* Go-live ([`../scope.md`](../scope.md) PF-14, `goLive`) accepts a manual subscription whose status is `active` (an OTA a platform admin bills outside Stripe) as its `subscription` precondition, besides a Stripe subscription that is `trialing` or `active`. A manual trial (`trialing` on a manual row) never counts: `details.missing` names `subscription` until the owner chooses a plan (§B) or an admin makes the manual subscription `active`.
 
 ### H. Abandoned Checkout
 

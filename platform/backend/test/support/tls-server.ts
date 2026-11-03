@@ -11,10 +11,15 @@
 //   clients sent (`servernames`, read in the server's SNI callback while it handles the ClientHello, so before the
 //   client's handshake can end), which proves that the probe sends the host as SNI. A client without SNI adds none.
 // - `startRefusingServer()`: a TCP server that closes every connection at once, before any TLS: a handshake error.
+// - `localCertificateAuthority()` and `startTlsServer(hostnames, {issuer})` (FIX-W40-PLATFORM, lead decision (2e) of
+//   2026-11-03): a certificate authority of the test (a CA certificate and key made the same way, valid for one day),
+//   and a server whose certificate it signed (`openssl req -new` and `openssl x509 -req -CA …`, which OpenSSL 3 and
+//   LibreSSL 3 both have), so the probe's production mode can be shown to accept a chain that verifies against the CA
+//   given as its trust anchor, and to refuse the same chain against Node.js's default trust store.
 //
 // Spawning `openssl` takes tens of milliseconds: tests call these in their `beforeAll` hooks.
 import { execFile } from "node:child_process";
-import { generateKeyPairSync, X509Certificate } from "node:crypto";
+import { generateKeyPairSync, randomBytes, X509Certificate } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createTcpServer, type AddressInfo, type Server } from "node:net";
 import { tmpdir } from "node:os";
@@ -41,21 +46,39 @@ export interface LocalTlsServer extends LocalServer {
   readonly servernames: readonly string[];
 }
 
+/** A certificate and its private key, as PEM. */
+export interface CertificateAndKey {
+  readonly certificatePem: string;
+  readonly keyPem: string;
+}
+
+/** A new EC P-256 private key, as PKCS #8 PEM. */
+function newPrivateKey(): string {
+  return generateKeyPairSync("ec", {
+    namedCurve: "prime256v1",
+    privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    publicKeyEncoding: { type: "spki", format: "pem" },
+  }).privateKey;
+}
+
+/** Runs `work` in a new temporary folder of mode 0700, deleted afterwards. */
+async function inTemporaryFolder<T>(work: (dir: string) => Promise<T>): Promise<T> {
+  const dir = mkdtempSync(join(tmpdir(), "velexis-platform-tls-"));
+  try {
+    return await work(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 /** A self-signed certificate for `hostnames`, valid for one day from now, and its private key, as PEM. */
-export async function selfSignedCertificate(
-  hostnames: readonly string[],
-): Promise<{ readonly certificatePem: string; readonly keyPem: string }> {
+export async function selfSignedCertificate(hostnames: readonly string[]): Promise<CertificateAndKey> {
   const [first] = hostnames;
   if (first === undefined) {
     throw new TypeError("selfSignedCertificate: name at least one host");
   }
-  const { privateKey } = generateKeyPairSync("ec", {
-    namedCurve: "prime256v1",
-    privateKeyEncoding: { type: "pkcs8", format: "pem" },
-    publicKeyEncoding: { type: "spki", format: "pem" },
-  });
-  const dir = mkdtempSync(join(tmpdir(), "velexis-platform-tls-"));
-  try {
+  const privateKey = newPrivateKey();
+  return inTemporaryFolder(async (dir) => {
     const keyPath = join(dir, "key.pem");
     const certificatePath = join(dir, "certificate.pem");
     writeFileSync(keyPath, privateKey, { mode: 0o600 });
@@ -75,9 +98,97 @@ export async function selfSignedCertificate(
       `subjectAltName=${hostnames.map((name) => `DNS:${name}`).join(",")}`,
     ]);
     return { certificatePem: readFileSync(certificatePath, "utf8"), keyPem: privateKey };
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+  });
+}
+
+/** A certificate authority of the test: a self-signed CA certificate (`CA:TRUE`), valid for one day, and its key. */
+export async function localCertificateAuthority(): Promise<CertificateAndKey> {
+  const privateKey = newPrivateKey();
+  return inTemporaryFolder(async (dir) => {
+    const keyPath = join(dir, "ca-key.pem");
+    const certificatePath = join(dir, "ca.pem");
+    writeFileSync(keyPath, privateKey, { mode: 0o600 });
+    await execFileAsync("openssl", [
+      "req",
+      "-x509",
+      "-new",
+      "-key",
+      keyPath,
+      "-out",
+      certificatePath,
+      "-days",
+      "1",
+      "-subj",
+      "/CN=Velexis platform test CA",
+      "-addext",
+      "basicConstraints=critical,CA:TRUE",
+      "-addext",
+      "keyUsage=critical,keyCertSign,cRLSign",
+    ]);
+    return { certificatePem: readFileSync(certificatePath, "utf8"), keyPem: privateKey };
+  });
+}
+
+/** A certificate for `hostnames` that `issuer` signed, valid for one day from now, and its private key, as PEM. */
+export async function issuedCertificate(
+  hostnames: readonly string[],
+  issuer: CertificateAndKey,
+): Promise<CertificateAndKey> {
+  const [first] = hostnames;
+  if (first === undefined) {
+    throw new TypeError("issuedCertificate: name at least one host");
   }
+  const privateKey = newPrivateKey();
+  return inTemporaryFolder(async (dir) => {
+    const keyPath = join(dir, "key.pem");
+    const requestPath = join(dir, "request.csr");
+    const issuerPath = join(dir, "ca.pem");
+    const issuerKeyPath = join(dir, "ca-key.pem");
+    const extensionsPath = join(dir, "extensions.cnf");
+    const certificatePath = join(dir, "certificate.pem");
+    writeFileSync(keyPath, privateKey, { mode: 0o600 });
+    writeFileSync(issuerPath, issuer.certificatePem);
+    writeFileSync(issuerKeyPath, issuer.keyPem, { mode: 0o600 });
+    writeFileSync(
+      extensionsPath,
+      [
+        "basicConstraints=critical,CA:FALSE",
+        "keyUsage=critical,digitalSignature",
+        "extendedKeyUsage=serverAuth",
+        `subjectAltName=${hostnames.map((name) => `DNS:${name}`).join(",")}`,
+        "",
+      ].join("\n"),
+    );
+    await execFileAsync("openssl", [
+      "req",
+      "-new",
+      "-key",
+      keyPath,
+      "-out",
+      requestPath,
+      "-subj",
+      `/CN=${first}`,
+    ]);
+    await execFileAsync("openssl", [
+      "x509",
+      "-req",
+      "-in",
+      requestPath,
+      "-CA",
+      issuerPath,
+      "-CAkey",
+      issuerKeyPath,
+      "-set_serial",
+      `0x${randomBytes(8).toString("hex")}`,
+      "-days",
+      "1",
+      "-extfile",
+      extensionsPath,
+      "-out",
+      certificatePath,
+    ]);
+    return { certificatePem: readFileSync(certificatePath, "utf8"), keyPem: privateKey };
+  });
 }
 
 async function listen(server: Server): Promise<number> {
@@ -95,9 +206,18 @@ function closer(server: Server): () => Promise<void> {
     });
 }
 
-/** A TLS server on a free loopback port whose self-signed certificate names `hostnames` (see the file header). */
-export async function startTlsServer(hostnames: readonly string[]): Promise<LocalTlsServer> {
-  const { certificatePem, keyPem } = await selfSignedCertificate(hostnames);
+/**
+ * A TLS server on a free loopback port whose certificate names `hostnames` (see the file header): self-signed, or
+ * signed by `options.issuer`.
+ */
+export async function startTlsServer(
+  hostnames: readonly string[],
+  options: { readonly issuer?: CertificateAndKey } = {},
+): Promise<LocalTlsServer> {
+  const { certificatePem, keyPem } =
+    options.issuer === undefined
+      ? await selfSignedCertificate(hostnames)
+      : await issuedCertificate(hostnames, options.issuer);
   const context = createSecureContext({ cert: certificatePem, key: keyPem });
   const servernames: string[] = [];
   const server = createTlsServer(

@@ -13,9 +13,11 @@
 //
 // Each job id names the domain and the UTC day of the Clock's now when the run (or its retry) starts
 // (`domain.recheck.<domainId>.<day>`, `domain.tls_probe.<domainId>.<day>`), so a retry on the same day adds no second
-// job for a domain queued already (completed jobs are kept a day, ADR-0009 item 7). When a job cannot be queued (Redis
-// down or too slow) the run fails after trying every domain, and BullMQ tries it again with the defaults of ADR-0009
-// (5 attempts, backoff from 30 s); the next day's run comes anyway.
+// job for a domain queued already (completed jobs are kept a day, ADR-0009 item 7). A platform admin's re-check of a
+// verified domain takes the same `domain.recheck` id (admin-domains.service.ts), so the daily run and the admin's
+// clicks count one strike a day at most (FIX-W40-PLATFORM, lead decision (2f) of 2026-11-03). When a job cannot be
+// queued (Redis down or too slow) the run fails after trying every domain, and BullMQ tries it again with the defaults
+// of ADR-0009 (5 attempts, backoff from 30 s); the next day's run comes anyway.
 import { Injectable } from "@nestjs/common";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { Clock } from "../common/clock";

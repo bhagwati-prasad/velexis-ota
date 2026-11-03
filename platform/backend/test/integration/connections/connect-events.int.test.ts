@@ -327,6 +327,66 @@ const logLines = (msg: string): Array<Record<string, unknown>> =>
 const invalidationsOf = (tenantId: string): InvalidationEvent[] =>
   invalidations.filter((event) => "tenantId" in event && event.tenantId === tenantId);
 
+/** How many sessions of this file's database wait for a lock (row and advisory locks alike). */
+async function waitingOnLocks(): Promise<number> {
+  const [row] = await rowsOf(
+    "SELECT count(DISTINCT l.pid)::int AS waiting FROM pg_locks l JOIN pg_stat_activity a USING (pid) " +
+      "WHERE NOT l.granted AND a.datname = current_database()",
+    [],
+  );
+  return Number(row?.["waiting"] ?? 0);
+}
+
+/**
+ * Delivers `delivery` while a transaction of its own holds the OTA's test connection (as go-live does while it copies a
+ * `connect_standard` connection to live, FIX-W40-PLATFORM, lead decision (2d) of 2026-11-03), waits until the worker's
+ * lock of the account's connections waits for it, then inserts and commits the live copy of `test` in that
+ * transaction; answers the event's inbox row once the worker is done with it.
+ */
+async function deliverWhileGoLiveCopies(
+  ota: Pick<Ota, "tenant" | "accountReference">,
+  test: Row,
+  delivery: Delivery,
+): Promise<{ row: Row; copy: PlatformRow<"payment_provider_connections"> }> {
+  const holder = await pool.connect();
+  let copy: PlatformRow<"payment_provider_connections"> | undefined;
+  try {
+    await holder.query("BEGIN");
+    await holder.query("SELECT id FROM platform.payment_provider_connections WHERE id = $1 FOR UPDATE", [
+      test["id"],
+    ]);
+    const res = await post(delivery.payload, delivery.header);
+    expect(res.status).toBe(200);
+    // The worker read the connections (one, the test one), and its transaction now waits for the test row.
+    await vi.waitFor(async () => {
+      expect(await waitingOnLocks()).toBeGreaterThan(0);
+    }, WAIT);
+    copy = await insertPaymentConnection(holder, ota.tenant, {
+      ...connectColumns(ota.accountReference, {
+        status: test["status"],
+        capabilities: test["capabilities"],
+        connected_at: test["connected_at"],
+      }),
+      environment: "live",
+    });
+    await holder.query("COMMIT");
+  } catch (error) {
+    await holder.query("ROLLBACK");
+    throw error;
+  } finally {
+    holder.release();
+  }
+  if (copy === undefined) {
+    throw new Error("the live copy was not inserted");
+  }
+  const row = await vi.waitFor(async () => {
+    const stored = await eventRow(delivery.eventId);
+    expect(["processed", "ignored", "failed"]).toContain(stored?.["status"]);
+    return stored as Row;
+  }, WAIT);
+  return { row, copy };
+}
+
 // ---- Tests ---------------------------------------------------------------------------------------------------------
 
 describe("POST /webhooks/stripe/connect-accounts (receiveStripeConnectAccountEvent)", () => {
@@ -510,6 +570,34 @@ describe("account.application.deauthorized", () => {
     expect(await auditOf(ota.tenant.id, "payments.connect_disconnected")).toHaveLength(2);
     expect(await emailsOf(ota.tenant.id)).toHaveLength(2);
     expect(await eventRow(delivery.eventId)).toMatchObject({ status: "processed", attempts: 1 });
+  });
+
+  it("[FIX-W40-PLATFORM AC4] disconnects the live copy go-live committed while the event waited for the account's lock", async () => {
+    const ota = await arrangeOta();
+    // Before go-live: the OTA has its test connection only.
+    await pool.query("DELETE FROM platform.payment_provider_connections WHERE id = $1", [ota.live.id]);
+    const delivery = connectEvent("account.application.deauthorized", ota.accountReference);
+
+    const { row, copy } = await deliverWhileGoLiveCopies(ota, ota.test, delivery);
+
+    expect(row).toMatchObject({ status: "processed", last_error: null, tenant_id: ota.tenant.id });
+    const now = t.clock.now();
+    expect(
+      (await connectionsOfTenant(ota.tenant.id)).map((connection) => [
+        connection["id"],
+        connection["status"],
+        connection["disconnected_at"],
+      ]),
+    ).toEqual([
+      [ota.test.id, "disabled", now],
+      [copy.id, "disabled", now],
+    ]);
+    expect(
+      (await auditOf(ota.tenant.id, "payments.connect_disconnected")).map((entry) => entry["target_id"]),
+    ).toEqual([ota.test.id, copy.id].sort());
+    // One e-mail per active owner, as for any deauthorisation of the OTA.
+    expect(await emailsOf(ota.tenant.id)).toHaveLength(ota.owners.length);
+    await expectConnectionInvalidation(ota.tenant.id);
   });
 
   it("[PBE-056 AC1] keeps a connection connected again after the event, and one a platform admin disabled", async () => {
@@ -731,6 +819,46 @@ describe("account.updated", () => {
       ["pending", 2],
     ]);
     expect(await auditOf(ota.tenant.id, "payments.connect_status_changed")).toHaveLength(2);
+    await expectConnectionInvalidation(ota.tenant.id);
+  });
+
+  it("[FIX-W40-PLATFORM AC4] refreshes the live copy go-live committed while the event waited for the account's lock, in the same event", async () => {
+    const ota = await arrangeOta();
+    await pool.query("DELETE FROM platform.payment_provider_connections WHERE id = $1", [ota.live.id]);
+    // Stripe stopped the account's charges: the test connection and its copy must both become `pending`.
+    stripe.put(stripeAccount(ota.accountReference, { charges: false }));
+    const delivery = connectEvent("account.updated", ota.accountReference);
+
+    const { row, copy } = await deliverWhileGoLiveCopies(ota, ota.test, delivery);
+
+    expect(row).toMatchObject({ status: "processed", last_error: null, tenant_id: ota.tenant.id });
+    const capabilities = { chargesEnabled: false, payoutsEnabled: false, detailsSubmitted: true };
+    expect(
+      (await connectionsOfTenant(ota.tenant.id)).map((connection) => [
+        connection["id"],
+        connection["status"],
+        connection["capabilities"],
+      ]),
+    ).toEqual([
+      [ota.test.id, "pending", capabilities],
+      [copy.id, "pending", capabilities],
+    ]);
+    expect(
+      (await auditOf(ota.tenant.id, "payments.connect_status_changed")).map((entry) => entry["target_id"]),
+    ).toEqual([ota.test.id, copy.id].sort());
+    // Both in one write: the first round's lock saw the copy, so the rows had changed since its read and it wrote
+    // nothing; the second round refreshed the two connections together. A lock that missed the copy would have
+    // refreshed the test connection alone in the first round.
+    const ofThisEvent = (msg: string) => logLines(msg).filter((line) => line["eventId"] === delivery.eventId);
+    expect(
+      ofThisEvent("stripe_connect.account_changed_during_refresh").map((line) => line["attempt"]),
+    ).toEqual([1]);
+    expect(
+      ofThisEvent("stripe_connect.account_refreshed").map((line) => [
+        line["attempt"],
+        [...(line["changed"] as string[])].sort(),
+      ]),
+    ).toEqual([[2, [ota.test.id, copy.id].sort()]]);
     await expectConnectionInvalidation(ota.tenant.id);
   });
 

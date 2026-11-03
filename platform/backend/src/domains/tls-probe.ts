@@ -12,8 +12,17 @@
 //   - `failed`: no connection, a handshake error (Caddy refuses the handshake while it has no certificate for the
 //     host: `ask` refused it, or issuance failed), no answer within TLS_PROBE_TIMEOUT_MS, no certificate, or a
 //     certificate for another name.
-//   The chain is not verified against a CA: the probe reports the certificate Caddy serves, whoever issued it (Let's
-//   Encrypt's staging CA in the M5 exit test included). The first probe after a verification is what makes Caddy ask
+//   With `APP_ENV=production` the chain must also verify (FIX-W40-PLATFORM, lead decision (2e) of 2026-11-03): the
+//   connection reads the peer's chain without refusing it (`rejectUnauthorized: false`, so the certificate is still
+//   read and an expired one still reported) and an `issued` outcome needs `socket.authorized`, the verdict
+//   `rejectUnauthorized: true` would act on: the chain verifies against the trust store of Node.js's TLS client (its
+//   root certificates, which follow the Mozilla CA list as the system trust store does, and NODE_EXTRA_CA_CERTS) and
+//   names the host. An untrusted chain (a self-signed certificate, Let's Encrypt's staging CA) is `failed`
+//   (`untrusted_chain`), so a certificate travellers' browsers would refuse never counts as issued; a certificate whose
+//   own `valid_to` the Clock has reached stays `expired`, which never counts as issued either (OpenSSL's verdict on an
+//   expired chain does not say whether the chain was trusted). Outside production the chain is not judged: a
+//   certificate that names the host and has not expired is `issued` whoever signed it, Let's Encrypt's staging CA of
+//   the M5 exit test included (`tlsProbeOptionsFor`). The first probe after a verification is what makes Caddy ask
 //   the `ask` endpoint and obtain the certificate, so the first traveller does not wait for it; issuance holds the
 //   handshake for a few seconds, hence the 30-second bound.
 // - **DomainTlsProbe** (worker) is one `domain.tls_probe {domainId}` job of `platform-domains`: the domain is read (one
@@ -29,12 +38,14 @@
 //
 // Nothing here logs a certificate: the lines carry the domain id, the tenant, the status and the failure code.
 import { Inject, Injectable, type ValueProvider } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import type { X509Certificate } from "node:crypto";
 import { connect } from "node:tls";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { Clock } from "../common/clock";
 import { PLATFORM_DB, type PlatformDb } from "../common/database";
 import { InvalidationPublisher, runInTransaction } from "../common/redis/invalidation.publisher";
+import type { PlatformBackendConfig } from "../config";
 import { DomainsRepository } from "./domains.repository";
 
 /** Where the probe connects: the TLS listener that serves the storefront hosts. */
@@ -67,7 +78,13 @@ export type ProbedTlsStatus = "issued" | "expired" | "failed";
 
 /** Why a probe failed (logged and kept with the job; never shown as a certificate detail). */
 export type TlsProbeFailure =
-  "connect_failed" | "handshake_failed" | "timeout" | "no_certificate" | "name_mismatch" | "bad_expiry";
+  | "connect_failed"
+  | "handshake_failed"
+  | "timeout"
+  | "no_certificate"
+  | "name_mismatch"
+  | "bad_expiry"
+  | "untrusted_chain";
 
 /** What one probe found. */
 export type TlsProbeOutcome =
@@ -77,6 +94,46 @@ export type TlsProbeOutcome =
 /** The probe's options; tests shorten the timeout. */
 export interface TlsProbeOptions {
   readonly timeoutMs?: number;
+  /**
+   * True when an `issued` outcome needs a chain that verifies (`APP_ENV=production`, file header); false or absent:
+   * the chain is not judged.
+   */
+  readonly verifyChain?: boolean;
+  /**
+   * The trust anchors to verify the chain against instead of Node.js's default trust store, as PEM (tests only: a
+   * local CA proves that a trusted chain is `issued` in production).
+   */
+  readonly ca?: readonly string[];
+}
+
+/** The probe's options of a deployment: the chain is verified with `APP_ENV=production` only (file header). */
+export function tlsProbeOptionsFor(appEnv: PlatformBackendConfig["APP_ENV"]): TlsProbeOptions {
+  return { verifyChain: appEnv === "production" };
+}
+
+/** What the probe's handshake gave: the peer certificate and the chain's verdict (`socket.authorized`). */
+export interface TlsHandshake {
+  readonly certificate: X509Certificate | undefined;
+  /** True when the chain verified against the trust store and named the host. */
+  readonly authorized: boolean;
+}
+
+/**
+ * The outcome of a handshake at `now` for `hostname`: the certificate's (outcomeOfCertificate), and with
+ * `verifyChain` an `issued` one only when the chain verified; otherwise `failed` (`untrusted_chain`). A certificate
+ * that is `failed` or `expired` on its own stays so: neither counts as issued.
+ */
+export function outcomeOfHandshake(
+  handshake: TlsHandshake,
+  hostname: string,
+  now: Date,
+  verifyChain: boolean,
+): TlsProbeOutcome {
+  const outcome = outcomeOfCertificate(handshake.certificate, hostname, now);
+  if (outcome.status === "issued" && verifyChain && !handshake.authorized) {
+    return { status: "failed", failure: "untrusted_chain" };
+  }
+  return outcome;
 }
 
 /** True when `code` is a socket error of the TCP connection itself (nothing listened, no route), not of TLS. */
@@ -107,7 +164,8 @@ export function outcomeOfCertificate(
 
 /**
  * Connects to `target` with `hostname` as SNI and reads the peer certificate (see the file header). `now` is the
- * instant the expiry is compared with (the Clock's). Never rejects: every failure is a `failed` outcome.
+ * instant the expiry is compared with (the Clock's); with `options.verifyChain` the chain must verify too. Never
+ * rejects: every failure is a `failed` outcome.
  */
 export function probeTls(
   hostname: string,
@@ -116,6 +174,7 @@ export function probeTls(
   options: TlsProbeOptions = {},
 ): Promise<TlsProbeOutcome> {
   const timeoutMs = options.timeoutMs ?? TLS_PROBE_TIMEOUT_MS;
+  const verifyChain = options.verifyChain === true;
   return new Promise<TlsProbeOutcome>((resolveProbe) => {
     let settled = false;
     let connected = false;
@@ -123,8 +182,10 @@ export function probeTls(
       host: target.host,
       port: target.port,
       servername: hostname,
-      // The probe reports the certificate Caddy serves; it does not judge the issuer (file header).
+      // The handshake is never refused for its chain: the certificate is read either way, and in production
+      // `socket.authorized` (what `rejectUnauthorized: true` would act on) decides whether it counts (file header).
       rejectUnauthorized: false,
+      ...(options.ca === undefined ? {} : { ca: [...options.ca] }),
     });
     const finish = (outcome: TlsProbeOutcome): void => {
       if (settled) {
@@ -140,7 +201,14 @@ export function probeTls(
       connected = true;
     });
     socket.once("secureConnect", () => {
-      finish(outcomeOfCertificate(socket.getPeerX509Certificate(), hostname, now()));
+      finish(
+        outcomeOfHandshake(
+          { certificate: socket.getPeerX509Certificate(), authorized: socket.authorized },
+          hostname,
+          now(),
+          verifyChain,
+        ),
+      );
     });
     socket.on("error", (error: NodeJS.ErrnoException) => {
       finish({
@@ -168,6 +236,9 @@ export interface DomainTlsProbeResult {
 
 @Injectable()
 export class DomainTlsProbe {
+  /** The probe's options of this deployment: the chain is verified with `APP_ENV=production` (file header). */
+  private readonly options: TlsProbeOptions;
+
   constructor(
     private readonly domains: DomainsRepository,
     private readonly invalidations: InvalidationPublisher,
@@ -175,7 +246,10 @@ export class DomainTlsProbe {
     @Inject(TLS_PROBE_TARGET) private readonly target: TlsProbeTarget,
     @Inject(PLATFORM_DB) private readonly db: PlatformDb,
     @InjectPinoLogger(DomainTlsProbe.name) private readonly logger: PinoLogger,
-  ) {}
+    config: ConfigService<PlatformBackendConfig, true>,
+  ) {
+    this.options = tlsProbeOptionsFor(config.get("APP_ENV", { infer: true }));
+  }
 
   /** One `domain.tls_probe` job (see the file header). */
   async probe(domainId: string): Promise<DomainTlsProbeResult> {
@@ -184,7 +258,7 @@ export class DomainTlsProbe {
       this.logger.info({ domainId }, "domains.tls_probe_skipped");
       return { domainId, status: "missing", probed: false };
     }
-    const outcome = await probeTls(row.hostname, this.target, () => this.clock.now());
+    const outcome = await probeTls(row.hostname, this.target, () => this.clock.now(), this.options);
 
     const stored = await runInTransaction(this.db, async (trx) => {
       const current = await this.domains.lockForCheck(trx, domainId);

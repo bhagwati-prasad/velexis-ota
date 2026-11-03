@@ -28,12 +28,14 @@
 //   CONFLICT` (`not_assigned`). The office becomes `available` with `released_at` and no tenant, with the audit row
 //   `amadeus_office.released` (the reason, the confirmation and the OTA it left), and an `amadeus_account`
 //   invalidation after the commit (the OTA backend stops using the office for that OTA's old orders). An `assigned`
-//   office that a disabled `velexis` connection of its OTA still holds (on the office's account) also leaves that
-//   connection in the same transaction (FIX-W39-PLATFORM, lead decision (2l) of 2026-11-02): out of `office_ids`, and
-//   the default, queuing and owner offices that named it become `null` (`version + 1`, `removeVelexisOffice`), so the
-//   pool never hands one office to two OTAs and re-enabling the connection (`adminSetConnectionStatus`) answers `409
-//   CONFLICT` (`no_office`) until an office is assigned again. The audit row adds the connection, its status and its
-//   offices before and after, and a `connection` invalidation follows the commit.
+//   office that a non-active `velexis` connection of its OTA still holds (on the office's account) also leaves that
+//   connection in the same transaction: a `disabled` one since FIX-W39-PLATFORM (lead decision (2l) of 2026-11-02),
+//   and a `pending_verification` or `invalid_credentials` one since FIX-W40-PLATFORM (lead decision (2b) of
+//   2026-11-03): out of `office_ids`, and the default, queuing and owner offices that named it become `null`
+//   (`version + 1`, `removeVelexisOffice`), so the pool never hands one office to two OTAs and re-enabling a disabled
+//   connection (`adminSetConnectionStatus`) answers `409 CONFLICT` (`no_office`) until an office is assigned again.
+//   The audit row adds the connection, its status and its offices before and after, and a `connection` invalidation
+//   follows the commit.
 // - Retire: only an `available` office (`409 CONFLICT`, `not_available`), with the admin's reason in the audit row;
 //   `amadeus_account` invalidation (an office status changed, platform architecture §6.3).
 import { Inject, Injectable } from "@nestjs/common";
@@ -444,12 +446,14 @@ export class AmadeusOfficesService {
         }
       }
 
-      // The disabled `velexis` connection that still holds an assigned office loses it (lead decision (2l)): the
-      // connection was locked above (an active one answered `connection_active`).
+      // A `velexis` connection that is not active and still holds an assigned office loses it: a disabled one (lead
+      // decision (2l) of 2026-11-02), and since FIX-W40-PLATFORM (lead decision (2b) of 2026-11-03) also one that is
+      // `pending_verification` or `invalid_credentials`. The connection was locked above (an active one answered
+      // `connection_active`).
       const emptied =
         holder !== undefined &&
         holder.credential_source === "velexis" &&
-        holder.status === "disabled" &&
+        holder.status !== "active" &&
         holder.amadeus_account_id === account.id &&
         holder.office_ids.includes(office.office_id)
           ? await this.connections.removeVelexisOffice(trx, holder.id, office.office_id, now)

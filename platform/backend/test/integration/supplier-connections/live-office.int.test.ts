@@ -821,6 +821,81 @@ describe("adminReleaseAmadeusOffice", () => {
     });
   });
 
+  it.each(["pending_verification", "invalid_credentials"] as const)(
+    "[FIX-W40-PLATFORM AC2] takes the released office out of a %s velexis connection that holds it: offices and defaults cleared, audited, invalidated",
+    async (status) => {
+      const live = await velexisAccount("live");
+      const ota = await liveOta();
+      const officeId = status === "pending_verification" ? "OSL1A0321" : "OSL1A0322";
+      const office = await insertAmadeusOffice(pool, live, {
+        office_id: officeId,
+        status: "assigned",
+        assigned_tenant_id: ota.tenant.id,
+        assigned_at: t.clock.now(),
+      });
+      const connection = await insertSupplierConnection(pool, ota.tenant, {
+        ...velexisSource(live),
+        status,
+        office_ids: [officeId],
+        default_office_id: officeId,
+        queuing_office_id: officeId,
+        owner_office_id: officeId,
+      });
+
+      const released = await release(office.id, { confirmNoOpenBookings: true, reason: REASON });
+
+      // A connection that is not active backs no booking: the office is released (no `connection_active`).
+      expect(released.status).toBe(200);
+      expect(released.body as OfficeBody).toMatchObject({ status: "available", assignedTenant: null });
+      expect(await storedOffice(office.id)).toMatchObject({ status: "available", assigned_tenant_id: null });
+      expect(await connectionsOf(ota.tenant.id)).toEqual([
+        expect.objectContaining({
+          id: connection.id,
+          credential_source: "velexis",
+          amadeus_account_id: live.id,
+          // The connection keeps its status; only the office fields name the released office no more.
+          status,
+          office_ids: [],
+          default_office_id: null,
+          queuing_office_id: null,
+          owner_office_id: null,
+          version: connection.version + 1,
+        }),
+      ]);
+      expect(await auditOf(ota.tenant.id, "amadeus_office.released")).toEqual([
+        expect.objectContaining({
+          actor_type: "platform_admin",
+          target_id: office.id,
+          details: expect.objectContaining({
+            connectionId: connection.id,
+            before: expect.objectContaining({
+              status: "assigned",
+              connectionStatus: status,
+              connectionOfficeIds: [officeId],
+              connectionDefaultOfficeId: officeId,
+              connectionQueuingOfficeId: officeId,
+              connectionOwnerOfficeId: officeId,
+              connectionVersion: connection.version,
+            }) as unknown,
+            after: expect.objectContaining({
+              status: "available",
+              connectionStatus: status,
+              connectionOfficeIds: [],
+              connectionDefaultOfficeId: null,
+              connectionQueuingOfficeId: null,
+              connectionOwnerOfficeId: null,
+              connectionVersion: connection.version + 1,
+            }) as unknown,
+          }) as unknown,
+        }),
+      ]);
+      await invalidations([
+        { v: 1, type: "amadeus_account", id: live.id },
+        { v: 1, type: "connection", tenantId: ota.tenant.id },
+      ]);
+    },
+  );
+
   it("[FIX-W39-PLATFORM AC8] leaves a disabled connection on another office, and an own-credential connection, as they are", async () => {
     const live = await velexisAccount("live");
     const ota = await liveOta();

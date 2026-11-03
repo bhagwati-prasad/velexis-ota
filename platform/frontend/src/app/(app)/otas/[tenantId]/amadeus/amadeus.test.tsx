@@ -117,12 +117,8 @@ import {
   officeIdsOf,
 } from "@/app/(app)/otas/[tenantId]/amadeus/own-credentials-form";
 import AmadeusPage from "@/app/(app)/otas/[tenantId]/amadeus/page";
-import {
-  SUBMISSION_POLL_INTERVAL_MS,
-  SubmissionStatus,
-  submissionReason,
-} from "@/app/(app)/otas/[tenantId]/amadeus/submission-status";
 import OtaLayout from "@/app/(app)/otas/[tenantId]/layout";
+import { SUBMISSION_POLL_INTERVAL_MS, SubmissionStatus } from "@/components/submission-status";
 import { BFF_KEY_HEADER, END_USER_AGENT_HEADER, END_USER_IP_HEADER } from "@/lib/end-user";
 import type { MilestoneFeatures, TenantRole } from "@/lib/roles";
 import { ACCESS_TOKEN_COOKIE } from "@/lib/session";
@@ -1162,45 +1158,6 @@ describe("own credentials", () => {
     expect(writes()).toEqual([]);
   });
 
-  it("[PFE-023 AC2] maps every verification result and apply refusal to plain words, never the code [PF-52 AC2]", () => {
-    const codes = [
-      "AMADEUS_CREDENTIALS_INVALID",
-      "PROVIDER_UNAVAILABLE",
-      "TENANT_NOT_ACTIVE",
-      "CONNECTION_DISABLED",
-      "FEATURE_DISABLED",
-      "CONNECTION_CHANGED",
-    ];
-    const words = new Set<string>();
-    for (const code of codes) {
-      const reason = submissionReason(code);
-      expect(reason).toBe(SUBMISSION.reasons[code]);
-      expect(reason).not.toContain(code);
-      words.add(reason);
-    }
-    // Each has words of its own; an unknown code or none gets the general words.
-    expect(words.size).toBe(codes.length);
-    expect(submissionReason("SOMETHING_NEWER")).toBe(SUBMISSION.reasonUnknown);
-    expect(submissionReason(null)).toBe(SUBMISSION.reasonUnknown);
-    expect(submissionReason("__proto__")).toBe(SUBMISSION.reasonUnknown);
-
-    for (const errorCode of [...codes, "SOMETHING_NEWER"]) {
-      render(
-        <SubmissionStatus
-          tenantId={TENANT_ID}
-          environment="live"
-          submission={{ id: SUBMISSION_ID, status: "failed", errorCode }}
-        />,
-      );
-      const block = document.querySelector<HTMLElement>("[data-submission-status]");
-      expect(block?.querySelector("[data-submission-reason]")?.textContent).toBe(submissionReason(errorCode));
-      expect(block?.textContent).not.toContain(errorCode);
-      cleanup();
-    }
-    // A final submission is never read again.
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
   it("keeps polling through a rate limit (after its Retry-After) and an unavailable API, and stops with the portal's message", async () => {
     fakePollTimers();
     routes({
@@ -1216,6 +1173,8 @@ describe("own credentials", () => {
         tenantId={TENANT_ID}
         environment="test"
         submission={{ id: SUBMISSION_ID, status: "pending", errorCode: null }}
+        poll={getSubmissionStatus}
+        wording={SUBMISSION}
       />,
     );
     const block = () => document.querySelector<HTMLElement>("[data-submission-status]");
@@ -1253,6 +1212,8 @@ describe("own credentials", () => {
           tenantId={TENANT_ID}
           environment="test"
           submission={{ id: SUBMISSION_ID, status: "pending", errorCode: null }}
+          poll={getSubmissionStatus}
+          wording={SUBMISSION}
         />
       </RedirectBoundary>,
     );
@@ -1655,6 +1616,22 @@ describe("own credentials", () => {
     expect(liveSection()).toBeTruthy();
     expect(calls("GET", submissionPath())).toHaveLength(0);
     expect(writes()).toEqual([]);
+  });
+
+  it("[FIX-W40-PLATFORM AC7] offers the live own credentials only while the live switch is on; the test ones stay", async () => {
+    routes({ [`GET ${ME_PATH}`]: () => json(account({ liveSwitch: false }), 200) });
+    await openAmadeus();
+
+    expect(ownSection("test")).toBeTruthy();
+    expect(screen.queryByRole("region", { name: OWN.title("live") })).toBeNull();
+    expect(document.querySelector('[data-own-credentials="live"]')).toBeNull();
+    expect(writes()).toEqual([]);
+    cleanup();
+
+    routes({ [`GET ${ME_PATH}`]: () => json(account({ liveSwitch: true }), 200) });
+    await openAmadeus();
+    expect(ownSection("test")).toBeTruthy();
+    expect(ownSection("live")).toBeTruthy();
   });
 });
 

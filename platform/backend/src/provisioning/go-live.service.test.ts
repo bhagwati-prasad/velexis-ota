@@ -9,6 +9,7 @@ import {
   livePaymentPlan,
   missingPreconditions,
   storedConnectCapabilities,
+  subscriptionAllowsGoLive,
   type GoLiveState,
   type PaymentConnectionState,
 } from "./go-live.service";
@@ -24,7 +25,7 @@ const READY: GoLiveState = {
   payment: { mode: "velexis", usable: true },
   payoutAccountStatus: "verified",
   planLimits: { staffSeats: 5, apiKeys: 10, customDomains: 1, liveMode: true },
-  stripeSubscriptionCurrent: true,
+  subscription: { billingProvider: "stripe", status: "active", linked: true },
   mfaEnabled: true,
 };
 
@@ -87,6 +88,63 @@ describe("livePaymentPlan", () => {
   });
 });
 
+describe("subscriptionAllowsGoLive", () => {
+  it("[FIX-W40-PLATFORM AC3] accepts a Stripe subscription that is trialing or active, and a manual one that is active", () => {
+    for (const status of ["trialing", "active"]) {
+      expect(subscriptionAllowsGoLive({ billingProvider: "stripe", status, linked: true }), status).toBe(
+        true,
+      );
+    }
+    expect(subscriptionAllowsGoLive({ billingProvider: "manual", status: "active", linked: false })).toBe(
+      true,
+    );
+    // A manual row has no Stripe subscription; one that carries an id anyway is judged by its status alone.
+    expect(subscriptionAllowsGoLive({ billingProvider: "manual", status: "active", linked: true })).toBe(
+      true,
+    );
+  });
+
+  it("[FIX-W40-PLATFORM AC3] refuses a manual trial, a Stripe row without its Stripe subscription, other statuses and none", () => {
+    // A manual trial still counts as no subscription: nobody pays for it yet.
+    expect(subscriptionAllowsGoLive({ billingProvider: "manual", status: "trialing", linked: false })).toBe(
+      false,
+    );
+    expect(subscriptionAllowsGoLive({ billingProvider: "stripe", status: "active", linked: false })).toBe(
+      false,
+    );
+    expect(subscriptionAllowsGoLive({ billingProvider: "stripe", status: "trialing", linked: false })).toBe(
+      false,
+    );
+    for (const status of ["past_due", "paused", "incomplete", "canceled"]) {
+      expect(subscriptionAllowsGoLive({ billingProvider: "stripe", status, linked: true }), status).toBe(
+        false,
+      );
+      expect(subscriptionAllowsGoLive({ billingProvider: "manual", status, linked: false }), status).toBe(
+        false,
+      );
+    }
+    expect(subscriptionAllowsGoLive({ billingProvider: "invoice", status: "active", linked: true })).toBe(
+      false,
+    );
+    expect(subscriptionAllowsGoLive(null)).toBe(false);
+  });
+
+  it("[FIX-W40-PLATFORM AC3] names the subscription missing for a manual trial and not for an active manual subscription", () => {
+    expect(
+      missingPreconditions({
+        ...READY,
+        subscription: { billingProvider: "manual", status: "active", linked: false },
+      }),
+    ).toEqual([]);
+    expect(
+      missingPreconditions({
+        ...READY,
+        subscription: { billingProvider: "manual", status: "trialing", linked: false },
+      }),
+    ).toEqual(["subscription"]);
+  });
+});
+
 describe("missingPreconditions", () => {
   it("[PBE-061 AC1] finds nothing missing when every precondition is met", () => {
     expect(missingPreconditions(READY)).toEqual([]);
@@ -113,7 +171,7 @@ describe("missingPreconditions", () => {
       [{ payment: { mode: "api_keys", usable: false } }, "payments_live"],
       [{ payoutAccountStatus: "pending_review" }, "payout_account"],
       [{ planLimits: { staffSeats: 5, apiKeys: 10, customDomains: 1, liveMode: false } }, "plan_live_mode"],
-      [{ stripeSubscriptionCurrent: false }, "subscription"],
+      [{ subscription: null }, "subscription"],
       [{ mfaEnabled: false }, "mfa"],
     ];
     for (const [change, missing] of cases) {
@@ -128,7 +186,7 @@ describe("missingPreconditions", () => {
         payment: { mode: "velexis", usable: false },
         payoutAccountStatus: undefined,
         planLimits: null,
-        stripeSubscriptionCurrent: false,
+        subscription: null,
         mfaEnabled: false,
       }),
     ).toEqual([...LIVE_PRECONDITIONS]);

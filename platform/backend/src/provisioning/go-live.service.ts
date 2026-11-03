@@ -31,7 +31,9 @@
 //    - `payout_account`: when that mode is `velexis`, the payout account is `verified` (read `FOR SHARE`, so a change
 //      of the account waits for go-live), because Velexis then collects the OTA's money and settles it (PADR-0003);
 //    - `plan_live_mode`: the plan's `limits.liveMode` is `true` (planAllowsLiveMode, as requestLiveAmadeus reads it);
-//    - `subscription`: a Stripe subscription that is `trialing` or `active`;
+//    - `subscription`: a Stripe subscription that is `trialing` or `active`, or a manual subscription
+//      (`billing_provider = 'manual'`, set by a platform admin) that is `active` (FIX-W40-PLATFORM, lead decision (2c)
+//      of 2026-11-03; `subscriptionAllowsGoLive`); a manual trial (`trialing` on a manual row) still counts as missing;
 //    - `mfa`: the owner's account still has MFA on, read again in the transaction (RecentMfaGuard read it on the pool
 //      before the handler ran).
 // 3. All met: `storefront_environment = 'live'`, `live_enabled_at`, `live_enabled_by_account_id` and `version + 1`
@@ -67,7 +69,7 @@ import {
 import { planAllowsLiveMode } from "../supplier-connections/live-office.service";
 import { TenantsRepository } from "../tenants/tenants.repository";
 import { toTenant, type Tenant } from "../tenants/tenants.service";
-import { GoLiveRepository } from "./go-live.repository";
+import { GoLiveRepository, type LiveCandidateSubscription } from "./go-live.repository";
 
 export type GoLiveRequest = components["schemas"]["GoLiveRequest"];
 
@@ -136,10 +138,30 @@ export interface GoLiveState {
   readonly payoutAccountStatus: string | undefined;
   /** The `limits` of the tenant's plan. */
   readonly planLimits: unknown;
-  /** A Stripe subscription is `trialing` or `active`. */
-  readonly stripeSubscriptionCurrent: boolean;
+  /** The OTA's subscription that is `trialing` or `active`; `null` without one (GoLiveFacts). */
+  readonly subscription: LiveCandidateSubscription | null;
   /** The owner's account has MFA on. */
   readonly mfaEnabled: boolean;
+}
+
+/**
+ * True when `subscription` meets the `subscription` precondition (PF-14 AC1): a Stripe subscription
+ * (`billing_provider = 'stripe'` with a `provider_subscription_id`) that is `trialing` or `active`, or a manual one
+ * (`billing_provider = 'manual'`) that is `active` (FIX-W40-PLATFORM, lead decision (2c) of 2026-11-03). A manual trial
+ * is no subscription for go-live: nobody pays for it yet.
+ */
+export function subscriptionAllowsGoLive(subscription: LiveCandidateSubscription | null): boolean {
+  if (subscription === null) {
+    return false;
+  }
+  switch (subscription.billingProvider) {
+    case "stripe":
+      return subscription.linked && (subscription.status === "trialing" || subscription.status === "active");
+    case "manual":
+      return subscription.status === "active";
+    default:
+      return false;
+  }
 }
 
 /** The preconditions `state` leaves unmet, in the order of LIVE_PRECONDITIONS; empty when the OTA can go live. */
@@ -149,7 +171,7 @@ export function missingPreconditions(state: GoLiveState): LivePrecondition[] {
     payments_live: !state.payment.usable,
     payout_account: state.payment.mode === "velexis" && state.payoutAccountStatus !== "verified",
     plan_live_mode: !planAllowsLiveMode(state.planLimits),
-    subscription: !state.stripeSubscriptionCurrent,
+    subscription: !subscriptionAllowsGoLive(state.subscription),
     mfa: !state.mfaEnabled,
   };
   return LIVE_PRECONDITIONS.filter((precondition) => unmet[precondition]);

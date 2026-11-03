@@ -389,6 +389,36 @@ describe("goLive: the preconditions", () => {
     }
   });
 
+  it("[FIX-W40-PLATFORM AC3] accepts an active manual subscription, and still names a manual trial missing", async () => {
+    // A manual trial (`trialing` on a manual row, no Stripe subscription) counts as no subscription.
+    const trial = await readyOta({
+      subscription: { billing_provider: "manual", status: "trialing", provider_subscription_id: null },
+    });
+
+    const refused = await goLive(trial);
+
+    expect([refused.status, errorOf(refused).code, errorOf(refused).details]).toEqual([
+      422,
+      "LIVE_PRECONDITIONS_UNMET",
+      { missing: ["subscription"] },
+    ]);
+    expect((await storedTenant(trial.tenant.id)).storefront_environment).toBe("test");
+    expect(await auditOf(trial.tenant.id, "tenant.went_live")).toEqual([]);
+
+    // An active manual subscription (a platform admin bills the OTA outside Stripe) meets the precondition.
+    const manual = await readyOta({
+      subscription: { billing_provider: "manual", status: "active", provider_subscription_id: null },
+    });
+
+    const switched = await goLive(manual);
+
+    expect(switched.status, JSON.stringify(switched.body)).toBe(200);
+    expect((switched.body as TenantBody).storefrontEnvironment).toBe("live");
+    expect((await storedTenant(manual.tenant.id)).storefront_environment).toBe("live");
+    expect(await auditOf(manual.tenant.id, "tenant.went_live")).toHaveLength(1);
+    await invalidations([{ v: 1, type: "tenant", id: manual.tenant.id }]);
+  });
+
   it("[PBE-061 AC1] names mfa when the owner's MFA is off by the time the transaction reads it", async () => {
     // RecentMfaGuard refuses an account without MFA before the handler (`403 MFA_REQUIRED`, below); MFA turned off
     // between the guard and the transaction is read again there. The service is called as the handler calls it.

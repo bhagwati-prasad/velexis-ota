@@ -15,7 +15,11 @@
 //   the TLS probe of the host at once (the sub-domain has no DNS records, so it gets the probe only). The jobs are the
 //   whole effect: one that cannot be queued answers `503 SERVICE_UNAVAILABLE` (the others stay queued); otherwise the
 //   audit row `domain.recheck_requested` (the host and the jobs) is written and `202` answered before the jobs run. A
-//   verified domain's re-check counts like a daily one (a failure grows `check_failures`). Nothing is published here:
+//   verified domain's re-check counts like a daily one (a failure grows `check_failures`), but at most once per UTC
+//   day (FIX-W40-PLATFORM, lead decision (2f) of 2026-11-03): its `domain.recheck` takes the daily re-check's job id
+//   of the domain and the Clock's UTC day (`dailyJobId`, recheck.scheduler.ts), so while that day's job is queued,
+//   running or kept as completed (a day, ADR-0009 item 7) a second add is a no-op. Quick repeated clicks, or a click
+//   after the 04:10 run, add no second strike that day; the TLS probe is queued each time. Nothing is published here:
 //   the jobs publish what they change.
 // - `adminRemoveDomain` (`remove`): an abusive custom domain of any OTA, whatever the OTA's status, with a reason. As
 //   the portal's `removeDomain` does (domains.service.ts), in one transaction under the tenant's domain lock: the row
@@ -47,6 +51,7 @@ import {
   forgetTlsAsk,
 } from "./domain-checks.processor";
 import { DomainsRepository, type AdminDomainRow } from "./domains.repository";
+import { dailyJobId } from "./recheck.scheduler";
 
 export type AdminDomain = components["schemas"]["AdminDomain"];
 export type AdminDomainList = components["schemas"]["AdminDomainList"];
@@ -187,7 +192,11 @@ export class AdminDomainsService {
         job === DOMAIN_VERIFY_JOB
           ? await this.jobs.enqueueVerify(domain.id)
           : job === DOMAIN_RECHECK_JOB
-            ? await this.jobs.enqueueRecheck(domain.id)
+            ? // The daily re-check's slot of the domain and the UTC day: one strike a day at most (file header).
+              await this.jobs.enqueueRecheck(
+                domain.id,
+                dailyJobId(DOMAIN_RECHECK_JOB, domain.id, this.clock.now()),
+              )
             : await this.jobs.enqueueTlsProbe(domain.id);
       queued &&= added;
     }

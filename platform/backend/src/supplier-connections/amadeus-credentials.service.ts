@@ -5,6 +5,10 @@
 //
 // `submit` (`submitAmadeusCredentials`, `PUT …/amadeus-connections/{environment}/credentials`):
 //
+// 0. The `live` environment also needs the live switch (FIX-W40-PLATFORM, lead decision (2g) of 2026-11-03): while
+//    FEATURE_LIVE_SWITCH is off, `403 FEATURE_DISABLED` with `details.feature = live_switch`, checked here, after the
+//    guards and before any other rule of the request, so nothing is read or written; the `test` environment does not
+//    need it.
 // 1. The request validation has checked the body against `SubmitAmadeusCredentialsRequest` (the client id without
 //    spaces, a client secret of 1 to 512 characters, 1 to 50 distinct office ids of 9 upper-case letters and digits).
 //    The default office and, when sent, the queuing and owner offices must be among `officeIds` (`400
@@ -37,11 +41,13 @@ import { Inject, Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types/platform";
 import { AppError, type FieldError } from "@velexis/errors";
 import { MEMBER_VISIBLE_TENANT_STATUSES, type TenantMembership } from "../common/auth/tenant-role.guard";
+import { liveSwitchOrThrow } from "../common/credentials/live-switch";
 import {
   CredentialSubmissionsService,
   toCredentialSubmission,
 } from "../common/credentials/credential-submissions.service";
 import { PLATFORM_DB, type PlatformDb } from "../common/database";
+import { FeatureSwitches } from "../common/features";
 import { runInTransaction } from "../common/redis/invalidation.publisher";
 import type { AmadeusEnvironment } from "./amadeus-accounts.repository";
 import {
@@ -106,6 +112,7 @@ export class AmadeusCredentialsService {
   constructor(
     private readonly submissions: CredentialSubmissionsService,
     private readonly connections: SupplierConnectionsRepository,
+    private readonly switches: FeatureSwitches,
     @Inject(PLATFORM_DB) private readonly db: PlatformDb,
   ) {}
 
@@ -115,6 +122,7 @@ export class AmadeusCredentialsService {
     environment: AmadeusEnvironment,
     request: SubmitAmadeusCredentialsRequest,
   ): Promise<CredentialSubmissionAccepted> {
+    liveSwitchOrThrow(this.switches, environment);
     const problems = officeProblems(request);
     if (problems.length > 0) {
       throw new AppError("VALIDATION_FAILED", { fieldErrors: problems });

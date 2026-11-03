@@ -284,7 +284,9 @@ function SettingsSection({
  *   mode), the other roles read that an owner requests it.
  * - **Own credentials** (`features.ownAmadeus`, owners and admins): one section per environment, test then live, each
  *   with the submission being verified and the form behind "Use my own Amadeus credentials". An environment without a
- *   connection has one too: a successful verification creates the connection.
+ *   connection has one too: a successful verification creates the connection. The live section also needs
+ *   `features.liveSwitch` (the API answers `FEATURE_DISABLED` without it; FIX-W40-PLATFORM, lead decision (2g) of
+ *   2026-11-03).
  */
 async function m5Sections(
   tenant: Tenant,
@@ -317,15 +319,17 @@ async function m5Sections(
   }
   const ownCredentials =
     features.ownAmadeus && can(tenant.myRole, "manageConnections")
-      ? ENVIRONMENTS.map((environment) => (
-          <OwnCredentialsForm
-            key={environment}
-            tenantId={tenant.id}
-            environment={environment}
-            tenantStatus={tenant.status}
-            connection={connections.find((connection) => connection.environment === environment) ?? null}
-          />
-        ))
+      ? ENVIRONMENTS.filter((environment) => environment === "test" || features.liveSwitch).map(
+          (environment) => (
+            <OwnCredentialsForm
+              key={environment}
+              tenantId={tenant.id}
+              environment={environment}
+              tenantStatus={tenant.status}
+              connection={connections.find((connection) => connection.environment === environment) ?? null}
+            />
+          ),
+        )
       : null;
   return { live: liveSection, ownCredentials };
 }

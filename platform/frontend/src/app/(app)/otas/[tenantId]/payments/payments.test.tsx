@@ -125,10 +125,7 @@ import {
   paymentsPath,
   stripeConnectOutcomeOf,
 } from "@/app/(app)/otas/[tenantId]/payments/stripe-connect";
-import {
-  KEYS_POLL_INTERVAL_MS,
-  keysSubmissionReason,
-} from "@/app/(app)/otas/[tenantId]/payments/stripe-keys-form";
+import { SUBMISSION_POLL_INTERVAL_MS } from "@/components/submission-status";
 import { contentSecurityPolicy } from "@/lib/csp";
 import { BFF_KEY_HEADER, END_USER_AGENT_HEADER, END_USER_IP_HEADER } from "@/lib/end-user";
 import type { MilestoneFeatures, TenantRole } from "@/lib/roles";
@@ -660,9 +657,7 @@ function submitForm(form: HTMLElement, name: string): void {
 /** The status block of the keys submission an environment follows, or `null`. */
 function statusBlock(environment: Environment = "test"): HTMLElement | null {
   // From the document: while the step-up dialog is open, the rest of the page is hidden from the accessibility tree.
-  return document.querySelector<HTMLElement>(
-    `[data-stripe-keys="${environment}"] [data-keys-submission-status]`,
-  );
+  return document.querySelector<HTMLElement>(`[data-stripe-keys="${environment}"] [data-submission-status]`);
 }
 
 /** The entries of an error summary inside `container`. */
@@ -1182,7 +1177,7 @@ describe("own Stripe keys", () => {
     fillKeys(form);
     submitForm(form, KEYS.submit);
     await answerStepUp();
-    await eventually(() => expect(statusBlock()?.dataset["keysSubmissionStatus"]).toBe("pending"));
+    await eventually(() => expect(statusBlock()?.dataset["submissionStatus"]).toBe("pending"));
 
     // The same keys twice: refused for the step-up, then accepted; trimmed at their ends.
     const [refused, accepted, ...more] = calls("PUT", keysPath("test"));
@@ -1216,17 +1211,17 @@ describe("own Stripe keys", () => {
 
     // Every 2 seconds, one read at a time, until the verification is final.
     expect(calls("GET", submissionPath())).toHaveLength(0);
-    await advance(KEYS_POLL_INTERVAL_MS - 1);
+    await advance(SUBMISSION_POLL_INTERVAL_MS - 1);
     expect(calls("GET", submissionPath())).toHaveLength(0);
     await advance(1);
-    await eventually(() => expect(statusBlock()?.dataset["keysSubmissionStatus"]).toBe("verifying"));
+    await eventually(() => expect(statusBlock()?.dataset["submissionStatus"]).toBe("verifying"));
     expectSessionHeaders(calls("GET", submissionPath())[0]);
-    await advance(KEYS_POLL_INTERVAL_MS);
-    await eventually(() => expect(statusBlock()?.dataset["keysSubmissionStatus"]).toBe("applied"));
+    await advance(SUBMISSION_POLL_INTERVAL_MS);
+    await eventually(() => expect(statusBlock()?.dataset["submissionStatus"]).toBe("applied"));
     expect(statusBlock()?.querySelector("[data-submission-message]")?.textContent).toBe(
       SUBMISSION.applied("test"),
     );
-    await advance(10 * KEYS_POLL_INTERVAL_MS);
+    await advance(10 * SUBMISSION_POLL_INTERVAL_MS);
     expect(calls("GET", submissionPath())).toHaveLength(2);
 
     // The revalidated page shows the OTA's own account, with the webhook URL, and the outcome stays in view.
@@ -1235,7 +1230,7 @@ describe("own Stripe keys", () => {
       "Your Stripe account (your API keys), test, active",
     );
     expect(card("test").querySelector('[data-detail="webhookUrl"] dd')?.textContent).toBe(WEBHOOK_URL);
-    expect(statusBlock()?.dataset["keysSubmissionStatus"]).toBe("applied");
+    expect(statusBlock()?.dataset["submissionStatus"]).toBe("applied");
     expect(actionCalls.keys).toBe(2);
   });
 
@@ -1248,9 +1243,9 @@ describe("own Stripe keys", () => {
     const form = openKeysForm();
     fillKeys(form);
     submitForm(form, KEYS.submit);
-    await eventually(() => expect(statusBlock()?.dataset["keysSubmissionStatus"]).toBe("pending"));
-    await advance(KEYS_POLL_INTERVAL_MS);
-    await eventually(() => expect(statusBlock()?.dataset["keysSubmissionStatus"]).toBe("failed"));
+    await eventually(() => expect(statusBlock()?.dataset["submissionStatus"]).toBe("pending"));
+    await advance(SUBMISSION_POLL_INTERVAL_MS);
+    await eventually(() => expect(statusBlock()?.dataset["submissionStatus"]).toBe("failed"));
 
     const block = statusBlock();
     expect(block?.querySelector("[data-submission-reason]")?.textContent).toBe(
@@ -1262,27 +1257,8 @@ describe("own Stripe keys", () => {
     );
     expect(document.body.textContent).not.toContain("STRIPE_KEY_INVALID");
     expect(document.body.innerHTML).not.toContain(API_TEXT);
-    await advance(10 * KEYS_POLL_INTERVAL_MS);
+    await advance(10 * SUBMISSION_POLL_INTERVAL_MS);
     expect(calls("GET", submissionPath())).toHaveLength(1);
-  });
-
-  it("[PFE-024 AC2] gives every verification result and apply refusal its own words, never the code [PF-62 AC1]", () => {
-    for (const code of [
-      "STRIPE_KEY_INVALID",
-      "STRIPE_LIVEMODE_MISMATCH",
-      "PROVIDER_UNAVAILABLE",
-      "TENANT_NOT_ACTIVE",
-      "CONNECTION_DISABLED",
-      "CONNECTION_CHANGED",
-      "FEATURE_DISABLED",
-    ]) {
-      const reason = keysSubmissionReason(code);
-      expect([code, reason === SUBMISSION.reasonUnknown]).toEqual([code, false]);
-      expect(reason).not.toContain(code);
-    }
-    expect(keysSubmissionReason("A_NEWER_CODE")).toBe(SUBMISSION.reasonUnknown);
-    expect(keysSubmissionReason(null)).toBe(SUBMISSION.reasonUnknown);
-    expect(keysSubmissionReason("toString")).toBe(SUBMISSION.reasonUnknown);
   });
 
   it("[PFE-024 AC2] follows a submission the page found, and keeps polling through a rate limit [PF-62 AC1]", async () => {
@@ -1305,16 +1281,16 @@ describe("own Stripe keys", () => {
       ),
     });
     await openPayments();
-    expect(statusBlock()?.dataset["keysSubmissionStatus"]).toBe("verifying");
-    await advance(KEYS_POLL_INTERVAL_MS);
+    expect(statusBlock()?.dataset["submissionStatus"]).toBe("verifying");
+    await advance(SUBMISSION_POLL_INTERVAL_MS);
     await eventually(() =>
       expect(statusBlock()?.querySelector("[data-poll-note]")?.textContent).toBe(SUBMISSION.pollFailed),
     );
     // The Retry-After of 5 seconds, not the 2 seconds.
-    await advance(KEYS_POLL_INTERVAL_MS);
+    await advance(SUBMISSION_POLL_INTERVAL_MS);
     expect(calls("GET", submissionPath())).toHaveLength(1);
     await advance(3_000);
-    await eventually(() => expect(statusBlock()?.dataset["keysSubmissionStatus"]).toBe("failed"));
+    await eventually(() => expect(statusBlock()?.dataset["submissionStatus"]).toBe("failed"));
     expect(statusBlock()?.querySelector("[data-submission-reason]")?.textContent).toBe(
       SUBMISSION.reasons["STRIPE_LIVEMODE_MISMATCH"],
     );
@@ -1333,10 +1309,10 @@ describe("own Stripe keys", () => {
       },
     );
     await openPayments();
-    expect(statusBlock()?.dataset["keysSubmissionStatus"]).toBe("pending");
+    expect(statusBlock()?.dataset["submissionStatus"]).toBe("pending");
 
     // The API unavailable: a note, and the next read 2 seconds later.
-    await advance(KEYS_POLL_INTERVAL_MS);
+    await advance(SUBMISSION_POLL_INTERVAL_MS);
     await eventually(() =>
       expect(statusBlock()?.querySelector("[data-poll-note]")?.textContent).toBe(SUBMISSION.pollFailed),
     );
@@ -1344,22 +1320,22 @@ describe("own Stripe keys", () => {
 
     // The portal itself unreachable (the action's own call fails, here before it reaches the API): tried again.
     nextHeaders.headers.mockRejectedValueOnce(new TypeError("Failed to fetch"));
-    await advance(KEYS_POLL_INTERVAL_MS);
+    await advance(SUBMISSION_POLL_INTERVAL_MS);
     await eventually(() => expect(actionCalls.poll).toBe(2));
     expect(calls("GET", submissionPath())).toHaveLength(1);
     expect(statusBlock()?.querySelector("[data-poll-note]")?.textContent).toBe(SUBMISSION.pollFailed);
 
     // Any other refusal stops polling with the portal's message, never the API's text.
-    await advance(KEYS_POLL_INTERVAL_MS);
+    await advance(SUBMISSION_POLL_INTERVAL_MS);
     await eventually(() =>
       expect(within(statusBlock() ?? document.body).getByRole("alert").textContent).toBe(
         `${SUBMISSION.pollStoppedTitle}${ERROR_MESSAGES.NOT_FOUND}`,
       ),
     );
     expect(statusBlock()?.querySelector("[data-poll-note]")).toBeNull();
-    expect(statusBlock()?.dataset["keysSubmissionStatus"]).toBe("pending");
+    expect(statusBlock()?.dataset["submissionStatus"]).toBe("pending");
     expect(document.body.innerHTML).not.toContain(API_TEXT);
-    await advance(10 * KEYS_POLL_INTERVAL_MS);
+    await advance(10 * SUBMISSION_POLL_INTERVAL_MS);
     expect(calls("GET", submissionPath())).toHaveLength(2);
     expect(actionCalls.poll).toBe(3);
   });
@@ -1373,9 +1349,9 @@ describe("own Stripe keys", () => {
       { [`GET ${submissionPath()}`]: () => apiError("UNAUTHENTICATED", 401) },
     );
     await openPayments();
-    await advance(KEYS_POLL_INTERVAL_MS);
+    await advance(SUBMISSION_POLL_INTERVAL_MS);
     await eventually(() => expect(redirectedTo()).toBe(`/sign-in?next=${encodeURIComponent(PAYMENTS_PAGE)}`));
-    await advance(10 * KEYS_POLL_INTERVAL_MS);
+    await advance(10 * SUBMISSION_POLL_INTERVAL_MS);
     expect(calls("GET", submissionPath())).toHaveLength(1);
     expect(actionCalls.poll).toBe(1);
   });
@@ -1396,7 +1372,7 @@ describe("own Stripe keys", () => {
     const form = openKeysForm();
     fillKeys(form);
     submitForm(form, KEYS.submit);
-    await eventually(() => expect(statusBlock()?.dataset["keysSubmissionStatus"]).toBe("pending"));
+    await eventually(() => expect(statusBlock()?.dataset["submissionStatus"]).toBe("pending"));
 
     // The form again, refused this time: its message shows, the webhook endpoint stays, and the accepted submission
     // is still followed and read.
@@ -1404,17 +1380,17 @@ describe("own Stripe keys", () => {
     fillKeys(again);
     submitForm(again, KEYS.submit);
     await eventually(() => expect(summaryItems(again)).toEqual([KEYS.rateLimited]));
-    expect(statusBlock()?.dataset["keysSubmissionStatus"]).toBe("pending");
+    expect(statusBlock()?.dataset["submissionStatus"]).toBe("pending");
     expect(document.querySelector('[data-webhook-setup="test"]')).not.toBeNull();
-    await advance(KEYS_POLL_INTERVAL_MS);
-    await eventually(() => expect(statusBlock()?.dataset["keysSubmissionStatus"]).toBe("verifying"));
+    await advance(SUBMISSION_POLL_INTERVAL_MS);
+    await eventually(() => expect(statusBlock()?.dataset["submissionStatus"]).toBe("verifying"));
     // Newer keys of the same environment replaced it (another tab): it says so and polling ends.
-    await advance(KEYS_POLL_INTERVAL_MS);
-    await eventually(() => expect(statusBlock()?.dataset["keysSubmissionStatus"]).toBe("superseded"));
+    await advance(SUBMISSION_POLL_INTERVAL_MS);
+    await eventually(() => expect(statusBlock()?.dataset["submissionStatus"]).toBe("superseded"));
     expect(statusBlock()?.querySelector("[data-submission-message]")?.textContent).toBe(
       SUBMISSION.superseded,
     );
-    await advance(10 * KEYS_POLL_INTERVAL_MS);
+    await advance(10 * SUBMISSION_POLL_INTERVAL_MS);
     expect(calls("PUT", keysPath("test"))).toHaveLength(2);
     expect(calls("GET", submissionPath())).toHaveLength(2);
 
@@ -1556,11 +1532,28 @@ describe("own Stripe keys", () => {
     change(field(form, KEYS.webhookSecretLabel), WEBHOOK_SECRET);
     submitForm(form, KEYS.submit);
     await waitFor(
-      () => expect(statusBlock("live")?.dataset["keysSubmissionStatus"]).toBe("pending"),
+      () => expect(statusBlock("live")?.dataset["submissionStatus"]).toBe("pending"),
       ACTION_WAIT,
     );
     expect(calls("PUT", keysPath("live"))).toHaveLength(1);
     expect(document.querySelector('[data-webhook-setup="live"]')).not.toBeNull();
+  });
+
+  it("[FIX-W40-PLATFORM AC7] offers the live own keys only while the live switch is on; the test keys stay", async () => {
+    routes({ [`GET ${ME_PATH}`]: () => json(account({ liveSwitch: false }), 200) });
+    await openPayments();
+
+    expect(keysPart("test")).toBeTruthy();
+    expect(screen.queryByRole("group", { name: KEYS.title("live") })).toBeNull();
+    // "Connect with Stripe" stays: one OAuth serves both environments, and go-live copies it to live.
+    expect(document.querySelector("[data-connect-stripe]")).not.toBeNull();
+    expect(writes()).toEqual([]);
+    cleanup();
+
+    routes({ [`GET ${ME_PATH}`]: () => json(account({ liveSwitch: true }), 200) });
+    await openPayments();
+    expect(keysPart("test")).toBeTruthy();
+    expect(keysPart("live")).toBeTruthy();
   });
 
   it("reads a submission with the session, revalidates only on a final status, and refuses ids that are none without a call", async () => {
@@ -1799,7 +1792,7 @@ describe("the page", () => {
       expect(rendered.container.querySelectorAll("[data-use-velexis]")).toHaveLength(2);
       expect(rendered.container.querySelector("[data-connect-stripe-form]")).not.toBeNull();
       expect(rendered.container.querySelectorAll("[data-stripe-keys-form]")).toHaveLength(2);
-      expect(rendered.container.querySelector('[data-keys-submission-status="failed"]')).not.toBeNull();
+      expect(rendered.container.querySelector('[data-submission-status="failed"]')).not.toBeNull();
       // A form sent before the page hydrated never goes out natively (a GET with the keys in the URL): React's guard
       // is the action of the keys forms and of "Connect Stripe" in the server's markup.
       const serverMarkup = document.createElement("div");

@@ -1788,6 +1788,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - Owners see both actions in the right states and finance members see neither [PF-72 AC1].
   - Invoices list number, period, total, status and Stripe links [PF-73 AC2]; a `past_due` subscription shows the banner on every OTA page [PF-74 AC1].
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
+- **Note:** 2026-11-03 (lead decision (2i) of 2026-11-03, recorded by FIX-W40-PLATFORM): an OTA whose provisioning failed after an abandoned Checkout (flows/subscription-billing.md §H: the tenant is `failed`, its key still reserved) can still be paid for from this page (`createCheckoutSession`, §B step 2 for an existing OTA). When Stripe sends the owner back with `?checkout=success`, the page does not show a success yet: it says that the payment is being confirmed and polls (`getSubscription`, every 2 seconds, one read at a time, a rate limit's `Retry-After` and an unavailable API tried again with a note) until the subscription has synced (the completed Checkout's webhook makes it `trialing` or `active` and re-dispatches the provisioning, §B table `checkout.session.completed`); then it shows the subscription, and the OTA's setup page takes over the provisioning progress. A `?checkout=canceled` keeps the neutral notice of step 3.
 
 ### PFE-022 · Build the custom domains page
 - **Component:** platform-frontend

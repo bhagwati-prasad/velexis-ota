@@ -877,6 +877,16 @@ const SLICE_PBE041_FEATURES = {
   createCustomerPortalSession: "stripe_billing",
 } as const satisfies Partial<Record<PlatformOperationId, Feature>>;
 
+/**
+ * The PBE-041 operations whose `live` environment also needs the live switch, checked by the service and not by an
+ * `x-feature` (FIX-W40-PLATFORM, lead decision (2g) of 2026-11-03): their `403` documents `FEATURE_DISABLED` with
+ * `details.feature = live_switch` next to their own switch's.
+ */
+const SLICE_PBE041_LIVE_SWITCH_TOO: readonly PlatformOperationId[] = [
+  "submitAmadeusCredentials",
+  "submitStripeApiKeys",
+];
+
 /** The PBE-041 operations that need a TOTP step-up on every call: the inventory's MFA↑ (PADR-0008). */
 const SLICE_PBE041_STEP_UP = [
   "goLive",
@@ -3071,13 +3081,14 @@ describe("the M5 portal slice: go-live, domains, own credentials, payments, sett
         { scope: "portal", mfaStepUp: stepUp, features: feature === undefined ? [] : [feature] },
       ]);
       if (feature !== undefined) {
-        // 403 FEATURE_DISABLED names the operation's own switch in details.feature.
+        // 403 FEATURE_DISABLED names the operation's own switch in details.feature, and the live switch where the live
+        // environment needs it too (FIX-W40-PLATFORM, lead decision (2g) of 2026-11-03).
         const disabled = errorExamples(operationId, "403").filter(
           (error) => error["code"] === "FEATURE_DISABLED",
         );
         expect([operationId, disabled.map((error) => objectAt(error, "details")["feature"])]).toEqual([
           operationId,
-          [feature],
+          SLICE_PBE041_LIVE_SWITCH_TOO.includes(operationId) ? [feature, "live_switch"] : [feature],
         ]);
       }
       if (stepUp) {

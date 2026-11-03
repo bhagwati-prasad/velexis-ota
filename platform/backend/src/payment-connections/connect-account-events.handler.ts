@@ -35,6 +35,15 @@
 // Each round re-fetches once; after REFRESH_TRIES rounds without that confirmation the event fails with the retryable
 // `CONNECTION_BUSY`, and BullMQ runs it again later.
 //
+// Both events lock the account's connections with `lockAccountRows`, which re-lists them once the lock is held
+// (FIX-W40-PLATFORM, lead decision (2d) of 2026-11-03): a `SELECT … FOR UPDATE` that waited for a row lock answers the
+// rows of the snapshot it started with, so a live copy go-live inserted and committed while the lock waited (go-live
+// holds the test row while it copies a `connect_standard` connection to live) would be missing from it. The second
+// statement starts once the locks are held, sees that copy and locks it too: `account.updated` then sees the rows
+// changed since its read and re-fetches for both, and a deauthorisation disables the copy as well. Every writer that
+// creates a `connect_standard` row of the OTA (go-live's copy, the Connect callback) locks the test row first, which
+// the event's transaction now holds, so no further row appears before its commit.
+//
 // `account.application.deauthorized` (the OTA disconnected Velexis in Stripe): one transaction locks the connections
 // and sets each `status = 'disabled'` and `disconnected_at` (`version + 1`, the mode stays `connect_standard` and the
 // account reference stays: no fallback to Velexis mode, PADR-0011 item 4), one `payments.connect_disconnected` audit row
@@ -274,7 +283,7 @@ export class ConnectAccountEventsHandler implements StripeEventHandler {
         throw error;
       }
       const changed = await runInTransaction(this.db, async (trx) => {
-        const locked = await this.connections.lockConnectRowsOfAccount(trx, accountReference);
+        const locked = await this.lockAccountRows(trx, accountReference);
         if (!sameRowVersions(seen, locked)) {
           return undefined;
         }
@@ -308,6 +317,19 @@ export class ConnectAccountEventsHandler implements StripeEventHandler {
       retryable: true,
       tenantId,
     });
+  }
+
+  /**
+   * The account's `connect_standard` connections, locked for the rest of `trx`, as listed once the lock is held (file
+   * header): the first statement takes the locks (and may wait for them), the second re-lists the rows, locking any
+   * that was committed while the first one waited; the rows held already are locked again without a wait.
+   */
+  private async lockAccountRows(
+    trx: PlatformTransaction,
+    accountReference: string,
+  ): Promise<PaymentConnectionView[]> {
+    await this.connections.lockConnectRowsOfAccount(trx, accountReference);
+    return this.connections.lockConnectRowsOfAccount(trx, accountReference);
   }
 
   /** The writes of `account.updated` on the locked connections; answers the connections it changed. */
@@ -360,7 +382,7 @@ export class ConnectAccountEventsHandler implements StripeEventHandler {
   /** `account.application.deauthorized` (file header): disable the connections, audit, e-mail the owners. */
   private async deauthorized(event: StripeInboxEvent, accountReference: string): Promise<StripeEventOutcome> {
     return runInTransaction(this.db, async (trx): Promise<StripeEventOutcome> => {
-      const locked = await this.connections.lockConnectRowsOfAccount(trx, accountReference);
+      const locked = await this.lockAccountRows(trx, accountReference);
       const [first] = locked;
       if (first === undefined) {
         return ignored("UNKNOWN_ACCOUNT: no OTA's Connect connection holds the account");

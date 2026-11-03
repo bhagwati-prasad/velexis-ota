@@ -1,9 +1,7 @@
 "use client";
 
 import type { components } from "@velexis/api-types/platform";
-import { LoaderCircle } from "lucide-react";
 import Link from "next/link";
-import { unstable_rethrow } from "next/navigation";
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 
 import {
@@ -20,12 +18,11 @@ import { CopyField } from "@/components/copy-field";
 import { FormErrorSummary, type FormErrorItem } from "@/components/form-error-summary";
 import { FormField } from "@/components/form-field";
 import { useStepUpAction } from "@/components/step-up-dialog";
+import { SubmissionStatus } from "@/components/submission-status";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { otaPath } from "@/lib/roles";
 import { STRIPE_ACCOUNT_STRINGS, STRIPE_KEYS_STRINGS, STRIPE_KEYS_SUBMISSION_STRINGS } from "@/lib/strings";
-import { cn } from "@/lib/utils";
 
 /**
  * The OTA's own Stripe account on the payments page (README §2 `/otas/[tenantId]/payments`, §5 polling;
@@ -37,9 +34,11 @@ import { cn } from "@/lib/utils";
  * - `StripeKeysForm`: "Use my own Stripe keys" of one environment: the publishable key, the secret or restricted key
  *   (with the permissions a restricted key needs) and the webhook signing secret, behind a step-up
  *   (`submitStripeKeys`). The accepted submission shows the webhook endpoint to create in Stripe (its URL and events)
- *   and the reminder to send a test event, and `KeysSubmissionStatus` follows its verification.
- * - `KeysSubmissionStatus`: reads the submission every 2 seconds, one read at a time, until it is final, as the Amadeus
- *   page's `SubmissionStatus` does (PFE-023): each `errorCode` in the portal's words, never the code.
+ *   and the reminder to send a test event, and `SubmissionStatus` follows its verification: the component of
+ *   `components/submission-status.tsx` that the Amadeus page uses too (FIX-W40-PLATFORM, lead decision (2h) of
+ *   2026-11-03, in place of PFE-024's `KeysSubmissionStatus`), with `getKeysSubmissionStatus` and the words of Stripe
+ *   keys: it reads the submission every 2 seconds, one read at a time, until it is final, each `errorCode` in the
+ *   portal's words, never the code.
  *
  * **The secrets** (the secret key and the webhook secret) are password fields whose values only the browser holds:
  * they are not controlled fields (React would copy a controlled value into the `value` attribute), the action never
@@ -56,20 +55,6 @@ type TenantStatus = Schemas["TenantStatus"];
 
 const ACCOUNT = STRIPE_ACCOUNT_STRINGS;
 const KEYS = STRIPE_KEYS_STRINGS;
-const SUBMISSION = STRIPE_KEYS_SUBMISSION_STRINGS;
-
-/**
- * The call of a server action was rejected with Next.js's `redirect()` or `notFound()`, which the router must handle,
- * rather than failing on its own (the portal could not be reached).
- */
-function isNavigation(error: unknown): boolean {
-  try {
-    unstable_rethrow(error);
-  } catch {
-    return true;
-  }
-  return false;
-}
 
 /** The link that reloads the page, so it shows the connections and the role as they are now. */
 function ReloadLink({ tenantId }: { readonly tenantId: string }) {
@@ -145,193 +130,6 @@ export function ConnectStripeForm({ tenantId, reconnect }: ConnectStripeFormProp
       </form>
       {stepUpDialog}
     </>
-  );
-}
-
-// ---- The verification ----------------------------------------------------------------------------------------------
-
-/** How long the page waits between two reads of a submission (README §5). */
-export const KEYS_POLL_INTERVAL_MS = 2_000;
-
-/** The longest wait a `Retry-After` may ask for between two reads. */
-const MAX_POLL_DELAY_MS = 60_000;
-
-/** The submission changes no more: polling stops (`applied`, `failed`, `superseded`). */
-export function isFinalKeysSubmission(status: string): boolean {
-  return status === "applied" || status === "failed" || status === "superseded";
-}
-
-/** Why a submission failed, in words: the verification result's own words, or the general ones. Never the code. */
-export function keysSubmissionReason(errorCode: string | null): string {
-  return errorCode !== null && Object.hasOwn(SUBMISSION.reasons, errorCode)
-    ? (SUBMISSION.reasons[errorCode] ?? SUBMISSION.reasonUnknown)
-    : SUBMISSION.reasonUnknown;
-}
-
-/** The colours of a status; the label always says it in words. */
-const TONE_CLASSES: Readonly<Record<string, string>> = {
-  pending: "border-transparent bg-sky-100 text-sky-900",
-  verifying: "border-transparent bg-sky-100 text-sky-900",
-  applied: "border-transparent bg-emerald-100 text-emerald-900",
-  failed: "border-transparent bg-red-100 text-red-900",
-  superseded: "border-transparent bg-secondary text-secondary-foreground",
-};
-
-/** A status in words; one the portal does not know yet (a newer API) in its raw form. */
-function statusLabel(status: string): string {
-  return Object.hasOwn(SUBMISSION.statuses, status)
-    ? (SUBMISSION.statuses[status] ?? status)
-    : status.replaceAll("_", " ");
-}
-
-function SubmissionMessage({
-  submission,
-  environment,
-}: {
-  readonly submission: KeysSubmissionView;
-  readonly environment: Environment;
-}) {
-  switch (submission.status) {
-    case "applied":
-      return <p>{SUBMISSION.applied(environment)}</p>;
-    case "failed":
-      return (
-        <>
-          <p>{SUBMISSION.failed}</p>
-          <p data-submission-reason="">{keysSubmissionReason(submission.errorCode)}</p>
-        </>
-      );
-    case "superseded":
-      return <p>{SUBMISSION.superseded}</p>;
-    case "pending":
-    case "verifying":
-      return <p>{SUBMISSION.open}</p>;
-  }
-}
-
-export interface KeysSubmissionStatusProps {
-  readonly tenantId: string;
-  readonly environment: Environment;
-  /** The submission to follow, as the page or the form has it. */
-  readonly submission: KeysSubmissionView;
-}
-
-/**
- * The status of one submission of Stripe keys, read with `getKeysSubmissionStatus` every 2 seconds until it is final.
- * A read that may pass (rate limit, API unavailable, the portal unreachable) is tried again with a note, after its
- * `Retry-After` (at most a minute); any other failure stops polling with the portal's message. An action that ends with
- * `redirect()` (an ended session) is thrown again while rendering, so the router's redirect boundary navigates. The
- * parent renders it with `key={submission.id}`, so a new submission starts a fresh component.
- */
-export function KeysSubmissionStatus({
-  tenantId,
-  environment,
-  submission: initial,
-}: KeysSubmissionStatusProps) {
-  const [submission, setSubmission] = useState<KeysSubmissionView>(initial);
-  const [pollNote, setPollNote] = useState<string | undefined>(undefined);
-  const [pollStopped, setPollStopped] = useState<string | undefined>(undefined);
-  const [navigation, setNavigation] = useState<{ readonly error: unknown } | undefined>(undefined);
-
-  const polling =
-    !isFinalKeysSubmission(submission.status) && pollStopped === undefined && navigation === undefined;
-  const submissionId = submission.id;
-
-  useEffect(() => {
-    if (!polling) {
-      return undefined;
-    }
-    // One read at a time: the next one is scheduled when the previous answer arrived. The cleanup (the component going
-    // away) cancels the chain, and a late answer of the old chain changes nothing.
-    let current = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const schedule = (delay: number) => {
-      timer = setTimeout(() => {
-        getKeysSubmissionStatus(tenantId, submissionId).then(
-          (result) => {
-            if (!current) {
-              return;
-            }
-            if (result.status === "ok") {
-              setPollNote(undefined);
-              setSubmission(result.submission);
-              if (!isFinalKeysSubmission(result.submission.status)) {
-                schedule(KEYS_POLL_INTERVAL_MS);
-              }
-              return;
-            }
-            if (result.transient) {
-              setPollNote(SUBMISSION.pollFailed);
-              const wait = (result.retryAfterSeconds ?? 0) * 1_000;
-              schedule(Math.min(Math.max(KEYS_POLL_INTERVAL_MS, wait), MAX_POLL_DELAY_MS));
-              return;
-            }
-            setPollNote(undefined);
-            setPollStopped(result.message);
-          },
-          (error: unknown) => {
-            if (!current) {
-              return;
-            }
-            if (isNavigation(error)) {
-              // The session ended: the router leaves the page, and no read follows.
-              setNavigation({ error });
-              return;
-            }
-            // The portal itself could not be reached: try again.
-            setPollNote(SUBMISSION.pollFailed);
-            schedule(KEYS_POLL_INTERVAL_MS);
-          },
-        );
-      }, delay);
-    };
-    schedule(KEYS_POLL_INTERVAL_MS);
-    return () => {
-      current = false;
-      clearTimeout(timer);
-    };
-  }, [polling, tenantId, submissionId]);
-
-  if (navigation !== undefined) {
-    // While rendering, where the router's redirect boundary catches it and navigates.
-    throw navigation.error;
-  }
-
-  const { status } = submission;
-  const final = isFinalKeysSubmission(status);
-  return (
-    <div
-      className="grid gap-2 rounded-lg border px-4 py-3 text-sm"
-      data-keys-submission-status={status}
-      data-environment={environment}
-    >
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="font-medium">{SUBMISSION.title}</span>
-        <Badge
-          variant="outline"
-          data-status={status}
-          className={cn(TONE_CLASSES[status] ?? TONE_CLASSES["superseded"])}
-        >
-          {final ? null : <LoaderCircle aria-hidden="true" className="animate-spin" />}
-          {statusLabel(status)}
-        </Badge>
-      </div>
-      {/* A live region from the first render, so each new status is read out. */}
-      <div role="status" className="grid gap-1" data-submission-message="">
-        <SubmissionMessage submission={submission} environment={environment} />
-      </div>
-      {pollNote === undefined ? null : (
-        <p className="text-muted-foreground" data-poll-note="">
-          {pollNote}
-        </p>
-      )}
-      {pollStopped === undefined ? null : (
-        <Alert variant="destructive">
-          <AlertTitle>{SUBMISSION.pollStoppedTitle}</AlertTitle>
-          <AlertDescription>{pollStopped}</AlertDescription>
-        </Alert>
-      )}
-    </div>
   );
 }
 
@@ -492,11 +290,13 @@ export function StripeKeysForm({ tenantId, environment, tenantStatus, connection
         <WebhookEndpoint webhook={state.webhook} environment={environment} />
       )}
       {followed === null ? null : (
-        <KeysSubmissionStatus
+        <SubmissionStatus
           key={followed.id}
           tenantId={tenantId}
           environment={environment}
           submission={followed}
+          poll={getKeysSubmissionStatus}
+          wording={STRIPE_KEYS_SUBMISSION_STRINGS}
         />
       )}
 

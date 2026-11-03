@@ -5,20 +5,21 @@ import Link from "next/link";
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactElement } from "react";
 
 import {
+  getSubmissionStatus,
   submitOwnCredentials,
   type OwnCredentialsField,
   type OwnCredentialsState,
   type OwnCredentialsValues,
   type SubmissionView,
 } from "@/app/(app)/otas/[tenantId]/amadeus/actions";
-import { SubmissionStatus } from "@/app/(app)/otas/[tenantId]/amadeus/submission-status";
 import { FormErrorSummary, type FormErrorItem } from "@/components/form-error-summary";
 import { FormField } from "@/components/form-field";
 import { useStepUpAction } from "@/components/step-up-dialog";
+import { SubmissionStatus } from "@/components/submission-status";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { otaPath } from "@/lib/roles";
-import { OWN_CREDENTIALS_STRINGS } from "@/lib/strings";
+import { OWN_CREDENTIALS_STRINGS, SUBMISSION_STRINGS } from "@/lib/strings";
 import { cn } from "@/lib/utils";
 
 /**
@@ -27,8 +28,9 @@ import { cn } from "@/lib/utils";
  * ids (one per line) and the default, queuing and owner offices, offered as selects of the office ids typed (the
  * queuing and owner office default to the default office). `submitOwnCredentials` checks the form and calls
  * `submitAmadeusCredentials`, which needs a TOTP step-up: `useStepUpAction` opens `StepUpDialog` on `REAUTH_REQUIRED`
- * and sends the same form again after the code. The accepted submission is then followed by `SubmissionStatus`, which
- * polls it until Amadeus accepted or refused the credentials; the connection keeps working as it did until then. A
+ * and sends the same form again after the code. The accepted submission is then followed by `SubmissionStatus`
+ * (`components/submission-status.tsx`, with `getSubmissionStatus` and the Amadeus words), which polls it until Amadeus
+ * accepted or refused the credentials; the connection keeps working as it did until then. A
  * submission the page found (`pendingSubmission`: open, or failed) is followed the same way.
  *
  * **The client secret** is a password field whose value only the browser holds: it is not a controlled field (React
@@ -239,6 +241,8 @@ export function OwnCredentialsForm({
           tenantId={tenantId}
           environment={environment}
           submission={followed}
+          poll={getSubmissionStatus}
+          wording={SUBMISSION_STRINGS}
         />
       )}
 

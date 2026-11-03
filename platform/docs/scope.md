@@ -123,6 +123,7 @@ Each feature has an id used by the plans and by test names. "AC" lines are what 
 **PF-13 OTA profile.** AC1: Owners and admins edit name, legal name, support e-mail, country and time zone; the key and currency are read-only after creation (branding and currencies of the storefront are OTA admin settings).
 
 **PF-14 Live switch (M5).** AC1: "Go live" requires an active live Amadeus connection, an active live payment connection, a plan with `limits.liveMode = true`, a subscription `trialing` or `active` on Stripe, and owner MFA step-up; otherwise `422 LIVE_PRECONDITIONS_UNMET` lists what is missing. AC2: Success sets `tenants.storefront_environment = 'live'` and publishes a cache invalidation; the hosted storefront serves live within 60 seconds.
+- *Note (2026-11-03, lead decision (2c), FIX-W40-PLATFORM).* AC1's subscription is also met by a **manual** subscription (`billing_provider = 'manual'`, set by a platform admin, [`flows/subscription-billing.md`](flows/subscription-billing.md)) whose status is `active`. A manual trial (`trialing` on a manual subscription) still counts as missing: `details.missing` names `subscription`.
 
 ### 3.3 Team and console
 

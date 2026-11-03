@@ -179,6 +179,8 @@ afterAll(async () => {
 beforeEach(() => {
   switches.on.clear();
   switches.on.add("own_stripe");
+  // Own keys for the live environment also need the live switch (FIX-W40-PLATFORM, lead decision (2g)).
+  switches.on.add("live_switch");
   stripe.reset();
   secretsOfTest.length = 0;
 });
@@ -974,6 +976,36 @@ describe("PUT /v1/tenants/{tenantId}/payment-connections/{environment}/api-keys 
     expect(outcomeOf(suspended)).toBe("409 TENANT_NOT_ACTIVE");
     expect(errorOf(suspended).details).toEqual({ status: "suspended" });
     // One submission only: the admin's.
+    expect(await submissionsOf(ota.tenant.id)).toHaveLength(1);
+  });
+
+  it("[FIX-W40-PLATFORM AC7] answers FEATURE_DISABLED (live_switch) for live keys while the live switch is off, after the step-up; test keys still work", async () => {
+    const ota = await arrangeOta();
+    switches.on.delete("live_switch");
+    const live = newKeys("live");
+
+    // The guards come first: without a recent step-up the live submission answers REAUTH_REQUIRED.
+    const notSteppedUp = await submitKeys(ota, live, "live", "owner", false);
+    const refused = await submitKeys(ota, live, "live");
+    // The switch is checked before any other rule of the request: test keys on the live environment are not looked at.
+    const refusedPrefixes = await submitKeys(ota, newKeys("test"), "live");
+
+    expect(outcomeOf(notSteppedUp)).toBe("401 REAUTH_REQUIRED");
+    for (const res of [refused, refusedPrefixes]) {
+      expectResponseToMatch("submitStripeApiKeys", res, { document: "platform" });
+      expect(outcomeOf(res)).toBe("403 FEATURE_DISABLED");
+      expect(errorOf(res).details).toEqual({ feature: "live_switch" });
+      // No key, not even a part of one, comes back.
+      expect(JSON.stringify(res.body)).not.toContain(live.secretKey.slice(8));
+    }
+    expect(await submissionsOf(ota.tenant.id)).toEqual([]);
+    // The OTA keeps its test connection and gets no live one.
+    expect((await connectionsOf(ota.tenant.id)).map((row) => row["environment"])).toEqual(["test"]);
+    expect(stripe.calls).toEqual([]);
+
+    const test = await submitKeys(ota, newKeys("test"), "test");
+    expect(test.status).toBe(202);
+    expectResponseToMatch("submitStripeApiKeys", test, { document: "platform" });
     expect(await submissionsOf(ota.tenant.id)).toHaveLength(1);
   });
 });

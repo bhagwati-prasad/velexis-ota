@@ -1646,8 +1646,9 @@ export const OWN_CREDENTIALS_STRINGS = Object.freeze({
 });
 
 /**
- * `SubmissionStatus` on `/otas/[tenantId]/amadeus` (PFE-023; PADR-0010; PF-52 AC2): the verification of submitted
- * Amadeus credentials (`getCredentialSubmission`), and each verification result in words, never its code.
+ * `SubmissionStatus` (`components/submission-status.tsx`) on `/otas/[tenantId]/amadeus` (PFE-023; PADR-0010; PF-52
+ * AC2): the verification of submitted Amadeus credentials (`getCredentialSubmission`), and each verification result in
+ * words, never its code.
  */
 export const SUBMISSION_STRINGS = Object.freeze({
   title: "Verification of your credentials",
@@ -1991,8 +1992,9 @@ export const STRIPE_KEYS_STRINGS = Object.freeze({
 });
 
 /**
- * The verification of submitted Stripe keys on `/otas/[tenantId]/payments` (PFE-024; PADR-0010; PF-62 AC1): its
- * status (`getCredentialSubmission`), and each verification result and apply refusal in words, never its code.
+ * The verification of submitted Stripe keys on `/otas/[tenantId]/payments` (PFE-024; PADR-0010; PF-62 AC1), the words
+ * `SubmissionStatus` (`components/submission-status.tsx`) shows for them: its status (`getCredentialSubmission`), and
+ * each verification result and apply refusal in words, never its code.
  */
 export const STRIPE_KEYS_SUBMISSION_STRINGS = Object.freeze({
   title: "Verification of your Stripe keys",

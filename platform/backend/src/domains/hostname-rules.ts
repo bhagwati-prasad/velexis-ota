@@ -20,7 +20,8 @@
 //   the `tlsask:` key builder and of the `domain` invalidation event, so every host `addDomain` stores can be asked
 //   for and announced;
 // - not be a Velexis host or a host below one (`velexisHostsOf`): STOREFRONT_BASE_DOMAIN, the hosts of the public URLs
-//   of the platform, and the placeholder hosts of docs/mvp/decisions.md §4;
+//   of the platform and of the OTA API (PUBLIC_OTA_API_URL, whatever its name: FIX-W40-PLATFORM, lead decision (2a)
+//   of 2026-11-03), and the placeholder hosts of docs/mvp/decisions.md §4;
 // - not be a shared hosting suffix of SHARED_SUFFIX_DENY_LIST or a host below one, where owning a sub-domain proves
 //   nothing about the zone.
 import { randomBytes } from "node:crypto";
@@ -108,7 +109,11 @@ export const DECISIONS_PLACEHOLDER_HOSTS: readonly string[] = Object.freeze([
 /** The configuration values the Velexis hosts come from. */
 export type VelexisHostConfig = Pick<
   PlatformBackendConfig,
-  "STOREFRONT_BASE_DOMAIN" | "PUBLIC_PORTAL_URL" | "PUBLIC_PLATFORM_ADMIN_URL" | "PUBLIC_OTA_ADMIN_URL"
+  | "STOREFRONT_BASE_DOMAIN"
+  | "PUBLIC_PORTAL_URL"
+  | "PUBLIC_PLATFORM_ADMIN_URL"
+  | "PUBLIC_OTA_ADMIN_URL"
+  | "PUBLIC_OTA_API_URL"
 >;
 
 /** What `checkCustomHostname` checks a host against. */
@@ -129,15 +134,20 @@ export type HostnameCheck =
  * The Velexis hosts of a configuration (decisions.md §4): STOREFRONT_BASE_DOMAIN, which covers every `<key>.` storefront
  * sub-domain, the OTA admin (`admin.ota.…`) and the OTA API (`api.ota.…`); the hosts of PUBLIC_PORTAL_URL (whose
  * sub-domains are the platform admin and the platform API, `admin.platform.…` and `api.platform.…`),
- * PUBLIC_PLATFORM_ADMIN_URL and PUBLIC_OTA_ADMIN_URL, in case a deployment moves one of them elsewhere; and the
- * placeholder hosts of DECISIONS_PLACEHOLDER_HOSTS. Lower case, each once.
+ * PUBLIC_PLATFORM_ADMIN_URL, PUBLIC_OTA_ADMIN_URL and PUBLIC_OTA_API_URL, in case a deployment moves one of them
+ * elsewhere (the OTA API's host is reserved whatever its name, so no OTA can claim the host Stripe sends the webhooks of
+ * its own keys to: FIX-W40-PLATFORM, lead decision (2a) of 2026-11-03); and the placeholder hosts of
+ * DECISIONS_PLACEHOLDER_HOSTS. Lower case, each once.
  */
 export function velexisHostsOf(config: VelexisHostConfig): string[] {
   const hosts = [
     config.STOREFRONT_BASE_DOMAIN,
-    ...[config.PUBLIC_PORTAL_URL, config.PUBLIC_PLATFORM_ADMIN_URL, config.PUBLIC_OTA_ADMIN_URL].map(
-      (url) => new URL(url).hostname,
-    ),
+    ...[
+      config.PUBLIC_PORTAL_URL,
+      config.PUBLIC_PLATFORM_ADMIN_URL,
+      config.PUBLIC_OTA_ADMIN_URL,
+      config.PUBLIC_OTA_API_URL,
+    ].map((url) => new URL(url).hostname),
     ...DECISIONS_PLACEHOLDER_HOSTS,
   ];
   return [...new Set(hosts.map((host) => host.toLowerCase()).filter((host) => host.length > 0))];
