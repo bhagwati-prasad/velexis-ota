@@ -7,7 +7,11 @@
 //
 // Office isolation (ADR-0012, OF-09 AC3). On the shared Velexis account every OTA's offices answer to the same
 // credentials, so Get Flight Order By Record Locator can return an order of another OTA. An order is the tenant's when
-// its office is one of the offices of the tenant's supplier connection (`officeIds`): its owner office, which is the
+// its office is one of the tenant's own offices (`ConnectionResolver.tenantOffices`): the offices of the tenant's
+// supplier connection (`officeIds`) and, since FIX-W39-OTA (lead decision (2n) of 2026-11-02, PADR-0012 point 4), the
+// offices of the environment's Velexis account `assigned` or `releasing` for the tenant, whose orders the booking
+// flows keep serving through the Velexis account after a switch to the OTA's own credentials (OBE-079; another
+// tenant's office, or one released to the pool, never is). The office of an order is its owner office, which is the
 // office that holds it, or, when Amadeus gives no owner office (its by-reference answers often have the queuing office
 // only), its queuing office (`orderOfficeOf`; ADR-0012 says "owned by one of the tenant's offices", the plan "owner or
 // queuing office": the owner office decides when there is one, as every later call on the order acts for it). Another
@@ -75,6 +79,7 @@ import {
   AMADEUS_OFFICE_ID,
   ConnectionResolver,
   type ResolvedAmadeusConnection,
+  type TenantOffices,
 } from "../amadeus/connection-resolver";
 import { AmadeusCallError } from "../amadeus/error-mapper";
 import { AMADEUS_OPERATIONS, type AmadeusOperationName } from "../amadeus/limits";
@@ -1187,7 +1192,7 @@ export class PnrImportService {
           this.context(tenant, OPERATIONS.import, office),
           { flightOrderId: orderId, query: { include: ["bags"] } },
           // The complete order may name another office than its by-reference answer did: its row withholds it then.
-          { recordedResponse: withheldResponseOf(orders.connection.officeIds) },
+          { recordedResponse: withheldResponseOf(orders.orderOfficeIds) },
         ),
       );
     } catch (error) {
@@ -1197,7 +1202,7 @@ export class PnrImportService {
     if (data === undefined) {
       throw new AppError("SUPPLIER_ERROR", { message: "Amadeus answered without the order." });
     }
-    if (!isTenantOrder(data, orders.connection.officeIds)) {
+    if (!isTenantOrder(data, orders.orderOfficeIds)) {
       // The complete order names another office than its by-reference answer did: never recorded, nor kept (its row
       // holds the withheld body, `withheldResponseOf`).
       await this.denyOffice("import", ref.reference, 1);
@@ -1764,23 +1769,24 @@ export class PnrImportService {
 
   /**
    * Get Flight Order By Record Locator (no transaction open), with the tenant's connection: its `supplier_requests` row
-   * withholds the orders of other offices from its first write (`withheldResponseOf`, the client's `recordedResponse`).
+   * withholds the orders of offices other than the tenant's own (`TenantOffices.orderOfficeIds`) from its first write
+   * (`withheldResponseOf`, the client's `recordedResponse`).
    */
   private async byReference(
     tenant: RequestTenant,
     operation: string,
     query: { readonly reference: string; readonly originSystemCode: string; readonly include?: "bags"[] },
-  ): Promise<Reply & { readonly connection: ResolvedAmadeusConnection }> {
+  ): Promise<Reply & TenantOffices> {
     try {
-      const connection = await this.connections.resolve(tenant.tenantId, tenant.environment);
+      const offices = await this.connections.tenantOffices(tenant.tenantId, tenant.environment);
       const reply = await this.objectReply(() =>
         this.amadeus.getFlightOrderByReference(
           this.context(tenant, operation, null),
           { query: { ...query, ...(query.include === undefined ? {} : { include: [...query.include] }) } },
-          { recordedResponse: withheldResponseOf(connection.officeIds) },
+          { recordedResponse: withheldResponseOf(offices.orderOfficeIds) },
         ),
       );
-      return { ...reply, connection };
+      return { ...reply, ...offices };
     } catch (error) {
       throw supplierAnswerOf(error, "Amadeus has no order with this record locator.");
     }
@@ -1807,19 +1813,20 @@ export class PnrImportService {
   private async tenantOrders(
     kind: "lookup" | "import",
     reference: string,
-    reply: Reply & { readonly connection: ResolvedAmadeusConnection },
-  ): Promise<{
-    readonly allowed: JsonObject[];
-    readonly withheld: JsonObject[];
-    readonly connection: ResolvedAmadeusConnection;
-    readonly supplierRequestId: string | null;
-  }> {
+    reply: Reply & TenantOffices,
+  ): Promise<
+    TenantOffices & {
+      readonly allowed: JsonObject[];
+      readonly withheld: JsonObject[];
+      readonly supplierRequestId: string | null;
+    }
+  > {
     const orders = records(reply.body["data"]);
     if (orders.length === 0) {
       throw new AppError("NOT_FOUND", { message: "Amadeus has no order with this record locator." });
     }
-    const { connection } = reply;
-    const { allowed, withheld } = partitionOrders(orders, connection.officeIds);
+    const { connection, orderOfficeIds } = reply;
+    const { allowed, withheld } = partitionOrders(orders, orderOfficeIds);
     if (withheld.length > 0) {
       this.logger.warn(
         { operation: OPERATIONS[kind], withheldOrders: withheld.length, allowedOrders: allowed.length },
@@ -1832,7 +1839,7 @@ export class PnrImportService {
         message: "This record locator belongs to an office outside this OTA.",
       });
     }
-    return { allowed, withheld, connection, supplierRequestId: reply.call.supplierRequestId };
+    return { allowed, withheld, connection, orderOfficeIds, supplierRequestId: reply.call.supplierRequestId };
   }
 
   /**

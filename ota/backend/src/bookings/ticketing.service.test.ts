@@ -27,6 +27,7 @@ function dueRow(overrides: Partial<TicketingBookingRow> = {}): TicketingBookingR
     amadeusOrderId: "eJzTd9cPcjQ",
     recordLocator: "ABC123",
     ownerOfficeId: "NCE1A0950",
+    queuingOfficeId: "NCE1A0950",
     ticketingStatus: "failed",
     ticketingAttempts: 1,
     ticketingLastAttemptAt: ago(10 * MINUTE),

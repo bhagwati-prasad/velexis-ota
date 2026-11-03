@@ -381,7 +381,10 @@ paths:
 
         **Errors.** A suspended or not-yet-provisioned OTA answers `403 TENANT_SUSPENDED` (render a maintenance page);
         `403 HOST_NOT_ALLOWED` when `X-Velexis-Host` is missing with a hosting key or is not a verified storefront
-        domain the key may act for.
+        domain the key may act for. `503 SERVICE_UNAVAILABLE` when the platform's rows cannot be read: the tenant
+        guard's lookup of the OTA, a read through the platform cache, or storefront.get's own read of the OTA's
+        domains when it fills its cache (nothing is cached then; try again shortly), as getPublicAsset documents it
+        (lead decision (2f) of 2026-11-02).
       tags:
         - Storefront
       security:
@@ -408,6 +411,7 @@ paths:
         - HOST_NOT_ALLOWED
         - RATE_LIMITED
         - INTERNAL_ERROR
+        - SERVICE_UNAVAILABLE
       x-scope: both
       x-milestone: M2
       parameters:
@@ -635,6 +639,8 @@ paths:
           $ref: '#/components/responses/RateLimited'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /v1/storefront/resolve:
     get:
       operationId: resolveStorefrontHost
@@ -12923,7 +12929,11 @@ paths:
         console.bookings.resync records the airline's cancellation (segments `CANCELLED`, the booking `cancelled`),
         which ends the request. An airline that refuses for good leaves the request open, and so does an order Amadeus
         no longer has, which the resync cannot read (`422 SUPPLIER_REJECTED`): a known MVP limitation (lead decision
-        (2c) of 2026-10-31, second batch; a 'close request' action is post-MVP). No issuance in progress (a
+        (2c) of 2026-10-31, second batch; a 'close request' action is post-MVP). The post-MVP 'close request' action is
+        for the order-not-found case too (lead decision (2c) of 2026-11-02): a staff request recorded after Flight
+        Order Management DELETE answered `404` cannot be finished by console.bookings.resync either, which cannot read
+        the order (`422 SUPPLIER_REJECTED`, `supplierSync.status = order_not_found`), so it stays open like one the
+        airline refuses for good. No issuance in progress (a
         fresh ticketing claim of the ticketing job or of a staff issuance: `409 BOOKING_NOT_MODIFIABLE`,
         `details.reason = ticketing_in_progress`). Permission `bookings:cancel`. Unlike bookings.cancel (customer scope)
         there is no self-service window or cancellation-quote requirement.

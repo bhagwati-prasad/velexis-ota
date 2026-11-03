@@ -5,10 +5,12 @@
 //
 // The file clones the @velexis/testing template (tenant_alpha and tenant_beta provisioned) and writes the platform rows
 // as the platform does: two tenants on the shared Velexis test Amadeus account (the stub), each with an office of its
-// own, accounts and memberships. Staff sign in through the OTA admin's service key with portal tokens. The orders are
-// created in the stub through its own HTTP API, as a GDS terminal would create them, with synthetic travellers and
-// flights relative to now; a stub serves one set of credentials, so both tenants read every order and only the OTA
-// backend's office check keeps them apart. Every answer is checked against the OTA document.
+// own, accounts and memberships, and an office of the account's pool `releasing` for alpha (one it used before, whose
+// orders stay alpha's: lead decision (2n) of 2026-11-02, FIX-W39-OTA). Staff sign in through the OTA admin's service
+// key with portal tokens. The orders are created in the stub through its own HTTP API, as a GDS terminal would create
+// them, with synthetic travellers and flights relative to now; a stub serves one set of credentials, so both tenants
+// read every order and only the OTA backend's office check keeps them apart. Every answer is checked against the OTA
+// document.
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import { getQueueToken } from "@nestjs/bullmq";
 import { encryptValue, sha256Hex, type KeyProvider } from "@velexis/crypto";
@@ -83,6 +85,8 @@ let betaId: string;
 let alphaOffice: string;
 let alphaSecondOffice: string;
 let betaOffice: string;
+/** An office of the account's pool `releasing` for alpha: not in its connection's `office_ids`, still alpha's. */
+let alphaReleasingOffice: string;
 let consoleRuleId: string;
 let stubCredentials: { readonly clientId: string; readonly clientSecret: string };
 
@@ -403,10 +407,27 @@ beforeAll(async () => {
     clientSecret: randomBytes(24).toString("base64url"),
   };
   const office = (): string => `NCE1A${randomBytes(2).toString("hex").toUpperCase()}`;
-  [alphaOffice, alphaSecondOffice, betaOffice] = [office(), office(), office()];
+  [alphaOffice, alphaSecondOffice, betaOffice, alphaReleasingOffice] = [
+    office(),
+    office(),
+    office(),
+    office(),
+  ];
   amadeusAccountId = await insertAmadeusAccount(stubCredentials.clientId, stubCredentials.clientSecret);
   alphaId = await insertTenant("alpha", [alphaOffice, alphaSecondOffice]);
   betaId = await insertTenant("beta", [betaOffice]);
+  await migrator
+    .insertInto("platform.amadeus_offices")
+    .values({
+      id: newId("amo"),
+      amadeus_account_id: amadeusAccountId,
+      office_id: alphaReleasingOffice,
+      status: "releasing",
+      assigned_tenant_id: alphaId,
+      assigned_at: new Date(),
+      release_requested_at: new Date(),
+    })
+    .execute();
   for (const [schema, name] of [
     ["tenant_alpha", "Alpha Travel"],
     ["tenant_beta", "Beta Trips"],
@@ -731,6 +752,41 @@ describe("console.bookings.import", () => {
         after: expect.objectContaining({ recordLocator: order.recordLocator, pricingMode: "net" }),
       }),
     ]);
+  });
+
+  it("[FIX-W39-OTA AC4] finds and imports an order of the tenant's releasing Velexis office, which another tenant cannot", async () => {
+    const agent = await staffSession(alphaId, "agent");
+    const betaAgent = await staffSession(betaId, "agent");
+    const order = await stubOrder({ queuing: alphaReleasingOffice, owner: alphaReleasingOffice });
+
+    const refused = await betaAgent.lookup(order.recordLocator);
+    const found = await agent.lookup(order.recordLocator);
+    stub.clearRequests();
+    const res = await agent.import({ reference: order.recordLocator, pricing: { mode: "net" } });
+
+    expect(answer(refused)).toEqual([403, "OFFICE_NOT_ALLOWED"]);
+    expect(answer(found)).toEqual([200, undefined]);
+    expect((found.body.matches as JsonObject[])[0]).toMatchObject({
+      flightOrderId: order.id,
+      importable: true,
+    });
+    expect(answer(res)).toEqual([201, undefined]);
+    expectResponseToMatch("consoleImportBooking", res);
+    expect(res.body).toMatchObject({
+      amadeusOrderId: order.id,
+      queuingOfficeId: alphaReleasingOffice,
+      ownerOfficeId: alphaReleasingOffice,
+    });
+    // The complete order is read for its office, which the Velexis account serves (OBE-079's releasing-office rule).
+    const rows = (await supplierRequestsOf("tenant_alpha", "console.bookings.import")).filter(
+      (entry) => entry.booking_id === res.body.id,
+    );
+    expect(rows.map((entry) => [entry.amadeus_api, entry.office_id])).toEqual([
+      ["GetFlightOrderByRecordLocator", alphaOffice],
+      ["FlightOrderManagement", alphaReleasingOffice],
+    ]);
+    // Neither row withholds the tenant's own order.
+    expect(JSON.stringify(rows.map((entry) => entry.response_body))).not.toContain("office_not_allowed");
   });
 
   it("[OBE-064 AC2] answers 409 ORDER_ALREADY_IMPORTED when the same order is imported again", async () => {

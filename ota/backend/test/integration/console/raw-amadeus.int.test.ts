@@ -5,12 +5,14 @@
 //
 // The file clones the @velexis/testing template (tenant_alpha and tenant_beta provisioned) and writes the platform rows
 // as the platform does: two tenants on the shared Velexis test Amadeus account (the stub), each with an office of its
-// own (alpha a second one), accounts and memberships. Staff sign in through the OTA admin's service key with portal
-// tokens. The orders are created in the stub through its own HTTP API, as a GDS terminal would create them, with
-// synthetic travellers and flights relative to now; a stub serves one set of credentials, so both tenants read every
-// order and only the OTA backend's office rule keeps them apart. Every documented answer is checked against the OTA
-// document. The `isolation` describe is the isolation test of the new tenant repository (RawAmadeusRepository,
-// conventions §12): a booking of another tenant or of the other environment is never the request's.
+// own (alpha a second one), accounts and memberships; the account's office pool holds an office `releasing` for alpha
+// (one it used before, whose orders and queue stay alpha's: lead decision (2n) of 2026-11-02, FIX-W39-OTA) and one
+// released to the pool. Staff sign in through the OTA admin's service key with portal tokens. The orders are created
+// in the stub through its own HTTP API, as a GDS terminal would create them, with synthetic travellers and flights
+// relative to now; a stub serves one set of credentials, so both tenants read every order and only the OTA backend's
+// office rule keeps them apart. Every documented answer is checked against the OTA document. The `isolation` describe
+// is the isolation test of the new tenant repository (RawAmadeusRepository, conventions §12): a booking of another
+// tenant or of the other environment is never the request's.
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -92,6 +94,10 @@ let betaId: string;
 let alphaOffice: string;
 let alphaSecondOffice: string;
 let betaOffice: string;
+/** An office of the account's pool `releasing` for alpha: not in its connection's `office_ids`, still alpha's. */
+let alphaReleasingOffice: string;
+/** An office of the account's pool released (`available`): nobody's. */
+let releasedOffice: string;
 let stubCredentials: { readonly clientId: string; readonly clientSecret: string };
 /** The Flight Offers Search fixture's answer, as the stub sends it for every search. */
 let searchFixture: JsonObject;
@@ -144,6 +150,22 @@ async function insertTenant(key: "alpha" | "beta", offices: readonly string[]): 
     })
     .execute();
   return id;
+}
+
+/** An office of the shared account's pool, `releasing` for `tenantId`, or `available` without a tenant. */
+async function insertPoolOffice(officeId: string, tenantId: string | null): Promise<void> {
+  await migrator
+    .insertInto("platform.amadeus_offices")
+    .values({
+      id: newId("amo"),
+      amadeus_account_id: amadeusAccountId,
+      office_id: officeId,
+      status: tenantId === null ? "available" : "releasing",
+      assigned_tenant_id: tenantId,
+      assigned_at: tenantId === null ? null : new Date(),
+      release_requested_at: tenantId === null ? null : new Date(),
+    })
+    .execute();
 }
 
 interface Member {
@@ -266,12 +288,14 @@ async function seedBooking(
     readonly recordLocator?: string;
     readonly tenant?: Schema;
     readonly environment?: "test" | "live";
+    /** The office that holds its order: the tenant's office by default. */
+    readonly office?: string;
   } = {},
 ) {
   const id = newId("bkg");
   const departure = new Date(Date.now() + 10 * DAY);
   const tenant = options.tenant ?? "tenant_alpha";
-  const office = tenant === "tenant_beta" ? betaOffice : alphaOffice;
+  const office = options.office ?? (tenant === "tenant_beta" ? betaOffice : alphaOffice);
   await inTenant(tenant, (trx) =>
     trx
       .insertInto("bookings")
@@ -506,10 +530,18 @@ beforeAll(async () => {
     clientSecret: randomBytes(24).toString("base64url"),
   };
   const office = (): string => `NCE1A${randomBytes(2).toString("hex").toUpperCase()}`;
-  [alphaOffice, alphaSecondOffice, betaOffice] = [office(), office(), office()];
+  [alphaOffice, alphaSecondOffice, betaOffice, alphaReleasingOffice, releasedOffice] = [
+    office(),
+    office(),
+    office(),
+    office(),
+    office(),
+  ];
   amadeusAccountId = await insertAmadeusAccount(stubCredentials.clientId, stubCredentials.clientSecret);
   alphaId = await insertTenant("alpha", [alphaOffice, alphaSecondOffice]);
   betaId = await insertTenant("beta", [betaOffice]);
+  await insertPoolOffice(alphaReleasingOffice, alphaId);
+  await insertPoolOffice(releasedOffice, null);
   for (const [schema, name] of [
     ["tenant_alpha", "Alpha Travel"],
     ["tenant_beta", "Beta Trips"],
@@ -1048,6 +1080,91 @@ describe("console.amadeus.getQueue", () => {
     expect(await staffActionsOf("tenant_alpha", agent.member.staffId)).toEqual([
       expect.objectContaining({ action: "amadeus.getQueue", outcome: "denied" }),
     ]);
+  });
+});
+
+describe("the tenant's releasing Velexis offices (lead decision (2n) of 2026-11-02)", () => {
+  it("[FIX-W39-OTA AC4] getFlightOrder answers an order of the tenant's releasing office, read for its booking's office", async () => {
+    const agent = await staffSession(alphaId, "agent");
+    const order = await stubOrder({ queuing: alphaReleasingOffice, owner: alphaReleasingOffice });
+    const bookingId = await seedBooking({
+      flightOrderId: order.id,
+      recordLocator: order.recordLocator,
+      office: alphaReleasingOffice,
+    });
+
+    const res = await agent.get(`${ORDERS}/${order.id}`);
+
+    expect(answer(res)).toEqual([200, undefined]);
+    expectResponseToMatch("consoleAmadeusGetFlightOrder", res);
+    // The booking's office names the call, which the Velexis account serves for that office alone (OBE-079).
+    expect(res.body).toMatchObject({
+      flightOrderId: order.id,
+      bookingId,
+      call: { officeId: alphaReleasingOffice },
+      amadeus: { data: { id: order.id, ownerOfficeId: alphaReleasingOffice } },
+    });
+    // The supplier log keeps the tenant's own order as Amadeus answered it.
+    const [row, ...others] = await supplierRequestsOf("tenant_alpha", agent.member.staffId);
+    expect(others).toEqual([]);
+    expect(row).toMatchObject({ office_id: alphaReleasingOffice, booking_id: bookingId });
+    expect(JSON.stringify(row?.response_body)).toContain(order.lastName);
+    expect(JSON.stringify(row?.response_body)).not.toContain("office_not_allowed");
+    await expectAudited(agent, res, "amadeus.getFlightOrder", { target_id: order.id, booking_id: bookingId });
+  });
+
+  it("[FIX-W39-OTA AC4] getFlightOrderByReference answers it too, and another tenant still cannot read it", async () => {
+    const order = await stubOrder({ queuing: alphaReleasingOffice, owner: null });
+    const agent = await staffSession(alphaId, "agent");
+    const betaAgent = await staffSession(betaId, "agent");
+    const path = `${BY_REFERENCE}?reference=${order.recordLocator}&originSystemCode=GDS`;
+
+    const res = await agent.get(path);
+    const refused = await betaAgent.get(path);
+
+    expect(answer(res)).toEqual([200, undefined]);
+    expect(res.body.matches).toEqual([{ flightOrderId: order.id, bookingId: null }]);
+    expect(answer(refused)).toEqual([403, "OFFICE_NOT_ALLOWED"]);
+    expectResponseToMatch("consoleAmadeusGetFlightOrderByReference", refused);
+    expect(JSON.stringify(refused.body)).not.toContain(order.lastName);
+  });
+
+  it("[FIX-W39-OTA AC4] getQueue reads the queue of the tenant's releasing office, its entries kept", async () => {
+    const agent = await staffSession(alphaId, "agent");
+    const order = await stubOrder({
+      queuing: alphaReleasingOffice,
+      owner: alphaReleasingOffice,
+      queue: RAW_QUEUE,
+    });
+
+    const res = await agent.get(`${QUEUES}/${RAW_QUEUE}?officeId=${alphaReleasingOffice}`);
+
+    expect(answer(res)).toEqual([200, undefined]);
+    expectResponseToMatch("consoleAmadeusGetQueue", res);
+    expect(amadeusCalls("listQueue").map((call) => call.query)).toEqual([{ officeId: alphaReleasingOffice }]);
+    const ids = (res.body.amadeus.data as JsonObject[]).map((entry) => entry["id"] as string);
+    expect(ids.some((id) => id.startsWith(order.recordLocator))).toBe(true);
+    await expectAudited(agent, res, "amadeus.getQueue", {
+      after: expect.objectContaining({ itemCount: ids.length, withheldItems: 0 }),
+    });
+    // Another tenant cannot read that queue: the office is not one of beta's, refused before any call.
+    const betaAgent = await staffSession(betaId, "agent");
+    stub.clearRequests();
+    const refused = await betaAgent.get(`${QUEUES}/${RAW_QUEUE}?officeId=${alphaReleasingOffice}`);
+    expect(answer(refused)).toEqual([403, "OFFICE_NOT_ALLOWED"]);
+    expect(amadeusCalls("listQueue")).toEqual([]);
+  });
+
+  it("[FIX-W39-OTA AC4] still refuses an order and a queue of an office released to the pool", async () => {
+    const agent = await staffSession(alphaId, "agent");
+    const order = await stubOrder({ queuing: releasedOffice, owner: releasedOffice });
+
+    const read = await agent.get(`${ORDERS}/${order.id}`);
+    const queue = await agent.get(`${QUEUES}/${RAW_QUEUE}?officeId=${releasedOffice}`);
+
+    expect(answer(read)).toEqual([403, "OFFICE_NOT_ALLOWED"]);
+    expect(answer(queue)).toEqual([403, "OFFICE_NOT_ALLOWED"]);
+    expect(amadeusCalls("listQueue")).toEqual([]);
   });
 });
 

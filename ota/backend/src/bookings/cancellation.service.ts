@@ -215,7 +215,7 @@ import { UnrecoverableError, type Job, type Queue } from "bullmq";
 import type { Redis } from "ioredis";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { AmadeusClient } from "../amadeus/amadeus.client";
-import type { AmadeusCallContext } from "../amadeus/call-context";
+import { orderOfficeContext, type AmadeusCallContext } from "../amadeus/call-context";
 import { AmadeusCallError } from "../amadeus/error-mapper";
 import { ifMatchSatisfied } from "../checkout/checkout.mapper";
 import { BookingAccessContext } from "../common/auth/booking-access.guard";
@@ -3051,7 +3051,7 @@ export class CancellationService {
       operation: CANCEL_OPERATION,
       requestId: this.requestId(tenant),
       bookingId: booking.id,
-      ...(booking.ownerOfficeId === null ? {} : { orderOffice: booking.ownerOfficeId }),
+      ...orderOfficeContext(booking),
     };
   }
 
@@ -3405,7 +3405,7 @@ export class CancellationChecks {
       operation: CANCELLATION_CHECK_OPERATION,
       requestId: tenant.requestId,
       bookingId: booking.id,
-      ...(booking.ownerOfficeId === null ? {} : { orderOffice: booking.ownerOfficeId }),
+      ...orderOfficeContext(booking),
     };
     try {
       const reply = await this.amadeus.getFlightOrder(context, { flightOrderId: orderId });

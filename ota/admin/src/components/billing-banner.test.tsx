@@ -1,20 +1,38 @@
 // @vitest-environment happy-dom
-// The billing banner of the console shell (OAD-018 AC1): one banner for each value of `tenant.billingNotice`, with the
-// link to the portal's billing page of the session's OTA, and none for `null` or a missing notice. The shell's wiring
-// (the notice of `console.auth.me`, `PUBLIC_PORTAL_URL`, the session's tenant) is tested in (console)/layout.test.tsx.
+// The billing banner of the console shell (OAD-018 AC1): one banner for each value of `tenant.billingNotice`, and none
+// for `null` or a missing notice. The notice shows for every role; the link to the portal's billing page of the
+// session's OTA only for owner and finance, the portal's `viewBilling` rule (lead decision (2o) of 2026-11-02,
+// FIX-W39-OTA). The shell's wiring (the notice and role of `console.auth.me`, `PUBLIC_PORTAL_URL`, the session's
+// tenant) is tested in (console)/layout.test.tsx.
+import type { StaffRole } from "@velexis/ota-sdk";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { TENANT_ID, TEST_PORTAL_URL } from "@/test/fake-ota-api";
 
-import { BILLING_STRINGS, BillingBanner, isBillingNotice, portalBillingUrl } from "./billing-banner";
+import {
+  BILLING_ROLES,
+  BILLING_STRINGS,
+  BillingBanner,
+  canViewBilling,
+  isBillingNotice,
+  portalBillingUrl,
+} from "./billing-banner";
 
 const BILLING_PAGE = `${TEST_PORTAL_URL}/otas/${TENANT_ID}/billing`;
 
-function banner(notice: string | null | undefined, tenantId: string = TENANT_ID) {
+function banner(
+  notice: string | null | undefined,
+  options: { readonly tenantId?: string; readonly role?: StaffRole } = {},
+) {
   return render(
     <div data-testid="shell">
-      <BillingBanner notice={notice} portalUrl={TEST_PORTAL_URL} tenantId={tenantId} />
+      <BillingBanner
+        notice={notice}
+        portalUrl={TEST_PORTAL_URL}
+        tenantId={options.tenantId ?? TENANT_ID}
+        role={options.role ?? "owner"}
+      />
     </div>,
   );
 }
@@ -81,11 +99,51 @@ describe("BillingBanner", () => {
   });
 
   it("keeps the notice but drops the link when the tenant id is not one", () => {
-    banner("past_due", "../../elsewhere");
+    banner("past_due", { tenantId: "../../elsewhere" });
 
     const alert = screen.getByRole("alert");
     expect(alert.textContent).toContain(BILLING_STRINGS.past_due.title);
     expect(within(alert).queryByRole("link")).toBeNull();
+  });
+
+  it("[FIX-W39-OTA AC5] links owner and finance to the portal's billing page, the roles the portal lets open it", () => {
+    for (const role of ["owner", "finance"] as const) {
+      banner("past_due", { role });
+
+      const alert = screen.getByRole("alert");
+      expect([
+        role,
+        within(alert).getByRole("link", { name: BILLING_STRINGS.link }).getAttribute("href"),
+      ]).toEqual([role, BILLING_PAGE]);
+      expect(alert.textContent).not.toContain(BILLING_STRINGS.billingRoles);
+      cleanup();
+    }
+  });
+
+  it("[FIX-W39-OTA AC5] shows every other role the notice without the link, and who manages billing", () => {
+    for (const role of ["admin", "agent", "viewer"] as const) {
+      for (const notice of ["past_due", "trial_ending"] as const) {
+        banner(notice, { role });
+
+        const strip = screen.getByRole(notice === "past_due" ? "alert" : "status");
+        expect([role, strip.getAttribute("data-notice")]).toEqual([role, notice]);
+        expect(strip.textContent).toContain(BILLING_STRINGS[notice].title);
+        expect(strip.textContent).toContain(BILLING_STRINGS[notice].detail);
+        expect(strip.textContent).toContain(BILLING_STRINGS.billingRoles);
+        expect([role, within(strip).queryByRole("link")]).toEqual([role, null]);
+        expect(document.body.innerHTML).not.toContain("/billing");
+        cleanup();
+      }
+    }
+  });
+});
+
+describe("canViewBilling", () => {
+  it("[FIX-W39-OTA AC5] is the portal's viewBilling rule: owner and finance, no other role or value", () => {
+    expect(BILLING_ROLES).toEqual(["owner", "finance"]);
+    expect(["owner", "admin", "agent", "finance", "viewer", "", null, undefined].map(canViewBilling)).toEqual(
+      [true, false, false, true, false, false, false, false],
+    );
   });
 });
 

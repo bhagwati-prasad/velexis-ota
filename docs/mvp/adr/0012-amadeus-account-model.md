@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (both models: Velexis shared account by default, OTA-owned credentials later), lead architect (data model, isolation, rate limits)
+**Revisions:** 2026-11-02 (lead decision (2n) of 2026-11-02, recording FIX-W39-OTA): the office isolation says which offices are "the tenant's": its connection's `office_ids` and the Velexis offices `assigned` or `releasing` for it (dated note under Office isolation).
 
 ## Context
 
@@ -37,6 +38,9 @@ The reference schema has one `platform.supplier_connections` row per tenant and 
 - It resolves the connection from the cached `supplier_connections` row and, for shared connections, the cached `amadeus_accounts` row.
 - **OAuth tokens** are cached in Redis per credential set and environment (`amadeus:token:<accountOrConnectionId>:<env>`), envelope-encrypted, with a TTL a little shorter than `expires_in`. Shared-account tokens are shared by all OTAs on that account.
 - **Office isolation on the shared account.** The client always sets the tenant's own office ids (`queuingOfficeId`, `ownerOfficeId`, queue office, PNR retrieval office). Requests for an office outside the tenant's `office_ids` fail with `403 OFFICE_NOT_ALLOWED` (already in the error catalogue). Imports by record locator are accepted only for orders owned by one of the tenant's offices.
+
+  **2026-11-02 (lead decision (2n) of 2026-11-02, FIX-W39-OTA; [PADR-0012](../../../platform/docs/adr/0012-amadeus-office-pool.md) point 4):** the tenant's offices are its connection's `office_ids` and the offices of the Velexis account `assigned` or `releasing` for it. A call on an existing order or queue of such an office is served through the Velexis account even after a switch to the OTA's own credentials (OBE-079), and the console's raw order and queue reads and the import by record locator accept its orders. New orders use the connection's offices only; another tenant's office, or one released to the pool, still answers `403 OFFICE_NOT_ALLOWED`.
+
 - **Rate limiting:**
   - a Redis token bucket per credential set protects the shared account's quota;
   - a second bucket per tenant keeps one OTA from using it all;

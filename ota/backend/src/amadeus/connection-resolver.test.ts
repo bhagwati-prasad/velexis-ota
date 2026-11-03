@@ -556,6 +556,89 @@ describe("an existing order (the releasing-office rule, OBE-079)", () => {
   });
 });
 
+describe("the tenant's own offices (tenantOffices, lead decision (2n) of 2026-11-02)", () => {
+  it("[FIX-W39-OTA AC4] are the OTA's own offices and its releasing Velexis offices after a switch to its own credentials", async () => {
+    const [tenantId, otherTenant] = [newId("ten"), newId("ten")];
+    const shared = account({
+      offices: [
+        serving(OFFICE, tenantId, "releasing"),
+        // Another OTA's offices on the shared account are never the tenant's.
+        serving(OTHER_OFFICE, otherTenant, "assigned"),
+        serving("PAR1A0912", otherTenant, "releasing"),
+      ],
+    });
+    const row = ownConnection(tenantId, shared);
+    const { resolver, cache } = harness({ connections: [row], accounts: [shared] });
+
+    const offices = await resolver.tenantOffices(tenantId, "test");
+
+    expect(offices.orderOfficeIds).toEqual([OWN_OFFICE, OWN_OTHER_OFFICE, OFFICE]);
+    // What serves new calls is unchanged: the OTA's own credentials and offices, as `resolve` answers them.
+    expect(offices.connection).toEqual(await resolver.resolve(tenantId, "test"));
+    expect(offices.connection).toMatchObject({
+      credentialSource: "tenant",
+      officeIds: [OWN_OFFICE, OWN_OTHER_OFFICE],
+    });
+    expect(Object.isFrozen(offices) && Object.isFrozen(offices.orderOfficeIds)).toBe(true);
+    expect(cache.amadeusAccount).toHaveBeenCalledWith(shared.id, expect.any(Function), parseAmadeusAccount);
+  });
+
+  it("[FIX-W39-OTA AC4] add a velexis connection's releasing office to its own, each office once", async () => {
+    const tenantId = newId("ten");
+    // An admin moved the tenant to OFFICE; its old office OTHER_OFFICE is releasing.
+    const shared = account({
+      offices: [serving(OFFICE, tenantId, "assigned"), serving(OTHER_OFFICE, tenantId, "releasing")],
+    });
+    const row = connection(tenantId, shared);
+    const { resolver } = harness({ connections: [row], accounts: [shared] });
+
+    const offices = await resolver.tenantOffices(tenantId, "test");
+
+    expect(offices.orderOfficeIds).toEqual([OFFICE, OTHER_OFFICE]);
+    expect(offices.connection).toMatchObject({ credentialSource: "velexis", officeIds: [OFFICE] });
+  });
+
+  it("[FIX-W39-OTA AC4] are the connection's alone once its Velexis offices are released, or without a Velexis account", async () => {
+    const tenantId = newId("ten");
+    const released = account({ offices: [] });
+    const otherEnvironment = account({ environment: "live", offices: [serving(OFFICE, tenantId)] });
+
+    for (const world of [
+      { connections: [ownConnection(tenantId, released)], accounts: [released] },
+      { connections: [ownConnection(tenantId, null)] },
+      // An account of the other environment never serves this one (the composite foreign key forbids the row).
+      {
+        connections: [ownConnection(tenantId, null, { velexisAccountId: otherEnvironment.id })],
+        accounts: [otherEnvironment],
+      },
+    ]) {
+      expect((await harness(world).resolver.tenantOffices(tenantId, "test")).orderOfficeIds).toEqual([
+        OWN_OFFICE,
+        OWN_OTHER_OFFICE,
+      ]);
+    }
+  });
+
+  it("[FIX-W39-OTA AC4] answer 424 as resolve does for a connection that cannot serve calls", async () => {
+    const tenantId = newId("ten");
+    const shared = account({ offices: [serving(OFFICE, tenantId)] });
+
+    expect(
+      await refusal(
+        harness({
+          connections: [ownConnection(tenantId, shared, { status: "disabled" })],
+          accounts: [shared],
+        }).resolver.tenantOffices(tenantId, "test"),
+      ),
+    ).toEqual([424, "SUPPLIER_NOT_CONFIGURED", "connection_not_active"]);
+    expect(await refusal(harness({}).resolver.tenantOffices(tenantId, "test"))).toEqual([
+      424,
+      "SUPPLIER_NOT_CONFIGURED",
+      "no_connection",
+    ]);
+  });
+});
+
 describe("a connection that cannot serve calls", () => {
   const tenantId = newId("ten");
   const shared = account();

@@ -40,6 +40,8 @@ const OWN = "NCE1A0001";
 const OWN_SECOND = "NCE1A0002";
 const OTHER = "PAR1A0950";
 const OFFICES = [OWN, OWN_SECOND];
+/** A Velexis office `releasing` for the tenant: its old orders and queue stay the tenant's (FIX-W39-OTA). */
+const RELEASING = "NCE1A0003";
 const WITHHELD = "office_not_allowed";
 
 /** The fixture's order (Madrid–Paris Orly, one adult) with `fields` over its data. */
@@ -386,6 +388,7 @@ const TENANT: RequestTenant = {
 
 function harness(reply: { readonly body: unknown; readonly officeId?: string }) {
   const entries: StaffActionEntry[] = [];
+  const snapshots: unknown[] = [];
   // What the client's supplier_requests row stores of each answer: its `recordedResponse` of it (AmadeusClient).
   const recorded: unknown[] = [];
   const response = (options: AmadeusCallOptions): AmadeusResponse<unknown> => {
@@ -407,38 +410,50 @@ function harness(reply: { readonly body: unknown; readonly officeId?: string }) 
   const amadeus = {
     searchFlightOffers: vi.fn(call),
     getFlightOrder: vi.fn(call),
+    getFlightOrderByReference: vi.fn(call),
+    listQueue: vi.fn(call),
   };
   const repository = {
     bookingExists: vi.fn(() => Promise.resolve(false)),
     orderBooking: vi.fn(() => Promise.resolve(undefined)),
     lastSupplierRequestId: vi.fn(() => Promise.resolve(undefined)),
   };
-  const audit = {
-    recordAlone: vi.fn((entry: StaffActionEntry) => {
-      entries.push(entry);
-      return Promise.resolve(`sact_0${entries.length}JA4H1A3C5E7G9J1L3N5Q7S9U`);
-    }),
+  const record = (entry: StaffActionEntry) => {
+    entries.push(entry);
+    return Promise.resolve(`sact_0${entries.length}JA4H1A3C5E7G9J1L3N5Q7S9U`);
   };
+  const audit = {
+    recordAlone: vi.fn(record),
+    record: vi.fn((_trx: unknown, entry: StaffActionEntry) => record(entry)),
+  };
+  // ConnectionResolver.tenantOffices: the connection's offices, then the tenant's releasing Velexis office.
+  const tenantOffices = vi.fn(() =>
+    Promise.resolve({
+      connection: { officeIds: OFFICES, offices: { queuing: OWN, owner: OWN, queue: OWN, retrieval: OWN } },
+      orderOfficeIds: [...OFFICES, RELEASING],
+    }),
+  );
   const service = new RawAmadeusService(
     { run: (fn: (trx: TenantTransaction) => Promise<unknown>) => fn(TRX) } as unknown as TenantTx,
     repository as unknown as RawAmadeusRepository,
-    {} as PnrImportRepository,
-    {} as QueueSnapshotsRepository,
-    amadeus as unknown as AmadeusClient,
     {
-      resolve: () =>
-        Promise.resolve({
-          officeIds: OFFICES,
-          offices: { queuing: OWN, owner: OWN, queue: OWN, retrieval: OWN },
-        }),
-    } as unknown as ConnectionResolver,
+      attachedBookings: vi.fn(() => Promise.resolve([])),
+    } as unknown as PnrImportRepository,
+    {
+      insert: vi.fn((_trx: unknown, row: unknown) => {
+        snapshots.push(row);
+        return Promise.resolve();
+      }),
+    } as unknown as QueueSnapshotsRepository,
+    amadeus as unknown as AmadeusClient,
+    { tenantOffices } as unknown as ConnectionResolver,
     audit as unknown as StaffActionsWriter,
     { require: () => TENANT, requestId: () => undefined } as unknown as TenantContext,
     { newId: () => "qsn_01JA4H1A3C5E7G9J1L3N5Q7S9U" } as unknown as IdGenerator,
     new Clock(),
     { warn: vi.fn(), info: vi.fn(), error: vi.fn() } as unknown as PinoLogger,
   );
-  return { service, amadeus, repository, entries, recorded };
+  return { service, amadeus, repository, entries, recorded, snapshots, tenantOffices };
 }
 
 describe("the raw read use cases", () => {
@@ -527,6 +542,99 @@ describe("the raw read use cases", () => {
         action: "amadeus.searchFlightOffers",
         reason: "Corporate request",
         after: expect.objectContaining({ supplierRequestId: "sreq_01JA4H1A3C5E7G9J1L3N5Q7S9U", results: 0 }),
+      }),
+    ]);
+  });
+
+  it("[FIX-W39-OTA AC4] answers an order of the tenant's releasing Velexis office, the supplier log untouched", async () => {
+    const old = orderData({ id: "eJzOld000001", ownerOfficeId: RELEASING, queuingOfficeId: RELEASING });
+    const body = { data: old };
+    const h = harness({ body, officeId: RELEASING });
+    h.repository.orderBooking.mockResolvedValueOnce({
+      id: "bkg_01JA4H1A3C5E7G9J1L3N5Q7S9U",
+      office: RELEASING,
+    } as never);
+
+    const result = await h.service.getFlightOrder("eJzOld000001", {});
+
+    expect(h.tenantOffices).toHaveBeenCalledWith(TENANT.tenantId, "test");
+    // The call names the booking's office, which the client serves through the Velexis account (OBE-079).
+    expect(h.amadeus.getFlightOrder).toHaveBeenCalledWith(
+      expect.objectContaining({ orderOffice: RELEASING, bookingId: "bkg_01JA4H1A3C5E7G9J1L3N5Q7S9U" }),
+      { flightOrderId: "eJzOld000001" },
+      { recordedResponse: expect.any(Function) },
+    );
+    expect(result).toMatchObject({
+      flightOrderId: "eJzOld000001",
+      bookingId: "bkg_01JA4H1A3C5E7G9J1L3N5Q7S9U",
+    });
+    expect(h.recorded[0]).toBe(body);
+    // Its succeeded audit row, never the `denied` one of another office's order.
+    expect(h.entries).toEqual([
+      expect.objectContaining({
+        action: "amadeus.getFlightOrder",
+        targetId: "eJzOld000001",
+        bookingId: "bkg_01JA4H1A3C5E7G9J1L3N5Q7S9U",
+      }),
+    ]);
+    expect(h.entries[0]?.outcome).toBeUndefined();
+  });
+
+  it("[FIX-W39-OTA AC4] still refuses another tenant's office beside the releasing one", async () => {
+    const h = harness({
+      body: {
+        data: [
+          orderData({ id: "eJzOld000002", ownerOfficeId: RELEASING }),
+          orderData({ id: "eJzOther0002", ownerOfficeId: OTHER }),
+        ],
+      },
+    });
+
+    const result = await h.service.getFlightOrderByReference({
+      reference: "ABC123",
+      originSystemCode: "GDS",
+    });
+
+    expect(result.matches).toEqual([{ flightOrderId: "eJzOld000002", bookingId: null }]);
+    // The other office's order is withheld from the answer and from the row; the releasing office's is kept.
+    expect(h.recorded).toEqual([
+      {
+        data: [
+          expect.objectContaining({ id: "eJzOld000002", ownerOfficeId: RELEASING }),
+          { type: "flight-order", id: "eJzOther0002", withheld: WITHHELD },
+        ],
+      },
+    ]);
+    expect(h.entries).toEqual([
+      expect.objectContaining({
+        action: "amadeus.getFlightOrderByReference",
+        after: expect.objectContaining({ flightOrderIds: ["eJzOld000002"], withheldOrders: 1 }),
+      }),
+    ]);
+  });
+
+  it("[FIX-W39-OTA AC4] keeps the entries of the queue of the tenant's releasing office, and withholds another office's", async () => {
+    const own = QUEUE_ENTRY("AAA111");
+    const other = QUEUE_ENTRY("BBB222", { ownerOfficeId: OTHER });
+    const h = harness({ body: { meta: { count: 2 }, data: [own, other] }, officeId: RELEASING });
+
+    const result = await h.service.getQueue(50, { officeId: RELEASING });
+
+    expect(h.amadeus.listQueue).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: "console.amadeus.getQueue" }),
+      { queueId: 50, query: { officeId: RELEASING } },
+      { recordedResponse: expect.any(Function) },
+    );
+    // An entry that names no office is the releasing office's: the tenant's, as the queue it was read from.
+    expect(result.amadeus).toEqual({ meta: { count: 1 }, data: [own] });
+    expect(h.recorded).toEqual([
+      { meta: { count: 2 }, data: [own, { type: "pnrList", id: other["id"], withheld: WITHHELD }] },
+    ]);
+    expect(h.snapshots).toEqual([expect.objectContaining({ officeId: RELEASING, itemCount: 1 })]);
+    expect(h.entries).toEqual([
+      expect.objectContaining({
+        action: "amadeus.getQueue",
+        after: expect.objectContaining({ itemCount: 1, withheldItems: 1 }),
       }),
     ]);
   });

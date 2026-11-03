@@ -85,7 +85,7 @@ export function createStorefrontApi(core) {
      * @throws {AuthenticationError} `INVALID_API_KEY`
      * @throws {PermissionError} `TENANT_SUSPENDED` (render a maintenance page), `ORIGIN_NOT_ALLOWED`, `HOST_NOT_ALLOWED`
      * @throws {RateLimitError} `RATE_LIMITED`
-     * @throws {ServerError} `INTERNAL_ERROR`
+     * @throws {ServerError} `INTERNAL_ERROR`, `SERVICE_UNAVAILABLE` (503: the platform's rows could not be read; retry)
      */
     get: (params, options) => core.call(op.storefront_get, params, withLocale(params, options)),
 

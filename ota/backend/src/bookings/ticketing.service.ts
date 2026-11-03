@@ -57,7 +57,7 @@ import { sql } from "@velexis/db";
 import { redactPayload } from "@velexis/logger";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { AmadeusClient } from "../amadeus/amadeus.client";
-import type { AmadeusCallContext } from "../amadeus/call-context";
+import { orderOfficeContext, type AmadeusCallContext } from "../amadeus/call-context";
 import { Clock } from "../common/clock";
 import type { WorkerConfig } from "../config";
 import { InvalidNotificationError, OutboxService } from "../notifications/outbox.service";
@@ -107,6 +107,7 @@ export interface TicketingBookingRow {
   readonly amadeusOrderId: string | null;
   readonly recordLocator: string | null;
   readonly ownerOfficeId: string | null;
+  readonly queuingOfficeId: string | null;
   readonly ticketingStatus: string;
   readonly ticketingAttempts: number;
   readonly ticketingLastAttemptAt: Date | null;
@@ -209,6 +210,7 @@ export class TicketingRepository {
         "bookings.amadeus_order_id as amadeusOrderId",
         "bookings.record_locator as recordLocator",
         "bookings.owner_office_id as ownerOfficeId",
+        "bookings.queuing_office_id as queuingOfficeId",
         "bookings.ticketing_status as ticketingStatus",
         "bookings.ticketing_attempts as ticketingAttempts",
         "bookings.ticketing_last_attempt_at as ticketingLastAttemptAt",
@@ -475,7 +477,7 @@ export class TicketingService {
       operation: TICKETING_OPERATION,
       requestId,
       bookingId,
-      ...(claim.booking.ownerOfficeId === null ? {} : { orderOffice: claim.booking.ownerOfficeId }),
+      ...orderOfficeContext(claim.booking),
     };
 
     // Step 2: the resync, always first.

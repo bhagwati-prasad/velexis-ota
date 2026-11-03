@@ -149,7 +149,7 @@ import {
   type IssueFlightOrderRequest,
   type PatchFlightOrderRequest,
 } from "../amadeus/amadeus.client";
-import type { AmadeusCallContext } from "../amadeus/call-context";
+import { bookingOrderOffice, type AmadeusCallContext } from "../amadeus/call-context";
 import { AmadeusCallError } from "../amadeus/error-mapper";
 import { AMADEUS_OPERATIONS } from "../amadeus/limits";
 import {
@@ -1168,7 +1168,11 @@ export class ConsoleBookingActionsService {
     const updateSnapshot = query.updateSnapshot !== false;
     const claim = await this.tx.run(async (trx) => {
       const booking = await this.bookingOfEnvironment(trx, tenant, bookingId);
-      return { orderId: this.requireOrder(booking), office: booking.ownerOfficeId, version: booking.version };
+      return {
+        orderId: this.requireOrder(booking),
+        office: bookingOrderOffice(booking),
+        version: booking.version,
+      };
     });
     const amadeusQuery = {
       ...(include.length > 0 ? { include: [...include] } : {}),
@@ -1476,7 +1480,7 @@ export class ConsoleBookingActionsService {
     }
     return {
       orderId,
-      office: booking.ownerOfficeId,
+      office: bookingOrderOffice(booking),
       previous: { status: booking.status, version: booking.version },
       data,
       before,
@@ -2112,7 +2116,7 @@ export class ConsoleBookingActionsService {
     if (claim.payment.kind === "capture") {
       await this.captureBeforeIssue(tenant, claim, claim.payment.paymentId, body);
     }
-    const context = this.callContext(tenant, bookingId, OPERATIONS.issue, claim.booking.ownerOfficeId);
+    const context = this.callContext(tenant, bookingId, OPERATIONS.issue, bookingOrderOffice(claim.booking));
     const found = await this.resyncBeforeIssue(tenant, claim, context);
     if (found !== undefined) {
       await this.tx.run((trx) =>
@@ -2341,7 +2345,7 @@ export class ConsoleBookingActionsService {
     const bookingId = claim.booking.id;
     try {
       const reply = await this.amadeus.getFlightOrder(
-        this.callContext(tenant, bookingId, OPERATIONS.issue, claim.booking.ownerOfficeId),
+        this.callContext(tenant, bookingId, OPERATIONS.issue, bookingOrderOffice(claim.booking)),
         { flightOrderId: claim.orderId },
       );
       const order = readCreatedOrder(reply.body);

@@ -1681,6 +1681,57 @@ describe("the M4 totals (api-changes-console-and-internal §6)", () => {
   });
 });
 
+// ---- FIX-W39-OTA: storefront.get's 503 (lead decision (2f) of 2026-11-02) ------------------------------------------
+
+describe("getStorefront's 503 SERVICE_UNAVAILABLE (lead decision (2f) of 2026-11-02)", () => {
+  /** The error body the platform cache's failed lookup answers (an AppError SERVICE_UNAVAILABLE). */
+  const unavailable = {
+    error: {
+      code: "SERVICE_UNAVAILABLE",
+      message: "The service is temporarily unavailable. Try again shortly.",
+      status: 503,
+      requestId: "req_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+    },
+  };
+
+  // Compiling the operation's 503 validator is one-time work: done here, with the document's own budget.
+  beforeAll(() => {
+    checker.check("getStorefront", { status: 503, body: unavailable });
+  }, DOCUMENT_TIMEOUT_MS);
+
+  it("[FIX-W39-OTA AC3] documents 503 as getPublicAsset does: the response, the error code and its sentence", () => {
+    const spec = operation("getStorefront").spec;
+    expect(objectAt(spec, "responses", "503")).toEqual({
+      $ref: "#/components/responses/ServiceUnavailable",
+    });
+    expect(objectAt(spec, "responses", "503")).toEqual(
+      objectAt(operation("getPublicAsset").spec, "responses", "503"),
+    );
+    const codes = spec["x-error-codes"] as ErrorCode[];
+    expect(codes).toContain("SERVICE_UNAVAILABLE");
+    // Every listed code is answered with a documented status, the 503 included.
+    for (const code of codes) {
+      expect([code, String(ERROR_CATALOGUE[code].status) in objectAt(spec, "responses")]).toEqual([
+        code,
+        true,
+      ]);
+    }
+    const description = descriptionOf("getStorefront");
+    expect(description).toContain("`503 SERVICE_UNAVAILABLE` when the platform's rows cannot be read");
+    for (const source of ["the tenant guard's lookup", "the platform cache", "fills its cache"]) {
+      expect([source, description.includes(source)]).toEqual([source, true]);
+    }
+    // Compiles only while the generated types list the response.
+    const response: keyof operations["getStorefront"]["responses"] = 503;
+    expect(response).toBe(503);
+  });
+
+  it("[FIX-W39-OTA AC3] validates the error body the API answers, and refuses another status's body as a 503", () => {
+    expect(checker.check("getStorefront", { status: 503, body: unavailable })).toEqual([]);
+    expect(checker.check("getStorefront", { status: 503, body: { name: "Acme Travel" } })).not.toEqual([]);
+  });
+});
+
 describe("the frozen original", () => {
   it("is unchanged under docs/velexis-sdk: same bytes, no MVP extension [OBE-009 AC2]", () => {
     const sha256 = createHash("sha256").update(readFileSync(FROZEN_DOCUMENT)).digest("hex");

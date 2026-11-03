@@ -13,6 +13,17 @@
 //   conn:<kind>:<tenantId>:<env>     a supplier or payment connection, loaded by its caller     60 s  not cached
 //   amadeus:acct:<id>                the shared Amadeus account row, loaded by its caller       60 s  not cached
 //
+// `amadeus:acct:<id>` holds more than the account row (OBE-079; named here by lead decision (2n) of 2026-11-02,
+// FIX-W39-OTA): with it, in the same entry, `offices`, the offices of the account's pool that serve a tenant, each as
+// `{officeId, tenantId, status}` with `status` `assigned` or `releasing` (`available` and `retired` offices are left
+// out), read with the account in one read-only transaction (PlatformReadRepository.amadeusAccountById). The connection
+// resolver serves an existing order of such an office through the Velexis account (the releasing-office rule), and the
+// console's raw order and queue reads and the PNR import count the tenant's offices among them as its own
+// (ConnectionResolver.tenantOffices). The platform publishes `amadeus_account` after every change of the account or of
+// its offices (an assignment, the start of a release, a release, a retirement), which drops the entry; `conn:amadeus:…`
+// names the account of its environment (`velexisAccountId`). The entry never holds a secret in clear: the client
+// secret stays the platform's envelope ciphertext.
+//
 // The key names, TTLs and negative TTLs are the builders' of redis.keys.ts. A value is stored as JSON
 // `{"v":1,"value":…}` (`"value":null` for a cached "not found") and checked again when it is read back: an entry that
 // does not parse (another version, a truncated write) is a miss and is replaced. Rows are cached as the repository

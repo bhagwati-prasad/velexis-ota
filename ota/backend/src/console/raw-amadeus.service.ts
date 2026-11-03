@@ -33,13 +33,19 @@
 // Office isolation on the shared account (ADR-0012, scope OF-09 AC3, lead addition of 2026-10-28). Every OTA's
 // offices answer to the same Velexis credentials, so the order reads can return another OTA's orders. OBE-064's rule
 // decides (pnr-import.service.ts `orderOfficeOf`): an order is the tenant's when the office that holds it, its owner
-// office, or its queuing office when Amadeus gives no owner office, is one of the connection's `office_ids`.
+// office, or its queuing office when Amadeus gives no owner office, is one of the tenant's own offices
+// (`ConnectionResolver.tenantOffices`): the connection's `office_ids`, and since FIX-W39-OTA (lead decision (2n) of
+// 2026-11-02, ADR-0012 and PADR-0012 point 4) the offices of the environment's Velexis account `assigned` or
+// `releasing` for the tenant, so an order or a queue of an office the tenant used before it switched to its own
+// Amadeus credentials stays readable here, as the booking flows still serve it through the Velexis account (OBE-079).
+// Another tenant's office, or an office released to the pool, is never the tenant's.
 //   - getFlightOrder: another office's order answers `403 OFFICE_NOT_ALLOWED`;
 //   - getFlightOrderByReference: another office's orders are left out of `data` and `matches`, and so are `included`
 //     and `dictionaries` (which describe every order Amadeus answered: its bag options, airports and carriers) when any
 //     order was; no order left answers `403 OFFICE_NOT_ALLOWED`;
 //   - getQueue: Queue List reads the queue of one of the tenant's offices (the client refuses another office before any
-//     call); its entries name no office in the specification, so an entry is the queue office's unless it names an
+//     call, and serves a `releasing` one through the Velexis account); its entries name no office in the
+//     specification, so an entry is the queue office's unless it names an
 //     owner (or queuing) office of its own, which then decides as for an order: another office's entries are left out
 //     of the answer and of the stored snapshot. Velexis never puts an order on another OTA's queue (the client fills
 //     the queuing and owner offices of Flight Create Orders from the creator's connection and refuses another office's
@@ -86,8 +92,8 @@ import {
   type SearchFlightOffersRequest,
   type UpsellAirOffersRequest,
 } from "../amadeus/amadeus.client";
-import type { AmadeusCallContext } from "../amadeus/call-context";
-import { ConnectionResolver, type ResolvedAmadeusConnection } from "../amadeus/connection-resolver";
+import { bookingOrderOffice, type AmadeusCallContext } from "../amadeus/call-context";
+import { ConnectionResolver, type TenantOffices } from "../amadeus/connection-resolver";
 import { AmadeusCallError } from "../amadeus/error-mapper";
 import { AMADEUS_OPERATIONS, type AmadeusOperationName } from "../amadeus/limits";
 import { consoleDictionariesOf } from "../bookings/bookings.mapper";
@@ -376,7 +382,7 @@ export function rawErrorOf(read: RawRead, error: unknown, supplierRequestId: str
 /** A booking of the environment that holds an Amadeus order. */
 export interface OrderBooking {
   readonly id: string;
-  /** Its owner office, else its queuing office: the office its order is read for. */
+  /** Its owner office, else its queuing office (`bookingOrderOffice`): the office its order is read for. */
   readonly office: string | null;
 }
 
@@ -408,7 +414,13 @@ export class RawAmadeusRepository {
       .executeTakeFirst();
     return row === undefined
       ? undefined
-      : { id: row.id, office: row.owner_office_id ?? row.queuing_office_id };
+      : {
+          id: row.id,
+          office: bookingOrderOffice({
+            ownerOfficeId: row.owner_office_id,
+            queuingOfficeId: row.queuing_office_id,
+          }),
+        };
   }
 
   /**
@@ -574,7 +586,7 @@ export class RawAmadeusService {
   async getFlightOrder(flightOrderId: string, query: RawGetFlightOrderQuery): Promise<RawFlightOrderResult> {
     const read = RAW_READS.getFlightOrder;
     const tenant = this.tenants.require();
-    const connection = await this.connection(tenant, read);
+    const { orderOfficeIds } = await this.offices(tenant, read);
     const booking = await this.tx.run((trx) =>
       this.repository.orderBooking(trx, tenant.environment, flightOrderId),
     );
@@ -599,14 +611,14 @@ export class RawAmadeusService {
       {
         bookingId: booking?.id,
         orderOffice: booking?.office ?? undefined,
-        recorded: rawRecordedResponseOf({ kind: "orders" }, connection.officeIds),
+        recorded: rawRecordedResponseOf({ kind: "orders" }, orderOfficeIds),
       },
     );
     const [order] = ordersOf(reply.body);
     if (order === undefined || !isRecord(reply.body["data"])) {
       throw new AppError("SUPPLIER_ERROR", { message: "Amadeus answered without the order." });
     }
-    if (partitionOrders([order], connection.officeIds).withheld.length > 0) {
+    if (partitionOrders([order], orderOfficeIds).withheld.length > 0) {
       await this.denyOffice(read, FLIGHT_ORDER_TARGET, flightOrderId, reply, 1);
       throw new AppError("OFFICE_NOT_ALLOWED", {
         message: "This order belongs to an office outside this OTA.",
@@ -639,7 +651,7 @@ export class RawAmadeusService {
   async getFlightOrderByReference(query: RawByReferenceQuery): Promise<RawFlightOrdersByReferenceResult> {
     const read = RAW_READS.getFlightOrderByReference;
     const tenant = this.tenants.require();
-    const connection = await this.connection(tenant, read);
+    const { orderOfficeIds } = await this.offices(tenant, read);
     const amadeusQuery = {
       reference: query.reference,
       originSystemCode: query.originSystemCode,
@@ -654,13 +666,13 @@ export class RawAmadeusService {
           { query: amadeusQuery as unknown as GetFlightOrderByReferenceRequest["query"] },
           options,
         ),
-      { recorded: rawRecordedResponseOf({ kind: "orders" }, connection.officeIds) },
+      { recorded: rawRecordedResponseOf({ kind: "orders" }, orderOfficeIds) },
     );
     const orders = records(reply.body["data"]);
     if (orders.length === 0) {
       throw new AppError("NOT_FOUND", { message: "Amadeus has no order with this record locator." });
     }
-    const { allowed, withheld } = partitionOrders(orders, connection.officeIds);
+    const { allowed, withheld } = partitionOrders(orders, orderOfficeIds);
     if (withheld.length > 0) {
       this.logger.warn(
         { operation: read.operation, withheldOrders: withheld.length, allowedOrders: allowed.length },
@@ -710,14 +722,15 @@ export class RawAmadeusService {
   async getQueue(queueId: number, query: RawQueueQuery): Promise<RawQueueResult> {
     const read = RAW_READS.getQueue;
     const tenant = this.tenants.require();
-    const connection = await this.connection(tenant, read);
+    const { connection, orderOfficeIds } = await this.offices(tenant, read);
     const amadeusQuery = {
       ...(query.max === undefined ? {} : { max: query.max }),
       ...(query.category === undefined ? {} : { category: query.category }),
       ...(query.officeId === undefined ? {} : { officeId: query.officeId }),
     };
-    // The office whose queue is read, as the client chooses it: the caller's (one of the connection's), else the
-    // connection's queue office.
+    // The office whose queue is read, as the client chooses it: the caller's (one of the connection's, or one of the
+    // tenant's releasing Velexis offices, which the client serves through the Velexis account), else the connection's
+    // queue office.
     const queueOffice = query.officeId ?? connection.offices.queue;
     const reply = await this.send(
       tenant,
@@ -733,7 +746,7 @@ export class RawAmadeusService {
           },
           options,
         ),
-      { recorded: rawRecordedResponseOf({ kind: "queue", queueOffice }, connection.officeIds) },
+      { recorded: rawRecordedResponseOf({ kind: "queue", queueOffice }, orderOfficeIds) },
     );
     const entries = queueEntriesOf(reply.body);
     if (entries === undefined) {
@@ -743,7 +756,7 @@ export class RawAmadeusService {
       );
       throw new AppError("SUPPLIER_ERROR", { message: "The supplier's queue answer could not be read." });
     }
-    const { withheld } = partitionQueueEntries(entries, connection.officeIds, queueOffice);
+    const { withheld } = partitionQueueEntries(entries, orderOfficeIds, queueOffice);
     if (withheld.length > 0) {
       this.logger.warn(
         { operation: read.operation, queueId, withheldItems: withheld.length },
@@ -836,10 +849,13 @@ export class RawAmadeusService {
     return { body: reply.body, call: reply.call, supplierRequestId };
   }
 
-  /** The tenant's connection (its offices); `424 SUPPLIER_NOT_CONFIGURED` as the client answers it. */
-  private async connection(tenant: RequestTenant, read: RawRead): Promise<ResolvedAmadeusConnection> {
+  /**
+   * The tenant's connection and its own offices (`ConnectionResolver.tenantOffices`: the connection's, and its Velexis
+   * offices `assigned` or `releasing`); `424 SUPPLIER_NOT_CONFIGURED` as the client answers it.
+   */
+  private async offices(tenant: RequestTenant, read: RawRead): Promise<TenantOffices> {
     try {
-      return await this.connections.resolve(tenant.tenantId, tenant.environment);
+      return await this.connections.tenantOffices(tenant.tenantId, tenant.environment);
     } catch (error) {
       throw rawErrorOf(read, error, null);
     }

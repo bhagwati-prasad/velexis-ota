@@ -55,7 +55,7 @@ import { AppError, isAppError, type FieldError, type OtaErrorCode } from "@velex
 import { redactPayload } from "@velexis/logger";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { AmadeusClient, type PatchFlightOrderRequest } from "../amadeus/amadeus.client";
-import type { AmadeusCallContext } from "../amadeus/call-context";
+import { bookingOrderOffice, type AmadeusCallContext } from "../amadeus/call-context";
 import { AmadeusCallError } from "../amadeus/error-mapper";
 import { ifMatchSatisfied } from "../checkout/checkout.mapper";
 import {
@@ -789,7 +789,7 @@ export class BookingChangesService {
     return {
       bookingId,
       orderId,
-      office: booking.ownerOfficeId,
+      office: bookingOrderOffice(booking),
       version: booking.version,
       data,
       contacts,

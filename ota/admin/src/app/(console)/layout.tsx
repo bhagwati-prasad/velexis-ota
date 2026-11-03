@@ -11,8 +11,9 @@
 // - the banner of a refused live environment (routes.md §1: the request already fell back to test, and the banner
 //   resets the cookie);
 // - the platform's billing notice (`tenant.billingNotice` of the same `console.auth.me`: `past_due`, `trial_ending`)
-//   with the link to the portal's billing page of the OTA (components/billing-banner.tsx, OAD-018), for every role
-//   and in both environments; nothing for `null` or a missing field;
+//   for every role and in both environments, with the link to the portal's billing page of the OTA for owner and
+//   finance only, the roles the portal lets open it (`staff.role` of the same answer; components/billing-banner.tsx,
+//   OAD-018, lead decision (2o) of 2026-11-02); nothing for `null` or a missing field;
 // - the page as `<main id="main-content">`, the target of the root layout's skip link.
 //
 // Next.js hides a server component's error from `error.tsx` in production, so the codes the shell knows are handled
@@ -171,6 +172,7 @@ export default async function ConsoleLayout({ children }: Readonly<{ children: R
           notice={staff.tenant.billingNotice}
           portalUrl={PUBLIC_PORTAL_URL}
           tenantId={staff.tenant.id}
+          role={staff.staff.role}
         />
         <main id="main-content" tabIndex={-1} className="flex-1 px-6 py-8 focus:outline-none">
           {children}

@@ -8,7 +8,12 @@
 //   `console.amadeus.quoteAirOffers`), `supplier_requests.operation`; the Amadeus operation is the client method.
 // - `orderOffice` is the booking's owner or queuing office for calls on an existing order: it must be an office of the
 //   tenant's connection (403 OFFICE_NOT_ALLOWED otherwise). From M5 the resolver also applies the releasing-office
-//   rule with it (OBE-079).
+//   rule with it (OBE-079). Every caller that names a booking's order takes it from `bookingOrderOffice`: the owner
+//   office, else the queuing office when the booking has no owner office (lead decision (2n) of 2026-11-02,
+//   FIX-W39-OTA; before, the booking sync, the ticketing, the cancellations and the changes named the owner office
+//   only, so a booking without one sent no office and was served by the current credentials, which cannot read an
+//   order of a releasing Velexis office). The timeout reconciliation names the queuing office on purpose
+//   (reconcile.service.ts `reconcileCallContext`: Queue List reads the queue the order was placed on).
 // - `stubScenario` picks a scenario of the Amadeus stub (`X-Stub-Scenario`) for a call made outside an HTTP request
 //   (a job, a test). Inside a request the client forwards the request's own `X-Stub-Scenario` header instead. Either is
 //   sent only when APP_ENV is not `production`.
@@ -36,6 +41,32 @@ export interface AmadeusCallContext {
   readonly orderOffice?: string | undefined;
   /** A stub scenario for calls outside an HTTP request (never sent in production). */
   readonly stubScenario?: string | undefined;
+}
+
+/** The offices a booking keeps of its order (`bookings.owner_office_id`, `bookings.queuing_office_id`). */
+export interface BookingOrderOffices {
+  readonly ownerOfficeId: string | null;
+  readonly queuingOfficeId: string | null;
+}
+
+/**
+ * `orderOffice` of a call on a booking's existing order (OADR-0001 point 3, see the file header): the booking's owner
+ * office, else its queuing office when it has no owner office (lead decision (2n) of 2026-11-02), else `null`: a
+ * booking that names no office, whose calls the connection's current credentials and offices serve. An empty column
+ * counts as missing.
+ */
+export function bookingOrderOffice(booking: BookingOrderOffices): string | null {
+  const named = (office: string | null): office is string => office !== null && office !== "";
+  if (named(booking.ownerOfficeId)) {
+    return booking.ownerOfficeId;
+  }
+  return named(booking.queuingOfficeId) ? booking.queuingOfficeId : null;
+}
+
+/** The `orderOffice` of a call context on the booking's order (`bookingOrderOffice`), or nothing when it names none. */
+export function orderOfficeContext(booking: BookingOrderOffices): Pick<AmadeusCallContext, "orderOffice"> {
+  const office = bookingOrderOffice(booking);
+  return office === null ? {} : { orderOffice: office };
 }
 
 /** The request header of the Amadeus stub that picks a scenario (tools/amadeus-stub). */

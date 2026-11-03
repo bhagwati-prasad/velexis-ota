@@ -11,8 +11,15 @@
 // The notice never blocks the console: a subscription that ends suspends the OTA instead, and the shell then renders
 // "This OTA is suspended" (403 TENANT_SUSPENDED). Billing belongs to the platform, so the banner only links to the
 // portal's billing page of the OTA, built by lib/portal-links.ts from the configured portal URL and the session's
-// tenant id and from nothing else; the portal checks its own roles when the page opens, as it does for every link of
-// `/portal`. A server component: it renders on the server with the shell and sends no JavaScript.
+// tenant id and from nothing else.
+//
+// Who sees what (lead decision (2o) of 2026-11-02, FIX-W39-OTA): the notice shows for every role, so everyone knows
+// why the console may stop; the link to the portal's billing page shows only to the roles the portal lets open it,
+// owner and finance (the portal's `viewBilling` rule, platform/frontend/src/lib/roles.ts, and the platform API's
+// getSubscription and listInvoices), read from the staff role the shell already has (`console.auth.me`). Every other
+// role reads who can act instead of a link the portal would refuse. The portal still checks its own roles when the
+// page opens. A server component: it renders on the server with the shell and sends no JavaScript.
+import type { StaffRole } from "@velexis/ota-sdk";
 import { CircleAlertIcon, TimerIcon, type LucideIcon } from "lucide-react";
 
 import { PORTAL_AREAS, portalOtaUrl } from "@/lib/portal-links";
@@ -33,7 +40,17 @@ export const BILLING_STRINGS = Object.freeze({
     detail: "Choose a Velexis plan to keep this OTA running after the trial.",
   },
   link: "Go to billing in the portal",
+  /** Instead of the link, for the roles the portal's billing page refuses. */
+  billingRoles: "The OTA's owners and finance staff manage billing in the portal.",
 });
+
+/** The roles that open the portal's billing page: the portal's `viewBilling` rule (owner and finance). */
+export const BILLING_ROLES: readonly StaffRole[] = Object.freeze(["owner", "finance"]);
+
+/** `role` may open the portal's billing page (`BILLING_ROLES`); any other value may not. */
+export function canViewBilling(role: string | null | undefined): boolean {
+  return (BILLING_ROLES as readonly string[]).includes(role ?? "");
+}
 
 /** How each notice is shown: the alert of a failed payment, the status message of an ending trial. */
 const NOTICE_STYLES: Readonly<
@@ -66,23 +83,27 @@ export interface BillingBannerProps {
   readonly portalUrl: string;
   /** The session's OTA (`tenant.id` of `console.auth.me`). */
   readonly tenantId: string;
+  /** The staff member's role (`staff.role` of `console.auth.me`): the link shows for owner and finance only. */
+  readonly role: StaffRole;
   readonly className?: string;
 }
 
 /**
- * The strip of the platform's billing notice under the shell's header, with the link to the portal's billing page;
- * nothing for `null`, a missing notice or a value the console does not know.
+ * The strip of the platform's billing notice under the shell's header, for every role, with the link to the portal's
+ * billing page for owner and finance (`canViewBilling`) and who manages billing for the others; nothing for `null`, a
+ * missing notice or a value the console does not know.
  */
-export function BillingBanner({ notice, portalUrl, tenantId, className }: BillingBannerProps) {
+export function BillingBanner({ notice, portalUrl, tenantId, role, className }: BillingBannerProps) {
   if (!isBillingNotice(notice)) {
     return null;
   }
-  const { role, icon: Icon, tone } = NOTICE_STYLES[notice];
+  const { role: ariaRole, icon: Icon, tone } = NOTICE_STYLES[notice];
   const strings = BILLING_STRINGS[notice];
-  const href = portalBillingUrl(portalUrl, tenantId);
+  const billing = canViewBilling(role);
+  const href = billing ? portalBillingUrl(portalUrl, tenantId) : undefined;
   return (
     <div
-      role={role}
+      role={ariaRole}
       data-notice={notice}
       className={cn("flex items-start gap-3 border-b px-6 py-3 text-sm", tone, className)}
     >
@@ -90,12 +111,14 @@ export function BillingBanner({ notice, portalUrl, tenantId, className }: Billin
       <div className="grid flex-1 gap-1">
         <p className="font-semibold">{strings.title}</p>
         <p>{strings.detail}</p>
-        {href === undefined ? null : (
+        {href !== undefined ? (
           <p>
             <a href={href} className="font-medium underline underline-offset-4">
               {BILLING_STRINGS.link}
             </a>
           </p>
+        ) : billing ? null : (
+          <p>{BILLING_STRINGS.billingRoles}</p>
         )}
       </div>
     </div>

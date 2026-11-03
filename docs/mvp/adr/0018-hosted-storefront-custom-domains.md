@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (one hosted multi-tenant storefront on `<key>.ota.example.com` or a custom domain, same-origin `/api/*` through Caddy, httpOnly cookies + CSRF, Caddy on-demand TLS), lead architect (Caddy configuration, `ask` rules, edge credential, CSP)
-**Revisions:** 2026-10-12 (planning review): custom-domain examples use the reserved name `travel.example.net`; Caddy's admin API listens only on a unix socket.
+**Revisions:** 2026-10-12 (planning review): custom-domain examples use the reserved name `travel.example.net`; Caddy's admin API listens only on a unix socket. 2026-11-02 (lead decision (2e) of 2026-11-02, recording FIX-W39-OTA): the custom domain lifecycle's step 5 says what "primary" takes: a custom domain serves e-mail links, the console's `storefrontUrl` and storefront.get only once it is verified, primary and its certificate issued (`tls_status = issued`), else the sub-domain does (dated note under step 5).
 
 ## Context
 
@@ -92,6 +92,9 @@ This protects the ACME rate limits and stops anyone from pointing arbitrary doma
 3. A `platform-domains` job checks DNS every 5 minutes for 72 hours. On success it sets `verified` and publishes a cache invalidation. On timeout it sets `failed`.
 4. The first HTTPS request triggers on-demand issuance through the `ask` endpoint. A daily job probes the host and records `tls_status` and `tls_expires_at`.
 5. The OTA may mark the custom domain primary. E-mail links then use it.
+
+   **2026-11-02 (lead decision (2e) of 2026-11-02, recording lead decision (2e) of 2026-10-31, second batch, as FIX-W38-OTA built it):** "then" means once the domain is servable with its own certificate. E-mail links (the OTA backend's renderer and drainer), `ConsoleTenant.storefrontUrl` of the console session and storefront.get (`StorefrontConfig.primaryUrl` and `domains`, the legal page URLs and `seo.canonicalBaseUrl`) use a custom domain only while it is `verified`, primary and its certificate is issued (`tenant_domains.tls_status = 'issued'`, which the probe of step 4 records); otherwise, for example between the switch to primary and the first issued certificate, or after a failed renewal, they use the sub-domain `<key>.ota.example.com`.
+
 6. Apex domains need an `A`/`AAAA` record to the VM's address instead of a CNAME. The portal explains both.
 
 ### How the OTA backend treats edge requests

@@ -6,7 +6,9 @@
 //   live environment, the warning colour and strip, the live booking only, the test booking's page "not found" → a
 //   destructive dialog of the live booking repeats LIVE (badge, warning, "… in LIVE") and is left unsent → back to TEST:
 //   the test booking only again → a viewer of the same live OTA sees no switch and the test data only → the platform's
-//   billing notice shows in the shell with the link to the portal's billing page, and goes again
+//   billing notice shows in the shell for every role, with the link to the portal's billing page for finance only of
+//   the three (owner and finance, the portal's viewBilling rule: lead decision (2o) of 2026-11-02, FIX-W39-OTA), and
+//   goes again
 //
 // Arranged in `beforeAll` through the platform API and the OTA API (PADR-0017 item 5), as roles.e2e.ts does:
 //   - the owner's OTA with its Amadeus test office from the Velexis test pool (`newOwnerWithActiveOta`: one of the
@@ -14,8 +16,9 @@
 //     for its test storefront and two bookings made through the OTA API as its storefront edge (`EdgeApi`): one that the
 //     airline ticketed (it stays a test booking) and one that the airline left without tickets (the stub's
 //     `ticketing-failed` scenario), so it waits in manual review: a booking whose page offers an agent Issue and Cancel;
-//   - two verified accounts with MFA (a live OTA's console needs it, PADR-0008), which the owner invites as `viewer` and
-//     `agent` (createInvitation) and which accept with the token of the invitation e-mail (acceptInvitation);
+//   - three verified accounts with MFA (a live OTA's console needs it, PADR-0008), which the owner invites as `viewer`,
+//     `agent` and `finance` (createInvitation) and which accept with the token of the invitation e-mail
+//     (acceptInvitation);
 //   - then the OTA goes live, as roles.e2e.ts makes it: no operation makes an OTA live before the platform's go-live
 //     (PBE-061), so its platform row is set `storefront_environment = live` as velexis_migrator and the platform's
 //     `tenant` invalidation published, as the platform does after its commit;
@@ -71,7 +74,7 @@ import { OTA_ADMIN_URL, PORTAL_URL } from "../../support/stack";
 test.describe.configure({ mode: "serial" });
 
 type Schemas = components["schemas"];
-type MemberRole = "agent" | "viewer";
+type MemberRole = "agent" | "viewer" | "finance";
 
 /** The owner's name: the inviter in the invitation e-mails' subject. */
 const OWNER_NAME = "Lena Live";
@@ -86,8 +89,10 @@ const LIVE_DIALOG_WARNING = "LIVE: this changes real bookings, tickets and payme
 /** The environment cookie of the staff session (README §4): `test` or `live`, no secret. */
 const ENVIRONMENT_COOKIE = "__Host-vx_env";
 
-/** The billing banner's link (components/billing-banner.tsx). */
+/** The billing banner's link (components/billing-banner.tsx), for owner and finance only. */
 const BILLING_LINK = "Go to billing in the portal";
+/** What the billing banner says instead of the link to the roles the portal's billing page refuses. */
+const BILLING_ROLES_NOTE = "The OTA's owners and finance staff manage billing in the portal.";
 
 /** A member of the OTA: the account (with MFA) and the portal session its browser holds. */
 interface Member {
@@ -318,10 +323,10 @@ test.beforeAll(async () => {
         "stub, the OTA worker, API and admin)",
     );
   }
-  // Budget: three sign-ups with their verification e-mails (up to 15 s each, two at once), the OTA's set-up on the OTA
+  // Budget: four sign-ups with their verification e-mails (up to 15 s each, three at once), the OTA's set-up on the OTA
   // worker (about 2 s locally; PF-11 allows a minute), two bookings through the OTA API and the stub (a second or two
-  // each), the two invitation e-mails (up to 15 s, at once) and each member's TOTP sign-in, which waits for a time step
-  // the MFA set-up did not use (up to 30 s, at once): 180 s.
+  // each), the three invitation e-mails (up to 15 s, at once) and each member's TOTP sign-in, which waits for a time
+  // step the MFA set-up did not use (up to 30 s, at once): 180 s.
   test.setTimeout(180_000);
   owned = await newOwnerWithActiveOta(OWNER_NAME, "liv");
   await switchAirlineCardOn(owned.schema);
@@ -337,12 +342,14 @@ test.beforeAll(async () => {
     email: uniqueEmail("oad018-live"),
     completionScenario: "ticketing-failed",
   });
-  const [viewer, agent] = await Promise.all([
+  const [viewer, agent, finance] = await Promise.all([
     addMember("viewer", "Vilde Viewer"),
     addMember("agent", "Arne Agent"),
+    addMember("finance", "Frida Finance"),
   ]);
   members.viewer = viewer;
   members.agent = agent;
+  members.finance = finance;
   await goLive(owned.ota.id);
   await moveBookingIntoLive(owned.schema, liveBooking);
 });
@@ -464,39 +471,59 @@ test("a viewer of the live OTA still sees no switch and the test data only [OAD-
   await expectBookingNotFound(page, liveBooking, "TEST");
 });
 
-test("the platform's billing notice shows in the shell with the portal's billing page [OAD-018 AC1]", async () => {
+test("the platform's billing notice shows in the shell for every role, the portal's billing page for finance [OAD-018 AC1] [FIX-W39-OTA AC5]", async ({
+  browser,
+}) => {
   const page = consolePageOf("agent");
   const billingPage = `${PORTAL_URL}/otas/${encodeURIComponent(owned.ota.id)}/billing`;
   await page.goto("/bookings");
   await expectAdminPage(page, "Bookings");
 
-  // A failed payment: an alert above every page, with the link to the portal's billing page.
+  // A failed payment: an alert above every page. An agent may not open the portal's billing page (its viewBilling
+  // rule: owner and finance), so it reads who manages billing instead of a link.
   await setBillingNotice(owned.ota.id, "past_due");
   const pastDue = page.locator('[data-notice="past_due"]');
   await reloadUntil(page, true, pastDue);
   await expect(pastDue).toHaveAttribute("role", "alert");
   await expect(pastDue).toContainText("Payment problem: update billing in the portal");
-  await expect(pastDue.getByRole("link", { name: BILLING_LINK })).toHaveAttribute("href", billingPage);
+  await expect(pastDue).toContainText(BILLING_ROLES_NOTE);
+  await expect(pastDue.getByRole("link", { name: BILLING_LINK })).toHaveCount(0);
   await expectAdminPage(page, "Bookings");
-  // The viewer's shell shows it too: the notice is the OTA's, for every role.
+  // The viewer's shell shows it too: the notice is the OTA's, for every role; no link either.
   const viewerPage = consolePageOf("viewer");
   await viewerPage.goto("/bookings");
-  await reloadUntil(viewerPage, true, viewerPage.locator('[data-notice="past_due"]'));
+  const viewerNotice = viewerPage.locator('[data-notice="past_due"]');
+  await reloadUntil(viewerPage, true, viewerNotice);
+  await expect(viewerNotice.getByRole("link", { name: BILLING_LINK })).toHaveCount(0);
   await expectAdminPage(viewerPage, "Bookings");
+  // Finance staff get the link to the portal's billing page of the OTA.
+  const { page: financePage } = await openConsoleAs(browser, "finance");
+  const financeNotice = financePage.locator('[data-notice="past_due"]');
+  await reloadUntil(financePage, true, financeNotice);
+  await expect(financeNotice.getByRole("link", { name: BILLING_LINK })).toHaveAttribute("href", billingPage);
+  await expect(financeNotice).not.toContainText(BILLING_ROLES_NOTE);
+  await expectAdminPage(financePage, "Bookings");
 
-  // An ending trial: a status message with the same link.
+  // An ending trial: a status message, with the same link for finance and the same note for the agent.
   await setBillingNotice(owned.ota.id, "trial_ending");
   const trialEnding = page.locator('[data-notice="trial_ending"]');
   await reloadUntil(page, true, trialEnding);
   await expect(trialEnding).toHaveAttribute("role", "status");
   await expect(trialEnding).toContainText("Your trial ends soon: choose a plan in the portal");
-  await expect(trialEnding.getByRole("link", { name: BILLING_LINK })).toHaveAttribute("href", billingPage);
+  await expect(trialEnding).toContainText(BILLING_ROLES_NOTE);
+  await expect(trialEnding.getByRole("link", { name: BILLING_LINK })).toHaveCount(0);
   await expect(pastDue).toHaveCount(0);
   await expectAdminPage(page, "Bookings");
+  const financeTrial = financePage.locator('[data-notice="trial_ending"]');
+  await reloadUntil(financePage, true, financeTrial);
+  await expect(financeTrial.getByRole("link", { name: BILLING_LINK })).toHaveAttribute("href", billingPage);
+  await expectAdminPage(financePage, "Bookings");
 
   // No notice: no banner.
   await setBillingNotice(owned.ota.id, null);
   await reloadUntil(page, false, page.locator("[data-notice]"));
   await expect(page.getByRole("link", { name: BILLING_LINK })).toHaveCount(0);
   await expectAdminPage(page, "Bookings");
+  await reloadUntil(financePage, false, financePage.locator("[data-notice]"));
+  await expect(financePage.getByRole("link", { name: BILLING_LINK })).toHaveCount(0);
 });

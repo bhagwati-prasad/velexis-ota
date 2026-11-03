@@ -403,6 +403,7 @@ export interface RefreshClaimRow {
   readonly status: string;
   readonly amadeusOrderId: string | null;
   readonly ownerOfficeId: string | null;
+  readonly queuingOfficeId: string | null;
   readonly lastRefreshAt: Date | null;
   /** The booking's `version` at the claim: the record step writes nothing when another writer changed it since. */
   readonly version: number;
@@ -1185,6 +1186,7 @@ export class BookingsRepository {
         "b.status as status",
         "b.amadeus_order_id as amadeusOrderId",
         "b.owner_office_id as ownerOfficeId",
+        "b.queuing_office_id as queuingOfficeId",
         "b.version as version",
         lastRefreshOf.as("lastRefreshAt"),
       ])

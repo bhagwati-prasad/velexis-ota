@@ -261,23 +261,33 @@ describe("(console) layout", () => {
     ]);
   });
 
-  it("[OAD-018 AC1] shows a failed payment's billing banner with the portal's billing page to every role", async () => {
+  it("[OAD-018 AC1] [FIX-W39-OTA AC5] shows a failed payment's billing banner to every role, the portal's billing page to finance and owner only", async () => {
     signedIn("test");
-    const profile = staffProfile({ role: "viewer", environments: ["test"] });
-    me({ ...profile, tenant: { ...profile.tenant, billingNotice: "past_due" } });
+    const viewer = staffProfile({ role: "viewer", environments: ["test"] });
+    me({ ...viewer, tenant: { ...viewer.tenant, billingNotice: "past_due" } });
 
     const page = await renderLayout();
 
     const alert = within(page).getByRole("alert");
     expect(alert.getAttribute("data-notice")).toBe("past_due");
     expect(alert.textContent).toContain("Payment problem: update billing in the portal");
-    expect(
-      within(alert).getByRole("link", { name: "Go to billing in the portal" }).getAttribute("href"),
-    ).toBe(`${TEST_PORTAL_URL}/otas/${TENANT_ID}/billing`);
+    // A viewer may not open the portal's billing page (its viewBilling rule): no link, who manages billing instead.
+    expect(within(alert).queryByRole("link", { name: "Go to billing in the portal" })).toBeNull();
+    expect(alert.textContent).toContain("The OTA's owners and finance staff manage billing in the portal.");
     // Above the page, which still renders: the notice never blocks the console.
     const main = within(page).getByRole("main");
     expect(main.textContent).toBe("Page body");
     expect(alert.nextElementSibling).toBe(main);
+
+    // The role comes from the same console.auth.me: finance gets the link.
+    const finance = staffProfile({ role: "finance", environments: ["test"] });
+    me({ ...finance, tenant: { ...finance.tenant, billingNotice: "past_due" } });
+    const financePage = await renderLayout();
+    expect(
+      within(within(financePage).getByRole("alert"))
+        .getByRole("link", { name: "Go to billing in the portal" })
+        .getAttribute("href"),
+    ).toBe(`${TEST_PORTAL_URL}/otas/${TENANT_ID}/billing`);
   });
 
   it("[OAD-018 AC1] shows an ending trial's billing banner in live mode too, and no banner without a notice", async () => {
@@ -295,9 +305,9 @@ describe("(console) layout", () => {
     }
     const status = within(live).getByRole("status");
     expect(status.getAttribute("data-notice")).toBe("trial_ending");
-    expect(
-      within(status).getByRole("link", { name: "Go to billing in the portal" }).getAttribute("href"),
-    ).toBe(`${TEST_PORTAL_URL}/otas/${TENANT_ID}/billing`);
+    // An agent reads the notice without the portal's billing page, which only owners and finance staff open.
+    expect(within(status).queryByRole("link", { name: "Go to billing in the portal" })).toBeNull();
+    expect(status.textContent).toContain("The OTA's owners and finance staff manage billing in the portal.");
 
     for (const tenant of [{ ...profile.tenant, billingNotice: null }, profile.tenant]) {
       me({ ...profile, tenant });

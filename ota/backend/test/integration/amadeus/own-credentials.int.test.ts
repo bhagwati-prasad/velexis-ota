@@ -15,11 +15,17 @@
 // call reaches, and that it answers at the first attempt, proves which credential set and which token served it.
 //
 // Before the tests, alpha books on the Velexis account (its assigned office A1, and A2, an office of an earlier
-// assignment already `releasing`), then switches to its own credentials as the platform applies them (PBE-053): its
+// assignment already `releasing`; on A1 also an order on queue OLD_QUEUE, and one whose booking keeps no owner office,
+// only its queuing office), then switches to its own credentials as the platform applies them (PBE-053): its
 // connection becomes `tenant` with its own host, client id, re-encrypted secret and offices, A1 becomes `releasing`,
 // and the platform publishes the `connection` and `amadeus_account` invalidations. Beta stays on the Velexis account
 // (office B1). Tenants of the platform only (no schema) serve the tests that need the resolver and the token provider
 // alone.
+//
+// FIX-W39-OTA (lead decision (2n) of 2026-11-02) adds the console after the switch: the raw order and queue reads
+// accept the orders and the queue of alpha's releasing Velexis office (ConnectionResolver.tenantOffices) and still
+// refuse another tenant's office, and the booking sync names the queuing office of a booking without an owner office
+// (`bookingOrderOffice`), so its old order is still read through the Velexis account.
 import { randomBytes } from "node:crypto";
 import { INVALIDATION_CHANNEL } from "@velexis/api-types/jobs";
 import { encryptValue, type KeyProvider } from "@velexis/crypto";
@@ -37,9 +43,11 @@ import { BookingSyncService } from "../../../src/bookings/booking-sync.service";
 import { orderSegmentsOf } from "../../../src/bookings/order-diff";
 import { readCreatedOrder } from "../../../src/bookings/order-recorder";
 import { buildCreateOrderRequest } from "../../../src/bookings/order-request.builder";
+import { RawAmadeusService } from "../../../src/console/raw-amadeus.service";
 import { newId } from "../../../src/common/ids";
 import { redisKeys } from "../../../src/common/redis/redis.keys";
 import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefront-settings.seed";
+import { CallerContext } from "../../../src/tenancy/caller-resolver";
 import { TenantContext, type RequestTenant } from "../../../src/tenancy/tenant-context";
 import { TenantTx } from "../../../src/tenancy/tenant-tx";
 import type { OtaPool } from "../../../src/tenancy/tenancy.module";
@@ -76,6 +84,8 @@ const MINUTE = 60_000;
 const DAY = 24 * 60 * MINUTE;
 /** The flight of the fixture's offer 2 takes 2 h 05 min. */
 const FLIGHT_MS = 125 * MINUTE;
+/** The queue of A1 that alpha's queued old order is on (the other orders are on no queue). */
+const OLD_QUEUE = 57;
 /** How long a test waits at most for an invalidation the platform published (the subscriber applies it at once). */
 const INVALIDATION_WAIT = { timeout: 5000, interval: 20 } as const;
 
@@ -94,6 +104,8 @@ let tokens: TokenProvider;
 let sync: BookingSyncService;
 let tenantContext: TenantContext;
 let tx: TenantTx;
+let raw: RawAmadeusService;
+let callers: CallerContext;
 
 let velexis: Credentials & { readonly accountId: string };
 let alphaOwn: Credentials;
@@ -278,13 +290,13 @@ function futureOffer(): { readonly offer: JsonObject; readonly departure: Date }
  * An order of one traveller created by `tenant` through the API's client, on `office` (or the connection's offices),
  * and the booking rows checkout.complete leaves for it (`confirmed`, its segments as the record step stores them).
  */
-async function book(tenant: FileTenant, office?: string): Promise<SeededBooking> {
+async function book(tenant: FileTenant, office?: string, queue?: number): Promise<SeededBooking> {
   const { offer, departure } = futureOffer();
   const request = buildCreateOrderRequest(
     buildOrderRequestInput({
       flightOffers: [offer],
       reference: newBookingReference(),
-      queue: null,
+      queue: queue === undefined ? null : { number: queue, category: 0 },
       offices: { queuing: office ?? "", owner: office ?? "" },
       issue: false,
     }),
@@ -440,6 +452,40 @@ async function rejection(promise: Promise<unknown>): Promise<AppError> {
   return error as AppError;
 }
 
+/**
+ * Runs `fn` as a console call of a `console:automation` key of `tenant` (the request's caller, which the raw reads'
+ * audit rows name as their actor).
+ */
+const asConsoleKey = <T>(tenant: FileTenant, fn: () => Promise<T>): Promise<T> =>
+  tenantContext.run(tenant.context, async () => {
+    const keyId = tenant.context.caller.id;
+    callers.set({
+      type: "key",
+      id: keyId,
+      keyId,
+      kind: "secret",
+      tenantId: tenant.id,
+      environment: "test",
+      scopes: ["console:automation"],
+    });
+    return await fn();
+  });
+
+/** The answer the tenant's newest `supplier_requests` row of `operation` keeps. */
+async function recordedAnswer(tenant: FileTenant, operation: string): Promise<unknown> {
+  const row = await as(tenant, () =>
+    tx.run((trx) =>
+      trx
+        .selectFrom("supplier_requests")
+        .select(["response_body"])
+        .where("operation", "=", operation)
+        .orderBy("id", "desc")
+        .executeTakeFirstOrThrow(),
+    ),
+  );
+  return row.response_body;
+}
+
 /** Empties both stubs' request logs, so a test asserts on its own requests only. */
 function clearStubs(): void {
   velexisStub.clearRequests();
@@ -454,6 +500,10 @@ const SETUP_TIMEOUT_MS = 120_000;
 
 let oldBooking: SeededBooking;
 let releasedBooking: SeededBooking;
+/** Alpha's old order on A1's queue OLD_QUEUE. */
+let queuedBooking: SeededBooking;
+/** Alpha's old order on A1 whose booking keeps its queuing office only (`owner_office_id` null). */
+let queuingOnlyBooking: SeededBooking;
 
 beforeAll(async () => {
   [db, redis, keys] = await Promise.all([createTestDatabase(), useRedis(), testKeyProvider()]);
@@ -508,6 +558,8 @@ beforeAll(async () => {
   sync = api.app.get(BookingSyncService, { strict: false });
   tenantContext = api.app.get(TenantContext, { strict: false });
   tx = api.app.get(TenantTx, { strict: false });
+  raw = api.app.get(RawAmadeusService, { strict: false });
+  callers = api.app.get(CallerContext, { strict: false });
   for (const tenant of [alpha, beta]) {
     await as(tenant, () =>
       tx.run((trx) =>
@@ -523,6 +575,17 @@ beforeAll(async () => {
   // Alpha's old orders, booked on the Velexis account: the Velexis token is cached from here on.
   oldBooking = await book(alpha, offices.a1);
   releasedBooking = await book(alpha, offices.a2);
+  queuedBooking = await book(alpha, offices.a1, OLD_QUEUE);
+  queuingOnlyBooking = await book(alpha, offices.a1);
+  await as(alpha, () =>
+    tx.run((trx) =>
+      trx
+        .updateTable("bookings")
+        .set({ owner_office_id: null })
+        .where("id", "=", queuingOnlyBooking.id)
+        .execute(),
+    ),
+  );
 
   // The switch, and the moment the API serves it (the connection's cached row is dropped by the invalidation).
   await switchToOwn(alpha.id, alpha.connectionId, alphaOwn, [offices.o1, offices.o2]);
@@ -764,6 +827,75 @@ describe("after a switch to the OTA's own credentials", () => {
       credId: velexis.accountId,
       officeIds: [offices.a1],
     });
+  });
+});
+
+describe("the console after a switch (lead decision (2n) of 2026-11-02)", () => {
+  it("[FIX-W39-OTA AC4] counts the tenant's releasing Velexis office among its own, never another tenant's", async () => {
+    const { connection, orderOfficeIds } = await resolver.tenantOffices(alpha.id, "test");
+
+    // The OTA's own offices first, then its releasing Velexis offices (A2 too while it was not yet released).
+    expect(orderOfficeIds.slice(0, 3)).toEqual([offices.o1, offices.o2, offices.a1]);
+    expect(orderOfficeIds).not.toContain(betaOffice);
+    expect(connection).toMatchObject({ credentialSource: "tenant", officeIds: [offices.o1, offices.o2] });
+    expect((await resolver.tenantOffices(beta.id, "test")).orderOfficeIds).toEqual([betaOffice]);
+  });
+
+  it("[FIX-W39-OTA AC4] answers a raw read of an old order of a releasing office through the Velexis account, kept as it is", async () => {
+    clearStubs();
+
+    const result = await asConsoleKey(alpha, () => raw.getFlightOrder(oldBooking.orderId, {}));
+
+    expect(result).toMatchObject({
+      flightOrderId: oldBooking.orderId,
+      bookingId: oldBooking.id,
+      call: { officeId: offices.a1, httpStatus: 200 },
+      amadeus: { data: { id: oldBooking.orderId } },
+    });
+    expect(requestsOf(velexisStub, "getFlightOrder")).toEqual([expect.objectContaining({ status: 200 })]);
+    expect(ownStub.requests()).toEqual([]);
+    // The supplier log keeps the tenant's own order, not a withheld marker.
+    const recorded = JSON.stringify(await recordedAnswer(alpha, "console.amadeus.getFlightOrder"));
+    expect(recorded).toContain(oldBooking.orderId);
+    expect(recorded).not.toContain("office_not_allowed");
+  });
+
+  it("[FIX-W39-OTA AC4] reads the queue of a releasing office with its entries, and refuses another tenant's office before any call", async () => {
+    clearStubs();
+
+    const result = await asConsoleKey(alpha, () => raw.getQueue(OLD_QUEUE, { officeId: offices.a1 }));
+    const refused = await rejection(
+      asConsoleKey(alpha, () => raw.getQueue(OLD_QUEUE, { officeId: betaOffice })),
+    );
+
+    const ids = (result.amadeus.data as JsonObject[]).map((entry) => String(entry["id"]));
+    expect(ids).toHaveLength(1);
+    expect(ids[0]?.startsWith(queuedBooking.recordLocator)).toBe(true);
+    expect(result.call).toMatchObject({ officeId: offices.a1, httpStatus: 200 });
+    expect(requestsOf(velexisStub, "listQueue")).toEqual([
+      expect.objectContaining({ status: 200, query: expect.objectContaining({ officeId: offices.a1 }) }),
+    ]);
+    expect([refused.status, refused.code]).toEqual([403, "OFFICE_NOT_ALLOWED"]);
+    expect(ownStub.requests()).toEqual([]);
+    expect(requestsOf(velexisStub, "listQueue")).toHaveLength(1);
+  });
+
+  it("[FIX-W39-OTA AC4] syncs a booking without an owner office through the Velexis account of its queuing office", async () => {
+    clearStubs();
+
+    const outcome = await resync(alpha, queuingOnlyBooking);
+
+    // Before, the sync named no office: the OTA's own credentials read the order, which their stub does not know.
+    expect(outcome).toMatchObject({ kind: "refreshed" });
+    expect(requestsOf(velexisStub, "getFlightOrder")).toEqual([
+      expect.objectContaining({
+        status: 200,
+        path: `/v1/booking/flight-orders/${queuingOnlyBooking.orderId}`,
+      }),
+    ]);
+    expect(ownStub.requests()).toEqual([]);
+    expect((await syncStateOf(alpha, queuingOnlyBooking)).syncError).toBeNull();
+    expect((await supplierOffices(alpha, queuingOnlyBooking.id))[0]).toBe(offices.a1);
   });
 });
 

@@ -82,7 +82,7 @@ import { sql, type Insertable, type TenantDatabase, type Updateable } from "@vel
 import { redactPayload } from "@velexis/logger";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { AmadeusClient } from "../amadeus/amadeus.client";
-import type { AmadeusCallContext } from "../amadeus/call-context";
+import { bookingOrderOffice, type AmadeusCallContext } from "../amadeus/call-context";
 import { AmadeusCallError } from "../amadeus/error-mapper";
 import { Clock } from "../common/clock";
 import { IdGenerator } from "../common/ids";
@@ -200,6 +200,7 @@ export interface SyncClaimRow {
   readonly status: string;
   readonly amadeusOrderId: string | null;
   readonly ownerOfficeId: string | null;
+  readonly queuingOfficeId: string | null;
   readonly lastArrivalAt: Date;
   readonly ticketingDeadlineAt: Date | null;
   readonly amountPaid: string;
@@ -403,6 +404,7 @@ export class BookingSyncRepository {
         "b.status as status",
         "b.amadeus_order_id as amadeusOrderId",
         "b.owner_office_id as ownerOfficeId",
+        "b.queuing_office_id as queuingOfficeId",
         "b.last_arrival_at as lastArrivalAt",
         "b.ticketing_deadline_at as ticketingDeadlineAt",
         "b.version as version",
@@ -495,6 +497,7 @@ interface SyncClaim {
   readonly id: string;
   readonly environment: "test" | "live";
   readonly orderId: string;
+  /** The office its order is read for (`bookingOrderOffice`: the owner office, else the queuing office). */
   readonly office: string | null;
   /** The booking's `version` at the claim. */
   readonly version: number;
@@ -675,7 +678,7 @@ export class BookingSyncService {
         id: row.id,
         environment: row.environment,
         orderId: row.amadeusOrderId,
-        office: row.ownerOfficeId,
+        office: bookingOrderOffice(row),
         version: row.version,
       };
     });
@@ -720,7 +723,7 @@ export class BookingSyncService {
           id: bookingId,
           environment: request.environment,
           orderId: row.amadeusOrderId,
-          office: row.ownerOfficeId,
+          office: bookingOrderOffice(row),
           version: row.version,
         } satisfies SyncClaim,
       } as const;

@@ -36,6 +36,13 @@
 //     the pool, which may be another OTA's next, never reaches Amadeus). A `velexis` connection's own office needs no
 //     look-up: the account serves it either way. The Velexis account must then be `active` and of the environment,
 //     else 424, as for a `velexis` connection;
+//   - the tenant's own offices (`tenantOffices`, lead decision (2n) of 2026-11-02, FIX-W39-OTA): the offices whose
+//     existing orders and queues are the tenant's are the connection's `officeIds` and the offices of the environment's
+//     Velexis account `assigned` or `releasing` for this tenant (PADR-0012 point 4, the offices rule 3 serves through
+//     the Velexis account; after a switch to the OTA's own credentials, its `releasing` ones). The console's raw order
+//     and queue reads and the PNR import accept the orders and queue entries of these offices and withhold every
+//     other office's (another tenant's office is still `403 OFFICE_NOT_ALLOWED`); an office released to the pool is no
+//     longer the tenant's;
 //   - offices: `queuing` and `owner` (new flight orders) are the connection's queuing and owner offices, `queue`
 //     (Queue List) and `retrieval` (by-reference reads) its default office, each falling back to the default office
 //     or the queuing office as the platform fills them (`default = queuing = owner` at provisioning). Only an office
@@ -121,6 +128,18 @@ export interface ResolvedAmadeusConnection {
   readonly offices: AmadeusOffices;
   /** Every office the calls may act for: the connection's, or the one Velexis office of an existing order. */
   readonly officeIds: readonly string[];
+}
+
+/** The tenant's connection and the offices whose existing orders and queues are the tenant's (`tenantOffices`). */
+export interface TenantOffices {
+  /** What serves the tenant's new calls: `resolve` without an order office. */
+  readonly connection: ResolvedAmadeusConnection;
+  /**
+   * The offices whose orders and queue entries are the tenant's (see the file header): the connection's `officeIds`,
+   * then the offices of the environment's Velexis account `assigned` or `releasing` for the tenant that are not among
+   * them, each once.
+   */
+  readonly orderOfficeIds: readonly string[];
 }
 
 /** Why a connection cannot serve calls; the `cause` of the 424. */
@@ -323,6 +342,14 @@ function accountSecret(account: PlatformAmadeusAccount): EncryptedSecret {
 
 type Unusable = (reason: ConnectionUnusableReason) => AppError;
 
+/** The `424 SUPPLIER_NOT_CONFIGURED` of `tenantId` in `environment`, its reason as the cause. */
+function unusableFor(tenantId: string, environment: AmadeusEnvironment): Unusable {
+  return (reason) =>
+    new AppError("SUPPLIER_NOT_CONFIGURED", {
+      cause: new AmadeusConnectionUnusableError(reason, tenantId, environment),
+    });
+}
+
 @Injectable()
 export class ConnectionResolver {
   /** AMADEUS_BASE_URL_TEST and _LIVE: origins, or `undefined`. */
@@ -350,11 +377,43 @@ export class ConnectionResolver {
     environment: AmadeusEnvironment,
     orderOffice?: string,
   ): Promise<ResolvedAmadeusConnection> {
-    const unusable: Unusable = (reason) =>
-      new AppError("SUPPLIER_NOT_CONFIGURED", {
-        cause: new AmadeusConnectionUnusableError(reason, tenantId, environment),
-      });
+    const unusable = unusableFor(tenantId, environment);
+    const connection = await this.activeConnection(tenantId, environment, unusable);
+    if (orderOffice !== undefined) {
+      const served = await this.velexisOrderOffice(connection, orderOffice, unusable);
+      if (served !== undefined) {
+        return served;
+      }
+    }
+    return await this.current(connection, unusable);
+  }
 
+  /**
+   * The tenant's connection in `environment` (`resolve` without an order office) and the offices whose existing orders
+   * and queues are the tenant's (see the file header; lead decision (2n) of 2026-11-02): the console's raw order and
+   * queue reads and the PNR import keep the orders of these offices and withhold every other office's. Throws as
+   * `resolve` does.
+   */
+  async tenantOffices(tenantId: string, environment: AmadeusEnvironment): Promise<TenantOffices> {
+    const unusable = unusableFor(tenantId, environment);
+    const row = await this.activeConnection(tenantId, environment, unusable);
+    const connection = await this.current(row, unusable);
+    const velexis = await this.velexisOfficesOf(row);
+    return Object.freeze({
+      connection,
+      orderOfficeIds: Object.freeze([
+        ...connection.officeIds,
+        ...velexis.filter((office) => !connection.officeIds.includes(office)),
+      ]),
+    });
+  }
+
+  /** The tenant's connection row of `environment` (`conn:amadeus:…`); 424 when there is none or it is not active. */
+  private async activeConnection(
+    tenantId: string,
+    environment: AmadeusEnvironment,
+    unusable: Unusable,
+  ): Promise<PlatformAmadeusConnection> {
     const connection = await this.cache.connection(
       "amadeus",
       tenantId,
@@ -368,15 +427,35 @@ export class ConnectionResolver {
     if (connection.status !== "active") {
       throw unusable("connection_not_active");
     }
-    if (orderOffice !== undefined) {
-      const served = await this.velexisOrderOffice(connection, orderOffice, unusable);
-      if (served !== undefined) {
-        return served;
-      }
-    }
+    return connection;
+  }
+
+  /** What serves the connection's new calls: the shared account (`velexis`) or the OTA's own credentials (`tenant`). */
+  private async current(
+    connection: PlatformAmadeusConnection,
+    unusable: Unusable,
+  ): Promise<ResolvedAmadeusConnection> {
     return connection.credentialSource === "velexis"
       ? await this.velexisConnection(connection, unusable)
       : this.tenantConnection(connection, unusable);
+  }
+
+  /**
+   * The offices of the environment's Velexis account `assigned` or `releasing` for the connection's tenant (none when
+   * the environment has no Velexis account), in the account's order.
+   */
+  private async velexisOfficesOf(connection: PlatformAmadeusConnection): Promise<string[]> {
+    const accountId = connection.velexisAccountId;
+    if (accountId === null) {
+      return [];
+    }
+    const account = await this.account(accountId);
+    if (account === null || account.environment !== connection.environment) {
+      return [];
+    }
+    return account.offices
+      .filter((office) => office.tenantId === connection.tenantId)
+      .map((office) => office.officeId);
   }
 
   /** A `velexis` connection: the shared account it references, its own offices. */

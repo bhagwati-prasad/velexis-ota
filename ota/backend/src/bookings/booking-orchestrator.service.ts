@@ -139,7 +139,7 @@ import { redactPayload } from "@velexis/logger";
 import type { JobsOptions, Queue } from "bullmq";
 import { PinoLogger } from "nestjs-pino";
 import { AmadeusClient, type AmadeusResponse } from "../amadeus/amadeus.client";
-import type { AmadeusCallContext } from "../amadeus/call-context";
+import { bookingOrderOffice, type AmadeusCallContext } from "../amadeus/call-context";
 import { ConnectionResolver, type ResolvedAmadeusConnection } from "../amadeus/connection-resolver";
 import { AmadeusCallError } from "../amadeus/error-mapper";
 import {
@@ -2426,7 +2426,7 @@ export class BookingOrchestrator {
     let supplierRequestId: string | null = null;
     try {
       const reply = await this.amadeus.issueFlightOrder(
-        this.callContext(tenant, started.id, started.ownerOfficeId ?? undefined),
+        this.callContext(tenant, started.id, bookingOrderOffice(started) ?? undefined),
         {
           flightOrderId: order.id,
           body: buildIssueRequest(offerIds) as unknown as Parameters<
