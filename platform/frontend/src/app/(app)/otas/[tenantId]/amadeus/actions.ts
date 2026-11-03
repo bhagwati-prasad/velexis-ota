@@ -9,11 +9,19 @@ import { z } from "zod";
 import { platformApi, type ApiError } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
 import { otaPath } from "@/lib/roles";
-import { AMADEUS_SETTINGS_STRINGS } from "@/lib/strings";
+import {
+  AMADEUS_LIVE_STRINGS,
+  AMADEUS_SETTINGS_STRINGS,
+  ERROR_MESSAGES,
+  OWN_CREDENTIALS_STRINGS,
+} from "@/lib/strings";
 import { ifMatchOf, isTenantId } from "@/lib/tenant";
 
 /**
- * The server action of the Amadeus page (README §2 `/otas/[tenantId]/amadeus`; flows/amadeus-connection.md §E; PF-53).
+ * The server actions of the Amadeus page (README §2 `/otas/[tenantId]/amadeus`; flows/amadeus-connection.md §C to §E;
+ * PF-51 to PF-53): the connection settings (PFE-018, below), and live access, the OTA's own credentials and the
+ * verification they wait for (PFE-023, at the end of the module).
+ *
  * `saveAmadeusSettings` checks the settings form with Zod (the shapes of the platform document's
  * `UpdateAmadeusConnectionRequest`), then calls `updateAmadeusConnection` (`PATCH
  * /v1/tenants/{tenantId}/amadeus-connections/{environment}`) with the connection's version the form was rendered with in
@@ -532,4 +540,505 @@ export async function saveAmadeusSettings(
   // The card shows the saved offices: render the page again.
   revalidatePath(otaPath(tenantId, "/amadeus"));
   return { status: "saved", version: result.data.version, connection: result.data, fieldErrors: {} };
+}
+
+// ---- Live access, own credentials and their verification (PFE-023) ------------------------------------------------
+
+/**
+ * `requestLiveAccess`, `submitOwnCredentials` and `getSubmissionStatus` (PFE-023; flows/amadeus-connection.md §C and
+ * §D; PF-51, PF-52). Each refuses a form or an id it cannot name a resource with without a call, calls the API with the
+ * session and the end-user headers, sends an ended session to sign-in and back to the Amadeus page and an unverified
+ * account to `/verify-pending`, and answers the portal's own text only, never the API's.
+ *
+ * - `requestLiveAccess` (`requestLiveAmadeus`, owners): the optional note for Velexis, trimmed, at most 1000
+ *   characters. The API inserts the live connection without an office (`pending_verification`); the page is
+ *   revalidated, so it shows that connection with the commercial onboarding that follows.
+ * - `submitOwnCredentials` (`submitAmadeusCredentials`, owners and admins, behind a TOTP step-up: `REAUTH_REQUIRED`
+ *   answers `stepUp`, and `useStepUpAction` sends the same form again after the code): the client id, the client
+ *   secret, the office ids and the default, queuing and owner offices (the last two left out when "same as the
+ *   default office"). The client secret goes to the API and nowhere else: it is never logged, never put in the state
+ *   the action returns (which holds only the non-secret values) and never rendered.
+ * - `getSubmissionStatus` (`getCredentialSubmission`, owners and admins): what `SubmissionStatus` polls every 2
+ *   seconds. A final answer (`applied`, `failed`, `superseded`) revalidates the page, so the connection card shows
+ *   the credentials the connection uses now (or the ones it kept).
+ */
+
+type CredentialSubmission = Schemas["CredentialSubmission"];
+type SubmitAmadeusCredentialsRequest = Schemas["SubmitAmadeusCredentialsRequest"];
+
+/**
+ * A submission as the portal shows it: its id, status and verification result. The API's `errorMessage` stays on the
+ * server (the portal shows its own words for `errorCode`), and the submission never holds a secret.
+ */
+export type SubmissionView = Pick<CredentialSubmission, "id" | "status" | "errorCode">;
+
+/** A credential submission id (`CredentialSubmissionId` of the platform document: `crs_` + ULID). */
+const SUBMISSION_ID = /^crs_[0-9A-HJKMNP-TV-Z]{26}$/;
+
+/** The statuses after which a submission changes no more (`CredentialSubmission.status`). */
+const FINAL_SUBMISSION_STATUSES: readonly string[] = ["applied", "failed", "superseded"];
+
+/** `RequestLiveAmadeusRequest.note`: at most 1000 characters (code points, as JSON Schema counts them). */
+const NOTE_MAX = 1_000;
+
+/** `SubmitAmadeusCredentialsRequest`: a client id of at most 200 characters without white space. */
+const CLIENT_ID_MAX = 200;
+const NO_WHITE_SPACE = /^\S+$/u;
+/** `OwnAmadeusClientSecret`: 1 to 512 characters. */
+const CLIENT_SECRET_MAX = 512;
+/** `SubmitAmadeusCredentialsRequest.officeIds`: 1 to 50 office ids, each at most once. */
+const OFFICE_IDS_MAX = 50;
+
+const LIVE = AMADEUS_LIVE_STRINGS;
+const OWN = OWN_CREDENTIALS_STRINGS;
+const OWN_PROBLEMS = OWN_CREDENTIALS_STRINGS.problems;
+
+/**
+ * Ends the request when the session is over: sign in again and come back to the Amadeus page (the middleware renews an
+ * access token that is only expired); an unverified account goes to `/verify-pending`.
+ */
+function leaveOnSessionEnd(error: ApiError, tenantId: string): void {
+  if (error.code === "UNAUTHENTICATED" || error.code === "TOKEN_EXPIRED") {
+    redirect(`/sign-in?${new URLSearchParams({ next: otaPath(tenantId, "/amadeus") }).toString()}`);
+  }
+  if (error.code === "EMAIL_NOT_VERIFIED") {
+    redirect("/verify-pending");
+  }
+}
+
+/** `details.reason` of a refusal, when the API sent one. */
+function reasonOf(error: ApiError): unknown {
+  return error.details["reason"];
+}
+
+// ---- Live access --------------------------------------------------------------------------------------------------
+
+/** What the live access form shows after a request. */
+export interface LiveRequestState {
+  readonly status: "idle" | "requested" | "failed";
+  /** The error code of a failure, for tests; never shown. */
+  readonly code?: PlatformErrorCode;
+  /** The note as sent, after a failure, so the form shows it again; empty after a request. */
+  readonly note: string;
+  /** A problem with the note: shown at the field. */
+  readonly fieldError?: string;
+  /** A problem that belongs to no field. */
+  readonly message?: string;
+  /** The page is out of date: the form offers "Reload the page". */
+  readonly reload?: true;
+  /** The plan does not include live mode (`FEATURE_DISABLED`): the form links to the billing page. */
+  readonly billing?: true;
+}
+
+type LiveProblem = Pick<LiveRequestState, "fieldError" | "message" | "reload" | "billing">;
+
+/** The portal's message for each code of a refused `requestLiveAmadeus` that needs no closer look. */
+const LIVE_FAILURES: Readonly<Partial<Record<PlatformErrorCode, LiveProblem>>> = {
+  FEATURE_DISABLED: { message: LIVE.notInPlan, billing: true },
+  TENANT_NOT_ACTIVE: { message: LIVE.notActive, reload: true },
+  FORBIDDEN: { message: LIVE.forbidden, reload: true },
+  NOT_FOUND: { message: LIVE.removed, reload: true },
+  RATE_LIMITED: { message: LIVE.rateLimited },
+};
+
+/** The portal's message for a refused `requestLiveAmadeus`. */
+function liveFailure(error: ApiError): LiveProblem {
+  if (error.code === "VALIDATION_FAILED") {
+    // The note is the only field of the body; anything else (the path) is a form the person cannot fix.
+    return error.fieldErrors.some((fieldError) => fieldError.path === "/note")
+      ? { fieldError: LIVE.noteLength }
+      : { message: LIVE.formExpired, reload: true };
+  }
+  if (error.code === "CONFLICT") {
+    const reason = reasonOf(error);
+    if (reason === "live_connection_exists") {
+      return { message: LIVE.exists, reload: true };
+    }
+    return reason === "live_account_missing"
+      ? { message: LIVE.accountMissing }
+      : { message: ERROR_MESSAGES.CONFLICT, reload: true };
+  }
+  return LIVE_FAILURES[error.code] ?? { message: errorMessage(error) };
+}
+
+/**
+ * Asks Velexis for a live Amadeus office (`POST /v1/tenants/{tenantId}/amadeus-connections/live/request`) from the
+ * live access form (the hidden field `tenantId` and the optional `note`). A request revalidates the Amadeus page, which
+ * then shows the live connection waiting for its office.
+ */
+export async function requestLiveAccess(
+  _previous: LiveRequestState,
+  formData: FormData,
+): Promise<LiveRequestState> {
+  const tenantId = text(formData, "tenantId");
+  const note = text(formData, "note").trim();
+  const failed = (code: PlatformErrorCode, problem: LiveProblem): LiveRequestState => ({
+    status: "failed",
+    code,
+    note,
+    ...problem,
+  });
+
+  if (!isTenantId(tenantId)) {
+    return failed("VALIDATION_FAILED", { message: LIVE.formExpired, reload: true });
+  }
+  if (codePoints(note) > NOTE_MAX) {
+    return failed("VALIDATION_FAILED", { fieldError: LIVE.noteLength });
+  }
+  const api = await platformApi();
+  const result = await api.POST("/v1/tenants/{tenantId}/amadeus-connections/live/request", {
+    params: { path: { tenantId } },
+    // The note is optional; an empty one is left out (`minLength: 1`).
+    body: note === "" ? {} : { note },
+  });
+  if (result.error !== undefined) {
+    leaveOnSessionEnd(result.error, tenantId);
+    return failed(result.error.code, liveFailure(result.error));
+  }
+  // The page shows the live connection, waiting for its office.
+  revalidatePath(otaPath(tenantId, "/amadeus"));
+  return { status: "requested", note: "" };
+}
+
+// ---- Own credentials ----------------------------------------------------------------------------------------------
+
+/** The fields of the own credentials form. */
+export type OwnCredentialsField =
+  "clientId" | "clientSecret" | "officeIds" | "defaultOfficeId" | "queuingOfficeId" | "ownerOfficeId";
+
+/** The non-secret values of the own credentials form, as typed. The client secret is never one of them. */
+export interface OwnCredentialsValues {
+  readonly clientId: string;
+  /** The office ids as typed: one per line (commas and spaces separate them too). */
+  readonly officeIds: string;
+  readonly defaultOfficeId: string;
+  /** Empty: the same as the default office (left out of the body). */
+  readonly queuingOfficeId: string;
+  /** Empty: the same as the default office (left out of the body). */
+  readonly ownerOfficeId: string;
+}
+
+/** What the own credentials form shows after a submission. Never holds the client secret. */
+export interface OwnCredentialsState {
+  readonly status: "idle" | "submitted" | "failed";
+  /** The error code of a failure, for tests; never shown. */
+  readonly code?: PlatformErrorCode;
+  /** The non-secret values as sent, so the form shows them again. */
+  readonly values: OwnCredentialsValues;
+  /** Messages per field, in the portal's own words. */
+  readonly fieldErrors: Readonly<Partial<Record<OwnCredentialsField, string>>>;
+  /** A problem that belongs to no field. */
+  readonly message?: string;
+  /** The page is out of date: the form offers "Reload the page". */
+  readonly reload?: true;
+  /** The API asked for a step-up (`REAUTH_REQUIRED`): `useStepUpAction` opens the dialog. */
+  readonly stepUp?: true;
+  /** The submission the API accepted (`202`), which `SubmissionStatus` follows. */
+  readonly submission?: SubmissionView;
+}
+
+/**
+ * The office ids of the form's text, in the order typed: separated by line breaks, commas, semicolons or spaces,
+ * upper-cased (the document's `AmadeusOfficeId` is upper case). `own-credentials-form.tsx` reads the text the same way
+ * to fill the office selects; the test keeps both equal.
+ */
+function officeIdsOf(value: string): string[] {
+  return value
+    .split(/[\s,;]+/u)
+    .filter((part) => part !== "")
+    .map((part) => part.toUpperCase());
+}
+
+/** The form, checked; the problems' paths are the fields. The client secret is checked, never trimmed or kept. */
+const OWN_CREDENTIALS_FORM = z
+  .object({
+    clientId: z
+      .string()
+      .trim()
+      .min(1, OWN_PROBLEMS.clientIdRequired)
+      .refine(
+        (value) => codePoints(value) <= CLIENT_ID_MAX && NO_WHITE_SPACE.test(value),
+        OWN_PROBLEMS.clientIdFormat,
+      ),
+    clientSecret: z
+      .string()
+      .min(1, OWN_PROBLEMS.clientSecretRequired)
+      .refine((value) => codePoints(value) <= CLIENT_SECRET_MAX, OWN_PROBLEMS.clientSecretLength),
+    officeIds: z.array(z.string()),
+    defaultOfficeId: z.string(),
+    queuingOfficeId: z.string(),
+    ownerOfficeId: z.string(),
+  })
+  .superRefine((form, context) => {
+    const { officeIds } = form;
+    const officeProblem = (message: string) =>
+      context.addIssue({ code: z.ZodIssueCode.custom, path: ["officeIds"], message });
+    if (officeIds.length === 0) {
+      officeProblem(OWN_PROBLEMS.officeIdsRequired);
+    } else if (officeIds.some((officeId) => !OFFICE_ID.test(officeId))) {
+      officeProblem(OWN_PROBLEMS.officeIdFormat);
+    } else if (new Set(officeIds).size !== officeIds.length) {
+      officeProblem(OWN_PROBLEMS.officeIdsDuplicate);
+    } else if (officeIds.length > OFFICE_IDS_MAX) {
+      officeProblem(OWN_PROBLEMS.officeIdsTooMany);
+    }
+    // The three offices must be among the office ids typed (the API checks it again).
+    const valid = new Set(officeIds.filter((officeId) => OFFICE_ID.test(officeId)));
+    if (!valid.has(form.defaultOfficeId)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["defaultOfficeId"],
+        message: form.defaultOfficeId === "" ? OWN_PROBLEMS.defaultOfficeRequired : OWN_PROBLEMS.office,
+      });
+    }
+    for (const field of ["queuingOfficeId", "ownerOfficeId"] as const) {
+      if (form[field] !== "" && !valid.has(form[field])) {
+        context.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: OWN_PROBLEMS.office });
+      }
+    }
+  });
+
+type OwnCredentialsForm = z.infer<typeof OWN_CREDENTIALS_FORM>;
+
+/** The request of the checked form: the queuing and owner offices only when chosen (the API defaults them). */
+function credentialsRequestOf(form: OwnCredentialsForm): SubmitAmadeusCredentialsRequest {
+  return {
+    clientId: form.clientId,
+    clientSecret: form.clientSecret,
+    officeIds: form.officeIds,
+    defaultOfficeId: form.defaultOfficeId,
+    ...(form.queuingOfficeId === "" ? {} : { queuingOfficeId: form.queuingOfficeId }),
+    ...(form.ownerOfficeId === "" ? {} : { ownerOfficeId: form.ownerOfficeId }),
+  };
+}
+
+/** The field and message of each JSON pointer of the API outside the office list. */
+const CREDENTIAL_FIELDS: Readonly<Record<string, readonly [OwnCredentialsField, string]>> = {
+  "/clientId": ["clientId", OWN_PROBLEMS.clientIdFormat],
+  "/clientSecret": ["clientSecret", OWN_PROBLEMS.clientSecretLength],
+  "/defaultOfficeId": ["defaultOfficeId", OWN_PROBLEMS.office],
+  "/queuingOfficeId": ["queuingOfficeId", OWN_PROBLEMS.office],
+  "/ownerOfficeId": ["ownerOfficeId", OWN_PROBLEMS.office],
+};
+
+/** The message of each JSON Schema keyword at `/officeIds` itself. */
+const OFFICE_LIST_MESSAGES: Readonly<Record<string, string>> = {
+  uniqueItems: OWN_PROBLEMS.officeIdsDuplicate,
+  maxItems: OWN_PROBLEMS.officeIdsTooMany,
+  minItems: OWN_PROBLEMS.officeIdsRequired,
+};
+
+const OFFICE_ID_POINTER = /^\/officeIds\/(0|[1-9][0-9]*)$/;
+
+/**
+ * The field and message of one API field error, or `undefined` for a path the form has no field for (a header, the
+ * path, an office the form did not send): the form is stale then. The JSON Schema keywords and the service's office
+ * rule (`unknown`) get the field's own message; an empty secret (`minLength`) its own.
+ */
+function credentialProblem(
+  path: string,
+  code: string,
+  sentOffices: number,
+): readonly [OwnCredentialsField, string] | undefined {
+  if (path === "/clientSecret" && code === "minLength") {
+    return ["clientSecret", OWN_PROBLEMS.clientSecretRequired];
+  }
+  const field = Object.hasOwn(CREDENTIAL_FIELDS, path) ? CREDENTIAL_FIELDS[path] : undefined;
+  if (field !== undefined) {
+    return field;
+  }
+  if (path === "/officeIds") {
+    return [
+      "officeIds",
+      Object.hasOwn(OFFICE_LIST_MESSAGES, code)
+        ? (OFFICE_LIST_MESSAGES[code] ?? OWN_PROBLEMS.rules)
+        : OWN_PROBLEMS.rules,
+    ];
+  }
+  const office = OFFICE_ID_POINTER.exec(path);
+  if (office !== null && Number(office[1]) < sentOffices) {
+    return ["officeIds", OWN_PROBLEMS.officeIdFormat];
+  }
+  return undefined;
+}
+
+/** The API's field errors on the form's fields (the first per field); empty when none is about the form. */
+function credentialFieldErrors(
+  error: ApiError,
+  sentOffices: number,
+): Partial<Record<OwnCredentialsField, string>> {
+  const problems: Partial<Record<OwnCredentialsField, string>> = {};
+  for (const fieldError of error.fieldErrors) {
+    const problem = credentialProblem(fieldError.path, fieldError.code, sentOffices);
+    if (problem !== undefined) {
+      problems[problem[0]] ??= problem[1];
+    }
+  }
+  return problems;
+}
+
+type CredentialProblem = Pick<OwnCredentialsState, "message" | "reload" | "stepUp">;
+
+/** The portal's message for each code of a refused `submitAmadeusCredentials` that is about no field. */
+const CREDENTIAL_FAILURES: Readonly<Partial<Record<PlatformErrorCode, CredentialProblem>>> = {
+  // Shown when the person cancels the step-up dialog that opens now.
+  REAUTH_REQUIRED: { message: OWN.stepUpCancelled, stepUp: true },
+  MFA_REQUIRED: { message: OWN.mfaRequired },
+  FEATURE_DISABLED: { message: OWN.featureDisabled, reload: true },
+  TENANT_NOT_ACTIVE: { message: OWN.notActive, reload: true },
+  FORBIDDEN: { message: OWN.forbidden, reload: true },
+  NOT_FOUND: { message: OWN.removed, reload: true },
+  // A field error on nothing the form sent (a header, the path): a form the person cannot fix.
+  VALIDATION_FAILED: { message: OWN.formExpired, reload: true },
+  RATE_LIMITED: { message: OWN.rateLimited },
+};
+
+/** The portal's message for a refused `submitAmadeusCredentials` that is about no field. */
+function credentialFailure(error: ApiError): CredentialProblem {
+  if (error.code === "CONFLICT") {
+    // A platform admin disabled the connection (lead decision of 2026-11-02, (2i)): nothing was written.
+    return reasonOf(error) === "connection_disabled"
+      ? { message: OWN.connectionDisabled }
+      : { message: ERROR_MESSAGES.CONFLICT, reload: true };
+  }
+  return CREDENTIAL_FAILURES[error.code] ?? { message: errorMessage(error) };
+}
+
+/** The non-secret values of a submission, as typed. */
+function credentialValuesFrom(formData: FormData): OwnCredentialsValues {
+  return {
+    clientId: text(formData, "clientId"),
+    officeIds: text(formData, "officeIds"),
+    defaultOfficeId: text(formData, "defaultOfficeId"),
+    queuingOfficeId: text(formData, "queuingOfficeId"),
+    ownerOfficeId: text(formData, "ownerOfficeId"),
+  };
+}
+
+/**
+ * Submits the OTA's own Amadeus credentials for one environment (`PUT
+ * /v1/tenants/{tenantId}/amadeus-connections/{environment}/credentials`) from the own credentials form (the hidden
+ * fields `tenantId` and `environment`). `202` answers the submission to follow and revalidates the page, so the
+ * connection card shows that credentials are being verified; the connection itself changes only once they are.
+ */
+export async function submitOwnCredentials(
+  previous: OwnCredentialsState,
+  formData: FormData,
+): Promise<OwnCredentialsState> {
+  const tenantId = text(formData, "tenantId");
+  const environment = text(formData, "environment");
+  const values = credentialValuesFrom(formData);
+  const failed = (
+    code: PlatformErrorCode,
+    problem: CredentialProblem & { readonly fieldErrors?: Partial<Record<OwnCredentialsField, string>> },
+  ): OwnCredentialsState => ({
+    status: "failed",
+    code,
+    values,
+    fieldErrors: problem.fieldErrors ?? {},
+    ...(problem.message === undefined ? {} : { message: problem.message }),
+    ...(problem.reload === undefined ? {} : { reload: problem.reload }),
+    ...(problem.stepUp === undefined ? {} : { stepUp: problem.stepUp }),
+    // A refused submission leaves the one being verified (if any) as it was.
+    ...(previous.submission === undefined ? {} : { submission: previous.submission }),
+  });
+
+  if (!isTenantId(tenantId) || !isEnvironment(environment)) {
+    // The form always carries both; without them a submission could not name its connection.
+    return failed("VALIDATION_FAILED", { message: OWN.formExpired, reload: true });
+  }
+  const parsed = OWN_CREDENTIALS_FORM.safeParse({
+    clientId: values.clientId,
+    clientSecret: text(formData, "clientSecret"),
+    officeIds: officeIdsOf(values.officeIds),
+    defaultOfficeId: values.defaultOfficeId,
+    queuingOfficeId: values.queuingOfficeId,
+    ownerOfficeId: values.ownerOfficeId,
+  });
+  if (!parsed.success) {
+    // The messages are the portal's own and never hold a value; the secret is neither in them nor in the state.
+    return failed("VALIDATION_FAILED", { fieldErrors: problemsOf(parsed.error) });
+  }
+
+  const api = await platformApi();
+  const result = await api.PUT("/v1/tenants/{tenantId}/amadeus-connections/{environment}/credentials", {
+    params: { path: { tenantId, environment } },
+    body: credentialsRequestOf(parsed.data),
+  });
+  if (result.error !== undefined) {
+    leaveOnSessionEnd(result.error, tenantId);
+    const fieldErrors =
+      result.error.code === "VALIDATION_FAILED"
+        ? credentialFieldErrors(result.error, parsed.data.officeIds.length)
+        : {};
+    if (Object.keys(fieldErrors).length > 0) {
+      return failed(result.error.code, { fieldErrors });
+    }
+    return failed(result.error.code, credentialFailure(result.error));
+  }
+
+  const { id, status, errorCode } = result.data.submission;
+  // The card shows the submission being verified; the connection keeps its credentials until they are.
+  revalidatePath(otaPath(tenantId, "/amadeus"));
+  return {
+    status: "submitted",
+    values: { ...values, clientId: parsed.data.clientId },
+    fieldErrors: {},
+    submission: { id, status, errorCode },
+  };
+}
+
+// ---- The verification ---------------------------------------------------------------------------------------------
+
+/** The answer of one read of a submission. */
+export type SubmissionPoll =
+  | { readonly status: "ok"; readonly submission: SubmissionView }
+  | {
+      readonly status: "failed";
+      /** The error code, for tests; never shown. */
+      readonly code: PlatformErrorCode;
+      readonly message: string;
+      /** The read may work when tried again (rate limit, API unavailable): polling goes on. */
+      readonly transient: boolean;
+      /** The wait of `Retry-After`, when the API sent one. */
+      readonly retryAfterSeconds?: number;
+    };
+
+/** Read failures that may pass: polling goes on. */
+const TRANSIENT_POLL_CODES: ReadonlySet<PlatformErrorCode> = new Set<PlatformErrorCode>([
+  "RATE_LIMITED",
+  "SERVICE_UNAVAILABLE",
+  "INTERNAL_ERROR",
+]);
+
+/**
+ * Reads a submission of the OTA's own credentials (`GET /v1/tenants/{tenantId}/credential-submissions/{submissionId}`)
+ * for `SubmissionStatus`. Ids that are none answer `NOT_FOUND` without a call. A final status revalidates the Amadeus
+ * page, so the connection card shows the outcome.
+ */
+export async function getSubmissionStatus(tenantId: unknown, submissionId: unknown): Promise<SubmissionPoll> {
+  if (!isTenantId(tenantId) || typeof submissionId !== "string" || !SUBMISSION_ID.test(submissionId)) {
+    return { status: "failed", code: "NOT_FOUND", message: errorMessage("NOT_FOUND"), transient: false };
+  }
+  const api = await platformApi();
+  const result = await api.GET("/v1/tenants/{tenantId}/credential-submissions/{submissionId}", {
+    params: { path: { tenantId, submissionId } },
+  });
+  if (result.error !== undefined) {
+    leaveOnSessionEnd(result.error, tenantId);
+    const { code, retryAfterSeconds } = result.error;
+    return {
+      status: "failed",
+      code,
+      message: errorMessage(result.error),
+      transient: TRANSIENT_POLL_CODES.has(code),
+      ...(retryAfterSeconds === undefined ? {} : { retryAfterSeconds }),
+    };
+  }
+  const { id, status, errorCode } = result.data;
+  if (FINAL_SUBMISSION_STATUSES.includes(status)) {
+    // The connection card shows the credentials the connection uses now, or the ones it kept.
+    revalidatePath(otaPath(tenantId, "/amadeus"));
+  }
+  return { status: "ok", submission: { id, status, errorCode } };
 }

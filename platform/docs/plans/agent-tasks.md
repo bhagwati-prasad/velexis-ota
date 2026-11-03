@@ -1804,7 +1804,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - TLS status and expiry are displayed [PF-41 AC3]; "Make primary" is offered only for verified domains [PF-41 AC4].
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-023 · Build live Amadeus access and own credentials in the portal
+### PFE-023 · Build live Amadeus access and own credentials in the portal ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M5
 - **Depends on:** PFE-018, PBE-053, PBE-054

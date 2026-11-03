@@ -1271,6 +1271,9 @@ export const CONNECTION_STRINGS = Object.freeze({
   /** A Velexis connection without an office (PF-50 AC2: the office pool was empty at set-up). */
   pendingOffice:
     "Velexis assigns an Amadeus office to your OTA soon. Flight searches and bookings in this environment start working once it is assigned; you do not need to do anything.",
+  /** A live Velexis connection without an office: an owner requested live access (PF-51, PFE-023). */
+  pendingLiveOffice:
+    "Velexis has your request for live access. Velexis completes the commercial onboarding with you, then assigns a live office; flight searches and bookings in this environment start working once it is assigned.",
   pendingCredentials: "Velexis is verifying the credentials of this connection.",
   amadeusInvalid:
     "Amadeus refused the credentials of this connection, so flight searches and bookings in this environment do not work. Contact Velexis support.",
@@ -1309,7 +1312,7 @@ export const CONNECTION_STRINGS = Object.freeze({
   submissionFailed: "The credentials you submitted could not be verified. The connection above stays in use.",
 });
 
-/** `/otas/[tenantId]/amadeus` (PF-50; live access and own credentials with PFE-023). */
+/** `/otas/[tenantId]/amadeus` (PF-50; live access and own credentials: `AMADEUS_LIVE_STRINGS`, PFE-023). */
 export const AMADEUS_STRINGS = Object.freeze({
   title: "Amadeus",
   intro:
@@ -1455,6 +1458,181 @@ export const AMADEUS_SETTINGS_STRINGS = Object.freeze({
   viewText: (text: string) => `remark “${text}”`,
   monitoredCaption: (environment: "test" | "live") =>
     `Monitored queues of the ${connectionEnvironmentWords(environment)} connection`,
+});
+
+/**
+ * Live Amadeus access on `/otas/[tenantId]/amadeus` (PFE-023; flows/amadeus-connection.md §C; PF-51): the owners'
+ * request for a live office on the Velexis account (`requestLiveAmadeus`), the commercial onboarding that follows it,
+ * and the answers of the request.
+ */
+export const AMADEUS_LIVE_STRINGS = Object.freeze({
+  title: "Live access",
+  intro:
+    "Your storefront takes real bookings once it is live, through a live Amadeus office. Velexis assigns one on its own Amadeus account once the commercial onboarding is done.",
+  /** What happens after the request, in order. */
+  steps: Object.freeze([
+    "You send the request here, and Velexis's operations team gets it at once.",
+    "Velexis completes the commercial onboarding with you outside the portal: the contract and your ticketing agreement with Amadeus.",
+    "Velexis assigns a live office: the live connection becomes active and every owner of the OTA gets an e-mail.",
+  ]),
+  stepsLabel: "What happens next",
+  noteLabel: "Note for Velexis (optional)",
+  noteHint:
+    "For example when you want to start selling, or how far your ticketing agreement with Amadeus is. Never enter a password or another secret. At most 1000 characters.",
+  submit: "Request live access",
+  submitting: "Sending the request…",
+  requestedTitle: "Velexis has your request for live access",
+  requested:
+    "Velexis completes the commercial onboarding with you (the contract and your ticketing agreement with Amadeus), then assigns a live office. Every owner of the OTA gets an e-mail when the live connection is ready.",
+  /** Admins and finance members read the section, without the form. */
+  ownerOnly: "Only an owner of this OTA can request live access.",
+  /** `listPlans` says the OTA's plan has no live mode: no request is offered. */
+  planWithoutLive:
+    "Your plan does not include live mode. Choose a plan with live mode to request live access.",
+  billingLink: "Go to billing",
+  readOnlyTitle: "Live access cannot be requested right now",
+  /** Why live access cannot be requested, for each OTA status but `active` (PADR-0014 item 5). */
+  readOnly: Object.freeze({
+    provisioning:
+      "Velexis is still setting up this OTA. You can request live access once the set-up is done.",
+    suspended: "This OTA is suspended, so it cannot request live access until it is resumed.",
+    failed: "The set-up of this OTA failed, so it cannot request live access.",
+  }),
+  noteLength: "Use at most 1000 characters in the note.",
+  /** `FEATURE_DISABLED`: live mode is off, or the plan has none. */
+  notInPlan:
+    "Live access is not available for this OTA: its plan does not include live mode, or Velexis has not opened live mode yet.",
+  exists: "This OTA has a live Amadeus connection already. Reload the page to see it.",
+  accountMissing:
+    "Velexis cannot connect live Amadeus offices yet. Velexis's operations team knows about your request; try again later.",
+  notActive: "This OTA is not active any more, so it cannot request live access. Reload the page to see why.",
+  forbidden:
+    "Only owners can request live access, and your role in this OTA does not allow it. Reload the page.",
+  removed: "You are not a member of this OTA any more. Reload the page.",
+  formExpired: "This form has expired. Reload the page and try again.",
+  rateLimited: "Too many requests in a short time. Wait a minute, then try again.",
+  reload: "Reload the page",
+});
+
+/**
+ * The OTA's own Amadeus credentials on `/otas/[tenantId]/amadeus` (PFE-023; flows/amadeus-connection.md §D; PF-52):
+ * the form of one environment (`submitAmadeusCredentials`, behind a step-up), its rules (those of the platform
+ * document's `SubmitAmadeusCredentialsRequest`) and the answers of the submission. No message holds a typed value.
+ */
+export const OWN_CREDENTIALS_STRINGS = Object.freeze({
+  /** The heading of one environment's section: "Your own Amadeus credentials: test environment". */
+  title: (environment: "test" | "live") =>
+    `Your own Amadeus credentials: ${connectionEnvironmentWords(environment)} environment`,
+  intro:
+    "Use the client id and secret Amadeus issued to your OTA instead of Velexis's Amadeus account. Velexis checks them with Amadeus first; until then the connection keeps working as it does now.",
+  introOwn:
+    "This connection uses your own Amadeus credentials. Submit new ones to replace them, for example after you changed the secret at Amadeus.",
+  introNoConnection:
+    "This environment has no Amadeus connection yet. Once Amadeus accepts your credentials, Velexis creates the connection with them.",
+  open: "Use my own Amadeus credentials",
+  openOwn: "Submit new Amadeus credentials",
+  close: "Cancel",
+  stepUpNote:
+    "Submitting asks for a code from your authenticator app. Once Amadeus accepts the credentials, the connection switches to them, and Velexis releases its shared office once your bookings on it are done.",
+  clientIdLabel: "Client id",
+  clientIdHint: "The API key Amadeus issued to your OTA. It is not a secret.",
+  clientSecretLabel: "Client secret",
+  clientSecretHint: "Velexis stores it encrypted and never shows it again, not even to you.",
+  officeIdsLabel: "Office ids",
+  officeIdsHint:
+    "The Amadeus offices these credentials may act for: one per line, 9 letters and digits each, such as OSLN12345. At most 50.",
+  defaultOfficeLabel: "Default office",
+  defaultOfficeHint: "Used for flight searches and bookings that name no office.",
+  queuingOfficeLabel: "Queuing office",
+  queuingOfficeHint: "The office whose queues receive new flight orders.",
+  ownerOfficeLabel: "Owner office",
+  ownerOfficeHint: "The office that owns new flight orders.",
+  /** The first option of the default office while none of the typed offices is chosen. */
+  officePlaceholder: "Choose an office",
+  /** The only option of an office select while no valid office id is typed. */
+  officesFirst: "Enter the office ids first",
+  /** The first option of the queuing and owner office: not sent, so the API uses the default office. */
+  sameAsDefault: "Same as the default office",
+  submit: "Submit for verification",
+  submitting: "Submitting…",
+  /** One message per rule a value breaks (the action's checks and the API's field errors). */
+  problems: Object.freeze({
+    clientIdRequired: "Enter the client id.",
+    clientIdFormat: "Enter the client id without spaces, in at most 200 characters.",
+    clientSecretRequired: "Enter the client secret.",
+    clientSecretLength: "Enter a client secret of at most 512 characters.",
+    officeIdsRequired: "Enter at least one office id.",
+    officeIdFormat: "Each office id has 9 letters and digits, such as OSLN12345.",
+    officeIdsDuplicate: "List each office id once.",
+    officeIdsTooMany: "Enter at most 50 office ids.",
+    defaultOfficeRequired: "Choose the default office.",
+    office: "Choose one of the office ids you entered.",
+    /** The API refused a value by a rule the portal has no own words for. */
+    rules: "Check this value: it does not follow the rules of the field.",
+  }),
+  readOnlyTitle: "Credentials cannot be submitted right now",
+  /** Why the form is disabled, for each OTA status but `active` (PADR-0014 item 5). */
+  readOnly: Object.freeze({
+    provisioning: "Velexis is still setting up this OTA. You can submit credentials once the set-up is done.",
+    suspended: "This OTA is suspended, so its Amadeus connections are read-only until it is resumed.",
+    failed: "The set-up of this OTA failed, so its Amadeus connections cannot be changed.",
+  }),
+  stepUpCancelled:
+    "The credentials were not submitted: submitting them needs a code from your authenticator app.",
+  mfaRequired:
+    "Turn on two-factor authentication for your account first: submitting credentials needs a code from your authenticator app.",
+  mfaLink: "Set up two-factor authentication",
+  featureDisabled: "Own Amadeus credentials are not available for this OTA yet. Reload the page.",
+  connectionDisabled:
+    "Velexis disabled this Amadeus connection, so it cannot switch to other credentials. Contact Velexis support.",
+  notActive:
+    "This OTA is not active any more, so its Amadeus connections cannot be changed. Reload the page to see why.",
+  forbidden: "Your role in this OTA does not allow submitting Amadeus credentials any more. Reload the page.",
+  removed: "You are not a member of this OTA any more. Reload the page.",
+  formExpired: "This form has expired. Reload the page and try again.",
+  rateLimited: "Too many submissions in a short time. Wait a minute, then try again.",
+  reload: "Reload the page",
+});
+
+/**
+ * `SubmissionStatus` on `/otas/[tenantId]/amadeus` (PFE-023; PADR-0010; PF-52 AC2): the verification of submitted
+ * Amadeus credentials (`getCredentialSubmission`), and each verification result in words, never its code.
+ */
+export const SUBMISSION_STRINGS = Object.freeze({
+  title: "Verification of your credentials",
+  /** A submission's status (`CredentialSubmission.status`). */
+  statuses: Object.freeze({
+    pending: "Waiting",
+    verifying: "Verifying",
+    applied: "In use",
+    failed: "Not accepted",
+    superseded: "Replaced",
+  }) as Readonly<Record<string, string>>,
+  open: "Velexis is checking the credentials with Amadeus. The result shows here as soon as it is in; until then the connection keeps working as it does now.",
+  applied: (environment: "test" | "live") =>
+    `Amadeus accepted the credentials. The ${connectionEnvironmentWords(environment)} connection now uses your own Amadeus credentials.`,
+  failed: "The credentials were not accepted, so the connection keeps working as it did before.",
+  superseded: "Newer credentials for this environment replaced these before they were verified.",
+  /** Why a submission failed, per `errorCode` (verification results and the apply's refusals, PADR-0010 item 6). */
+  reasons: Object.freeze({
+    AMADEUS_CREDENTIALS_INVALID:
+      "Amadeus refused the client id or the client secret. Check both in your Amadeus account, then submit them again.",
+    PROVIDER_UNAVAILABLE:
+      "Velexis could not reach Amadeus to check the credentials. Submit them again later.",
+    TENANT_NOT_ACTIVE:
+      "This OTA was no longer active when Velexis checked the credentials, so they were not used. Submit them again once the OTA is active.",
+    CONNECTION_DISABLED:
+      "Velexis disabled this Amadeus connection after you submitted, so the credentials were not used. Contact Velexis support.",
+    FEATURE_DISABLED:
+      "Own Amadeus credentials were turned off when Velexis checked the credentials, so they were not used.",
+    CONNECTION_CHANGED:
+      "The connection changed after you submitted, so the credentials were not used. Submit them again.",
+  }) as Readonly<Record<string, string>>,
+  /** A failure without a code, or with one the portal has no words for. */
+  reasonUnknown:
+    "Velexis could not verify the credentials. Submit them again, and contact Velexis support if it keeps happening.",
+  pollFailed: "The verification status could not be read just now. The page tries again in a moment.",
+  pollStoppedTitle: "The verification status cannot be shown",
 });
 
 /** `/otas/[tenantId]/payments` (PF-60; your own Stripe account with PFE-024). */

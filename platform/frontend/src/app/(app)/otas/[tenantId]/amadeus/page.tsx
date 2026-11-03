@@ -1,8 +1,12 @@
 import type { components } from "@velexis/api-types/platform";
+import type { PlatformErrorCode } from "@velexis/errors";
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
+import { LiveAccessForm } from "@/app/(app)/otas/[tenantId]/amadeus/live-access-form";
+import { OwnCredentialsForm } from "@/app/(app)/otas/[tenantId]/amadeus/own-credentials-form";
 import { AmadeusSettingsForm } from "@/app/(app)/otas/[tenantId]/amadeus/settings-form";
 import { byEnvironment, ConnectionCard, type AmadeusConnection } from "@/components/connection-card";
 import { NotAllowed } from "@/components/not-allowed";
@@ -16,9 +20,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { platformApi, type ApiResult } from "@/lib/api";
+import { createPlatformApi, platformApi, type ApiResult } from "@/lib/api";
+import { getConfig } from "@/lib/config";
 import { errorMessage } from "@/lib/errors";
-import { can, otaPath } from "@/lib/roles";
+import { can, otaPath, type MilestoneFeatures } from "@/lib/roles";
 import { AMADEUS_SETTINGS_STRINGS, AMADEUS_STRINGS } from "@/lib/strings";
 import { requireTenant, type Tenant } from "@/lib/tenant";
 
@@ -26,6 +31,7 @@ export const metadata: Metadata = { title: AMADEUS_STRINGS.title };
 
 type AmadeusConnectionList = components["schemas"]["AmadeusConnectionList"];
 type AutomatedProcess = components["schemas"]["AmadeusAutomatedProcessDefault"];
+type Environment = components["schemas"]["Environment"];
 
 const SETTINGS = AMADEUS_SETTINGS_STRINGS;
 
@@ -54,6 +60,62 @@ async function loadConnections(tenantId: string): Promise<ApiResult<AmadeusConne
   }
   return result;
 }
+
+/** Answers of `getMe` that mean the session is over: sign in again. */
+const SESSION_ENDED: ReadonlySet<PlatformErrorCode> = new Set<PlatformErrorCode>([
+  "UNAUTHENTICATED",
+  "TOKEN_EXPIRED",
+]);
+
+/** Every M5 switch off: what the page assumes when `getMe` fails. */
+const NO_FEATURES: MilestoneFeatures = {
+  stripeBilling: false,
+  ownStripe: false,
+  settlements: false,
+  ownAmadeus: false,
+  customDomains: false,
+  liveSwitch: false,
+};
+
+/**
+ * The milestone switches of PADR-0015 from `getMe` (`features.liveSwitch` for live access, `features.ownAmadeus` for
+ * the OTA's own credentials; PFE-023). An ended session goes to sign-in and back to this page, an unverified account to
+ * `/verify-pending`; any other failure hides the M5 parts, as a switch that is off does, and the rest of the page stays.
+ */
+async function loadFeatures(tenantId: string): Promise<MilestoneFeatures> {
+  const api = await platformApi();
+  const me = await api.GET("/v1/me");
+  if (me.error === undefined) {
+    return me.data.features;
+  }
+  if (SESSION_ENDED.has(me.error.code)) {
+    redirect(`/sign-in?${new URLSearchParams({ next: otaPath(tenantId, "/amadeus") }).toString()}`);
+  }
+  if (me.error.code === "EMAIL_NOT_VERIFIED") {
+    redirect("/verify-pending");
+  }
+  return NO_FEATURES;
+}
+
+/**
+ * Whether `listPlans` says the OTA's plan has no live mode (`limits.liveMode` false), so live access is not offered.
+ * `listPlans` is public: the call carries no access token, only the end-user headers of PADR-0019. A plan it does not
+ * list (not public) or a failed call leaves the decision to the API, which answers `FEATURE_DISABLED` then.
+ */
+async function planWithoutLiveMode(planCode: string): Promise<boolean> {
+  const settings = getConfig();
+  const api = createPlatformApi({
+    baseUrl: settings.PLATFORM_API_URL,
+    bffKey: settings.PLATFORM_BFF_KEY,
+    requestHeaders: await headers(),
+  });
+  const plans = await api.GET("/v1/plans");
+  const plan = plans.data?.data.find((candidate) => candidate.code === planCode);
+  return plan !== undefined && !plan.limits.liveMode;
+}
+
+/** The environments of the OTA's own credentials, in the page's order. */
+const ENVIRONMENTS: readonly Environment[] = ["test", "live"];
 
 /** A label of `labels`, or the raw value of a newer API the portal has no words for. */
 function labelOf(labels: Readonly<Record<string, string>>, value: string): string {
@@ -214,13 +276,70 @@ function SettingsSection({
 }
 
 /**
- * `/otas/[tenantId]/amadeus` (README §2 Signed in; flows/amadeus-connection.md §B and §E; PF-50, PF-53): the OTA's
+ * The live access section and the own credentials sections of the page (PFE-023), as far as the role, the M5 switches
+ * and the connections allow them:
+ *
+ * - **Live access** (`features.liveSwitch`): while the OTA has no live connection, or its live Velexis connection still
+ *   waits for an office (the request was made). Owners get the request (unless `listPlans` says the plan has no live
+ *   mode), the other roles read that an owner requests it.
+ * - **Own credentials** (`features.ownAmadeus`, owners and admins): one section per environment, test then live, each
+ *   with the submission being verified and the form behind "Use my own Amadeus credentials". An environment without a
+ *   connection has one too: a successful verification creates the connection.
+ */
+async function m5Sections(
+  tenant: Tenant,
+  connections: readonly AmadeusConnection[],
+  features: MilestoneFeatures,
+): Promise<{ readonly live: ReactNode; readonly ownCredentials: ReactNode }> {
+  const live = connections.find((connection) => connection.environment === "live");
+  const liveRequested =
+    live !== undefined &&
+    live.credentialSource === "velexis" &&
+    live.status === "pending_verification" &&
+    live.officeIds.length === 0;
+  const isOwner = tenant.myRole === "owner";
+  let liveSection: ReactNode = null;
+  if (features.liveSwitch && (live === undefined || liveRequested)) {
+    // The plan is asked only when the request would be offered.
+    const withoutLive =
+      isOwner && live === undefined && tenant.status === "active"
+        ? await planWithoutLiveMode(tenant.planCode)
+        : false;
+    liveSection = (
+      <LiveAccessForm
+        tenantId={tenant.id}
+        tenantStatus={tenant.status}
+        isOwner={isOwner}
+        requested={liveRequested}
+        planWithoutLive={withoutLive}
+      />
+    );
+  }
+  const ownCredentials =
+    features.ownAmadeus && can(tenant.myRole, "manageConnections")
+      ? ENVIRONMENTS.map((environment) => (
+          <OwnCredentialsForm
+            key={environment}
+            tenantId={tenant.id}
+            environment={environment}
+            tenantStatus={tenant.status}
+            connection={connections.find((connection) => connection.environment === environment) ?? null}
+          />
+        ))
+      : null;
+  return { live: liveSection, ownCredentials };
+}
+
+/**
+ * `/otas/[tenantId]/amadeus` (README §2 Signed in; flows/amadeus-connection.md §B to §E; PF-50 to PF-53): the OTA's
  * Amadeus connections for owners, admins and finance members: one `ConnectionCard` per environment, test first
- * ("Velexis test account, office NCE1A0955, active"), then the settings of each connection: owners and admins change the
- * default, queuing and owner offices, the ticketing defaults and the monitored queues (`AmadeusSettingsForm`, PFE-018),
- * finance members read them. A Velexis connection still waiting for an office (the pool was empty at set-up) explains
- * that Velexis assigns one soon. The tenant comes from the layout's `getTenant` (the same request's cached answer);
- * another role gets the not-allowed page without a call. Live access and the OTA's own credentials come with PFE-023.
+ * ("Velexis test account, office NCE1A0955, active"), then live access and the OTA's own credentials (M5, PFE-023,
+ * `m5Sections`), then the settings of each connection: owners and admins change the default, queuing and owner offices,
+ * the ticketing defaults and the monitored queues (`AmadeusSettingsForm`, PFE-018), finance members read them. A
+ * Velexis connection still waiting for an office (the pool was empty at set-up, or a live office follows the commercial
+ * onboarding) explains it. The tenant comes from the layout's `getTenant` (the same request's cached answer); another
+ * role gets the not-allowed page without a call. The connections (`listAmadeusConnections`) and the M5 switches
+ * (`getMe`) are read side by side.
  */
 export default async function AmadeusPage({ params }: Readonly<{ params: Promise<{ tenantId: string }> }>) {
   const { tenantId } = await params;
@@ -233,7 +352,13 @@ export default async function AmadeusPage({ params }: Readonly<{ params: Promise
   if (!can(tenant.myRole, "viewConnections")) {
     return <NotAllowed tenantId={tenant.id} role={tenant.myRole} />;
   }
-  const connections = await loadConnections(tenant.id);
+  const [connections, features] = await Promise.all([loadConnections(tenant.id), loadFeatures(tenant.id)]);
+  const ordered = connections.error === undefined ? byEnvironment(connections.data.data) : [];
+  // Without the connections the page cannot tell what the OTA has: the M5 parts wait for a page that has them.
+  const m5 =
+    connections.error === undefined
+      ? await m5Sections(tenant, ordered, features)
+      : { live: null, ownCredentials: null };
 
   return (
     <div className="mx-auto grid max-w-4xl gap-8">
@@ -246,25 +371,25 @@ export default async function AmadeusPage({ params }: Readonly<{ params: Promise
           <AlertTitle>{AMADEUS_STRINGS.unavailableTitle}</AlertTitle>
           <AlertDescription>{errorMessage(connections.error)}</AlertDescription>
         </Alert>
-      ) : connections.data.data.length === 0 ? (
+      ) : ordered.length === 0 ? (
         <p className="text-muted-foreground">{AMADEUS_STRINGS.empty}</p>
       ) : (
-        <>
-          <div className="grid gap-4 md:grid-cols-2">
-            {byEnvironment(connections.data.data).map((connection) => (
-              <ConnectionCard
-                key={connection.id}
-                kind="amadeus"
-                connection={connection}
-                timeZone={tenant.timeZone}
-              />
-            ))}
-          </div>
-          {byEnvironment(connections.data.data).map((connection) => (
-            <SettingsSection key={connection.id} tenant={tenant} connection={connection} />
+        <div className="grid gap-4 md:grid-cols-2">
+          {ordered.map((connection) => (
+            <ConnectionCard
+              key={connection.id}
+              kind="amadeus"
+              connection={connection}
+              timeZone={tenant.timeZone}
+            />
           ))}
-        </>
+        </div>
       )}
+      {m5.live}
+      {m5.ownCredentials}
+      {ordered.map((connection) => (
+        <SettingsSection key={connection.id} tenant={tenant} connection={connection} />
+      ))}
     </div>
   );
 }

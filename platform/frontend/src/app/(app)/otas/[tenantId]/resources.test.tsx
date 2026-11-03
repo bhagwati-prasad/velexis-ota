@@ -805,9 +805,13 @@ describe("/otas/[tenantId]/amadeus", () => {
     );
     expect(screen.queryByRole("region", { name: CONNECTION_STRINGS.title("live") })).toBeNull();
 
-    // One listAmadeusConnections with the session, next to the layout's one getTenant; nothing is written.
-    expect(calledPaths()).toEqual([`GET ${TENANT_PATH}`, `GET ${AMADEUS_PATH}`]);
+    // One listAmadeusConnections with the session, next to the layout's one getTenant and the M5 switches of one getMe
+    // (PFE-023); nothing is written.
+    expect(calledPaths().sort()).toEqual(
+      [`GET ${TENANT_PATH}`, `GET ${AMADEUS_PATH}`, `GET ${ME_PATH}`].sort(),
+    );
     expectSessionHeaders(calls("GET", AMADEUS_PATH)[0]);
+    expectSessionHeaders(calls("GET", ME_PATH)[0]);
   });
 
   it("[PFE-013 AC2] explains that Velexis assigns an office soon when the pool was empty at set-up [PF-50 AC2]", async () => {

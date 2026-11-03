@@ -63,10 +63,14 @@ function amadeusNotice(connection: AmadeusConnection): { readonly id: string; re
   switch (connection.status) {
     case "pending_verification":
       // A Velexis connection is pending while it has no office: provisioning found the pool empty (PF-50 AC2), or a
-      // live office is still to be assigned (M5); the OTA's own credentials are pending while they are verified.
-      return connection.credentialSource === "velexis"
-        ? { id: "pending-office", text: CONNECTION_STRINGS.pendingOffice }
-        : { id: "pending-credentials", text: CONNECTION_STRINGS.pendingCredentials };
+      // live office is still to be assigned after an owner's request and the commercial onboarding (PF-51, PFE-023);
+      // the OTA's own credentials are pending while they are verified.
+      if (connection.credentialSource !== "velexis") {
+        return { id: "pending-credentials", text: CONNECTION_STRINGS.pendingCredentials };
+      }
+      return connection.environment === "live"
+        ? { id: "pending-live-office", text: CONNECTION_STRINGS.pendingLiveOffice }
+        : { id: "pending-office", text: CONNECTION_STRINGS.pendingOffice };
     case "invalid_credentials":
       return { id: "invalid-credentials", text: CONNECTION_STRINGS.amadeusInvalid };
     case "disabled":
