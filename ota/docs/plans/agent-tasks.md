@@ -2498,7 +2498,8 @@ The platform turns on own Stripe, own Amadeus credentials, custom domains and go
   - Setting `billing_notice = 'past_due'` on the platform row (as migrator in the test) shows in the next `console.auth.me` after the invalidation.
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int console`
 
-### OBE-083 · Prove own Stripe, own Amadeus and go-live across the backends
+### OBE-083 · Prove own Stripe, own Amadeus and go-live across the backends ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M5
 - **Depends on:** OBE-078, OBE-079, OBE-080, OBE-081, PBE-053, PBE-055, PBE-057, PBE-061

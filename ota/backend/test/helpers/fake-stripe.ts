@@ -22,6 +22,10 @@
 // (Stripe's JSON, as the fixtures of @velexis/testing/stripe hold it): `GET /v1/charges/{id}`, `GET /v1/refunds/{id}`,
 // `GET /v1/refunds?charge=…` (a list) and `GET /v1/disputes/{id}`; a refund created with `POST /v1/refunds` is kept in
 // `refunds` too.
+//
+// `GET /v1/account` (OBE-083: the platform's verification of an OTA's own Stripe keys, PBE-057, which the cross-backend
+// stack sends here) answers the account the test put in `accounts` under the request's secret key (`Authorization:
+// Bearer <key>`), or Stripe's 401 for a key it does not hold.
 import { randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { Global, Module, type DynamicModule } from "@nestjs/common";
@@ -66,6 +70,8 @@ export interface FakeStripe {
   readonly charges: Map<string, FakeStripeObject>;
   readonly refunds: Map<string, FakeStripeObject>;
   readonly disputes: Map<string, FakeStripeObject>;
+  /** The accounts `GET /v1/account` answers, by the secret key the test gave each (OBE-083). */
+  readonly accounts: Map<string, FakeStripeObject>;
   /** The next `count` requests fail as `failure` says. */
   fail(count: number, failure: FakeStripeFailure): void;
   /** Runs before each answer (after the request was recorded); its rejection fails that request with a 500. */
@@ -152,6 +158,7 @@ export async function startFakeStripe(): Promise<FakeStripe> {
   const charges = new Map<string, FakeStripeObject>();
   const refunds = new Map<string, FakeStripeObject>();
   const disputes = new Map<string, FakeStripeObject>();
+  const accounts = new Map<string, FakeStripeObject>();
   const replays = new Map<
     string,
     { readonly body: string; readonly status: number; readonly answer: unknown }
@@ -255,6 +262,16 @@ export async function startFakeStripe(): Promise<FakeStripe> {
         (refund) => charge === undefined || refund["charge"] === charge,
       );
       return { status: 200, body: { object: "list", data, has_more: false, url: "/v1/refunds" } };
+    }
+    if (method === "GET" && path === "/v1/account") {
+      const key = /^Bearer (\S+)$/.exec(request.headers["authorization"] ?? "")?.[1];
+      const account = key === undefined ? undefined : accounts.get(key);
+      return account === undefined
+        ? {
+            status: 401,
+            body: { error: { type: "invalid_request_error", message: "Invalid API Key provided" } },
+          }
+        : { status: 200, body: account };
     }
     const other = /^\/v1\/(charges|refunds|disputes)\/([A-Za-z0-9_]+)$/.exec(path);
     if (method === "GET" && other !== null) {
@@ -367,6 +384,7 @@ export async function startFakeStripe(): Promise<FakeStripe> {
     charges,
     refunds,
     disputes,
+    accounts,
     fail(count, failure) {
       failures = [...failures, ...Array.from({ length: count }, () => failure)];
     },

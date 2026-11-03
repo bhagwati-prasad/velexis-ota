@@ -506,6 +506,11 @@ jobs:
       - name: Cross-backend tests (platform with the built OTA worker)
         run: pnpm --filter @velexis/platform-backend test:xb
 
+      # OBE-083, PADR-0017 item 2: the OTA backend's test:xb starts the BUILT platform API, worker and dev:seed and the
+      # BUILT OTA API and worker, both from the dist/ folders of the Build step above.
+      - name: Cross-backend tests (OTA with the built platform and OTA backends)
+        run: pnpm --filter @velexis/ota-backend test:xb
+
       - name: Pack a release folder (dry run of deploy/scripts/pack-release.sh)
         run: |
           RELEASE_SHA="${GITHUB_SHA}" bash deploy/scripts/pack-release.sh /tmp/release
