@@ -31,7 +31,8 @@ Rendered by `boot()` and `lib/errors.js` before or instead of the page content: 
 | `503 SERVICE_UNAVAILABLE`, `ConnectionError` | Inline message with a Retry button; nothing is lost on retry |
 | `429 RATE_LIMITED` | "Busy, try again in a few seconds", Retry enabled after `retryAfterSeconds` |
 | `424 SUPPLIER_NOT_CONFIGURED` | "Flight search is not available yet" (OTA not connected to Amadeus) |
-| `environment = test` | Permanent "Test mode: no real bookings or payments" banner |
+| `environment = test` | Permanent "Test mode: no real bookings or payments" banner and `noindex`; only `environment = live` takes both away (a value the build does not know counts as test; a page's own robots meta stays) |
+| Sign-in or sign-up on the sub-domain while a custom domain is primary | The same page on the primary host, before any session is created ([`pages-account.md`](pages-account.md) §5, M5) |
 
 ## 3. Home: `/` (`index.html`, M2)
 

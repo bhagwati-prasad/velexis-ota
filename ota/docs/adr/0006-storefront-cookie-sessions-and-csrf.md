@@ -56,7 +56,7 @@
 
 ### Follow-ups
 
-- When a custom domain becomes primary (M5), redirect the sub-domain before sign-in so sessions are created on the primary host.
+- When a custom domain becomes primary (M5), redirect the sub-domain before sign-in so sessions are created on the primary host. **2026-11-03 (OFE-021): done in the storefront.** `boot()` sends the sign-in and sign-up pages (`/account/sign-in.html`, `/account/sign-up.html`, and the same paths without `.html`) on the OTA's sub-domain to the same path on the primary custom domain with `location.replace`, query and fragment kept, before `auth.getSession` and before the page module runs ([`ota/frontend/src/lib/primary-host.js`](../../frontend/src/lib/primary-host.js)). The primary host comes from `storefront.get` alone (`primaryUrl` and the `domains` entry of kind `custom` marked `primary`, which name a custom domain only once its certificate is issued, FIX-W38-OTA); a configuration where they disagree, a custom domain (so no two hosts send a traveller back and forth), an unlisted host and every other page do not redirect, so the other pages keep working on both hosts. The rule reads the configuration the tab already holds, which can be up to 5 minutes old ([OADR-0015](0015-storefront-build-urls-and-hosting.md) point 7), so a change of the primary flag reaches it within those 5 minutes. ADR-0018's follow-up of a 301 for the whole sub-domain at Caddy is not part of it.
 
 ## Alternatives considered
 

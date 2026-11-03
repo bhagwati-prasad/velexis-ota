@@ -2532,7 +2532,8 @@ The platform turns on own Stripe, own Amadeus credentials, custom domains and go
   - The live journey passes.
 - **Verify:** `pnpm --filter @velexis/ota-admin test && E2E_WITH_OTA=1 pnpm test:e2e -- --project=ota-admin specs/ota-admin/live-environment.e2e.ts`
 
-### OFE-021 · Handle live mode and custom domains on the storefront
+### OFE-021 · Handle live mode and custom domains on the storefront ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M5
 - **Depends on:** OFE-003, OBE-080, OBE-081

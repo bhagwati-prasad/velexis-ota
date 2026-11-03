@@ -5,12 +5,18 @@
 //
 // 1. The configuration: `storefront.get` through lib/config.js (5 minutes in sessionStorage). While it loads, the live
 //    region says "Loading" (only when it takes a moment).
-// 2. Then, at once: the theme (lib/theme.js), the header (name, logo, currency selector, account menu), the footer
+// 2. On the sign-in and sign-up pages of the OTA's sub-domain, when its primary host is a custom domain: the same page
+//    on that host (lib/primary-host.js, OFE-021, OADR-0006 Follow-ups), before any session is created. boot() then
+//    never resolves, so the page module does not run, and `location.replace` keeps the sub-domain's page out of the
+//    history. Every other page works on both hosts.
+// 3. Then, at once: the theme (lib/theme.js), the header (name, logo, currency selector, account menu), the footer
 //    (legal links, the content pages of `storefront.listPages` with `showInFooter` once they arrive, their failure
-//    ignored, support contacts), the test banner and `noindex` for `environment = test`, and `auth.getSession`
-//    for the account menu (`401` = signed out; called only when the SDK has the `auth` namespace, SDK-008, and the OTA
-//    has customer accounts). A component that fails is reported and skipped: it never stops the page.
-// 3. `client` is the SDK client for the page's calls: with the currency the traveller chose in the header
+//    ignored, support contacts), the environment (`applyEnvironment`: only `environment = live` hides the test banner
+//    and takes away the `noindex` of a test storefront; `test`, and any value this build does not know, shows the
+//    banner and adds `noindex`), and `auth.getSession` for the account menu (`401` = signed out; called only when the
+//    SDK has the `auth` namespace, SDK-008, and the OTA has customer accounts). A component that fails is reported and
+//    skipped: it never stops the page.
+// 4. `client` is the SDK client for the page's calls: with the currency the traveller chose in the header
 //    (`localStorage`, `client.withOptions({ currency })`, sent as `X-Currency`), else the shared client. Choosing
 //    another currency stores it and dispatches `vx:currency-change` on the document with `{ currency, client }`; the
 //    pages that show prices decide whether to search again (README §7).
@@ -30,6 +36,7 @@ import { clearCachedConfig, loadConfig } from "./lib/config.js";
 import { clone, fill } from "./lib/dom.js";
 import { pageStateFor } from "./lib/errors.js";
 import { hasString, t } from "./lib/i18n.js";
+import { primaryHostRedirect } from "./lib/primary-host.js";
 import { loadSession } from "./lib/session.js";
 import { applyTheme } from "./lib/theme.js";
 
@@ -164,6 +171,66 @@ export function markNoindex(doc) {
     .map((directive) => directive.trim().toLowerCase())
     .filter((directive) => directive !== "" && directive !== "index" && directive !== "all");
   meta.content = [...new Set(["noindex", ...directives])].join(", ");
+}
+
+/**
+ * The attribute boot puts on the robots meta tag when it marks a test storefront `noindex`: its value is what the
+ * page's own tag said before (empty when the page had none, so boot created the tag).
+ */
+const TEST_NOINDEX_ATTRIBUTE = "data-vx-test-noindex";
+
+/**
+ * Shows the storefront's environment on the page (README §2 point 4, OADR-0012 point 8, OFE-021). Only
+ * `environment = live` hides the "Test mode" banner and takes away the `noindex` that a test storefront's pages get;
+ * `test`, and any value this build does not know, shows the banner and adds `noindex`, so a storefront never looks real
+ * unless the API says it is live. The page's own robots meta tag (the private and short-lived pages carry `noindex` in
+ * their HTML) is kept in both environments: live gives it back as the page had it.
+ * @param {Document} doc
+ * @param {unknown} environment `config.environment`
+ */
+export function applyEnvironment(doc, environment) {
+  const live = environment === "live";
+  safely(() => mountTestBanner(doc.body, { environment: live ? "live" : "test" }));
+  safely(() => {
+    const marked = doc.head.querySelector(`meta[name="robots"][${TEST_NOINDEX_ATTRIBUTE}]`);
+    if (live) {
+      const own = marked?.getAttribute(TEST_NOINDEX_ATTRIBUTE) ?? "";
+      if (marked && own === "") {
+        marked.remove();
+      } else if (marked) {
+        marked.setAttribute("content", own);
+        marked.removeAttribute(TEST_NOINDEX_ATTRIBUTE);
+      }
+    } else if (!marked) {
+      const own = doc.head.querySelector('meta[name="robots"]')?.getAttribute("content")?.trim() ?? "";
+      markNoindex(doc);
+      doc.head.querySelector('meta[name="robots"]')?.setAttribute(TEST_NOINDEX_ATTRIBUTE, own);
+    }
+  });
+}
+
+/**
+ * Sends the page to `target` on the OTA's primary custom domain (lib/primary-host.js) and keeps it from being used
+ * meanwhile: the main content is made inert and busy, and the live region keeps saying "Loading". Returns `false` when
+ * the browser refuses the navigation (reported): the page is given back and starts here.
+ * @param {Document} doc
+ * @param {string} target
+ * @param {(url: string) => void} navigate
+ * @returns {boolean}
+ */
+function leaveFor(doc, target, navigate) {
+  const main = doc.querySelector("main");
+  main?.setAttribute("inert", "");
+  main?.setAttribute("aria-busy", "true");
+  try {
+    navigate(target);
+    return true;
+  } catch (error) {
+    report(error);
+    main?.removeAttribute("inert");
+    main?.removeAttribute("aria-busy");
+    return false;
+  }
 }
 
 /**
@@ -350,14 +417,16 @@ async function configOrState({ client, storage, doc, live }) {
 }
 
 /**
- * Starts the page: configuration, theme, header, footer, test banner and session (see the top of this file).
- * Resolves with what the page module runs with; never rejects. When the storefront is suspended or unknown it never
- * resolves, and the page shows that state instead.
+ * Starts the page: configuration, the primary-host redirect of the sign-in and sign-up pages, theme, header, footer,
+ * environment and session (see the top of this file). Resolves with what the page module runs with; never rejects.
+ * When the storefront is suspended or unknown it never resolves, and the page shows that state instead; nor when the
+ * page goes to the OTA's primary custom domain.
  * @param {object} [deps] for tests; the defaults are the page's own
  * @param {BootClient} [deps.client] the SDK client (lib/client.js)
  * @param {ConfigStorage | null} [deps.storage] the configuration cache (sessionStorage; `null` for none)
  * @param {PreferenceStorage | null} [deps.preferences] where the currency choice is kept (localStorage)
  * @param {Document} [deps.doc] the page
+ * @param {(url: string) => void} [deps.navigate] how the page goes to the primary host (`location.replace`)
  * @returns {Promise<BootContext>}
  */
 export async function boot({
@@ -365,17 +434,23 @@ export async function boot({
   storage = undefined,
   preferences = preferenceStorage(),
   doc = document,
+  navigate = (url) => doc.defaultView?.location.replace(url),
 } = {}) {
   const live = mountLiveRegion(doc.body);
   live.announce(t("app.loading"));
   const config = await configOrState({ client, storage, doc, live });
+  const location = doc.defaultView?.location;
+
+  const redirect = location ? safely(() => primaryHostRedirect(config, location)) : null;
+  if (redirect && leaveFor(doc, redirect, navigate)) {
+    return new Promise(() => {});
+  }
   live.clear();
 
   const sessionRequest =
     config.features?.customerAccounts === false ? Promise.resolve(null) : loadSession(client);
   const currency = rememberedCurrency(config, preferences);
   const pageClient = clientFor(client, currency);
-  const location = doc.defaultView?.location;
 
   safely(() => applyTheme(config.branding, { doc }));
   const headerRoot = /** @type {HTMLElement | null} */ (doc.querySelector("body > header"));
@@ -401,10 +476,7 @@ export async function boot({
   if (footerRoot) {
     safely(() => mountFooter(footerRoot, { config, client }));
   }
-  safely(() => mountTestBanner(doc.body, { environment: config.environment }));
-  if (config.environment === "test") {
-    safely(() => markNoindex(doc));
-  }
+  applyEnvironment(doc, config.environment);
 
   const session = await sessionRequest;
   if (session && header) {
