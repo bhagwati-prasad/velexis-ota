@@ -1243,11 +1243,30 @@ export const INVITATION_STRINGS = Object.freeze({
 /** What the last DNS check of a custom domain found missing (`lastCheckError`, flows/custom-domains.md step 3). */
 export const DNS_CHECK_ERRORS: Readonly<Record<string, string>> = Object.freeze({
   txt_missing: "The TXT record was not found yet.",
-  txt_mismatch: "The TXT record was found, but its value is not the one above.",
-  cname_missing: "The CNAME record was not found yet.",
+  txt_mismatch: "A TXT record was found, but its value is not the one above.",
+  cname_missing: "Neither the CNAME record nor the A record was found yet.",
   cname_wrong_target: "The CNAME record points to another address than the one above.",
-  a_wrong_address: "The A or AAAA record points to another address than the ones above.",
+  a_wrong_address: "An A or AAAA record points to another address than the ones above.",
   dns_timeout: "The DNS servers of the domain did not answer in time. Velexis checks again soon.",
+});
+
+/** The certificate of a verified custom domain in words (`tlsStatus`, flows/custom-domains.md step 4; PFE-022). */
+export const TLS_STATUS_NOTES: Readonly<Record<string, string>> = Object.freeze({
+  pending:
+    "Velexis gets the certificate at the first visit to the domain. Its status shows here after the next check.",
+  issued: "The storefront is served over HTTPS. Velexis renews the certificate automatically.",
+  failed:
+    "The last check found no valid certificate for this domain. Velexis keeps trying; if this lasts, check the DNS records.",
+  expired:
+    "The certificate has expired. Velexis renews it automatically; if this lasts, check the DNS records.",
+});
+
+/** Why the domains cannot be changed, for each OTA status but `active` (PADR-0014 item 5; PFE-022). */
+const DOMAINS_READ_ONLY = Object.freeze({
+  provisioning:
+    "Velexis is still setting up this OTA. You can add and change domains once the set-up is done.",
+  suspended: "This OTA is suspended, so its domains are read-only until it is resumed.",
+  failed: "The set-up of this OTA failed, so it has no domains to change.",
 });
 
 /** `/otas/[tenantId]/domains` and `DnsRecordsTable` (PF-40; the custom domains of PF-41 with PFE-022). */
@@ -1276,6 +1295,116 @@ export const DOMAINS_STRINGS = Object.freeze({
   checkPassed: "The records are in place.",
   /** A `lastCheckError` the portal has no words for yet. */
   checkFailed: "The records were not found yet.",
+
+  // `DnsRecordsTable` (PFE-022): what each record is for, and the copy buttons.
+  recordsIntro: "Create these records at your DNS provider:",
+  ownershipStep: "The TXT record proves that you own the domain.",
+  /** The routing options the API lists: a CNAME and/or address records (`A`, plus `AAAA` only when it is listed). */
+  routingStep: (cname: boolean, addressTypes: readonly string[]) => {
+    const address =
+      addressTypes.length === 0
+        ? ""
+        : addressTypes.length === 1
+          ? `the ${addressTypes[0] ?? ""} record`
+          : `the ${addressTypes.slice(0, -1).join(", ")} and ${addressTypes.at(-1) ?? ""} records`;
+    if (cname && address !== "") {
+      return `For the routing, create either the CNAME record, for a sub-domain such as travel.example.com, or ${address}, for an apex domain such as example.com, which cannot have a CNAME record. Velexis accepts either.`;
+    }
+    return cname
+      ? "For the routing, create the CNAME record."
+      : `For the routing, create ${address === "" ? "the records below" : address}.`;
+  },
+  keepRecords: "Keep these records in place: Velexis checks them every day.",
+  copyName: (type: string) => `Copy the name of the ${type} record`,
+  copyValue: (type: string) => `Copy the value of the ${type} record`,
+  copiedName: (type: string) => `The name of the ${type} record is copied to the clipboard.`,
+  copiedValue: (type: string) => `The value of the ${type} record is copied to the clipboard.`,
+  copyFailed: "Copying did not work. Select the text and copy it yourself.",
+
+  // The custom domains (PFE-022): certificate, failed domains, read-only states.
+  tlsLabel: "Certificate",
+  tlsExpires: "Expires",
+  tlsExpired: "Expired",
+  failedNote:
+    "Velexis could not verify this domain: its records were not in place within 72 hours, or they stopped working. Correct the records, then choose “Check now” to start a new 72-hour window.",
+  failedNoteReadOnly:
+    "Velexis could not verify this domain: its records were not in place within 72 hours, or they stopped working. An owner or admin of this OTA can start a new 72-hour window.",
+  readOnlyTitle: "The domains cannot be changed right now",
+  readOnly: DOMAINS_READ_ONLY,
+
+  // The add form (PFE-022).
+  addTitle: "Add a custom domain",
+  addIntro:
+    "Enter a domain you own. Velexis then shows the DNS records to create and checks them every 5 minutes, for up to 72 hours.",
+  hostnameLabel: "Domain name",
+  hostnameHint:
+    "For example travel.example.com, or example.com for an apex domain. Without https:// or a path.",
+  add: "Add domain",
+  adding: "Adding…",
+  hostnameRequired: "Enter a domain name.",
+  hostnameTooLong: "Enter a domain name of at most 253 characters.",
+  hostnameNotHost: "Enter the domain name only, like travel.example.com, without https://, a path or spaces.",
+  hostnameInvalid:
+    "Enter a valid public domain name, like travel.example.com. Velexis addresses and shared hosting addresses (such as github.io) cannot be added.",
+  hostnameTaken: "Another OTA uses this domain already.",
+  addedTitle: (hostname: string) => `${hostname} was added`,
+  addedIntro:
+    "Create the DNS records below at your DNS provider. Velexis checks them every 5 minutes; the domain must be verified within 72 hours.",
+  addedDismiss: "Done",
+  /** `PLAN_LIMIT_REACHED` of addDomain, with `details.limit` when the API gives it. */
+  planLimit: (limit: number | undefined) =>
+    limit === undefined
+      ? "Your plan's limit of custom domains is reached. Remove a domain, or choose a bigger plan, to add another."
+      : `Your plan allows ${limit} custom ${limit === 1 ? "domain" : "domains"}, and this OTA has reached that number. Remove a domain, or choose a bigger plan, to add another.`,
+  upgradeTitle: "Custom domains are not in your plan",
+  upgrade: "Your plan does not include custom domains. Choose a plan with custom domains to add one.",
+  upgradeAskOwner:
+    "Your plan does not include custom domains. An owner of this OTA can choose a plan with custom domains.",
+  billingLink: "Go to billing",
+
+  // The actions of a domain (PFE-022).
+  checkNow: "Check now",
+  checking: "Checking…",
+  makePrimary: "Make primary",
+  makingPrimary: "Making primary…",
+  remove: "Remove",
+  removing: "Removing…",
+  /** Read with each action's button, so a screen reader hears which domain it changes. */
+  actionTarget: (hostname: string) => ` (${hostname})`,
+  removeTitle: (hostname: string) => `Remove ${hostname}?`,
+  removeDescription:
+    "The storefront stops answering on this domain at once. If it is the primary address, your Velexis address becomes primary again. The domain is then free for any OTA that proves it owns it; delete its DNS records at your DNS provider.",
+  removeConfirm: "Remove domain",
+  checkStarted: (hostname: string) =>
+    `Velexis is checking the DNS records of ${hostname} now. The result shows here within a minute: reload the page to see it.`,
+  checkRestarted: (hostname: string) =>
+    `A new 72-hour window started for ${hostname}, and Velexis is checking its DNS records now. The result shows here within a minute: reload the page to see it.`,
+  /**
+   * A new primary address. A custom domain whose certificate is not issued yet is not linked until it is (the OTA
+   * backend links only a primary custom domain with an issued certificate; FIX-W38-OTA): the sub-domain is meanwhile.
+   */
+  primaryDone: (hostname: string, waitsForCertificate = false) =>
+    waitsForCertificate
+      ? `${hostname} is the primary address now. Links and e-mails to your customers use it once its certificate is issued; until then they use your Velexis address.`
+      : `${hostname} is the primary address now. Links and e-mails to your customers use it.`,
+  removedDone: (hostname: string) => `${hostname} was removed.`,
+  /** The outcome's subject when the form named no host (it always does). */
+  theDomain: "The domain",
+  /** `RATE_LIMITED` of checkDomain (1 check per domain per minute), with the wait of `Retry-After`. */
+  checkRateLimited: (seconds: number | undefined) =>
+    seconds === undefined
+      ? "Velexis checks a domain at most once a minute. Try again in a minute."
+      : `Velexis checks a domain at most once a minute. Try again in ${seconds} ${seconds === 1 ? "second" : "seconds"}.`,
+  alreadyVerified: "This domain is verified already. Reload the page to see it.",
+  notVerified: "Only a verified domain can be primary. Reload the page to see its status.",
+  removedMeanwhile:
+    "This domain was removed in the meantime. Reload the page to see the domains as they are now.",
+  subdomainConflict: "Your Velexis address has no DNS records to check and cannot be removed.",
+  notActive: "This OTA is not active any more, so its domains cannot be changed. Reload the page to see why.",
+  forbidden: "Only owners and admins of this OTA can change its domains. Reload the page to see your role.",
+  rateLimited: "Too many changes in a short time. Wait a moment, then try again.",
+  formExpired: "This form has expired. Reload the page and try again.",
+  reload: "Reload the page",
 });
 
 /** The environment of a connection in its summary ("test", "live"). */
