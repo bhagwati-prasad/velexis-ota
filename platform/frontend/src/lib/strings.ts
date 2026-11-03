@@ -2404,6 +2404,117 @@ export const BILLING_STRINGS = Object.freeze({
   unavailableTitle: "The subscription could not be loaded",
 });
 
+// ---- Go live (PFE-026) -----------------------------------------------------------------------------------------
+
+/** The preconditions of going live, as `details.missing` of `goLive`'s `422 LIVE_PRECONDITIONS_UNMET` names them. */
+type LivePreconditionId =
+  "amadeus_live" | "payments_live" | "payout_account" | "plan_live_mode" | "subscription" | "mfa";
+
+/** The words of one precondition: what it asks for, and the link to the page that completes it. */
+interface LivePreconditionStrings {
+  readonly title: string;
+  readonly text: string;
+  readonly link: string;
+}
+
+/**
+ * `/otas/[tenantId]/go-live` (PFE-026; scope PF-14; the platform document's `goLive`): the six preconditions of going
+ * live as a checklist, each linking to the page that completes it, and the switch behind a confirmation and a step-up.
+ */
+export const GO_LIVE_STRINGS = Object.freeze({
+  title: "Go live",
+  intro:
+    "Switch your storefront from test mode to live: customers then book real flights and pay with real cards. Going live asks for a code from your authenticator app.",
+  checklistTitle: "What going live needs",
+  checklistIntro:
+    "Velexis checks every one of these when you select “Go live”. While one is missing nothing changes, and this list shows what to complete. Each one links to the page where you do it.",
+  preconditions: Object.freeze<Record<LivePreconditionId, LivePreconditionStrings>>({
+    amadeus_live: Object.freeze({
+      title: "An active live Amadeus connection",
+      text: "Velexis has assigned your live Amadeus office, or your own live Amadeus credentials are verified.",
+      link: "Go to Amadeus",
+    }),
+    payments_live: Object.freeze({
+      title: "Live payments",
+      text: "Your storefront can take live card payments: through Velexis's Stripe account, through your connected Stripe account once Stripe lets it take payments, or with your own verified live Stripe keys.",
+      link: "Go to payments",
+    }),
+    payout_account: Object.freeze({
+      title: "A verified payout account",
+      text: "When your customers pay through Velexis's Stripe account, Velexis pays your money to a bank account it has verified. Not needed with your own Stripe account.",
+      link: "Go to the payout account",
+    }),
+    plan_live_mode: Object.freeze({
+      title: "A plan with live mode",
+      text: "Your OTA's plan includes live mode.",
+      link: "Go to billing",
+    }),
+    subscription: Object.freeze({
+      title: "A current subscription",
+      text: "Your subscription is paid by card through Stripe and is in its trial or active, or Velexis bills you directly and it is active. The free trial without payment details does not count.",
+      link: "Go to billing",
+    }),
+    mfa: Object.freeze({
+      title: "Two-factor sign-in",
+      text: "Your account has two-factor sign-in on.",
+      link: "Go to security",
+    }),
+  }),
+  /** The state of a precondition, in words: the state never rests on the icon alone. */
+  states: Object.freeze({
+    met: "Done",
+    missing: "Missing",
+    unchecked: "Checked when you go live",
+  }),
+  /** `details.missing` named a precondition the portal has no words for (a newer API). */
+  otherMissing: "Something else Velexis needs is missing. Contact Velexis support.",
+  unmetTitle: "Your OTA cannot go live yet",
+  unmet: (count: number) =>
+    count === 1
+      ? "1 requirement is missing, so nothing has changed. Complete it, then select “Go live” again."
+      : `${COUNT_FORMAT.format(count)} requirements are missing, so nothing has changed. Complete them, then select “Go live” again.`,
+  goLive: "Go live",
+  goingLive: "Going live…",
+  confirmTitle: "Switch your storefront to live?",
+  confirmText:
+    "Customers then book real flights and pay with real cards, and the portal has no switch back to test mode. Velexis checks the requirements first: while one is missing, nothing changes.",
+  confirmLabel: "Go live",
+  /** The step-up dialog was closed without a code. */
+  stepUpCancelled: "Nothing changed: going live needs a code from your authenticator app.",
+  // Live
+  liveTitle: "Your storefront is live",
+  /** Right after the switch (PF-14 AC2: the hosted storefront serves live within 60 seconds). */
+  liveNow: "The switch takes effect within 60 seconds: until then your storefront can still show test mode.",
+  liveSince: "Live since",
+  storefrontLabel: "Your live storefront",
+  liveKeys:
+    "Your own storefront code and integrations need live API keys. Creating a live secret key asks for a code from your authenticator app.",
+  liveKeysLink: "Create live API keys",
+  // When there is no switch
+  switchOffTitle: "Live mode is not available yet",
+  switchOff:
+    "Velexis has not opened live mode yet. Until then your OTA runs in test mode, and you can prepare it for going live.",
+  unavailableTitle: "This page could not be loaded",
+  readOnlyTitle: "Your OTA cannot go live right now",
+  /** Why the OTA cannot go live, for each status but `active` (PADR-0014 item 5). */
+  readOnly: Object.freeze({
+    provisioning: "Velexis is still setting up this OTA. You can go live once the set-up is done.",
+    suspended: "This OTA is suspended, so it cannot go live until it is resumed.",
+    failed: "The set-up of this OTA failed, so it cannot go live.",
+  }),
+  // Refusals of the switch
+  mfaRequired: "Turn on two-factor sign-in first: going live asks for a code from your authenticator app.",
+  securityLink: "Go to security",
+  featureDisabled: "Velexis has turned live mode off for now, so nothing has changed. Reload the page.",
+  notActive: "This OTA is not active any more, so it cannot go live. Reload the page to see why.",
+  forbidden:
+    "Only owners can switch the OTA to live, and your role in this OTA does not allow it. Reload the page.",
+  removed: "You are not a member of this OTA any more. Reload the page.",
+  formExpired: "This page has expired. Reload it and try again.",
+  rateLimited: "Too many requests in a short time. Wait a minute, then try again.",
+  reload: "Reload the page",
+});
+
 // ---- Account profile and security (PFE-007) ------------------------------------------------------------------
 
 /** `/account`: the profile of the signed-in account (PF-07). */

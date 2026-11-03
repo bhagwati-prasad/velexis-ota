@@ -19,11 +19,14 @@ export const metadata: Metadata = { title: API_KEYS_STRINGS.title };
 type ApiKeyList = components["schemas"]["ApiKeyList"];
 
 /**
- * The environments with a tab. Live keys exist only once the OTA is live (`LIVE_MODE_NOT_ENABLED` before), and their
- * tab comes with the go-live switch (PFE-026, M5); the table and the create form already take an environment.
+ * The environments with a tab: test always, live once the OTA is live (PFE-026, M5; `storefrontEnvironment` of
+ * `getTenant`), because live keys exist only from go-live on (the API answers `LIVE_MODE_NOT_ENABLED` before). The tab
+ * stays for a live OTA whatever the live switch says, so its live keys can still be revoked; creating or rolling one
+ * with the switch off is the API's `FEATURE_DISABLED`, which the form shows. A live secret key asks for a step-up
+ * (PF-30 AC6): `createKey` answers `stepUp` on `REAUTH_REQUIRED` and the form's `useStepUpAction` asks for the code.
  */
-function environmentsOf(_tenant: Tenant): ApiKeyEnvironment[] {
-  return ["test"];
+function environmentsOf(tenant: Tenant): ApiKeyEnvironment[] {
+  return tenant.storefrontEnvironment === "live" ? ["test", "live"] : ["test"];
 }
 
 /**
@@ -61,11 +64,12 @@ function stateOf(apiKey: ApiKey, now: number): KeyState {
 
 /**
  * `/otas/[tenantId]/api-keys` (README §2 Signed in; flow api-keys.md; PADR-0005; PF-30): the OTA's API keys for owners
- * and admins, one tab per environment (test; live with M5). Each tab lists its keys (`ApiKeysTable`: name, kind,
- * prefix and `…last4`, origins or scopes, creator, last use, expiry, state; edit, roll, revoke) and the form for a new
- * key (`CreateKeyForm`). The tenant comes from the layout's `getTenant` (the same request's cached answer); another
- * role gets the not-allowed page without a call. A key is shown once, from the answer of the create or roll action:
- * this page never has it, so a reload never shows it again. While the OTA is not active the keys are read-only.
+ * and admins, one tab per environment (test; live once the OTA is live, PFE-026). Each tab lists its keys
+ * (`ApiKeysTable`: name, kind, prefix and `…last4`, origins or scopes, creator, last use, expiry, state; edit, roll,
+ * revoke) and the form for a new key (`CreateKeyForm`). The tenant comes from the layout's `getTenant` (the same
+ * request's cached answer); another role gets the not-allowed page without a call. A key is shown once, from the answer
+ * of the create or roll action: this page never has it, so a reload never shows it again. While the OTA is not active
+ * the keys are read-only.
  */
 export default async function ApiKeysPage({ params }: Readonly<{ params: Promise<{ tenantId: string }> }>) {
   const { tenantId } = await params;

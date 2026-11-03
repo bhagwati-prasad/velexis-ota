@@ -1861,7 +1861,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - Paid statements and their CSV are available to owners and finance members; drafts never appear [PF-63 AC3].
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-026 · Build the go-live page and live API keys
+### PFE-026 · Build the go-live page and live API keys ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M5
 - **Depends on:** PFE-011, PBE-061
