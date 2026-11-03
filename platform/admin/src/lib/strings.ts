@@ -380,6 +380,37 @@ export const DASHBOARD_STRINGS = Object.freeze({
   /** Below 3 available offices (PADR-0012): new OTAs would wait for one. */
   poolLow: (environment: string, count: number) =>
     `Only ${counted(count, "office is", "offices are")} available in ${environment}. Add offices to the pool before new OTAs have to wait for one.`,
+  // Live office requests (PAD-014, flows/amadeus-connection.md §C)
+  liveRequestsTitle: "Live office requests",
+  liveRequestsIntro:
+    "OTAs whose owner requested live access and whose live Velexis connection still waits for an office. Assign a live office once the commercial onboarding is done; the owners get an e-mail.",
+  liveRequestsEmpty: "No OTA waits for a live office.",
+  liveRequestsUnavailable: "The live office requests could not be loaded. Reload the page in a moment.",
+  liveRequestsCaption: "OTAs waiting for a live office, newest request first",
+  liveRequestOta: "OTA",
+  liveRequestRequested: "Requested",
+  liveRequestNote: "Owner's note",
+  liveRequestNoNote: "No note",
+  liveRequestAction: "Action",
+  /** The link to the OTA's connections, where "Assign office" is; the OTA's name follows for screen readers. */
+  assignOffice: "Assign office",
+  assignOfficeFor: (name: string) => ` to ${name}`,
+  /** Only the most recent requests are checked against the OTAs' connections. */
+  liveRequestsTruncated: (checked: number) =>
+    `Only the OTAs of the ${counted(checked, "most recent live request", "most recent live requests")} were checked.`,
+  /** Some OTAs could not be read: their requests are not shown. */
+  liveRequestsUnchecked: (count: number) =>
+    `${counted(count, "request", "requests")} could not be checked right now. Reload the page in a moment.`,
+  liveRequestsAuditLink: "Every live request in the audit log",
+  // The M5 counters (PAD-014), each shown while its milestone switch is on
+  m5Title: "To review",
+  m5Intro: "Work that waits for Velexis staff. Each count opens the list behind it.",
+  domainsPending: (count: number) =>
+    count === 1 ? "custom domain waits for its DNS records" : "custom domains wait for their DNS records",
+  settlementsToReview: (count: number) =>
+    count === 1 ? "draft settlement to review" : "draft settlements to review",
+  stripeEventsFailed: (count: number) => (count === 1 ? "failed Stripe event" : "failed Stripe events"),
+  subscriptionsPastDue: (count: number) => (count === 1 ? "subscription past due" : "subscriptions past due"),
 });
 
 /** `/tenants`: the search of `adminListTenants` (PF-81). */
@@ -1553,6 +1584,9 @@ export const ASSIGN_OFFICE_STRINGS = Object.freeze({
   title: "Assign an office",
   intro: (environment: string) =>
     `This connection waits for an office: the pool of ${environment} was empty when the OTA was set up. Assign an available office to activate it; the owners get an e-mail.`,
+  /** The live connection an owner requested (PAD-014, flows/amadeus-connection.md §C). */
+  liveIntro:
+    "An owner requested live access. Once Velexis has finished the commercial onboarding (contract and ticketing agreement, recorded in the office's notes), assign an available live office to activate the connection; the owners get an e-mail.",
   officeLabel: "Office",
   officeHint: "An available office of the Velexis Amadeus account of this environment.",
   assign: "Assign office",
@@ -1688,7 +1722,7 @@ export const AMADEUS_ACCOUNT_FORM_STRINGS = Object.freeze({
 export const AMADEUS_OFFICE_STRINGS = Object.freeze({
   title: "Office pool",
   intro:
-    "The Amadeus offices of the Velexis accounts, oldest first. A new OTA gets an available test office when it is set up; an OTA whose set-up found the pool empty gets one here, or on its page. The address of this page keeps the filters, so a list can be shared.",
+    "The Amadeus offices of the Velexis accounts, oldest first. A new OTA gets an available test office when it is set up; an OTA whose set-up found the pool empty gets one here, or on its page, and so does an OTA whose live request waits for a live office. An office an OTA no longer uses (releasing) goes back to the pool with “Release” once the OTA confirmed that no booking with future travel remains on it. The address of this page keeps the filters, so a list can be shared.",
   filtersLabel: "Office filters",
   environmentLabel: "Environment",
   statusLabel: "Status",
@@ -1783,6 +1817,26 @@ export const OFFICE_ACTION_STRINGS = Object.freeze({
   /** `CONFLICT` (`not_available`) of a retirement. */
   notAvailable:
     "Only an available office can be retired. This one was assigned or retired in the meantime: reload the page.",
+  // Release (PAD-014, PADR-0012 item 5)
+  release: "Release",
+  releaseTitle: (officeId: string) => `Release office ${officeId}?`,
+  /** A `releasing` office: the OTA moved to its own Amadeus credentials. */
+  releaseDescriptionReleasing: (tenantKey: string) =>
+    `${tenantKey} now uses its own Amadeus credentials and keeps this office only for the orders created through it. Released, the office is available again and can go to another OTA. Release it only once ${tenantKey} confirmed, from its bookings console filtered by this office, that no booking with future travel remains on it.`,
+  /** An `assigned` office: released only when the OTA's connection that holds it is not active (PADR-0012 item 8). */
+  releaseDescriptionAssigned: (tenantKey: string) =>
+    `This office is still assigned to ${tenantKey}. It is released only when the Velexis connection of ${tenantKey} that holds it is not active (for example disabled for abuse), and it then leaves that connection. Release it only once ${tenantKey} confirmed that no booking with future travel remains on it.`,
+  confirmLabel: (tenantKey: string, officeId: string) =>
+    `${tenantKey} confirmed that no booking with future travel remains on office ${officeId}.`,
+  confirmRequired: "Confirm that no booking with future travel remains on the office.",
+  releaseConfirm: "Release office",
+  released: (officeId: string) => `Office ${officeId} is released and available again.`,
+  /** `CONFLICT` (`connection_active`) of a release. */
+  connectionActive:
+    "This office backs the active Velexis connection of its OTA, so it was not released. Disable that connection on the OTA's page first, or wait until the OTA moves to its own credentials.",
+  /** `CONFLICT` (`not_assigned`) of a release. */
+  notAssigned:
+    "This office is not assigned to an OTA any more (another admin released or retired it). Reload the page.",
   // Notes
   editNotes: "Edit notes",
   notesTitle: (officeId: string) => `Notes of office ${officeId}`,
@@ -2098,6 +2152,94 @@ export const PAYOUT_ACCOUNT_STRINGS = Object.freeze({
     "The owner or another admin changed this payout account since it was loaded, so nothing was saved. Reload the page to see it as it is now.",
   reload: "Reload the page",
   gone: "This OTA has no payout account any more. Reload the page.",
+  formExpired: "This form is out of date. Reload the page and try again.",
+  rateLimitedFor: (seconds: number) => `Too many attempts. Try again in ${waitTime(seconds)}.`,
+});
+
+// ---- Domains (PAD-014) ----------------------------------------------------------------------------------------------
+
+/**
+ * What the last DNS check of a host found missing (`lastCheckError` of `AdminDomain`, PADR-0004 item 2; note of
+ * 2026-11-02), in words: the API answers a code, never a sentence.
+ */
+export const DOMAIN_CHECK_ERRORS = Object.freeze({
+  txt_missing: "No TXT record at _velexis.<host>",
+  txt_mismatch: "TXT records found, none with the verification token",
+  cname_missing: "No CNAME and no address record at the host",
+  cname_wrong_target: "The CNAME does not point to the OTA's sub-domain",
+  a_wrong_address: "An A or AAAA record points outside the storefront addresses",
+  dns_timeout: "A DNS lookup did not complete; the next check asks again",
+});
+
+/** `/domains`: the storefront hosts of every OTA (`adminListDomains`, PF-92). */
+export const DOMAIN_LIST_STRINGS = Object.freeze({
+  title: "Domains",
+  intro:
+    "The storefront hosts of every OTA, newest first: the custom domains with their DNS verification and their certificate, and the Velexis sub-domains. The address of this page keeps the filters, so a list can be shared.",
+  filtersLabel: "Domain filters",
+  kindLabel: "Kind",
+  verificationLabel: "DNS verification",
+  tlsLabel: "TLS",
+  caption: "Storefront hosts, newest first",
+  empty: "No host matches these filters.",
+  columnHost: "Host",
+  columnOta: "OTA",
+  columnKind: "Kind",
+  columnVerification: "DNS verification",
+  columnLastCheck: "Last DNS check",
+  columnTls: "TLS",
+  columnAdded: "Added",
+  columnActions: "Actions",
+  primary: "Primary",
+  verifiedOn: "Verified",
+  deadline: "Window ends",
+  neverChecked: "Not checked yet",
+  checkPassed: "Passed",
+  /** A code the admin's list does not know yet; it is shown as the API answers it. */
+  otherCheckError: "Another problem:",
+  /** Consecutive failed daily re-checks of a verified domain; the third fails it. */
+  checkFailures: (count: number) => `${COUNT_FORMAT.format(count)} of 3 failed daily re-checks`,
+  tlsExpires: "Expires",
+  tlsChecked: "Probed",
+  tlsNeverChecked: "Not probed yet",
+  noTls: "No certificate yet",
+  invalidFilters: "The filters in this address are not valid. Clear them and try again.",
+  showAll: "Show every host",
+  unavailableTitle: "The domains could not be loaded",
+});
+
+/** The actions on one host of `/domains`: re-check now, remove an abusive custom domain (**reason**). */
+export const DOMAIN_ACTION_STRINGS = Object.freeze({
+  working: "Working…",
+  /** The rest of a row button's accessible name, after its text, so each button names its host. */
+  hostSuffix: (hostname: string) => ` ${hostname}`,
+  // Re-check
+  recheck: "Re-check",
+  recheckTitle: (hostname: string) => `Check ${hostname} now?`,
+  recheckPending:
+    "The DNS records of this pending custom domain are checked now, as in its verification window, and its certificate is probed.",
+  recheckVerified:
+    "The DNS records of this verified custom domain are checked now and its certificate is probed. A failed check counts as the day's daily re-check (at most one a day); three failed days in a row fail the domain.",
+  recheckFailed:
+    "This custom domain has failed and has no verification window: only its certificate is probed. Its owners restart the verification in the portal.",
+  recheckSubdomain: "A sub-domain has no DNS records to check: only its certificate is probed.",
+  recheckConfirm: "Check now",
+  rechecked: (hostname: string) =>
+    `The checks of ${hostname} are queued. Reload the page in a minute to see their result.`,
+  /** `SERVICE_UNAVAILABLE`: the jobs are the whole effect, and Redis did not take them. */
+  recheckUnavailable:
+    "The checks could not be queued: the platform API or its Redis does not answer. Try again in a few minutes.",
+  // Remove
+  remove: "Remove",
+  removeTitle: (hostname: string) => `Remove ${hostname}?`,
+  removeDescription: (tenantKey: string) =>
+    `The custom domain is deleted from ${tenantKey} at once and its storefront stops answering on it; if it was the primary host, the sub-domain becomes primary again. The owners get an e-mail (without your reason). Use it for an abusive domain, such as one used for phishing.`,
+  removeConfirm: "Remove domain",
+  removed: (hostname: string) => `${hostname} is removed. The owners get an e-mail.`,
+  /** `CONFLICT` (`subdomain`) of a removal. */
+  subdomain: "An OTA's sub-domain cannot be removed.",
+  // Refusals
+  domainGone: "This host no longer exists: its owners or another admin removed it. Reload the page.",
   formExpired: "This form is out of date. Reload the page and try again.",
   rateLimitedFor: (seconds: number) => `Too many attempts. Try again in ${waitTime(seconds)}.`,
 });

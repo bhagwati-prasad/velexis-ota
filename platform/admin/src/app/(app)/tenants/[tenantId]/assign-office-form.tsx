@@ -79,7 +79,10 @@ export function AssignOfficeForm({
           <h3 id={`${id}-title`} className="text-base font-semibold">
             {O.title}
           </h3>
-          <p className="text-sm text-muted-foreground">{O.intro(environmentLabel)}</p>
+          {/* A live connection waits for an office because its owner requested live access (PAD-014). */}
+          <p className="text-sm text-muted-foreground">
+            {environment === "live" ? O.liveIntro : O.intro(environmentLabel)}
+          </p>
           {offices === null ? (
             <p className="text-sm">
               {O.unavailable}{" "}

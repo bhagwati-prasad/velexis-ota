@@ -113,7 +113,9 @@ const LINK_CLASS = "font-medium underline underline-offset-4";
  * Amadeus accounts from `adminListAmadeusOffices`, oldest first. `FilterBar` keeps the environment and the status in
  * the URL (the dashboard links `?environment=…&status=…`) and `DataTable` pages with the cursor of the answer, so every
  * list is a link another admin can open. Each office shows its status and, while it is assigned or releasing, its
- * OTA. An available office can be assigned to an OTA or retired (reason); every office's notes can be edited. Above
+ * OTA. An available office can be assigned to an OTA or retired (reason); a `releasing` or `assigned` office can be
+ * released back to the pool with the "no open bookings" confirmation and a reason (PAD-014, PADR-0012 items 5 and 8;
+ * `?environment=live` lists the live offices); every office's notes can be edited. Above
  * the list, offices are added in bulk to the pool of an account (`adminListAmadeusAccounts` gives the choice). A filter
  * the API would refuse shows a notice instead of a list and asks the API for no list.
  */

@@ -8,12 +8,15 @@ import { useId, useState, type FormEvent } from "react";
 
 import {
   assignOfficeToTenant,
+  releaseOffice,
   retireOffice,
   saveOfficeNotes,
   type AssignOfficeState,
   type OfficeNotesState,
+  type ReleaseOfficeState,
   type RetireOfficeState,
 } from "@/app/(app)/amadeus/offices/actions";
+import { ReleaseDialog } from "@/app/(app)/amadeus/offices/release-dialog";
 import { DataTable, listHref, type ListPage } from "@/components/data-table";
 import { DateTime } from "@/components/date-time";
 import { ReasonDialog } from "@/components/reason-dialog";
@@ -40,8 +43,9 @@ import {
 
 /**
  * The office pool table of `/amadeus/offices` (README §2; PADR-0012; PF-90) and the actions on each office: **Assign**
- * an available office to an OTA (by its key or tenant id), **Retire** an available office (`ReasonDialog`) and **Edit
- * notes** of any office (`If-Match`). Releasing an office comes with PAD-014. The outcome of the last action stays above
+ * an available office to an OTA (by its key or tenant id), **Retire** an available office (`ReasonDialog`), **Release**
+ * a `releasing` or `assigned` office back to the pool (`ReleaseDialog`: the "no open bookings" confirmation and a
+ * reason; PAD-014) and **Edit notes** of any office (`If-Match`). The outcome of the last action stays above
  * the table while the revalidated page shows the pool as it is now; the assign and notes dialogs show their refusals
  * themselves. The rows hold only the fields the table shows.
  */
@@ -65,6 +69,7 @@ export interface OfficeRow {
 
 const IDLE_ASSIGN: AssignOfficeState = { status: "idle" };
 const IDLE_RETIRE: RetireOfficeState = { status: "idle" };
+const IDLE_RELEASE: ReleaseOfficeState = { status: "idle" };
 const IDLE_NOTES: OfficeNotesState = { status: "idle" };
 
 /** `maxLength` of the notes (`UpdateAmadeusOfficeRequest.notes`; the action checks it again, in code points). */
@@ -83,7 +88,9 @@ const ENVIRONMENT_LABELS: Readonly<Record<string, string>> = SUPPLIER_ENVIRONMEN
  * The action has just succeeded. A step-up request is the previous state with `stepUp: true` (README §4), so after an
  * earlier success it still reads `done`; it is no answer yet.
  */
-function isDone(state: AssignOfficeState | RetireOfficeState | OfficeNotesState): boolean {
+function isDone(
+  state: AssignOfficeState | RetireOfficeState | ReleaseOfficeState | OfficeNotesState,
+): boolean {
   return state.status === "done" && !isStepUpRequired(state);
 }
 
@@ -99,7 +106,7 @@ interface OpenDialog {
   readonly openedWith: AssignOfficeState | OfficeNotesState;
 }
 
-type ActionId = "assign" | "retire" | "notes";
+type ActionId = "assign" | "retire" | "release" | "notes";
 
 export interface OfficeTableProps {
   /** The offices of the page, oldest first. */
@@ -111,11 +118,12 @@ export interface OfficeTableProps {
 export function OfficeTable({ offices, page }: OfficeTableProps) {
   const assign = useStepUpAction(assignOfficeToTenant, IDLE_ASSIGN);
   const retire = useStepUpAction(retireOffice, IDLE_RETIRE);
+  const release = useStepUpAction(releaseOffice, IDLE_RELEASE);
   const notes = useStepUpAction(saveOfficeNotes, IDLE_NOTES);
   const [dialog, setDialog] = useState<OpenDialog | undefined>(undefined);
   // The outcome shown is the one of the action that ran last.
   const [latest, setLatest] = useState<ActionId | undefined>(undefined);
-  const pending = assign.isPending || retire.isPending || notes.isPending;
+  const pending = assign.isPending || retire.isPending || release.isPending || notes.isPending;
 
   // A success closes its dialog, once per answer (a step-up request, the previous state, is no answer yet).
   const [answered, setAnswered] = useState({ assign: assign.state, notes: notes.state });
@@ -231,6 +239,23 @@ export function OfficeTable({ offices, page }: OfficeTableProps) {
                 </ReasonDialog>
               </>
             ) : null}
+            {(office.status === "releasing" || office.status === "assigned") &&
+            office.assignedTenant !== null ? (
+              <ReleaseDialog
+                office={{
+                  id: office.id,
+                  officeId: office.officeId,
+                  status: office.status,
+                  tenantId: office.assignedTenant.id,
+                  tenantKey: office.assignedTenant.key,
+                }}
+                disabled={pending}
+                onConfirm={(formData) => {
+                  setLatest("release");
+                  release.dispatch(formData);
+                }}
+              />
+            ) : null}
             <Button variant="outline" size="sm" disabled={pending} onClick={() => open("notes", office)}>
               {S.editNotes}
               <span className="sr-only">{S.notesSuffix(office.officeId)}</span>
@@ -244,7 +269,7 @@ export function OfficeTable({ offices, page }: OfficeTableProps) {
   const outcome =
     latest === undefined || dialog !== undefined
       ? undefined
-      : { assign: assign.state, retire: retire.state, notes: notes.state }[latest];
+      : { assign: assign.state, retire: retire.state, release: release.state, notes: notes.state }[latest];
   return (
     <div className="grid gap-4">
       {outcome === undefined || latest === undefined ? null : <Outcome action={latest} state={outcome} />}
@@ -290,6 +315,7 @@ export function OfficeTable({ offices, page }: OfficeTableProps) {
       </Dialog>
       {assign.stepUpDialog}
       {retire.stepUpDialog}
+      {release.stepUpDialog}
       {notes.stepUpDialog}
     </div>
   );
@@ -301,7 +327,7 @@ function Outcome({
   state,
 }: {
   readonly action: ActionId;
-  readonly state: AssignOfficeState | RetireOfficeState | OfficeNotesState;
+  readonly state: AssignOfficeState | RetireOfficeState | ReleaseOfficeState | OfficeNotesState;
 }) {
   if (state.status === "idle" || isStepUpRequired(state)) {
     return null;
@@ -334,7 +360,11 @@ function Outcome({
   }
   return (
     <p role="status" data-notice="done" className="rounded-lg border px-4 py-3 text-sm font-medium">
-      {action === "retire" ? S.retired(state.officeId) : S.notesSaved(state.officeId)}
+      {action === "retire"
+        ? S.retired(state.officeId)
+        : action === "release"
+          ? S.released(state.officeId)
+          : S.notesSaved(state.officeId)}
     </p>
   );
 }

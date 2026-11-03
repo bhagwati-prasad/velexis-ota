@@ -254,7 +254,8 @@ test("three live offices end the live pool's warning, on the accounts page and t
   await expectAccessible(adminPage, "Amadeus accounts");
 
   await adminPage.goto("/");
-  const pool = adminPage.getByRole("region", { name: "Live" });
+  // Exact: the dashboard's "Live office requests" (PAD-014) would match the substring "Live" too.
+  const pool = adminPage.getByRole("region", { name: "Live", exact: true });
   await expect(pool.getByRole("link", { name: /^3 available/ })).toBeVisible();
   await expect(adminPage.getByText(/offices? (is|are) available in Live/)).toHaveCount(0);
   await expectAccessible(adminPage, "Dashboard");

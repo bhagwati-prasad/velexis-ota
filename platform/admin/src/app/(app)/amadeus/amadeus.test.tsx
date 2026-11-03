@@ -1359,7 +1359,7 @@ describe("amadeus/offices/page.tsx: the office pool", () => {
     expect(officeRow("PAR1A0001")).toBeTruthy();
   });
 
-  it("offers Assign and Retire only on available offices, and notes on every office", async () => {
+  it("offers Assign and Retire only on available offices, Release only on assigned and releasing ones, and notes on every office", async () => {
     await openOffices();
     const buttonsOf = (officeId: string) =>
       within(officeRow(officeId))
@@ -1370,9 +1370,15 @@ describe("amadeus/offices/page.tsx: the office pool", () => {
       `${X.retire}${X.officeSuffix("PAR1A0001")}`,
       `${X.editNotes}${X.notesSuffix("PAR1A0001")}`,
     ]);
-    for (const officeId of ["NCE1A0955", "MUC1A0100", "LON1A0042"]) {
-      expect(buttonsOf(officeId)).toEqual([`${X.editNotes}${X.notesSuffix(officeId)}`]);
+    // PAD-014 (M5): an office assigned to an OTA, or releasing after its switch to own credentials, can be released
+    // (PADR-0012 items 5 and 8); a retired one offers nothing but its notes. domains.test.tsx tests the release.
+    for (const officeId of ["NCE1A0955", "MUC1A0100"]) {
+      expect(buttonsOf(officeId)).toEqual([
+        `${X.release}${X.officeSuffix(officeId)}`,
+        `${X.editNotes}${X.notesSuffix(officeId)}`,
+      ]);
     }
+    expect(buttonsOf("LON1A0042")).toEqual([`${X.editNotes}${X.notesSuffix("LON1A0042")}`]);
     // A releasing office names its OTA and since when it is releasing; a retired one keeps its notes.
     const releasing = officeRow("MUC1A0100");
     expect(hrefOf(link("nordicair", releasing))).toBe(`/tenants/${NORDICAIR_ID}`);

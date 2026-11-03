@@ -20,13 +20,15 @@ import {
 /**
  * The server actions of `/amadeus/offices` (README §2 and §4; flows/amadeus-connection.md §A; PADR-0012; PF-90): add
  * offices to the pool of an account in bulk (`adminAddAmadeusOffices`), assign an available office to an OTA
- * (`adminAssignAmadeusOffice`), retire an available office (`adminRetireAmadeusOffice`, **reason**), and edit the notes
- * of an office (`adminUpdateAmadeusOffice`, `If-Match`). Releasing an office comes with PAD-014 (M5).
+ * (`adminAssignAmadeusOffice`), retire an available office (`adminRetireAmadeusOffice`, **reason**), edit the notes
+ * of an office (`adminUpdateAmadeusOffice`, `If-Match`), and release a `releasing` or `assigned` office back to the pool
+ * (`adminReleaseAmadeusOffice`, **reason** and the "no open bookings" confirmation; PAD-014, M5).
  *
  * Every action checks its form with Zod before it calls the platform API, so made-up fields send nothing. An ended
  * session goes to `/sign-in` and back to the pool; `REAUTH_REQUIRED` returns the previous state with `stepUp: true`, so
  * `useStepUpAction` asks for a TOTP code and runs the action again with the same form data. A success revalidates the
- * pool, the accounts page (its office counts) and the dashboard (the pool levels), and an assignment the OTA's page.
+ * pool, the accounts page (its office counts) and the dashboard (the pool levels), and an assignment or a release the
+ * OTA's page.
  * The states carry only what the forms show, in the admin's own words: never the API's message.
  */
 
@@ -90,6 +92,14 @@ export type AssignOfficeState = StepUpFlag &
 
 /** The state of the retire action. */
 export type RetireOfficeState = StepUpFlag &
+  (
+    | Idle
+    | { readonly status: "done"; readonly officeRowId: string; readonly officeId: string }
+    | (OfficeActionFailure & { readonly officeRowId: string })
+  );
+
+/** The state of the release of an office. */
+export type ReleaseOfficeState = StepUpFlag &
   (
     | Idle
     | { readonly status: "done"; readonly officeRowId: string; readonly officeId: string }
@@ -443,6 +453,73 @@ export async function retireOffice(
     };
   }
   revalidatePool();
+  return { status: "done", officeRowId: result.data.id, officeId: result.data.officeId };
+}
+
+// ---- Release ------------------------------------------------------------------------------------------------------
+
+/**
+ * Returns an office to the pool (`adminReleaseAmadeusOffice`, PADR-0012 item 5, flows/amadeus-connection.md §D item 5)
+ * from the fields `officeRowId`, `tenantId` (the OTA it leaves, whose page is revalidated), `confirmNoOpenBookings`
+ * (the box: the OTA confirmed that no booking with future travel remains on the office; it must be `true`) and `reason`
+ * (5–500 characters after trimming, kept in the audit log). A `releasing` office is released; an `assigned` one only
+ * when it backs no active `velexis` connection (`CONFLICT` `connection_active`), and it then leaves the OTA's inactive
+ * connection that held it (FIX-W39-PLATFORM, FIX-W40-PLATFORM). An office that is not assigned answers `CONFLICT`
+ * (`not_assigned`). The answer is the office, `available` again.
+ */
+export async function releaseOffice(
+  previous: ReleaseOfficeState,
+  formData: FormData,
+): Promise<ReleaseOfficeState> {
+  const officeRowId = OFFICE_ROW_ID.safeParse(text(formData, "officeRowId"));
+  const tenantId = text(formData, "tenantId");
+  if (!officeRowId.success || !TENANT_ID.test(tenantId)) {
+    return {
+      status: "failed",
+      code: "VALIDATION_FAILED",
+      message: S.formExpired,
+      officeRowId: officeRowId.data ?? "",
+    };
+  }
+  // The confirmation is a statement of the admin, never implied: only the checked box (`true`) counts.
+  if (text(formData, "confirmNoOpenBookings") !== "true") {
+    return {
+      status: "failed",
+      code: "VALIDATION_FAILED",
+      message: S.confirmRequired,
+      officeRowId: officeRowId.data,
+    };
+  }
+  const reason = text(formData, "reason");
+  const problem = reasonProblem(reason);
+  if (problem !== undefined) {
+    return { status: "failed", code: "VALIDATION_FAILED", message: problem, officeRowId: officeRowId.data };
+  }
+
+  const api = await platformApi();
+  const result = await api.POST("/v1/admin/amadeus-offices/{officeRowId}/release", {
+    params: { path: { officeRowId: officeRowId.data } },
+    body: { confirmNoOpenBookings: true, reason: reason.trim() },
+  });
+  if (result.error !== undefined) {
+    const { error } = result;
+    signInIfEnded(error);
+    if (error.code === "REAUTH_REQUIRED") {
+      return { ...previous, stepUp: true };
+    }
+    return {
+      status: "failed",
+      code: error.code,
+      message: messageOf(
+        error,
+        { NOT_FOUND: S.officeGone, VALIDATION_FAILED: S.formExpired },
+        { connection_active: S.connectionActive, not_assigned: S.notAssigned },
+      ),
+      officeRowId: officeRowId.data,
+    };
+  }
+  revalidatePool();
+  revalidatePath(`/tenants/${tenantId}`);
   return { status: "done", officeRowId: result.data.id, officeId: result.data.officeId };
 }
 

@@ -1924,7 +1924,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - Revealing the payout account needs a reason and a step-up and hides itself after 60 seconds [PF-64 AC2].
 - **Verify:** `pnpm --filter @velexis/platform-admin test`
 
-### PAD-014 · Build the domains page and the live office workflow in the admin
+### PAD-014 · Build the domains page and the live office workflow in the admin ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-admin
 - **Milestone:** M5
 - **Depends on:** PAD-007, PBE-051, PBE-054

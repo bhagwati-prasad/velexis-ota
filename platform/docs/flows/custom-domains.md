@@ -80,6 +80,8 @@ sequenceDiagram
 
    *Note (2026-11-03, PBE-051).* The re-check queues the DNS check that fits the host's status (`domain.verify` for a pending custom domain, `domain.recheck` for a verified one; none for a failed one, whose owner restarts its window with "Check now", or for the sub-domain, which has no records) and the TLS probe at once, and writes the audit row `domain.recheck_requested`. The removal works as step 7 for a custom domain of any OTA in any status, keeps the trimmed reason in the audit row `domain.removed` (actor `platform_admin`), and e-mails every active owner `domain.removed` without the reason, which is written for the audit trail.
 
+   *Note (2026-11-03, PAD-014).* The admin's `/domains` page lists every host with these filters in the URL, words `lastCheckError` and shows the TLS state; "Re-check" asks for a confirmation that says what is checked for the host, and "Remove" (custom domains only) asks for the reason ([`../../admin/README.md`](../../admin/README.md) §4, "Domains").
+
 ## Failure handling
 
 | Failure | Behaviour |
