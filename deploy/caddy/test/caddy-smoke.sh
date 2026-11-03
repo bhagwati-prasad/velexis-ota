@@ -58,8 +58,9 @@
 #   - and, for ADR-0027 row 4, TLS 1.2 and 1.3 are accepted, TLS 1.1 is refused, every host sends HSTS (error
 #     pages included), and neither the edge secret nor a client's forged copy reaches Caddy's log;
 #   - on every host (FIX-W29-SECURITY), a request whose query, `Referer` and redirect `Location` carry the values of
-#     the Caddyfile's `(log_query_filter)` (signatures and tokens, Stripe's client secrets of the 3-D Secure return, and
-#     the e-mail addresses, names, searches and return paths of the portal and the admin sites) and whose
+#     the Caddyfile's `(log_query_filter)` (signatures and tokens, Stripe's client secrets of the 3-D Secure return,
+#     the OAuth code and state of Stripe Connect's return to the portal, and the e-mail addresses, names, searches
+#     and return paths of the portal and the admin sites) and whose
 #     `Next-Router-State-Tree` holds a page's query still succeeds, reaches its app with every value, and leaves none
 #     of them in its access log line, which keeps the other values (`payment_intent`, `redirect_status`, ...).
 #
@@ -651,8 +652,8 @@ step "Access log: no secret and no personal value of a URL (query, Referer, Loca
 # request's own log line.
 MARK="$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 # The parameters of the Caddyfile's (log_query_filter), in its order.
-LOG_PARAMS=(sig token client_secret payment_intent_client_secret setup_intent_client_secret q email customerEmail
-  travelerLastName targetId next)
+LOG_PARAMS=(sig token client_secret payment_intent_client_secret setup_intent_client_secret code state q email
+  customerEmail travelerLastName targetId next)
 value_of() { printf 'smk%s%s' "${1//_/}" "$MARK"; } # parameter -> its marker value
 KEEP="smkkeep$MARK"                                # a value every log line keeps: the filter deletes only its list
 ROUTER="smkrouter$MARK"                            # the page query inside Next.js's router state header

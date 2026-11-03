@@ -1702,6 +1702,327 @@ export const DESCRIPTOR_STRINGS = Object.freeze({
   rateLimited: "Too many changes in a short time. Wait a minute, then try again.",
 });
 
+// ---- Your own Stripe account and the way back to Velexis payments (PFE-024) -----------------------------------
+
+/**
+ * The OTA's own Stripe account on `/otas/[tenantId]/payments` (PFE-024; flows/stripe-payments-account.md §C to §E;
+ * PF-61, PF-62): the section with Stripe Connect (`startStripeConnect`) and the own API keys of each environment
+ * (`submitStripeApiKeys`), what a card of the OTA's own account adds (an unfinished onboarding, a disconnection), and
+ * the answers of the start. No message holds a typed value or a key.
+ */
+export const STRIPE_ACCOUNT_STRINGS = Object.freeze({
+  title: "Your own Stripe account",
+  intro:
+    "Take your customers' card payments on your own Stripe account instead of Velexis's: connect it with Stripe, or enter its API keys. The money then goes to your Stripe account, and Velexis settles nothing for it. Payments taken before keep the account they were taken with.",
+  /** Finance members read the connections, without the forms. */
+  roleNote: "Only owners and admins can connect your own Stripe account.",
+  connectTitle: "Connect with Stripe",
+  connectIntro:
+    "Stripe asks you to sign in to your Stripe account, or to create one, and to allow Velexis to take payments for it, then sends you back here. One Stripe account serves both environments: the test connection switches at once, and the live one at once too if your OTA is live, otherwise when it goes live.",
+  connectStepUpNote: "Connecting asks for a code from your authenticator app first.",
+  connect: "Connect Stripe",
+  /** The label of the button when Velexis was disconnected from the OTA's Stripe account in Stripe (PF-61 AC2). */
+  reconnect: "Connect Stripe again",
+  connecting: "Opening Stripe…",
+  readOnlyTitle: "Your own Stripe account cannot be changed right now",
+  /** Why nothing can be changed, for each OTA status but `active` (PADR-0014 item 5). */
+  readOnly: Object.freeze({
+    provisioning:
+      "Velexis is still setting up this OTA. You can connect your own Stripe account once the set-up is done.",
+    suspended: "This OTA is suspended, so its payment connections are read-only until it is resumed.",
+    failed: "The set-up of this OTA failed, so its payment connections cannot be changed.",
+  }),
+  /** A platform admin disabled a payment connection: the callback would refuse it (`connection_disabled`). */
+  connectDisabledByVelexis:
+    "Velexis disabled a payment connection of this OTA, so a Stripe account cannot be connected now. Contact Velexis support.",
+  stepUpCancelled:
+    "Nothing happened: connecting your Stripe account needs a code from your authenticator app.",
+  mfaRequired:
+    "Turn on two-factor authentication for your account first: connecting your own Stripe account needs a code from your authenticator app.",
+  mfaLink: "Set up two-factor authentication",
+  featureDisabled: "Your own Stripe account is not available for this OTA yet. Reload the page.",
+  notActive:
+    "This OTA is not active any more, so its payment connections cannot be changed. Reload the page to see why.",
+  forbidden: "Your role in this OTA does not allow connecting a Stripe account any more. Reload the page.",
+  removed: "You are not a member of this OTA any more. Reload the page.",
+  formExpired: "This form has expired. Reload the page and try again.",
+  rateLimited: "Too many attempts in a short time. Wait a minute, then try again.",
+  unavailable: "Velexis could not start the connection right now. Try again in a few minutes.",
+  /** The API answered an authorize URL that is not Stripe's: the browser is never sent there. */
+  invalidAnswer:
+    "Velexis could not start the connection. Try again, and contact Velexis support if it keeps happening.",
+  reload: "Reload the page",
+  // What a card of the OTA's own account adds.
+  choicesTitle: "What you can do",
+  /** A Connect account whose onboarding Stripe has not finished (`pending`). */
+  connectPending:
+    "Stripe has not finished the onboarding of your account. Complete it in your Stripe dashboard (business details and bank account): the connection becomes active as soon as Stripe enables card payments, and until then the storefront takes no card payments in this environment.",
+  /** Velexis was disconnected from the OTA's Stripe account in Stripe (`account.application.deauthorized`). */
+  deauthorized:
+    "Velexis was disconnected from your Stripe account in Stripe, so the storefront takes no card payments in this environment. Velexis does not switch to its own Stripe account on its own: connect your Stripe account again, or use Velexis payments.",
+  deauthorizedReadOnly:
+    "Velexis was disconnected from this Stripe account in Stripe, so the storefront takes no card payments in this environment. An owner or admin can connect it again, and an owner can return to Velexis payments.",
+  /** The link from such a card to the "Connect Stripe again" button of the section. */
+  reconnectLink: "Connect Stripe again",
+  /** A platform admin disabled the connection (`disabled`, no `disconnectedAt`). */
+  disabledByVelexis: "Velexis disabled this connection. Contact Velexis support to have it enabled again.",
+});
+
+/**
+ * The outcome of a Stripe Connect callback, which `/connect/stripe/callback` names in the payments page's
+ * `?stripeConnect=` (PFE-024; flows/stripe-payments-account.md §C and "Failure handling"; PF-61 AC1). Only these names
+ * are ever shown, so a crafted URL can only show one of the portal's own messages.
+ */
+export const STRIPE_CONNECT_OUTCOME_STRINGS = Object.freeze({
+  connected: {
+    tone: "success",
+    title: "Your Stripe account is connected",
+    text: "New card payments now go to your Stripe account: in the test environment, and in the live environment too if your OTA is live (otherwise once it goes live). Payments taken before keep the account they were taken with.",
+  },
+  pending: {
+    tone: "info",
+    title: "Your Stripe account is connected, but cannot take payments yet",
+    text: "Finish the onboarding in your Stripe dashboard. The connection becomes active as soon as Stripe enables card payments.",
+  },
+  denied: {
+    tone: "info",
+    title: "Nothing was connected",
+    text: "You declined the connection on Stripe, so nothing changed. Connect Stripe again whenever you are ready.",
+  },
+  state_invalid: {
+    tone: "error",
+    title: "The Stripe connection did not complete",
+    text: "The connection request expired or was already used, so nothing changed. Try again: connect Stripe again.",
+  },
+  oauth_error: {
+    tone: "error",
+    title: "The Stripe connection did not complete",
+    text: "Stripe could not complete the connection, so nothing changed. Try again: connect Stripe again.",
+  },
+  livemode_mismatch: {
+    tone: "error",
+    title: "The Stripe account is in the wrong mode",
+    text: "Velexis needs a live Stripe account in production and a test account everywhere else, so nothing changed. Connect a Stripe account in the right mode.",
+  },
+  already_connected: {
+    tone: "error",
+    title: "This Stripe account belongs to another OTA",
+    text: "The Stripe account is already connected to another OTA, so nothing changed. Connect another Stripe account.",
+  },
+  connection_disabled: {
+    tone: "error",
+    title: "The Stripe account was not connected",
+    text: "Velexis disabled a payment connection of this OTA, so nothing changed. Contact Velexis support.",
+  },
+  feature_disabled: {
+    tone: "error",
+    title: "The Stripe account was not connected",
+    text: "Connecting your own Stripe account is not available for this OTA right now, so nothing changed.",
+  },
+  not_active: {
+    tone: "error",
+    title: "The Stripe account was not connected",
+    text: "This OTA is not active, so nothing changed.",
+  },
+  forbidden: {
+    tone: "error",
+    title: "The Stripe account was not connected",
+    text: "Only owners and admins connect a Stripe account, and your role in this OTA does not allow it any more.",
+  },
+  rate_limited: {
+    tone: "error",
+    title: "The Stripe account was not connected",
+    text: "Too many attempts in a short time. Wait a minute, then connect Stripe again.",
+  },
+  provider_error: {
+    tone: "error",
+    title: "The Stripe connection did not complete",
+    text: "Stripe did not answer as expected, so nothing changed. Try again in a few minutes.",
+  },
+  unavailable: {
+    tone: "error",
+    title: "The Stripe connection did not complete",
+    text: "Velexis could not complete the connection right now, so nothing changed. Try again in a few minutes.",
+  },
+  signed_out: {
+    tone: "error",
+    title: "The Stripe account was not connected",
+    text: "Your session ended before Stripe sent you back, so nothing changed. Connect Stripe again.",
+  },
+} as const);
+
+/**
+ * The OTA's own Stripe API keys of one environment on `/otas/[tenantId]/payments` (PFE-024; flows/stripe-payments-
+ * account.md §D; PF-62): the form (`submitStripeApiKeys`, behind a step-up), its rules (the platform document's
+ * `SubmitStripeApiKeysRequest` and the API's own), the webhook endpoint to create in Stripe, and the answers of the
+ * submission. No message holds a typed value.
+ */
+export const STRIPE_KEYS_STRINGS = Object.freeze({
+  /** The heading of one environment's part: "Your own Stripe keys: test environment". */
+  title: (environment: "test" | "live") =>
+    `Your own Stripe keys: ${connectionEnvironmentWords(environment)} environment`,
+  intro:
+    "Enter the API keys of your Stripe account instead of connecting it. Velexis checks them with Stripe first; until then the connection keeps working as it does now.",
+  introOwn:
+    "This connection uses your own Stripe keys. Submit new ones to replace them, for example after you rolled a key in Stripe.",
+  introNoConnection:
+    "This environment has no payment connection yet. Once Stripe accepts your keys, Velexis creates the connection with them.",
+  open: "Use my own Stripe keys",
+  openOwn: "Submit new Stripe keys",
+  close: "Cancel",
+  stepUpNote:
+    "Submitting asks for a code from your authenticator app. Once Stripe accepts the keys, new card payments go to your Stripe account; payments taken before keep the account they were taken with.",
+  where: (environment: "test" | "live") =>
+    `Your Stripe dashboard shows the keys under Developers, then API keys, in ${environment === "live" ? "live" : "test"} mode.`,
+  publishableKeyLabel: "Publishable key",
+  publishableKeyHint: (environment: "test" | "live") =>
+    `Starts with pk_${environment}_. It is not a secret: your storefront uses it.`,
+  secretKeyLabel: "Secret or restricted key",
+  secretKeyHint: (environment: "test" | "live") =>
+    `Starts with sk_${environment}_ or rk_${environment}_. Velexis stores it encrypted and never shows it again, not even to you.`,
+  restrictedTitle: "A restricted key needs these permissions",
+  /** What a restricted key (`rk_`) must allow (the API's rule and `GET /v1/account`, lead decision (2m)). */
+  restrictedPermissions: Object.freeze([
+    "PaymentIntents: write",
+    "Refunds: write",
+    "Charges: read",
+    "Disputes: read",
+    "Account: read",
+  ]),
+  webhookSecretLabel: "Webhook signing secret",
+  webhookSecretHint:
+    "Starts with whsec_: the signing secret of the webhook endpoint you create for Velexis in Stripe. Velexis stores it encrypted and never shows it again.",
+  submit: "Submit for verification",
+  submitting: "Submitting…",
+  /** One message per rule a value breaks (the action's checks and the API's field errors). */
+  problems: Object.freeze({
+    publishableKeyRequired: "Enter the publishable key.",
+    publishableKey: (environment: "test" | "live") =>
+      `Enter the publishable key of Stripe's ${environment} mode: pk_${environment}_ followed by letters and digits.`,
+    secretKeyRequired: "Enter the secret or restricted key.",
+    secretKey: (environment: "test" | "live") =>
+      `Enter a secret or restricted key of Stripe's ${environment} mode: sk_${environment}_ or rk_${environment}_ followed by letters and digits.`,
+    webhookSecretRequired: "Enter the webhook signing secret.",
+    webhookSecret:
+      "Enter the endpoint's signing secret: whsec_ followed by at least 8 letters, digits, dashes or underscores.",
+    /** A key longer than the API takes (255 characters). */
+    tooLong: "This value is longer than a Stripe key can be. Copy it again from your Stripe dashboard.",
+  }),
+  // The webhook endpoint the OTA creates in Stripe (flows §D items 2 and 4).
+  webhookTitle: "Create the webhook endpoint in Stripe",
+  webhookIntro:
+    "In your Stripe dashboard, under Developers, then Webhooks, add an endpoint with this URL and these events. Its signing secret is the one you entered.",
+  webhookUrlLabel: "Endpoint URL",
+  webhookEventsLabel: "Events to send",
+  testEventReminder:
+    "Velexis can check the signing secret only once Stripe sends an event: when the endpoint is created, send a test event from its page in Stripe.",
+  readOnlyTitle: "Keys cannot be submitted right now",
+  /** Why the form is disabled, for each OTA status but `active` (PADR-0014 item 5). */
+  readOnly: Object.freeze({
+    provisioning: "Velexis is still setting up this OTA. You can submit keys once the set-up is done.",
+    suspended: "This OTA is suspended, so its payment connections are read-only until it is resumed.",
+    failed: "The set-up of this OTA failed, so its payment connections cannot be changed.",
+  }),
+  stepUpCancelled: "The keys were not submitted: submitting them needs a code from your authenticator app.",
+  mfaRequired:
+    "Turn on two-factor authentication for your account first: submitting keys needs a code from your authenticator app.",
+  mfaLink: "Set up two-factor authentication",
+  featureDisabled: "Your own Stripe keys are not available for this OTA yet. Reload the page.",
+  connectionDisabled:
+    "Velexis disabled this payment connection, so it cannot switch to your own keys. Contact Velexis support.",
+  notActive:
+    "This OTA is not active any more, so its payment connections cannot be changed. Reload the page to see why.",
+  forbidden: "Your role in this OTA does not allow submitting Stripe keys any more. Reload the page.",
+  removed: "You are not a member of this OTA any more. Reload the page.",
+  formExpired: "This form has expired. Reload the page and try again.",
+  rateLimited: "Too many submissions in a short time. Wait a minute, then try again.",
+  reload: "Reload the page",
+});
+
+/**
+ * The verification of submitted Stripe keys on `/otas/[tenantId]/payments` (PFE-024; PADR-0010; PF-62 AC1): its
+ * status (`getCredentialSubmission`), and each verification result and apply refusal in words, never its code.
+ */
+export const STRIPE_KEYS_SUBMISSION_STRINGS = Object.freeze({
+  title: "Verification of your Stripe keys",
+  /** A submission's status (`CredentialSubmission.status`). */
+  statuses: Object.freeze({
+    pending: "Waiting",
+    verifying: "Verifying",
+    applied: "In use",
+    failed: "Not accepted",
+    superseded: "Replaced",
+  }) as Readonly<Record<string, string>>,
+  open: "Velexis is checking the keys with Stripe. The result shows here as soon as it is in; until then the connection keeps working as it does now.",
+  applied: (environment: "test" | "live") =>
+    `Stripe accepted the keys. The ${connectionEnvironmentWords(environment)} connection now takes card payments on your own Stripe account.`,
+  failed: "The keys were not accepted, so the connection keeps working as it did before.",
+  superseded: "Newer keys for this environment replaced these before they were verified.",
+  /** Why a submission failed, per `errorCode` (verification results and the apply's refusals, PADR-0010 item 6). */
+  reasons: Object.freeze({
+    STRIPE_KEY_INVALID:
+      "Stripe refused the secret key, or a restricted key lacks a permission Velexis needs. Check the key in your Stripe dashboard, then submit the keys again.",
+    STRIPE_LIVEMODE_MISMATCH:
+      "The keys belong to the other Stripe mode: use test keys for the test environment and live keys for the live one.",
+    PROVIDER_UNAVAILABLE: "Velexis could not reach Stripe to check the keys. Submit them again later.",
+    TENANT_NOT_ACTIVE:
+      "This OTA was no longer active when Velexis checked the keys, so they were not used. Submit them again once the OTA is active.",
+    CONNECTION_DISABLED:
+      "Velexis disabled this payment connection after you submitted, so the keys were not used. Contact Velexis support.",
+    CONNECTION_CHANGED:
+      "A payment connection was created for this environment after you submitted, so the webhook URL you got no longer fits and the keys were not used. Submit them again and use the new webhook URL.",
+    FEATURE_DISABLED: "Own Stripe keys were turned off when Velexis checked the keys, so they were not used.",
+  }) as Readonly<Record<string, string>>,
+  /** A failure without a code, or with one the portal has no words for. */
+  reasonUnknown:
+    "Velexis could not verify the keys. Submit them again, and contact Velexis support if it keeps happening.",
+  pollFailed: "The verification status could not be read just now. The page tries again in a moment.",
+  pollStoppedTitle: "The verification status cannot be shown",
+});
+
+/**
+ * "Use Velexis payments" on a card of the OTA's own Stripe account (PFE-024; flows/stripe-payments-account.md §E;
+ * PADR-0011 items 6 and 7): the confirmation, the step-up and the answers of `useVelexisPayments` (owners only).
+ */
+export const USE_VELEXIS_STRINGS = Object.freeze({
+  button: "Use Velexis payments",
+  title: (environment: "test" | "live") =>
+    `Use Velexis payments in the ${connectionEnvironmentWords(environment)} environment?`,
+  description:
+    "New card payments then go to Velexis's Stripe account, and Velexis transfers the money to your payout account each month. Payments taken before stay on the account they were taken with: their captures and refunds still go through it.",
+  connectNote: "Velexis also disconnects itself from your Stripe account in Stripe.",
+  liveNote: "The live environment needs a payout account that Velexis has verified.",
+  stepUpNote: "Switching asks for a code from your authenticator app.",
+  confirm: "Use Velexis payments",
+  switching: "Switching…",
+  switched: (environment: "test" | "live") =>
+    `The ${connectionEnvironmentWords(environment)} environment uses Velexis payments now. Payments taken before keep the account they were taken with.`,
+  /** Admins see the card's choices without this one. */
+  ownerOnly: "Only owners can return to Velexis payments.",
+  /** Why the switch is disabled, for each OTA status but `active` (PADR-0014 item 5). */
+  readOnly: Object.freeze({
+    provisioning: "Velexis is still setting up this OTA. You can switch once the set-up is done.",
+    suspended: "This OTA is suspended, so its payment connections are read-only until it is resumed.",
+    failed: "The set-up of this OTA failed, so its payment connections cannot be changed.",
+  }),
+  stepUpCancelled: "Nothing changed: switching to Velexis payments needs a code from your authenticator app.",
+  mfaRequired:
+    "Turn on two-factor authentication for your account first: switching to Velexis payments needs a code from your authenticator app.",
+  mfaLink: "Set up two-factor authentication",
+  payoutAccountRequired:
+    "The live environment needs a payout account that Velexis has verified before Velexis takes its payments. Add one, then switch once Velexis has verified it.",
+  payoutAccountLink: "Go to the payout account",
+  notActive:
+    "This OTA is not active any more, so its payment connections cannot be changed. Reload the page to see why.",
+  forbidden:
+    "Only owners can return to Velexis payments, and your role in this OTA does not allow it. Reload the page.",
+  removed:
+    "This payment connection is not there any more, or you are not a member of this OTA any more. Reload the page.",
+  formExpired: "This form has expired. Reload the page and try again.",
+  rateLimited: "Too many attempts in a short time. Wait a minute, then try again.",
+  reload: "Reload the page",
+});
+
 // ---- Payout account and settlements (PFE-025) ------------------------------------------------------------------
 
 /**

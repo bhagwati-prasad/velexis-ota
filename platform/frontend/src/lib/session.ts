@@ -29,17 +29,24 @@ export const PASSWORD_RESET_COOKIE = "__Host-vxp_reset";
 export const INVITATION_COOKIE = "__Host-vxp_invite";
 /** A validated relative return path (15 minutes). */
 export const NEXT_PATH_COOKIE = "__Host-vxp_next";
+/**
+ * The OTA whose Stripe Connect an owner or admin started (its `ten_` id, not a secret; 1 hour): Stripe's redirect back
+ * to `/connect/stripe/callback` names no OTA, and a refused callback returns to that OTA's payments page (PFE-024).
+ */
+export const STRIPE_CONNECT_COOKIE = "__Host-vxp_connect";
 
 const MINUTE = 60;
 const ACCESS_TOKEN_MAX_AGE = 15 * MINUTE;
 const REFRESH_TOKEN_MAX_AGE = 30 * 24 * 60 * MINUTE;
 const MFA_CHALLENGE_MAX_AGE = 5 * MINUTE;
 const TOKEN_MOVE_MAX_AGE = 15 * MINUTE;
+const STRIPE_CONNECT_MAX_AGE = 60 * MINUTE;
 
 /**
  * `SameSite=Strict` for the cookies of a flow that starts from a link in an e-mail or another site (MFA, reset,
  * invitation): they are never sent with a cross-site request. The session and return-path cookies are `Lax`, so a
- * person who follows a link to the portal arrives signed in.
+ * person who follows a link to the portal arrives signed in; so is the Stripe Connect cookie, because Stripe sends the
+ * browser back to the callback with a top-level navigation from its own site.
  */
 const SAME_SITE = {
   [ACCESS_TOKEN_COOKIE]: "lax",
@@ -48,6 +55,7 @@ const SAME_SITE = {
   [PASSWORD_RESET_COOKIE]: "strict",
   [INVITATION_COOKIE]: "strict",
   [NEXT_PATH_COOKIE]: "lax",
+  [STRIPE_CONNECT_COOKIE]: "lax",
 } as const;
 
 /** The name of one portal cookie. */
@@ -146,6 +154,14 @@ export function invitationCookie(token: string): CookieWrite {
 export function nextPathCookie(next: string | null | undefined): CookieWrite | undefined {
   const path = safeNextPath(next);
   return path === undefined ? undefined : portalCookie(NEXT_PATH_COOKIE, path, TOKEN_MOVE_MAX_AGE);
+}
+
+/**
+ * The OTA of a Stripe Connect that is starting, for 1 hour: longer than the OAuth state's 10 minutes, so a callback
+ * whose state expired while the person was on Stripe still returns to the OTA's payments page with "try again".
+ */
+export function stripeConnectCookie(tenantId: string): CookieWrite {
+  return portalCookie(STRIPE_CONNECT_COOKIE, tenantId, STRIPE_CONNECT_MAX_AGE);
 }
 
 /** Writes `writes` to `sink`. */

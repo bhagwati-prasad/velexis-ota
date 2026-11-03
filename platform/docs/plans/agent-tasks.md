@@ -1821,7 +1821,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - Submitting own credentials asks for a step-up, polls, and shows success or the rejection reason while the old connection stays in place [PF-52 AC1, AC2].
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-024 · Build Stripe Connect, API-key connections and the return to Velexis payments
+### PFE-024 · Build Stripe Connect, API-key connections and the return to Velexis payments ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M5
 - **Depends on:** PFE-016, PBE-056, PBE-057

@@ -968,8 +968,13 @@ describe("/otas/[tenantId]/payments", () => {
     expect(detail(test, "account")).toBe(CONNECTION_STRINGS.paymentAccount.velexis);
     expect(detail(test, "statementDescriptorSuffix")).toBe("ACME TRAVEL");
 
-    expect(calledPaths()).toEqual([`GET ${TENANT_PATH}`, `GET ${PAYMENTS_PATH}`]);
+    // One listPaymentConnections with the session, next to the layout's one getTenant and the M5 switches of one getMe
+    // (PFE-024); nothing is written.
+    expect(calledPaths().sort()).toEqual(
+      [`GET ${TENANT_PATH}`, `GET ${PAYMENTS_PATH}`, `GET ${ME_PATH}`].sort(),
+    );
     expectSessionHeaders(calls("GET", PAYMENTS_PATH)[0]);
+    expectSessionHeaders(calls("GET", ME_PATH)[0]);
   });
 
   it("shows an own Stripe account with its id, capabilities and dates, and why a pending one cannot take payments", async () => {

@@ -42,7 +42,8 @@
 #   - secrets: the signature of a signed URL (`sig`), single-use tokens (`token`), and Stripe's client secrets, which
 #     the 3-D Secure return puts into the storefront's /checkout/complete address (`payment_intent_client_secret`; a
 #     setup intent's `setup_intent_client_secret`; `client_secret` of Stripe's older redirect flows). The ids and the
-#     outcome (`payment_intent`, `setup_intent`, `redirect_status`) stay;
+#     outcome (`payment_intent`, `setup_intent`, `redirect_status`) stay. Stripe Connect's return to the portal's
+#     /connect/stripe/callback carries the single-use OAuth authorisation code (`code`) and state (`state`), PFE-024;
 #   - personal data that the portal and the admin sites put into their URLs: a list's free-text search (`q`), e-mail
 #     addresses (`email`, `customerEmail`), a traveller's name (`travelerLastName`), the free-text target of the
 #     platform's audit log (`targetId`), and the page a sign-in returns to (`next`, which carries that page's query).
@@ -53,6 +54,8 @@
 	delete client_secret
 	delete payment_intent_client_secret
 	delete setup_intent_client_secret
+	delete code
+	delete state
 	delete q
 	delete email
 	delete customerEmail
