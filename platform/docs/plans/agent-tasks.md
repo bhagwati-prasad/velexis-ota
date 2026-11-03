@@ -1557,7 +1557,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - A domain past 72 hours becomes `failed` and the owners get an e-mail; "check now" on it restarts the window.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int domains`
 
-### PBE-051 · Add the TLS probe, the daily re-check and the admin domain endpoints
+### PBE-051 · Add the TLS probe, the daily re-check and the admin domain endpoints ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-050, PBE-042

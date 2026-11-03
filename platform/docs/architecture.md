@@ -198,7 +198,7 @@ The platform publishes JSON `{ "v": 1, "type": …, …ids }` on the Redis chann
 | `type` | Fields | Published when |
 |---|---|---|
 | `tenant` | `id` | Status, plan, `storefront_environment`, profile change |
-| `domain` | `hostname` | Domain verified, failed, removed, primary changed |
+| `domain` | `hostname` | Domain verified, failed, removed, primary changed; `tls_status` changed by the TLS probe (the OTA backend links a custom domain only once its certificate is issued; 2026-11-02, lead decision (2d), PBE-051) |
 | `api_key` | `prefix` | Key revoked, expiry set, origins changed |
 | `connection` | `tenantId` | Any change to the tenant's supplier or payment connection |
 | `membership` | `accountId`, `tenantId` | Role, status, removal |

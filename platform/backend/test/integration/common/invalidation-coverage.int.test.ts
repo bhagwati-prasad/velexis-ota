@@ -7,13 +7,14 @@
 // file's rows, each once. A mutation added to the table later fails its row until it publishes its event.
 //
 // What the table does not hold, and where it is proven instead:
-// - `domain` events of the custom domain operations of M5 that are still pending (test/contract/pending-operations.ts:
-//   the admin's re-check and removal, PBE-051): the guard test below fails once one of them is bound without its row.
-//   makeDomainPrimary and removeDomain have theirs since PBE-049; addDomain writes a pending domain, which neither the
-//   OTA backend nor TLS `ask` serves, so it publishes nothing (architecture §6.3: verified, failed, removed, primary
-//   changed) and has no row. checkDomain (PBE-050) has a row that publishes nothing: restarting a failed domain's
-//   window makes it pending, served nowhere either; the verification its job may bring is the worker's, proven in
-//   domain-verification.int.test.ts.
+// - `domain` events of the custom domain operations of M5 that are still pending (test/contract/pending-operations.ts):
+//   the guard test below fails once one of them is bound without its row. makeDomainPrimary and removeDomain have
+//   theirs since PBE-049, adminRecheckDomain and adminRemoveDomain since PBE-051; addDomain writes a pending domain,
+//   which neither the OTA backend nor TLS `ask` serves, so it publishes nothing (architecture §6.3: verified, failed,
+//   removed, primary changed) and has no row. checkDomain (PBE-050) and adminRecheckDomain have rows that publish
+//   nothing: restarting a failed domain's window makes it pending, served nowhere either, and the admin's re-check only
+//   queues jobs; the verification, the failed re-check and the TLS status change those jobs may bring are the worker's,
+//   proven in domain-verification.int.test.ts and domain-recheck.int.test.ts.
 // - Changes the platform worker makes, not a request: provisioning's post-steps (post-steps.int.test.ts) and its
 //   failure handler (failure-handler.test.ts), billing sync of Stripe subscriptions (billing-events.int.test.ts), the
 //   verification job of a shared Amadeus account (amadeus-accounts.int.test.ts), and the developer's commands
@@ -1169,6 +1170,55 @@ const COVERAGE: readonly CoverageRow[] = [
         send: () => t.http.post(`/v1/tenants/${tenant.id}/domains/${custom.id}/check`).set(headers),
         status: 202,
         events: [],
+      };
+    },
+  },
+  {
+    // The admin's re-check only queues the DNS check and the TLS probe (PBE-051): what they change, the worker's jobs
+    // publish (domain-recheck.int.test.ts, admin-domains.int.test.ts).
+    change: "domain re-checked by a platform admin (jobs queued)",
+    operationId: "adminRecheckDomain",
+    publishes: [],
+    async arrange() {
+      const { tenant } = await ota();
+      const custom = await insertTenantDomain(pool, tenant, {
+        id: ids.new("dom"),
+        hostname: mine(`cov-${randomBytes(6).toString("hex")}.example.net`),
+        kind: "custom",
+        verification_token: "vx-verify-K7Q4M2XP9TRWH5ZDB3NV8QKE1MZT6RYC",
+      });
+      const headers = await adminHeaders();
+      return {
+        send: () => t.http.post(`/v1/admin/domains/${custom.id}/recheck`).set(headers),
+        status: 202,
+        events: [],
+      };
+    },
+  },
+  {
+    // PBE-051: an abusive primary custom domain removed by a platform admin; the sub-domain is primary again.
+    change: "custom domain removed by a platform admin (both hosts)",
+    operationId: "adminRemoveDomain",
+    publishes: ["domain"],
+    async arrange() {
+      const { tenant, domain: subdomain } = await ota({ tenant: { status: "suspended" } });
+      await pool.query("UPDATE platform.tenant_domains SET is_primary = false WHERE id = $1", [subdomain.id]);
+      const custom = await insertTenantDomain(pool, tenant, {
+        id: ids.new("dom"),
+        hostname: mine(`cov-${randomBytes(6).toString("hex")}.example.net`),
+        kind: "custom",
+        is_primary: true,
+        verification_token: "vx-verify-K7Q4M2XP9TRWH5ZDB3NV8QKE1MZT6RYC",
+      });
+      const headers = await adminHeaders();
+      return {
+        send: () =>
+          t.http.post(`/v1/admin/domains/${custom.id}/remove`).set(headers).send({ reason: REASON }),
+        status: 204,
+        events: [
+          { v: 1, type: "domain", hostname: custom.hostname },
+          { v: 1, type: "domain", hostname: mine(subdomain.hostname) },
+        ],
       };
     },
   },

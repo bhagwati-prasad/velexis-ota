@@ -2924,7 +2924,7 @@ export interface paths {
         put?: never;
         /**
          * Check a host's DNS records and certificate now
-         * @description Queues the checks of one host on `platform-domains` now (M5, custom-domains flow steps 2, 4 and 6), instead of waiting for the schedulers: the DNS check of a custom domain (`domain.verify`: the verification of a pending one, the daily re-check of a verified one) and the TLS probe of the host (`domain.tls_probe`); the sub-domain has no DNS records, so it gets the probe only. The answer comes before the jobs run; reload the list to see `lastCheckedAt`, `lastCheckError` and the TLS state. Writes an audit row. `503 SERVICE_UNAVAILABLE` while Redis is unreachable, because the jobs are the whole effect.
+         * @description Queues the checks of one host on `platform-domains` now (M5, custom-domains flow steps 2, 4, 6 and 8), instead of waiting for the schedulers: the DNS check that fits a custom domain's status (`domain.verify`, the verification of a pending one; `domain.recheck`, the daily re-check of a verified one, whose failure counts like a daily one) and the TLS probe of the host at once (`domain.tls_probe`). The sub-domain has no DNS records, and a failed custom domain has no window to check in (its owners restart one with `checkDomain`), so both get the probe only. The answer comes before the jobs run; reload the list to see `lastCheckedAt`, `lastCheckError` and the TLS state. Writes an audit row. `503 SERVICE_UNAVAILABLE` while Redis is unreachable, because the jobs are the whole effect.
          */
         post: operations["adminRecheckDomain"];
         delete?: never;

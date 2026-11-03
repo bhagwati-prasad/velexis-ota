@@ -50,13 +50,11 @@ export const PENDING_OPERATIONS: readonly PendingOperation[] = Object.freeze([
   // implements its M5 part. receiveStripeBillingEvent is bound since PBE-043, the three payout account operations
   // (adminGetPayoutAccount, adminRevealPayoutAccount, adminReviewPayoutAccount) since PBE-058, adminGenerateSettlements
   // since PBE-059, the settlement review (list, detail, lines and their CSV, adjustments, approval, payment, void) since
-  // PBE-060, receiveStripeConnectAccountEvent since PBE-056, adminReleaseAmadeusOffice since PBE-054.
+  // PBE-060, receiveStripeConnectAccountEvent since PBE-056, adminReleaseAmadeusOffice since PBE-054, the three domain
+  // operations (adminListDomains, adminRecheckDomain, adminRemoveDomain) since PBE-051.
   { operationId: "adminCheckPlanPrices", task: "PBE-048" },
   { operationId: "adminResyncSubscription", task: "PBE-048" },
   { operationId: "adminListInvoices", task: "PBE-048" },
   { operationId: "adminListStripeEvents", task: "PBE-048" },
   { operationId: "adminReprocessStripeEvent", task: "PBE-048" },
-  { operationId: "adminListDomains", task: "PBE-051" },
-  { operationId: "adminRecheckDomain", task: "PBE-051" },
-  { operationId: "adminRemoveDomain", task: "PBE-051" },
 ] satisfies PendingOperation[]);

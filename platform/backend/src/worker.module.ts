@@ -14,7 +14,8 @@
 // Connect account events that processor runs (PBE-056), SettlementsModule the one processor of
 // `platform-settlements` (the monthly drafts) with the `settlements.monthly` handler (PBE-059), and DomainsModule the
 // one processor of `platform-domains` (the DNS verification of custom domains) with the `domains.verify_pending`
-// handler (PBE-050).
+// handler (PBE-050), and the daily DNS re-check and TLS probe with the `domains.recheck_verified` and
+// `domains.tls_probe` handlers (PBE-051).
 import { Module, type DynamicModule } from "@nestjs/common";
 import { DiscoveryModule } from "@nestjs/core";
 import type { Logger } from "@velexis/logger";

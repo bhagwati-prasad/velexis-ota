@@ -40,12 +40,16 @@ export const EMAIL_TEMPLATE_KEYS = [
   // M5: the verification of the OTA's own credentials ended (PBE-052, `credentials.verify`; PADR-0013 item 5).
   "connection.credentials_applied",
   "connection.credentials_failed",
-  // M5: the DNS verification of a custom domain ended (PBE-050, `domain.verify`; PADR-0013 item 5).
+  // M5: the DNS verification of a custom domain ended (PBE-050, `domain.verify`; PADR-0013 item 5); `domain.failed` also
+  // when three daily re-checks of a verified domain failed in a row (PBE-051, `domain.recheck`).
   "domain.verified",
   "domain.failed",
   // M5: a platform admin assigned the live office the owner requested (PBE-054, adminAssignAmadeusOffice; PADR-0013
   // item 5, note of 2026-10-31).
   "amadeus.live_ready",
+  // M5: a platform admin removed an abusive custom domain (PBE-051, adminRemoveDomain; PADR-0013 item 5, note of
+  // 2026-11-03).
+  "domain.removed",
 ] as const;
 
 /** A key of EMAIL_TEMPLATE_KEYS. */
@@ -153,18 +157,21 @@ export const EMAIL_TEMPLATES: Readonly<Record<EmailTemplateKey, EmailTemplateDef
     "hostname",
     "domainsUrl",
   ]),
-  "domain.failed": definition("A custom domain was not verified within its 72-hour window (to the owners)", [
-    "fullName",
-    "tenantName",
-    "tenantKey",
-    "hostname",
-    "reason",
-    "domainsUrl",
-  ]),
+  "domain.failed": definition(
+    "A custom domain was not verified within its 72-hour window, or failed three daily re-checks in a row (to the owners)",
+    ["fullName", "tenantName", "tenantKey", "hostname", "failure", "reason", "domainsUrl"],
+  ),
   "amadeus.live_ready": definition(
     "A platform admin assigned a live Amadeus office and the live connection is active (to the owners)",
     ["fullName", "tenantName", "tenantKey", "officeId", "amadeusUrl"],
   ),
+  "domain.removed": definition("A platform admin removed a custom domain (to the owners)", [
+    "fullName",
+    "tenantName",
+    "tenantKey",
+    "hostname",
+    "domainsUrl",
+  ]),
 });
 
 /** Variables every template may use, filled in by the renderer from the configuration (PADR-0013 item 7). */

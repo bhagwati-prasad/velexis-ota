@@ -9,7 +9,10 @@
 // pending custom domains of the 5-minute run (`pendingCustomDomainIds`, on the partial index of pending rows), the
 // domain a `domain.verify` job checks (`findForCheck`, then `lockForCheck` in the job's transaction), the outcome
 // (`markVerified`, `recordCheckFailure`), the restart of a failed domain's window by `checkDomain` (`restartWindow`),
-// and the OTA's name and active owners for the owners' e-mails (`tenantLabel`, `activeOwners`, read only).
+// and the OTA's name and active owners for the owners' e-mails (`tenantLabel`, `activeOwners`, read only). PBE-051
+// adds the daily runs' domains (`verifiedCustomDomainIds` for the DNS re-check, `servedStorefrontHostIds` for the TLS
+// probe), their outcomes (`recordRecheckPassed`, `recordRecheckFailure`, `recordTlsProbe`) and the platform admin's
+// reads of every OTA's hosts (`listForAdmin` with `domainExists` for its cursor, `findForAdmin`).
 // Kysely on the process's `PLATFORM_DB` (the API's or the worker's pool), schema-qualified tables (ADR-0005).
 import { Inject, Injectable } from "@nestjs/common";
 import { sql } from "@velexis/db";
@@ -130,6 +133,61 @@ export interface DomainCheckFailure {
   readonly failed: boolean;
   readonly now: Date;
 }
+
+/** A storefront host of any OTA as the platform admin lists it (`AdminDomain`), with its tenant's key. */
+export interface AdminDomainRow {
+  readonly id: string;
+  readonly tenant_id: string;
+  readonly tenant_key: string;
+  readonly hostname: string;
+  readonly kind: string;
+  readonly purpose: string;
+  readonly is_primary: boolean;
+  readonly verification_status: string;
+  readonly verified_at: Date | null;
+  readonly verification_deadline_at: Date | null;
+  readonly last_checked_at: Date | null;
+  readonly last_check_error: string | null;
+  readonly check_failures: number;
+  readonly tls_status: string;
+  readonly tls_expires_at: Date | null;
+  readonly tls_checked_at: Date | null;
+  readonly created_at: Date;
+}
+
+/** The filters of `adminListDomains` (each a value of a CHECK of `tenant_domains`). */
+export interface AdminDomainFilter {
+  readonly kind?: string | undefined;
+  readonly verificationStatus?: string | undefined;
+  readonly tlsStatus?: string | undefined;
+}
+
+/** What a TLS probe stores. */
+export interface TlsProbeRecord {
+  /** `issued`, `expired` or `failed`. */
+  readonly status: string;
+  /** The certificate's `valid_to`; `null` when no certificate was read. */
+  readonly expiresAt: Date | null;
+  readonly now: Date;
+}
+
+/** The outcome of a failed daily re-check, as `recordRecheckFailure` writes it. */
+export interface RecheckFailure {
+  /** The error code of domain-checks.ts (`txt_missing`, …). */
+  readonly error: string;
+  /** The consecutive failed re-checks, this one included. */
+  readonly failures: number;
+  /** True at the third: the domain becomes `failed` and loses the primary flag. */
+  readonly failed: boolean;
+  readonly now: Date;
+}
+
+/** The tenant statuses whose storefront hosts may be served (`ask` rule 1), so the daily TLS probe asks for them. */
+export const SERVED_TENANT_STATUSES: readonly string[] = Object.freeze([
+  "provisioning",
+  "active",
+  "suspended",
+]);
 
 @Injectable()
 export class DomainsRepository {
@@ -360,6 +418,160 @@ export class DomainsRepository {
       .set({ verification_status: "pending", verification_deadline_at: deadline, updated_at: now })
       .where("id", "=", domainId)
       .execute();
+  }
+
+  /** The ids of every `verified` custom domain, oldest first: one `domain.recheck` job each in the daily run. */
+  async verifiedCustomDomainIds(): Promise<string[]> {
+    const rows = await this.db
+      .selectFrom("platform.tenant_domains")
+      .select("id")
+      .where("verification_status", "=", "verified")
+      .where("kind", "=", "custom")
+      .orderBy("created_at")
+      .orderBy("id")
+      .execute();
+    return rows.map((row) => row.id);
+  }
+
+  /**
+   * The ids of every verified storefront host (sub-domains and custom domains) of a tenant whose hosts may be served
+   * (SERVED_TENANT_STATUSES), oldest first: one `domain.tls_probe` job each in the daily run.
+   */
+  async servedStorefrontHostIds(): Promise<string[]> {
+    const rows = await this.db
+      .selectFrom("platform.tenant_domains as d")
+      .innerJoin("platform.tenants as t", "t.id", "d.tenant_id")
+      .select("d.id")
+      .where("d.purpose", "=", "storefront")
+      .where("d.verification_status", "=", "verified")
+      .where("t.status", "in", [...SERVED_TENANT_STATUSES])
+      .orderBy("d.created_at")
+      .orderBy("d.id")
+      .execute();
+    return rows.map((row) => row.id);
+  }
+
+  /** A passed daily re-check: checked at `now`, the failure count back to 0 and no error. */
+  async recordRecheckPassed(trx: PlatformTransaction, domainId: string, now: Date): Promise<void> {
+    await trx
+      .updateTable("platform.tenant_domains")
+      .set({ check_failures: 0, last_checked_at: now, last_check_error: null, updated_at: now })
+      .where("id", "=", domainId)
+      .execute();
+  }
+
+  /**
+   * A failed daily re-check: its time, its error code and the count of consecutive failures; at the third the domain
+   * becomes `failed` and loses the primary flag (the caller makes the sub-domain primary after this update, so the
+   * partial unique index never sees two primaries).
+   */
+  async recordRecheckFailure(
+    trx: PlatformTransaction,
+    domainId: string,
+    failure: RecheckFailure,
+  ): Promise<void> {
+    await trx
+      .updateTable("platform.tenant_domains")
+      .set({
+        check_failures: failure.failures,
+        last_checked_at: failure.now,
+        last_check_error: failure.error,
+        updated_at: failure.now,
+        ...(failure.failed ? { verification_status: "failed", is_primary: false } : {}),
+      })
+      .where("id", "=", domainId)
+      .execute();
+  }
+
+  /** A TLS probe's outcome: `tls_status`, `tls_expires_at` and `tls_checked_at`. */
+  async recordTlsProbe(trx: PlatformTransaction, domainId: string, probe: TlsProbeRecord): Promise<void> {
+    await trx
+      .updateTable("platform.tenant_domains")
+      .set({
+        tls_status: probe.status,
+        tls_expires_at: probe.expiresAt,
+        tls_checked_at: probe.now,
+        updated_at: probe.now,
+      })
+      .where("id", "=", domainId)
+      .execute();
+  }
+
+  /**
+   * At most `limit` storefront hosts of every OTA that match `filter`, newest first (then by id), after the host
+   * `afterDomainId` (the last host of the previous page) when given. The cursor's position is read in the same
+   * statement, so `created_at` keeps its microseconds (a JavaScript Date would round it to the millisecond and skip
+   * the hosts created within the same millisecond as the cursor's).
+   */
+  async listForAdmin(
+    filter: AdminDomainFilter,
+    afterDomainId: string | undefined,
+    limit: number,
+  ): Promise<AdminDomainRow[]> {
+    let query = this.adminRows(this.db);
+    if (filter.kind !== undefined) {
+      query = query.where("d.kind", "=", filter.kind);
+    }
+    if (filter.verificationStatus !== undefined) {
+      query = query.where("d.verification_status", "=", filter.verificationStatus);
+    }
+    if (filter.tlsStatus !== undefined) {
+      query = query.where("d.tls_status", "=", filter.tlsStatus);
+    }
+    if (afterDomainId !== undefined) {
+      query = query.where(
+        (eb) => eb.refTuple("d.created_at", "d.id"),
+        "<",
+        (eb) =>
+          eb
+            .selectFrom("platform.tenant_domains as c")
+            .select(["c.created_at", "c.id"])
+            .where("c.id", "=", afterDomainId)
+            .$asTuple("created_at", "id"),
+      );
+    }
+    return query.orderBy("d.created_at", "desc").orderBy("d.id", "desc").limit(limit).execute();
+  }
+
+  /** True when the host `domainId` exists (a cursor of the admin's list names a host of this table). */
+  async domainExists(domainId: string): Promise<boolean> {
+    const row = await this.db
+      .selectFrom("platform.tenant_domains")
+      .select("id")
+      .where("id", "=", domainId)
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /** The host `domainId` of any OTA as the admin sees it; `undefined` when there is none. */
+  async findForAdmin(domainId: string): Promise<AdminDomainRow | undefined> {
+    return this.adminRows(this.db).where("d.id", "=", domainId).executeTakeFirst();
+  }
+
+  /** The columns of AdminDomainRow: a domain row with its tenant's key. */
+  private adminRows(db: PlatformDb | PlatformTransaction) {
+    return db
+      .selectFrom("platform.tenant_domains as d")
+      .innerJoin("platform.tenants as t", "t.id", "d.tenant_id")
+      .select([
+        "d.id",
+        "d.tenant_id",
+        "t.key as tenant_key",
+        "d.hostname",
+        "d.kind",
+        "d.purpose",
+        "d.is_primary",
+        "d.verification_status",
+        "d.verified_at",
+        "d.verification_deadline_at",
+        "d.last_checked_at",
+        "d.last_check_error",
+        "d.check_failures",
+        "d.tls_status",
+        "d.tls_expires_at",
+        "d.tls_checked_at",
+        "d.created_at",
+      ]);
   }
 
   /** The name, key, status and deletion time of the tenant `tenantId`, read in `trx`; `undefined` without one. */

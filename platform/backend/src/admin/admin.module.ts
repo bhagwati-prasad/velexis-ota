@@ -37,6 +37,10 @@
 //   SettlementsModule's PayoutAccountsService (PBE-058).
 // - AdminSettlementsController: the settlement statements: the generation of a month's drafts over SettlementsModule's
 //   SettlementJobs (PBE-059) and the review workflow over its SettlementReviewService (PBE-060).
+// - AdminDomainsController: every OTA's storefront hosts (list, re-check now, removal of an abusive custom domain with
+//   a reason) over DomainsModule's AdminDomainsService (PBE-051). DomainsModule comes in as `DomainsModule.forApi()`,
+//   the very object AppModule imports, so the API has one instance of it (one DomainJobs producer, one TlsAskService);
+//   it also exports the repository the tenant detail reads.
 //
 // Later tasks add the other areas of platform/docs/api-inventory-admin.md, one controller per area. The admin
 // bootstrap commands of dist/cli.js (`admin:grant`, `admin:reset-mfa`, admin-cli.commands.ts) run outside this module,
@@ -67,6 +71,7 @@ import { AdminBillingController } from "./admin-billing.controller";
 import { AdminDashboardController } from "./admin-dashboard.controller";
 import { AdminDashboardRepository } from "./admin-dashboard.repository";
 import { AdminDashboardService } from "./admin-dashboard.service";
+import { AdminDomainsController } from "./admin-domains.controller";
 import { AdminJobsController } from "./admin-jobs.controller";
 import { AdminJobsService } from "./admin-jobs.service";
 import { AdminPayoutsController } from "./admin-payouts.controller";
@@ -87,7 +92,8 @@ import { QueueInspector } from "./queue-inspector";
     ProvisioningModule.forApi(),
     TenantsModule,
     BillingModule,
-    DomainsModule,
+    // The very object AppModule imports (`forApi()` returns one object), so Nest builds the module once.
+    DomainsModule.forApi(),
     PaymentConnectionsModule,
     CredentialSubmissionsModule,
     SettlementsModule,
@@ -104,6 +110,7 @@ import { QueueInspector } from "./queue-inspector";
     AdminBillingController,
     AdminPayoutsController,
     AdminSettlementsController,
+    AdminDomainsController,
   ],
   providers: [
     AdminAuthService,

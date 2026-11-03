@@ -78,6 +78,8 @@ export const AUDIT_ACTIONS = Object.freeze([
   "domain.verification_failed", // domain.verify job past the 72 h deadline (system)
   "domain.primary_changed", // makeDomainPrimary
   "domain.removed", // removeDomain, adminRemoveDomain
+  "domain.recheck_failed", // domain.recheck job: the third consecutive failed daily re-check (system)
+  "domain.recheck_requested", // adminRecheckDomain
 
   // Amadeus: the OTA's connections (Amadeus flow, PADR-0010) and the Velexis account and office pool (PADR-0012).
   "amadeus.settings_updated", // updateAmadeusConnection

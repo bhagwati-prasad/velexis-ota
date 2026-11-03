@@ -3,7 +3,9 @@
 // and checks domains through the HTTP pipeline; the worker's module graph (WorkerModule, as dist/worker.js builds it,
 // with the API's FakeClock) runs `domain.verify` and the `domains.verify_pending` handler from the same Redis database
 // and database clone. The worker's resolver is a fake (DNS_RESOLVER): each test writes the records it needs into its
-// record table, so no test asks a real DNS server. Every answer is checked against the platform document.
+// record table, so no test asks a real DNS server. Every answer is checked against the platform document. The TLS probe
+// that follows a verification (PBE-051) connects to a local TLS server (TLS_PROBE_TARGET, test/support/tls-server.ts)
+// whose certificate names `*.example.net`, the hosts of this file, instead of Caddy on `127.0.0.1:443`.
 //
 // The `domain` events of `vx:invalidate` are read by a subscriber that keeps the events of this file's hosts and its
 // own markers (Redis pub/sub is not scoped to a database index). Every address is a `uniqueEmail` of this file, and
@@ -39,6 +41,7 @@ import {
   type DnsResolver,
 } from "../../../src/domains/domain-checks";
 import { VERIFICATION_WINDOW_MS } from "../../../src/domains/domains.service";
+import { TLS_PROBE_TARGET } from "../../../src/domains/tls-probe";
 import {
   DOMAINS_VERIFY_PENDING_JOB,
   verifyPendingJobId,
@@ -48,6 +51,7 @@ import { WorkerModule } from "../../../src/worker.module";
 import { insertAccount, insertPlan, insertTenantDomain, testId } from "../../builders/platform-rows";
 import { insertOta, TEST_BASE_DOMAIN, type InsertedOta } from "../../builders/tenants";
 import { createTestApp, LogSink, type TestApp } from "../../support/app";
+import { startTlsServer, type LocalTlsServer } from "../../support/tls-server";
 
 /**
  * The database clone, the API's and the worker's Nest module graphs and the platform document of
@@ -153,6 +157,8 @@ let worker: TestingModule;
 let domainsQueue: Queue;
 let maintenanceQueue: Queue;
 let subscriber: Redis;
+/** The TLS server the worker's probe connects to (TLS_PROBE_TARGET), with a certificate for `*.example.net`. */
+let tlsServer: LocalTlsServer;
 /** A plan with two custom domains. */
 let planCode = "";
 
@@ -172,6 +178,7 @@ beforeAll(async () => {
   maintenanceQueue = t.app.get<Queue>(getQueueToken(PLATFORM_QUEUE.maintenance), { strict: false });
   responseChecker("platform");
   planCode = (await insertPlan(pool, { limits: { staffSeats: 5, apiKeys: 10, customDomains: 2 } })).code;
+  tlsServer = await startTlsServer(["*.example.net"]);
 
   const logger = createProcessLogger(PLATFORM_PROCESSES.worker, t.config, workerLogs);
   worker = await Test.createTestingModule({ imports: [WorkerModule.forRoot(t.config, logger)] })
@@ -181,6 +188,8 @@ beforeAll(async () => {
     .useValue({})
     .overrideProvider(DNS_RESOLVER)
     .useValue(resolver)
+    .overrideProvider(TLS_PROBE_TARGET)
+    .useValue({ host: tlsServer.host, port: tlsServer.port })
     .compile();
   await worker.init();
 
@@ -198,6 +207,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await subscriber?.quit();
   await worker?.close();
+  await tlsServer?.close();
   await t?.close();
 }, SETUP_TIMEOUT_MS);
 
@@ -441,7 +451,7 @@ describe("domain.verify: the worker's DNS check", () => {
     await settle();
     expect(eventsFor(hostname)).toEqual([{ v: 1, type: "domain", hostname }]);
 
-    // The TLS probe of PBE-051 one minute later; until then the processor completes it with a log line.
+    // The TLS probe one minute later (PBE-051): the local TLS server's certificate names the host, so it is issued.
     const [probe] = await jobsFor(DOMAIN_TLS_PROBE_JOB, added.id);
     expect(probe?.opts.delay).toBe(TLS_PROBE_DELAY_MS);
     expect(probe?.data).toEqual({ domainId: added.id });
@@ -450,10 +460,20 @@ describe("domain.verify: the worker's DNS check", () => {
     await vi.waitFor(async () => {
       const done = await domainsQueue.getJob(probe?.id ?? "");
       expect(await done?.getState()).toBe("completed");
-      expect(done?.returnvalue).toEqual({ handled: false });
+      expect(done?.returnvalue).toEqual({
+        domainId: added.id,
+        status: "issued",
+        probed: true,
+        changed: true,
+      });
     }, WAIT);
-    expect(logsWithMessage("domains.job_not_handled")).toContainEqual(
-      expect.objectContaining({ job: DOMAIN_TLS_PROBE_JOB, domainId: added.id }),
+    expect(await domainRow(added.id)).toMatchObject({
+      tls_status: "issued",
+      tls_expires_at: tlsServer.expiresAt,
+      tls_checked_at: t.clock.now(),
+    });
+    expect(logsWithMessage("domains.tls_probed")).toContainEqual(
+      expect.objectContaining({ domainId: added.id, tlsStatus: "issued", previousTlsStatus: "pending" }),
     );
 
     // The portal's list shows the verified domain.

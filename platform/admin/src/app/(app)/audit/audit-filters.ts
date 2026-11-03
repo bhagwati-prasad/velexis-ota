@@ -74,6 +74,8 @@ export const AUDIT_ACTIONS: readonly string[] = Object.freeze([
   "domain.verification_failed",
   "domain.primary_changed",
   "domain.removed",
+  "domain.recheck_failed",
+  "domain.recheck_requested",
   "amadeus.settings_updated",
   "amadeus.live_requested",
   "amadeus.credentials_submitted",
