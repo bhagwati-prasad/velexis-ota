@@ -16,7 +16,12 @@
 //   (SubscriptionSyncLock, subscription-lock.ts, FIX-W30-PLATFORM). PBE-046 adds the handler of the invoice events
 //   (handlers/invoice.handler.ts), which writes through BillingModule's InvoicesRepository, provided here on its own
 //   too, takes the lock of the invoice's subscription and queues the owners' `billing.payment_failed` e-mail through
-//   NotificationsModule (layer 0). The dunning and the trial schedules join it.
+//   NotificationsModule (layer 0). PBE-047 adds the handlers of the two daily billing schedules of the
+//   `platform-maintenance` processor, which scheduler.registry.ts registers only while FEATURE_STRIPE_BILLING is on:
+//   `billing.abandoned_checkouts` (abandoned-checkouts.scheduler.ts: a `provisioning` OTA whose Checkout waited 48
+//   hours fails, through ProvisioningModule's jobs repository) and `billing.manual_trials` (manual-trials.scheduler.ts:
+//   the notices, the end and the suspension of manual trials, through SuspensionService), with MembershipsRepository
+//   for the owners and NotificationsModule's outbox for their e-mails.
 //
 // It uses the global CommonModule (Clock, IdGenerator, PLATFORM_DB), the global RedisModule (InvalidationPublisher,
 // and REDIS_CLIENT for the subscription lock), the queues of QueuesModule, AuditModule and NotificationsModule.
@@ -29,16 +34,19 @@ import { QueuesModule } from "../../common/queues/queues.module";
 import { stripeClientProvider } from "../../common/stripe/stripe.client";
 import { StripeEventsRepository } from "../../common/stripe/stripe-events.repository";
 import { StripeInboxService } from "../../common/stripe/stripe-inbox.service";
+import { MembershipsRepository } from "../../memberships/memberships.repository";
 import { ProvisioningModule } from "../../provisioning/provisioning.module";
 import { TenantsRepository } from "../../tenants/tenants.repository";
 import { BillingCustomersRepository } from "../billing-customers.repository";
 import { InvoicesRepository } from "../invoices.repository";
 import { PlansRepository } from "../plans.repository";
 import { SubscriptionsRepository } from "../subscriptions.repository";
+import { AbandonedCheckoutsScheduler } from "./abandoned-checkouts.scheduler";
 import { BillingWebhookController } from "./billing-webhook.controller";
 import { CheckoutSessionCompletedHandler } from "./handlers/checkout-session-completed.handler";
 import { InvoiceHandler } from "./handlers/invoice.handler";
 import { SubscriptionChangedHandler } from "./handlers/subscription-changed.handler";
+import { ManualTrialsScheduler } from "./manual-trials.scheduler";
 import { PriceToPlan } from "./price-to-plan";
 import { BillingStatusRules } from "./status-rules";
 import { StripeEventsProcessor } from "./stripe-events.processor";
@@ -65,6 +73,9 @@ import { SubscriptionSyncLock } from "./subscription-lock";
     CheckoutSessionCompletedHandler,
     InvoicesRepository,
     InvoiceHandler,
+    MembershipsRepository,
+    AbandonedCheckoutsScheduler,
+    ManualTrialsScheduler,
   ],
 })
 export class BillingSyncWorkerModule {}

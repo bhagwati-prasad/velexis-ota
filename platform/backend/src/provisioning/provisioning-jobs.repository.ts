@@ -12,7 +12,8 @@
 // PBE-031 adds the platform admin's jobs page: the filtered list and the detail (neither ever selects the reveal
 // columns), the locked read of an admin retry or cancel, the payload of a new job (a retry copies its failed job's),
 // and the cancel of a `queued` job. PBE-030 adds the cancel of the active `suspend` or `resume` job that a new
-// suspension or resume of the same tenant supersedes.
+// suspension or resume of the same tenant supersedes, PBE-047 the cancel of the `queued` provision job of an OTA whose
+// Checkout was abandoned (`billing.abandoned_checkouts`).
 import { Inject, Injectable } from "@nestjs/common";
 import type { ProvisioningStepRecord, TenantMigrationRecord } from "@velexis/api-types/jobs";
 import { sql } from "@velexis/db";
@@ -999,6 +1000,33 @@ export class ProvisioningJobsRepository {
       .returning("id")
       .executeTakeFirst();
     return row !== undefined;
+  }
+
+  /**
+   * Cancels the `queued` provision job of `tenantId` in `trx` with `cancel.error` (PBE-047: the OTA's Checkout was
+   * abandoned, so the job that waited behind its closed gate will never run): `canceled`, `finished_at`, no lease, only
+   * while it is `queued`. Returns the ids of the jobs canceled (none or one, `provisioning_jobs_active_uq`).
+   */
+  async cancelQueuedProvision(
+    trx: PlatformTransaction,
+    cancel: { readonly tenantId: string; readonly error: string; readonly now: Date },
+  ): Promise<string[]> {
+    const rows = await trx
+      .updateTable("platform.provisioning_jobs")
+      .set({
+        status: "canceled" satisfies ProvisioningJobStatus,
+        finished_at: cancel.now,
+        locked_until: null,
+        locked_by: null,
+        error: cancel.error.slice(0, MAX_JOB_ERROR_LENGTH),
+        updated_at: cancel.now,
+      })
+      .where("tenant_id", "=", cancel.tenantId)
+      .where("kind", "=", "provision" satisfies ProvisioningJobKind)
+      .where("status", "=", "queued" satisfies ProvisioningJobStatus)
+      .returning("id")
+      .execute();
+    return rows.map((row) => row.id);
   }
 
   /**

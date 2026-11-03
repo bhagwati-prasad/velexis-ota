@@ -125,7 +125,7 @@ export const AUDIT_ACTIONS = Object.freeze([
   "plan.created", // adminCreatePlan
   "plan.updated", // adminUpdatePlan
   "billing.checkout_started", // createCheckoutSession, createTenant with a paid plan (M5)
-  "subscription.updated", // Stripe Billing sync (system)
+  "subscription.updated", // Stripe Billing sync, billing.manual_trials (system)
   "subscription.resynced", // adminResyncSubscription
   "subscription.manually_updated", // adminUpdateManualSubscription
 

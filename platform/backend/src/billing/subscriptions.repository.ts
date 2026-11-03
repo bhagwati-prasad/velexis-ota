@@ -5,7 +5,9 @@
 // the reads and writes of the Stripe Billing sync (a Stripe subscription copied into its row, by its provider id or the
 // pre-inserted row it names, and the current row it replaces), FIX-W30-PLATFORM the subscription's tenant that the
 // manual edit locks first (billing's lock order), FIX-W31-PLATFORM the tenant's row that Checkout locks before it writes
-// the pre-inserted row (`lockTenant`, the same order). Kysely on the API's `PLATFORM_DB` (ADR-0005).
+// the pre-inserted row (`lockTenant`, the same order), PBE-047 the reads and writes of the two billing schedules (the
+// abandoned Checkouts of `billing.abandoned_checkouts`, the manual trials of `billing.manual_trials`). Kysely on the
+// API's `PLATFORM_DB` (ADR-0005).
 import { Inject, Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -294,6 +296,74 @@ function stateColumns(state: StripeSubscriptionState) {
   };
 }
 
+/**
+ * The statuses of the row of an abandoned Checkout (PBE-047, subscription-billing flow §H): `incomplete` (nobody paid
+ * the Checkout), or `incomplete_expired` (Stripe expired a subscription whose first payment never succeeded).
+ */
+export const ABANDONED_CHECKOUT_STATUSES = Object.freeze(["incomplete", "incomplete_expired"] as const);
+
+/** A `provisioning` OTA whose Checkout was abandoned, as `billing.abandoned_checkouts` finds it (PBE-047). */
+export interface AbandonedCheckoutRow {
+  readonly tenant_id: string;
+  /** The OTA's shown subscription (the current one, else the latest): the Stripe row of its Checkout. */
+  readonly subscription_id: string;
+  /** One of ABANDONED_CHECKOUT_STATUSES. */
+  readonly status: string;
+  /** `cs_…` of the latest Checkout Session recorded on the row, if any. */
+  readonly checkout_session_id: string | null;
+  /** The row's last write: its creation, or the start of its latest Checkout (`recordCheckoutSession`). */
+  readonly updated_at: Date;
+}
+
+/** What `findAbandonedCheckouts` looks for. */
+export interface AbandonedCheckoutFilter {
+  /** Only rows whose last write is at or before this time (now minus 48 hours). */
+  readonly before: Date;
+  /** The most rows to answer. */
+  readonly limit: number;
+  /** Only this OTA (the re-check under the OTA's row lock). */
+  readonly tenantId?: string;
+}
+
+/** A manual subscription that `billing.manual_trials` handles (PBE-047): its id and its OTA. */
+export interface ManualTrialRef {
+  readonly id: string;
+  readonly tenant_id: string;
+}
+
+/** What `findManualTrials` looks for. */
+export interface ManualTrialFilter {
+  /** Trials ending before this time (the end of the notice window), and those of an OTA that shows the trial banner. */
+  readonly endsBefore: Date;
+  /** The banner of a trial ending (`tenants.billing_notice`). */
+  readonly notice: string;
+  /** The most rows to answer, after the subscription `afterId` (keyset on the id). */
+  readonly limit: number;
+  readonly afterId?: string;
+}
+
+/** A manual subscription locked by `billing.manual_trials`, with its last write (PBE-047). */
+export type LockedManualTrial = Pick<
+  SubscriptionTable,
+  | "id"
+  | "tenant_id"
+  | "plan_code"
+  | "status"
+  | "billing_provider"
+  | "trial_ends_at"
+  | "updated_at"
+  | "version"
+>;
+
+/** The statuses of a manual trial that `billing.manual_trials` moves on (PBE-047). */
+export const MANUAL_TRIAL_STATUSES = Object.freeze(["trialing", "past_due"] as const);
+
+/**
+ * The status of a manual subscription paid outside Stripe (an admin set it `active`, adminUpdateManualSubscription):
+ * no trial any more, so `billing.manual_trials` takes the trial's banner off its OTA (PBE-047).
+ */
+export const MANUAL_PAID_STATUS = "active";
+
 /** What a Checkout Session records on the pre-inserted `incomplete` row. */
 export interface CheckoutSessionRecord {
   /** `sub_…` of the `incomplete` row. */
@@ -466,6 +536,122 @@ export class SubscriptionsRepository {
       .returning("id")
       .executeTakeFirst();
     return row !== undefined;
+  }
+
+  /**
+   * The abandoned Checkouts (PBE-047, subscription-billing flow §H), read on `db` (the pool, or the caller's transaction
+   * once it holds the OTA's row): the `provisioning` OTAs whose shown subscription (the current one, else the latest, as
+   * `findShownForTenant` picks it) is a Stripe row in ABANDONED_CHECKOUT_STATUSES last written at or before
+   * `filter.before`, oldest first (`updated_at`, then the OTA's id), `filter.limit` at most.
+   */
+  async findAbandonedCheckouts(
+    db: PlatformDb | PlatformTransaction,
+    filter: AbandonedCheckoutFilter,
+  ): Promise<AbandonedCheckoutRow[]> {
+    let query = db
+      .selectFrom("platform.tenants as t")
+      .innerJoinLateral(
+        (eb) =>
+          eb
+            .selectFrom("platform.subscriptions as s")
+            .select(["s.id", "s.status", "s.billing_provider", "s.checkout_session_id", "s.updated_at"])
+            .whereRef("s.tenant_id", "=", "t.id")
+            .orderBy(
+              sql`CASE WHEN s.status IN (${sql.join(CURRENT_SUBSCRIPTION_STATUSES)}) THEN 0 ELSE 1 END`,
+            )
+            .orderBy("s.created_at", "desc")
+            .orderBy("s.id", "desc")
+            .limit(1)
+            .as("shown"),
+        (join) => join.onTrue(),
+      )
+      .select([
+        "t.id as tenant_id",
+        "shown.id as subscription_id",
+        "shown.status",
+        "shown.checkout_session_id",
+        "shown.updated_at",
+      ])
+      .where("t.status", "=", "provisioning")
+      .where("shown.billing_provider", "=", "stripe")
+      .where("shown.status", "in", ABANDONED_CHECKOUT_STATUSES)
+      .where("shown.updated_at", "<=", filter.before);
+    if (filter.tenantId !== undefined) {
+      query = query.where("t.id", "=", filter.tenantId);
+    }
+    return query.orderBy("shown.updated_at").orderBy("t.id").limit(filter.limit).execute();
+  }
+
+  /**
+   * The abandoned Checkout's row `id` becomes `incomplete_expired` in `trx` (`version + 1`, `updated_at`), only while it
+   * is an `incomplete` Stripe row (PBE-047). True when this call changed it.
+   */
+  async expireIncomplete(trx: PlatformTransaction, id: string, now: Date): Promise<boolean> {
+    const row = await trx
+      .updateTable("platform.subscriptions")
+      .set({ status: "incomplete_expired", version: sql<number>`version + 1`, updated_at: now })
+      .where("id", "=", id)
+      .where("billing_provider", "=", "stripe")
+      .where("status", "=", "incomplete")
+      .returning("id")
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /**
+   * The manual trials `billing.manual_trials` looks at (PBE-047), on the pool, of `active` OTAs: manual subscriptions
+   * in MANUAL_TRIAL_STATUSES with an end that end before `filter.endsBefore` or whose OTA shows the trial banner
+   * `filter.notice` (a trial an admin moved later), and the manual subscriptions in MANUAL_PAID_STATUS whose OTA still
+   * shows that banner (an admin set the trial `active`: paid outside Stripe). Ordered by id, after `filter.afterId`,
+   * `filter.limit` at most.
+   */
+  async findManualTrials(filter: ManualTrialFilter): Promise<ManualTrialRef[]> {
+    let query = this.db
+      .selectFrom("platform.subscriptions as s")
+      .innerJoin("platform.tenants as t", "t.id", "s.tenant_id")
+      .select(["s.id", "s.tenant_id"])
+      .where("s.billing_provider", "=", "manual")
+      .where("t.status", "=", "active")
+      .where((eb) =>
+        eb.or([
+          eb.and([
+            eb("s.status", "in", MANUAL_TRIAL_STATUSES),
+            eb("s.trial_ends_at", "is not", null),
+            eb.or([
+              eb("s.trial_ends_at", "<", filter.endsBefore),
+              eb("t.billing_notice", "=", filter.notice),
+            ]),
+          ]),
+          eb.and([eb("s.status", "=", MANUAL_PAID_STATUS), eb("t.billing_notice", "=", filter.notice)]),
+        ]),
+      );
+    if (filter.afterId !== undefined) {
+      query = query.where("s.id", ">", filter.afterId);
+    }
+    return query.orderBy("s.id").limit(filter.limit).execute();
+  }
+
+  /**
+   * The manual subscription `id`, locked for the rest of `trx` (`FOR UPDATE`), with its last write (PBE-047). The
+   * caller has locked the subscription's tenant first (billing's lock order). `undefined` for none or a Stripe row.
+   */
+  async lockManualTrial(trx: PlatformTransaction, id: string): Promise<LockedManualTrial | undefined> {
+    return trx
+      .selectFrom("platform.subscriptions")
+      .select([
+        "id",
+        "tenant_id",
+        "plan_code",
+        "status",
+        "billing_provider",
+        "trial_ends_at",
+        "updated_at",
+        "version",
+      ])
+      .where("id", "=", id)
+      .where("billing_provider", "=", "manual")
+      .forUpdate()
+      .executeTakeFirst();
   }
 
   /**

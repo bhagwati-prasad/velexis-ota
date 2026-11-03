@@ -53,6 +53,8 @@ export const EMAIL_TEMPLATE_KEYS = [
   // M5: Stripe could not collect an invoice of Velexis's subscription (PBE-046, `invoice.payment_failed`; PADR-0013
   // item 5).
   "billing.payment_failed",
+  // M5: a manual trial ends in 14 or 3 days (PBE-047, `billing.manual_trials`; PADR-0013 item 5).
+  "billing.trial_ending",
 ] as const;
 
 /** A key of EMAIL_TEMPLATE_KEYS. */
@@ -178,6 +180,10 @@ export const EMAIL_TEMPLATES: Readonly<Record<EmailTemplateKey, EmailTemplateDef
   "billing.payment_failed": definition(
     "Stripe could not collect the payment of an invoice of the OTA's Velexis subscription (to the owners)",
     ["fullName", "tenantName", "tenantKey", "invoiceNumber", "amountDue", "billingUrl"],
+  ),
+  "billing.trial_ending": definition(
+    "The OTA's manual trial ends in 14 or 3 days: choose a plan, or the OTA is suspended 14 days after the end (to the owners)",
+    ["fullName", "tenantName", "tenantKey", "trialEndsOn", "timeLeft", "suspensionOn", "billingUrl"],
   ),
 });
 

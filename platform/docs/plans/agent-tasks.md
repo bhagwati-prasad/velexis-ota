@@ -1491,7 +1491,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - The list shows number, period, total, status and Stripe links; a payment failure e-mails the owners.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int billing`
 
-### PBE-047 · Add the abandoned-Checkout and manual-trial schedulers
+### PBE-047 · Add the abandoned-Checkout and manual-trial schedulers ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-045
