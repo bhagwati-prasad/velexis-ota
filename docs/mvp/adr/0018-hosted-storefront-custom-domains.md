@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (one hosted multi-tenant storefront on `<key>.ota.example.com` or a custom domain, same-origin `/api/*` through Caddy, httpOnly cookies + CSRF, Caddy on-demand TLS), lead architect (Caddy configuration, `ask` rules, edge credential, CSP)
-**Revisions:** 2026-10-12 (planning review): custom-domain examples use the reserved name `travel.example.net`; Caddy's admin API listens only on a unix socket. 2026-11-02 (lead decision (2e) of 2026-11-02, recording FIX-W39-OTA): the custom domain lifecycle's step 5 says what "primary" takes: a custom domain serves e-mail links, the console's `storefrontUrl` and storefront.get only once it is verified, primary and its certificate issued (`tls_status = issued`), else the sub-domain does (dated note under step 5).
+**Revisions:** 2026-10-12 (planning review): custom-domain examples use the reserved name `travel.example.net`; Caddy's admin API listens only on a unix socket. 2026-11-02 (lead decision (2e) of 2026-11-02, recording FIX-W39-OTA): the custom domain lifecycle's step 5 says what "primary" takes: a custom domain serves e-mail links, the console's `storefrontUrl` and storefront.get only once it is verified, primary and its certificate issued (`tls_status = issued`), else the sub-domain does (dated note under step 5). 2026-11-03 (lead decision (2j) of 2026-11-03, recording FIX-W40-OTA): the Follow-ups' 301 of the whole sub-domain to the primary custom domain is superseded for the MVP by the storefront's browser redirect of the sign-in and sign-up pages from the sub-domain (OFE-021, OADR-0006); a secondary custom domain never redirects (dated note under that follow-up).
 
 ## Context
 
@@ -131,6 +131,8 @@ This protects the ACME rate limits and stops anyone from pointing arbitrary doma
 
 - Decided during planning; revisit when sign-ups approach 30 per week. Then use a wildcard certificate for `*.ota.example.com` with a DNS-01 challenge (a Caddy binary built with `xcaddy` and a DNS provider module).
 - Once an OTA marks a custom domain primary, redirect its sub-domain to it (301), so customers stay on one host.
+
+  **2026-11-03 (lead decision (2j) of 2026-11-03, recorded by FIX-W40-OTA): superseded for the MVP.** Caddy sends no 301 for the whole sub-domain. Instead the storefront redirects in the browser: on the OTA's sub-domain, the sign-in and sign-up pages (`/account/sign-in.html`, `/account/sign-up.html`, and the same paths without `.html`) go to the same path on the primary custom domain with `location.replace`, query and fragment kept, before `auth.getSession` and before the page module runs, so sessions are created on the primary host (OFE-021, [`ota/frontend/src/lib/primary-host.js`](../../../ota/frontend/src/lib/primary-host.js); [OADR-0006](../../../ota/docs/adr/0006-storefront-cookie-sessions-and-csrf.md) Follow-ups). The primary host is the one storefront.get names (`primaryUrl` and the `domains` entry marked `primary`: verified, primary and its certificate issued, step 5's note). Every other page keeps working on both hosts, and only the sub-domain redirects: a secondary custom domain never does, so no two hosts send a traveller back and forth (`StorefrontConfig.domains` in the OTA document says so since FIX-W40-OTA). Host-only cookies stay the Negative consequence above for the other pages.
 
 ## Alternatives considered
 

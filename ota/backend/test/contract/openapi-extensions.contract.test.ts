@@ -1732,6 +1732,34 @@ describe("getStorefront's 503 SERVICE_UNAVAILABLE (lead decision (2f) of 2026-11
   });
 });
 
+// ---- FIX-W40-OTA: which host redirects to primaryUrl (lead decision (2j) of 2026-11-03) ----------------------------
+
+describe("StorefrontConfig.domains: only the sub-domain redirects (lead decision (2j) of 2026-11-03)", () => {
+  const domainsOf = (document: Json): Json =>
+    objectAt(document, "components", "schemas", "StorefrontConfig", "properties", "domains");
+
+  it("[FIX-W40-OTA AC2] says only the sub-domain redirects to primaryUrl and a secondary custom domain never does", () => {
+    const description = String(domainsOf(working)["description"]);
+
+    expect(description).toContain(
+      "Only the sub-domain (the entry of kind `subdomain`) redirects to `primaryUrl`",
+    );
+    expect(description).toContain("a secondary custom domain never does");
+    expect(description).toContain("lead decision (2j) of 2026-11-03");
+    expect(description).toContain("redirects only its sign-in and sign-up pages");
+    expect(description).not.toContain("redirect secondary hosts");
+  });
+
+  it("[FIX-W40-OTA AC2] changes the description only: the property keeps the frozen original's shape", () => {
+    const { description: _working, ...shape } = domainsOf(working);
+    const { description: frozenDescription, ...frozenShape } = domainsOf(frozen);
+
+    expect(shape).toEqual(frozenShape);
+    // The frozen original keeps its own words: it is never edited.
+    expect(String(frozenDescription)).toContain("redirect secondary hosts to `primaryUrl`");
+  });
+});
+
 describe("the frozen original", () => {
   it("is unchanged under docs/velexis-sdk: same bytes, no MVP extension [OBE-009 AC2]", () => {
     const sha256 = createHash("sha256").update(readFileSync(FROZEN_DOCUMENT)).digest("hex");

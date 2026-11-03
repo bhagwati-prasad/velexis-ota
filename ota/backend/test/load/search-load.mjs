@@ -93,6 +93,11 @@ const BUILT_FILES = [
 const AMADEUS_ROLE = "amadeus";
 /** `<key>.<base>` is a tenant's storefront host (the value of the `.env.example` files). */
 const STOREFRONT_BASE_DOMAIN = "ota.example.com";
+/**
+ * The API's public URL, the VM's (deploy/env/ota-backend.env.example): APP_ENV=production refuses an http one
+ * (FIX-W40-OTA). The journeys go through the edge, which gets same-origin asset and file paths, so nothing uses it.
+ */
+const PUBLIC_OTA_API_URL = "https://api.ota.example.com";
 /** The tenants of a run, in order: --tenants takes the first n (alpha and beta are the template's schemas). */
 const TENANT_KEYS = Object.freeze(["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"]);
 /** The routes of the measured searches (airports of the reference fixture); each search has its own route and day. */
@@ -751,7 +756,7 @@ function apiEnv(options, run) {
     AMADEUS_BASE_URL_TEST: run.amadeusUrl,
     AMADEUS_BASE_URL_LIVE: run.amadeusUrl,
     STOREFRONT_BASE_DOMAIN,
-    PUBLIC_OTA_API_URL: `http://127.0.0.1:${run.apiPort}`,
+    PUBLIC_OTA_API_URL,
     SENTRY_DSN: "",
   };
 }

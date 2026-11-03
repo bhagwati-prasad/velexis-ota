@@ -31147,8 +31147,11 @@ components:
             Verified storefront domains of the OTA (`platform.tenant_domains`, purpose storefront): its
             `<key>.velexis.app` sub-domain and the custom domains whose certificate is issued (a verified custom domain
             is listed once the platform's TLS probe records `tls_status = issued`; lead decision (2g) of 2026-10-31,
-            second batch), the one of `primaryUrl` marked `primary`. Validate the request host against it and redirect
-            secondary hosts to `primaryUrl`.
+            second batch), the one of `primaryUrl` marked `primary`. Validate the request host against it. Only the
+            sub-domain (the entry of kind `subdomain`) redirects to `primaryUrl`, while that names a custom domain; a
+            secondary custom domain never does, so no two hosts send a visitor back and forth (lead decision (2j) of
+            2026-11-03). The hosted storefront redirects only its sign-in and sign-up pages that way, so sessions are
+            created on the primary host.
         timeZone:
           type: string
           description: IANA time zone of the OTA (support hours, emails).

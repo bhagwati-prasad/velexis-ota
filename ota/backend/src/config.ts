@@ -10,10 +10,12 @@
 import { isIP } from "node:net";
 import { resolve } from "node:path";
 import {
+  ConfigError,
   defineConfig,
   env,
   loadDevEnvFiles,
   type ConfigOf,
+  type ConfigProblem,
   type EnvSource,
   type EnvVar,
 } from "@velexis/config";
@@ -247,6 +249,39 @@ function amadeusBaseUrl(): EnvVar<string | undefined> {
   };
 }
 
+/** Why PUBLIC_OTA_API_URL is refused whatever APP_ENV says (`publicOtaApiUrl`). */
+const PUBLIC_OTA_API_URL_NOT_A_BASE = "must be a base URL without credentials, query or fragment";
+/** Why PUBLIC_OTA_API_URL is refused with APP_ENV=production (`publicOtaApiUrlProblems`). */
+const PUBLIC_OTA_API_URL_NOT_HTTPS = "must be an https URL with APP_ENV=production";
+
+/**
+ * PUBLIC_OTA_API_URL, the API's public base URL (FIX-W40-OTA, lead decision (2a) of 2026-11-03: the platform backend's
+ * rule of FIX-W39-PLATFORM for its copy of the same value): an `http:` or `https:` URL that the paths of the absolute
+ * URLs given to key callers follow (`<PUBLIC_OTA_API_URL>/v1/assets/…`, `/v1/files/…`), so a path is allowed but user
+ * name, password, query and fragment are refused in every environment. An empty `?` or `#` leaves `search` and `hash`
+ * empty, so the text itself is checked for them. `https:` with `APP_ENV=production` is a rule between two variables:
+ * `publicOtaApiUrlProblems` checks it. The value is kept as given (the callers drop trailing slashes); a refused one is
+ * named, never printed.
+ */
+function publicOtaApiUrl(): EnvVar<string> {
+  const url = env.url({ protocols: ["https:", "http:"] });
+  return {
+    ...url,
+    kind: "publicOtaApiUrl",
+    parse(raw, context) {
+      const result = url.parse(raw, context);
+      if (!result.ok) {
+        return result;
+      }
+      const parsed = new URL(raw);
+      if (parsed.username !== "" || parsed.password !== "" || raw.includes("?") || raw.includes("#")) {
+        return { ok: false, reason: PUBLIC_OTA_API_URL_NOT_A_BASE };
+      }
+      return result;
+    },
+  };
+}
+
 /** The API process (`dist/main.js`, unit velexis-ota-api). */
 export const apiConfigSchema = {
   ...sharedSchema,
@@ -276,8 +311,10 @@ export const apiConfigSchema = {
   // bookings.getDocumentDownloadUrl and checks the signature of every download. Only the API signs and verifies; the
   // worker does not read it.
   DOCUMENT_URL_KEY_FILE: env.secretFile({ minBytes: SIGNED_URL_KEY_MIN_BYTES }),
-  // The API's public origin, for absolute URLs given to key callers (asset and file links; ADR-0018).
-  PUBLIC_OTA_API_URL: env.url({ protocols: ["https:", "http:"] }),
+  // The API's public base URL, for absolute URLs given to key callers (asset and file links; ADR-0018), the same value
+  // as the platform backend's PUBLIC_OTA_API_URL. Never with credentials, a query or a fragment, and an https URL with
+  // APP_ENV=production (FIX-W40-OTA, lead decision (2a) of 2026-11-03; `publicOtaApiUrl`, `publicOtaApiUrlProblems`).
+  PUBLIC_OTA_API_URL: publicOtaApiUrl(),
   // Optional overrides of the Amadeus host per environment (the stub, http://127.0.0.1:4900, in development and CI);
   // empty on the VM, where the connection's or the shared account's base_url is used (OADR-0001 point 4).
   AMADEUS_BASE_URL_TEST: amadeusBaseUrl(),
@@ -324,25 +361,65 @@ export type ApiConfig = ConfigOf<typeof apiConfigSchema>;
 export type WorkerConfig = ConfigOf<typeof workerConfigSchema>;
 
 /**
- * Validates `source` against the schema. Without a source it validates the process environment, after filling unset
- * variables from `ota/backend/.env.local` and the root `.env.local` in development and tests (never when `APP_ENV` or
- * `NODE_ENV` is `production`: on the VM systemd provides the environment). Throws one `ConfigError` naming every
- * missing or invalid variable, never a value.
+ * The PUBLIC_OTA_API_URL rule that a schema entry cannot express (FIX-W40-OTA, lead decision (2a) of 2026-11-03, as the
+ * platform backend's `publicOtaApiUrlProblems` of FIX-W39-PLATFORM): with `APP_ENV=production` it is an `https:` URL.
+ * Key callers get absolute asset URLs and signed document URLs on it (a signed URL is a credential for 5 minutes), and
+ * the VM's API is reached through Caddy over HTTPS only; `http:` stays allowed in development and tests
+ * (`http://localhost:4000`). A value that is invalid on its own, or an invalid APP_ENV, is reported by the schema, not
+ * here; the reason never holds the value.
+ */
+function publicOtaApiUrlProblems(source: EnvSource | undefined): ConfigProblem[] {
+  let values;
+  try {
+    values = defineConfig(
+      { APP_ENV: sharedSchema.APP_ENV, PUBLIC_OTA_API_URL: apiConfigSchema.PUBLIC_OTA_API_URL },
+      source,
+    );
+  } catch (error) {
+    if (error instanceof ConfigError) {
+      return [];
+    }
+    throw error;
+  }
+  return values.APP_ENV === "production" && new URL(values.PUBLIC_OTA_API_URL).protocol !== "https:"
+    ? [{ variable: "PUBLIC_OTA_API_URL", reason: PUBLIC_OTA_API_URL_NOT_HTTPS }]
+    : [];
+}
+
+/**
+ * Validates `source` against the schema and the process's rules between variables (`check`). Without a source it
+ * validates the process environment, after filling unset variables from `ota/backend/.env.local` and the root
+ * `.env.local` in development and tests (never when `APP_ENV` or `NODE_ENV` is `production`: on the VM systemd provides
+ * the environment). Throws one `ConfigError` naming every missing or invalid variable, never a value: the schema's
+ * problems first, then those of `check`.
  */
 function load<S extends typeof apiConfigSchema | typeof workerConfigSchema>(
   schema: S,
   source: EnvSource | undefined,
+  check: (source: EnvSource | undefined) => readonly ConfigProblem[] = () => [],
 ): ConfigOf<S> {
-  if (source !== undefined) {
-    return defineConfig(schema, source);
+  if (source === undefined) {
+    loadDevEnvFiles({ appDir: APP_DIR });
   }
-  loadDevEnvFiles({ appDir: APP_DIR });
-  return defineConfig(schema);
+  // Without a source, `defineConfig` reads the process environment (with the files above filled in).
+  const problems = [...check(source)];
+  try {
+    const config = defineConfig(schema, source);
+    if (problems.length === 0) {
+      return config;
+    }
+  } catch (error) {
+    if (!(error instanceof ConfigError)) {
+      throw error;
+    }
+    problems.unshift(...error.problems);
+  }
+  throw new ConfigError(problems);
 }
 
-/** The API's configuration (see `load`). */
+/** The API's configuration (see `load`), with the production rule of PUBLIC_OTA_API_URL (`publicOtaApiUrlProblems`). */
 export function loadApiConfig(source?: EnvSource): ApiConfig {
-  return load(apiConfigSchema, source);
+  return load(apiConfigSchema, source, publicOtaApiUrlProblems);
 }
 
 /** The worker's configuration (see `load`). */

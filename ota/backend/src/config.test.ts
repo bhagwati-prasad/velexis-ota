@@ -53,7 +53,12 @@ const API_ONLY_NAMES = [
   "DOCUMENT_URL_KEY_FILE",
   "PUBLIC_OTA_API_URL",
 ];
-const API_ENV = { ...SHARED, ...API_ONLY } as const;
+/**
+ * The API's public URL of the VM (deploy/env/ota-backend.env.example): APP_ENV=production, SHARED's, needs an https
+ * PUBLIC_OTA_API_URL (FIX-W40-OTA, lead decision (2a) of 2026-11-03), while API_ONLY has the development value.
+ */
+const PRODUCTION_API_URL = "https://api.ota.example.com";
+const API_ENV = { ...SHARED, ...API_ONLY, PUBLIC_OTA_API_URL: PRODUCTION_API_URL } as const;
 
 function configErrorOf(run: () => unknown): ConfigError {
   try {
@@ -414,6 +419,120 @@ describe("the caller credentials of the API (OBE-011)", () => {
     );
 
     expect(error.problems.map((problem) => problem.variable)).toEqual(["PUBLIC_OTA_API_URL"]);
+  });
+});
+
+describe("the API's public URL (FIX-W40-OTA, lead decision (2a) of 2026-11-03: the platform's rule)", () => {
+  const OTA_API_URL = "PUBLIC_OTA_API_URL";
+  const NOT_A_BASE = "must be a base URL without credentials, query or fragment";
+  const NOT_HTTPS = "must be an https URL with APP_ENV=production";
+  /** A dummy password that a refused value carries: no message may print it. */
+  const PASSWORD = "dummy-password-that-must-never-be-printed";
+
+  it("[FIX-W40-OTA AC1] accepts an http(s) base URL, with a path or a trailing slash, in development and tests, as given", () => {
+    for (const appEnv of ["development", "test"]) {
+      for (const url of [
+        "http://localhost:4000",
+        "http://127.0.0.1:4000/",
+        "https://api.ota.example.com",
+        "https://ota.example.com/api/",
+      ]) {
+        expect([
+          appEnv,
+          loadApiConfig({ ...API_ENV, APP_ENV: appEnv, [OTA_API_URL]: url })[OTA_API_URL],
+        ]).toEqual([appEnv, url]);
+      }
+    }
+  });
+
+  it("[FIX-W40-OTA AC1] refuses credentials, a query or a fragment in every environment, without printing the value", () => {
+    for (const appEnv of ["development", "test", "production"]) {
+      for (const url of [
+        `https://velexis:${PASSWORD}@api.ota.example.com`,
+        `https://:${PASSWORD}@api.ota.example.com`,
+        "https://velexis@api.ota.example.com",
+        "https://api.ota.example.com/?token=1",
+        "https://api.ota.example.com?",
+        "https://api.ota.example.com/v1#top",
+        "https://api.ota.example.com#",
+        // An http URL with credentials in production: one problem, the schema's; the https rule is not reported on top.
+        `http://velexis:${PASSWORD}@api.ota.example.com`,
+      ]) {
+        const error = configErrorOf(() => loadApiConfig({ ...API_ENV, APP_ENV: appEnv, [OTA_API_URL]: url }));
+
+        expect([appEnv, url, error.problems]).toEqual([
+          appEnv,
+          url,
+          [{ variable: OTA_API_URL, reason: NOT_A_BASE }],
+        ]);
+        expect(error.message).not.toContain(PASSWORD);
+        expect(error.message).not.toContain(url);
+      }
+    }
+  });
+
+  it("[FIX-W40-OTA AC1] requires an https URL with APP_ENV=production, and names it with the schema's problems", () => {
+    for (const url of ["http://api.ota.example.com", "http://localhost:4000", "http://127.0.0.1:4000/api"]) {
+      const error = configErrorOf(() => loadApiConfig({ ...API_ENV, [OTA_API_URL]: url }));
+
+      expect([url, error.problems]).toEqual([url, [{ variable: OTA_API_URL, reason: NOT_HTTPS }]]);
+      expect(error.message).not.toContain(url);
+    }
+    expect(loadApiConfig({ ...API_ENV, [OTA_API_URL]: "https://ota.example.com/api" })[OTA_API_URL]).toBe(
+      "https://ota.example.com/api",
+    );
+    // One ConfigError for the whole configuration: the schema's problems first, then the rule between variables.
+    const { DATABASE_URL: _omitted, ...withoutDatabase } = API_ENV;
+    const error = configErrorOf(() =>
+      loadApiConfig({ ...withoutDatabase, [OTA_API_URL]: "http://api.ota.example.com" }),
+    );
+    expect(error.problems).toEqual([
+      { variable: "DATABASE_URL", reason: "is required but missing" },
+      { variable: OTA_API_URL, reason: NOT_HTTPS },
+    ]);
+    // An APP_ENV the schema refuses decides nothing: only APP_ENV is named.
+    expect(
+      configErrorOf(() =>
+        loadApiConfig({ ...API_ENV, APP_ENV: "staging", [OTA_API_URL]: "http://api.ota.example.com" }),
+      ).problems.map((problem) => problem.variable),
+    ).toEqual(["APP_ENV"]);
+  });
+
+  it("[FIX-W40-OTA AC1] applies the production rule to the process environment too", () => {
+    // production: no .env.local file is read, so only the stubbed environment counts.
+    for (const [name, value] of Object.entries(API_ENV)) {
+      vi.stubEnv(name, value);
+    }
+    expect(loadApiConfig()[OTA_API_URL]).toBe(PRODUCTION_API_URL);
+    vi.stubEnv(OTA_API_URL, "http://api.ota.example.com");
+
+    expect(configErrorOf(() => loadApiConfig()).problems).toEqual([
+      { variable: OTA_API_URL, reason: NOT_HTTPS },
+    ]);
+  });
+
+  it("[FIX-W40-OTA AC1] stays the API's: the worker neither reads nor checks it", () => {
+    const worker = loadWorkerConfig({
+      ...WORKER_ENV,
+      [OTA_API_URL]: `http://velexis:${PASSWORD}@x.example?y#z`,
+    });
+
+    expect(worker).not.toHaveProperty(OTA_API_URL);
+  });
+
+  it("[FIX-W40-OTA AC1] is https on the VM, the platform's value there, and the local API in development", () => {
+    const vm = renderedTemplate("ota-backend.env.example")[OTA_API_URL];
+
+    expect(vm).toBe(PRODUCTION_API_URL);
+    // The platform backend builds the webhook URLs of own Stripe keys on its copy of the same value (FIX-W39-PLATFORM).
+    expect(renderedTemplate("platform-backend.env.example")[OTA_API_URL]).toBe(vm);
+    for (const file of [join(REPO_ROOT, ".env.example"), join(APP_DIR, ".env.example")]) {
+      const local = readEnvFile(file)[OTA_API_URL];
+      expect([file, local]).toEqual([file, "http://localhost:4000"]);
+      expect(loadApiConfig({ ...API_ENV, APP_ENV: "development", [OTA_API_URL]: local })[OTA_API_URL]).toBe(
+        local,
+      );
+    }
   });
 });
 
