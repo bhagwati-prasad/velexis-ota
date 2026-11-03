@@ -120,6 +120,7 @@ export default async function NewOtaPage() {
         defaultPlanCode={plan.defaultPlanCode}
         planNote={plan.note}
         plansUnavailable={plan.unavailable}
+        stripeBilling={account.features.stripeBilling}
       />
     </div>
   );

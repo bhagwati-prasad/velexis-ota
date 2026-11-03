@@ -1755,7 +1755,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - A live secret key without a recent step-up answers `REAUTH_REQUIRED` [PF-30 AC6].
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int provisioning api-keys`
 
-### PFE-020 · Add the plan step and the Checkout hand-off to the create-OTA wizard
+### PFE-020 · Add the plan step and the Checkout hand-off to the create-OTA wizard ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M5
 - **Depends on:** PFE-009, PBE-044

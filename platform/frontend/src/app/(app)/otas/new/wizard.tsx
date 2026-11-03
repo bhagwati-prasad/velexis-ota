@@ -25,7 +25,16 @@ import {
   keyStatusText,
   type KeyFieldCheck,
 } from "@/app/(app)/otas/new/key-availability-field";
-import { PlanPicker, type Plan } from "@/app/(app)/otas/new/plan-picker";
+import {
+  DEFAULT_BILLING_INTERVAL,
+  PlanPicker,
+  PlanPrice,
+  checkoutAvailable,
+  isBillingInterval,
+  trialText,
+  type BillingInterval,
+  type Plan,
+} from "@/app/(app)/otas/new/plan-picker";
 import { FormErrorSummary, type FormErrorItem } from "@/components/form-error-summary";
 import { FormField, fieldId } from "@/components/form-field";
 import { Button } from "@/components/ui/button";
@@ -37,14 +46,17 @@ import { cn } from "@/lib/utils";
  *
  * 1. *OTA details*: name, key (prefilled from the name until the person edits it, with `KeyAvailabilityField`),
  *    country, default currency and time zone;
- * 2. *Plan*: `PlanPicker` (before M5 only `early_access`);
- * 3. *Review*, then "Create OTA".
+ * 2. *Plan*: `PlanPicker` (before M5 only `early_access`; from M5 the public plans with the "Annual billing"
+ *    switch, PFE-020);
+ * 3. *Review*, then "Create OTA" (from M5 "Create OTA and continue to payment": the action sends the browser to the
+ *    Stripe Checkout URL of the API's answer, PF-71 AC1).
  *
  * All three steps are one form, so the final submit sends every field. "Continue" checks the fields of its step in
  * the browser; the `createOta` action checks them all again. The `Idempotency-Key` the page made when the wizard
  * opened travels in a hidden field with every submit, so a double click or a retry creates one OTA (PF-10 AC2). A
  * refused submit returns to the step of its first problem: `TENANT_KEY_UNAVAILABLE` to step 1 with the message at
- * the key, the tenant limit stays on the review (PF-10 AC4). Nothing here is secret.
+ * the key, the tenant limit stays on the review (PF-10 AC4). With `stripeBilling` off (before M5) the wizard is M1's:
+ * no interval, no Checkout. Nothing here is secret, and no URL is built here.
  */
 
 /** One option of a select: an ISO code or a time zone, and its name in the portal's English. */
@@ -59,7 +71,7 @@ const STEPS: readonly WizardStep[] = ["details", "plan", "review"];
 /** The fields of each step, in form order. */
 const STEP_FIELDS: Readonly<Record<WizardStep, readonly CreateOtaField[]>> = {
   details: ["name", "key", "countryCode", "defaultCurrency", "timeZone"],
-  plan: ["planCode"],
+  plan: ["billingInterval", "planCode"],
   review: [],
 };
 
@@ -155,6 +167,29 @@ export interface WizardProps {
   readonly planNote?: string | undefined;
   /** Shown instead of the plans when they could not be loaded. */
   readonly plansUnavailable?: string | undefined;
+  /**
+   * `getMe.features.stripeBilling` (M5): the plan step adds the billing interval and the submit hands over to Stripe
+   * Checkout. Off (the default), the wizard is M1's.
+   */
+  readonly stripeBilling?: boolean | undefined;
+}
+
+/** The plan of `code` among `plans`. */
+function planOf(plans: readonly Plan[], code: string): Plan | undefined {
+  return plans.find((plan) => plan.code === code);
+}
+
+/**
+ * The plan to start with: the page's choice, unless Checkout cannot start it with `interval` (M5), which leaves the
+ * choice to the person.
+ */
+function initialPlanCode(
+  plans: readonly Plan[],
+  code: string,
+  interval: BillingInterval | undefined,
+): string {
+  const plan = planOf(plans, code);
+  return interval === undefined || plan === undefined || checkoutAvailable(plan, interval) ? code : "";
 }
 
 /** The create-OTA wizard: three steps in one form, posted to `createOta` with the wizard's `Idempotency-Key`. */
@@ -169,17 +204,20 @@ export function Wizard({
   defaultPlanCode,
   planNote,
   plansUnavailable,
+  stripeBilling = false,
 }: WizardProps) {
   const [state, dispatch, pending] = useActionState(createOta, INITIAL_STATE);
   const [step, setStep] = useState<WizardStep>("details");
-  const [values, setValues] = useState<Values>({
+  const [values, setValues] = useState<Values>(() => ({
     name: "",
     key: "",
     countryCode: "",
     defaultCurrency: "",
     timeZone: defaultTimeZone,
-    planCode: defaultPlanCode,
-  });
+    planCode: initialPlanCode(plans, defaultPlanCode, stripeBilling ? DEFAULT_BILLING_INTERVAL : undefined),
+    // M5 only; before it the form has no interval and the request none.
+    billingInterval: stripeBilling ? DEFAULT_BILLING_INTERVAL : "",
+  }));
   // The key follows the name until the person types a key of their own (and again once they empty it).
   const [keyEdited, setKeyEdited] = useState(false);
   const [keyCheck, setKeyCheck] = useState<KeyFieldCheck>({ key: "", status: "empty" });
@@ -258,6 +296,18 @@ export function Wizard({
     }
   }
 
+  /**
+   * M5: the "Annual billing" switch. A chosen plan that Checkout cannot start with the new interval is no longer
+   * chosen (its radio button is disabled), so the person picks one that can.
+   */
+  function setInterval(interval: BillingInterval): void {
+    setValues((previous) => {
+      const plan = planOf(plans, previous.planCode);
+      const keepsPlan = plan !== undefined && checkoutAvailable(plan, interval);
+      return { ...previous, billingInterval: interval, planCode: keepsPlan ? previous.planCode : "" };
+    });
+  }
+
   /** The problems of the fields of `current` that the browser can see. */
   function stepErrors(current: WizardStep): FieldErrors {
     const errors: Partial<Record<CreateOtaField, string>> = {};
@@ -292,8 +342,21 @@ export function Wizard({
         errors.timeZone = WIZARD_STRINGS.timeZoneUnknown;
       }
     }
-    if (current === "plan" && values.planCode === "") {
-      errors.planCode = WIZARD_STRINGS.planRequired;
+    if (current === "plan") {
+      if (stripeBilling && !isBillingInterval(values.billingInterval)) {
+        errors.billingInterval = WIZARD_STRINGS.intervalInvalid;
+      }
+      const plan = planOf(plans, values.planCode);
+      if (values.planCode === "") {
+        errors.planCode = WIZARD_STRINGS.planRequired;
+      } else if (
+        stripeBilling &&
+        plan !== undefined &&
+        isBillingInterval(values.billingInterval) &&
+        !checkoutAvailable(plan, values.billingInterval)
+      ) {
+        errors.planCode = WIZARD_STRINGS.planIntervalUnavailable;
+      }
     }
     return errors;
   }
@@ -320,7 +383,14 @@ export function Wizard({
 
   const stepIndex = STEPS.indexOf(step);
   const storefrontHost = `${values.key}.${storefrontBaseDomain}`;
-  const planName = plans.find((plan) => plan.code === values.planCode)?.name ?? values.planCode;
+  const chosenPlan = planOf(plans, values.planCode);
+  const planName = chosenPlan?.name ?? values.planCode;
+  // M5 only: the interval the switch shows and the form sends.
+  const interval = stripeBilling
+    ? isBillingInterval(values.billingInterval)
+      ? values.billingInterval
+      : DEFAULT_BILLING_INTERVAL
+    : undefined;
 
   function heading(id: WizardStep) {
     return (
@@ -441,9 +511,12 @@ export function Wizard({
           plans={plans}
           value={values.planCode}
           onChange={(code) => setValue("planCode", code)}
-          note={planNote}
+          interval={interval}
+          onIntervalChange={setInterval}
+          note={planNote ?? (stripeBilling ? WIZARD_STRINGS.checkoutNote : undefined)}
           unavailable={plansUnavailable}
           error={problems.fieldErrors.planCode}
+          intervalError={problems.fieldErrors.billingInterval}
         />
       </section>
 
@@ -465,7 +538,26 @@ export function Wizard({
           <dd>{labelOf(timeZones, values.timeZone)}</dd>
           <dt className="text-muted-foreground">{WIZARD_STEP_LABELS.plan}</dt>
           <dd>{planName}</dd>
+          {interval === undefined ? null : (
+            <>
+              <dt className="text-muted-foreground">{WIZARD_STRINGS.billing}</dt>
+              <dd>{WIZARD_STRINGS.intervals[interval]}</dd>
+              {chosenPlan === undefined ? null : (
+                <>
+                  <dt className="text-muted-foreground">{WIZARD_STRINGS.price}</dt>
+                  <dd className="flex flex-wrap items-baseline gap-x-2">
+                    <PlanPrice plan={chosenPlan} interval={interval} />
+                  </dd>
+                  <dt className="text-muted-foreground">{WIZARD_STRINGS.freeTrial}</dt>
+                  <dd>{trialText(chosenPlan)}</dd>
+                </>
+              )}
+            </>
+          )}
         </dl>
+        {interval === undefined ? null : (
+          <p className="text-sm text-muted-foreground">{WIZARD_STRINGS.reviewCheckout}</p>
+        )}
         <div className="flex flex-wrap gap-3">
           {(["details", "plan"] as const).map((id) => (
             <Button key={id} type="button" variant="outline" size="sm" onClick={() => go(id)}>
@@ -482,7 +574,9 @@ export function Wizard({
             ? WIZARD_STRINGS.next
             : pending
               ? WIZARD_STRINGS.submitting
-              : WIZARD_STRINGS.submit}
+              : stripeBilling
+                ? WIZARD_STRINGS.submitCheckout
+                : WIZARD_STRINGS.submit}
         </Button>
         {stepIndex === 0 ? null : (
           <Button

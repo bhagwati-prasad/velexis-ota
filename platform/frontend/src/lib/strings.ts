@@ -637,6 +637,27 @@ export const WIZARD_STRINGS = Object.freeze({
   planRequired: "Choose a plan.",
   price: "Price",
   perMonth: "per month",
+  perYear: "per year",
+  // From M5 (`features.stripeBilling`, PFE-020): the billing interval, the Checkout hand-off.
+  /** The switch of the plan step: off bills monthly, on bills once a year. */
+  annualBilling: "Annual billing",
+  annualBillingHint: "Off: billed every month. On: billed once a year, at the annual price.",
+  /** The billing interval of the plan, as the review names it. */
+  billing: "Billing",
+  intervals: Object.freeze({ month: "Monthly", year: "Annual" }),
+  /** A plan without a Stripe price for the chosen interval (`checkoutAvailable`): it cannot be chosen with it. */
+  planNotOffered: (interval: "month" | "year") =>
+    interval === "year" ? "Not available with annual billing." : "Not available with monthly billing.",
+  monthlyOnly: "Monthly billing only",
+  intervalInvalid: "Choose monthly or annual billing.",
+  planIntervalUnavailable:
+    "This plan is not available with the chosen billing. Choose another plan, or change the billing.",
+  freeTrial: "Free trial",
+  checkoutNote:
+    "After the review, Stripe's secure payment page opens to start the plan. Nothing is charged during a free trial; Stripe asks for a card for later.",
+  reviewCheckout:
+    "When you create the OTA, Stripe's secure payment page opens: pay there, or start the free trial. The set-up of your OTA starts as soon as Stripe confirms it.",
+  submitCheckout: "Create OTA and continue to payment",
   reviewIntro:
     "Check the details before you create the OTA. The key and the default currency cannot be changed afterwards.",
   storefrontAddress: "Storefront address",
@@ -724,6 +745,36 @@ export const SETUP_STRINGS = Object.freeze({
   canceledText: "Contact Velexis support to finish the set-up of this OTA.",
   suspendedText: "The OTA dashboard has the details.",
   unavailableTitle: "The set-up could not be loaded",
+  // From M5: the Stripe Checkout of a new OTA (PFE-020; flow signup-and-create-ota.md step 7, billing flow §B, §H).
+  /** Back from Stripe (`?checkout=success`): the webhook, not the redirect, starts the set-up. */
+  checkoutConfirming:
+    "Thank you. Stripe is confirming the payment, or the start of the free trial, to Velexis. This can take a minute: the set-up starts as soon as the confirmation arrives, and this page follows it.",
+  paymentTitle: "Payment needed",
+  paymentText:
+    "Your OTA is created and waits for its plan. Continue to Stripe's secure payment page to pay, or to start the free trial there: the set-up starts as soon as Stripe confirms it.",
+  plan: "Plan",
+  billing: "Billing",
+  intervals: Object.freeze({ month: "Monthly", year: "Annual" }),
+  continueToPayment: "Continue to payment",
+  paymentHint:
+    "If no payment is made within 48 hours, the set-up stops; your OTA key stays reserved and an owner can retry.",
+  paymentOwnerOnly: "An owner of this OTA continues to payment to start the set-up.",
+  abandonedTitle: "The payment was not completed",
+  abandonedText:
+    "Stripe's payment page expired before the payment was made, so the set-up stopped. Your OTA key stays reserved.",
+  retryPayment: "Retry",
+  retryPaymentHint:
+    "Retry opens a new payment page on Stripe; the set-up starts as soon as Stripe confirms the payment.",
+  retryPaymentOwnerOnly: "Only an owner of this OTA can retry the payment.",
+  /** What a payment attempt that did not leave for Stripe left behind (`?payment=<code>`). */
+  paymentUnavailable: "Stripe's payment page could not be opened just now. Try again in a moment.",
+  paymentAlreadyDone:
+    "Stripe already has a subscription for this OTA, so no new payment page was opened. The set-up starts as soon as Stripe confirms it.",
+  planUnavailable: "This plan cannot be started any more. Choose a plan on the billing page.",
+  billingLink: "Go to billing",
+  notRetryable:
+    "The set-up is no longer failed: someone may have retried it already. Here is where it stands now.",
+  paymentFormExpired: "The payment form had expired. Try again.",
 });
 
 // ---- OTA dashboard, onboarding checklist and settings (PFE-010) ----------------------------------------------

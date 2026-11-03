@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import { platformApi, type ApiError } from "@/lib/api";
-import { errorMessage } from "@/lib/errors";
+import { errorMessage, isPlatformErrorCode } from "@/lib/errors";
 import { otaPath } from "@/lib/roles";
 import { ERROR_MESSAGES, WIZARD_STRINGS } from "@/lib/strings";
 
@@ -19,6 +19,9 @@ import { ERROR_MESSAGES, WIZARD_STRINGS } from "@/lib/strings";
  *   when it opened, so a double click or a retry creates one OTA (PF-10 AC2). Success continues to the set-up page
  *   of the new OTA; `TENANT_KEY_UNAVAILABLE` returns to step 1 with the message at the key, the tenant limit shows
  *   its message on the review step (PF-10 AC4), and other failures show the portal's message for their code.
+ *   From M5 (PFE-020, PF-71) the wizard also sends the billing interval, and the answer's `checkoutUrl` is where the
+ *   browser goes: Stripe Checkout, a URL of the API's answer and never one built here (README §5, external
+ *   navigations). Without one (Stripe failed after the OTA was created) the set-up page offers "Continue to payment".
  *
  * Both call the API with the session's bearer token and the end-user headers (`platformApi()`); neither returns
  * anything but the portal's own text.
@@ -74,8 +77,12 @@ export async function checkKeyAvailability(key: unknown): Promise<KeyCheck> {
 /** The steps of the wizard, in order. */
 export type WizardStep = "details" | "plan" | "review";
 
-/** The fields of the wizard that the person fills in. */
-export type CreateOtaField = "name" | "key" | "countryCode" | "defaultCurrency" | "timeZone" | "planCode";
+/**
+ * The fields of the wizard that the person fills in. `billingInterval` exists from M5 only (the "Annual billing"
+ * switch); before M5 the form has no such field and the request no such property.
+ */
+export type CreateOtaField =
+  "name" | "key" | "countryCode" | "defaultCurrency" | "timeZone" | "planCode" | "billingInterval";
 
 /** The step of each field. */
 const FIELD_STEPS: Readonly<Record<CreateOtaField, WizardStep>> = {
@@ -85,6 +92,7 @@ const FIELD_STEPS: Readonly<Record<CreateOtaField, WizardStep>> = {
   defaultCurrency: "details",
   timeZone: "details",
   planCode: "plan",
+  billingInterval: "plan",
 };
 
 const FIELDS = Object.keys(FIELD_STEPS) as CreateOtaField[];
@@ -139,6 +147,8 @@ const CREATE_OTA_FORM = z.object({
     .max(TIME_ZONE_MAX, WIZARD_STRINGS.timeZoneUnknown)
     .regex(TIME_ZONE, WIZARD_STRINGS.timeZoneUnknown),
   planCode: z.string().min(1, WIZARD_STRINGS.planRequired).regex(PLAN_CODE, WIZARD_STRINGS.planRequired),
+  // `BillingInterval`; empty when the form has no such field (before M5), and then not sent.
+  billingInterval: z.enum(["", "month", "year"], { message: WIZARD_STRINGS.intervalInvalid }),
 });
 
 /** The portal's message for an API field error of each field (the API's own text is never shown). */
@@ -149,6 +159,7 @@ const API_FIELD_MESSAGES: Readonly<Record<CreateOtaField, string>> = {
   defaultCurrency: WIZARD_STRINGS.currencyUnknown,
   timeZone: WIZARD_STRINGS.timeZoneUnknown,
   planCode: WIZARD_STRINGS.planRequired,
+  billingInterval: WIZARD_STRINGS.intervalInvalid,
 };
 
 /** A text field of the submission; a file or a missing field reads as empty. */
@@ -230,12 +241,41 @@ function failureOf(error: ApiError): CreateOtaState {
 }
 
 /**
+ * The URL of a Checkout answer when it can be followed: an absolute `https:` URL without credentials, exactly as the
+ * API answered it (Stripe's Checkout URLs carry a fragment the page needs). Anything else is never followed.
+ */
+function checkoutTarget(value: string | null | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return undefined;
+  }
+  return url.protocol === "https:" && url.username === "" && url.password === "" ? value : undefined;
+}
+
+/**
+ * The set-up page of a new OTA whose Checkout did not open: `?payment=<code>` names why (a code of the catalogue),
+ * and the page shows the portal's words for it above "Continue to payment".
+ */
+function setupWithoutCheckout(tenantId: string, code: string): string {
+  const payment = isPlatformErrorCode(code) ? code : "PROVIDER_ERROR";
+  return `${otaPath(tenantId, "/setup")}?${new URLSearchParams({ payment }).toString()}`;
+}
+
+/**
  * Creates the OTA (`POST /v1/tenants`) from the wizard's fields `name`, `key`, `countryCode`, `defaultCurrency`,
- * `timeZone` and `planCode`, with the hidden field `idempotencyKey` as the `Idempotency-Key` header. Redirects to
- * `/otas/<id>/setup` on success; otherwise returns the problems and the step to show them on.
+ * `timeZone`, `planCode` and, from M5, `billingInterval`, with the hidden field `idempotencyKey` as the
+ * `Idempotency-Key` header. Otherwise returns the problems and the step to show them on.
  *
- * Before M5 the API puts every OTA on `early_access`, whatever the plan says; the interval and the Stripe Checkout
- * hand-off of M5 come with PFE-020.
+ * On success: before M5 (the API puts every OTA on `early_access`, whatever the plan says, and answers `checkoutUrl:
+ * null`) the browser goes to `/otas/<id>/setup`. From M5 it goes to the answer's `checkoutUrl`, Stripe Checkout
+ * (PF-71 AC1): the URL is the API's, followed only when it is an `https:` URL, and never assembled here. When Stripe
+ * failed after the OTA was created (`checkoutUrl: null`, `checkoutError`), the browser goes to the set-up page, which
+ * offers "Continue to payment" (flow signup-and-create-ota.md, "Failure handling").
  */
 export async function createOta(_previous: CreateOtaState, formData: FormData): Promise<CreateOtaState> {
   const idempotencyKey = text(formData, "idempotencyKey");
@@ -257,10 +297,14 @@ export async function createOta(_previous: CreateOtaState, formData: FormData): 
     return fieldFailure("VALIDATION_FAILED", fieldErrors);
   }
 
+  // Before M5 the form has no interval: the request then has no such property, as in M1.
+  const { billingInterval, ...fields } = parsed.data;
+  const body = billingInterval === "" ? fields : { ...fields, billingInterval };
+
   const api = await platformApi();
   const result = await api.POST("/v1/tenants", {
     params: { header: { "Idempotency-Key": idempotencyKey } },
-    body: parsed.data,
+    body,
   });
   if (result.error !== undefined) {
     if (result.error.code === "UNAUTHENTICATED" || result.error.code === "TOKEN_EXPIRED") {
@@ -272,5 +316,15 @@ export async function createOta(_previous: CreateOtaState, formData: FormData): 
     }
     return failureOf(result.error);
   }
-  redirect(otaPath(result.data.tenant.id, "/setup"));
+  const { tenant, checkoutUrl, checkoutError } = result.data;
+  if (checkoutUrl !== null) {
+    // M5: Stripe Checkout, at the URL the API answered (PF-71 AC1); one that cannot be followed is not.
+    const target = checkoutTarget(checkoutUrl);
+    redirect(target ?? setupWithoutCheckout(tenant.id, "INTERNAL_ERROR"));
+  }
+  if (checkoutError !== undefined) {
+    // M5, Stripe failed after the OTA was created: the set-up page offers "Continue to payment".
+    redirect(setupWithoutCheckout(tenant.id, checkoutError.code));
+  }
+  redirect(otaPath(tenant.id, "/setup"));
 }
