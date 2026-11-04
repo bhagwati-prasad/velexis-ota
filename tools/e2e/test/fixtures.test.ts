@@ -7,6 +7,7 @@ import type * as MailpitModule from "@velexis/testing/mailpit";
 import type { MailpitMessage } from "@velexis/testing/mailpit";
 import {
   addSessionCookies,
+  callPlatformApi,
   createVerifiedAccount,
   PlatformApiError,
   signInWithApi,
@@ -109,6 +110,55 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+});
+
+describe("callPlatformApi", () => {
+  it("sends a PATCH with its JSON body, the operation's If-Match and the admin's token, and answers the JSON [PFE-027 AC1]", async () => {
+    const requests = fakePlatformApi(() => ({
+      status: 200,
+      body: { id: "sub_1", planCode: "e2edom_x", version: 2 },
+    }));
+    const answer = await callPlatformApi<{ planCode: string }>({
+      operation: "adminUpdateManualSubscription",
+      method: "PATCH",
+      path: "/v1/admin/subscriptions/sub_1",
+      endUserIp: "198.18.0.7",
+      accessToken: "admin-access-token",
+      headers: { "If-Match": '"1"' },
+      body: { planCode: "e2edom_x", reason: "The domains journey's plan." },
+    });
+    expect(answer.planCode).toBe("e2edom_x");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      method: "PATCH",
+      body: { planCode: "e2edom_x", reason: "The domains journey's plan." },
+    });
+    expect(path(requests[0])).toBe("/v1/admin/subscriptions/sub_1");
+    expect(requests[0]?.headers).toMatchObject({
+      "If-Match": '"1"',
+      Authorization: "Bearer admin-access-token",
+      "Content-Type": "application/json",
+      "X-Velexis-End-User-IP": "198.18.0.7",
+      "X-Velexis-Bff-Key": exampleEnv(["platform/backend/.env.example"])["PLATFORM_BFF_KEY"],
+    });
+  });
+
+  it("fails a refused PATCH with the operation, status and code only [PFE-027 AC1]", async () => {
+    fakePlatformApi(() => ({
+      status: 412,
+      body: { error: { code: "PRECONDITION_FAILED", message: "stale", status: 412, requestId: "r1" } },
+    }));
+    const failure = callPlatformApi({
+      operation: "adminUpdateManualSubscription",
+      method: "PATCH",
+      path: "/v1/admin/subscriptions/sub_1",
+      endUserIp: "198.18.0.7",
+      headers: { "If-Match": '"1"' },
+      body: { planCode: "e2edom_x", reason: "The domains journey's plan." },
+    });
+    await expect(failure).rejects.toBeInstanceOf(PlatformApiError);
+    await expect(failure).rejects.toThrow(/^adminUpdateManualSubscription answered 412 PRECONDITION_FAILED$/);
+  });
 });
 
 describe("createVerifiedAccount", () => {

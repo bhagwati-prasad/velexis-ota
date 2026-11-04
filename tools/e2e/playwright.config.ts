@@ -2,8 +2,9 @@
 //
 // One global setup (support/stack.ts) starts the built stack on a fresh database for the whole run and stops it at
 // the end. Projects select their spec files by name; a spec shared by several projects (specs/smoke.e2e.ts) pins each
-// test to its project with a tag. The OTA plan's projects: `storefront` (OFE-008), the nightly `storefront-stripe`
-// (OFE-017) and `ota-admin` (OAD-016), each only with E2E_WITH_OTA=1.
+// test to its project with a tag, and a portal journey over Stripe's network (specs/portal-checkout.e2e.ts, PFE-027)
+// carries `@stripe`, which only the nightly `portal-stripe` selects. The OTA plan's projects: `storefront` (OFE-008),
+// the nightly `storefront-stripe` (OFE-017) and `ota-admin` (OAD-016), each only with E2E_WITH_OTA=1.
 import { defineConfig, devices, type Project } from "@playwright/test";
 import { loadDevEnvFiles } from "@velexis/config";
 import { PROJECT_TAGS } from "./support/fixtures";
@@ -76,6 +77,9 @@ export function projectsFor(options: ProjectOptions): Project[] {
   if (options.withStripe) {
     // Nightly only: Stripe Checkout and the Customer Portal in Stripe's test mode, over the network. Without
     // E2E_STRIPE=1 the project does not exist, so `--project=portal-stripe` fails instead of running without Stripe.
+    // Its journey is portal-checkout.e2e.ts (PFE-027, every test tagged `@stripe`), whose paid OTA the OTA worker sets
+    // up after the payment, so it needs E2E_WITH_OTA=1 as well; the three other portal journeys of M5 (domains,
+    // payments, go-live) carry no `@stripe` and run in `portal`.
     projects.push({
       name: "portal-stripe",
       testMatch: ["specs/portal-*.e2e.ts"],

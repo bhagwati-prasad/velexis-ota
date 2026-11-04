@@ -463,17 +463,37 @@ function otaStripeOverrides(name: "ota-api" | "ota-worker", context: StackContex
 }
 
 /**
- * The milestone switch of PADR-0015 that the stack turns on for the platform processes (API, worker and CLI, which read
- * the same values), on top of the `false` of the `.env.example` files (OFE-022): the live switch, so the storefront's
- * live-mode journey makes its OTA live through the platform API (`goLive`) as an owner does. It needs no Stripe value or
- * other setting and adds no schedule. The other switches stay off: Stripe Billing would open a Stripe Checkout at
- * `createTenant`; own Stripe, settlements and custom domains need Stripe values or DNS the stack does not have; and own
- * Amadeus credentials would add their forms to the portal's Amadeus page, whose regions admin-amadeus-pool.e2e.ts reads
- * by name (the live journey writes its OTA's own live connection as a fixture instead, support/ota.ts).
+ * The milestone switches of PADR-0015 that the stack turns on for the platform processes (API, worker and CLI, which
+ * read the same values), on top of the `false` of the `.env.example` files:
+ *
+ * - the live switch (OFE-022), so the storefront's live-mode journey and the portal's go-live journey (PFE-027) make
+ *   their OTAs live through the platform API (`goLive`) as an owner does. It needs no Stripe value or other setting and
+ *   adds no schedule;
+ * - custom domains (PFE-027), so the portal's domains journey adds a custom domain and sees its pending view. They need
+ *   STOREFRONT_IPV4, which `.env.example` sets (a documentation address, RFC 5737). The worker then runs their
+ *   schedules (`domains.verify_pending` every 5 minutes, the daily re-check and TLS probe at 04:10 and 04:40 UTC), whose
+ *   DNS lookups go to STACK_DNS_RESOLVERS and so never leave the machine, and whose TLS probe finds no listener;
+ * - settlements (PFE-027), so the portal's payments journey sets a payout account (`setPayoutAccount`). They need
+ *   STRIPE_SECRET_KEY, which `platform/backend/.env.example` sets to a test-mode dummy; the monthly settlement run
+ *   (05:00 UTC on the 3rd) would fail on it, and no journey waits for it.
+ *
+ * The other switches stay off: Stripe Billing would open a Stripe Checkout at `createTenant`; own Stripe needs Connect
+ * values the stack does not have; and own Amadeus credentials would add their forms to the portal's Amadeus page, whose
+ * regions admin-amadeus-pool.e2e.ts reads by name (the live journeys write their OTA's own live connection as a fixture
+ * instead, support/ota.ts).
  */
 export const PLATFORM_SWITCHES_ON = Object.freeze({
   FEATURE_LIVE_SWITCH: "true",
+  FEATURE_CUSTOM_DOMAINS: "true",
+  FEATURE_SETTLEMENTS: "true",
 } as const);
+
+/**
+ * The DNS servers of the platform worker's custom domain checks in the stack (DNS_RESOLVERS, PBE-050): a loopback port
+ * where no DNS server answers, so the checks of the domains journeys add fail at once (`dns_timeout`) and no lookup
+ * leaves the machine. No journey depends on DNS: a custom domain stays `pending`, and a verified one is a fixture.
+ */
+export const STACK_DNS_RESOLVERS = `${STACK_HOST}:9`;
 
 /** The variables that differ per process. */
 function serviceOverrides(name: ServiceName, context: StackContext): Record<string, string> {
@@ -486,6 +506,7 @@ function serviceOverrides(name: ServiceName, context: StackContext): Record<stri
         PORT: String(STACK_PORTS.platformApi),
         HEALTH_PORT: String(STACK_PORTS.platformWorker),
         ...PLATFORM_SWITCHES_ON,
+        DNS_RESOLVERS: STACK_DNS_RESOLVERS,
         ...stripeOverrides(context.settings),
       };
     case "portal":

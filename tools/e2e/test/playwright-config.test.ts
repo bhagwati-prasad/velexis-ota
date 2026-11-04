@@ -1,10 +1,13 @@
-// The projects of playwright.config.ts (PFE-014, OFE-008, OFE-017, OAD-016, OAD-017): which exist with and without
-// E2E_WITH_OTA=1 and E2E_STRIPE=1, and which tests each selects. `playwright test --list` shows the same against the specs themselves.
+// The projects of playwright.config.ts (PFE-014, OFE-008, OFE-017, OAD-016, OAD-017, PFE-027): which exist with and
+// without E2E_WITH_OTA=1 and E2E_STRIPE=1, and which tests each selects. `playwright test --list` shows the same against
+// the specs themselves.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { type PlaywrightTestConfig, type Project } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { projectsFor } from "../playwright.config";
 import { PROJECT_TAGS } from "../support/fixtures";
-import { OTA_ADMIN_URL, PORTAL_URL, STOREFRONT_URL } from "../support/stack";
+import { OTA_ADMIN_URL, PORTAL_URL, REPO_ROOT, STOREFRONT_URL } from "../support/stack";
 
 const names = (projects: readonly Project[]): (string | undefined)[] =>
   projects.map((project) => project.name);
@@ -97,6 +100,47 @@ describe("projectsFor", () => {
       use: { baseURL: PORTAL_URL },
     });
     expect(selects(byName(projects, "portal"), stripeTest)).toBe(false);
+  });
+
+  it("runs the portal's M5 journeys in portal and its Checkout journey nightly in portal-stripe only [PFE-027 AC1]", () => {
+    const projects = projectsFor({ withOta: true, withStripe: true });
+    const portal = byName(projects, "portal");
+    const portalStripe = byName(projects, "portal-stripe");
+    // Every portal journey's file is in both projects; the tags decide which runs where.
+    for (const project of [portal, portalStripe]) {
+      expect([project?.testMatch].flat()).toContain("specs/portal-*.e2e.ts");
+    }
+    for (const journey of [
+      "specs/portal-domains.e2e.ts › adding a custom domain shows the pending view with its DNS records and Check now",
+      "specs/portal-payments.e2e.ts › saving a valid test IBAN asks for a step-up first",
+      "specs/portal-go-live.e2e.ts › once the preconditions are met, Go live switches the OTA to live",
+    ]) {
+      expect(selects(portal, journey), journey).toBe(true);
+      expect(selects(portalStripe, journey), journey).toBe(false);
+    }
+    const checkout = `the portal's Stripe Checkout and Customer Portal journey ${PROJECT_TAGS.stripe} › the owner pays with the test card`;
+    expect(selects(portalStripe, checkout)).toBe(true);
+    expect(selects(portal, checkout)).toBe(false);
+    // Without E2E_STRIPE=1 nothing runs the Checkout journey: the project does not exist.
+    expect(names(projectsFor({ withOta: true, withStripe: false }))).not.toContain("portal-stripe");
+  });
+
+  it("finds the tags those projects select in the M5 portal specs themselves: only the Checkout journey is @stripe [PFE-027 AC1]", () => {
+    const spec = (file: string): string => readFileSync(join(REPO_ROOT, "tools/e2e/specs", file), "utf8");
+    // The three journeys of `portal` carry no `@stripe` anywhere, so `portal` runs them and `portal-stripe` never does.
+    for (const file of ["portal-domains.e2e.ts", "portal-payments.e2e.ts", "portal-go-live.e2e.ts"]) {
+      const source = spec(file);
+      expect(source, file).not.toMatch(/PROJECT_TAGS\.stripe|["'`]@stripe/);
+      expect(source, file).toMatch(/\[PFE-027 AC1\]/);
+    }
+    // Every test of the Checkout journey is in one describe tagged `@stripe` (and none outside it), so it runs only in
+    // the nightly `portal-stripe`.
+    const checkout = spec("portal-checkout.e2e.ts");
+    expect(checkout).toMatch(
+      /test\.describe\(\s*"the portal's Stripe Checkout and Customer Portal journey",\s*\{ tag: PROJECT_TAGS\.stripe \},/,
+    );
+    expect(checkout.match(/^test\(/gm) ?? []).toEqual([]);
+    expect((checkout.match(/^ {4}test\("/gm) ?? []).length).toBe(4);
   });
 
   it("runs the OTA admin's payments journey nightly in storefront-stripe, never in ota-admin [OAD-017 step 1]", () => {

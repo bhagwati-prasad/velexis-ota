@@ -75,7 +75,8 @@ function bffKey(): string {
 export interface ApiCall {
   /** The operationId, for error messages. */
   readonly operation: string;
-  readonly method: "GET" | "POST";
+  /** PATCH for the admin's edits that take `If-Match` (`adminUpdateManualSubscription`, PFE-027), in `headers`. */
+  readonly method: "GET" | "POST" | "PATCH";
   /** The path under PLATFORM_API_URL, for example `/v1/auth/sign-in`. */
   readonly path: string;
   readonly endUserIp: string;

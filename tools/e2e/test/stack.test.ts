@@ -29,6 +29,7 @@ import {
   serviceEnv,
   stackContext,
   stackServices,
+  STACK_DNS_RESOLVERS,
   STACK_PORTS,
   STOREFRONT_URL,
   SUSPENDED_STOREFRONT_HOST,
@@ -300,24 +301,53 @@ describe("serviceEnv", () => {
     });
   });
 
-  it("[OFE-022 AC1] turns on the live switch for the platform processes only, the other switches as .env.example has them", () => {
-    expect(PLATFORM_SWITCHES_ON).toEqual({ FEATURE_LIVE_SWITCH: "true" });
+  it("[OFE-022 AC1] turns on the live switch for the platform processes only, the switches it leaves alone as .env.example has them", () => {
+    expect(PLATFORM_SWITCHES_ON).toMatchObject({ FEATURE_LIVE_SWITCH: "true" });
     const examples = exampleEnv([".env.example", "platform/backend/.env.example"]);
     for (const name of ["platform-api", "platform-worker", "platform-cli"] as const) {
       const values = serviceEnv(name, context);
       expect(values, name).toMatchObject(PLATFORM_SWITCHES_ON);
-      for (const variable of [
-        "FEATURE_STRIPE_BILLING",
-        "FEATURE_OWN_STRIPE",
-        "FEATURE_SETTLEMENTS",
-        "FEATURE_OWN_AMADEUS",
-        "FEATURE_CUSTOM_DOMAINS",
-      ]) {
+      // The switches the stack leaves alone (PFE-027 turned on custom domains and settlements, below).
+      for (const variable of ["FEATURE_STRIPE_BILLING", "FEATURE_OWN_STRIPE", "FEATURE_OWN_AMADEUS"]) {
         expect(values[variable], `${name} ${variable}`).toBe(examples[variable]);
       }
     }
     for (const name of ["ota-api", "ota-worker", "portal", "storefront"] as const) {
       expect(serviceEnv(name, context)["FEATURE_LIVE_SWITCH"], name).not.toBe("true");
+    }
+  });
+
+  it("[PFE-027 AC1] turns on custom domains and settlements for the platform processes, with what they need and DNS kept on the machine", () => {
+    // The live switch (OFE-022), and the two switches of the portal's domains and payments journeys: nothing else.
+    expect(PLATFORM_SWITCHES_ON).toEqual({
+      FEATURE_LIVE_SWITCH: "true",
+      FEATURE_CUSTOM_DOMAINS: "true",
+      FEATURE_SETTLEMENTS: "true",
+    });
+    const examples = exampleEnv([".env.example", "platform/backend/.env.example"]);
+    // Off in the .env.example files, so each one is the stack's own choice.
+    for (const variable of Object.keys(PLATFORM_SWITCHES_ON)) {
+      expect(examples[variable], variable).toBe("false");
+    }
+    expect(STACK_DNS_RESOLVERS).toBe("127.0.0.1:9");
+    for (const name of ["platform-api", "platform-worker", "platform-cli"] as const) {
+      const values = serviceEnv(name, context);
+      expect(values, name).toMatchObject(PLATFORM_SWITCHES_ON);
+      // What the platform's configuration requires while these switches are on (config.ts): an IPv4 address of the
+      // storefront for custom domains, and a test-mode Stripe key for settlements (the dummy of .env.example).
+      expect(values["STOREFRONT_IPV4"], name).toMatch(/^\d{1,3}(?:\.\d{1,3}){3}$/);
+      expect(values["STRIPE_SECRET_KEY"], name).toMatch(/^sk_test_/);
+      // The worker's DNS checks of custom domains ask a loopback port where no DNS server answers, never the public
+      // resolvers of .env.example.
+      expect(values["DNS_RESOLVERS"], name).toBe(STACK_DNS_RESOLVERS);
+      expect(examples["DNS_RESOLVERS"]).not.toBe(STACK_DNS_RESOLVERS);
+    }
+    // Only the platform backend reads the switches: the apps that show them read getMe's `features`.
+    for (const name of ["ota-api", "ota-worker", "portal", "platform-admin", "storefront"] as const) {
+      const values = serviceEnv(name, context);
+      expect(values["FEATURE_CUSTOM_DOMAINS"], name).not.toBe("true");
+      expect(values["FEATURE_SETTLEMENTS"], name).not.toBe("true");
+      expect(values["DNS_RESOLVERS"], name).not.toBe(STACK_DNS_RESOLVERS);
     }
   });
 
@@ -431,7 +461,8 @@ describe("serviceEnv", () => {
     const values = serviceEnv("platform-api", context);
     expect(values["PLATFORM_BFF_KEY"]).toBe(platform["PLATFORM_BFF_KEY"]);
     expect(values["MAIL_FROM"]).toBe(platform["MAIL_FROM"]);
-    expect(values["FEATURE_CUSTOM_DOMAINS"]).toBe("false");
+    // A switch the stack does not turn on (FEATURE_CUSTOM_DOMAINS was this example until PFE-027 turned it on).
+    expect(values["FEATURE_OWN_AMADEUS"]).toBe("false");
     expect(serviceEnv("portal", context)["PLATFORM_BFF_KEY"]).toBe(platform["PLATFORM_BFF_KEY"]);
     expect(serviceEnv("ota-worker", context)["AIRLINE_CARD_ENABLED"]).toBe(
       exampleEnv(["ota/backend/.env.example"])["AIRLINE_CARD_ENABLED"],
