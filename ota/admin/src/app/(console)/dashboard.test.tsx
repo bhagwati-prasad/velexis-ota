@@ -539,6 +539,28 @@ describe("/ (dashboard)", () => {
     expect(countCard(page, "reconciling").getAttribute("data-attention")).toBe("true");
   });
 
+  it("[OAD-019 step 1] a count that needs attention keeps its hint at WCAG's 4.5:1 on the card's amber", async () => {
+    everythingAnswers();
+
+    const page = await renderDashboard();
+
+    // The ticketing count (3) needs attention: its card is amber, so its hint is amber too, never the neutral muted grey
+    // (4.3:1 on amber-50, which axe found in the journey); a count of 0 keeps the muted grey on the white card.
+    const hintOf = (card: HTMLElement): string =>
+      within(card).getByText("Issue the tickets, or settle the review.").getAttribute("class") ?? "";
+    const attention = countCard(page, "ticketing-problems");
+    expect(attention.getAttribute("data-attention")).toBe("true");
+    expect(attention.getAttribute("class")).toContain("bg-amber-50");
+    expect(hintOf(attention)).toContain("text-amber-900");
+    expect(hintOf(attention)).not.toContain("text-muted-foreground");
+    const calm = countCard(page, "reconciling");
+    expect(calm.getAttribute("data-attention")).toBe("false");
+    expect(calm.getAttribute("class")).not.toContain("bg-amber-50");
+    expect(
+      within(calm).getByText("Supplier timeouts the reconciliation is still settling.").getAttribute("class"),
+    ).toContain("text-muted-foreground");
+  });
+
   it("says when nothing waits: no queue read, no authorised payment, no booking", async () => {
     bookingsAnswer({ ticketing: 0, deadline: 0, reconciling: 0 }, []);
     api.on(PAYMENTS, () => pageOf([]));

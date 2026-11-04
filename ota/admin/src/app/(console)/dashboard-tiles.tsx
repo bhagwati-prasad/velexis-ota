@@ -226,6 +226,12 @@ export const DASHBOARD_STRINGS = Object.freeze({
 
 const LINK_CLASS = "text-sm font-medium text-primary underline underline-offset-4";
 const MUTED = "text-xs text-muted-foreground";
+/**
+ * The hint of a count that needs attention, on the card's amber (`bg-amber-50`): the neutral muted grey is 4.3:1 there,
+ * under WCAG's 4.5:1 (axe found it on the dashboard of OAD-019's journey), so it is amber, as the live shell's secondary
+ * text is (OAD-018).
+ */
+const ATTENTION_HINT = "text-xs text-amber-900";
 const ROW_LINK_CLASS = "font-mono font-medium underline-offset-4 hover:underline focus-visible:underline";
 
 // ---- Counts -----------------------------------------------------------------------------------------------------------
@@ -326,7 +332,7 @@ function AttentionCard({
         <span className="text-3xl font-semibold tabular-nums">{shown.text}</span>
         <span className="text-sm">{shown.one ? DASHBOARD_STRINGS.booking : DASHBOARD_STRINGS.bookings}</span>
       </span>
-      <span className={MUTED}>{count.hint}</span>
+      <span className={shown.any ? ATTENTION_HINT : MUTED}>{count.hint}</span>
     </Link>
   );
 }

@@ -2725,6 +2725,7 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 - **Verify:** `grep -c "api.ota.example.com" ota/frontend/docs/build-your-own-frontend.md`
 
 ### OAD-019 · Complete the OTA admin suite with accessibility and header checks
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: three consecutive green nightly e2e runs on GitHub)
 - **Component:** ota-admin
 - **Milestone:** M6
 - **Depends on:** OAD-017, OAD-018
