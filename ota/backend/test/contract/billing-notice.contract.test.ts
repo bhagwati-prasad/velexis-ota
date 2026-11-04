@@ -192,3 +192,53 @@ describe("ConsoleTenant.billingNotice (api-changes-console-and-internal §3.1)",
     expect(log.split("\n").filter((line) => line.startsWith("| OBE-076 | M5 |"))).toHaveLength(1);
   });
 });
+
+// ---- FIX-W42-OTA: how long trial_ending lasts (lead decision (4a) of 2026-11-04, second set) -------------------------
+// The platform's manual-trial run (billing.manual_trials, platform/docs/flows/subscription-billing.md §G; PBE-047,
+// FIX-W41-PLATFORM) sets trial_ending from the first reminder, 14 days before a trial's end, and keeps it after the
+// end while the lapsed trial is past_due, until a plan replaces the trial or the OTA is suspended. Descriptions only.
+
+describe("ConsoleTenant.billingNotice: trial_ending until a plan or a suspension (lead decision (4a) of 2026-11-04)", () => {
+  const TRIAL_ENDING_SPAN =
+    "`trial_ending` from the first trial reminder (14 days before a trial's end) until a plan replaces the trial or the OTA is suspended";
+  const LAPSED_TRIAL = "while a lapsed manual trial is `past_due`";
+
+  it("[FIX-W42-OTA AC1] says trial_ending lasts from the first reminder until a plan replaces the trial or the OTA is suspended, a past_due manual trial included", () => {
+    const description = String(
+      objectAt(schemaOf(working, "ConsoleTenant"), "properties", "billingNotice")["description"],
+    );
+
+    expect(description).toContain(TRIAL_ENDING_SPAN);
+    expect(description).toContain(`so the platform also keeps it after the end ${LAPSED_TRIAL}`);
+    expect(description).toContain("lead decision (4a) of 2026-11-04, second set");
+    expect(description).not.toContain("before a trial ends");
+    // `past_due` keeps its words, and the rest of the description stays (source, cache, suspension, optional).
+    expect(description).toContain(
+      "`past_due` while a subscription payment has failed or the subscription is paused;",
+    );
+    for (const words of [
+      "(`403 TENANT_SUSPENDED`)",
+      "within one second of the invalidation (lead decision (2h) of 2026-10-31, second batch)",
+      "Optional (added in M5, OBE-076): an answer without it means no banner.",
+    ]) {
+      expect([words, description.includes(words)]).toEqual([words, true]);
+    }
+  });
+
+  it("[FIX-W42-OTA AC1] api-changes part 2 §3.1 says the same, and the change log has the description-only row", () => {
+    const changes = readFileSync(API_CHANGES, "utf8");
+    const section = changes.slice(changes.indexOf("### 3.1 "), changes.indexOf("### 3.2 "));
+    expect(section).toContain(
+      "`trial_ending` from the first reminder (14 days before a trial's end) until a plan replaces the trial or the OTA is suspended",
+    );
+    expect(section).toContain(`so the platform also keeps it ${LAPSED_TRIAL}`);
+    expect(section).toContain("lead decision (4a) of 2026-11-04, second set");
+    expect(section).not.toContain("before a trial ends");
+    const rows = readFileSync(CHANGE_LOG, "utf8")
+      .split("\n")
+      .filter((line) => line.startsWith("| FIX-W42-OTA (OBE-076) | M5 |"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toContain("Description only: `ConsoleTenant.billingNotice`");
+    expect(rows[0]).toMatch(/\| 135 \| no \(description only\) \|$/);
+  });
+});

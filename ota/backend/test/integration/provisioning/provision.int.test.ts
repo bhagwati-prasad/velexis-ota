@@ -58,6 +58,14 @@ const TENANT_TABLE_COUNT = 44;
 
 const quietPoolLogger = { error: (): void => undefined };
 const silentValidationLogger = { error: (): void => undefined };
+/**
+ * Cloning the template database, starting the worker module graph (WorkerModule.forRoot: TenancyModule, QueuesModule,
+ * ProvisioningModule) and waiting for its BullMQ worker: a few seconds alone, much longer on a busy 4-CPU runner, past
+ * Vitest's 10 s hook default. The budget of seeds.int.test.ts' setup and the other hooks that clone a database
+ * (test/helpers/openapi.ts `OPENAPI_SETUP_TIMEOUT_MS`; lead decision (4b) of 2026-11-04, second set, FIX-W42-OTA); it
+ * only stops a setup that hangs.
+ */
+const SETUP_TIMEOUT_MS = 60_000;
 
 let db: TestDatabase;
 let redis: TestRedis;
@@ -103,7 +111,7 @@ beforeAll(async () => {
   worker = app.get(TenantOpsProcessor).worker;
   service = app.get(ProvisioningService);
   await worker.waitUntilReady();
-});
+}, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   await app?.close();
