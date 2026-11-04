@@ -5,7 +5,11 @@
 //
 //   past_due      a subscription payment failed (or the subscription is paused): an alert, "Payment problem: update
 //                 billing in the portal"
-//   trial_ending  the trial ends soon: a status message asking for a plan
+//   trial_ending  the trial is ending: a status message asking for a plan. The platform's daily manual-trial run
+//                 (`billing.manual_trials`, subscription-billing flow §G) sets it from 14 days before the trial's end
+//                 and keeps it after the end too, while the trial is `past_due`, until a plan replaces the trial or
+//                 the OTA is suspended at least 14 days after the end, so its words hold on both sides of the end and
+//                 never promise an end still to come (lead decision (2k) of 2026-11-04, FIX-W41-OTA)
 //   null, absent  nothing (an answer without the optional field means no banner)
 //
 // The notice never blocks the console: a subscription that ends suspends the OTA instead, and the shell then renders
@@ -36,8 +40,10 @@ export const BILLING_STRINGS = Object.freeze({
       "the OTA is suspended if it is not made.",
   },
   trial_ending: {
-    title: "Your trial ends soon: choose a plan in the portal",
-    detail: "Choose a Velexis plan to keep this OTA running after the trial.",
+    title: "Your trial is ending: choose a plan in the portal",
+    detail:
+      "The Velexis trial of this OTA is ending or has ended. The console keeps working for now; " +
+      "the OTA is suspended if no plan is chosen.",
   },
   link: "Go to billing in the portal",
   /** Instead of the link, for the roles the portal's billing page refuses. */

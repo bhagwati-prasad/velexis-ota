@@ -46,6 +46,13 @@ const SCHEMAS = {
 const SCHEMA_N_MINUS_1 = "tenant_seed_schema_n_minus_1";
 
 const quietPoolLogger = { error: (): void => undefined };
+/**
+ * Cloning the template and provisioning the eight schemas above with every tenant migration, as the worker does: a few
+ * seconds alone, much longer on a busy 4-CPU runner, past Vitest's 10 s hook default. The budget of the other hooks
+ * that clone a database (test/helpers/openapi.ts `OPENAPI_SETUP_TIMEOUT_MS`; lead decision (2f) of 2026-11-04,
+ * FIX-W41-OTA); it only stops a setup that hangs.
+ */
+const SETUP_TIMEOUT_MS = 60_000;
 
 let db: TestDatabase;
 let provisionerPool: ReturnType<typeof createPool>;
@@ -78,7 +85,7 @@ beforeAll(async () => {
   });
   provisioner = createTenantDb(provisionerPool, { appEnv: "test" });
   app = createTenantDb(otaPool, { appEnv: "test" });
-});
+}, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
   await provisionerPool?.end();

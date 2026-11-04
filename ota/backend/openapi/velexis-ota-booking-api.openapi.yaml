@@ -663,13 +663,20 @@ paths:
         **Behaviour.** Normalises `host` (lower case, port and trailing dot removed), looks it up in
         `platform.tenant_domains` (purpose `storefront`, `verification_status = verified`; pending or failed domains are
         unknown), loads `platform.tenants`, checks that the key may act for that OTA, and returns the OTA's `tenantKey`
-        and `tenantStatus`, the key's `environment`, the matched domain, every verified storefront domain (redirect
-        secondary hosts to `primaryUrl`), the OTA's custom API base URL if it has one (`tenant_domains` purpose `api`),
-        and the OTA's storefront publishable key for that environment (`platform.api_keys`; publishable keys are public
-        by design, null when none is active) for the browser client on that host. Hosts of OTAs the key may not act for,
-        unverified hosts and hosts of deleted or failed OTAs all answer `404 NOT_FOUND`, so nothing about other OTAs
-        leaks. Provisioning and suspended OTAs resolve with their `tenantStatus` so the app can render a maintenance
-        page (their other operations answer `403 TENANT_SUSPENDED`).
+        and `tenantStatus`, the key's `environment`, the matched domain, every verified storefront domain (**Primary
+        domain** below says which host redirects to `primaryUrl`), the OTA's custom API base URL if it has one
+        (`tenant_domains` purpose `api`), and the OTA's storefront publishable key for that environment
+        (`platform.api_keys`; publishable keys are public by design, null when none is active) for the browser client on
+        that host. Hosts of OTAs the key may not act for, unverified hosts and hosts of deleted or failed OTAs all
+        answer `404 NOT_FOUND`, so nothing about other OTAs leaks. Provisioning and suspended OTAs resolve with their
+        `tenantStatus` so the app can render a maintenance page (their other operations answer `403 TENANT_SUSPENDED`).
+
+
+        **Primary domain.** Only the OTA's platform sub-domain (the `domains` entry of kind `subdomain`) redirects to
+        `primaryUrl`, and only while that names a custom domain: the hosted storefront redirects its sign-in and sign-up
+        pages that way (OFE-021), and a hosting-key app may redirect its sub-domain host to `primaryUrl`. A secondary
+        custom domain is served as it is and never redirects, so no two hosts send a visitor back and forth (lead
+        decision (2d) of 2026-11-04; `StorefrontConfig.domains` says the same since lead decision (2j) of 2026-11-03).
 
 
         **Caching.** Redis 5 minutes per host and key; `Cache-Control: private, max-age=300`. In Next.js middleware keep
@@ -31934,7 +31941,12 @@ components:
         primaryUrl:
           type: string
           format: uri
-          description: Canonical storefront URL (primary domain); redirect secondary hosts there.
+          description: >-
+            Canonical storefront URL (primary domain). Only the OTA's platform sub-domain (the `domains` entry of kind
+            `subdomain`) redirects there, and only while this URL names a custom domain: the hosted storefront
+            redirects its sign-in and sign-up pages (OFE-021), and a hosting-key app may redirect its sub-domain host
+            to it. A secondary custom domain is served as it is and never redirects, so no two hosts send a visitor
+            back and forth (lead decision (2d) of 2026-11-04; `StorefrontConfig.domains`).
         domains:
           type: array
           minItems: 1

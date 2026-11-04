@@ -504,12 +504,13 @@ test("the platform's billing notice shows in the shell for every role, the porta
   await expect(financeNotice).not.toContainText(BILLING_ROLES_NOTE);
   await expectAdminPage(financePage, "Bookings");
 
-  // An ending trial: a status message, with the same link for finance and the same note for the agent.
+  // An ending trial: a status message, with the same link for finance and the same note for the agent. Its words hold
+  // before and after the trial's end (lead decision (2k) of 2026-11-04, FIX-W41-OTA).
   await setBillingNotice(owned.ota.id, "trial_ending");
   const trialEnding = page.locator('[data-notice="trial_ending"]');
   await reloadUntil(page, true, trialEnding);
   await expect(trialEnding).toHaveAttribute("role", "status");
-  await expect(trialEnding).toContainText("Your trial ends soon: choose a plan in the portal");
+  await expect(trialEnding).toContainText("Your trial is ending: choose a plan in the portal");
   await expect(trialEnding).toContainText(BILLING_ROLES_NOTE);
   await expect(trialEnding.getByRole("link", { name: BILLING_LINK })).toHaveCount(0);
   await expect(pastDue).toHaveCount(0);

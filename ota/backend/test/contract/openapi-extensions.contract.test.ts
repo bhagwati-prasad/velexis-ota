@@ -1760,6 +1760,65 @@ describe("StorefrontConfig.domains: only the sub-domain redirects (lead decision
   });
 });
 
+// ---- FIX-W41-OTA: the same rule for storefront.resolve (lead decision (2d) of 2026-11-04) ---------------------------
+
+describe("storefront.resolve: only the sub-domain redirects (lead decision (2d) of 2026-11-04)", () => {
+  const primaryUrlOf = (document: Json): Json =>
+    objectAt(document, "components", "schemas", "StorefrontHostResolution", "properties", "primaryUrl");
+  const SUBDOMAIN_ONLY =
+    "Only the OTA's platform sub-domain (the `domains` entry of kind `subdomain`) redirects";
+  const SECONDARY_NEVER = "A secondary custom domain is served as it is and never redirects";
+
+  it("[FIX-W41-OTA AC1] resolveStorefrontHost says only the sub-domain redirects to primaryUrl, a hosting-key app's sub-domain host included", () => {
+    const description = String(operation("resolveStorefrontHost").spec["description"]);
+
+    expect(description).toContain("**Primary domain.**");
+    expect(description).toContain(`${SUBDOMAIN_ONLY} to \`primaryUrl\``);
+    expect(description).toContain(
+      "the hosted storefront redirects its sign-in and sign-up pages that way (OFE-021)",
+    );
+    expect(description).toContain("a hosting-key app may redirect its sub-domain host to `primaryUrl`");
+    expect(description).toContain(SECONDARY_NEVER);
+    expect(description).toContain("lead decision (2d) of 2026-11-04");
+    expect(description).not.toContain("redirect secondary hosts");
+  });
+
+  it("[FIX-W41-OTA AC1] StorefrontHostResolution.primaryUrl says the same and no longer sends secondary hosts there", () => {
+    const description = String(primaryUrlOf(working)["description"]);
+
+    expect(description).toContain(`${SUBDOMAIN_ONLY} there, and only while this URL names a custom domain`);
+    expect(description).toContain("a hosting-key app may redirect its sub-domain host to it");
+    expect(description).toContain(SECONDARY_NEVER);
+    expect(description).toContain("lead decision (2d) of 2026-11-04");
+    expect(description).not.toContain("redirect secondary hosts");
+  });
+
+  it("[FIX-W41-OTA AC1] changes descriptions only: primaryUrl, its schema and the operation's parameters and responses keep the frozen original's shape", () => {
+    const { description: _working, ...shape } = primaryUrlOf(working);
+    const { description: frozenDescription, ...frozenShape } = primaryUrlOf(frozen);
+
+    expect(shape).toEqual(frozenShape);
+    // The rest of StorefrontHostResolution is the frozen original's, word for word.
+    const withoutPrimaryUrlWords = (document: Json): Json => {
+      const schema = objectAt(document, "components", "schemas", "StorefrontHostResolution");
+      const properties = objectAt(schema, "properties");
+      const { description: _words, ...primaryUrl } = objectAt(properties, "primaryUrl");
+      return { ...schema, properties: { ...properties, primaryUrl } };
+    };
+    expect(withoutPrimaryUrlWords(working)).toEqual(withoutPrimaryUrlWords(frozen));
+    const frozenOperation = frozenOperations.find((found) => found.operationId === "resolveStorefrontHost");
+    expect(frozenOperation?.spec["parameters"]).toBeDefined();
+    for (const key of ["parameters", "responses"]) {
+      expect([key, operation("resolveStorefrontHost").spec[key]]).toEqual([key, frozenOperation?.spec[key]]);
+    }
+    // The frozen original keeps its own words: it is never edited.
+    expect(String(frozenDescription)).toContain("redirect secondary hosts there");
+    expect(String(frozenOperation?.spec["description"])).toContain(
+      "redirect secondary hosts to `primaryUrl`",
+    );
+  });
+});
+
 describe("the frozen original", () => {
   it("is unchanged under docs/velexis-sdk: same bytes, no MVP extension [OBE-009 AC2]", () => {
     const sha256 = createHash("sha256").update(readFileSync(FROZEN_DOCUMENT)).digest("hex");

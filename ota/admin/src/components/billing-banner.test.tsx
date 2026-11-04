@@ -80,6 +80,32 @@ describe("BillingBanner", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("[FIX-W41-OTA AC3] words an ending trial so that it holds before and after the trial's end", () => {
+    // The platform's manual-trial run keeps trial_ending from 14 days before the trial's end until a plan replaces the
+    // trial or the OTA is suspended at least 14 days after it (lead decision (2k) of 2026-11-04): no promise of an end
+    // still to come.
+    banner("trial_ending", { role: "agent" });
+
+    const status = screen.getByRole("status");
+    expect(within(status).getByText("Your trial is ending: choose a plan in the portal")).toBeTruthy();
+    expect(status.textContent).toContain(
+      "The Velexis trial of this OTA is ending or has ended. The console keeps working for now; " +
+        "the OTA is suspended if no plan is chosen.",
+    );
+    const words = `${BILLING_STRINGS.trial_ending.title} ${BILLING_STRINGS.trial_ending.detail}`;
+    for (const promise of [
+      /\bsoon\b/i,
+      /\bwill end\b/i,
+      /\bends\b/i,
+      /\bafter the trial\b/i,
+      /\bdays? left\b/i,
+    ]) {
+      expect([promise.source, promise.test(words)]).toEqual([promise.source, false]);
+    }
+    // No count of days and no date, which would be wrong on one side of the end.
+    expect(words).not.toMatch(/[0-9]/);
+  });
+
   it("[OAD-018 AC1] renders nothing for null or a missing notice", () => {
     for (const notice of [null, undefined]) {
       banner(notice);
