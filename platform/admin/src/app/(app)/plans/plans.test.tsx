@@ -53,6 +53,7 @@ import {
   PlanStatusForm,
   PricingState,
 } from "@/app/(app)/plans/plan-form";
+import { StripePricesForm } from "@/app/(app)/plans/stripe-prices-form";
 import { ManualSubscriptionForm } from "@/app/(app)/subscriptions/[subscriptionId]/manual-subscription-form";
 import SubscriptionPage from "@/app/(app)/subscriptions/[subscriptionId]/page";
 import { updateManualSubscription, type ManualSubscriptionState } from "@/app/(app)/subscriptions/actions";
@@ -700,6 +701,8 @@ const CLIENT_COMPONENTS: ReadonlySet<unknown> = new Set<unknown>([
   PlanBadge,
   PlanStatus,
   PricingState,
+  // PAD-012's "Link Stripe prices" form on the plan's page.
+  StripePricesForm,
   ManualSubscriptionForm,
   SubscriptionTable,
   FilterBar,

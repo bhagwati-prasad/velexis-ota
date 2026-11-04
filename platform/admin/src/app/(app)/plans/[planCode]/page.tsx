@@ -12,6 +12,7 @@ import {
   PlanStatusForm,
   PricingState,
 } from "@/app/(app)/plans/plan-form";
+import { StripePricesForm, type StripePricesFormProps } from "@/app/(app)/plans/stripe-prices-form";
 import { DateTime } from "@/components/date-time";
 import { Money } from "@/components/money";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -116,6 +117,26 @@ function editableOf(plan: AdminPlan): EditablePlan {
     sortOrder: plan.sortOrder,
     settlementFeeBps: plan.settlementFeeBps,
     version: plan.version,
+  };
+}
+
+/**
+ * What "Link Stripe prices" shows of the plan (PAD-012): the Stripe ids, the warnings of the last comparison with their
+ * three documented fields, the currency and whether there is a yearly price, and the version for `If-Match`. The form
+ * is a client component, so only these go to the browser.
+ */
+function stripeLinkOf(plan: AdminPlan): StripePricesFormProps {
+  return {
+    planCode: plan.code,
+    currency: plan.currency,
+    hasAnnualPrice: plan.annualPrice !== null,
+    link: {
+      stripeProductId: plan.stripeProductId,
+      stripePriceIdMonth: plan.stripePriceIdMonth,
+      stripePriceIdYear: plan.stripePriceIdYear,
+      priceWarnings: plan.priceWarnings.map(({ field, expected, actual }) => ({ field, expected, actual })),
+      version: plan.version,
+    },
   };
 }
 
@@ -258,9 +279,11 @@ function BackLink() {
 /**
  * `/plans/[planCode]` (README §2; subscription-billing flow §A): one plan of `adminListPlans` (the API has no read of a
  * single plan, and the list is short) with its fields, the OTAs on it, its Stripe link state and price warnings (M5),
- * "Edit the plan" (`EditPlanForm`: every field but the code and the currency, the limits and the features as structured
- * fields, the version in `If-Match`) and "Retire plan" or "Make the plan active again" (`PlanStatusForm`). A value that
- * is no plan code renders the not-found page without a call, and so does a code the list does not have.
+ * "Link Stripe prices" (`StripePricesForm`, PAD-012, PF-88: the Stripe product and the two recurring prices with the
+ * version in `If-Match`, each price with its warnings next to it, and "Check prices"), "Edit the plan" (`EditPlanForm`:
+ * every field but the code and the currency, the limits and the features as structured fields, the version in
+ * `If-Match`) and "Retire plan" or "Make the plan active again" (`PlanStatusForm`). A value that is no plan code
+ * renders the not-found page without a call, and so does a code the list does not have.
  */
 export default async function PlanPage({ params }: Readonly<{ params: Promise<{ planCode: string }> }>) {
   const { planCode } = await params;
@@ -308,6 +331,7 @@ export default async function PlanPage({ params }: Readonly<{ params: Promise<{ 
         <SummaryPanel plan={plan} />
         <StripePanel plan={plan} />
       </div>
+      <StripePricesForm {...stripeLinkOf(plan)} />
       <EditPlanForm plan={editableOf(plan)} />
       <section aria-labelledby="plan-lifecycle" className="grid gap-3">
         <h2 id="plan-lifecycle" className="text-lg font-semibold tracking-tight">

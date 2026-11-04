@@ -13,14 +13,16 @@ import {
   REASON_MAX_LENGTH,
   REASON_MIN_LENGTH,
   REASON_STRINGS,
+  RESYNC_STRINGS as R,
 } from "@/lib/strings";
 
 /**
- * The server action of `/subscriptions/[subscriptionId]` (README §2 and §4; subscription-billing flow §G, PF-75):
+ * The server actions of `/subscriptions/[subscriptionId]` (README §2 and §4; subscription-billing flow §G, PF-75):
  * "Edit manual subscription" (`adminUpdateManualSubscription`, **reason**, `If-Match`). Before Stripe Billing (M5)
  * every OTA runs on a manual trial; an admin moves its end date, changes its plan, or cancels or reopens it, and the
  * reason is kept in the audit log. Stripe-billed rows are never edited here: the page offers no form for them, and the
- * API refuses them (`409`, `stripe_billed`).
+ * API refuses them (`409`, `stripe_billed`). Since PAD-012 (M5, PF-89) a Stripe-billed row is resynced from Stripe
+ * instead ("Resync from Stripe", `adminResyncSubscription`, at the end of this file).
  *
  * The action checks every field with Zod before it calls the API (the reason as `AdminReason` counts it: 5 to 500 code
  * points after trimming), so made-up fields send nothing. An ended session goes to `/sign-in` and back;
@@ -62,6 +64,8 @@ export type ManualSubscriptionState = {
 
 /** `SubscriptionId` and `PlanCode` of the platform document, the version of `If-Match`, and the editable statuses. */
 const SUBSCRIPTION_ID = z.string().regex(/^sub_[0-9A-HJKMNP-TV-Z]{26}$/);
+/** `TenantId`: the OTA's page a resync revalidates. */
+const TENANT_ID = z.string().regex(/^ten_[0-9A-HJKMNP-TV-Z]{26}$/);
 const PLAN_CODE = z.string().regex(/^[a-z][a-z0-9_]{1,39}$/);
 const VERSION = z.string().regex(/^[1-9][0-9]{0,14}$/);
 /** An RFC 3339 instant in UTC, as the form writes it (`2027-02-12T08:20:11Z`). */
@@ -218,6 +222,99 @@ export async function updateManualSubscription(
       status: saved.status,
       trialEndsAt: saved.trialEndsAt,
       version: saved.version,
+    },
+  };
+}
+
+// ---- Resync from Stripe (PAD-012, M5) -------------------------------------------------------------------------------
+
+/** What the resync's outcome shows of the subscription as Stripe has it now. */
+export interface ResyncedSubscription {
+  readonly status: Schemas["SubscriptionStatus"];
+  readonly currentPeriodEnd: string | null;
+  readonly cancelAtPeriodEnd: boolean;
+  readonly version: number;
+}
+
+/** The state of "Resync from Stripe". */
+export type ResyncState = {
+  /** The call answered `REAUTH_REQUIRED`: `useStepUpAction` asks for a TOTP code and runs the action again. */
+  readonly stepUp?: true;
+} & (
+  | { readonly status: "idle" }
+  | { readonly status: "done"; readonly subscription: ResyncedSubscription }
+  | {
+      readonly status: "failed";
+      /** The error code, for tests and the `data-code` of the notice; never shown. */
+      readonly code: PlatformErrorCode;
+      readonly message: string;
+    }
+);
+
+/** The resync's own words for the codes that are not a `409` with a known `details.reason`. */
+const RESYNC_MESSAGES: Readonly<Partial<Record<PlatformErrorCode, string>>> = {
+  CONFLICT: R.otherConflict,
+  NOT_FOUND: R.subscriptionGone,
+  PROVIDER_ERROR: R.providerError,
+  VALIDATION_FAILED: R.formExpired,
+};
+
+/**
+ * Re-fetches the Stripe subscription of the hidden field `subscriptionId` from Stripe now (`adminResyncSubscription`,
+ * PF-89, subscription-billing flow §D note of PBE-048): the API applies it as `customer.subscription.updated` would
+ * (status, periods, cancellation, price and plan, then the status rules, which may set or clear the billing notice and
+ * suspend or resume the OTA for billing) under the lock the subscription's events take, and writes the admin's
+ * `subscription.resynced` audit row. The page offers it on Stripe rows with a Stripe subscription only; the API's
+ * `409 CONFLICT` reasons (`manual`, `not_linked` and billing sync's failure codes in lower case, such as
+ * `unknown_price` or `subscription_busy`) and a Stripe failure (`502`, nothing changed) are worded. The operation asks
+ * for neither a reason nor a step-up. A success revalidates the subscription, the list, the OTA's page and the
+ * dashboard (its past-due count).
+ */
+export async function resyncSubscription(previous: ResyncState, formData: FormData): Promise<ResyncState> {
+  const subscriptionId = SUBSCRIPTION_ID.safeParse(text(formData, "subscriptionId"));
+  const tenantId = TENANT_ID.safeParse(text(formData, "tenantId"));
+  if (!subscriptionId.success || !tenantId.success) {
+    return { status: "failed", code: "VALIDATION_FAILED", message: R.formExpired };
+  }
+
+  const api = await platformApi();
+  const result = await api.POST("/v1/admin/subscriptions/{subscriptionId}/resync", {
+    params: { path: { subscriptionId: subscriptionId.data } },
+  });
+  if (result.error !== undefined) {
+    const { error } = result;
+    if (error.code === "UNAUTHENTICATED" || error.code === "TOKEN_EXPIRED") {
+      redirect(
+        `/sign-in?${new URLSearchParams({ next: `/subscriptions/${subscriptionId.data}` }).toString()}`,
+      );
+    }
+    if (error.code === "REAUTH_REQUIRED") {
+      return { ...previous, stepUp: true };
+    }
+    const reason = error.details["reason"];
+    const conflict =
+      error.code === "CONFLICT" && typeof reason === "string" && Object.hasOwn(R.conflicts, reason)
+        ? R.conflicts[reason]
+        : undefined;
+    const message =
+      conflict ??
+      (error.code === "RATE_LIMITED" && error.retryAfterSeconds !== undefined
+        ? R.rateLimitedFor(error.retryAfterSeconds)
+        : (RESYNC_MESSAGES[error.code] ?? errorMessage(error)));
+    return { status: "failed", code: error.code, message };
+  }
+  const resynced = result.data;
+  revalidatePath(`/subscriptions/${resynced.id}`);
+  revalidatePath("/subscriptions");
+  revalidatePath(`/tenants/${tenantId.data}`);
+  revalidatePath("/");
+  return {
+    status: "done",
+    subscription: {
+      status: resynced.status,
+      currentPeriodEnd: resynced.currentPeriodEnd,
+      cancelAtPeriodEnd: resynced.cancelAtPeriodEnd,
+      version: resynced.version,
     },
   };
 }

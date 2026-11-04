@@ -7,12 +7,15 @@ import { redirect } from "next/navigation";
 
 import { platformApi, type ApiError } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
-import { PLAN_FORM_STRINGS as F } from "@/lib/strings";
+import { PLAN_FORM_STRINGS as F, STRIPE_PRICES_STRINGS as SP } from "@/lib/strings";
 
 /**
  * The server actions of `/plans` and `/plans/[planCode]` (README §2 and §4; subscription-billing flow §A): create a
  * plan (`adminCreatePlan`), edit one (`adminUpdatePlan` with `If-Match`), and retire it or make it active again
- * (`isActive` of the same operation).
+ * (`isActive` of the same operation). Since PAD-012 (M5, PF-88) the plan's page also links the Stripe product and the
+ * monthly and yearly prices (`linkStripePrices`: the Stripe ids of `adminUpdatePlan`, with `If-Match`) and compares
+ * the linked prices with Stripe again (`checkPlanPrices`: `adminCheckPlanPrices`); both answer the price warnings,
+ * which never block a save.
  *
  * The forms send structured fields, never raw JSON: the limits as four fields, the features as rows of a name and an
  * on/off switch. Each action checks every field as the platform document does (`CreatePlanRequest`,
@@ -360,6 +363,8 @@ const FAILURE_MESSAGES: Readonly<Partial<Record<PlatformErrorCode, string>>> = {
   PRECONDITION_FAILED: F.stale,
   NOT_FOUND: F.planGone,
   VALIDATION_FAILED: F.formExpired,
+  // A new price of a plan with a linked Stripe price is compared with Stripe before the save (PAD-012).
+  PROVIDER_ERROR: F.providerError,
 };
 
 /** The message of a failure that belongs to no field. */
@@ -592,4 +597,250 @@ export async function setPlanActive(previous: PlanStatusState, formData: FormDat
   revalidatePath(planPath(code));
   revalidatePath("/plans");
   return { status: "done", isActive: result.data.isActive, version: result.data.version };
+}
+
+// ---- Stripe prices (PAD-012, M5) ------------------------------------------------------------------------------------
+
+type PlanPriceWarning = Schemas["PlanPriceWarning"];
+
+/** The Stripe ids of the "Link Stripe prices" form. */
+export type StripeLinkField = "stripeProductId" | "stripePriceIdMonth" | "stripePriceIdYear";
+
+/** The Stripe ids as typed; an empty field unlinks. */
+export type StripeLinkValues = Readonly<Record<StripeLinkField, string>>;
+
+/** The Stripe link of a plan as the form shows it: the ids, the warnings of the last comparison and the version. */
+export interface StripeLink {
+  readonly stripeProductId: string | null;
+  readonly stripePriceIdMonth: string | null;
+  readonly stripePriceIdYear: string | null;
+  readonly priceWarnings: readonly PlanPriceWarning[];
+  /** The plan version the next save sends in `If-Match`. */
+  readonly version: number;
+}
+
+/** The state of "Link Stripe prices". */
+export interface StripePricesState extends StepUpFlag {
+  readonly status: "idle" | "saved" | "failed";
+  /** The error code of a failure, for tests and the `data-code` of the notice; never shown. */
+  readonly code?: PlatformErrorCode;
+  /** What the fields show: what was sent after a failure, the saved ids after a save. */
+  readonly values: StripeLinkValues;
+  /** Messages per field, in the admin's own words. */
+  readonly fieldErrors: Readonly<Partial<Record<StripeLinkField, string>>>;
+  /** A problem that belongs to no field (stale version, price of another plan, Stripe unreachable). */
+  readonly message?: string;
+  /** The link as saved, with the warnings of the comparison the save ran. */
+  readonly link?: StripeLink;
+}
+
+/** The state of "Check prices". */
+export type PriceCheckState = StepUpFlag &
+  (
+    | { readonly status: "idle" }
+    | { readonly status: "checked"; readonly warnings: readonly PlanPriceWarning[] }
+    | ActionFailure
+  );
+
+/** The patterns and the length of `UpdatePlanRequest.stripeProductId` and of the two price ids. */
+const STRIPE_PRODUCT_ID = /^prod_[A-Za-z0-9]+$/;
+const STRIPE_PRICE_ID = /^price_[A-Za-z0-9]+$/;
+const STRIPE_ID_MAX = 255;
+
+/** The fields of the form, in display order. */
+const STRIPE_LINK_FIELDS: readonly StripeLinkField[] = [
+  "stripeProductId",
+  "stripePriceIdMonth",
+  "stripePriceIdYear",
+];
+
+/** A field's id, `null` for an empty field (unlink), or `undefined` when it is no id of `pattern`. */
+function stripeIdOf(value: string, pattern: RegExp): string | null | undefined {
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    return null;
+  }
+  return trimmed.length <= STRIPE_ID_MAX && pattern.test(trimmed) ? trimmed : undefined;
+}
+
+/**
+ * The warnings of an answer with their three documented fields only: the state goes to the browser, so nothing else
+ * an answer might carry goes with it.
+ */
+function warningsOf(warnings: readonly PlanPriceWarning[]): PlanPriceWarning[] {
+  return warnings.map(({ field, expected, actual }) => ({ field, expected, actual }));
+}
+
+/** The form's own words for the codes of a failed save that belong to no field. */
+const STRIPE_FAILURE_MESSAGES: Readonly<Partial<Record<PlatformErrorCode, string>>> = {
+  PRECONDITION_FAILED: SP.stale,
+  NOT_FOUND: SP.planGone,
+  PROVIDER_ERROR: SP.saveProviderError,
+  VALIDATION_FAILED: SP.formExpired,
+};
+
+/** The field and message of the API's field errors of a save (`/stripeProductId`, `same_price`, …). */
+function stripeFieldErrors(error: ApiError): Partial<Record<StripeLinkField, string>> {
+  const fieldErrors: Partial<Record<StripeLinkField, string>> = {};
+  for (const { path, code } of error.fieldErrors) {
+    const field = STRIPE_LINK_FIELDS.find((candidate) => path === `/${candidate}`);
+    if (field === undefined) {
+      continue;
+    }
+    fieldErrors[field] ??=
+      code === "same_price"
+        ? SP.samePrice
+        : field === "stripeProductId"
+          ? SP.productInvalid
+          : SP.priceInvalid;
+  }
+  return fieldErrors;
+}
+
+/** A refused save of the Stripe links: the typed ids stay, the problems are in the admin's words. */
+function refusedLink(
+  values: StripeLinkValues,
+  code: PlatformErrorCode,
+  problems: { readonly fieldErrors?: Partial<Record<StripeLinkField, string>>; readonly message?: string },
+): StripePricesState {
+  return {
+    status: "failed",
+    code,
+    values,
+    fieldErrors: problems.fieldErrors ?? {},
+    ...(problems.message === undefined ? {} : { message: problems.message }),
+  };
+}
+
+/**
+ * Links the Stripe product and the monthly and yearly prices of the plan of the hidden field `planCode`
+ * (`adminUpdatePlan` with `stripeProductId`, `stripePriceIdMonth` and `stripePriceIdYear`; an empty field unlinks with
+ * `null`) and the hidden `version` in `If-Match` (PF-88, subscription-billing flow §A). Each id is checked as
+ * `UpdatePlanRequest` checks it, and one price for both intervals is refused at the yearly price as the API refuses it
+ * (`same_price`), before any call. The API compares every newly linked or changed price with Stripe before it saves and
+ * answers the differences in `priceWarnings`: they never block the save, so a save with warnings is a save. A price
+ * another plan links (`409 stripe_price_taken`), a stale version (`412`) and a Stripe failure (`502`, nothing saved)
+ * are worded. Neither a reason nor a step-up is asked for: the operation requires none.
+ */
+export async function linkStripePrices(
+  previous: StripePricesState,
+  formData: FormData,
+): Promise<StripePricesState> {
+  const values: StripeLinkValues = {
+    stripeProductId: text(formData, "stripeProductId"),
+    stripePriceIdMonth: text(formData, "stripePriceIdMonth"),
+    stripePriceIdYear: text(formData, "stripePriceIdYear"),
+  };
+  const code = text(formData, "planCode");
+  const version = text(formData, "version");
+  if (!PLAN_CODE.test(code) || !VERSION.test(version)) {
+    return refusedLink(values, "VALIDATION_FAILED", { message: SP.formExpired });
+  }
+  const product = stripeIdOf(values.stripeProductId, STRIPE_PRODUCT_ID);
+  const month = stripeIdOf(values.stripePriceIdMonth, STRIPE_PRICE_ID);
+  const year = stripeIdOf(values.stripePriceIdYear, STRIPE_PRICE_ID);
+  const fieldErrors: Partial<Record<StripeLinkField, string>> = {};
+  if (product === undefined) {
+    fieldErrors.stripeProductId = SP.productInvalid;
+  }
+  if (month === undefined) {
+    fieldErrors.stripePriceIdMonth = SP.priceInvalid;
+  }
+  if (year === undefined) {
+    fieldErrors.stripePriceIdYear = SP.priceInvalid;
+  } else if (year !== null && year === month) {
+    fieldErrors.stripePriceIdYear = SP.samePrice;
+  }
+  if (
+    product === undefined ||
+    month === undefined ||
+    year === undefined ||
+    Object.keys(fieldErrors).length > 0
+  ) {
+    return refusedLink(values, "VALIDATION_FAILED", { fieldErrors });
+  }
+
+  const api = await platformApi();
+  const result = await api.PATCH("/v1/admin/plans/{planCode}", {
+    params: { path: { planCode: code }, header: { "If-Match": `"${version}"` } },
+    body: { stripeProductId: product, stripePriceIdMonth: month, stripePriceIdYear: year },
+  });
+  if (result.error !== undefined) {
+    const { error } = result;
+    signInIfEnded(error, code);
+    if (error.code === "REAUTH_REQUIRED") {
+      return { ...previous, values, stepUp: true };
+    }
+    if (error.code === "CONFLICT" && error.details["reason"] === "stripe_price_taken") {
+      return refusedLink(values, error.code, { message: SP.priceTaken });
+    }
+    const apiErrors = error.code === "VALIDATION_FAILED" ? stripeFieldErrors(error) : {};
+    if (Object.keys(apiErrors).length > 0) {
+      return refusedLink(values, error.code, { fieldErrors: apiErrors });
+    }
+    const message =
+      error.code === "RATE_LIMITED" && error.retryAfterSeconds !== undefined
+        ? SP.rateLimitedFor(error.retryAfterSeconds)
+        : (STRIPE_FAILURE_MESSAGES[error.code] ?? errorMessage(error));
+    return refusedLink(values, error.code, { message });
+  }
+  revalidatePath(planPath(code));
+  revalidatePath("/plans");
+  const saved = result.data;
+  return {
+    status: "saved",
+    values: {
+      stripeProductId: saved.stripeProductId ?? "",
+      stripePriceIdMonth: saved.stripePriceIdMonth ?? "",
+      stripePriceIdYear: saved.stripePriceIdYear ?? "",
+    },
+    fieldErrors: {},
+    link: {
+      stripeProductId: saved.stripeProductId,
+      stripePriceIdMonth: saved.stripePriceIdMonth,
+      stripePriceIdYear: saved.stripePriceIdYear,
+      priceWarnings: warningsOf(saved.priceWarnings),
+      version: saved.version,
+    },
+  };
+}
+
+/**
+ * Compares the saved Stripe prices of the plan of the hidden field `planCode` with Stripe again
+ * (`adminCheckPlanPrices`, PF-88), for example after a price was changed or archived in the Stripe dashboard. The
+ * answer's warnings become the plan's (the plan's version does not change); a plan without a linked price answers none
+ * and the API calls nothing. A Stripe failure (`502`) keeps the stored warnings and is worded.
+ */
+export async function checkPlanPrices(
+  previous: PriceCheckState,
+  formData: FormData,
+): Promise<PriceCheckState> {
+  const code = text(formData, "planCode");
+  if (!PLAN_CODE.test(code)) {
+    return { status: "failed", code: "VALIDATION_FAILED", message: SP.formExpired };
+  }
+  const api = await platformApi();
+  const result = await api.POST("/v1/admin/plans/{planCode}/check-prices", {
+    params: { path: { planCode: code } },
+  });
+  if (result.error !== undefined) {
+    const { error } = result;
+    signInIfEnded(error, code);
+    if (error.code === "REAUTH_REQUIRED") {
+      return { ...previous, stepUp: true };
+    }
+    const messages: Readonly<Partial<Record<PlatformErrorCode, string>>> = {
+      NOT_FOUND: SP.planGone,
+      PROVIDER_ERROR: SP.checkProviderError,
+      VALIDATION_FAILED: SP.formExpired,
+    };
+    const message =
+      error.code === "RATE_LIMITED" && error.retryAfterSeconds !== undefined
+        ? SP.rateLimitedFor(error.retryAfterSeconds)
+        : (messages[error.code] ?? errorMessage(error));
+    return { status: "failed", code: error.code, message };
+  }
+  revalidatePath(planPath(code));
+  revalidatePath("/plans");
+  return { status: "checked", warnings: warningsOf(result.data.warnings) };
 }

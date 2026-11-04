@@ -8,6 +8,7 @@ import {
   ManualSubscriptionForm,
   type PlanChoice,
 } from "@/app/(app)/subscriptions/[subscriptionId]/manual-subscription-form";
+import { ResyncForm } from "@/app/(app)/subscriptions/[subscriptionId]/resync-form";
 import { DateTime } from "@/components/date-time";
 import { Money } from "@/components/money";
 import { StatusBadge } from "@/components/status-badge";
@@ -27,6 +28,7 @@ import {
   BILLING_INTERVAL_LABELS,
   BILLING_PROVIDER_LABELS,
   MANUAL_SUBSCRIPTION_STRINGS as M,
+  RESYNC_STRINGS,
   SUBSCRIPTION_DETAIL_STRINGS as S,
   formatCount,
 } from "@/lib/strings";
@@ -100,7 +102,15 @@ function Panel({
   );
 }
 
-/** A Stripe-hosted link, only for an `https:` URL (anything else is not rendered as a link). */
+/** `href` with the query of `filters`. */
+function withQuery(href: string, filters: Readonly<Record<string, string>>): string {
+  return `${href}?${new URLSearchParams(filters).toString()}`;
+}
+
+/**
+ * A Stripe-hosted link, only for an `https:` URL (anything else is not rendered as a link); `noopener noreferrer`, so
+ * Stripe's page gets neither this window nor the admin URL it was opened from.
+ */
 function StripeLink({ href, children }: { readonly href: string | null; readonly children: ReactNode }) {
   if (href === null) {
     return null;
@@ -112,7 +122,7 @@ function StripeLink({ href, children }: { readonly href: string | null; readonly
     return null;
   }
   return url.protocol === "https:" ? (
-    <a href={url.toString()} rel="noreferrer" className={LINK_CLASS}>
+    <a href={url.toString()} rel="noopener noreferrer" className={LINK_CLASS}>
       {children}
     </a>
   ) : null;
@@ -180,9 +190,20 @@ function SummaryPanel({ subscription }: { readonly subscription: AdminSubscripti
   );
 }
 
-function InvoicesPanel({ invoices }: { readonly invoices: readonly AdminInvoice[] }) {
+function InvoicesPanel({
+  invoices,
+  tenantId,
+}: {
+  readonly invoices: readonly AdminInvoice[];
+  readonly tenantId: string;
+}) {
   return (
     <Panel id="subscription-invoices" title={S.invoicesTitle} intro={S.invoicesIntro}>
+      <p className="text-sm">
+        <Link href={withQuery("/invoices", { tenantId })} className={LINK_CLASS}>
+          {S.allInvoicesOfOta}
+        </Link>
+      </p>
       {invoices.length === 0 ? (
         <p className="text-sm text-muted-foreground">{S.invoicesEmpty}</p>
       ) : (
@@ -252,9 +273,21 @@ function InvoicesPanel({ invoices }: { readonly invoices: readonly AdminInvoice[
   );
 }
 
-function EventsPanel({ events }: { readonly events: readonly AdminStripeEvent[] }) {
+function EventsPanel({
+  events,
+  tenantId,
+}: {
+  readonly events: readonly AdminStripeEvent[];
+  readonly tenantId: string;
+}) {
   return (
     <Panel id="subscription-events" title={S.eventsTitle} intro={S.eventsIntro}>
+      <p className="text-sm">
+        {S.eventsReprocessHint}{" "}
+        <Link href={withQuery("/stripe-events", { tenantId })} className={LINK_CLASS}>
+          {S.allEventsOfOta}
+        </Link>
+      </p>
       {events.length === 0 ? (
         <p className="text-sm text-muted-foreground">{S.eventsEmpty}</p>
       ) : (
@@ -313,11 +346,13 @@ function BackLink() {
 /**
  * `/subscriptions/[subscriptionId]` (README §2; subscription-billing flow §G, PF-75): one subscription of
  * `adminGetSubscription` with its OTA, plan, status, billing, trial and periods and the Stripe references, its invoices
- * (`Money`, Stripe-hosted links) and the Stripe events of its OTA (both empty before M5). A **manual** subscription has
+ * (`Money`, Stripe-hosted links) and the Stripe events of its OTA (both empty before M5), each with a link to the
+ * whole list of its OTA (`/invoices?tenantId=…`, `/stripe-events?tenantId=…`, PAD-012). A **manual** subscription has
  * "Edit the manual subscription" (`ManualSubscriptionForm`: plan, trial end, status, with a reason and `If-Match`; the
  * page then also loads the active plans with `adminListPlans`, and a failed list still renders the page); a
- * Stripe-billed one has no edit form at all, only a note that Stripe owns it. A value that is no subscription id, and
- * an unknown subscription, render the not-found page.
+ * Stripe-billed one has no edit form at all, only a note that Stripe owns it and, once its Checkout has completed (it
+ * has a Stripe subscription), "Resync from Stripe" (`ResyncForm`, PAD-012, PF-89). A value that is no subscription id,
+ * and an unknown subscription, render the not-found page.
  */
 export default async function SubscriptionPage({
   params,
@@ -392,13 +427,19 @@ export default async function SubscriptionPage({
           />
         </Panel>
       ) : (
-        <Alert>
-          <AlertTitle>{S.stripeBilledTitle}</AlertTitle>
-          <AlertDescription>{S.stripeBilled}</AlertDescription>
-        </Alert>
+        <Panel id="subscription-stripe" title={S.stripeBilledTitle} intro={S.stripeBilled}>
+          {subscription.providerSubscriptionId === null ? (
+            // Checkout has not completed: the API would answer `409 not_linked`, so nothing is offered.
+            <p className="text-sm" data-resync="not-linked">
+              {RESYNC_STRINGS.notLinked}
+            </p>
+          ) : (
+            <ResyncForm subscriptionId={subscription.id} tenantId={subscription.tenantId} />
+          )}
+        </Panel>
       )}
-      <InvoicesPanel invoices={invoices} />
-      <EventsPanel events={events} />
+      <InvoicesPanel invoices={invoices} tenantId={subscription.tenantId} />
+      <EventsPanel events={events} tenantId={subscription.tenantId} />
     </div>
   );
 }

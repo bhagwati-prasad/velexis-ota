@@ -867,7 +867,7 @@ export const PLAN_FORM_STRINGS = Object.freeze({
   newPlan: "New plan",
   createTitle: "New plan",
   createIntro:
-    "A new plan is active at once. Its code and its currency never change afterwards. The Stripe product and prices are linked with Stripe Billing (M5).",
+    "A new plan is active at once. Its code and its currency never change afterwards. The Stripe product and prices are linked on the plan's page once the plan exists.",
   editTitle: "Edit the plan",
   editIntro:
     "The code and the currency never change. New limits and features reach both backends within 60 seconds; existing OTAs on the plan get them too.",
@@ -956,6 +956,12 @@ export const PLAN_FORM_STRINGS = Object.freeze({
   reload: "Reload the page",
   planGone: "This plan no longer exists. Go back to the list of plans.",
   formExpired: "This form is out of date. Reload the page and try again.",
+  /**
+   * `502 PROVIDER_ERROR` of an edit (PAD-012): a new price of a plan with a linked Stripe price is compared with Stripe
+   * before the save, and Stripe did not answer.
+   */
+  providerError:
+    "Stripe could not be reached to compare the linked prices with the new price, so nothing was saved. Try again in a few minutes.",
   rateLimitedFor: (seconds: number) => `Too many attempts. Try again in ${waitTime(seconds)}.`,
 });
 
@@ -982,7 +988,7 @@ export const PLAN_DETAIL_STRINGS = Object.freeze({
   version: "Version",
   stripeTitle: "Stripe",
   stripeIntro:
-    "Stripe Billing (M5) links a Stripe product and a monthly and a yearly price to the plan and compares them with it. Until then no price is linked, and no OTA checks out with Stripe.",
+    "The Stripe product and the monthly and yearly prices linked to the plan, whether Stripe Checkout can start for each interval, and the differences the last comparison with Stripe found. An interval without a linked price cannot check out with Stripe.",
   stripeProduct: "Stripe product",
   stripePriceMonth: "Monthly Stripe price",
   stripePriceYear: "Yearly Stripe price",
@@ -1073,9 +1079,14 @@ export const SUBSCRIPTION_DETAIL_STRINGS = Object.freeze({
   no: "No",
   stripeBilledTitle: "Billed by Stripe",
   stripeBilled:
-    "Stripe bills this subscription, so it cannot be edited here: the owners change it in the Stripe Customer Portal, and Stripe's webhooks keep this page up to date.",
+    "Stripe bills this subscription, so it cannot be edited here: the owners change it in the Stripe Customer Portal, and Stripe's webhooks keep this page up to date. When a webhook was missed or the row drifted, resync it from Stripe.",
   invoicesTitle: "Invoices",
   invoicesIntro: "The invoices of the subscription, newest first (at most 50). A manual trial has none.",
+  /** Links from the subscription to the lists of its OTA (PAD-012). */
+  allInvoicesOfOta: "All invoices of this OTA",
+  allEventsOfOta: "All Stripe events of this OTA",
+  eventsReprocessHint:
+    "A failed or ignored event can be reprocessed on the Stripe events page once its cause is fixed.",
   invoicesCaption: "Invoices, newest first",
   invoicesEmpty: "No invoice.",
   invoiceNumber: "Number",
@@ -2233,6 +2244,239 @@ export const DOMAIN_ACTION_STRINGS = Object.freeze({
   subdomain: "An OTA's sub-domain cannot be removed.",
   // Refusals
   domainGone: "This host no longer exists: its owners or another admin removed it. Reload the page.",
+  formExpired: "This form is out of date. Reload the page and try again.",
+  rateLimitedFor: (seconds: number) => `Too many attempts. Try again in ${waitTime(seconds)}.`,
+});
+
+// ---- Stripe Billing in the admin: plan prices, resync, invoices, Stripe events (PAD-012) ---------------------------
+
+/** The attribute of a price warning (`PlanPriceWarning.field` is `<link>.<attribute>`), in words. */
+export const PRICE_WARNING_ATTRIBUTES = Object.freeze({
+  amount: "Amount",
+  currency: "Currency",
+  interval: "Billing interval",
+  active: "Active in Stripe",
+});
+
+/** A billing interval of a Stripe price as a warning names it (`month`, `year`, `3 month`). */
+export const PRICE_INTERVAL_LABELS = Object.freeze({
+  day: "Daily",
+  week: "Weekly",
+  month: "Monthly",
+  year: "Yearly",
+});
+
+/**
+ * "Link Stripe prices" on `/plans/[planCode]` (`adminUpdatePlan` with the Stripe ids, `adminCheckPlanPrices`; PF-88,
+ * subscription-billing flow §A): the product and the two recurring prices, each price with the warnings of the last
+ * comparison next to it. Warnings never block saving.
+ */
+export const STRIPE_PRICES_STRINGS = Object.freeze({
+  title: "Link Stripe prices",
+  intro:
+    "Link the Stripe product and the recurring prices that were created in Stripe for this plan. A saved link is compared with the plan in Stripe at once: differences show next to the price as warnings, and they never block saving. An interval without a linked price cannot start Stripe Checkout.",
+  productLabel: "Stripe product",
+  productHint: "The product id, such as prod_QxGrowth01. Leave it empty to unlink the product.",
+  productInvalid: "Enter a Stripe product id: prod_ followed by letters and digits.",
+  monthLabel: "Monthly Stripe price",
+  monthHint: (currency: string) =>
+    `A recurring monthly price in ${currency}, such as price_1QxGrowthMonthEur. Leave it empty to unlink it: monthly Checkout then stops.`,
+  yearLabel: "Yearly Stripe price",
+  yearHint: (currency: string) =>
+    `A recurring yearly price in ${currency}. Leave it empty to unlink it: yearly Checkout then stops.`,
+  yearHintNoAnnual:
+    "The plan has no yearly price, so a linked yearly price shows an amount warning. Leave it empty for no yearly Checkout.",
+  priceInvalid: "Enter a Stripe price id: price_ followed by letters and digits.",
+  /** `400 VALIDATION_FAILED` `same_price`, and the same check before the call. */
+  samePrice:
+    "One price cannot be both the monthly and the yearly price: billing could not tell its interval. Link a yearly price of its own.",
+  /** `409 CONFLICT` `stripe_price_taken`. */
+  priceTaken:
+    "Another plan links one of these prices already. A Stripe price links one plan only: unlink it on the other plan first, or link another price.",
+  /** `502 PROVIDER_ERROR` of a save. */
+  saveProviderError:
+    "Stripe could not be reached to compare the prices, so nothing was saved. Try again in a few minutes.",
+  save: "Save the links",
+  saving: "Saving…",
+  saved: "The Stripe links are saved, and the linked prices agree with the plan.",
+  savedNoPrice: "The Stripe links are saved. No price is linked, so there is nothing to compare.",
+  savedWithWarnings: (count: number) =>
+    `The Stripe links are saved, with ${counted(count, "price warning", "price warnings")}: see next to each price. Correct the price in Stripe or the plan here, then check the prices again.`,
+  // Check prices
+  checkTitle: "Compare with Stripe",
+  check: "Check prices",
+  checking: "Checking…",
+  checkHint:
+    "Compares the saved prices with Stripe now, for example after a price was changed or archived in the Stripe dashboard. Unsaved changes above are not compared, and the plan's version does not change.",
+  checkNothingLinked: "No price is linked yet, so there is nothing to compare.",
+  checkedNone: "Checked just now: the linked prices agree with the plan.",
+  checkedSome: (count: number) =>
+    `Checked just now: ${counted(count, "price warning", "price warnings")}, shown next to each price.`,
+  /** `502 PROVIDER_ERROR` of a check: the stored warnings stay as they were. */
+  checkProviderError:
+    "Stripe could not be reached, so the prices were not compared. The warnings shown are those of the last comparison. Try again in a few minutes.",
+  // Warnings next to a price
+  warningCount: (count: number) => counted(count, "price warning", "price warnings"),
+  noWarning: "No price warning.",
+  planSays: "The plan:",
+  stripeSays: "Stripe:",
+  noAnnualPrice: "No yearly price",
+  noUnitAmount: "No fixed amount",
+  oneTime: "A one-time price",
+  everyN: (count: string, unit: string) => `Every ${count} ${unit}s`,
+  active: "Active",
+  archived: "Archived",
+  unknownPrice: "Not found in Stripe (deleted, or of the other mode)",
+  none: "None",
+  // Refusals
+  stale:
+    "Someone changed this plan since the page was loaded, so the links were not saved. Reload the page to see the plan as it is now, then link the prices again.",
+  reload: "Reload the page",
+  planGone: "This plan no longer exists. Go back to the list of plans.",
+  formExpired: "This form is out of date. Reload the page and try again.",
+  rateLimitedFor: (seconds: number) => `Too many attempts. Try again in ${waitTime(seconds)}.`,
+});
+
+/** "Resync from Stripe" on `/subscriptions/[subscriptionId]` (`adminResyncSubscription`; PF-89). */
+export const RESYNC_STRINGS = Object.freeze({
+  resync: "Resync from Stripe",
+  confirmTitle: "Resync this subscription from Stripe?",
+  confirmDescription:
+    "Velexis fetches the subscription from Stripe now and applies it as a webhook would: status, periods, cancellation, price and plan. The billing rules then run: they may set or clear the OTA's billing notice, suspend the OTA for billing or resume it. The audit log records the resync with your name, also when nothing differed.",
+  confirm: "Resync now",
+  working: "Resyncing…",
+  done: "The subscription is resynced from Stripe.",
+  doneStatus: "Status now:",
+  donePeriodEnd: "Current period ends:",
+  notLinked:
+    "Stripe Checkout of this subscription has not completed, so there is no Stripe subscription to fetch yet.",
+  /** `409 CONFLICT` by `details.reason` (billing sync's failure codes in lower case, subscription-billing flow §D). */
+  conflicts: {
+    manual: "This is a manual subscription: there is nothing to fetch from Stripe. Reload the page.",
+    not_linked:
+      "Stripe Checkout of this subscription has not completed, so there is no Stripe subscription to fetch yet.",
+    unknown_price:
+      "Stripe bills a price that is linked to no plan, or to several. Link the price on its plan, then resync again.",
+    unsupported_subscription:
+      "Stripe's subscription has more than one item, which Velexis does not bill. Fix it in Stripe, then resync again.",
+    invalid_customer:
+      "Stripe's customer of this subscription does not belong to a Velexis OTA. Check the customer in Stripe.",
+    subscription_conflict:
+      "The OTA has another current subscription in Stripe. Resolve it in Stripe, then resync again.",
+    customer_conflict:
+      "This Stripe customer belongs to another OTA. Resolve it in Stripe, then resync again.",
+    tenant_mismatch:
+      "Stripe's subscription names another OTA than this row. Resolve it in Stripe, then resync again.",
+    tenant_not_billable: "The OTA is deleted or being deleted, so nothing is synchronised any more.",
+    subscription_busy:
+      "A Stripe event of this subscription is being processed right now. Try again in a minute.",
+    subscription_lock_lost:
+      "A Stripe event of this subscription was processed at the same time. Try again in a minute.",
+    subscription_moved:
+      "A Stripe event of this subscription was processed at the same time. Try again in a minute.",
+  } as Readonly<Record<string, string>>,
+  /** A `409 CONFLICT` reason this list does not know yet. */
+  otherConflict:
+    "Billing sync could not apply Stripe's subscription, so nothing changed. Reload the page and try again.",
+  providerError: "Stripe could not be reached, so nothing changed. Try again in a few minutes.",
+  subscriptionGone: "This subscription no longer exists. Go back to the list of subscriptions.",
+  formExpired: "This form is out of date. Reload the page and try again.",
+  rateLimitedFor: (seconds: number) => `Too many attempts. Try again in ${waitTime(seconds)}.`,
+});
+
+/** `/invoices`: the invoices of every OTA (`adminListInvoices`; PF-89). */
+export const INVOICE_LIST_STRINGS = Object.freeze({
+  title: "Invoices",
+  intro:
+    "The Velexis invoices of every OTA, synchronised from Stripe, newest first. Amounts are in the invoice's currency; the links open the Stripe-hosted page and PDF. The address of this page keeps the filters, so a list can be shared.",
+  filtersLabel: "Invoice filters",
+  statusLabel: "Status",
+  tenantLabel: "OTA id",
+  tenantPlaceholder: "ten_…",
+  caption: "Invoices, newest first",
+  empty: "No invoice matches these filters.",
+  columnNumber: "Number",
+  columnOta: "OTA",
+  columnSubscription: "Subscription",
+  columnStatus: "Status",
+  columnPeriod: "Period",
+  columnTotal: "Total",
+  columnPaid: "Amount paid",
+  columnDue: "Amount due",
+  columnIssued: "Issued",
+  columnPaidAt: "Paid",
+  columnLinks: "Stripe",
+  openTenant: "Open the OTA",
+  noSubscription: "None",
+  none: "None",
+  notYet: "Not yet",
+  periodTo: "to",
+  invoicePage: "Invoice page",
+  invoicePdf: "PDF",
+  invoiceOf: (number: string) => ` of invoice ${number}`,
+  oneTenant: "Invoices of one OTA.",
+  everyTenant: "Show the invoices of every OTA",
+  invalidFilters: "The filters in this address are not valid. Clear them and try again.",
+  showAll: "Show every invoice",
+  unavailableTitle: "The invoices could not be loaded",
+});
+
+/** The receiver of a Stripe event (`AdminStripeEvent.endpoint`). */
+export const STRIPE_EVENT_ENDPOINT_LABELS = Object.freeze({
+  billing: "Billing",
+  connect_accounts: "Connect accounts",
+});
+
+/** `/stripe-events`: the Stripe webhook inbox (`adminListStripeEvents`, `adminReprocessStripeEvent`; PF-89). */
+export const STRIPE_EVENT_LIST_STRINGS = Object.freeze({
+  title: "Stripe events",
+  intro:
+    "The Stripe webhook inbox of both receivers: failed and ignored events first, each group newest first, then the others. The last error says why an event failed or was ignored. Once its cause is fixed (for example a price linked to its plan), reprocess it. The address of this page keeps the filters, so a list can be shared.",
+  filtersLabel: "Stripe event filters",
+  statusLabel: "Status",
+  typeLabel: "Event type",
+  typePlaceholder: "invoice.payment_failed",
+  tenantLabel: "OTA id",
+  tenantPlaceholder: "ten_…",
+  caption: "Stripe events, failed and ignored first",
+  empty: "No Stripe event matches these filters.",
+  columnEvent: "Event",
+  columnType: "Type",
+  columnStatus: "Status",
+  columnAttempts: "Attempts",
+  columnError: "Last error",
+  columnOta: "OTA",
+  columnReceived: "Received",
+  columnProcessed: "Processed",
+  columnActions: "Actions",
+  noTenant: "Not resolved",
+  none: "None",
+  notYet: "Not yet",
+  invalidFilters: "The filters in this address are not valid. Clear them and try again.",
+  showAll: "Show every Stripe event",
+  unavailableTitle: "The Stripe events could not be loaded",
+});
+
+/** "Reprocess" on `/stripe-events` (`adminReprocessStripeEvent`): a failed or ignored event only. */
+export const STRIPE_EVENT_ACTION_STRINGS = Object.freeze({
+  reprocess: "Reprocess",
+  /** The rest of a row button's accessible name, after its text, so each button names its event. */
+  eventSuffix: (eventId: string) => ` ${eventId}`,
+  confirmTitle: (eventId: string) => `Reprocess ${eventId}?`,
+  confirmDescription: (type: string) =>
+    `The ${type} event goes back to “Received” with its attempts and last error kept, and the worker processes it again within minutes: it fetches the object from Stripe and applies it. Fix the cause first, or it fails again. The audit log records it.`,
+  confirm: "Reprocess event",
+  working: "Working…",
+  done: (eventId: string) =>
+    `${eventId} is queued again. Reload the page in a minute to see whether it was processed.`,
+  /** `409 CONFLICT` by `details.reason` (the event's status). */
+  conflicts: {
+    processing: "The worker is processing this event right now. Reload the page in a minute.",
+    received: "This event is queued for processing already. Reload the page in a minute.",
+    processed: "This event is processed already, so there is nothing to run again. Reload the page.",
+  } as Readonly<Record<string, string>>,
+  otherConflict: "This event cannot be reprocessed in its current state. Reload the page.",
+  eventGone: "This event no longer exists. Reload the page.",
   formExpired: "This form is out of date. Reload the page and try again.",
   rateLimitedFor: (seconds: number) => `Too many attempts. Try again in ${waitTime(seconds)}.`,
 });
