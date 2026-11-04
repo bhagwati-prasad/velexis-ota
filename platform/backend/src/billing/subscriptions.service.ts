@@ -31,19 +31,39 @@
 //   2026-10-26): billing's lock order (flow §D), which billing sync keeps too, so an edit and a billing-sync write of
 //   the same OTA (a completed Checkout replacing the manual trial) wait for each other in turn, never in a circle.
 //
+// - The resync (`adminResyncSubscription`, PBE-048; flow §D, PADR-0002 item 5) re-fetches a Stripe subscription and
+//   applies billing sync's update path to its row (subscription-changed.handler.ts `resync`): under the subscription's
+//   lock, the status rules included, with one `subscription.resynced` audit row of the admin. A manual subscription has
+//   nothing to fetch (`409 CONFLICT`, `details.reason = manual`), nor has a Stripe row whose Checkout has not completed
+//   (`details.reason = not_linked`). A billing-sync failure writes nothing and answers `409 CONFLICT` with its code in
+//   lower case as `details.reason` (`unknown_price` for a price no plan links, `subscription_busy` while an event of the
+//   subscription holds its lock, `tenant_mismatch`, …); a Stripe failure answers `502 PROVIDER_ERROR`. The answer is
+//   the row as it is after the commit.
+// - The invoices (`adminListInvoices`, and `invoices[]` of the detail) answer their amounts with the decimals of their
+//   currency, as the portal's `listInvoices` does (`5000` JPY, `49.00` EUR; lead decision (2g) of 2026-11-04, PBE-048,
+//   `invoiceMoney` of invoices.controller.ts). The list is newest first (issue date, an invoice without one last, then
+//   creation, then id), with the filters `tenantId` and `status` and an opaque cursor of the last invoice's id.
+//
 // The tenant write needs TenantsModule's repository, a module of BillingModule's own layer (architecture §2.2), so
 // AdminModule (layer 4) provides this service, as it provides ProvisioningJobsRepository; BillingModule provides
-// PlansService.
+// PlansService. The resync's update path is billing sync's SubscriptionChangedHandler (layer 3), which AdminModule
+// provides with what it needs.
 import { Inject, Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types/platform";
 import { AppError } from "@velexis/errors";
+import Stripe from "stripe";
 import { AuditService } from "../audit/audit.service";
 import type { AccessTokenClaims } from "../auth/token.service";
 import { Clock } from "../common/clock";
 import { PLATFORM_DB, type PlatformDb } from "../common/database";
 import { InvalidationPublisher, runInTransaction } from "../common/redis/invalidation.publisher";
+import { StripeNotConfiguredError } from "../common/stripe/stripe.client";
+import { StripeEventFailure } from "../common/stripe/stripe-inbox.service";
 import { TenantsRepository } from "../tenants/tenants.repository";
+import { invoiceMoney } from "./invoices.controller";
 import { PlansRepository } from "./plans.repository";
+import { providerError, stripeBillingFailureOf } from "./stripe-billing.gateway";
+import { SubscriptionChangedHandler } from "./sync/handlers/subscription-changed.handler";
 import { manualTrialStep, utcDay } from "./sync/manual-trials.scheduler";
 import {
   CURRENT_SUBSCRIPTION_INDEX,
@@ -59,6 +79,7 @@ export type AdminSubscription = components["schemas"]["AdminSubscription"];
 export type AdminSubscriptionList = components["schemas"]["AdminSubscriptionList"];
 export type AdminSubscriptionDetail = components["schemas"]["AdminSubscriptionDetail"];
 export type AdminInvoice = components["schemas"]["AdminInvoice"];
+export type AdminInvoiceList = components["schemas"]["AdminInvoiceList"];
 export type AdminStripeEvent = components["schemas"]["AdminStripeEvent"];
 export type UpdateManualSubscriptionRequest = components["schemas"]["UpdateManualSubscriptionRequest"];
 
@@ -67,6 +88,14 @@ export interface ListSubscriptionsQuery {
   readonly status?: AdminSubscription["status"] | undefined;
   readonly provider?: AdminSubscription["billingProvider"] | undefined;
   readonly planCode?: string | undefined;
+  readonly cursor?: string | undefined;
+  readonly limit?: number | undefined;
+}
+
+/** The query of `adminListInvoices`, as the validation interceptor coerced it (`limit` defaults to 50). */
+export interface ListInvoicesQuery {
+  readonly tenantId?: string | undefined;
+  readonly status?: AdminInvoice["status"] | undefined;
   readonly cursor?: string | undefined;
   readonly limit?: number | undefined;
 }
@@ -109,9 +138,12 @@ export function toAdminSubscription(row: AdminSubscriptionRow): AdminSubscriptio
   };
 }
 
-/** The admin's invoice of a row: amounts as `Money` in the invoice currency. */
+/**
+ * The admin's invoice of a row: amounts as `Money` in the invoice currency, with the currency's decimals as the
+ * portal's `listInvoices` answers them (`invoiceMoney`, lead decision (2g) of 2026-11-04).
+ */
 export function toAdminInvoice(row: InvoiceRow): AdminInvoice {
-  const money = (amount: string) => ({ amount, currency: row.currency });
+  const money = (stored: string) => invoiceMoney(stored, row.currency, row.minor_units);
   return {
     id: row.id,
     tenantId: row.tenant_id,
@@ -150,15 +182,13 @@ export function toAdminStripeEvent(row: StripeEventRow): AdminStripeEvent {
   };
 }
 
-/** An opaque cursor: base64url of `{"id": "<subscription id>"}`, the last subscription of the page. */
-export function encodeSubscriptionCursor(subscriptionId: string): string {
-  return Buffer.from(JSON.stringify({ id: subscriptionId }), "utf8").toString("base64url");
+/** An opaque cursor: base64url of `{"id": "<id>"}`, the last row of the page. */
+export function encodeIdCursor(id: string): string {
+  return Buffer.from(JSON.stringify({ id }), "utf8").toString("base64url");
 }
 
-const SUBSCRIPTION_ID = /^sub_[0-9A-HJKMNP-TV-Z]{26}$/;
-
-/** The subscription id of a cursor of this list, or `undefined` when it is not one. */
-export function decodeSubscriptionCursor(cursor: string): string | undefined {
+/** The id of a cursor made by `encodeIdCursor` when it matches `pattern`, or `undefined` when it is not one. */
+export function decodeIdCursor(cursor: string, pattern: RegExp): string | undefined {
   if (!/^[A-Za-z0-9_-]{1,512}$/.test(cursor)) {
     return undefined;
   }
@@ -168,15 +198,50 @@ export function decodeSubscriptionCursor(cursor: string): string | undefined {
       return undefined;
     }
     const id: unknown = (value as Record<string, unknown>)["id"];
-    return Object.keys(value).length === 1 && typeof id === "string" && SUBSCRIPTION_ID.test(id)
-      ? id
-      : undefined;
+    return Object.keys(value).length === 1 && typeof id === "string" && pattern.test(id) ? id : undefined;
   } catch {
     return undefined;
   }
 }
 
-function invalidCursor(): AppError<"VALIDATION_FAILED"> {
+/** An opaque cursor: base64url of `{"id": "<subscription id>"}`, the last subscription of the page. */
+export function encodeSubscriptionCursor(subscriptionId: string): string {
+  return encodeIdCursor(subscriptionId);
+}
+
+const SUBSCRIPTION_ID = /^sub_[0-9A-HJKMNP-TV-Z]{26}$/;
+const INVOICE_ID = /^inv_[0-9A-HJKMNP-TV-Z]{26}$/;
+
+/** The subscription id of a cursor of this list, or `undefined` when it is not one. */
+export function decodeSubscriptionCursor(cursor: string): string | undefined {
+  return decodeIdCursor(cursor, SUBSCRIPTION_ID);
+}
+
+/** An opaque cursor of the admin's invoice list: base64url of `{"id": "<invoice id>"}`, the page's last invoice. */
+export function encodeInvoiceCursor(invoiceId: string): string {
+  return encodeIdCursor(invoiceId);
+}
+
+/** The invoice id of a cursor of the admin's invoice list, or `undefined` when it is not one. */
+export function decodeInvoiceCursor(cursor: string): string | undefined {
+  return decodeIdCursor(cursor, INVOICE_ID);
+}
+
+/**
+ * The answer to a failed resync (file header): `409 CONFLICT` with the billing-sync failure's code in lower case, or
+ * `502 PROVIDER_ERROR` for a Stripe failure; anything else as it is.
+ */
+export function resyncError(error: unknown): unknown {
+  if (error instanceof StripeEventFailure) {
+    return new AppError("CONFLICT", { details: { reason: error.code.toLowerCase() } });
+  }
+  if (error instanceof Stripe.errors.StripeError || error instanceof StripeNotConfiguredError) {
+    return providerError(stripeBillingFailureOf("subscriptions.retrieve", error));
+  }
+  return error;
+}
+
+export function invalidCursor(): AppError<"VALIDATION_FAILED"> {
   return new AppError("VALIDATION_FAILED", {
     fieldErrors: [{ path: "/query/cursor", code: "cursor", message: "Is not a cursor of this list." }],
   });
@@ -204,6 +269,7 @@ export class SubscriptionsService {
     private readonly audit: AuditService,
     private readonly invalidations: InvalidationPublisher,
     private readonly clock: Clock,
+    private readonly sync: SubscriptionChangedHandler,
     @Inject(PLATFORM_DB) private readonly db: PlatformDb,
   ) {}
 
@@ -247,6 +313,63 @@ export class SubscriptionsService {
       subscription: toAdminSubscription(row),
       invoices: invoices.map(toAdminInvoice),
       events: events.map(toAdminStripeEvent),
+    };
+  }
+
+  /**
+   * adminResyncSubscription: the Stripe subscription of the row `subscriptionId` re-fetched and applied by billing
+   * sync's update path, with the admin's `subscription.resynced` audit row (file header). `404` for an unknown row,
+   * `409` for a manual one, one without a Stripe subscription or a billing-sync failure, `502` when Stripe fails.
+   */
+  async resync(claims: Pick<AccessTokenClaims, "sub">, subscriptionId: string): Promise<AdminSubscription> {
+    const row = await this.subscriptions.findAdmin(subscriptionId);
+    if (row === undefined) {
+      throw new AppError("NOT_FOUND");
+    }
+    if (row.billing_provider !== "stripe") {
+      throw new AppError("CONFLICT", { details: { reason: "manual" } });
+    }
+    if (row.provider_subscription_id === null) {
+      throw new AppError("CONFLICT", { details: { reason: "not_linked" } });
+    }
+    try {
+      await this.sync.resync(
+        { id: row.id, tenantId: row.tenant_id, providerSubscriptionId: row.provider_subscription_id },
+        claims.sub,
+      );
+    } catch (error) {
+      throw resyncError(error);
+    }
+    const synced = await this.subscriptions.findAdmin(row.id);
+    if (synced === undefined) {
+      throw new Error(`subscription ${row.id} vanished after its resync`);
+    }
+    return toAdminSubscription(synced);
+  }
+
+  /** adminListInvoices: one page of invoices, newest first, with the filters of the query (file header). */
+  async listInvoices(query: ListInvoicesQuery): Promise<AdminInvoiceList> {
+    const limit = query.limit ?? DEFAULT_SUBSCRIPTION_PAGE_LIMIT;
+    let afterId: string | undefined;
+    if (query.cursor !== undefined) {
+      afterId = decodeInvoiceCursor(query.cursor);
+      if (afterId === undefined || !(await this.subscriptions.invoiceExists(afterId))) {
+        throw invalidCursor();
+      }
+    }
+    const rows = await this.subscriptions.listInvoicesAdmin(
+      { tenantId: query.tenantId, status: query.status },
+      afterId,
+      limit + 1,
+    );
+    const page = rows.slice(0, limit);
+    const last = page.at(-1);
+    return {
+      data: page.map(toAdminInvoice),
+      page: {
+        nextCursor: rows.length > limit && last !== undefined ? encodeInvoiceCursor(last.id) : null,
+        limit,
+      },
     };
   }
 

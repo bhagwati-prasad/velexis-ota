@@ -65,6 +65,8 @@ The M5 counters of `adminGetDashboard` are always present and `null` while their
 | `adminListStripeEvents` | `GET /v1/admin/stripe-events?status=&type=&tenantId=&cursor=` | Webhook inbox | → `{data: [{id, endpoint, type, status, attempts, lastError, tenantId, receivedAt, processedAt}], page}` | `stripe_events` | — | M5 |
 | `adminReprocessStripeEvent` | `POST /v1/admin/stripe-events/{eventId}/reprocess` | Re-run a failed or ignored event | → `202` | `stripe_events` | `CONFLICT` (`details.reason` is the event's status: `processing`, `received` or `processed`) | M5 |
 
+*Note (2026-11-04, PBE-048).* `adminUpdatePlan` also answers `400 VALIDATION_FAILED` (`same_price`) for one price as both the monthly and the yearly price, and stores the warnings of its comparison as the plan's, in the comparison's audit row (`plan.updated`; `adminCheckPlanPrices` writes `plan.prices_checked`), so `adminListPlans` reads `platform_audit_log` too; a comparison does not change the plan's version. `adminResyncSubscription` also answers `409 CONFLICT` with `details.reason = not_linked` (a Stripe row whose Checkout has not completed) or the code of a billing-sync failure in lower case (`unknown_price`, `subscription_busy`, …; nothing is written), and audits `subscription.resynced`. The invoices of `adminListInvoices` and `adminGetSubscription` carry the decimals of their currency (`5000` JPY, `49.00` EUR), as `listInvoices` does (lead decision (2g) of 2026-11-04).
+
 ## 5. Velexis Amadeus account and offices
 
 | Operation | Method and path | Purpose | Request → response | Tables | Errors | M |

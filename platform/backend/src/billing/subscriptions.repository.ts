@@ -6,8 +6,9 @@
 // pre-inserted row it names, and the current row it replaces), FIX-W30-PLATFORM the subscription's tenant that the
 // manual edit locks first (billing's lock order), FIX-W31-PLATFORM the tenant's row that Checkout locks before it writes
 // the pre-inserted row (`lockTenant`, the same order), PBE-047 the reads and writes of the two billing schedules (the
-// abandoned Checkouts of `billing.abandoned_checkouts`, the manual trials of `billing.manual_trials`). Kysely on the
-// API's `PLATFORM_DB` (ADR-0005).
+// abandoned Checkouts of `billing.abandoned_checkouts`, the manual trials of `billing.manual_trials`), PBE-048 the
+// admin's invoice list (`invoices` of BillingModule, read with each currency's exponent). Kysely on the API's
+// `PLATFORM_DB` (ADR-0005).
 import { Inject, Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -67,7 +68,11 @@ export interface ManualSubscriptionChanges {
   canceled_at?: Date | null;
 }
 
-/** An invoice row of a subscription's history (`platform.invoices`, synchronised from Stripe in M5). */
+/**
+ * An invoice row as the admin sees it (`platform.invoices`, synchronised from Stripe in M5), with its currency's
+ * exponent (`reference.currencies.minor_units`; `null` when the reference lacks the currency), so its amounts are
+ * answered with the currency's decimals (lead decision (2g) of 2026-11-04, PBE-048).
+ */
 export type InvoiceRow = Pick<
   Selectable<PlatformDatabase["platform.invoices"]>,
   | "id"
@@ -90,7 +95,38 @@ export type InvoiceRow = Pick<
   | "invoice_pdf_url"
   | "provider_invoice_id"
   | "created_at"
->;
+> & { readonly minor_units: number | null };
+
+/** The filters of the admin's invoice list. */
+export interface AdminInvoiceFilter {
+  readonly tenantId?: string | undefined;
+  readonly status?: string | undefined;
+}
+
+/** The columns of an InvoiceRow (`i` the invoice, `c` its currency). */
+const INVOICE_ROW_COLUMNS = [
+  "i.id",
+  "i.tenant_id",
+  "i.subscription_id",
+  "i.number",
+  "i.status",
+  "i.currency",
+  "i.subtotal",
+  "i.tax_amount",
+  "i.total",
+  "i.amount_paid",
+  "i.amount_due",
+  "i.period_start",
+  "i.period_end",
+  "i.issued_at",
+  "i.due_at",
+  "i.paid_at",
+  "i.hosted_invoice_url",
+  "i.invoice_pdf_url",
+  "i.provider_invoice_id",
+  "i.created_at",
+  "c.minor_units",
+] as const;
 
 /** A Stripe event of the webhook inbox (`platform.stripe_events`, M5): ids, type and state, never a payload. */
 export type StripeEventRow = Pick<
@@ -958,35 +994,62 @@ export class SubscriptionsRepository {
       .executeTakeFirstOrThrow();
   }
 
-  /** The invoices of the subscription `id`, newest first (`created_at`, then id), `limit` at most. */
+  /**
+   * The invoices of the subscription `id`, newest first (`created_at`, then id), `limit` at most, each with its
+   * currency's exponent.
+   */
   async invoicesOf(id: string, limit: number): Promise<InvoiceRow[]> {
     return this.db
+      .selectFrom("platform.invoices as i")
+      .leftJoin("reference.currencies as c", "c.code", "i.currency")
+      .select(INVOICE_ROW_COLUMNS)
+      .where("i.subscription_id", "=", id)
+      .orderBy("i.created_at", "desc")
+      .orderBy("i.id", "desc")
+      .limit(limit)
+      .execute();
+  }
+
+  /** True when the invoice `id` exists (a cursor of the admin's invoice list names an invoice of this table). */
+  async invoiceExists(id: string): Promise<boolean> {
+    const row = await this.db
       .selectFrom("platform.invoices")
-      .select([
-        "id",
-        "tenant_id",
-        "subscription_id",
-        "number",
-        "status",
-        "currency",
-        "subtotal",
-        "tax_amount",
-        "total",
-        "amount_paid",
-        "amount_due",
-        "period_start",
-        "period_end",
-        "issued_at",
-        "due_at",
-        "paid_at",
-        "hosted_invoice_url",
-        "invoice_pdf_url",
-        "provider_invoice_id",
-        "created_at",
-      ])
-      .where("subscription_id", "=", id)
-      .orderBy("created_at", "desc")
-      .orderBy("id", "desc")
+      .select("id")
+      .where("id", "=", id)
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
+  /**
+   * One page of the admin's invoice list (adminListInvoices, PBE-048), newest first: by issue date (an invoice without
+   * one last), then creation time, then id; after the invoice `afterId` when given, `limit` rows at most, each with its
+   * currency's exponent. The keyset compares with the stored values of the cursor's row, so no precision is lost.
+   */
+  async listInvoicesAdmin(
+    filter: AdminInvoiceFilter,
+    afterId: string | undefined,
+    limit: number,
+  ): Promise<InvoiceRow[]> {
+    const issued = sql<Date>`coalesce(i.issued_at, '-infinity'::timestamptz)`;
+    let query = this.db
+      .selectFrom("platform.invoices as i")
+      .leftJoin("reference.currencies as c", "c.code", "i.currency")
+      .select(INVOICE_ROW_COLUMNS);
+    if (filter.tenantId !== undefined) {
+      query = query.where("i.tenant_id", "=", filter.tenantId);
+    }
+    if (filter.status !== undefined) {
+      query = query.where("i.status", "=", filter.status);
+    }
+    if (afterId !== undefined) {
+      query = query.where(
+        sql<boolean>`(${issued}, i.created_at, i.id) < (SELECT coalesce(p.issued_at, '-infinity'::timestamptz), p.created_at, p.id FROM platform.invoices p WHERE p.id = ${afterId})`,
+      );
+    }
+    return query
+      .orderBy(issued, "desc")
+      .orderBy("i.created_at", "desc")
+      .orderBy("i.id", "desc")
       .limit(limit)
       .execute();
   }

@@ -315,14 +315,15 @@ describe("route parity", () => {
     ).toEqual([
       "signUp is bound by 2 routes: AuthController.signUp (POST /v1/auth/sign-up), SignUpController.signUp (POST /v1/auth/sign-up)",
     ]);
-    // An operation that is still pending, listed a second time (any one: the list shrinks as tasks bind routes).
-    const [pending] = PENDING_OPERATIONS;
-    if (pending === undefined) {
-      throw new Error("no pending operation left to repeat");
-    }
+    // An operation that is still pending, listed a second time (any one: the list shrinks as tasks bind routes). Once
+    // every operation is bound (the M5 exit, PADR-0016 item 2; PBE-048 bound the last ones), signUp stands for it: its
+    // route is left out, so it is pending as it was before PBE-013.
+    const pending = PENDING_OPERATIONS[0] ?? ({ operationId: "signUp", task: "PBE-013" } as const);
+    const stillPending = PENDING_OPERATIONS.length === 0 ? [pending] : PENDING_OPERATIONS;
+    const routesOfPending = PENDING_OPERATIONS.length === 0 ? withoutSignUp(routes) : routes;
     expect(
-      parityProblems(routes, platformOperations, [
-        ...PENDING_OPERATIONS,
+      parityProblems(routesOfPending, platformOperations, [
+        ...stillPending,
         { ...pending },
         { operationId: "rogueOperation" as PlatformOperationId, task: "PBE-999" },
       ]),

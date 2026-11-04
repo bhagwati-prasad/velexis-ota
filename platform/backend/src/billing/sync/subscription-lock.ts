@@ -4,7 +4,7 @@
 // transaction. Without a lock, two events of one subscription whose re-fetches overlap could let the older answer
 // commit after the newer one and leave the older state. So every billing-sync path that re-fetches a Stripe
 // subscription and writes it into its row (`customer.subscription.*` and `checkout.session.completed`; the admin's
-// resync, which PBE-048 adds, is to take it too) runs inside `SubscriptionSyncLock.run(<sub_…>, …)`, which serialises
+// resync of PBE-048 too) runs inside `SubscriptionSyncLock.run(<sub_…>, …)`, which serialises
 // them per subscription:
 //
 // 1. Before the re-fetch, take `vx:stripe:sub:<sub_…>:lock` (redis-keys.ts: `SET … EX 15 NX` with a random token).
@@ -50,11 +50,11 @@ export const SUBSCRIPTION_LOCK_RENEW_MS = (STRIPE_SUBSCRIPTION_LOCK_TTL_SECONDS 
 /** How often a waiting event tries the lock again. */
 export const SUBSCRIPTION_LOCK_POLL_MS = 100;
 
-/** What the lock's log lines name besides the subscription. */
-export interface SubscriptionLockContext {
-  /** The Stripe event whose processing holds or waits for the lock. */
-  readonly eventId: string;
-}
+/**
+ * What the lock's log lines name besides the subscription: the Stripe event whose processing holds or waits for the
+ * lock, or the subscription row the platform admin resyncs (`adminResyncSubscription`, PBE-048).
+ */
+export type SubscriptionLockContext = { readonly eventId: string } | { readonly resyncOf: string };
 
 /** The lock as its holder's work sees it. */
 export interface HeldSubscriptionLock {
@@ -88,7 +88,7 @@ export class SubscriptionSyncLock {
     work: (lock: HeldSubscriptionLock) => Promise<T>,
   ): Promise<T> {
     const key = redisKeys.stripeSubscriptionLock(subscriptionId);
-    const line = { eventId: context.eventId, providerSubscriptionId: subscriptionId };
+    const line = { ...context, providerSubscriptionId: subscriptionId };
     const token = randomUUID();
     await this.acquire(key, token, line);
     const renewal = this.keepLocked(key, token, line);

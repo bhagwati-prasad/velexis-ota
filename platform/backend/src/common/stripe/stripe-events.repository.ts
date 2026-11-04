@@ -17,8 +17,20 @@
 // `failed` rows, and for `processing` rows left behind by an attempt that could not record its end (the worker
 // stopped, or the database failed during the last attempt), as the e-mail outbox's sweep does with `sending` rows.
 // Every time comes from the caller's Clock, never from the database's `now()`, so tests move time with the FakeClock.
+//
+// The platform admin's reads and the reprocessing (PBE-048): `listAdmin` (adminListStripeEvents) lists `failed` and
+// `ignored` rows first, each group newest first, then the others, with an opaque keyset of the last row's id; `reopen`
+// (adminReprocessStripeEvent) puts a `failed` or `ignored` row, locked by `lockForReprocess`, back to `received` with
+// its attempts and last error kept and no `processed_at`, so the processor's `claim` takes it again.
 import { Injectable } from "@nestjs/common";
-import type { Kysely, PlatformDatabase, ReferenceDatabase, Selectable, Transaction } from "@velexis/db";
+import {
+  sql,
+  type Kysely,
+  type PlatformDatabase,
+  type ReferenceDatabase,
+  type Selectable,
+  type Transaction,
+} from "@velexis/db";
 
 type PlatformSchemas = PlatformDatabase & ReferenceDatabase;
 
@@ -82,6 +94,16 @@ export interface StripeEventSweepCriteria {
   /** `processing` rows last changed before this time: the attempt that claimed them never recorded its end. */
   readonly processingBefore: Date;
   readonly limit: number;
+}
+
+/** The statuses an admin may reprocess (adminReprocessStripeEvent): an event that is done without success. */
+export const REPROCESSABLE_STATUSES: ReadonlySet<string> = new Set(["failed", "ignored"]);
+
+/** The filters of the admin's list of the inbox. */
+export interface StripeEventAdminFilter {
+  readonly status?: string | undefined;
+  readonly type?: string | undefined;
+  readonly tenantId?: string | undefined;
 }
 
 /** `text` cut to LAST_ERROR_MAX_LENGTH characters. */
@@ -225,5 +247,67 @@ export class StripeEventsRepository {
       .limit(criteria.limit)
       .execute();
     return rows.map((row) => row.id);
+  }
+
+  /**
+   * One page of the admin's list (adminListStripeEvents, PBE-048): `failed` and `ignored` rows first, each group newest
+   * first (`received_at`, then id), then the others the same way; after the row `afterId` when given (compared with
+   * its stored values), `limit` rows at most.
+   */
+  async listAdmin(
+    executor: StripeEventsExecutor,
+    filter: StripeEventAdminFilter,
+    afterId: string | undefined,
+    limit: number,
+  ): Promise<StripeEventRecord[]> {
+    const rank = sql<number>`(CASE WHEN e.status IN ('failed', 'ignored') THEN 1 ELSE 0 END)`;
+    let query = executor.selectFrom("platform.stripe_events as e").selectAll("e");
+    if (filter.status !== undefined) {
+      query = query.where("e.status", "=", filter.status);
+    }
+    if (filter.type !== undefined) {
+      query = query.where("e.type", "=", filter.type);
+    }
+    if (filter.tenantId !== undefined) {
+      query = query.where("e.tenant_id", "=", filter.tenantId);
+    }
+    if (afterId !== undefined) {
+      query = query.where(
+        sql<boolean>`(${rank}, e.received_at, e.id) < (SELECT CASE WHEN c.status IN ('failed', 'ignored') THEN 1 ELSE 0 END, c.received_at, c.id FROM platform.stripe_events c WHERE c.id = ${afterId})`,
+      );
+    }
+    return query
+      .orderBy(rank, "desc")
+      .orderBy("e.received_at", "desc")
+      .orderBy("e.id", "desc")
+      .limit(limit)
+      .execute();
+  }
+
+  /** The row `id`, locked for the rest of the caller's transaction (`FOR UPDATE`); `undefined` when there is none. */
+  async lockForReprocess(
+    executor: Transaction<PlatformSchemas>,
+    id: string,
+  ): Promise<StripeEventRecord | undefined> {
+    return executor
+      .selectFrom("platform.stripe_events")
+      .selectAll()
+      .where("id", "=", id)
+      .forUpdate()
+      .executeTakeFirst();
+  }
+
+  /**
+   * A `failed` or `ignored` row (locked by `lockForReprocess`) back to `received`, its attempts and last error kept and
+   * `processed_at` cleared (PBE-048). False when the row is in another status.
+   */
+  async reopen(executor: StripeEventsExecutor, id: string, now: Date): Promise<boolean> {
+    const result = await executor
+      .updateTable("platform.stripe_events")
+      .set({ status: "received", processed_at: null, updated_at: now })
+      .where("id", "=", id)
+      .where("status", "in", [...REPROCESSABLE_STATUSES])
+      .executeTakeFirst();
+    return result.numUpdatedRows > 0n;
   }
 }

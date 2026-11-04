@@ -4,7 +4,8 @@
 // truncate (migration 0002), so this class has no method that changes a row. The admin's audit search and CSV export
 // (adminListAudit, adminExportAudit) read the table through `audit-query.service.ts` (PBE-032); the recent rows of one
 // OTA, which the admin's tenant detail shows (PBE-029), are read here (`recentForTenant`), and so is whether a Stripe
-// event's row was written already (`hasEventRow`, FIX-W37-PLATFORM).
+// event's row was written already (`hasEventRow`, FIX-W37-PLATFORM), and a value that a module's newest rows record
+// about its targets (`latestDetailOf`: the price warnings of a plan's last comparison with Stripe, PBE-048).
 import { Injectable } from "@nestjs/common";
 import {
   sql,
@@ -47,6 +48,15 @@ export interface AuditEventRow {
   readonly targetId: string;
   /** `evt_…`, as `details.eventId` holds it. */
   readonly eventId: string;
+}
+
+/** What `latestDetailOf` reads: one top-level key of `details` of the newest row of some actions about some targets. */
+export interface AuditLatestDetailQuery {
+  readonly targetType: string;
+  readonly targetIds: readonly string[];
+  readonly actions: readonly string[];
+  /** The top-level key of `details`; a row without it is passed over. */
+  readonly key: string;
 }
 
 /** What the insert returns: the identity id (a decimal string, as the API shows it) and the time of the row. */
@@ -109,6 +119,39 @@ export class AuditRepository {
       .limit(1)
       .executeTakeFirst();
     return found !== undefined;
+  }
+
+  /**
+   * `details -> query.key` of the newest row (the identity `id`) of one of `query.actions` about each target of
+   * `query.targetIds` whose `details` has the key, read on `db` (the pool, or the caller's transaction), by target id;
+   * a target without such a row is absent. The index on the target finds the rows.
+   */
+  async latestDetailOf(
+    db: PlatformDb | PlatformTransaction,
+    query: AuditLatestDetailQuery,
+  ): Promise<Map<string, unknown>> {
+    const latest = new Map<string, unknown>();
+    if (query.targetIds.length === 0 || query.actions.length === 0) {
+      return latest;
+    }
+    const value = sql<unknown>`details -> ${query.key}::text`;
+    const rows = await db
+      .selectFrom("platform.platform_audit_log")
+      .distinctOn("target_id")
+      .select(["target_id", value.as("value")])
+      .where("target_type", "=", query.targetType)
+      .where("target_id", "in", [...query.targetIds])
+      .where("action", "in", [...query.actions])
+      .where(value, "is not", null)
+      .orderBy("target_id")
+      .orderBy("id", "desc")
+      .execute();
+    for (const row of rows) {
+      if (row.target_id !== null) {
+        latest.set(row.target_id, row.value);
+      }
+    }
+    return latest;
   }
 
   /**

@@ -35,6 +35,15 @@ export interface AuditEventEntry {
   readonly eventId: string;
 }
 
+/** What `latestDetail` reads: `details[key]` of the newest row of one of `actions` about each target. */
+export interface AuditLatestDetail {
+  readonly targetType: AuditTargetType;
+  readonly targetIds: readonly string[];
+  readonly actions: readonly AuditAction[];
+  /** A top-level key of `details`; rows without it are passed over. */
+  readonly key: string;
+}
+
 /** A plain object of values to record (`before`, `after`); it is redacted before it is stored. */
 export type AuditValues = Readonly<Record<string, unknown>>;
 
@@ -187,6 +196,19 @@ export class AuditService {
    */
   hasEventEntry(trx: PlatformTransaction, entry: AuditEventEntry): Promise<boolean> {
     return this.repository.hasEventRow(trx, entry);
+  }
+
+  /**
+   * `details[query.key]` of the newest row of one of `query.actions` about each target of `query.targetIds` that has
+   * the key, read on `db`, by target id (AuditRepository `latestDetailOf`): a module that records a value in its audit
+   * rows reads it back here, for instance the price warnings of a plan's last comparison with Stripe (PBE-048,
+   * plans.service.ts). The value is returned as stored (redacted when it was written).
+   */
+  latestDetail(
+    db: PlatformDb | PlatformTransaction,
+    query: AuditLatestDetail,
+  ): Promise<Map<string, unknown>> {
+    return this.repository.latestDetailOf(db, query);
   }
 
   /**

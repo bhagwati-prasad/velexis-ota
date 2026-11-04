@@ -1508,7 +1508,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - With FakeClock, a manual trial gets the two notices, then `past_due`, then suspension 14 days after the end [PF-75 AC1].
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int billing`
 
-### PBE-048 · Implement the admin billing endpoints
+### PBE-048 · Implement the admin billing endpoints ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M5
 - **Depends on:** PBE-046, PBE-033

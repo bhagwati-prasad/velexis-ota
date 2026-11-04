@@ -38,6 +38,15 @@
 //
 // The event resolves to the tenant (`stripe_events.tenant_id`). Log lines carry ids and statuses, never an e-mail
 // address or a payload.
+//
+// **The platform admin's resync** (`adminResyncSubscription`, PBE-048; flow §D, PADR-0002 item 5) is the same update
+// path without an event (`resync`): under the subscription's lock it re-fetches the Stripe subscription of a Stripe row,
+// then, in one transaction that locks the tenant's row and then the subscription's, it checks the OTA as above and runs
+// `syncInTransaction`, confirming the lock just before the commit. The status rules act with billing sync's `system`
+// actor (a `billing` suspension is billing sync's alone, PADR-0014 item 1), and the one audit row is the admin's:
+// `subscription.resynced` (actor `platform_admin`), written whether or not Stripe's state differed from the row. A
+// billing-sync failure (`UNKNOWN_PRICE`, `SUBSCRIPTION_BUSY`, …) throws StripeEventFailure and writes nothing, as for an
+// event; the caller (SubscriptionsService) answers it.
 import { Inject, Injectable } from "@nestjs/common";
 import { REQUEST_ID_PATTERN } from "@velexis/logger";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
@@ -282,7 +291,13 @@ export function dispatchAfterCommit(
 
 /** One sync of a Stripe subscription into its row, in the caller's transaction (step 2 of the file header). */
 export interface SubscriptionSyncInput {
-  readonly event: StripeInboxEvent;
+  /** The Stripe event being processed; `undefined` for the platform admin's resync (`resyncBy`). */
+  readonly event: StripeInboxEvent | undefined;
+  /**
+   * `acc_…` of the platform admin whose resync this is (PBE-048): the audit row is then their `subscription.resynced`,
+   * written whether or not anything changed. `undefined` for billing sync.
+   */
+  readonly resyncBy?: string;
   readonly actor: LifecycleActor;
   /** The tenant, its row locked in the transaction. */
   readonly tenant: TenantRecord;
@@ -298,6 +313,15 @@ export interface SubscriptionSyncInput {
   readonly details?: Readonly<Record<string, unknown>>;
   /** True when the caller changed something the audit row reports (the Customer of a Checkout). */
   readonly otherChange?: boolean;
+}
+
+/** The Stripe row the platform admin resyncs (PBE-048). */
+export interface ResyncTarget {
+  /** `sub_…` of the row (a platform id). */
+  readonly id: string;
+  readonly tenantId: string;
+  /** Stripe's `sub_…` the row holds. */
+  readonly providerSubscriptionId: string;
 }
 
 /** What a sync did. */
@@ -396,6 +420,50 @@ export class SubscriptionChangedHandler implements StripeEventHandler {
   }
 
   /**
+   * adminResyncSubscription (PBE-048, file header): re-fetches the Stripe subscription of `target` under its lock and
+   * applies it to the row as an event would, with `accountId`'s `subscription.resynced` audit row. Throws
+   * StripeEventFailure for a billing-sync failure (nothing is written) and the SDK's error when Stripe fails.
+   */
+  async resync(target: ResyncTarget, accountId: string): Promise<SubscriptionSyncResult> {
+    const providerSubscriptionId = target.providerSubscriptionId;
+    return this.lock.run(providerSubscriptionId, { resyncOf: target.id }, async (held) => {
+      const subscription = await this.stripe.api().subscriptions.retrieve(providerSubscriptionId);
+      const actor: LifecycleActor = { type: "system", label: BILLING_SYNC_LABEL };
+      return runInTransaction(this.db, async (trx): Promise<SubscriptionSyncResult> => {
+        const tenant = await this.tenants.lockForUpdate(trx, target.tenantId);
+        if (tenant === undefined || !isShownTenantStatus(tenant.status)) {
+          throw new StripeEventFailure(
+            "TENANT_NOT_BILLABLE",
+            "the subscription's OTA is deleted or being deleted",
+            { retryable: false, tenantId: target.tenantId },
+          );
+        }
+        const row = await this.subscriptions.lockStripeByProvider(trx, providerSubscriptionId);
+        if (row === undefined || row.id !== target.id || subscription.id !== providerSubscriptionId) {
+          throw new StripeEventFailure("SUBSCRIPTION_MOVED", "the subscription's row changed meanwhile", {
+            retryable: true,
+            tenantId: tenant.id,
+          });
+        }
+        await this.assertSameTenant(trx, subscription, tenant.id);
+        const result = await this.syncInTransaction(trx, {
+          event: undefined,
+          resyncBy: accountId,
+          actor,
+          tenant,
+          subscription,
+          row,
+          checkoutSessionId: null,
+          replacesCurrent: false,
+        });
+        // The last statement before the commit: the write commits only while the lock is this resync's.
+        await held.confirm();
+        return result;
+      });
+    });
+  }
+
+  /**
    * Copies `input.subscription` into its row in `trx`, a transaction of `runInTransaction` in which the tenant's row is
    * locked, and applies the status rules (step 2 of the file header).
    */
@@ -449,14 +517,16 @@ export class SubscriptionChangedHandler implements StripeEventHandler {
       superseded.length > 0 ||
       rules.plan !== undefined ||
       rules.billingNotice !== undefined ||
-      input.otherChange === true
+      input.otherChange === true ||
+      input.resyncBy !== undefined
     ) {
       await this.record(trx, input, { row, written, superseded, rules });
     }
     this.logger.info(
       {
-        eventId: event.id,
-        eventType: event.type,
+        eventId: event?.id ?? null,
+        eventType: event?.type ?? null,
+        ...(input.resyncBy === undefined ? {} : { resync: true }),
         tenantId: tenant.id,
         subscriptionId: written.id,
         providerSubscriptionId: written.provider_subscription_id,
@@ -509,7 +579,7 @@ export class SubscriptionChangedHandler implements StripeEventHandler {
       readonly rules: AppliedBillingRules;
     },
   ): Promise<void> {
-    const { event, actor, tenant } = input;
+    const { event, actor, tenant, resyncBy } = input;
     const { row, written, superseded, rules } = result;
     const fields =
       row === undefined
@@ -526,9 +596,13 @@ export class SubscriptionChangedHandler implements StripeEventHandler {
       after["billingNotice"] = rules.billingNotice.after;
     }
     await this.audit.record(trx, {
-      actorType: "system",
-      actorLabel: BILLING_SYNC_LABEL,
-      action: "subscription.updated",
+      ...(resyncBy === undefined
+        ? ({ actorType: "system", actorLabel: BILLING_SYNC_LABEL, action: "subscription.updated" } as const)
+        : ({
+            actorType: "platform_admin",
+            actorAccountId: resyncBy,
+            action: "subscription.resynced",
+          } as const)),
       targetType: "subscription",
       targetId: written.id,
       tenantId: tenant.id,
@@ -537,8 +611,9 @@ export class SubscriptionChangedHandler implements StripeEventHandler {
       ...(Object.keys(before).length === 0 ? {} : { before }),
       after,
       details: {
-        eventId: event.id,
-        eventType: event.type,
+        ...(event === undefined
+          ? { providerSubscriptionId: written.provider_subscription_id }
+          : { eventId: event.id, eventType: event.type }),
         created: row === undefined,
         ...(superseded.length === 0 ? {} : { supersededSubscriptionIds: [...superseded] }),
         ...(rules.lifecycleJobId === undefined

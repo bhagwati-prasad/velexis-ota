@@ -20,15 +20,20 @@ export type InvoiceList = components["schemas"]["InvoiceList"];
 const iso = (value: Date | null): string | null => (value === null ? null : value.toISOString());
 
 /**
- * The portal's `Invoice` of a stored row: amounts with the decimals of the row's currency (as stored when
- * `reference.currencies` lacks it, which billing sync never writes).
+ * A stored invoice amount (`numeric(12,2)` text) as `Money` in the invoice's `currency`, with the decimals of its
+ * exponent `minorUnits` (`reference.currencies.minor_units`; as stored when the reference lacks the currency, which
+ * billing sync never writes). The portal's list and the platform admin's (lead decision (2g) of 2026-11-04) share it.
  */
+export function invoiceMoney(stored: string, currency: string, minorUnits: number | null): Invoice["total"] {
+  return {
+    amount: minorUnits === null ? stored : toCurrencyAmount(stored, minorUnits),
+    currency: currency.trim(),
+  };
+}
+
+/** The portal's `Invoice` of a stored row: amounts with the decimals of the row's currency (`invoiceMoney`). */
 export function toInvoice(row: InvoiceListRow): Invoice {
-  const currency = row.currency.trim();
-  const money = (stored: string): Invoice["total"] => ({
-    amount: row.minor_units === null ? stored : toCurrencyAmount(stored, row.minor_units),
-    currency,
-  });
+  const money = (stored: string): Invoice["total"] => invoiceMoney(stored, row.currency, row.minor_units);
   return {
     id: row.id,
     number: row.number,

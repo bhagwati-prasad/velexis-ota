@@ -1,7 +1,9 @@
 // The `plans` repository (platform/docs/architecture.md §2.1: BillingModule owns the table). PBE-017 brought the read
 // of the pricing page and the create-OTA wizard; PBE-033 the admin's plan management (list with tenant counts, create,
 // update, the active-plan check of a manual subscription). The Stripe price links come with PBE-042 (M5); billing sync
-// (PBE-045) reads the plans a Stripe Price is linked to. Kysely on the API's `PLATFORM_DB` (ADR-0005).
+// (PBE-045) reads the plans a Stripe Price is linked to; PBE-048 writes the links (`update`, under `lockStripeLinks`
+// with `otherPlansLinking`) and reads the currency's exponent of the price comparison. Kysely on the API's
+// `PLATFORM_DB` (ADR-0005).
 //
 // **The version of a plan.** Unlike the other versioned tables, `platform.plans` has no `version` column (migrations
 // 0001 and 0002). The version that `adminUpdatePlan` takes in `If-Match` is derived from `updated_at` instead:
@@ -10,12 +12,23 @@
 // `GREATEST(now, date_trunc('milliseconds', updated_at) + 1 ms)`: the version grows by at least one on every change,
 // also when two changes fall within the same millisecond or the clock stands still (the FakeClock of the tests), so a
 // stale `If-Match` never matches again. A writer outside this repository must keep that rule.
+//
+// **The price warnings of a plan** (PBE-048, `AdminPlan.priceWarnings`) are not a column of `platform.plans`: the
+// audit row of each comparison records them, and PlansService reads them back through AuditService
+// (plans.service.ts).
 import { Inject, Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
 import { PLATFORM_DB, type PlatformDb } from "../common/database";
 
 type PlanTable = Selectable<PlatformDatabase["platform.plans"]>;
+
+/**
+ * A transaction-level advisory lock that serialises the writes of the plans' Stripe price links (PBE-048): the unique
+ * indexes of migration 0002 refuse a price linked twice in one column, and this lock lets `adminUpdatePlan` refuse a
+ * price that another plan links in the other column too, without a race between two plans.
+ */
+const STRIPE_LINKS_LOCK_KEY = "platform.plans.stripe_price_links";
 
 /** What `listPlans` reads of a plan. */
 export type PublicPlanRow = Pick<
@@ -85,7 +98,17 @@ export interface PlanChanges {
   trial_days?: number;
   settlement_fee_bps?: number;
   sort_order?: number;
+  /** The Stripe links (M5, PBE-048); `null` unlinks. */
+  stripe_product_id?: string | null;
+  stripe_price_id_month?: string | null;
+  stripe_price_id_year?: string | null;
 }
+
+/** The unique indexes of the price links (migration 0002): a price linked twice in one column. */
+export const STRIPE_PRICE_INDEXES: ReadonlySet<string> = new Set([
+  "plans_stripe_price_month_uq",
+  "plans_stripe_price_year_uq",
+]);
 
 /** The columns of PlanRecord, as every admin read selects them. */
 const PLAN_RECORD_COLUMNS = [
@@ -156,6 +179,15 @@ export class PlansRepository {
     db: PlatformDb | PlatformTransaction = this.db,
   ): Promise<AdminPlanRow | undefined> {
     return this.withTenantCounts(db).where("p.code", "=", code).executeTakeFirst();
+  }
+
+  /** The plan `code`, read without a lock on the pool; `undefined` when there is none. */
+  async findRecord(code: string): Promise<PlanRecord | undefined> {
+    return this.db
+      .selectFrom("platform.plans as p")
+      .select(PLAN_RECORD_COLUMNS)
+      .where("p.code", "=", code)
+      .executeTakeFirst();
   }
 
   /** The plan `code`, locked for the rest of the caller's transaction (`FOR UPDATE`). */
@@ -254,6 +286,51 @@ export class PlansRepository {
       .where("code", "=", code)
       .executeTakeFirst();
     return row !== undefined;
+  }
+
+  /** The exponent (`minor_units`) of `currency` in `reference.currencies`; `undefined` for a currency it lacks. */
+  async currencyExponent(currency: string): Promise<number | undefined> {
+    const row = await this.db
+      .selectFrom("reference.currencies")
+      .select("minor_units")
+      .where("code", "=", currency)
+      .executeTakeFirst();
+    return row?.minor_units;
+  }
+
+  /**
+   * Takes the transaction-level lock of the plans' Stripe price links in `trx` (STRIPE_LINKS_LOCK_KEY), released by
+   * the commit or the rollback. Taken by a write that links a price, before it checks the other plans' links.
+   */
+  async lockStripeLinks(trx: PlatformTransaction): Promise<void> {
+    await sql`SELECT pg_advisory_xact_lock(hashtext(${STRIPE_LINKS_LOCK_KEY}))`.execute(trx);
+  }
+
+  /**
+   * The codes of the plans other than `code` that link one of `priceIds` as their monthly or yearly price, read on `db`
+   * (in `trx` after `lockStripeLinks`), in code order.
+   */
+  async otherPlansLinking(
+    db: PlatformDb | PlatformTransaction,
+    code: string,
+    priceIds: readonly string[],
+  ): Promise<string[]> {
+    if (priceIds.length === 0) {
+      return [];
+    }
+    const rows = await db
+      .selectFrom("platform.plans")
+      .select("code")
+      .where("code", "<>", code)
+      .where((eb) =>
+        eb.or([
+          eb("stripe_price_id_month", "in", [...priceIds]),
+          eb("stripe_price_id_year", "in", [...priceIds]),
+        ]),
+      )
+      .orderBy("code")
+      .execute();
+    return rows.map((row) => row.code);
   }
 
   /** The admin reads of plans: every PlanRecord column and the plan's tenant count. */

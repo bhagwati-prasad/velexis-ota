@@ -123,7 +123,8 @@ export const AUDIT_ACTIONS = Object.freeze([
 
   // Plans and subscriptions (subscription billing flow, PADR-0002).
   "plan.created", // adminCreatePlan
-  "plan.updated", // adminUpdatePlan
+  "plan.updated", // adminUpdatePlan (with the price warnings when it compared the plan with Stripe, PBE-048)
+  "plan.prices_checked", // adminCheckPlanPrices (the warnings of the comparison, PBE-048)
   "billing.checkout_started", // createCheckoutSession, createTenant with a paid plan (M5)
   "subscription.updated", // Stripe Billing sync, billing.manual_trials (system)
   "subscription.resynced", // adminResyncSubscription

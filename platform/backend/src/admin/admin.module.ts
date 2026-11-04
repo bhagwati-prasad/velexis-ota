@@ -32,7 +32,13 @@
 // - AdminBillingController: the plans (BillingModule's PlansService) and the subscriptions (PBE-033). The
 //   subscriptions' SubscriptionsService (`billing/subscriptions.service.ts`) is provided here, not by BillingModule:
 //   its manual edit also moves the tenant's plan through TenantsModule's repository, and BillingModule may not import
-//   TenantsModule, a module of its own layer (architecture §2.2).
+//   TenantsModule, a module of its own layer (architecture §2.2). M5 (PBE-048): the price comparison runs in
+//   PlansService; the resync of a Stripe subscription runs billing sync's update path, SubscriptionChangedHandler of
+//   BillingSyncModule (layer 3), provided here on its own with what it needs (the Stripe client, the subscription lock,
+//   the price-to-plan map, the status rules over ProvisioningModule's SuspensionService, the Customers' repository), as
+//   BillingSyncModule.forWorker() provides it to the worker; the Stripe webhook inbox (list and reprocessing) is
+//   AdminStripeEventsService over the inbox's StripeEventsRepository (BillingSyncModule exports the one of its receiver)
+//   and the `platform-stripe-events` queue.
 // - AdminPayoutsController: the payout accounts (masked view, reveal with a reason and a step-up, review) over
 //   SettlementsModule's PayoutAccountsService (PBE-058).
 // - AdminSettlementsController: the settlement statements: the generation of a month's drafts over SettlementsModule's
@@ -49,10 +55,17 @@ import { Module } from "@nestjs/common";
 import { AccountsModule } from "../accounts/accounts.module";
 import { AuditModule } from "../audit/audit.module";
 import { AuthModule } from "../auth/auth.module";
+import { BillingCustomersRepository } from "../billing/billing-customers.repository";
 import { BillingModule } from "../billing/billing.module";
 import { SubscriptionsService } from "../billing/subscriptions.service";
+import { BillingSyncModule } from "../billing/sync/billing-sync.module";
+import { SubscriptionChangedHandler } from "../billing/sync/handlers/subscription-changed.handler";
+import { PriceToPlan } from "../billing/sync/price-to-plan";
+import { BillingStatusRules } from "../billing/sync/status-rules";
+import { SubscriptionSyncLock } from "../billing/sync/subscription-lock";
 import { CredentialSubmissionsModule } from "../common/credentials/credential-submissions.module";
 import { QueuesModule } from "../common/queues/queues.module";
+import { stripeClientProvider } from "../common/stripe/stripe.client";
 import { DomainsModule } from "../domains/domains.module";
 import { NotificationsModule } from "../notifications/notifications.module";
 import { PaymentConnectionsModule } from "../payment-connections/payment-connections.module";
@@ -76,6 +89,7 @@ import { AdminJobsController } from "./admin-jobs.controller";
 import { AdminJobsService } from "./admin-jobs.service";
 import { AdminPayoutsController } from "./admin-payouts.controller";
 import { AdminSettlementsController } from "./admin-settlements.controller";
+import { AdminStripeEventsService } from "./admin-stripe-events.service";
 import { AdminTenantsController } from "./admin-tenants.controller";
 import { AdminTenantsService } from "./admin-tenants.service";
 import { QueueInspector } from "./queue-inspector";
@@ -92,6 +106,8 @@ import { QueueInspector } from "./queue-inspector";
     ProvisioningModule.forApi(),
     TenantsModule,
     BillingModule,
+    // The static module AppModule imports too: one instance, whose inbox repository it exports.
+    BillingSyncModule,
     // The very object AppModule imports (`forApi()` returns one object), so Nest builds the module once.
     DomainsModule.forApi(),
     PaymentConnectionsModule,
@@ -121,6 +137,13 @@ import { QueueInspector } from "./queue-inspector";
     AdminJobsService,
     QueueInspector,
     SubscriptionsService,
+    AdminStripeEventsService,
+    stripeClientProvider,
+    BillingCustomersRepository,
+    PriceToPlan,
+    BillingStatusRules,
+    SubscriptionSyncLock,
+    SubscriptionChangedHandler,
   ],
 })
 export class AdminModule {}

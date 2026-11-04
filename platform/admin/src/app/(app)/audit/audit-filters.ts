@@ -112,6 +112,7 @@ export const AUDIT_ACTIONS: readonly string[] = Object.freeze([
   "settlement.voided",
   "plan.created",
   "plan.updated",
+  "plan.prices_checked",
   "billing.checkout_started",
   "subscription.updated",
   "subscription.resynced",

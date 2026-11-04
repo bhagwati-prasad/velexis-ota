@@ -35,9 +35,17 @@ import {
   type StripeApi,
 } from "../common/stripe/stripe.client";
 
-/** A Stripe call of this gateway. */
+/**
+ * A Stripe call of this gateway, or of the platform admin's billing (PBE-048: the price comparison of price-check.ts
+ * and the resync of a subscription), whose failures are described the same way.
+ */
 export type StripeBillingOperation =
-  "customers.create" | "customers.search" | "checkout.sessions.create" | "billingPortal.sessions.create";
+  | "customers.create"
+  | "customers.search"
+  | "checkout.sessions.create"
+  | "billingPortal.sessions.create"
+  | "prices.retrieve"
+  | "subscriptions.retrieve";
 
 /** The Velexis metadata of a Checkout Session and of the subscription it creates (PADR-0002 item 3). */
 export interface CheckoutMetadata {

@@ -3,7 +3,8 @@
 //
 // - The static module (AppModule) carries the receiver `POST /webhooks/stripe/billing` (BillingWebhookController, over
 //   the inbox of common/stripe: StripeSignatureGuard, StripeInboxService, StripeEventsRepository), which stores and
-//   queues events and never calls Stripe (PBE-043).
+//   queues events and never calls Stripe (PBE-043). It exports the inbox's repository to AdminModule, which lists and
+//   reprocesses the events (PBE-048).
 // - `BillingSyncModule.forWorker()` (WorkerModule) adds the worker's side: the one processor of
 //   `platform-stripe-events` (StripeEventsProcessor, for the events of both receivers; it finds the
 //   `@HandlesStripeEvents` handlers among the worker's providers), the `stripe_events.sweep` handler of the
@@ -84,6 +85,8 @@ export class BillingSyncWorkerModule {}
   imports: [QueuesModule],
   controllers: [BillingWebhookController],
   providers: [StripeEventsRepository, StripeInboxService],
+  // For the platform admin's view of the inbox (AdminModule, PBE-048): the API's one repository of the receiver.
+  exports: [StripeEventsRepository],
 })
 export class BillingSyncModule {
   /** The processor of the inbox, its sweep and the billing event handlers, for WorkerModule. */
