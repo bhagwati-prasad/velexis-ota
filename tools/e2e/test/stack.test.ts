@@ -20,6 +20,7 @@ import {
   otaStripeKeys,
   PLATFORM_ADMIN_URL,
   PLATFORM_API_URL,
+  PLATFORM_SWITCHES_ON,
   PORTAL_URL,
   readStackSettings,
   runningStackContext,
@@ -297,6 +298,27 @@ describe("serviceEnv", () => {
       DATABASE_URL: dsn("velexis_ota_app", "dev_ota"),
       DATABASE_PROVISIONER_URL: dsn("velexis_provisioner", "dev_provisioner"),
     });
+  });
+
+  it("[OFE-022 AC1] turns on the live switch for the platform processes only, the other switches as .env.example has them", () => {
+    expect(PLATFORM_SWITCHES_ON).toEqual({ FEATURE_LIVE_SWITCH: "true" });
+    const examples = exampleEnv([".env.example", "platform/backend/.env.example"]);
+    for (const name of ["platform-api", "platform-worker", "platform-cli"] as const) {
+      const values = serviceEnv(name, context);
+      expect(values, name).toMatchObject(PLATFORM_SWITCHES_ON);
+      for (const variable of [
+        "FEATURE_STRIPE_BILLING",
+        "FEATURE_OWN_STRIPE",
+        "FEATURE_SETTLEMENTS",
+        "FEATURE_OWN_AMADEUS",
+        "FEATURE_CUSTOM_DOMAINS",
+      ]) {
+        expect(values[variable], `${name} ${variable}`).toBe(examples[variable]);
+      }
+    }
+    for (const name of ["ota-api", "ota-worker", "portal", "storefront"] as const) {
+      expect(serviceEnv(name, context)["FEATURE_LIVE_SWITCH"], name).not.toBe("true");
+    }
   });
 
   it("never gives the migrator's or the test admin's DSN, and no DSN at all to the Next.js apps, the stub and the previews", () => {

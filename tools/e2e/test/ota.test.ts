@@ -1,14 +1,31 @@
-// The pure helpers of support/ota.ts (OFE-008, OFE-019, OAD-016, OAD-017). The database and Redis helpers run in the storefront
+// The pure helpers of support/ota.ts (OFE-008, OFE-019, OAD-016, OAD-017, OFE-022). The database and Redis helpers run in the storefront
 // journeys (specs/storefront/search.e2e.ts, account-bookings.e2e.ts, keyboard-checkout.e2e.ts) and the OTA admin's
 // (specs/ota-admin/), against the stack's own database; the API clients, the booking seed and the stub order run here
 // against a fake browser context, a fake API and a fake `fetch`.
-import { createPublicKey, generateKeyPairSync, sign, verify } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { createPublicKey, generateKeyPairSync, randomBytes, sign, verify } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { aadFor, decryptValue, DecryptionError, LocalFileKeyProvider } from "@velexis/crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ACCESS_TOKEN_TTL_SECONDS,
   agedAccessToken,
+  customDomainOf,
+  FIXTURE_PRECONDITIONS,
+  forwardedRequestOf,
+  goLiveAnswerOf,
+  goLiveAttempt,
+  hostResolverRules,
+  livePlanCodeOf,
+  newPlatformId,
+  returnedHeadersOf,
+  sealedClientSecret,
+  serveStorefrontHost,
+  storefrontHostsOf,
+  uniqueLiveOfficeId,
+  type ForwardedAnswer,
+  type Forwarder,
   airlineTestCard,
   bookAirlineCardTrip,
   createStubOrder,
@@ -45,7 +62,7 @@ import {
   type StorageEvaluator,
   type StorefrontApiContext,
 } from "../support/ota";
-import { AMADEUS_STUB_URL, OTA_API_URL, REPO_ROOT, STOREFRONT_URL } from "../support/stack";
+import { AMADEUS_STUB_URL, OTA_API_URL, PLATFORM_API_URL, REPO_ROOT, STOREFRONT_URL } from "../support/stack";
 import { CSRF_COOKIE } from "../support/storefront-guards";
 
 describe("searchIdOf", () => {
@@ -1009,5 +1026,409 @@ describe("STOREFRONT_SESSION_COPIES and forgetStorefrontCopies", () => {
     };
     await forgetStorefrontCopies(page);
     expect([...stored.keys()]).toEqual(["vx.storefront.currency"]);
+  });
+});
+
+describe("the live journey's names and rules (OFE-022)", () => {
+  it("[OFE-022 AC1] names a live office, the custom domain and the live plan after the OTA, and new platform ids", () => {
+    expect(uniqueLiveOfficeId()).toMatch(/^E2L[0-9A-F]{6}$/);
+    expect(uniqueLiveOfficeId()).not.toBe(uniqueLiveOfficeId());
+    expect(customDomainOf("live0a1b2c3d4e")).toBe("book.live0a1b2c3d4e-travel.example");
+    expect(livePlanCodeOf("live0a1b2c3d4e")).toBe("e2elive_live0a1b2c3d4e");
+    expect(livePlanCodeOf("live0a1b2c3d4e")).toMatch(/^[a-z][a-z0-9_]{1,39}$/);
+    for (const key of ["", "Live", "x", "live-1", "evil.example"]) {
+      expect(() => customDomainOf(key), key).toThrow(TypeError);
+      expect(() => livePlanCodeOf(key), key).toThrow(TypeError);
+    }
+    expect(newPlatformId("sub")).toMatch(/^sub_[0-9A-HJKMNP-TV-Z]{26}$/);
+    expect(newPlatformId("dom")).toMatch(/^dom_0[0-9A-HJKMNP-TV-Z]{25}$/);
+    expect(newPlatformId("sc")).toMatch(/^sc_0[0-9A-HJKMNP-TV-Z]{25}$/);
+    // The preconditions the fixtures meet, as goLive names them, in its order.
+    expect([...FIXTURE_PRECONDITIONS]).toEqual([
+      "amadeus_live",
+      "payout_account",
+      "plan_live_mode",
+      "subscription",
+    ]);
+  });
+
+  it("[OFE-022 AC1] seals a random client secret that only its own connection row's column decrypts", async () => {
+    // A key folder of this test: one KEK, `master-v1.key` (32 random bytes in base64, mode 0600), as `pnpm dev:keys` makes.
+    const dir = mkdtempSync(join(tmpdir(), "e2e-keys-"));
+    try {
+      writeFileSync(join(dir, "master-v1.key"), randomBytes(32).toString("base64"), { mode: 0o600 });
+      const keys = await LocalFileKeyProvider.fromDir(dir, "local:v1");
+      const connectionId = newPlatformId("sc");
+      const place = (rowId: string): string =>
+        aadFor("platform", "supplier_connections", "client_secret_ciphertext", rowId);
+
+      const sealed = await sealedClientSecret(connectionId, keys);
+      expect(sealed.kekId).toBe("local:v1");
+      const secret = await decryptValue(sealed.ciphertext, { aad: place(connectionId), keys });
+      expect(secret.toString("utf8")).toMatch(/^[A-Za-z0-9_-]{32}$/);
+      // Another row, or another column of the same row, does not decrypt it (the platform's associated data).
+      await expect(
+        decryptValue(sealed.ciphertext, { aad: place(newPlatformId("sc")), keys }),
+      ).rejects.toThrow(DecryptionError);
+      await expect(
+        decryptValue(sealed.ciphertext, {
+          aad: aadFor("platform", "amadeus_accounts", "client_secret_ciphertext", connectionId),
+          keys,
+        }),
+      ).rejects.toThrow(DecryptionError);
+      // Each call makes a new secret.
+      const again = await decryptValue((await sealedClientSecret(connectionId, keys)).ciphertext, {
+        aad: place(connectionId),
+        keys,
+      });
+      expect(again.equals(secret)).toBe(false);
+      secret.fill(0);
+      again.fill(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("[OFE-022 AC1] maps host names to the stack's loopback address for Chromium, refusing anything else", () => {
+    expect(hostResolverRules(["live0a1b2c3d4e.ota.example.com"])).toBe(
+      "--host-resolver-rules=MAP live0a1b2c3d4e.ota.example.com 127.0.0.1",
+    );
+    expect(hostResolverRules(["a.example", "b.example"], "127.0.0.2")).toBe(
+      "--host-resolver-rules=MAP a.example 127.0.0.2, MAP b.example 127.0.0.2",
+    );
+    expect(() => hostResolverRules([])).toThrow(TypeError);
+    for (const host of [
+      "*.ota.example.com",
+      "a.example, MAP b.example 10.0.0.1",
+      "A.example",
+      "a.example:80",
+    ]) {
+      expect(() => hostResolverRules([host]), host).toThrow(TypeError);
+    }
+  });
+
+  it("[OFE-022 AC1] keeps goLive's status, code and missing preconditions, or the environment of its tenant, nothing more", () => {
+    expect(
+      goLiveAnswerOf(422, {
+        error: {
+          code: "LIVE_PRECONDITIONS_UNMET",
+          message: "…",
+          status: 422,
+          requestId: "req_1",
+          details: { missing: ["plan_live_mode", "subscription"] },
+        },
+      }),
+    ).toEqual({ status: 422, code: "LIVE_PRECONDITIONS_UNMET", missing: ["plan_live_mode", "subscription"] });
+    expect(goLiveAnswerOf(200, { id: "ten_1", name: "Live Travel", storefrontEnvironment: "live" })).toEqual({
+      status: 200,
+      storefrontEnvironment: "live",
+    });
+    expect(
+      goLiveAnswerOf(403, { error: { code: "FEATURE_DISABLED", details: { feature: "live_switch" } } }),
+    ).toEqual({
+      status: 403,
+      code: "FEATURE_DISABLED",
+    });
+    expect(goLiveAnswerOf(502, undefined)).toEqual({ status: 502 });
+  });
+
+  it("[OFE-022 AC1] calls goLive as the portal does for the owner, and answers a refusal too", async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchImpl: FetchLike = async (url, init) => {
+      calls.push({ url, init });
+      return new Response(
+        JSON.stringify({
+          error: { code: "LIVE_PRECONDITIONS_UNMET", details: { missing: ["subscription"] } },
+        }),
+        { status: 422, headers: { "content-type": "application/json" } },
+      );
+    };
+    const owner = {
+      account: { email: "o@example.com", password: "x", fullName: "O", endUserIp: "198.18.1.2" },
+      accessToken: "portal-access-token",
+    };
+    const answer = await goLiveAttempt(owner, "ten_01JA2Z9W5K7Q3M8N4P6R2T0V1X", {
+      bffKey: "bff-test-key",
+      fetch: fetchImpl,
+    });
+    expect(answer).toEqual({ status: 422, code: "LIVE_PRECONDITIONS_UNMET", missing: ["subscription"] });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe(`${PLATFORM_API_URL}/v1/tenants/ten_01JA2Z9W5K7Q3M8N4P6R2T0V1X/go-live`);
+    expect(calls[0]?.init.method).toBe("POST");
+    expect(calls[0]?.init.body).toBe(JSON.stringify({ confirm: true }));
+    expect(calls[0]?.init.headers).toMatchObject({
+      authorization: "Bearer portal-access-token",
+      "x-velexis-bff-key": "bff-test-key",
+      "x-velexis-end-user-ip": "198.18.1.2",
+    });
+  });
+
+  it("[OFE-022 AC1] reads the hosts and the environment of a storefront.get answer, and nothing from another body", () => {
+    expect(
+      storefrontHostsOf({
+        tenantKey: "live0a1b2c3d4e",
+        environment: "live",
+        primaryUrl: "https://book.live0a1b2c3d4e-travel.example",
+        name: "E2E Travel",
+        domains: [
+          { host: "live0a1b2c3d4e.ota.example.com", kind: "subdomain", primary: false },
+          { host: "book.live0a1b2c3d4e-travel.example", kind: "custom", primary: true },
+        ],
+      }),
+    ).toEqual({
+      tenantKey: "live0a1b2c3d4e",
+      environment: "live",
+      primaryUrl: "https://book.live0a1b2c3d4e-travel.example",
+      domains: [
+        { host: "live0a1b2c3d4e.ota.example.com", kind: "subdomain", primary: false },
+        { host: "book.live0a1b2c3d4e-travel.example", kind: "custom", primary: true },
+      ],
+    });
+    expect(storefrontHostsOf({ error: { code: "HOST_NOT_ALLOWED" } })).toBeUndefined();
+    expect(storefrontHostsOf(undefined)).toBeUndefined();
+  });
+});
+
+describe("forwardedRequestOf and returnedHeadersOf", () => {
+  const SUB = "http://live0a1b2c3d4e.ota.example.com:4173";
+  const CUSTOM = "https://book.live0a1b2c3d4e-travel.example";
+  const BROWSER = {
+    accept: "application/json",
+    "accept-encoding": "gzip, br",
+    cookie: "__Host-vx_csrf=abc",
+    "x-csrf-token": "abc",
+    "idempotency-key": "4a7c4f9e-0000-4000-8000-000000000001",
+    "content-type": "application/json",
+    "content-length": "17",
+    host: "book.live0a1b2c3d4e-travel.example",
+    origin: CUSTOM,
+    // The browser cannot choose the OTA or the client address: the edge's own headers replace these.
+    "x-velexis-host": "demo.ota.example.com",
+    "x-velexis-edge": "forged",
+    "x-forwarded-for": "203.0.113.9",
+    ":authority": "book.live0a1b2c3d4e-travel.example",
+  };
+
+  it("[OFE-022 AC1] sends a page's /api/ request to the OTA API as Caddy does in front of the page's own host", () => {
+    expect(
+      forwardedRequestOf(
+        `${CUSTOM}/api/v1/flight-searches?limit=5`,
+        BROWSER,
+        { origin: CUSTOM, endUserIp: "198.18.3.4" },
+        "edge-test-secret",
+      ),
+    ).toEqual({
+      kind: "api",
+      url: `${OTA_API_URL}/v1/flight-searches?limit=5`,
+      headers: {
+        accept: "application/json",
+        cookie: "__Host-vx_csrf=abc",
+        "x-csrf-token": "abc",
+        "idempotency-key": "4a7c4f9e-0000-4000-8000-000000000001",
+        "content-type": "application/json",
+        "x-velexis-edge": "edge-test-secret",
+        "x-velexis-host": "book.live0a1b2c3d4e-travel.example",
+        origin: CUSTOM,
+        "x-forwarded-for": "198.18.3.4",
+      },
+    });
+    // The sub-domain mapped to the preview names the sub-domain to the API, its port never part of the host.
+    expect(
+      forwardedRequestOf(
+        `${SUB}/api/v1/storefront`,
+        {},
+        { origin: SUB, endUserIp: "198.18.3.4" },
+        "s",
+        "http://127.0.0.1:4999",
+      ).headers,
+    ).toMatchObject({
+      "x-velexis-host": "live0a1b2c3d4e.ota.example.com",
+      origin: "https://live0a1b2c3d4e.ota.example.com",
+    });
+  });
+
+  it("[OFE-022 AC1] takes pages and assets from the preview with a file server's headers, only where the route serves them", () => {
+    expect(
+      forwardedRequestOf(
+        `${CUSTOM}/account/sign-in.html?next=%2Fbookings.html`,
+        { ...BROWSER, accept: "text/html", "user-agent": "Chromium" },
+        { origin: CUSTOM, endUserIp: "198.18.3.4", pagesFrom: STOREFRONT_URL },
+        "edge-test-secret",
+      ),
+    ).toEqual({
+      kind: "page",
+      url: `${STOREFRONT_URL}/account/sign-in.html?next=%2Fbookings.html`,
+      headers: { accept: "text/html", "user-agent": "Chromium" },
+    });
+    expect(() =>
+      forwardedRequestOf(
+        `${SUB}/index.html`,
+        BROWSER,
+        { origin: SUB, endUserIp: "198.18.3.4" },
+        "edge-test-secret",
+      ),
+    ).toThrow("the route serves no pages");
+    let refusal = "";
+    try {
+      forwardedRequestOf(
+        `${STOREFRONT_URL}/api/v1/storefront`,
+        BROWSER,
+        { origin: CUSTOM, endUserIp: "198.18.3.4" },
+        "edge-test-secret",
+      );
+    } catch (error) {
+      refusal = String(error);
+    }
+    expect(refusal).toContain(`is not on ${CUSTOM}`);
+    expect(refusal).not.toContain("edge-test-secret");
+  });
+
+  it("[OFE-022 AC1] hands an answer back without hop-by-hop and framing headers, the API's COOP dropped, each cookie kept", () => {
+    const headers = {
+      "content-type": "application/json",
+      "content-length": "42",
+      "content-encoding": "gzip",
+      connection: "close",
+      "cross-origin-opener-policy": "same-origin",
+      "set-cookie": [
+        "__Host-vx_csrf=abc; Path=/; Secure; SameSite=Lax",
+        "__Host-vx_at=t; Path=/; Secure; HttpOnly",
+      ],
+      vary: "Origin",
+    };
+    expect(returnedHeadersOf("api", headers)).toEqual({
+      "content-type": "application/json",
+      "set-cookie":
+        "__Host-vx_csrf=abc; Path=/; Secure; SameSite=Lax\n__Host-vx_at=t; Path=/; Secure; HttpOnly",
+      vary: "Origin",
+    });
+    // A page of the preview keeps its own COOP (the airline-card page's, OADR-0017 point 3).
+    expect(returnedHeadersOf("page", { "cross-origin-opener-policy": "same-origin" })).toEqual({
+      "cross-origin-opener-policy": "same-origin",
+    });
+  });
+});
+
+describe("serveStorefrontHost", () => {
+  const CUSTOM = "https://book.live0a1b2c3d4e-travel.example";
+
+  /** A context that keeps the route handler, a route whose fulfil and abort are recorded, and a recording forwarder. */
+  function fakeHostRouting(answer: ForwardedAnswer | Error) {
+    let pattern = "";
+    let handler: ((route: unknown) => Promise<void>) | undefined;
+    const context = {
+      route: async (url: string, routeHandler: (route: unknown) => Promise<void>) => {
+        pattern = url;
+        handler = routeHandler;
+      },
+    } as unknown as RoutedContext;
+    const forwarded: Parameters<Forwarder>[0][] = [];
+    const fulfilled: Record<string, unknown>[] = [];
+    const aborted: string[] = [];
+    const forward: Forwarder = async (request) => {
+      forwarded.push(request);
+      if (answer instanceof Error) {
+        throw answer;
+      }
+      return answer;
+    };
+    return {
+      context,
+      forward,
+      forwarded,
+      fulfilled,
+      aborted,
+      pattern: () => pattern,
+      handle: async (url: string, method: string, headers: Record<string, string>, body: Buffer | null) => {
+        if (handler === undefined) {
+          throw new Error("no route was registered");
+        }
+        await handler({
+          request: () => ({
+            url: () => url,
+            method: () => method,
+            allHeaders: async () => headers,
+            postDataBuffer: () => body,
+          }),
+          fulfill: async (options: Record<string, unknown>) => {
+            fulfilled.push(options);
+          },
+          abort: async (code: string) => {
+            aborted.push(code);
+          },
+        });
+      },
+    };
+  }
+
+  it("[OFE-022 AC1] answers the origin's /api/ requests from the OTA API and its pages from the preview", async () => {
+    const answer: ForwardedAnswer = {
+      status: 201,
+      headers: {
+        "content-type": "application/json",
+        "content-length": "2",
+        "cross-origin-opener-policy": "same-origin",
+      },
+      body: Buffer.from("{}"),
+    };
+    const routing = fakeHostRouting(answer);
+    await serveStorefrontHost(
+      routing.context,
+      { origin: CUSTOM, endUserIp: "198.18.5.6", pagesFrom: STOREFRONT_URL },
+      { edgeSecret: "edge-test-secret", forward: routing.forward },
+    );
+    expect(routing.pattern()).toBe(`${CUSTOM}/**`);
+
+    await routing.handle(
+      `${CUSTOM}/api/v1/flight-searches`,
+      "POST",
+      { accept: "application/json" },
+      Buffer.from("{}"),
+    );
+    await routing.handle(`${CUSTOM}/search.html`, "GET", { accept: "text/html" }, null);
+    expect(routing.forwarded).toEqual([
+      expect.objectContaining({
+        kind: "api",
+        method: "POST",
+        url: `${OTA_API_URL}/v1/flight-searches`,
+        body: Buffer.from("{}"),
+      }),
+      expect.objectContaining({
+        kind: "page",
+        method: "GET",
+        url: `${STOREFRONT_URL}/search.html`,
+        body: null,
+      }),
+    ]);
+    expect(routing.forwarded[0]?.headers).toMatchObject({
+      "x-velexis-edge": "edge-test-secret",
+      "x-velexis-host": "book.live0a1b2c3d4e-travel.example",
+      "x-forwarded-for": "198.18.5.6",
+    });
+    expect(routing.fulfilled[0]).toEqual({
+      status: 201,
+      headers: { "content-type": "application/json" },
+      body: answer.body,
+    });
+    expect(routing.fulfilled[1]).toEqual({
+      status: 201,
+      headers: { "content-type": "application/json", "cross-origin-opener-policy": "same-origin" },
+      body: answer.body,
+    });
+    expect(routing.aborted).toEqual([]);
+  });
+
+  it("[OFE-022 AC1] routes only /api/ of an origin the preview serves itself, and fails a request whose target is gone", async () => {
+    const routing = fakeHostRouting(new Error("connect ECONNREFUSED 127.0.0.1:4000"));
+    const sub = "http://live0a1b2c3d4e.ota.example.com:4173";
+    await serveStorefrontHost(
+      routing.context,
+      { origin: sub, endUserIp: "198.18.5.6" },
+      { edgeSecret: "s", forward: routing.forward },
+    );
+    expect(routing.pattern()).toBe(`${sub}/api/**`);
+    await routing.handle(`${sub}/api/v1/storefront`, "GET", {}, null);
+    expect(routing.fulfilled).toEqual([]);
+    expect(routing.aborted).toEqual(["connectionrefused"]);
   });
 });

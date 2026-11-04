@@ -6,7 +6,7 @@
   "license": "UNLICENSED",
   "type": "commonjs",
   "scripts": {
-    "build:tools": "tsc -b ../../packages/testing ../reference-data ../amadeus-stub",
+    "build:tools": "tsc -b ../../packages/testing ../../packages/crypto ../reference-data ../amadeus-stub",
     "test:e2e": "pnpm run build:tools && sh -c '[ \"$1\" = -- ] && shift; exec playwright test \"$@\"' playwright",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
@@ -19,6 +19,7 @@
     "@types/pg": "8.23.1",
     "@velexis/api-types": "workspace:*",
     "@velexis/config": "workspace:*",
+    "@velexis/crypto": "workspace:*",
     "@velexis/db": "workspace:*",
     "@velexis/testing": "workspace:*",
     "eslint": "9.39.5",

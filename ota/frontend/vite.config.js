@@ -45,6 +45,26 @@ export const PAY_AIRLINE_HEADERS = Object.freeze({
   "Cache-Control": "no-store",
 });
 
+/** A host name as the storefront proxy accepts STOREFRONT_DEV_HOST (lower case, two labels or more, no port). */
+const HOST_NAME =
+  /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+/**
+ * The host names `vite preview` answers besides the loopback addresses and `localhost`, which Vite 6 always allows: the
+ * storefront sub-domains `<key>.<STOREFRONT_BASE_DOMAIN>` (Vite's leading-dot form, which also takes the base domain
+ * itself). Vite answers any other `Host` with `403` "Blocked request" (`preview.allowedHosts`, DNS rebinding
+ * protection). The live-mode journey of the end-to-end suite (OFE-022, lead decision (2e) of 2026-11-04) maps an OTA's
+ * sub-domain to the preview with Chromium's host-resolver rules, so the browser sends that name as `Host`; nothing else
+ * reaches the preview by name. Never `true`, and nothing without a valid STOREFRONT_BASE_DOMAIN (an empty list: the
+ * loopback addresses only, as before).
+ * @param {Record<string, string | undefined>} env
+ * @returns {string[]}
+ */
+export function previewAllowedHosts(env) {
+  const base = (env.STOREFRONT_BASE_DOMAIN ?? "").trim().toLowerCase();
+  return HOST_NAME.test(base) ? [`.${base}`] : [];
+}
+
 /**
  * The build options both builds share: CSP-clean output (OADR-0015 point 2), with no inline module-preload polyfill
  * and no data: URIs for fonts or scripts.
@@ -164,6 +184,7 @@ export default defineConfig(({ command, mode }) => {
       strictPort: true,
       proxy,
       headers: { ...STOREFRONT_HEADERS },
+      allowedHosts: previewAllowedHosts(env),
     },
   };
 });

@@ -915,6 +915,9 @@ importers:
       '@velexis/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@velexis/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
       '@velexis/db':
         specifier: workspace:*
         version: link:../../packages/db

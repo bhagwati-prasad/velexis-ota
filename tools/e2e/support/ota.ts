@@ -25,10 +25,20 @@
 //   await openConsoleFromPortal(page, owned.ota.id);                 // portal → "Open console" → /bookings
 //   await waitPastMidnight(await bookingDayTimeZones(owned));       // never book in the 3 minutes before its midnight
 //
-// The OTA admin's settings and payments journeys of OAD-017 add (the very end):
+// The OTA admin's settings and payments journeys of OAD-017 add:
 //
 //   await serveStorefrontOf(context, owned.storefrontHost);  // the preview's pages show the journey's own OTA
 //   await forgetStorefrontCopies(page);                      // the tab's own 5-minute copies of the storefront
+//
+// The storefront's live-mode and custom-domain journey of OFE-022 adds (the very end):
+//
+//   const owned = await newOwnerWithActiveOta("Lena Live", "live", { mfa: true });  // an owner with MFA
+//   const owner = await stepUpWithApi(owned.owner);                                  // the TOTP step-up
+//   const facts = await meetLivePreconditions(owned, officeId);  // velexis_migrator fixtures: own live Amadeus, plan,
+//                                                                 // subscription, Stripe Connect
+//   const answer = await goLiveAttempt(owner, owned.ota.id);                         // goLive through the platform API
+//   await addPrimaryCustomDomain(owned, customHost);        // a verified custom domain, certificate issued, primary
+//   await serveStorefrontHost(context, { origin, endUserIp, pagesFrom });          // a host of the OTA in the browser
 //
 // Tenant data goes through `tenantTx` of @velexis/db as velexis_ota_app, the OTA backend's own role, never through
 // schema-qualified SQL or a session-level search_path (ADR-0004). The platform row of the suspended OTA is written as
@@ -36,11 +46,16 @@
 // API has no operation that creates a suspended OTA, and the demo OTA stays active for every other journey. After the
 // change the platform's `tenant` invalidation is published, as the platform does after its commit, so the OTA API
 // reads the new status at once instead of after the 60 s of its cache.
-import { createPrivateKey, randomInt, randomUUID, sign } from "node:crypto";
+import { createPrivateKey, randomBytes, randomInt, randomUUID, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { request as httpRequest, type IncomingHttpHeaders } from "node:http";
 import { resolve } from "node:path";
 import { expect, type BrowserContext, type Page } from "@playwright/test";
-import { INVALIDATION_CHANNEL, type TenantInvalidation } from "@velexis/api-types/jobs";
+import {
+  INVALIDATION_CHANNEL,
+  type InvalidationEvent,
+  type TenantInvalidation,
+} from "@velexis/api-types/jobs";
 import {
   createPool,
   createTenantDb,
@@ -49,18 +64,34 @@ import {
   type Transaction,
   type TenantDatabase,
 } from "@velexis/db";
+import {
+  aadFor,
+  encryptValue,
+  LocalFileKeyProvider,
+  type EncryptedValue,
+  type KeyProvider,
+} from "@velexis/crypto";
 import Redis from "ioredis";
 import { expectNoSeriousA11yViolations } from "./a11y";
-import { createVerifiedAccount, signInWithApi, type SessionTokens } from "./fixtures";
+import {
+  callPlatformApi,
+  createVerifiedAccount,
+  enableMfa,
+  signInWithApi,
+  type PortalAccount,
+  type SessionTokens,
+} from "./fixtures";
 import { buildAccount, stack, withDatabase } from "./seed";
 import {
   AMADEUS_STUB_URL,
   DEMO_TENANT_KEY,
   OTA_ADMIN_URL,
   OTA_API_URL,
+  PLATFORM_API_URL,
   PORTAL_URL,
   REPO_ROOT,
   serviceEnv,
+  STACK_HOST,
   stackDatabaseUrl,
   STOREFRONT_BASE_DOMAIN,
   STOREFRONT_URL,
@@ -129,17 +160,27 @@ export async function expireSearch(searchId: string): Promise<void> {
   });
 }
 
-/** Publishes the platform's `tenant` invalidation of `tenantId` on the stack's Redis (OADR-0009 point 4). */
-export async function publishTenantInvalidation(tenantId: string): Promise<void> {
+/**
+ * Publishes `events` on the stack's `vx:invalidate` channel, in order, as the platform publishes them after its commit
+ * (OADR-0009 point 4), so the OTA API reads the changed platform rows at once instead of after its caches' 60 s.
+ */
+export async function publishInvalidations(...events: readonly InvalidationEvent[]): Promise<void> {
   const redis = new Redis(stack().redisUrl, { lazyConnect: true, maxRetriesPerRequest: 1 });
   redis.on("error", () => undefined);
   try {
     await redis.connect();
-    const event: TenantInvalidation = { v: 1, type: "tenant", id: tenantId };
-    await redis.publish(INVALIDATION_CHANNEL, JSON.stringify(event));
+    for (const event of events) {
+      await redis.publish(INVALIDATION_CHANNEL, JSON.stringify(event));
+    }
   } finally {
     redis.disconnect();
   }
+}
+
+/** Publishes the platform's `tenant` invalidation of `tenantId` on the stack's Redis (OADR-0009 point 4). */
+export async function publishTenantInvalidation(tenantId: string): Promise<void> {
+  const event: TenantInvalidation = { v: 1, type: "tenant", id: tenantId };
+  await publishInvalidations(event);
 }
 
 /** Crockford's base 32, the alphabet of ULIDs. */
@@ -902,6 +943,15 @@ export interface OwnedOta {
 /** How many OTAs `newOwnerWithActiveOta` sets up at most to get one with an office (see there). */
 const OFFICE_SETUP_ATTEMPTS = 3;
 
+/** What `newOwnerWithActiveOta`'s owner needs besides a verified account. */
+export interface NewOwnerOptions {
+  /**
+   * TOTP MFA on before the owner signs in (`enableMfa`), so the session carries the TOTP verification and the owner
+   * can step up (`stepUpWithApi`): go-live and the OTA's own credentials need both (OFE-022). Default: off.
+   */
+  readonly mfa?: boolean;
+}
+
 /**
  * A new portal account (`fullName`), verified and signed in, that creates an OTA through `createTenant` (a key of
  * `keyPrefix` and 10 random hex digits) and waits for the OTA worker to set it up (`active`, about 2 s locally) with
@@ -912,10 +962,15 @@ const OFFICE_SETUP_ATTEMPTS = 3;
  * waits for an office (`pending_verification`), which only an admin's assignment would end. So when that happens, the
  * owner waits until an available office is free of holds again and sets up another OTA (at most
  * OFFICE_SETUP_ATTEMPTS OTAs); the one without an office is left as it is. A pool without an available office fails
- * at once with that reason.
+ * at once with that reason. With `options.mfa` the account turns MFA on before it signs in.
  */
-export async function newOwnerWithActiveOta(fullName: string, keyPrefix: string): Promise<OwnedOta> {
-  const account = await createVerifiedAccount(buildAccount({ fullName }));
+export async function newOwnerWithActiveOta(
+  fullName: string,
+  keyPrefix: string,
+  options: NewOwnerOptions = {},
+): Promise<OwnedOta> {
+  const verified = await createVerifiedAccount(buildAccount({ fullName }));
+  const account: PortalAccount = options.mfa === true ? await enableMfa(verified) : verified;
   const session = await signInWithApi(account);
   const owner: SignedInOwner = { account, accessToken: session.accessToken };
   for (let attempt = 1; ; attempt += 1) {
@@ -1515,4 +1570,699 @@ export async function forgetStorefrontCopies(page: StorageEvaluator): Promise<vo
       window.sessionStorage.removeItem(key);
     }
   }, STOREFRONT_SESSION_COPIES);
+}
+
+// ---- The storefront's live mode and custom domain (OFE-022) ----------------------------------------------------------
+//
+// ota/frontend/README.md §13 and OF-12 AC1 (the M5 demo of platform/docs/plans/implementation-plan.md §4): a journey's
+// own OTA goes live through the platform API as its owner does (goLive by an owner with MFA, after a TOTP step-up), gets
+// a verified custom domain that becomes its primary host, and its storefront is looked at in the browser on both hosts.
+//
+// What the stack cannot reach for real is written as velexis_migrator fixtures, as OBE-083's cross-backend test writes
+// it (lead decision of 2026-11-04): the OTA's own live Amadeus connection as the platform worker leaves verified own
+// credentials (PBE-053: `credential_source = 'tenant'`, `active`, the client secret sealed with the stack's KEK as the
+// platform seals it, so the OTA API decrypts it and asks the stack's Amadeus stub, which hands any client a token, for
+// a token), a plan with `limits.liveMode` and its active subscription (Stripe Billing is off in the stack: its Checkout
+// is a hosted page), a Stripe Connect test connection as the platform's Connect callback leaves it (the OAuth runs on
+// Stripe's pages; go-live copies it to live), and the custom domain verified with its certificate issued (no DNS or
+// ACME in the stack). The live Amadeus connection is no submission through the platform API because that needs
+// FEATURE_OWN_AMADEUS, whose portal and admin pages change what PAD-010's journey reads (a second region named after
+// the test environment), and the Velexis live account and its pool belong to PAD-010's journey alone
+// (admin-amadeus-pool.e2e.ts counts its offices exactly), so no Velexis live office is used either. goLive itself, the
+// owner's MFA and step-up are real.
+//
+// In the browser, the OTA's two hosts are its own origins: its sub-domain `<key>.ota.example.com` is mapped to the
+// preview on STOREFRONT_URL with Chromium's host-resolver rules (`hostResolverRules`; the preview allows the storefront
+// sub-domains, ota/frontend/vite.config.js), and its custom domain is answered over https by the journey from the same
+// preview, as Caddy answers it on the VM (`serveStorefrontHost` with `pagesFrom`): Chromium keeps the Secure `__Host-`
+// cookies of the storefront only on https and loopback origins, so the custom domain's sign-up and search need https.
+// On both, the pages' `/api/*` requests go to the OTA API with the edge headers Caddy adds in front of that host (the
+// preview's own proxy names the demo OTA's host).
+
+/** An Amadeus office id no other journey uses: `E2L` and 6 random hex digits (9 upper-case letters and digits). */
+export function uniqueLiveOfficeId(): string {
+  return `E2L${randomBytes(3).toString("hex").toUpperCase()}`;
+}
+
+/**
+ * The custom storefront domain of the journey's OTA `key`: `book.<key>-travel.example`, under a top-level domain that
+ * RFC 2606 reserves, so it never resolves anywhere; the journey answers it itself (`serveStorefrontHost`).
+ */
+export function customDomainOf(key: string): string {
+  tenantSchemaOf(key);
+  return `book.${key}-travel.example`;
+}
+
+/** Chromium's `--host-resolver-rules` that map each of `hosts` to `to` (default 127.0.0.1, where the stack listens). */
+export function hostResolverRules(hosts: readonly string[], to: string = STACK_HOST): string {
+  if (hosts.length === 0) {
+    throw new TypeError("no host to map");
+  }
+  for (const host of hosts) {
+    if (!/^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(host)) {
+      throw new TypeError(`not a host name: ${host}`);
+    }
+  }
+  return `--host-resolver-rules=${hosts.map((host) => `MAP ${host} ${to}`).join(", ")}`;
+}
+
+/** The owner after `stepUp` (`POST /v1/auth/step-up` with the next TOTP code): its token's `mfa_at` is now. */
+export async function stepUpWithApi(owner: SignedInOwner): Promise<SignedInOwner> {
+  const { authenticator } = owner.account;
+  if (authenticator === undefined) {
+    throw new Error(`${owner.account.email} has no authenticator: create the owner with { mfa: true }`);
+  }
+  const session = await callPlatformApi<SessionTokens>({
+    operation: "stepUp",
+    method: "POST",
+    path: "/v1/auth/step-up",
+    endUserIp: owner.account.endUserIp,
+    accessToken: owner.accessToken,
+    body: { code: await authenticator.nextCode() },
+  });
+  return { account: owner.account, accessToken: session.accessToken };
+}
+
+/**
+ * The stack's key-encryption keys: MASTER_KEY_DIR (under the repository root, as @velexis/config resolves it) and
+ * MASTER_KEY_CURRENT of platform/backend/.env.example, which the platform API and worker get, and the OTA API and worker
+ * share in development (`pnpm dev:keys`).
+ */
+export async function stackKeyProvider(): Promise<KeyProvider> {
+  const env = serviceEnv("platform-api", stack());
+  const dir = env["MASTER_KEY_DIR"];
+  const current = env["MASTER_KEY_CURRENT"];
+  if (dir === undefined || dir === "" || current === undefined || current === "") {
+    throw new Error("platform/backend/.env.example names no MASTER_KEY_DIR or MASTER_KEY_CURRENT");
+  }
+  return await LocalFileKeyProvider.fromDir(resolve(REPO_ROOT, dir), current);
+}
+
+/**
+ * A new client secret of the own Amadeus connection `connectionId`, sealed with `keys` as the platform worker seals one
+ * it applies (`connectionSecretPlace`: associated data `platform.supplier_connections.client_secret_ciphertext:<id>`),
+ * so only that row's ciphertext column decrypts it. The secret is random, made up here (the stack's stub hands any
+ * client a token), and never leaves this function except sealed.
+ */
+export async function sealedClientSecret(connectionId: string, keys: KeyProvider): Promise<EncryptedValue> {
+  return await encryptValue(randomBytes(24).toString("base64url"), {
+    aad: aadFor("platform", "supplier_connections", "client_secret_ciphertext", connectionId),
+    keys,
+  });
+}
+
+/** The OTA's Amadeus connection of `environment` as the platform stores it (`platform.supplier_connections`). */
+export interface AmadeusConnectionRow {
+  readonly status: string;
+  readonly credentialSource: string;
+  readonly defaultOfficeId: string | null;
+  readonly officeIds: readonly string[];
+}
+
+/** The OTA `tenantId`'s Amadeus connection of `environment`, read as velexis_ota_app; `undefined` without one. */
+export async function amadeusConnectionOf(
+  tenantId: string,
+  environment: "test" | "live",
+): Promise<AmadeusConnectionRow | undefined> {
+  return await withDatabase("ota", async (client) => {
+    const { rows } = await client.query<{
+      status: string;
+      credential_source: string;
+      default_office_id: string | null;
+      office_ids: string[];
+    }>(
+      `SELECT status, credential_source, default_office_id, office_ids
+         FROM platform.supplier_connections
+        WHERE tenant_id = $1 AND provider = 'amadeus' AND environment = $2`,
+      [tenantId, environment],
+    );
+    const row = rows[0];
+    return row === undefined
+      ? undefined
+      : {
+          status: row.status,
+          credentialSource: row.credential_source,
+          defaultOfficeId: row.default_office_id,
+          officeIds: row.office_ids,
+        };
+  });
+}
+
+/** What goLive answered: its status and, for a refusal, the error code and the preconditions it names. */
+export interface GoLiveAnswer {
+  readonly status: number;
+  /** The error code of a refusal (`LIVE_PRECONDITIONS_UNMET`, …). */
+  readonly code?: string;
+  /** `details.missing` of `422 LIVE_PRECONDITIONS_UNMET`, in the API's order. */
+  readonly missing?: readonly string[];
+  /** `storefrontEnvironment` of the tenant goLive answered with `200`. */
+  readonly storefrontEnvironment?: string;
+}
+
+/** The parts of an answer of goLive that GoLiveAnswer keeps: never anything else of the body. */
+export function goLiveAnswerOf(status: number, body: unknown): GoLiveAnswer {
+  const record = objectOf(body);
+  if (status === 200) {
+    const environment = record["storefrontEnvironment"];
+    return typeof environment === "string" ? { status, storefrontEnvironment: environment } : { status };
+  }
+  const error = objectOf(record["error"]);
+  const code = typeof error["code"] === "string" ? error["code"] : undefined;
+  const missing = objectOf(error["details"])["missing"];
+  return {
+    status,
+    ...(code === undefined ? {} : { code }),
+    ...(Array.isArray(missing) && missing.every((item) => typeof item === "string")
+      ? { missing: missing as string[] }
+      : {}),
+  };
+}
+
+/** What `goLiveAttempt` needs besides the owner and the OTA; the defaults are the stack's. */
+export interface PlatformCallOptions {
+  /** The platform API (default PLATFORM_API_URL). */
+  readonly baseUrl?: string;
+  /** PLATFORM_BFF_KEY (default: the development value of platform/backend/.env.example that the stack's API gets). */
+  readonly bffKey?: string;
+  readonly fetch?: FetchLike;
+}
+
+/**
+ * goLive (`POST /v1/tenants/{tenantId}/go-live` with `{confirm: true}`) as the portal calls it for the owner: the
+ * owner's token (stepped up within 15 minutes) and the PADR-0019 headers of callPlatformApi. Unlike callPlatformApi it
+ * answers a refusal too, with the preconditions `422 LIVE_PRECONDITIONS_UNMET` names (`goLiveAnswerOf`), so a journey
+ * can show which ones its fixtures meet.
+ */
+export async function goLiveAttempt(
+  owner: SignedInOwner,
+  tenantId: string,
+  options: PlatformCallOptions = {},
+): Promise<GoLiveAnswer> {
+  const bffKey = options.bffKey ?? serviceEnv("platform-api", stack())["PLATFORM_BFF_KEY"] ?? "";
+  const send = options.fetch ?? ((input, init) => fetch(input, init));
+  const response = await send(
+    `${options.baseUrl ?? PLATFORM_API_URL}/v1/tenants/${encodeURIComponent(tenantId)}/go-live`,
+    {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        authorization: `Bearer ${owner.accessToken}`,
+        "x-velexis-bff-key": bffKey,
+        "x-velexis-end-user-ip": owner.account.endUserIp,
+        "x-velexis-end-user-agent": "velexis-e2e",
+      },
+      body: JSON.stringify({ confirm: true }),
+      signal: AbortSignal.timeout(15_000),
+    },
+  );
+  const text = await response.text();
+  let body: unknown;
+  try {
+    body = text === "" ? undefined : JSON.parse(text);
+  } catch {
+    body = undefined;
+  }
+  return goLiveAnswerOf(response.status, body);
+}
+
+/** A platform id as the platform writes them: `<prefix>_` and a ULID (a leading `0`, so it is a valid one). */
+export function newPlatformId(prefix: "sc" | "sub" | "dom"): string {
+  return `${prefix}_${newTenantId().slice("ten_".length)}`;
+}
+
+/** The plan of the journey's OTA `key` with live mode: `e2elive_<key>` (`plans.code`: `^[a-z][a-z0-9_]{1,39}$`). */
+export function livePlanCodeOf(key: string): string {
+  tenantSchemaOf(key);
+  return `e2elive_${key}`;
+}
+
+/** The go-live preconditions that `meetLivePreconditions` writes as fixtures, as goLive names them. */
+export const FIXTURE_PRECONDITIONS = Object.freeze([
+  "amadeus_live",
+  "payout_account",
+  "plan_live_mode",
+  "subscription",
+] as const);
+
+/** The rows `meetLivePreconditions` wrote. */
+export interface LivePreconditionFixtures {
+  /** The OTA's own live Amadeus connection (`sc_…`, `credential_source = 'tenant'`, `active`). */
+  readonly liveConnectionId: string;
+  /** Its office, the only one it holds and its default, queuing and owner office. */
+  readonly liveOfficeId: string;
+  /** The plan with `limits.liveMode` (not public), the OTA's plan from then on. */
+  readonly planCode: string;
+  /** The OTA's `active` manual subscription of that plan (`billing_provider = 'manual'`, FIX-W40-PLATFORM). */
+  readonly subscriptionId: string;
+  /** The connected account (`acct_…`) of the OTA's test payment connection, now `connect_standard`. */
+  readonly connectAccount: string;
+}
+
+/**
+ * Meets the go-live preconditions the stack cannot reach for real, as velexis_migrator fixtures in one transaction (the
+ * way OBE-083's cross-backend test meets them), then publishes the platform's `tenant` and `connection` invalidations:
+ *
+ *   amadeus_live     the OTA's own live Amadeus connection as the platform worker leaves verified own credentials
+ *                    (PBE-053's apply): `credential_source = 'tenant'`, `active`, the stack's Amadeus stub as its host,
+ *                    a made-up client id and a random client secret sealed with the stack's KEK
+ *                    (`sealedClientSecret`), `liveOfficeId` as its only, default, queuing and owner office;
+ *   plan_live_mode   a plan `e2elive_<key>` with `limits.liveMode` (not public), the OTA's plan from now on;
+ *   subscription     its `active` manual subscription (the OTA's current one, the earlier ones `canceled`): Stripe
+ *                    Billing is off in the stack, and goLive takes an active manual subscription (FIX-W40-PLATFORM);
+ *   payout_account   not needed once the OTA's test payment connection is `connect_standard` with a connected account,
+ *                    as the platform's Connect callback leaves it (`active`, charges and payouts enabled): goLive copies
+ *                    it to live, and only `velexis` payments need a verified payout account (PADR-0003).
+ *
+ * MFA is real (the owner's account). `keys` seal the client secret (default: the stack's, `stackKeyProvider`).
+ */
+export async function meetLivePreconditions(
+  owned: OwnedOta,
+  liveOfficeId: string,
+  keys?: KeyProvider,
+): Promise<LivePreconditionFixtures> {
+  if (!/^[A-Z0-9]{9}$/.test(liveOfficeId)) {
+    throw new TypeError(`not an Amadeus office id: ${liveOfficeId}`);
+  }
+  const tenantId = owned.ota.id;
+  const fixtures: LivePreconditionFixtures = {
+    liveConnectionId: newPlatformId("sc"),
+    liveOfficeId,
+    planCode: livePlanCodeOf(owned.ota.key),
+    subscriptionId: newPlatformId("sub"),
+    connectAccount: `acct_e2e${randomBytes(8).toString("hex")}`,
+  };
+  const sealed = await sealedClientSecret(fixtures.liveConnectionId, keys ?? (await stackKeyProvider()));
+  await withDatabase("migrator", async (client) => {
+    await client.query("BEGIN");
+    try {
+      await client.query(
+        `INSERT INTO platform.supplier_connections (id, tenant_id, provider, environment, credential_source, base_url,
+                                                    client_id, client_secret_ciphertext, encryption_key_id, office_ids,
+                                                    default_office_id, queuing_office_id, owner_office_id, status,
+                                                    last_verified_at)
+         VALUES ($1, $2, 'amadeus', 'live', 'tenant', $3, $4, $5, $6, ARRAY[$7::text], $7, $7, $7, 'active', now())`,
+        [
+          fixtures.liveConnectionId,
+          tenantId,
+          AMADEUS_STUB_URL,
+          `e2e-live-${randomBytes(6).toString("hex")}`,
+          sealed.ciphertext,
+          sealed.kekId,
+          liveOfficeId,
+        ],
+      );
+      await client.query(
+        `INSERT INTO platform.plans (code, name, description, currency, monthly_price, per_booking_fee,
+                                     included_bookings, limits, features, is_public, is_active, sort_order,
+                                     trial_days, settlement_fee_bps)
+         VALUES ($1, 'E2E live', 'A plan with live mode for the storefront live journey (OFE-022).', 'EUR', 49, 0, 0,
+                 '{"staffSeats":5,"apiKeys":10,"customDomains":1,"liveMode":true}'::jsonb, '{}'::jsonb, false, true,
+                 90, 0, 0)`,
+        [fixtures.planCode],
+      );
+      await client.query(
+        `UPDATE platform.subscriptions
+            SET status = 'canceled', canceled_at = now(), version = version + 1, updated_at = now()
+          WHERE tenant_id = $1 AND status IN ('trialing', 'active', 'past_due', 'paused', 'incomplete', 'unpaid')`,
+        [tenantId],
+      );
+      await client.query(
+        `INSERT INTO platform.subscriptions (id, tenant_id, plan_code, status, billing_interval, billing_provider,
+                                             current_period_start, current_period_end)
+         VALUES ($1, $2, $3, 'active', 'month', 'manual', now(), now() + interval '30 days')`,
+        [fixtures.subscriptionId, tenantId, fixtures.planCode],
+      );
+      const tenant = await client.query(
+        `UPDATE platform.tenants SET plan_code = $2, version = version + 1, updated_at = now() WHERE id = $1`,
+        [tenantId, fixtures.planCode],
+      );
+      const connection = await client.query(
+        `UPDATE platform.payment_provider_connections
+            SET account_mode = 'connect_standard', account_reference = $2, publishable_key = NULL,
+                secret_ciphertext = NULL, webhook_secret_ciphertext = NULL, encryption_key_id = NULL,
+                capabilities = '{"chargesEnabled":true,"payoutsEnabled":true,"detailsSubmitted":true}'::jsonb,
+                connected_at = now(), disconnected_at = NULL, last_error = NULL, status = 'active',
+                version = version + 1, updated_at = now()
+          WHERE tenant_id = $1 AND environment = 'test'`,
+        [tenantId, fixtures.connectAccount],
+      );
+      if (tenant.rowCount !== 1 || connection.rowCount !== 1) {
+        throw new Error(`the OTA ${tenantId} has no tenant row or no test payment connection to arrange`);
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    }
+  });
+  await publishInvalidations({ v: 1, type: "tenant", id: tenantId }, { v: 1, type: "connection", tenantId });
+  return fixtures;
+}
+
+/**
+ * Adds the custom storefront domain `hostname` to the journey's OTA as the platform leaves one that passed DNS
+ * verification and the TLS probe (PBE-049 to PBE-051; DNS and ACME cannot run in the stack), as velexis_migrator in one
+ * transaction: `verified`, its certificate `issued`, and primary, the sub-domain losing the flag as makeDomainPrimary
+ * does. Then the platform's `domain` invalidations of both hosts, which drop the OTA API's storefront.get entries.
+ */
+export async function addPrimaryCustomDomain(owned: OwnedOta, hostname: string): Promise<void> {
+  const tenantId = owned.ota.id;
+  await withDatabase("migrator", async (client) => {
+    await client.query("BEGIN");
+    try {
+      await client.query(
+        `INSERT INTO platform.tenant_domains (id, tenant_id, hostname, kind, purpose, is_primary, verification_status,
+                                              verification_token, verified_at, last_checked_at, tls_status,
+                                              tls_checked_at)
+         VALUES ($1, $2, $3, 'custom', 'storefront', false, 'verified', $4, now(), now(), 'issued', now())`,
+        [newPlatformId("dom"), tenantId, hostname, `vx-verify-${randomBytes(20).toString("hex")}`],
+      );
+      await client.query(
+        `UPDATE platform.tenant_domains SET is_primary = false, updated_at = now()
+          WHERE tenant_id = $1 AND purpose = 'storefront' AND is_primary`,
+        [tenantId],
+      );
+      const primary = await client.query(
+        `UPDATE platform.tenant_domains SET is_primary = true, updated_at = now() WHERE hostname = $1`,
+        [hostname],
+      );
+      if (primary.rowCount !== 1) {
+        throw new Error(`the custom domain ${hostname} was not written`);
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    }
+  });
+  await publishInvalidations(
+    { v: 1, type: "domain", hostname: owned.storefrontHost },
+    { v: 1, type: "domain", hostname },
+  );
+}
+
+/** The parts of storefront.get the live journey waits for and compares. */
+export interface StorefrontHosts {
+  readonly tenantKey: string;
+  readonly environment: string;
+  readonly primaryUrl: string;
+  readonly domains: readonly { readonly host: string; readonly kind: string; readonly primary: boolean }[];
+}
+
+/** The parts of a storefront.get answer that StorefrontHosts keeps; `undefined` for anything else. */
+export function storefrontHostsOf(body: unknown): StorefrontHosts | undefined {
+  const config = objectOf(body);
+  const { tenantKey, environment, primaryUrl, domains } = config;
+  if (
+    typeof tenantKey !== "string" ||
+    typeof environment !== "string" ||
+    typeof primaryUrl !== "string" ||
+    !Array.isArray(domains)
+  ) {
+    return undefined;
+  }
+  return {
+    tenantKey,
+    environment,
+    primaryUrl,
+    domains: domains.map((entry) => {
+      const domain = objectOf(entry);
+      return {
+        host: String(domain["host"]),
+        kind: String(domain["kind"]),
+        primary: domain["primary"] === true,
+      };
+    }),
+  };
+}
+
+// --- A host of the journey's OTA in the browser -----------------------------------------------------------------------
+
+/** How a page origin of the journey's OTA is answered in a browser context (`serveStorefrontHost`). */
+export interface StorefrontHostRoute {
+  /**
+   * The origin the browser shows the OTA's pages on: its sub-domain mapped to a preview
+   * (`http://<key>.ota.example.com:4173`) or its custom domain (`https://<custom domain>`). Its host name is the
+   * storefront host the edge names to the OTA API (`X-Velexis-Host`, `Origin: https://<host>`), as Caddy does.
+   */
+  readonly origin: string;
+  /** The end user's IP, sent to the OTA API as `X-Forwarded-For` (Caddy's client address), so per-IP limits count it. */
+  readonly endUserIp: string;
+  /**
+   * Where the pages and assets come from when the browser cannot reach a preview by this name (the custom domain over
+   * https): the preview at this origin (STOREFRONT_URL), with its production headers. Without it, only `/api/*` is
+   * answered here and everything else goes to the network (the sub-domain, which the host-resolver rules map to the
+   * preview).
+   */
+  readonly pagesFrom?: string;
+}
+
+/** The request the journey sends for one browser request of a StorefrontHostRoute. */
+export interface ForwardedRequest {
+  readonly kind: "api" | "page";
+  readonly url: string;
+  readonly headers: Readonly<Record<string, string>>;
+}
+
+/** Request headers never forwarded: the target's own, the body's framing, and compression (answers come plain). */
+const UNFORWARDED_REQUEST_HEADERS: ReadonlySet<string> = new Set([
+  "host",
+  "origin",
+  "connection",
+  "keep-alive",
+  "content-length",
+  "transfer-encoding",
+  "accept-encoding",
+  "x-velexis-edge",
+  "x-velexis-host",
+  "x-forwarded-for",
+]);
+
+/** The headers of a page or asset request that the preview needs: what a browser's request to a file server is. */
+const PAGE_REQUEST_HEADERS: readonly string[] = Object.freeze(["accept", "accept-language", "user-agent"]);
+
+/**
+ * The request the journey sends for the browser's request of `requestUrl` (with `browserHeaders`, as
+ * `request.allHeaders()` gives them) on `route`'s origin:
+ *
+ *   `/api/*`   to the OTA API (`apiUrl`, default OTA_API_URL) without `/api`, with the browser's headers (its cookies,
+ *              the SDK's `X-CSRF-Token` and `Idempotency-Key`) and the edge headers Caddy adds in front of the origin's
+ *              host: `X-Velexis-Edge` (`edgeSecret`), `X-Velexis-Host`, `Origin: https://<host>`, `X-Forwarded-For`;
+ *   else       with `pagesFrom`, the same path and query on the preview, with the headers a file server reads.
+ *
+ * Throws for an address on another origin, or for a page request of a route without `pagesFrom`. The secret is never
+ * part of an error.
+ */
+export function forwardedRequestOf(
+  requestUrl: string,
+  browserHeaders: Readonly<Record<string, string>>,
+  route: StorefrontHostRoute,
+  edgeSecret: string,
+  apiUrl: string = OTA_API_URL,
+): ForwardedRequest {
+  const origin = new URL(route.origin);
+  const url = new URL(requestUrl);
+  if (url.origin !== origin.origin) {
+    throw new TypeError(`${url.origin}${url.pathname} is not on ${origin.origin}`);
+  }
+  const names = Object.keys(browserHeaders);
+  if (url.pathname.startsWith("/api/")) {
+    const headers: Record<string, string> = {};
+    for (const name of names) {
+      const lower = name.toLowerCase();
+      if (!lower.startsWith(":") && !UNFORWARDED_REQUEST_HEADERS.has(lower)) {
+        headers[lower] = browserHeaders[name] ?? "";
+      }
+    }
+    headers["x-velexis-edge"] = edgeSecret;
+    headers["x-velexis-host"] = origin.hostname;
+    headers["origin"] = `https://${origin.hostname}`;
+    headers["x-forwarded-for"] = route.endUserIp;
+    return { kind: "api", url: `${apiUrl}${url.pathname.slice("/api".length)}${url.search}`, headers };
+  }
+  if (route.pagesFrom === undefined) {
+    throw new TypeError(`${url.origin}${url.pathname} is no /api/ address, and the route serves no pages`);
+  }
+  const headers: Record<string, string> = {};
+  for (const name of names) {
+    if (PAGE_REQUEST_HEADERS.includes(name.toLowerCase())) {
+      headers[name.toLowerCase()] = browserHeaders[name] ?? "";
+    }
+  }
+  return { kind: "page", url: `${route.pagesFrom}${url.pathname}${url.search}`, headers };
+}
+
+/** Response headers that never go back to the page: hop-by-hop ones and those of the body as it was sent. */
+const UNRETURNED_RESPONSE_HEADERS: ReadonlySet<string> = new Set([
+  "connection",
+  "keep-alive",
+  "transfer-encoding",
+  "content-length",
+  "content-encoding",
+]);
+
+/**
+ * The headers of an answer as the page gets them: without the hop-by-hop and body-framing headers, and for an `api`
+ * answer without the `Cross-Origin-Opener-Policy` that the API's helmet adds and Caddy's storefront routes drop
+ * (OADR-0017 point 3: only the airline-card page sends COOP on the storefront origin). Several `Set-Cookie` values are
+ * joined by newlines, which Playwright's `route.fulfill` sends as separate headers.
+ */
+export function returnedHeadersOf(
+  kind: ForwardedRequest["kind"],
+  headers: IncomingHttpHeaders,
+): Record<string, string> {
+  const returned: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    const lower = name.toLowerCase();
+    if (
+      value === undefined ||
+      UNRETURNED_RESPONSE_HEADERS.has(lower) ||
+      (kind === "api" && PREVIEW_DROPPED_HEADERS.includes(lower))
+    ) {
+      continue;
+    }
+    returned[lower] = Array.isArray(value) ? value.join(lower === "set-cookie" ? "\n" : ", ") : value;
+  }
+  return returned;
+}
+
+/** An answer of the OTA API or the preview to a forwarded request. */
+export interface ForwardedAnswer {
+  readonly status: number;
+  readonly headers: IncomingHttpHeaders;
+  readonly body: Buffer;
+}
+
+/** Sends one forwarded request (a fake in the unit tests). */
+export type Forwarder = (
+  request: ForwardedRequest & { readonly method: string; readonly body: Buffer | null },
+) => Promise<ForwardedAnswer>;
+
+/**
+ * Sends a forwarded request with `node:http` on a connection of its own (no agent, so no kept-alive socket the API
+ * closed as idle just when it was reused, which answers with a reset a browser behind Caddy never sees), within the
+ * 90 s an airline's answer at completion may take.
+ */
+export const forwardOverHttp: Forwarder = (request) =>
+  new Promise((resolveAnswer, reject) => {
+    const outgoing = httpRequest(
+      request.url,
+      { method: request.method, headers: request.headers, agent: false, timeout: 90_000 },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () =>
+          resolveAnswer({
+            status: response.statusCode ?? 502,
+            headers: response.headers,
+            body: Buffer.concat(chunks),
+          }),
+        );
+        response.on("error", reject);
+      },
+    );
+    outgoing.on("timeout", () =>
+      outgoing.destroy(new Error(`no answer from ${new URL(request.url).origin}`)),
+    );
+    outgoing.on("error", reject);
+    outgoing.end(request.body ?? undefined);
+  });
+
+/** What `serveStorefrontHost` needs besides the context and the route; the defaults are the stack's. */
+export interface ServeStorefrontHostOptions {
+  /** VELEXIS_EDGE_SECRET (default: the development value of ota/backend/.env.example that the stack's API gets). */
+  readonly edgeSecret?: string;
+  /** The OTA API (default OTA_API_URL). */
+  readonly apiUrl?: string;
+  readonly forward?: Forwarder;
+}
+
+/**
+ * Answers `route.origin` in `context` as Caddy answers the OTA's host on the VM: its pages' `/api/*` requests from the
+ * OTA API as the storefront edge of that host, and with `route.pagesFrom` its pages and assets from the preview
+ * (`forwardedRequestOf`), each answer handed back as it came (`returnedHeadersOf`), the API's cookies included. For a
+ * journey's own OTA only, whose hosts no preview's proxy names.
+ */
+export async function serveStorefrontHost(
+  context: RoutedContext,
+  route: StorefrontHostRoute,
+  options: ServeStorefrontHostOptions = {},
+): Promise<void> {
+  const secret = options.edgeSecret ?? stackEdgeSecret();
+  const forward = options.forward ?? forwardOverHttp;
+  const origin = new URL(route.origin).origin;
+  const pattern = route.pagesFrom === undefined ? `${origin}/api/**` : `${origin}/**`;
+  await context.route(pattern, async (intercepted) => {
+    const request = intercepted.request();
+    const target = forwardedRequestOf(
+      request.url(),
+      await request.allHeaders(),
+      route,
+      secret,
+      options.apiUrl ?? OTA_API_URL,
+    );
+    let answer: ForwardedAnswer;
+    try {
+      answer = await forward({
+        ...target,
+        method: request.method(),
+        body: target.kind === "api" ? request.postDataBuffer() : null,
+      });
+    } catch {
+      // The OTA API or the preview is gone (the stack stopping): the request fails as a refused connection would.
+      await intercepted.abort("connectionrefused");
+      return;
+    }
+    await intercepted.fulfill({
+      status: answer.status,
+      headers: returnedHeadersOf(target.kind, answer.headers),
+      body: answer.body,
+    });
+  });
+}
+
+/** A storefront search of the journey's OTA as the OTA recorded it, and the Amadeus calls it made. */
+export interface RecordedSearch {
+  /** `flight_searches.environment`: the Amadeus environment the search ran in. */
+  readonly environment: string;
+  readonly supplierRequests: readonly {
+    readonly environment: string;
+    readonly amadeusApi: string;
+    readonly officeId: string | null;
+    readonly outcome: string;
+  }[];
+}
+
+/**
+ * The search `searchId` of the OTA of `schema` and its `supplier_requests` (`tenantTx` as velexis_ota_app), oldest
+ * first; throws when the search is not there.
+ */
+export async function recordedSearchOf(schema: string, searchId: string): Promise<RecordedSearch> {
+  return await withTenantTx(schema, async (trx) => {
+    const search = await trx
+      .selectFrom("flight_searches")
+      .select("environment")
+      .where("id", "=", searchId)
+      .executeTakeFirst();
+    if (search === undefined) {
+      throw new Error(`the OTA of ${schema} has no search ${searchId}`);
+    }
+    const requests = await trx
+      .selectFrom("supplier_requests")
+      .select(["environment", "amadeus_api", "office_id", "outcome"])
+      .where("search_id", "=", searchId)
+      .orderBy("created_at")
+      .orderBy("id")
+      .execute();
+    return {
+      environment: search.environment,
+      supplierRequests: requests.map((row) => ({
+        environment: row.environment,
+        amadeusApi: row.amadeus_api,
+        officeId: row.office_id,
+        outcome: row.outcome,
+      })),
+    };
+  });
 }

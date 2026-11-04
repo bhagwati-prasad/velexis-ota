@@ -7,6 +7,7 @@ import { loadConfigFromFile, preview } from "vite";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { STOREFRONT_HEADERS } from "../scripts/vite-plugins.js";
+import { previewAllowedHosts } from "../vite.config.js";
 import {
   NAVIGATION,
   REPO_ROOT,
@@ -173,6 +174,7 @@ describe("the production build and its preview", () => {
     vi.stubEnv("OTA_API_URL", "http://127.0.0.1:9");
     vi.stubEnv("VELEXIS_EDGE_SECRET", EDGE_SECRET);
     vi.stubEnv("STOREFRONT_DEV_HOST", "demo.ota.example.com");
+    vi.stubEnv("STOREFRONT_BASE_DOMAIN", "ota.example.com");
     dist = scratchDir("build");
     await buildStorefront(dist);
     server = await preview({
@@ -266,5 +268,44 @@ describe("the production build and its preview", () => {
     expect(missing.status).toBe(404);
     expect(missing.headers["content-security-policy"]).toBe(csp);
     expect(missing.body).toContain("Page not found");
+  });
+
+  it("[OFE-022 AC1] vite preview answers a storefront sub-domain by name and refuses any other host name", async () => {
+    const url = baseUrl(/** @type {import("vite").PreviewServer} */ (server));
+    const port = new URL(url).port;
+
+    // The name the live-mode journey maps to the preview with Chromium's host-resolver rules (OFE-022).
+    const subdomain = await httpRequest(`${url}/account/sign-in.html`, {
+      headers: { ...NAVIGATION, host: `alpha1a2b3c.ota.example.com:${port}` },
+    });
+    expect(subdomain.status).toBe(200);
+    expect(subdomain.body).toContain("<h1");
+
+    for (const host of [`travel.alpha.example:${port}`, `ota.example.com.evil.example:${port}`]) {
+      const refused = await httpRequest(`${url}/`, { headers: { ...NAVIGATION, host } });
+      expect(refused.status, host).toBe(403);
+      expect(refused.body, host).toContain("Blocked request");
+    }
+  });
+});
+
+describe("the host names vite preview answers", () => {
+  it("[OFE-022 AC1] are the sub-domains of a valid STOREFRONT_BASE_DOMAIN only, and never every host", () => {
+    expect(previewAllowedHosts({ STOREFRONT_BASE_DOMAIN: "ota.example.com" })).toEqual([".ota.example.com"]);
+    expect(previewAllowedHosts({ STOREFRONT_BASE_DOMAIN: " OTA.Example.com " })).toEqual([
+      ".ota.example.com",
+    ]);
+    for (const base of [
+      undefined,
+      "",
+      "localhost",
+      "ota.example.com:4173",
+      "*.example.com",
+      "https://x.example",
+    ]) {
+      expect(previewAllowedHosts({ STOREFRONT_BASE_DOMAIN: base }), String(base)).toEqual([]);
+    }
+    expect(buildConfig?.preview?.allowedHosts).not.toBe(true);
+    expect(Array.isArray(buildConfig?.preview?.allowedHosts)).toBe(true);
   });
 });

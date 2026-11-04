@@ -2548,7 +2548,8 @@ The platform turns on own Stripe, own Amadeus credentials, custom domains and go
   - Unit tests cover live versus test rendering and the redirect rule (only auth pages, only to the configured primary host, path and query kept).
 - **Verify:** `pnpm --filter @velexis/ota-frontend test && pnpm --filter @velexis/ota-frontend build`
 
-### OFE-022 · Write the live-mode and custom-domain storefront journey
+### OFE-022 · Write the live-mode and custom-domain storefront journey ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M5
 - **Depends on:** OFE-021, OBE-083, OFE-019

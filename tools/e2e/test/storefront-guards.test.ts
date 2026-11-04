@@ -14,6 +14,7 @@ import {
   isThirdPartyRequest,
   STRIPE_JS_COOKIES,
   StorefrontGuards,
+  storefrontOrigins,
   unexpectedCookieNames,
   withoutQuery,
   type GuardedContext,
@@ -180,6 +181,7 @@ describe("GUARD_INIT_SCRIPT", () => {
 
 /** A fake browser context: the binding, the init script and the request listener the guards install. */
 function fakeContext(cookies: { name: string; httpOnly: boolean }[] = []) {
+  const asked: string[][] = [];
   const installed: {
     binding?: (source: unknown, report: unknown) => void;
     bindingName?: string;
@@ -194,14 +196,17 @@ function fakeContext(cookies: { name: string; httpOnly: boolean }[] = []) {
     addInitScript: async (script: { content: string }) => {
       installed.script = script.content;
     },
-    cookies: async () => cookies.map((cookie) => ({ ...cookie, value: "x", domain: "127.0.0.1", path: "/" })),
+    cookies: async (urls: string[]) => {
+      asked.push(urls);
+      return cookies.map((cookie) => ({ ...cookie, value: "x", domain: "127.0.0.1", path: "/" }));
+    },
     on: (event: string, listener: (request: Request) => void) => {
       if (event === "request") {
         installed.onRequest = listener;
       }
     },
   } as unknown as GuardedContext;
-  return { context, installed };
+  return { context, installed, asked };
 }
 
 /** A fake request from the top-level page at `pageUrl`. */
@@ -343,5 +348,62 @@ describe("StorefrontGuards", () => {
     await expect((await StorefrontGuards.install(readable.context)).finish(closedPage)).rejects.toThrow(
       /cookie readable by JavaScript other than __Host-vx_csrf: __Host-vx_rt on context/,
     );
+  });
+});
+
+describe("the origins of a journey's own OTA (OFE-022)", () => {
+  const SUB = "http://live0a1b2c3d4e.ota.example.com:4173";
+  const CUSTOM = "https://book.live0a1b2c3d4e-travel.example";
+
+  it("[OFE-022 AC1] counts a journey's own hosts as the storefront's only when it names them", () => {
+    expect(isThirdPartyRequest(`${CUSTOM}/api/v1/storefront`, `${CUSTOM}/`)).toBe(true);
+    expect(isThirdPartyRequest(`${CUSTOM}/api/v1/storefront`, `${CUSTOM}/`, [SUB, CUSTOM])).toBe(false);
+    expect(isThirdPartyRequest(`${SUB}/assets/index.js`, `${SUB}/`, [SUB, CUSTOM])).toBe(false);
+    // Another port or scheme of the same host is another origin.
+    expect(isThirdPartyRequest("http://book.live0a1b2c3d4e-travel.example/", `${CUSTOM}/`, [CUSTOM])).toBe(
+      true,
+    );
+    expect(isThirdPartyRequest("https://tracker.example/pixel", `${CUSTOM}/`, [SUB, CUSTOM])).toBe(true);
+    // Stripe on the card page of an own host too, and only there.
+    expect(isCardPage(`${CUSTOM}/checkout/pay-card.html`, [CUSTOM])).toBe(true);
+    expect(
+      isThirdPartyRequest("https://js.stripe.com/v3/", `${CUSTOM}/checkout/pay-card.html`, [CUSTOM]),
+    ).toBe(false);
+    expect(isThirdPartyRequest("https://js.stripe.com/v3/", `${CUSTOM}/checkout.html`, [CUSTOM])).toBe(true);
+  });
+
+  it("[OFE-022 AC1] takes origins only, each once, and refuses an address with a path or another scheme", () => {
+    expect(storefrontOrigins([SUB, CUSTOM, SUB])).toEqual([SUB, CUSTOM]);
+    for (const value of [`${CUSTOM}/`, `${CUSTOM}/p/terms`, "ftp://files.example", "book.example", ""]) {
+      expect(() => storefrontOrigins([value]), value).toThrow(TypeError);
+    }
+  });
+
+  it("[OFE-022 AC1] watches the documents, requests and cookies of the named origins as the previews'", async () => {
+    const { context, installed, asked } = fakeContext([{ name: CSRF_COOKIE, httpOnly: false }]);
+    const guards = await StorefrontGuards.install(context, { origins: [SUB, CUSTOM] });
+    expect(guards.origins).toEqual([
+      STOREFRONT_URL,
+      SUSPENDED_STOREFRONT_URL,
+      ADMIN_SUSPENSION_STOREFRONT_URL,
+      SUB,
+      CUSTOM,
+    ]);
+    installed.onRequest?.(fakeRequest(`${CUSTOM}/api/v1/flight-searches`, `${CUSTOM}/search.html`));
+    installed.onRequest?.(fakeRequest(`${SUB}/api/v1/storefront`, `${SUB}/account/sign-in.html`));
+    installed.binding?.({}, { kind: "cookies", names: [CSRF_COOKIE], document: `${CUSTOM}/account/` });
+    await guards.finish(closedPage);
+    expect(asked.at(-1)).toEqual(guards.origins);
+
+    // A readable cookie other than the CSRF token on an own host's document fails the test like a preview's.
+    installed.binding?.(
+      {},
+      { kind: "cookies", names: [CSRF_COOKIE, "vx_session"], document: `${CUSTOM}/account/` },
+    );
+    installed.onRequest?.(fakeRequest("https://tracker.example/pixel", `${SUB}/`));
+    expect(guards.forget()).toEqual([
+      { kind: "cookie", names: ["vx_session"], document: `${CUSTOM}/account/` },
+      { kind: "third-party", url: "https://tracker.example/pixel", page: `${SUB}/` },
+    ]);
   });
 });

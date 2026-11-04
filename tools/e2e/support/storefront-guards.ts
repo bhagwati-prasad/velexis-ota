@@ -14,8 +14,9 @@
 //   1. any `securitypolicyviolation` in any frame: the build has no inline script or style, and the preview sends the
 //      Caddyfile's CSP, so a violation is a bug (a listener added to every document before its own scripts run);
 //   2. any request to a host other than the storefront's own (STOREFRONT_URL, SUSPENDED_STOREFRONT_URL,
-//      ADMIN_SUSPENSION_STOREFRONT_URL): Stripe's hosts are allowed on `/checkout/pay-card.html` only (the page and the
-//      frames inside it), and nothing else anywhere;
+//      ADMIN_SUSPENSION_STOREFRONT_URL, and the hosts of a journey's own OTA that it names with
+//      `install(context, { origins })`, OFE-022): Stripe's hosts are allowed on `/checkout/pay-card.html` only (the page
+//      and the frames inside it), and nothing else anywhere;
 //   3. a cookie that page JavaScript can read other than `__Host-vx_csrf`: the names of `document.cookie` of every
 //      storefront document, when it has loaded and when it is left, and every cookie of the context that is not
 //      httpOnly at the end. Values never leave the page: the CSRF token is no credential, but it stays out of reports.
@@ -107,9 +108,14 @@ export function withoutQuery(url: string): string {
 /**
  * Whether a request to `requestUrl`, made by the top-level page at `pageUrl`, goes to a third-party host the storefront
  * must never contact. Only `http:` and `https:` requests count (`data:` and `blob:` are local); the storefront's own
- * origins are always allowed, and Stripe's hosts on the card payment page only.
+ * origins (FIRST_PARTY_ORIGINS and `extraOrigins`, a journey's own OTA's hosts) are always allowed, and Stripe's hosts
+ * on the card payment page only.
  */
-export function isThirdPartyRequest(requestUrl: string, pageUrl: string): boolean {
+export function isThirdPartyRequest(
+  requestUrl: string,
+  pageUrl: string,
+  extraOrigins: readonly string[] = [],
+): boolean {
   let request: URL;
   try {
     request = new URL(requestUrl);
@@ -119,23 +125,46 @@ export function isThirdPartyRequest(requestUrl: string, pageUrl: string): boolea
   if (request.protocol !== "http:" && request.protocol !== "https:") {
     return false;
   }
-  if (FIRST_PARTY_ORIGINS.includes(request.origin)) {
+  if (FIRST_PARTY_ORIGINS.includes(request.origin) || extraOrigins.includes(request.origin)) {
     return false;
   }
   if (request.protocol === "https:" && STRIPE_HOST.test(request.hostname)) {
-    return !isCardPage(pageUrl);
+    return !isCardPage(pageUrl, extraOrigins);
   }
   return true;
 }
 
-/** Whether `pageUrl` is the card payment page of the storefront. */
-export function isCardPage(pageUrl: string): boolean {
+/** Whether `pageUrl` is the card payment page of the storefront (on one of its origins, `extraOrigins` included). */
+export function isCardPage(pageUrl: string, extraOrigins: readonly string[] = []): boolean {
   try {
     const page = new URL(pageUrl);
-    return FIRST_PARTY_ORIGINS.includes(page.origin) && CARD_PAGE_PATHS.includes(page.pathname);
+    return (
+      (FIRST_PARTY_ORIGINS.includes(page.origin) || extraOrigins.includes(page.origin)) &&
+      CARD_PAGE_PATHS.includes(page.pathname)
+    );
   } catch {
     return false;
   }
+}
+
+/**
+ * The origins `extra` names, each checked (an `http:` or `https:` origin of its own, no path) and once: the hosts of a
+ * journey's own OTA that its guards count among the storefront's own (`install(context, { origins })`).
+ */
+export function storefrontOrigins(extra: readonly string[]): string[] {
+  const origins = extra.map((value) => {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      throw new TypeError(`not an origin: ${value}`);
+    }
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.origin !== value) {
+      throw new TypeError(`not an origin: ${value}`);
+    }
+    return url.origin;
+  });
+  return [...new Set(origins)];
 }
 
 /**
@@ -224,6 +253,13 @@ export interface StorefrontGuardOptions {
    * are allowed from that page on. Every other journey leaves it out, and allows only CSRF_COOKIE.
    */
   readonly stripeJourney?: boolean | undefined;
+  /**
+   * The origins of a journey's own OTA that its pages are shown on, besides the previews' (FIRST_PARTY_ORIGINS): its
+   * storefront sub-domain mapped to a preview and its custom domain (OFE-022, `http://<key>.ota.example.com:4173`,
+   * `https://<custom domain>`). Requests to them are the storefront's own, and their documents and cookies are checked
+   * as the previews' are. Each must be an origin (`storefrontOrigins`).
+   */
+  readonly origins?: readonly string[] | undefined;
 }
 
 /** The guards of one test's browser context. */
@@ -231,11 +267,25 @@ export class StorefrontGuards {
   readonly #problems: GuardProblem[] = [];
   /** The context showed the card payment page (a document or a request of it): the Stripe.js cookies may follow. */
   #cardPageSeen = false;
+  /** The origins of a journey's own OTA (`options.origins`), checked. */
+  readonly #extraOrigins: readonly string[];
 
   private constructor(
     private readonly context: GuardedContext,
     private readonly options: StorefrontGuardOptions,
-  ) {}
+  ) {
+    this.#extraOrigins = storefrontOrigins(options.origins ?? []);
+  }
+
+  /** Every origin of the storefront these guards watch: the previews' and the journey's own OTA's. */
+  get origins(): readonly string[] {
+    return [...FIRST_PARTY_ORIGINS, ...this.#extraOrigins];
+  }
+
+  /** Whether `url` is an address on one of `origins`. */
+  #onStorefront(url: string): boolean {
+    return this.origins.some((origin) => url.startsWith(`${origin}/`));
+  }
 
   /** Installs the guards on `context` (before its first navigation) and returns them. */
   static async install(
@@ -281,9 +331,7 @@ export class StorefrontGuards {
 
   /** The cookie guard at the end: every cookie of the storefront's origins that is not httpOnly. */
   async checkContextCookies(): Promise<void> {
-    const readable = (await this.context.cookies([...FIRST_PARTY_ORIGINS])).filter(
-      (cookie) => !cookie.httpOnly,
-    );
+    const readable = (await this.context.cookies([...this.origins])).filter((cookie) => !cookie.httpOnly);
     const names = unexpectedCookieNames(
       readable.map((cookie) => cookie.name),
       this.allowedCookies,
@@ -316,12 +364,12 @@ export class StorefrontGuards {
         sample: data.sample,
       });
     } else if (data.kind === "cookies") {
-      if (isCardPage(data.document)) {
+      if (isCardPage(data.document, this.#extraOrigins)) {
         this.#cardPageSeen = true;
       }
       const names = unexpectedCookieNames(data.names, this.allowedCookies);
       // Only the storefront's own documents: a cross-origin page (an error page of a refused navigation) has its own.
-      if (names.length > 0 && FIRST_PARTY_ORIGINS.some((origin) => data.document.startsWith(`${origin}/`))) {
+      if (names.length > 0 && this.#onStorefront(data.document)) {
         this.#add({ kind: "cookie", names, document: withoutQuery(data.document) });
       }
     }
@@ -335,10 +383,10 @@ export class StorefrontGuards {
     } catch {
       // A request without a frame (a service worker's): the storefront allows none (`worker-src 'none'`).
     }
-    if (isCardPage(pageUrl)) {
+    if (isCardPage(pageUrl, this.#extraOrigins)) {
       this.#cardPageSeen = true;
     }
-    if (isThirdPartyRequest(request.url(), pageUrl)) {
+    if (isThirdPartyRequest(request.url(), pageUrl, this.#extraOrigins)) {
       this.#add({
         kind: "third-party",
         url: withoutQuery(request.url()),
@@ -353,7 +401,7 @@ export class StorefrontGuards {
    */
   async finish(page: Page): Promise<void> {
     await this.checkContextCookies();
-    if (!page.isClosed() && FIRST_PARTY_ORIGINS.some((origin) => page.url().startsWith(`${origin}/`))) {
+    if (!page.isClosed() && this.#onStorefront(page.url())) {
       await this.checkA11y(page);
     }
     this.verify();
