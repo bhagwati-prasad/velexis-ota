@@ -7,7 +7,7 @@
 // list with the task that adds their work (M3: notifications.sweep with OBE-030, payments.authorisation_watch with
 // OBE-040, ticketing.scan with OBE-044, bookings.reconcile_scan with OBE-043, bookings.sync_scan with OBE-045,
 // refunds.sweep with FIX-W27-FOLLOWUPS, checkouts.expire and retention.daily with OBE-056; M4: queues.poll with
-// OBE-065).
+// OBE-065; M6: customers.erase with OBE-087).
 //
 // Target tenants (OADR-0014 point 4): a schedule names the statuses it runs for, `active` and possibly `suspended`
 // (suspended tenants keep their obligations to paid travellers, but nothing that starts new supplier activity runs for
@@ -47,7 +47,7 @@ export interface ScheduleDefinition {
   /** A cron pattern (minute hour day-of-month month day-of-week), evaluated in UTC. */
   readonly pattern: string;
   /** The milestone that adds the schedule's work. */
-  readonly milestone: "M2" | "M3" | "M4";
+  readonly milestone: "M2" | "M3" | "M4" | "M6";
   /** The statuses of the tenants it runs for (the per-task filter): `active`, and `suspended` where it applies. */
   readonly statuses: readonly FanOutStatus[];
   /** What it does, as architecture §6 says. */
@@ -176,6 +176,16 @@ export const OTA_SCHEDULES: readonly ScheduleDefinition[] = Object.freeze([
     statuses: ["active"],
     description:
       "Read each monitored queue of the tenant's active Amadeus connections (platform.supplier_connections.monitored_queues, test and live) with Queue List and store one queue_snapshots row per queue, 5 queues per job (console/queue-poller.processor.ts)",
+  }),
+  schedule({
+    id: "customers.erase",
+    pattern: "50 3 * * *",
+    milestone: "M6",
+    // The erasure is owed to the deleted customers and touches the tenant's own tables only: it starts no supplier
+    // activity, so a suspended OTA's deleted customers are erased too (OADR-0014 point 4).
+    statuses: ["active", "suspended"],
+    description:
+      "Erase the customers deleted (account.delete) 30 days ago or more, 100 per job, oldest deletion first, each in a transaction of its own: their checkouts, bookings and payments are detached (customer_id NULL, amounts and references kept), their saved travellers, preferences, data exports, sessions, reset tokens, consents and identities are deleted, and so is the customer row (db README §7; account/erasure.service.ts)",
   }),
 ]);
 

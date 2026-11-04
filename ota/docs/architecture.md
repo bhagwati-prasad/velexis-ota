@@ -25,7 +25,7 @@ The contexts follow [`conventions.md` §2](../../docs/mvp/conventions.md#2-nestj
 | `common` | Guards, interceptors (OpenAPI validation, idempotency), error filter, cookie writer, Redis client, queue producers, `Clock`, id generator | `idempotency_keys` | — | both | M2 |
 | `tenancy` | Resolve caller and tenant (edge, keys, service key), read-only platform repository, Redis caches, `vx:invalidate` subscriber, tenant context, `tenantTx` wrapper ([OADR-0009](adr/0009-caller-and-tenant-resolution.md)) | — | PostgreSQL `platform` (read) | both | M2 |
 | `identity` | Customer sign-up, verification, sign-in, sessions (cookie and bearer), password reset; staff sign-in by portal token, staff sessions in Redis ([OADR-0006](adr/0006-storefront-cookie-sessions-and-csrf.md), [OADR-0011](adr/0011-console-access-staff-sessions-and-environments.md)) | `customers`, `customer_identities`, `customer_sessions`, `customer_password_resets`, `customer_consents` | Redis `ptk:*` | API | M3, M4 |
-| `account` | Customer profile, deletion | `customers`, `customer_sessions` | — | API | M3 |
+| `account` | Customer profile, deletion; the erasure of deleted customers 30 days later (`customers.erase`, run by the worker through `jobs`, OBE-087) | `customers`, `customer_sessions`; the erasure also `customer_*`, `saved_travelers`, `saved_traveler_documents` and the `customer_id` of `checkouts`, `bookings`, `payments` | — | API; erasure: worker | M3, M6 |
 | `storefront` | `storefront.get` (settings + platform data), content pages, public assets | `storefront_settings`, `storefront_pages`, `storefront_assets` | storage | API | M2, M4 |
 | `reference` | Locations, airports, airlines, countries, currencies | `reference.*` (read) | — | API | M2 |
 | `amadeus` | The only Amadeus caller: connection resolver, OAuth tokens, rate limits, timeouts, retries, error mapping, redaction, `supplier_requests` ([OADR-0001](adr/0001-amadeus-client-design.md)) | `supplier_requests` | Amadeus | both | M2 |
@@ -39,7 +39,7 @@ The contexts follow [`conventions.md` §2](../../docs/mvp/conventions.md#2-nestj
 | `console` | Console controllers: bookings, PNR import, queues, customers, supplier log, read-only raw Amadeus, payments; `staff_actions` writer and the audit interceptor (one row per state-changing or refused console call and per successful read of one person's personal data or a supplier record that its handler opts in with `@AuditedRead`; no row for other reads or a `429`, [OADR-0011](adr/0011-console-access-staff-sessions-and-environments.md) point 8; OBE-060, FIX-W25-AUDIT) | `staff_actions`, `queue_snapshots` + the above | via `amadeus`, `payments` | API | M4 |
 | `settings` | Markup and fee rules, storefront settings, pages, asset uploads, templates ([OADR-0012](adr/0012-storefront-settings-assets-and-pages.md)) | `markup_rules`, `fee_rules`, `storefront_settings`, `storefront_pages`, `storefront_assets`, `notification_templates` | storage | API | M4 |
 | `provisioning` | `ota-tenant-ops` consumer: provision, migrate, suspend, resume; seeds; `platform-tenant-events` producer ([OADR-0007](adr/0007-tenant-migration-runner-and-provisioning-worker.md)) | whole schema (DDL as provisioner) | — | worker | M1 |
-| `jobs` | Schedulers and per-tenant fan-out, retention purges, queue poller ([OADR-0014](adr/0014-per-tenant-workers-and-schedulers.md)) | many | — | worker | M2–M4 |
+| `jobs` | Schedulers and per-tenant fan-out, retention purges, queue poller, the customer erasure's handler ([OADR-0014](adr/0014-per-tenant-workers-and-schedulers.md)) | many | — | worker | M2–M4, M6 |
 | `health` | `/health/live`, `/health/ready` | — | PostgreSQL, Redis | both | M0 |
 
 ### 2.2 Dependencies between modules
@@ -76,6 +76,7 @@ flowchart TB
   jobs --> shopping
   jobs --> notifications
   jobs --> console
+  jobs --> account
   provisioning --> tenancy
   amadeus --> tenancy
   payments --> tenancy
@@ -189,6 +190,7 @@ BullMQ prefix `vx`, defaults of [ADR-0009](../../docs/mvp/adr/0009-background-jo
 | `queues.poll` | 15 min | Queue List for each monitored queue (`supplier_connections.monitored_queues`, test and live) of active tenants (paused while suspended), one `queue_snapshots` row per queue, 5 queues per job; a connection that timed out or was unavailable is not read again in the job, its other queues skipped and logged (OBE-065, FIX-W32-OTA, `console/queue-poller.processor.ts`) | M4 |
 | `payments.authorisation_watch` | 06:15 daily | Alert staff about authorised, uncaptured payments older than 5 days | M3 |
 | `retention.daily` | 03:35 daily | `supplier_requests` > 90 d, `queue_snapshots` > 30 d, `idempotency_keys` expired, sessions, reset and booking tokens expired | M3 |
+| `customers.erase` | 03:50 daily | Per tenant (`active` and `suspended`): erase the customers deleted 30 days ago or more, 100 per job, oldest deletion first, one transaction each: their checkouts, bookings and payments detached (`customer_id` NULL, amounts and references kept), their identities, sessions, reset tokens, consents, preferences, data exports and saved travellers deleted with the customer row ([db README §7](../../docs/velexis-sdk/db/README.md), OBE-087, `account/erasure.service.ts`) | M6 |
 
 ## 7. Redis keys
 

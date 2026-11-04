@@ -9,12 +9,16 @@
 // the worker's providers. The checkout expiry (OBE-056) is provided here too (`jobs → checkout`): the checkout module
 // is the API's only. The retention purge (OBE-056) is this module's own work (`retention.processor.ts`,
 // `retention.repository.ts`). The queue poller (OBE-065) is the console's (`jobs → console`): its handler and the
-// `queue_snapshots` repository are provided here, with the worker's Amadeus client (AmadeusWorkerModule). The platform
-// repository, the platform cache, the tenant context and `TenantTx` come from `TenancyModule.forWorker()`, the queues
-// from QueuesModule, Clock from the global CommonModule; the tenant context needs the worker's request-context module
-// (nestjs-cls, worker.module.ts).
+// `queue_snapshots` repository are provided here, with the worker's Amadeus client (AmadeusWorkerModule). The erasure
+// of deleted customers (OBE-087) is the account context's (`jobs → account`): the account module is the API's only,
+// so its handler, service and repository are provided here (account/erasure.processor.ts, erasure.service.ts). The
+// platform repository, the platform cache, the tenant context and `TenantTx` come from `TenancyModule.forWorker()`, the
+// queues from QueuesModule, Clock from the global CommonModule; the tenant context needs the worker's request-context
+// module (nestjs-cls, worker.module.ts).
 import { Module } from "@nestjs/common";
 import { DiscoveryModule } from "@nestjs/core";
+import { CustomerErasureProcessor } from "../account/erasure.processor";
+import { CustomerErasureRepository, CustomerErasureService } from "../account/erasure.service";
 import { AmadeusWorkerModule } from "../amadeus/amadeus.module";
 import { CheckoutExpiryProcessor } from "../checkout/checkout-expiry.processor";
 import { QueuesModule } from "../common/queues/queues.module";
@@ -40,6 +44,9 @@ import { JobSchedulerRegistry } from "./schedulers";
     RetentionProcessor,
     QueueSnapshotsRepository,
     QueuePollerProcessor,
+    CustomerErasureRepository,
+    CustomerErasureService,
+    CustomerErasureProcessor,
   ],
 })
 export class JobsModule {}

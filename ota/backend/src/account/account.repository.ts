@@ -355,7 +355,7 @@ export class AccountRepository {
   /**
    * Records the deletion in `customers` (db README §7, `customers_deleted_ck`): `deleted`, `deleted_at`, the address
    * replaced by the placeholder, no pending address, marketing consent withdrawn (source `account`), `version` + 1.
-   * Names, phone and date of birth stay until the erasure job (OBE-087) anonymises the row.
+   * Names, phone and date of birth stay until the erasure job (`customers.erase`, OBE-087) deletes the row.
    */
   async markDeleted(trx: TenantTransaction, deleted: DeletedCustomer): Promise<void> {
     await trx

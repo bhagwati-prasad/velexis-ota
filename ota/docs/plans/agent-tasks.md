@@ -2632,7 +2632,8 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - Until then, `AIRLINE_CARD_ENABLED` stays `false` in production (the PR shows the current value).
 - **Verify:** `test -f ota/docs/runbooks/airline-card-go-live.md && grep -q AIRLINE_CARD_ENABLED deploy/env/ota-backend.env.example`
 
-### OBE-087 · Add the 30-day customer erasure job
+### OBE-087 · Add the 30-day customer erasure job ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M6
 - **Depends on:** OBE-035, OBE-056

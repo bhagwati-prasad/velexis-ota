@@ -63,6 +63,8 @@ const EXPIRE = "checkouts.expire";
 const RETENTION = "retention.daily";
 /** The queue poller of OBE-065. */
 const POLL = "queues.poll";
+/** The erasure of deleted customers of OBE-087. */
+const ERASE = "customers.erase";
 const ALPHA = "ten_01JALPHA0000000000000000AA";
 const BETA = "ten_01JBETA00000000000000000BB";
 /** The 15-minute iteration of the tests: 2026-01-15T10:15:00Z (FakeClock's day). */
@@ -166,6 +168,7 @@ describe("the schedules", () => {
       EXPIRE,
       RETENTION,
       POLL,
+      ERASE,
     ]);
     expect(purgeSchedule()).toMatchObject({
       pattern: "*/15 * * * *",
@@ -226,6 +229,13 @@ describe("the schedules", () => {
       pattern: "*/15 * * * *",
       milestone: "M4",
       statuses: ["active"],
+    });
+    // OBE-087: the erasure of deleted customers at 03:50 UTC every day, for suspended tenants too: it starts no
+    // supplier activity, and the erasure is owed to the customers (OADR-0014 point 4).
+    expect(scheduleById(ERASE)).toMatchObject({
+      pattern: "50 3 * * *",
+      milestone: "M6",
+      statuses: ["active", "suspended"],
     });
     for (const schedule of OTA_SCHEDULES) {
       // Job ids `<task>:<tenantId>:<bucket>` and `repeat:<id>:<millis>` must keep exactly three parts.
@@ -292,9 +302,14 @@ describe("the schedules", () => {
       { pattern: "*/15 * * * *", tz: SCHEDULE_TIME_ZONE },
       { name: FAN_OUT_JOB, data: { task: POLL } },
     );
+    expect(upsertJobScheduler).toHaveBeenCalledWith(
+      ERASE,
+      { pattern: "50 3 * * *", tz: SCHEDULE_TIME_ZONE },
+      { name: FAN_OUT_JOB, data: { task: ERASE } },
+    );
     expect(removeJobScheduler).toHaveBeenCalledExactlyOnceWith("offers.legacy_sweep");
     expect(result).toEqual({
-      registered: [PURGE, SWEEP, WATCH, TICKETING, RECONCILE, SYNC, REFUNDS, EXPIRE, RETENTION, POLL],
+      registered: [PURGE, SWEEP, WATCH, TICKETING, RECONCILE, SYNC, REFUNDS, EXPIRE, RETENTION, POLL, ERASE],
       removed: ["offers.legacy_sweep"],
     });
   });

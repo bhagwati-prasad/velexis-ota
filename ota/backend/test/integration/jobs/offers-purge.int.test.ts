@@ -44,6 +44,7 @@ import { FAN_OUT_JOB } from "../../../src/jobs/schedulers";
 import { BOOKINGS_SYNC_SCAN_JOB } from "../../../src/bookings/booking-sync.processor";
 import { CHECKOUTS_EXPIRE_JOB } from "../../../src/checkout/checkout-expiry.processor";
 import { RETENTION_JOB } from "../../../src/jobs/retention.processor";
+import { CUSTOMERS_ERASE_JOB } from "../../../src/account/erasure.processor";
 import { RECONCILE_SCAN_JOB } from "../../../src/bookings/reconcile.processor";
 import { TICKETING_SCAN_JOB } from "../../../src/bookings/ticketing.processor";
 import { NOTIFICATIONS_SWEEP_JOB } from "../../../src/notifications/notifications.processor";
@@ -347,8 +348,8 @@ const NONE = { searches: 0, offers: 0, upsells: 0, pricedOffers: 0 };
 /**
  * The scheduler of offers.purge among those registered at start-up (the outbox sweep of OBE-030, the authorisation
  * watch of OBE-040, the ticketing scan of OBE-044, the reconciliation scan of OBE-043, the booking sync scan of
- * OBE-045, the refund sweep of FIX-W27-FOLLOWUPS, the checkout expiry and retention purge of OBE-056, and the queue
- * poller of OBE-065 are the others).
+ * OBE-045, the refund sweep of FIX-W27-FOLLOWUPS, the checkout expiry and retention purge of OBE-056, the queue
+ * poller of OBE-065 and the customer erasure of OBE-087 are the others).
  */
 const purgeScheduler = (): JobSchedulerJson | undefined =>
   registered.find((scheduler) => scheduler.key === OFFERS_PURGE_JOB);
@@ -359,6 +360,7 @@ describe("the schedulers", () => {
       RECONCILE_SCAN_JOB,
       BOOKINGS_SYNC_SCAN_JOB,
       CHECKOUTS_EXPIRE_JOB,
+      CUSTOMERS_ERASE_JOB,
       NOTIFICATIONS_SWEEP_JOB,
       OFFERS_PURGE_JOB,
       AUTHORISATION_WATCH_JOB,
@@ -390,6 +392,7 @@ describe("the schedulers", () => {
           CHECKOUTS_EXPIRE_JOB,
           RETENTION_JOB,
           QUEUES_POLL_JOB,
+          CUSTOMERS_ERASE_JOB,
         ],
         removed: [],
       }),

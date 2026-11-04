@@ -207,6 +207,6 @@ The status machines are those of [db README §2.1](../../docs/velexis-sdk/db/REA
 | `idempotency_keys` | 24 hours | `retention.daily` |
 | Expired customer sessions, reset tokens, booking access tokens | Until expiry + 7 days | `retention.daily` |
 | Bookings, payments, refunds, events, documents, staff actions | Kept (financial and audit records) | Tenant deletion (post-MVP) |
-| Deleted customers | Soft-deleted at once; hard erasure within 30 days (M6 job) | db README §7 |
+| Deleted customers | Soft-deleted at once (account.delete); erased by the first daily run 30 days after the deletion (db README §7): the customer row, its identities, sessions, reset tokens, consents, preferences, data exports and saved travellers deleted, its checkouts, bookings and payments detached (`customer_id` NULL); bookings, payments and refunds keep their amounts, references, travellers and contacts | `customers.erase` daily (OBE-087) |
 
 A `supplier_requests` row that `retention.daily` deletes is unlinked from the booking events (and queue snapshots) that named it: their `supplier_request_id` becomes `NULL` (the baseline's `ON DELETE SET NULL`), and the events stay (accepted as built, lead decision (3) of 2026-10-27).

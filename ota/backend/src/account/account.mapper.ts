@@ -53,7 +53,7 @@ export const RETAINED_BOOKING_RECORDS: readonly RetainedRecord[] = Object.freeze
 export interface AccountDeletionOutcome {
   /** When the deletion was made (the request's time). */
   readonly requestedAt: Date;
-  /** Whether the customer had bookings, which are kept (detached and minimised by the erasure job). */
+  /** Whether the customer had bookings, which are kept (the erasure job detaches them, erasure.service.ts). */
   readonly hasBookings: boolean;
 }
 
