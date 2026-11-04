@@ -25,6 +25,7 @@ Related: [`../README.md`](../README.md) (what the OTA group is), [platform docs]
 | [`api-changes-console-and-internal.md`](api-changes-console-and-internal.md) | Part 2: console settings (markups, fees, storefront settings, pages, assets, templates), console payments (capture, refund, list), public storefront pages and assets, internal endpoints (health, webhooks, files). |
 | [`data-model.md`](data-model.md) | How the backend uses the tenant schema (links to the DDL and ER), every delta of tenant migration `0002` and why it is needed. |
 | [`data-model-migration-0002.md`](data-model-migration-0002.md) | The exact SQL of `ota/backend/migrations/tenant/0002_add_mvp_tenant_deltas.sql`. |
+| [`security-review.md`](security-review.md) | The OTA backend's security review before launch (OBE-084): the authentication matrix of every operation, the rate limits, response headers and redaction coverage, the dependency audit and secret scan, and the findings with their severity, status and tasks. |
 | [`performance.md`](performance.md) | Measured figures of the OTA backend, each run with its date, commit and machine, and the decisions taken from them: the M2 search load test and the Amadeus buckets (OBE-028). |
 
 ## Flows

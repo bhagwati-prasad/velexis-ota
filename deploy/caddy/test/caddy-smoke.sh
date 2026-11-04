@@ -43,6 +43,10 @@
 #   - on api.ota.localhost and api.platform.localhost, /internal/* and /health/ready (and the same variants)
 #     answer 404 without reaching the upstream, /health/live reaches it, and client copies of the edge headers are
 #     removed;
+#   - on api.ota.localhost, api.platform.localhost and the storefront's /api (OBE-084, OADR-0009 rule 1.2), every
+#     proxied request reaches the upstream with exactly Caddy's X-Forwarded-For (the client's address) and
+#     X-Forwarded-Host (the requested host), also when the client sends forged ones, so the OTA admin's service key
+#     can never arrive "direct" through Caddy; a client's X-Velexis-Edge never reaches an upstream;
 #   - request bodies (lead decision (2c) of 2026-10-30, FIX-W34-SHARED): POST /v1/console/settings/assets on
 #     api.ota.localhost passes a body of 1,060,000 bytes whole to the upstream and answers 413 to 1,200,000 (1100KiB);
 #     every other route and method of both API hosts passes 990,000 bytes and answers 413 to 1,060,000 (1MB), and the
@@ -740,6 +744,46 @@ for entry in "${LOG_REQUESTS[@]}"; do
       contains "$(logged "$id" location)" "keep=$KEEP"
   fi
 done
+
+# ---- 6c. what Caddy forwards to the APIs (OBE-084, OADR-0009 rule 1.2) -------------------------------------------
+step "Forwarding headers: X-Forwarded-For and X-Forwarded-Host on every proxied API request; no client edge credential"
+# The OTA API takes the OTA admin's service key only from a direct loopback connection: a request without
+# X-Forwarded-For and X-Forwarded-Host (common/auth/caller.guard.ts), as the platform's InternalOnlyGuard does. That
+# holds only if Caddy sets both on every request it proxies, whatever the client sent, on api.ota.example.com and the
+# storefronts' /api/*: Caddy trusts no proxy (no trusted_proxies), so it replaces a client's X-Forwarded-For and
+# X-Forwarded-Host with its own values instead of appending to them. FORGED_XFF is an address no request of this run
+# comes from.
+FORGED_XFF=192.0.2.77
+forwarded_checks() { # label host -> the last response reached the upstream with Caddy's own forwarding headers
+  same "$1 reaches the upstream with exactly Caddy's X-Forwarded-For (the client's loopback address) [OBE-084 AC1]" \
+    "$(json headers.x-forwarded-for)" '["127.0.0.1"]'
+  same "$1 reaches the upstream with exactly Caddy's X-Forwarded-Host (the requested host) [OBE-084 AC1]" \
+    "$(json headers.x-forwarded-host)" "[\"$2:$HTTPS_PORT\"]"
+}
+# The API hosts: without any client header, with forged ones, and with a client copy of the edge credential.
+for api in "api.$STOREFRONT 4000" "api.$PLATFORM 3100"; do
+  read -r host port <<<"$api"
+  fetch "$host" /v1/forwarded
+  same "$host: /v1/forwarded reaches the upstream on $port [OBE-084 AC1]" "$(json port)" "$port"
+  forwarded_checks "$host (no client forwarding headers)" "$host"
+  fetch "$host" /v1/forwarded -H "X-Forwarded-For: $FORGED_XFF" -H "X-Forwarded-Host: $UNKNOWN" \
+    -H "X-Velexis-Edge: $FORGED_EDGE" -H "X-Velexis-Host: $TENANT"
+  forwarded_checks "$host (a client's forged X-Forwarded-For and X-Forwarded-Host)" "$host"
+  same "$host drops a client-supplied X-Velexis-Edge [OBE-084 AC1]" "$(json headers.x-velexis-edge)" ""
+  same "$host drops a client-supplied X-Velexis-Host [OBE-084 AC1]" "$(json headers.x-velexis-host)" ""
+done
+# The storefront's /api/*: the same forwarding headers, and the edge credential is Caddy's, never the client's.
+fetch "$TENANT" /api/v1/forwarded
+forwarded_checks "$TENANT/api (no client forwarding headers)" "$TENANT"
+fetch "$TENANT" /api/v1/forwarded -H "X-Forwarded-For: $FORGED_XFF" -H "X-Forwarded-Host: $UNKNOWN" \
+  -H "X-Velexis-Edge: $FORGED_EDGE" -H "X-Velexis-Host: $UNKNOWN"
+same "$TENANT/api/v1/forwarded reaches the OTA API as /v1/forwarded [OBE-084 AC1]" \
+  "$(json port) $(json url)" "4000 /v1/forwarded"
+forwarded_checks "$TENANT/api (a client's forged X-Forwarded-For and X-Forwarded-Host)" "$TENANT"
+same "$TENANT/api drops a client-supplied X-Velexis-Edge: the upstream gets the edge secret only [OBE-084 AC1]" \
+  "$(json headers.x-velexis-edge)" "[\"$EDGE_SECRET\"]"
+same "$TENANT/api: X-Velexis-Host is the storefront host, not the client's [OBE-084 AC1]" \
+  "$(json headers.x-velexis-host)" "[\"$TENANT\"]"
 
 # ---- 7. hosts without a certificate ---------------------------------------------------------------------------
 step "On-demand TLS: only hosts the ask endpoint allows get a certificate"

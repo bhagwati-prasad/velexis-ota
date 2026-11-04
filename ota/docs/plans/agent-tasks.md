@@ -2569,6 +2569,7 @@ The platform turns on own Stripe, own Amadeus credentials, custom domains and go
 Security review, the PCI controls of the airline-card flow and the gate for live airline-card payments, the erasure job, performance, runbooks, complete end-to-end suites and the SDK's first npm release. Foundation tasks X-029 … X-032 (monitoring, on-VM checks, restore drill, managed-services proof) run in the same milestone.
 
 ### OBE-084 · Run the OTA backend security review and close the gaps
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: `pnpm audit --prod` still reports 7 high advisories, open in security-review.md as OTA-SR-01 to OTA-SR-03 until OBE-093, OBE-094 and OAD-020 are merged)
 - **Component:** ota-backend
 - **Milestone:** M6
 - **Depends on:** OBE-075, OBE-083, OBE-052
@@ -2584,6 +2585,65 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - The auth matrix, rate-limit, header and redaction tests pass.
   - `security-review.md` lists no open high finding; `pnpm audit --prod` shows no high or critical issue.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-backend test:int m6 && bash deploy/caddy/test/caddy-smoke.sh && pnpm audit --prod`
+
+### OBE-093 · Upgrade nodemailer in the OTA backend past its audit advisories
+- **Component:** ota-backend
+- **Milestone:** M6
+- **Depends on:** OBE-084
+- **Size:** S
+- **Read first:** ota/docs/security-review.md (OTA-SR-01, §5); docs/mvp/tech-stack.md; ota/backend/src/notifications/mailer.gateway.ts; nodemailer's changelog from 6.10 to the pinned release (breaking changes)
+- **Files:** `ota/backend/package.json`, `packages/testing/package.json`, `ota/backend/src/notifications/mailer.gateway.ts`, `ota/backend/src/notifications/mailer.gateway.test.ts`, `docs/mvp/tech-stack.md`, `ota/docs/security-review.md`
+- **Steps:**
+  1. Pin `nodemailer` (and its types, if pinned) in `ota/backend` and `packages/testing` to the latest 10.x release, at least 10.1.4, which closes every advisory `pnpm audit --prod` lists for 6.10.1 (GHSA-rcmh-qjqh-p98v, GHSA-p6gq-j5cr-w38f, GHSA-2x7j-588g-ccc2, GHSA-v53p-9fqp-m79j, GHSA-r7g4-qg5f-qqm2 and the moderate and low ones), checked with `npm view`; adapt `mailer.gateway.ts` to the major releases' changes (transport options, the `parseConnectionUrl` import) without new features.
+  2. Keep the transport unable to read files or URLs (`disableFileAccess`, `disableUrlAccess`) and without `raw` messages, and prove it in `mailer.gateway.test.ts`; the notification tests pass unchanged. The platform backend's copy is PBE-062's finding: `tech-stack.md` lists the version both move to.
+  3. Close OTA-SR-01 in `security-review.md` with the version and the date.
+- **Acceptance:**
+  - `pnpm audit --prod` lists no `nodemailer` advisory reaching `ota/backend`; the notifications unit and integration tests pass.
+- **Verify:** `pnpm --filter @velexis/ota-backend test -- notifications && pnpm --filter @velexis/ota-backend test:int notifications && pnpm audit --prod`
+
+### OBE-094 · Lift multer past its advisory within NestJS 11 and refresh the OTA backend's vulnerable transitive packages
+- **Component:** ota-backend
+- **Milestone:** M6
+- **Depends on:** OBE-084
+- **Size:** S
+- **Read first:** ota/docs/security-review.md (OTA-SR-02, OTA-SR-04, §5); docs/mvp/decisions.md (components 1 and 4: NestJS 11); docs/mvp/tech-stack.md; the root `package.json` (`pnpm.overrides`: the `next>postcss` entry of PFE-001); ota/backend/src/common/http/body-parsers.ts (the API's own multipart parser: multer stays unused)
+- **Files:** `package.json`, `ota/docs/security-review.md` (and the lockfile, which is always allowed)
+- **Steps:**
+  1. Add a root `pnpm.overrides` entry that resolves `multer` below `@nestjs/platform-express` to 2.5.0 (GHSA-q7qp-rjg7-q26m; the last 11.x, 11.2.8, pins 2.4.0, and `@nestjs/platform-express` requires 2.5.0 only from 12), checked with `npm view`, as the `next>postcss` entry does, and keep every `@nestjs/*` package on 11.x: decisions.md names NestJS 11, so a move to NestJS 12 is a question to the owner, never part of this task. The override covers the platform backend's copy too (PBE-062's finding): say so in the PR.
+  2. Refresh the lockfile so that `fast-uri` resolves to 3.1.9 or later inside `ajv`'s range (`^3.0.1`) and `qs` to 6.16.1 or later inside `stripe` 18.5.0's (`^6.11.0`), without further overrides.
+  3. Close OTA-SR-02 and OTA-SR-04 in `security-review.md` with the versions and the date.
+- **Acceptance:**
+  - `pnpm audit --prod` lists no `multer`, `fast-uri` or `qs` advisory reaching `ota/backend`; `pnpm install --frozen-lockfile` passes; lint, typecheck, `test`, `test:int` and `test:xb` of the OTA backend pass, the `test/integration/m6` tests unchanged.
+- **Verify:** `pnpm install --frozen-lockfile && pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int && pnpm --filter @velexis/ota-backend test:xb && pnpm audit --prod`
+
+### OBE-095 · Document the generic refusals of every OTA operation
+- **Component:** ota-backend
+- **Milestone:** M6
+- **Depends on:** OBE-084
+- **Size:** S
+- **Read first:** ota/docs/security-review.md (OTA-SR-05); ota/backend/openapi/README.md §6 (change log); ota/backend/test/integration/m6/auth-matrix.int.test.ts (the answers it finds undocumented)
+- **Files:** `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `packages/api-types/src/generated/ota.ts`, `ota/backend/test/integration/m6/auth-matrix.int.test.ts`, `ota/docs/security-review.md`
+- **Steps:**
+  1. Document, with the shared error responses, the answers the authentication matrix finds outside an operation's documented statuses: `400 VALIDATION_FAILED` for a path value and `400 INVALID_REQUEST` for an edge header beside an API key on the 18 operations it lists, and `401 INVALID_API_KEY` and `403` (`ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`) on the three Stripe webhook receivers; add the change-log row and regenerate the types (`pnpm contracts:generate`).
+  2. Make the matrix check every answer but the pending operations' `501` against the document (`expectResponseToMatch` on every such cell), and close OTA-SR-05.
+- **Acceptance:**
+  - Every answer of the authentication matrix but a pending operation's `501` matches the OTA document.
+- **Verify:** `pnpm contracts:lint && pnpm --filter @velexis/ota-backend exec vitest run --config vitest.int.config.ts test/integration/m6/auth-matrix.int.test.ts`
+
+### OAD-020 · Upgrade zod in the OTA admin past GHSA-mrhx-c7xc-m3w5
+- **Component:** ota-admin
+- **Milestone:** M6
+- **Depends on:** OBE-084
+- **Size:** S
+- **Read first:** ota/docs/security-review.md (OTA-SR-03, §5); docs/mvp/tech-stack.md; the zod 4 migration notes; ota/admin/README.md (server actions)
+- **Files:** `ota/admin/package.json`, `ota/admin/src/app/(console)/`, `docs/mvp/tech-stack.md`, `ota/docs/security-review.md`
+- **Steps:**
+  1. Pin `zod` in `ota/admin` to the latest 4.x release, at least 4.6.6 (GHSA-mrhx-c7xc-m3w5: memory exhaustion while validating oversized constrained collections), checked with `npm view`; migrate the server actions' schemas without changing what a form accepts or the messages it shows (the admin's unit tests pass unchanged).
+  2. Give every list a server action parses an upper bound (`.max(n)` matching the API's own limit), so an oversized form is refused before any per-item validation; one test per bounded list.
+  3. Close OTA-SR-03 in `security-review.md`; the portal's and the platform admin's copies are PBE-062's finding.
+- **Acceptance:**
+  - `pnpm audit --prod` lists no `zod` advisory reaching `ota/admin`; the OTA admin's unit tests pass.
+- **Verify:** `pnpm --filter @velexis/ota-admin test && pnpm audit --prod`
 
 ### OFE-023 · Publish the storefront script inventory for the daily integrity check
 - **Component:** ota-frontend
