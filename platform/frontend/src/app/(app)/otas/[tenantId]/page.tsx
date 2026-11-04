@@ -5,7 +5,6 @@ import Link from "next/link";
 import { OnboardingChecklist } from "@/components/onboarding-checklist";
 import { ConsoleLaunchNotice, OpenConsoleButton, consoleProblemOf } from "@/components/open-console-button";
 import { StatusBadge } from "@/components/status-badge";
-import { TenantBanner } from "@/components/tenant-banner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { platformApi, type ApiResult } from "@/lib/api";
@@ -48,9 +47,9 @@ function SetupNotice({ tenant }: { readonly tenant: Tenant }) {
 }
 
 /**
- * `/otas/[tenantId]` (README §2 Signed in; PF-12): the OTA dashboard for every member. It shows the OTA's name,
- * status and notices (`TenantBanner`: suspended with its reason and, for a billing suspension, the billing link;
- * `billing_notice`; test mode), the storefront link `https://<primaryHost>/`, the OTA's key, the caller's role, and
+ * `/otas/[tenantId]` (README §2 Signed in; PF-12): the OTA dashboard for every member. It shows the OTA's name and
+ * status (its notices, `TenantBanner`, sit above every page of the OTA since PFE-021: `otas/[tenantId]/layout.tsx`),
+ * the storefront link `https://<primaryHost>/`, the OTA's key, the caller's role, and
  * the onboarding checklist of `getOnboarding`, each item linking to its page. The tenant comes from the layout's
  * `getTenant` (the same request's cached answer); "Edit the OTA profile" shows only to roles that may edit it.
  * "Open console" (PFE-017) posts to the launch route handler; when a launch was refused, the handler comes back here
@@ -103,7 +102,6 @@ export default async function OtaDashboardPage({
       {consoleFailure === undefined ? null : (
         <ConsoleLaunchNotice failure={consoleFailure} tenantId={tenant.id} role={role} />
       )}
-      <TenantBanner tenant={tenant} role={role} />
       <SetupNotice tenant={tenant} />
 
       <div className="grid gap-4 md:grid-cols-2">

@@ -1776,7 +1776,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - With the switch off the wizard behaves as in M1.
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
-### PFE-021 · Build the billing page actions and invoices
+### PFE-021 · Build the billing page actions and invoices ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M5
 - **Depends on:** PFE-013, PBE-046

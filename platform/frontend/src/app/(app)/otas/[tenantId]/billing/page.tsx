@@ -1,41 +1,110 @@
+import { randomUUID } from "node:crypto";
+
 import type { components } from "@velexis/api-types/platform";
 import type { Metadata } from "next";
+import { headers } from "next/headers";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
+import {
+  getCheckoutSync,
+  openCustomerPortal,
+  startCheckout,
+} from "@/app/(app)/otas/[tenantId]/billing/actions";
+import {
+  CheckoutConfirmation,
+  ChoosePlanForm,
+  ManageInStripeForm,
+} from "@/app/(app)/otas/[tenantId]/billing/billing-forms";
+import {
+  checkoutReturnOf,
+  isConfirmedSubscription,
+  planChoiceOffered,
+} from "@/app/(app)/otas/[tenantId]/billing/billing-rules";
+import { InvoicesTable } from "@/app/(app)/otas/[tenantId]/billing/invoices-table";
+import type { Plan } from "@/app/(app)/otas/new/plan-picker";
 import { DateTime } from "@/components/date-time";
 import { NotAllowed } from "@/components/not-allowed";
 import { StatusBadge } from "@/components/status-badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { platformApi, type ApiResult } from "@/lib/api";
+import { createPlatformApi, platformApi, type ApiError, type ApiResult } from "@/lib/api";
+import { getConfig } from "@/lib/config";
 import { errorMessage } from "@/lib/errors";
 import { can, otaPath } from "@/lib/roles";
 import { BILLING_STRINGS } from "@/lib/strings";
-import { requireTenant } from "@/lib/tenant";
+import { loadSubscription, requireTenant, type Tenant } from "@/lib/tenant";
 
 export const metadata: Metadata = { title: BILLING_STRINGS.title };
 
-type Subscription = components["schemas"]["Subscription"];
+type Schemas = components["schemas"];
+type Subscription = Schemas["Subscription"];
+type InvoiceList = Schemas["InvoiceList"];
+type Account = Schemas["Account"];
+
+/** The query of the page: Stripe Checkout's way back (`checkout=success` or `checkout=canceled`). */
+type SearchParams = Record<string, string | string[] | undefined>;
 
 /**
- * `getSubscription` (owners and finance members). An ended session goes to sign-in and back to this page, an
- * unverified account to `/verify-pending`. `NOT_FOUND` here means an OTA without a subscription (the layout's
- * `getTenant` of the same request found the membership), and the page says so; other failures are returned for the
- * page to show the portal's message.
+ * Ends the request for an ended session (sign in again and come back to this page) and an unverified account
+ * (`/verify-pending`); any other failure is the page's to show.
  */
-async function loadSubscription(tenantId: string): Promise<ApiResult<Subscription>> {
-  const api = await platformApi();
-  const result = await api.GET("/v1/tenants/{tenantId}/subscription", { params: { path: { tenantId } } });
+function leaveOnSessionEnd(error: ApiError, tenantId: string): void {
+  if (error.code === "UNAUTHENTICATED" || error.code === "TOKEN_EXPIRED") {
+    redirect(`/sign-in?${new URLSearchParams({ next: otaPath(tenantId, "/billing") }).toString()}`);
+  }
+  if (error.code === "EMAIL_NOT_VERIFIED") {
+    redirect("/verify-pending");
+  }
+}
+
+/**
+ * `getSubscription` (owners and finance members), shared with the layout's banner of the same request
+ * (`loadSubscription`). `NOT_FOUND` here means an OTA without a subscription (the layout's `getTenant` of the same
+ * request found the membership), and the page says so; other failures are returned for the page to show.
+ */
+async function loadSubscriptionFor(tenantId: string): Promise<ApiResult<Subscription>> {
+  const result = await loadSubscription(tenantId);
   if (result.error !== undefined) {
-    const { code } = result.error;
-    if (code === "UNAUTHENTICATED" || code === "TOKEN_EXPIRED") {
-      redirect(`/sign-in?${new URLSearchParams({ next: otaPath(tenantId, "/billing") }).toString()}`);
-    }
-    if (code === "EMAIL_NOT_VERIFIED") {
-      redirect("/verify-pending");
-    }
+    leaveOnSessionEnd(result.error, tenantId);
   }
   return result;
+}
+
+/** `getMe`, for the M5 switch `features.stripeBilling`; a failed call leaves the switch off. */
+async function loadAccount(tenantId: string): Promise<ApiResult<Account>> {
+  const api = await platformApi();
+  const result = await api.GET("/v1/me");
+  if (result.error !== undefined) {
+    leaveOnSessionEnd(result.error, tenantId);
+  }
+  return result;
+}
+
+/** `listInvoices` (owners and finance members), newest first. */
+async function loadInvoices(tenantId: string): Promise<ApiResult<InvoiceList>> {
+  const api = await platformApi();
+  const result = await api.GET("/v1/tenants/{tenantId}/invoices", { params: { path: { tenantId } } });
+  if (result.error !== undefined) {
+    leaveOnSessionEnd(result.error, tenantId);
+  }
+  return result;
+}
+
+/**
+ * The plans an owner can choose: the public plans of `listPlans` that Stripe Checkout can start with at least one
+ * billing interval, in the API's order. `listPlans` is public: the call carries no access token, only the end-user
+ * headers of PADR-0019, as on the pricing page. `undefined` when the call failed.
+ */
+async function checkoutPlans(): Promise<Plan[] | undefined> {
+  const settings = getConfig();
+  const api = createPlatformApi({
+    baseUrl: settings.PLATFORM_API_URL,
+    bffKey: settings.PLATFORM_BFF_KEY,
+    requestHeaders: await headers(),
+  });
+  const result = await api.GET("/v1/plans");
+  return result.data?.data.filter((plan) => plan.checkoutAvailable.month || plan.checkoutAvailable.year);
 }
 
 /**
@@ -105,15 +174,83 @@ function details(subscription: Subscription, timeZone: string): Detail[] {
   return rows;
 }
 
+/** A section of the page with its `h2`; `name` is its `data-section`, for tests. */
+function PageSection({
+  id,
+  name,
+  title,
+  children,
+}: {
+  readonly id: string;
+  readonly name: string;
+  readonly title: string;
+  readonly children: ReactNode;
+}) {
+  return (
+    <section
+      aria-labelledby={id}
+      className="grid content-start gap-4 rounded-xl border p-5"
+      data-section={name}
+    >
+      <h2 id={id} className="text-lg font-semibold tracking-tight">
+        {title}
+      </h2>
+      {children}
+    </section>
+  );
+}
+
 /**
- * `/otas/[tenantId]/billing` (README §2 Signed in; flows/subscription-billing.md §G; PF-75): the OTA's subscription
- * for owners and finance members: the plan, the status, how it is paid, the end of the trial and of the current
- * period, and the billing notice. Before M5 every OTA runs on a manual trial (`billing_provider = 'manual'`), and the
- * page says that paid plans arrive soon. The dates are in the OTA's time zone. The tenant comes from the layout's
- * `getTenant` (the same request's cached answer); another role gets the not-allowed page without a call. Choosing a
- * plan, the Stripe Customer Portal and the invoices come with PFE-021.
+ * Back from Stripe with `?checkout=success` once the completed Checkout reached Velexis: the subscription shows below,
+ * and an OTA whose set-up starts again (an abandoned Checkout paid at last, billing flow §H) is followed on its set-up
+ * page.
  */
-export default async function BillingPage({ params }: Readonly<{ params: Promise<{ tenantId: string }> }>) {
+function CheckoutConfirmed({ tenant }: { readonly tenant: Tenant }) {
+  const setupFollows = tenant.status === "provisioning" || tenant.status === "failed";
+  return (
+    <Alert role="status" data-checkout="confirmed">
+      <AlertTitle>{BILLING_STRINGS.checkoutConfirmedTitle}</AlertTitle>
+      <AlertDescription>
+        <p>{BILLING_STRINGS.checkoutConfirmed}</p>
+        {setupFollows ? (
+          <p>
+            {BILLING_STRINGS.checkoutSetup}{" "}
+            <Link href={otaPath(tenant.id, "/setup")} className="font-medium underline underline-offset-4">
+              {BILLING_STRINGS.setupLink}
+            </Link>
+          </p>
+        ) : null}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+/**
+ * `/otas/[tenantId]/billing` (README §2 Signed in; flows/subscription-billing.md §B, §E, §F, §G; PF-72 to PF-75): the
+ * OTA's subscription for owners and finance members: the plan, the status, how it is paid, the end of the trial and
+ * of the current period, the subscription's notice where the OTA's banner (`TenantBanner`, above every page of the OTA)
+ * does not show it already, and from M5 (PFE-021):
+ *
+ * - "Choose a plan" for owners while the subscription allows one (a manual trial, a canceled subscription, an unpaid
+ *   or abandoned Checkout, or none at all) and `features.stripeBilling` is on: the public plans Stripe Checkout can
+ *   start, then Stripe Checkout (`createCheckoutSession`);
+ * - "Manage in Stripe" for owners of a Stripe subscription (`canManageInStripe`): the Stripe Customer Portal
+ *   (`createCustomerPortalSession`, a `303`);
+ * - the invoices (`listInvoices`) for owners and finance members, once Stripe billing is on or the subscription is a
+ *   Stripe one; finance members read the invoices and that an owner acts, and get neither action [PF-72 AC1];
+ * - Stripe's way back: `?checkout=canceled` a neutral notice, `?checkout=success` "Confirming your payment" until the
+ *   completed Checkout's webhook has made the subscription a Stripe one that is `trialing` or `active` (read every 2
+ *   seconds, `CheckoutConfirmation`), then the subscription, with the way to the set-up page for an OTA whose set-up
+ *   starts again (the note of 2026-11-03 in PFE-021's block, lead decision (2i)).
+ *
+ * Before M5 every OTA runs on a manual trial (`billing_provider = 'manual'`), and the page says that paid plans arrive
+ * soon. The dates are in the OTA's time zone. The tenant comes from the layout's `getTenant` (the same request's cached
+ * answer); another role gets the not-allowed page without a call.
+ */
+export default async function BillingPage({
+  params,
+  searchParams,
+}: Readonly<{ params: Promise<{ tenantId: string }>; searchParams?: Promise<SearchParams> }>) {
   const { tenantId } = await params;
   const loaded = await requireTenant(tenantId);
   if (loaded.error !== undefined) {
@@ -124,8 +261,33 @@ export default async function BillingPage({ params }: Readonly<{ params: Promise
   if (!can(tenant.myRole, "viewBilling")) {
     return <NotAllowed tenantId={tenant.id} role={tenant.myRole} />;
   }
-  const result = await loadSubscription(tenant.id);
+  const [result, me, query] = await Promise.all([
+    loadSubscriptionFor(tenant.id),
+    loadAccount(tenant.id),
+    searchParams ?? Promise.resolve<SearchParams>({}),
+  ]);
   const subscription = result.data;
+  const stripeBilling = me.data?.features.stripeBilling === true;
+  const isOwner = can(tenant.myRole, "manageBilling");
+  const checkoutReturn = checkoutReturnOf(query);
+  // Back from Stripe before the webhook: no plan to choose until the Checkout's outcome is known.
+  const confirming =
+    checkoutReturn === "success" && (subscription === undefined || !isConfirmedSubscription(subscription));
+  const planChoice =
+    stripeBilling &&
+    !confirming &&
+    (subscription === undefined ? result.error?.code === "NOT_FOUND" : planChoiceOffered(subscription));
+  const manageInStripe = subscription?.canManageInStripe === true;
+  const showInvoices = stripeBilling || subscription?.billingProvider === "stripe";
+
+  const [invoices, plans] = await Promise.all([
+    showInvoices ? loadInvoices(tenant.id) : Promise.resolve(undefined),
+    isOwner && planChoice ? checkoutPlans() : Promise.resolve(undefined),
+  ]);
+  // The subscription's own notice, unless the OTA's banner above the page shows it already (`past_due`,
+  // `trial_ending`): `canceled`, or a notice the tenant row does not carry (yet).
+  const banner = subscription?.banner ?? null;
+  const ownBanner = banner !== null && banner !== tenant.billingNotice ? banner : null;
 
   return (
     <div className="mx-auto grid max-w-3xl gap-8">
@@ -134,10 +296,22 @@ export default async function BillingPage({ params }: Readonly<{ params: Promise
         <p className="text-muted-foreground">{BILLING_STRINGS.intro}</p>
       </div>
 
+      {checkoutReturn === "canceled" ? (
+        <Alert role="status" data-checkout="canceled">
+          <AlertDescription>{BILLING_STRINGS.checkoutCanceled}</AlertDescription>
+        </Alert>
+      ) : null}
+      {confirming ? <CheckoutConfirmation poll={getCheckoutSync.bind(null, tenant.id)} /> : null}
+      {checkoutReturn === "success" && !confirming ? <CheckoutConfirmed tenant={tenant} /> : null}
+
       {result.error === undefined ? null : result.error.code === "NOT_FOUND" ? (
-        <p className="rounded-lg border px-4 py-3 text-sm" data-notice="no-subscription">
-          {BILLING_STRINGS.none}
-        </p>
+        // While a Checkout is being confirmed, an OTA without a subscription waits for the one its webhook writes:
+        // "contact Velexis support" would contradict the confirmation above.
+        confirming ? null : (
+          <p className="rounded-lg border px-4 py-3 text-sm" data-notice="no-subscription">
+            {BILLING_STRINGS.none}
+          </p>
+        )
       ) : (
         <Alert variant="destructive">
           <AlertTitle>{BILLING_STRINGS.unavailableTitle}</AlertTitle>
@@ -147,7 +321,7 @@ export default async function BillingPage({ params }: Readonly<{ params: Promise
 
       {subscription === undefined ? null : (
         <>
-          {subscription.banner === null ? null : <SubscriptionBanner banner={subscription.banner} />}
+          {ownBanner === null ? null : <SubscriptionBanner banner={ownBanner} />}
           <section
             aria-labelledby="billing-subscription"
             className="grid content-start gap-4 rounded-xl border bg-card p-5 text-card-foreground shadow-xs"
@@ -169,7 +343,7 @@ export default async function BillingPage({ params }: Readonly<{ params: Promise
               </p>
             ) : null}
           </section>
-          {subscription.billingProvider === "manual" ? (
+          {subscription.billingProvider === "manual" && !stripeBilling ? (
             <section
               aria-labelledby="billing-manual-trial"
               className="grid gap-2 rounded-xl border p-5"
@@ -182,6 +356,51 @@ export default async function BillingPage({ params }: Readonly<{ params: Promise
             </section>
           ) : null}
         </>
+      )}
+
+      {isOwner && planChoice ? (
+        <PageSection id="billing-choose-plan" name="choose-plan" title={BILLING_STRINGS.choosePlanTitle}>
+          <p className="text-sm text-muted-foreground">{BILLING_STRINGS.choosePlanIntro}</p>
+          <ChoosePlanForm
+            tenantId={tenant.id}
+            plans={plans ?? []}
+            unavailable={
+              plans === undefined
+                ? BILLING_STRINGS.plansUnavailable
+                : plans.length === 0
+                  ? BILLING_STRINGS.noPlans
+                  : undefined
+            }
+            // One key per rendering of the page: a double click opens one Checkout, a later visit a fresh one.
+            idempotencyKey={randomUUID()}
+            action={startCheckout.bind(null, tenant.id)}
+          />
+        </PageSection>
+      ) : null}
+      {isOwner && manageInStripe ? (
+        <PageSection id="billing-manage" name="manage-in-stripe" title={BILLING_STRINGS.manageTitle}>
+          <p className="text-sm text-muted-foreground">{BILLING_STRINGS.manageIntro}</p>
+          <ManageInStripeForm tenantId={tenant.id} action={openCustomerPortal.bind(null, tenant.id)} />
+        </PageSection>
+      ) : null}
+      {!isOwner && (planChoice || manageInStripe) ? (
+        <p className="rounded-lg border px-4 py-3 text-sm" data-notice="owner-only">
+          {BILLING_STRINGS.ownerOnly}
+        </p>
+      ) : null}
+
+      {invoices === undefined ? null : (
+        <PageSection id="billing-invoices" name="invoices" title={BILLING_STRINGS.invoicesTitle}>
+          <p className="text-sm text-muted-foreground">{BILLING_STRINGS.invoicesIntro}</p>
+          {invoices.error === undefined ? (
+            <InvoicesTable invoices={invoices.data.data} timeZone={tenant.timeZone} />
+          ) : (
+            <Alert variant="destructive">
+              <AlertTitle>{BILLING_STRINGS.invoicesUnavailableTitle}</AlertTitle>
+              <AlertDescription>{errorMessage(invoices.error)}</AlertDescription>
+            </Alert>
+          )}
+        </PageSection>
       )}
     </div>
   );

@@ -117,6 +117,7 @@ const DOMAINS_PATH = `${TENANT_PATH}/domains`;
 const AMADEUS_PATH = `${TENANT_PATH}/amadeus-connections`;
 const PAYMENTS_PATH = `${TENANT_PATH}/payment-connections`;
 const SUBSCRIPTION_PATH = `${TENANT_PATH}/subscription`;
+const INVOICES_PATH = `${TENANT_PATH}/invoices`;
 /** A value the API must never answer and the page never show (a secret's or ciphertext's stand-in). */
 const NEVER_SHOWN = "pfe013-never-shown-value";
 
@@ -339,6 +340,8 @@ function routes(overrides: Record<string, Route> = {}): void {
     [`GET ${AMADEUS_PATH}`]: () => json({ data: [amadeusConnection()] }, 200),
     [`GET ${PAYMENTS_PATH}`]: () => json({ data: [paymentConnection()] }, 200),
     [`GET ${SUBSCRIPTION_PATH}`]: () => json(subscription(), 200),
+    // PFE-021: the invoices of a Stripe subscription (the billing page's own tests are billing/billing.test.tsx).
+    [`GET ${INVOICES_PATH}`]: () => json({ data: [] }, 200),
     ...overrides,
   };
   fetchMock.mockImplementation(async (input) => {
@@ -1108,13 +1111,14 @@ describe("/otas/[tenantId]/billing", () => {
     const manual = screen.getByRole("region", { name: BILLING_STRINGS.manualTrialTitle });
     expect(manual.textContent).toContain("Paid plans arrive soon");
     expect(within(manual).getByText(BILLING_STRINGS.manualTrial)).toBeTruthy();
-    // No banner, no cancellation and no action yet (PFE-021).
+    // Before M5 (`features.stripeBilling` off): no banner, no cancellation, no action and no invoices (PFE-021).
     expect(screen.queryByRole("alert")).toBeNull();
     expect(document.querySelector("[data-notice='cancel-at-period-end']")).toBeNull();
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByRole("link")).toBeNull();
 
-    expect(calledPaths()).toEqual([`GET ${TENANT_PATH}`, `GET ${SUBSCRIPTION_PATH}`]);
+    // getMe reads the M5 switch (PFE-021); listInvoices and listPlans follow only from M5.
+    expect(calledPaths()).toEqual([`GET ${TENANT_PATH}`, `GET ${SUBSCRIPTION_PATH}`, `GET ${ME_PATH}`]);
     expectSessionHeaders(calls("GET", SUBSCRIPTION_PATH)[0]);
   });
 

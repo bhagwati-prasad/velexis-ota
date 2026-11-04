@@ -287,7 +287,8 @@ function AbandonedPanel({ tenantId, canRetry }: { readonly tenantId: string; rea
  *
  * - an OTA that waits for its payment shows "Payment needed" with "Continue to payment" instead of the steps;
  * - back from Stripe (`?checkout=success`) the page follows the progress and says that Stripe's confirmation can take
- *   a minute: the webhook, not the redirect, starts the set-up (PF-71 AC1);
+ *   a minute: the webhook, not the redirect, starts the set-up (PF-71 AC1); an OTA that is not in set-up and has no
+ *   test keys waiting goes on to the billing page, which confirms the payment (PFE-021);
  * - an OTA failed by an abandoned Checkout offers "Retry", which opens a new Checkout;
  * - `?payment=<code>` says why the last payment attempt did not leave for Stripe.
  */
@@ -324,6 +325,18 @@ export default async function SetupPage({
 
   const role = tenant.data.myRole;
   const checkoutReturn = single(query["checkout"]) === "success";
+  if (
+    checkoutReturn &&
+    progress.progress.tenantStatus !== "provisioning" &&
+    !progress.progress.initialKeysAvailable &&
+    can(role, "viewBilling")
+  ) {
+    // Stripe's success URL is this page for every Checkout (billing flow §B step 3), but only an OTA in set-up (or one
+    // whose new test keys wait for their reveal) is followed here. The billing page confirms the payment of the others,
+    // such as an OTA failed by an abandoned Checkout and paid from the billing page (PFE-021, lead decision (2i) of
+    // 2026-11-03), and then leads back here when its set-up starts again.
+    redirect(`${otaPath(tenantId, "/billing")}?checkout=success`);
+  }
   const noticeCode = single(query["payment"]);
   const notice = isPlatformErrorCode(noticeCode) ? (
     <PaymentNotice code={noticeCode} tenantId={tenantId} role={role} />

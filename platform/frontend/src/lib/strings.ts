@@ -182,9 +182,16 @@ export const TENANT_BANNER_STRINGS = Object.freeze({
   suspendedReadOnly: "Settings are read-only while the OTA is suspended.",
   billingLink: "Go to billing",
   pastDueTitle: "A payment failed",
-  pastDue: "Update your payment details to keep your OTA running.",
-  trialEndingTitle: "Your trial ends soon",
-  trialEnding: "Choose a plan to keep your OTA running after the trial.",
+  pastDue: "Update your card to keep your OTA running. Stripe tries the payment again.",
+  /**
+   * `trial_ending` is set 14 days before the trial's end and stays after it until a plan replaces the trial or the OTA
+   * is suspended, so the words hold on both sides of the end (lead decision (2k) of 2026-11-04).
+   */
+  trialEndingTitle: "Your trial is ending",
+  trialEnding: "Choose a plan to keep your OTA running.",
+  /** The days left, only while the trial's end is known (owners and finance members read it) and still ahead. */
+  trialDaysLeft: (days: number) =>
+    days <= 1 ? "The trial ends within a day." : `The trial ends in ${days} days.`,
   testModeTitle: "Test mode",
   testMode:
     "The storefront uses the Amadeus test system and Stripe test mode: bookings and payments are not real.",
@@ -225,6 +232,7 @@ export const STATUS_LABELS = Object.freeze({
     void: "Void",
   },
   payoutAccount: { pending_review: "Pending review", verified: "Verified", rejected: "Rejected" },
+  invoice: { draft: "Draft", open: "Open", paid: "Paid", void: "Void", uncollectible: "Uncollectible" },
 });
 
 // ---- Sign-up and e-mail verification (PFE-005) ---------------------------------------------------------------
@@ -2391,9 +2399,10 @@ export const BILLING_STRINGS = Object.freeze({
       title: "A payment failed",
       text: "Update your payment details to keep your OTA running.",
     }),
+    // The words hold before and after the trial's end (lead decision (2k) of 2026-11-04), as in `TenantBanner`.
     trial_ending: Object.freeze({
-      title: "Your trial ends soon",
-      text: "Choose a plan to keep your OTA running after the trial.",
+      title: "Your trial is ending",
+      text: "Choose a plan to keep your OTA running.",
     }),
     canceled: Object.freeze({
       title: "The subscription is canceled",
@@ -2402,6 +2411,83 @@ export const BILLING_STRINGS = Object.freeze({
   }),
   none: "This OTA has no subscription. Contact Velexis support.",
   unavailableTitle: "The subscription could not be loaded",
+  // From M5 (PFE-021): the way back from Stripe Checkout (flows/subscription-billing.md §B).
+  /** `?checkout=canceled`: Stripe's cancel URL. Nothing changed. */
+  checkoutCanceled:
+    "You left Stripe's payment page without paying, so nothing has changed. Choose a plan again whenever you are ready.",
+  /** `?checkout=success` while the completed Checkout's webhook has not reached Velexis yet. */
+  checkoutConfirming:
+    "Thank you. Stripe is confirming your payment, or the start of your free trial, to Velexis. This can take a minute: this page shows your subscription as soon as the confirmation arrives.",
+  checkoutConfirmingTitle: "Confirming your payment",
+  /** `?checkout=success` once the subscription is a Stripe one that is `trialing` or `active`. */
+  checkoutConfirmed: "Stripe has confirmed your subscription. Its details are below.",
+  checkoutConfirmedTitle: "Payment confirmed",
+  /** After the confirmation, for an OTA whose set-up starts again (an abandoned Checkout paid at last, §H). */
+  checkoutSetup: "Velexis is setting up your OTA now.",
+  setupLink: "Follow the set-up",
+  pollFailed: "Velexis could not be reached just now. The page tries again in a moment.",
+  pollStoppedTitle: "The confirmation could not be followed",
+  // "Choose a plan" (owners): Stripe Checkout for an existing OTA (§B step 2).
+  choosePlanTitle: "Choose a plan",
+  choosePlanIntro:
+    "Choose a paid plan for your OTA. Stripe's secure payment page opens next, and you come back here once you have paid or started the free trial.",
+  trialNote: "A plan's free trial applies to an OTA's first paid subscription only.",
+  continueToPayment: "Continue to payment",
+  openingCheckout: "Opening Stripe…",
+  plansUnavailable: "The plans could not be loaded just now. Reload the page to try again.",
+  noPlans: "No paid plan can be chosen just now. Contact Velexis support.",
+  planRequired: "Choose a plan.",
+  // "Manage in Stripe" (owners of a Stripe subscription): the Stripe Customer Portal (§F).
+  manageTitle: "Manage your subscription",
+  manageIntro:
+    "Change your plan or your card, see Stripe's receipts, or cancel at the end of the period in Stripe's Customer Portal.",
+  manageInStripe: "Manage in Stripe",
+  openingPortal: "Opening Stripe…",
+  /** For finance members, where an owner would have an action. */
+  ownerOnly: "An owner of this OTA chooses the plan and manages the subscription in Stripe.",
+  reload: "Reload the page",
+  /** Why "Continue to payment" did not leave for Stripe. */
+  checkoutFailures: Object.freeze({
+    featureDisabled: "Paid plans cannot be chosen just now. Reload the page to see what is open.",
+    planNotAvailable:
+      "This plan cannot be started with this billing just now. Choose another plan or billing.",
+    subscriptionActive:
+      "This OTA already has a Stripe subscription. Change its plan or its card with “Manage in Stripe”.",
+    conflict: "The subscription changed in the meantime. Reload the page to see where it stands.",
+    formExpired: "The payment form had expired. Reload the page and try again.",
+    forbidden: "Only an owner of this OTA can choose a plan. Reload the page.",
+    notFound: "This OTA or its plan could not be found any more. Reload the page.",
+    unavailable: "Stripe's payment page could not be opened just now. Try again in a moment.",
+  }),
+  /** Why "Manage in Stripe" did not leave for Stripe. */
+  portalFailures: Object.freeze({
+    noCustomer: "This OTA has no Stripe customer yet. Choose a plan first.",
+    featureDisabled: "Stripe's Customer Portal cannot be opened just now. Reload the page.",
+    forbidden: "Only an owner of this OTA can manage the subscription. Reload the page.",
+    notFound: "This OTA could not be found any more. Reload the page.",
+    unavailable: "Stripe's Customer Portal could not be opened just now. Try again in a moment.",
+  }),
+  // The invoices (PF-73 AC2), for owners and finance members.
+  invoicesTitle: "Invoices",
+  invoicesIntro: "Velexis's invoices to your OTA, newest first. Stripe hosts each invoice page and its PDF.",
+  invoicesCaption: "Velexis invoices",
+  invoicesEmpty: "No invoices yet. They appear here once your plan is billed.",
+  invoicesUnavailableTitle: "The invoices could not be loaded",
+  invoiceColumns: Object.freeze({
+    number: "Number",
+    period: "Period",
+    total: "Total",
+    status: "Status",
+    links: "Invoice",
+  }),
+  /** Between the first and the last day of a billed period. */
+  periodTo: " to ",
+  noPeriod: "No period",
+  viewInvoice: "View invoice",
+  downloadPdf: "Download PDF",
+  /** Read after a link's own words: the invoice it belongs to, and that it opens Stripe in a new tab. */
+  linkContext: (number: string) => ` ${number} (opens Stripe in a new tab)`,
+  noLinks: "Not available yet",
 });
 
 // ---- Go live (PFE-026) -----------------------------------------------------------------------------------------

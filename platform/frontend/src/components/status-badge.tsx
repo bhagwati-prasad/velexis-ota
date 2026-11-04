@@ -25,6 +25,8 @@ interface StatusesByKind {
   settlement: "draft" | "approved" | "paid" | "carried_forward" | "void";
   /** The review status of the payout account (PFE-025). */
   payoutAccount: Schemas["PayoutAccountStatus"];
+  /** A Velexis invoice to the OTA (PFE-021). */
+  invoice: Schemas["Invoice"]["status"];
 }
 
 /** What a badge is about: tenant, job, connection, domain, settlement and the other statuses of the portal. */
@@ -69,6 +71,7 @@ const TONES: { readonly [Kind in StatusKind]: Readonly<Record<StatusOf<Kind>, To
     void: "neutral",
   },
   payoutAccount: { pending_review: "warning", verified: "success", rejected: "danger" },
+  invoice: { draft: "neutral", open: "info", paid: "success", void: "neutral", uncollectible: "danger" },
 };
 
 /** Every status of every kind has a label (a new status in the document fails the type check until it has one). */

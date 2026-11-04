@@ -5,8 +5,8 @@ import type { PlatformErrorCode } from "@velexis/errors";
 import { notFound, redirect } from "next/navigation";
 import { cache } from "react";
 
-import { platformApi, type ApiError } from "@/lib/api";
-import { otaPath } from "@/lib/roles";
+import { platformApi, type ApiError, type ApiResult } from "@/lib/api";
+import { can, otaPath } from "@/lib/roles";
 
 /**
  * The OTA of an `/otas/[tenantId]/…` request (README §5): `otas/[tenantId]/layout.tsx` loads it once per request,
@@ -17,6 +17,9 @@ import { otaPath } from "@/lib/roles";
 
 /** An OTA as `getTenant` answers it, with the caller's role in `myRole`. */
 export type Tenant = components["schemas"]["Tenant"];
+
+/** The OTA's subscription as `getSubscription` answers it. */
+export type Subscription = components["schemas"]["Subscription"];
 
 /** An OTA id as the platform issues it (`ten_` + ULID); the `TenantId` pattern of the platform document. */
 const TENANT_ID = /^ten_[0-9A-HJKMNP-TV-Z]{26}$/;
@@ -86,4 +89,28 @@ export async function requireTenant(tenantId: string): Promise<TenantResult> {
     redirect("/verify-pending");
   }
   return result;
+}
+
+/**
+ * `GET /v1/tenants/{tenantId}/subscription` for the request being rendered, at most once per request and id (a React
+ * `cache()`, like `loadTenant`): the layout's `TenantBanner` reads the trial's end from it and the billing page the
+ * whole subscription, with one call between them (PFE-021). Owners and finance members only (`viewBilling`): the
+ * callers check the role first, since the API answers `403` to the other roles. Failures are returned as they are.
+ */
+export const loadSubscription = cache(async (tenantId: string): Promise<ApiResult<Subscription>> => {
+  const api = await platformApi();
+  return api.GET("/v1/tenants/{tenantId}/subscription", { params: { path: { tenantId } } });
+});
+
+/**
+ * The end of the OTA's trial for `TenantBanner`'s days left, when the caller may know it: only while the OTA has the
+ * `trial_ending` notice and for the roles that read the subscription (`viewBilling`); otherwise, or when the
+ * subscription cannot be read, `undefined`, and the notice says no number (lead decision (2k) of 2026-11-04).
+ */
+export async function trialEndForBanner(tenant: Tenant): Promise<string | undefined> {
+  if (tenant.billingNotice !== "trial_ending" || !can(tenant.myRole, "viewBilling")) {
+    return undefined;
+  }
+  const result = await loadSubscription(tenant.id);
+  return result.data?.trialEndsAt ?? undefined;
 }

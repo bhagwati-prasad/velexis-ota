@@ -762,7 +762,8 @@ describe("TenantBanner", () => {
     cleanup();
 
     render(<TenantBanner tenant={{ ...tenant, billingNotice: "trial_ending" }} role="owner" />);
-    expect(screen.getByRole("status").textContent).toContain("Your trial ends soon");
+    // Words that hold before and after the trial's end (lead decision (2k) of 2026-11-04, PFE-021).
+    expect(screen.getByRole("status").textContent).toContain("Your trial is ending");
   });
 });
 
