@@ -1810,6 +1810,8 @@ export interface paths {
          * @description The counters of the admin home page, read-only: OTAs by status, tenant jobs that ended `failed` in the last 24 hours, failed BullMQ jobs per platform queue, and the Velexis Amadeus office pool per environment (the page warns below 3 available offices). Each count links to its filtered list in the admin. The failed job counts come from BullMQ, so, like the queue operations, the dashboard answers `503 SERVICE_UNAVAILABLE` while Redis is unreachable.
          *
          *     The M5 counters are always present and `null` while their milestone switch is off: `domainsPending` (pending custom domains, `custom_domains`), `settlementsToReview` (draft settlements, `settlements`), `stripeEventsFailed` (failed Stripe events, `stripe_billing` or `own_stripe`) and `subscriptionsPastDue` (`stripe_billing`).
+         *
+         *     **Live office requests** (2026-11-04, lead decision (2n), FIX-W41-PLATFORM): `liveOfficeRequests` lists the OTAs whose owner requested live access on the Velexis account (`requestLiveAmadeus`) and whose live connection still waits for an office, read from the connections themselves (not from the audit log), oldest request first, at most 50, so the admin assigns offices from one read of this page.
          */
         get: operations["adminGetDashboard"];
         put?: never;
@@ -2285,6 +2287,8 @@ export interface paths {
          * @description Changes a **manual** subscription (the trials before M5): its plan, its trial end, or its status (`trialing` or `canceled`), with a written `reason` of 5–500 characters after trimming that the audit row keeps. At least one change comes with the reason. A change of plan also sets `tenants.plan_code` and, after commit, publishes a `tenant` invalidation; `canceled` sets `canceled_at`. `If-Match` carries the subscription's `version`; a stale version answers `412 PRECONDITION_FAILED`.
          *
          *     `409 CONFLICT` when the subscription is billed by Stripe (`details.reason = stripe_billed`; Stripe subscriptions change in the Customer Portal or with `adminResyncSubscription` in M5), or when `trialing` would give the OTA a second current subscription (`details.reason = current_exists`). A `planCode` that names no active plan answers `422 UNPROCESSABLE` (`details.reason = plan_not_active`); plans that are not public are allowed.
+         *
+         *     **Reopening a past-due trial** (2026-11-04, lead decision (2l), FIX-W41-PLATFORM): moving the `trialEndsAt` of a `past_due` manual trial to a later UTC day than today, without `status` or with `trialing`, reopens it: the status becomes `trialing`, and the OTA's banner (`tenants.billing_notice`) becomes what the daily `billing.manual_trials` run sets for a trial with that end: `trial_ending` when the new end is within 14 days, none otherwise (a banner of another kind stays). The audit row records the status before and after and, when it changed, the banner; a changed banner publishes a `tenant` invalidation after the commit.
          */
         patch: operations["adminUpdateManualSubscription"];
         trace?: never;
@@ -2934,7 +2938,7 @@ export interface paths {
          * Check a host's DNS records and certificate now
          * @description Queues the checks of one host on `platform-domains` now (M5, custom-domains flow steps 2, 4, 6 and 8), instead of waiting for the schedulers: the DNS check that fits a custom domain's status (`domain.verify`, the verification of a pending one; `domain.recheck`, the daily re-check of a verified one, whose failure counts like a daily one) and the TLS probe of the host at once (`domain.tls_probe`). The sub-domain has no DNS records, and a failed custom domain has no window to check in (its owners restart one with `checkDomain`), so both get the probe only. The answer comes before the jobs run; reload the list to see `lastCheckedAt`, `lastCheckError` and the TLS state. Writes an audit row. `503 SERVICE_UNAVAILABLE` while Redis is unreachable, because the jobs are the whole effect.
          *
-         *     **One strike a day** (2026-11-03, lead decision (2f), FIX-W40-PLATFORM): the re-check of a verified domain counts toward the three consecutive failures that fail a domain at most once per UTC day. Its `domain.recheck` shares the daily re-check's job of the domain and the UTC day: while that day's check is queued, running or done (from the 04:10 run or an earlier click), a second re-check queues no second DNS check that day, so quick repeated clicks cannot fail a domain; the TLS probe is queued every time.
+         *     **DNS every time, one strike a day** (2026-11-04, lead decision (2b), FIX-W41-PLATFORM; it replaces the shared daily job of 2026-11-03, lead decision (2f), FIX-W40-PLATFORM): the re-check of a verified domain always queues its DNS check (`domain.recheck`), also after the day's 04:10 run, under a job id of its own (re-checks of one domain in the same 10-second slot of the server's clock share one check, so a double click queues one unless it falls on both sides of a slot's end), and that check counts toward the three consecutive failures that fail a domain at most once per UTC day: a failure adds a strike only when none was counted that UTC day (by the daily run or an earlier re-check), and a pass resets the count as the daily run does, so quick repeated clicks cannot fail a domain. `lastCheckedAt` and `lastCheckError` show every check. The TLS probe is queued every time.
          */
         post: operations["adminRecheckDomain"];
         delete?: never;
@@ -4718,6 +4722,21 @@ export interface components {
             stripeEventsFailed: number | null;
             /** @description Subscriptions in `past_due` (M5); `null` while `stripe_billing` is off. */
             subscriptionsPastDue: number | null;
+            /** @description The OTAs waiting for a live office (M5, 2026-11-04, FIX-W41-PLATFORM): each OTA whose `live` Amadeus connection on the Velexis account (`credentialSource` `velexis`) is `pending_verification` without an office, as `requestLiveAmadeus` inserted it, of an OTA that is not being deleted. Read from the connections themselves, never from the audit log. Oldest request first (then by connection id), at most 50; empty when no OTA waits. An admin serves a request with `adminAssignAmadeusOffice`, which takes it off this list. */
+            liveOfficeRequests: components["schemas"]["LiveOfficeRequest"][];
+        };
+        /** @description An OTA waiting for a live office: its live Velexis Amadeus connection, inserted without an office by the owner's `requestLiveAmadeus`. */
+        LiveOfficeRequest: {
+            tenantId: components["schemas"]["TenantId"];
+            tenantKey: components["schemas"]["TenantKey"];
+            tenantName: components["schemas"]["TenantName"];
+            /** @description The waiting live connection (`AmadeusConnection.id`), shown on the OTA's connections. */
+            connectionId: string;
+            /**
+             * Format: date-time
+             * @description When the owner requested live access (the connection's creation).
+             */
+            requestedAt: string;
         };
         /** @description The offices of the Velexis Amadeus account of one environment, by status. */
         OfficePoolLevel: {

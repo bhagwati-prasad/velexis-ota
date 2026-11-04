@@ -11,7 +11,11 @@
 //   one, `test` before `live` (PADR-0012; the admin warns below 3 available offices);
 // - the M5 counters, always present and `null` while their milestone switch is off (PADR-0015), and read only when it
 //   is on: `domainsPending` (`custom_domains`), `settlementsToReview` (`settlements`), `stripeEventsFailed`
-//   (`stripe_billing` or `own_stripe`) and `subscriptionsPastDue` (`stripe_billing`).
+//   (`stripe_billing` or `own_stripe`) and `subscriptionsPastDue` (`stripe_billing`);
+// - `liveOfficeRequests` (FIX-W41-PLATFORM, lead decision (2n) of 2026-11-04): the OTAs whose live Velexis connection
+//   waits for an office (`pending_verification`, no office, as `requestLiveAmadeus` inserted it), oldest request first,
+//   at most LIVE_OFFICE_REQUESTS_LIMIT, read from the connections themselves (never from the audit log), so the admin's
+//   dashboard shows them from this one call. Always present: an empty list when no OTA waits.
 //
 // The database counts are one snapshot: one read-only `REPEATABLE READ` transaction, which never holds a lock and
 // writes nothing. The Redis counts run next to it, never inside it.
@@ -31,9 +35,13 @@ import { AdminDashboardRepository, type TenantStatusCounts } from "./admin-dashb
 
 export type AdminDashboard = components["schemas"]["AdminDashboard"];
 type OfficePoolLevel = components["schemas"]["OfficePoolLevel"];
+type LiveOfficeRequest = components["schemas"]["LiveOfficeRequest"];
 
 /** How long the failed counts of the platform queues may take before the dashboard answers `503`. */
 export const QUEUE_COUNT_TIMEOUT_MS = 2000;
+
+/** The most live office requests the dashboard lists (`maxItems` of `AdminDashboard.liveOfficeRequests`). */
+export const LIVE_OFFICE_REQUESTS_LIMIT = 50;
 
 /** The window of `provisioningFailed24h`. */
 export const PROVISIONING_FAILED_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -50,6 +58,7 @@ interface DatabaseCounts {
   readonly settlementsToReview: number | null;
   readonly stripeEventsFailed: number | null;
   readonly subscriptionsPastDue: number | null;
+  readonly liveOfficeRequests: LiveOfficeRequest[];
 }
 
 @Injectable()
@@ -85,6 +94,7 @@ export class AdminDashboardService implements OnModuleInit {
       settlementsToReview: counts.settlementsToReview,
       stripeEventsFailed: counts.stripeEventsFailed,
       subscriptionsPastDue: counts.subscriptionsPastDue,
+      liveOfficeRequests: counts.liveOfficeRequests,
     };
   }
 
@@ -148,6 +158,15 @@ export class AdminDashboardService implements OnModuleInit {
           stripeEventsFailed:
             on("stripe_billing") || on("own_stripe") ? await this.counters.failedStripeEvents(trx) : null,
           subscriptionsPastDue: on("stripe_billing") ? await this.counters.pastDueSubscriptions(trx) : null,
+          liveOfficeRequests: (await this.counters.liveOfficeRequests(trx, LIVE_OFFICE_REQUESTS_LIMIT)).map(
+            (row): LiveOfficeRequest => ({
+              tenantId: row.tenant_id,
+              tenantKey: row.tenant_key,
+              tenantName: row.tenant_name,
+              connectionId: row.connection_id,
+              requestedAt: row.requested_at.toISOString(),
+            }),
+          ),
         };
       });
   }

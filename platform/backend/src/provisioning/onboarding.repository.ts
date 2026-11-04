@@ -11,6 +11,21 @@
 import { Injectable } from "@nestjs/common";
 import type { PlatformTransaction } from "../audit/audit.repository";
 
+/**
+ * The subscription statuses `plan_chosen` looks at: a Stripe subscription that is `trialing` or `active`, or a manual
+ * one that is `active` (PADR-0018 and its note of 2026-11-04). Both are statuses of the `subscriptions_current_uq`
+ * index, so an OTA has at most one row in them.
+ */
+export const CHOSEN_PLAN_SUBSCRIPTION_STATUSES = Object.freeze(["trialing", "active"] as const);
+
+/** The OTA's subscription in a status of CHOSEN_PLAN_SUBSCRIPTION_STATUSES, as `plan_chosen` judges it. */
+export interface OnboardingSubscription {
+  /** `billing_provider`: `stripe`, or `manual` (set by a platform admin). */
+  readonly billingProvider: string;
+  /** `status`: `trialing` or `active`. */
+  readonly status: string;
+}
+
 /** What the rules of PADR-0018 look at, for one OTA and one caller, as the tables hold it. */
 export interface OnboardingRecord {
   /** `tenants.key`: the storefront sub-domain `<key>.<base domain>` when the OTA has no primary storefront domain. */
@@ -35,8 +50,11 @@ export interface OnboardingRecord {
   readonly invitationNotRevoked: boolean;
   /** The number of `active` memberships of the OTA. */
   readonly activeMembers: number;
-  /** A subscription of the OTA has `billing_provider = 'stripe'` and is `trialing` or `active` (so it is current). */
-  readonly stripeSubscriptionCurrent: boolean;
+  /**
+   * The OTA's subscription that is `trialing` or `active` (at most one: `subscriptions_current_uq`), whoever bills it;
+   * `null` without one. `planChosen` (onboarding.service.ts) decides whether it makes `plan_chosen` done.
+   */
+  readonly currentSubscription: OnboardingSubscription | null;
   /** A custom storefront domain of the OTA is `verified`. */
   readonly customDomainVerified: boolean;
   /** The `test` Stripe payment connection's `account_mode` and `status`; `null` when the OTA has none. */
@@ -137,15 +155,21 @@ export class OnboardingRepository {
           .where("m.status", "=", "active")
           .as("active_members"),
         eb
-          .exists(
-            eb
-              .selectFrom("platform.subscriptions as b")
-              .select("b.id")
-              .where("b.tenant_id", "=", tenantId)
-              .where("b.billing_provider", "=", "stripe")
-              .where("b.status", "in", ["trialing", "active"]),
-          )
-          .as("stripe_subscription_current"),
+          .selectFrom("platform.subscriptions as b")
+          .select("b.billing_provider")
+          .where("b.tenant_id", "=", tenantId)
+          .where("b.status", "in", CHOSEN_PLAN_SUBSCRIPTION_STATUSES)
+          .orderBy("b.id")
+          .limit(1)
+          .as("subscription_provider"),
+        eb
+          .selectFrom("platform.subscriptions as b")
+          .select("b.status")
+          .where("b.tenant_id", "=", tenantId)
+          .where("b.status", "in", CHOSEN_PLAN_SUBSCRIPTION_STATUSES)
+          .orderBy("b.id")
+          .limit(1)
+          .as("subscription_status"),
         eb
           .exists(
             eb
@@ -184,7 +208,10 @@ export class OnboardingRepository {
       amadeusTestActive: Boolean(row.amadeus_test_active),
       invitationNotRevoked: Boolean(row.invitation_not_revoked),
       activeMembers: Number(row.active_members ?? 0),
-      stripeSubscriptionCurrent: Boolean(row.stripe_subscription_current),
+      currentSubscription:
+        row.subscription_provider === null || row.subscription_status === null
+          ? null
+          : { billingProvider: row.subscription_provider, status: row.subscription_status },
       customDomainVerified: Boolean(row.custom_domain_verified),
       testPaymentConnection:
         row.test_payment_mode === null || row.test_payment_status === null

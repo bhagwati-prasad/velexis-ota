@@ -433,7 +433,8 @@ describe("getOnboarding: one rule per item", () => {
   it("[PBE-024 AC1] plan_chosen flips to done when the current subscription is a trialing or active Stripe one", async () => {
     switches.on.add("stripe_billing");
     const { tenantId, owner } = await activeOta();
-    const subscription = await insertSubscription(pool, { id: tenantId });
+    // A manual trial: not a chosen plan (an active manual plan is one since 2026-11-04, the next test).
+    const subscription = await insertSubscription(pool, { id: tenantId }, { status: "trialing" });
 
     const manual = await item(owner, tenantId, "plan_chosen");
     await update(
@@ -455,6 +456,21 @@ describe("getOnboarding: one rule per item", () => {
       milestone: "M5",
     });
     expect([incomplete, trialing, active]).toEqual([false, true, true]);
+  });
+
+  it("[FIX-W41-PLATFORM AC1] plan_chosen is done for an active manual subscription, never for a manual trial", async () => {
+    switches.on.add("stripe_billing");
+    const { tenantId, owner } = await activeOta();
+    const subscription = await insertSubscription(pool, { id: tenantId }, { status: "trialing" });
+
+    const trial = await done(owner, tenantId, "plan_chosen");
+    await update("UPDATE platform.subscriptions SET status = 'active' WHERE id = $1", [subscription.id]);
+    const active = await done(owner, tenantId, "plan_chosen");
+    await update("UPDATE platform.subscriptions SET status = 'past_due' WHERE id = $1", [subscription.id]);
+    const pastDue = await done(owner, tenantId, "plan_chosen");
+
+    expect(subscription.billing_provider).toBe("manual");
+    expect([trial, active, pastDue]).toEqual([false, true, false]);
   });
 
   it("[PBE-024 AC1] custom_domain flips to done when a custom storefront domain is verified", async () => {
@@ -648,14 +664,15 @@ describe("getOnboarding: one rule per item", () => {
     });
 
     // An OTA in set-up whose rows each miss a rule by one column: a `test` supplier connection that is not active (and
-    // is no live one), a revoked invitation and a removed member, a manual subscription, a verified custom domain for
-    // the API (not the storefront), and an active Connect Standard payment connection in `live` (not `test`).
+    // is no live one), a revoked invitation and a removed member, a manual trial (a Stripe trial, or an active manual
+    // plan, would count), a verified custom domain for the API (not the storefront), and an active Connect Standard
+    // payment connection in `live` (not `test`).
     const subject = await otaInSetup();
     const subjectRef = { id: subject.tenantId };
     await insertSupplierConnection(pool, subjectRef);
     await invite(subject.tenantId, "revoked");
     await insertMembership(pool, subjectRef, await insertAccount(pool), { role: "agent", status: "removed" });
-    await insertSubscription(pool, subjectRef);
+    await insertSubscription(pool, subjectRef, { status: "trialing" });
     await insertTenantDomain(pool, subjectRef, {
       hostname: `api.${subject.key}.example`,
       kind: "custom",

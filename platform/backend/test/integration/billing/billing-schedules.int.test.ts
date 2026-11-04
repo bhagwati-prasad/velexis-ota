@@ -1003,6 +1003,132 @@ describe("billing.manual_trials", () => {
   });
 });
 
+describe("billing.manual_trials: the notice after the end (FIX-W41-PLATFORM, lead decision (2j) of 2026-11-04)", () => {
+  it("[FIX-W41-PLATFORM AC6] with FakeClock, a trial that ended before the switch went on gets exactly one e-mail naming the suspension date, then the suspension 14 days later", async () => {
+    const base = t.clock.set(runDay(100));
+    await runManualTrials(); // settle what earlier tests left due by now
+    // Ended 20 days ago, before FEATURE_STRIPE_BILLING was switched on: no notice was ever queued. One owner.
+    const owner = await newAccount("owner-fixw41-ended", "Ana Lima");
+    const ended = await arrangeOta(
+      { name: "Fjord Trips" },
+      {
+        trial_ends_at: after(base, -20),
+        created_at: after(base, -110),
+        updated_at: after(base, -110),
+      },
+      [[owner, "owner"]],
+    );
+    const tenantId = ended.tenant.id;
+    const billingUrl = `${t.config.PUBLIC_PORTAL_URL.replace(/\/+$/, "")}/otas/${tenantId}/billing`;
+    const trialEndsOn = after(base, -20).toISOString().slice(0, 10);
+    // The row becomes past due today, so the OTA is suspended 14 days from today.
+    const suspensionOn = after(base, 14).toISOString().slice(0, 10);
+
+    // (Trials of earlier tests may still be due on these days, so the run's counts are not this OTA's alone: the
+    // assertions read this OTA's rows.)
+    await runManualTrials();
+    expect(await subscriptionsOf(tenantId)).toEqual([expect.objectContaining({ status: "past_due" })]);
+    expect(await emailsOf(tenantId, "billing.trial_ending")).toEqual([]);
+    const late = await emailsOf(tenantId, "billing.trial_ended");
+    expect(late).toEqual([
+      expect.objectContaining({
+        to_email: owner.email,
+        account_id: owner.id,
+        data: {
+          fullName: "Ana Lima",
+          tenantName: "Fjord Trips",
+          tenantKey: ended.tenant.key,
+          trialEndsOn,
+          suspensionOn,
+          billingUrl,
+        },
+      }),
+    ]);
+    const message = await waitForMessage({ to: owner.email, timeoutMs: MAIL_WAIT_MS });
+    expect(message.Subject).toBe("The Velexis trial of Fjord Trips has ended");
+    expect(message.Text).toContain(`ended on ${trialEndsOn} (UTC)`);
+    expect(message.Text).toContain(`suspended from ${suspensionOn}`);
+    expect(await auditOf(tenantId, "subscription.updated")).toEqual([
+      expect.objectContaining({
+        details: expect.objectContaining({
+          before: { status: "trialing", billingNotice: null },
+          after: { status: "past_due", billingNotice: TRIAL_ENDING_NOTICE },
+          reason: "trial_ended",
+          endedNotice: true,
+          emailsQueued: 1,
+        }),
+      }),
+    ]);
+
+    // The same day again, and the next days: nothing more, at most one such e-mail per trial.
+    await runManualTrials();
+    t.clock.set(after(base, 1));
+    await runManualTrials();
+    t.clock.set(after(base, 13));
+    await runManualTrials();
+    expect(await tenantOf(tenantId)).toMatchObject({ status: "active" });
+    expect(await subscriptionsOf(tenantId)).toEqual([expect.objectContaining({ status: "past_due" })]);
+    expect(await emailsOf(tenantId, "billing.trial_ended")).toHaveLength(1);
+
+    // On the named day the OTA is suspended for billing.
+    t.clock.set(after(base, 14));
+    await runManualTrials();
+    expect(await tenantOf(tenantId)).toMatchObject({ status: "suspended", suspension_reason: "billing" });
+    expect(await subscriptionsOf(tenantId)).toEqual([expect.objectContaining({ status: "canceled" })]);
+    expect(await emailsOf(tenantId, "billing.trial_ended")).toHaveLength(1);
+  });
+
+  it("[FIX-W41-PLATFORM AC6] a trial whose notice went out before its end gets no e-mail after it", async () => {
+    const base = t.clock.set(runDay(130));
+    await runManualTrials(); // settle what earlier tests left due by now
+    const trial = await arrangeTrial("fixw41-noticed", {}, { trial_ends_at: after(base, 3, 7) });
+
+    await runManualTrials();
+    expect(await emailsOf(trial.tenant.id, "billing.trial_ending")).toHaveLength(2);
+    t.clock.set(after(base, 3));
+    await runManualTrials();
+
+    expect(await subscriptionsOf(trial.tenant.id)).toEqual([expect.objectContaining({ status: "past_due" })]);
+    expect(await emailsOf(trial.tenant.id, "billing.trial_ending")).toHaveLength(2);
+    expect(await emailsOf(trial.tenant.id, "billing.trial_ended")).toEqual([]);
+  });
+
+  it("[FIX-W41-PLATFORM AC6] at most one such e-mail per trial: a trial reopened after it that lapses again without a notice gets no second one", async () => {
+    const base = t.clock.set(runDay(160));
+    await runManualTrials(); // settle what earlier tests left due by now
+    const owner = await newAccount("owner-fixw41-reopened", "Ana Lima");
+    const ended = await arrangeOta(
+      { name: "Glacier Trips" },
+      {
+        trial_ends_at: after(base, -20),
+        created_at: after(base, -110),
+        updated_at: after(base, -110),
+      },
+      [[owner, "owner"]],
+    );
+    const tenantId = ended.tenant.id;
+    await runManualTrials();
+    expect(await subscriptionsOf(tenantId)).toEqual([expect.objectContaining({ status: "past_due" })]);
+    expect(await emailsOf(tenantId, "billing.trial_ended")).toHaveLength(1);
+
+    // Later that day, after the run, a platform admin reopens the trial with an end tomorrow (as
+    // adminUpdateManualSubscription does: `trialing`, a new end, `version + 1`), so no run falls in a notice window.
+    await pool.query(
+      "UPDATE platform.subscriptions SET status = 'trialing', trial_ends_at = $2, updated_at = $3, " +
+        "version = version + 1 WHERE id = $1",
+      [ended.subscription.id, after(base, 1, 6), after(base, 0, 2)],
+    );
+    t.clock.set(after(base, 1));
+    await runManualTrials();
+
+    // Past due again on the new end day, without any notice of the new end: the outbox's key is the trial's, so
+    // nothing more is sent.
+    expect(await subscriptionsOf(tenantId)).toEqual([expect.objectContaining({ status: "past_due" })]);
+    expect(await emailsOf(tenantId, "billing.trial_ending")).toEqual([]);
+    expect(await emailsOf(tenantId, "billing.trial_ended")).toHaveLength(1);
+  });
+});
+
 // ---- Registration --------------------------------------------------------------------------------------------------
 
 describe("the schedules", () => {

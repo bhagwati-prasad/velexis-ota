@@ -2,8 +2,10 @@
 // integration test cannot provoke with its configuration and a working Redis, that is the M5 counters with their
 // milestone switches on (read and answered as numbers, each only under its own switch), the 24-hour window of
 // `provisioningFailed24h` on the Clock, the office pool by environment, and `503 SERVICE_UNAVAILABLE` when the BullMQ
-// counts fail or take longer than QUEUE_COUNT_TIMEOUT_MS. The switches-off answer is proven over HTTP in
-// test/integration/admin/admin-tenants.int.test.ts.
+// counts fail or take longer than QUEUE_COUNT_TIMEOUT_MS, and the live office requests mapped from the repository's
+// rows (FIX-W41-PLATFORM). The switches-off answer is proven over HTTP in
+// test/integration/admin/admin-tenants.int.test.ts, the live office requests' rule in
+// test/integration/admin/admin-dashboard.int.test.ts.
 import type { ModuleRef } from "@nestjs/core";
 import { PLATFORM_QUEUES } from "@velexis/api-types/jobs";
 import { AppError } from "@velexis/errors";
@@ -16,6 +18,7 @@ import type { AmadeusAccountsRepository } from "../supplier-connections/amadeus-
 import type { AdminDashboardRepository } from "./admin-dashboard.repository";
 import {
   AdminDashboardService,
+  LIVE_OFFICE_REQUESTS_LIMIT,
   PROVISIONING_FAILED_WINDOW_MS,
   QUEUE_COUNT_TIMEOUT_MS,
   type FailedCountSource,
@@ -30,16 +33,38 @@ interface Harness {
   readonly warnings: string[];
   /** The access mode and isolation level of each transaction. */
   readonly transactions: string[];
+  /** The `limit` of each read of the live office requests. */
+  readonly liveLimits: number[];
 }
+
+/** Two OTAs waiting for a live office, oldest first, as the repository answers them. */
+const LIVE_ROWS = [
+  {
+    tenant_id: "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+    tenant_key: "acme",
+    tenant_name: "Acme Travel",
+    connection_id: "sc_01JC4M2P6R0T4W8Y2A6C0E4G8K",
+    requested_at: new Date("2027-03-01T09:12:00.000Z"),
+  },
+  {
+    tenant_id: "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5G",
+    tenant_key: "nordic",
+    tenant_name: "Nordic Fares",
+    connection_id: "sc_01JC4M2P6R0T4W8Y2A6C0E4G8M",
+    requested_at: new Date("2027-03-02T14:02:00.000Z"),
+  },
+];
 
 function harness(options: {
   readonly features?: readonly Feature[];
   readonly failedCount?: (queue: string) => Promise<number>;
+  readonly liveRows?: typeof LIVE_ROWS;
 }): Harness {
   const calls: string[] = [];
   const since: Date[] = [];
   const warnings: string[] = [];
   const transactions: string[] = [];
+  const liveLimits: number[] = [];
   const clock = new FakeClock();
   const counted = (name: string, value: number) => (): Promise<number> => {
     calls.push(name);
@@ -59,6 +84,11 @@ function harness(options: {
     draftSettlements: counted("draftSettlements", 5),
     failedStripeEvents: counted("failedStripeEvents", 6),
     pastDueSubscriptions: counted("pastDueSubscriptions", 7),
+    liveOfficeRequests: (_db: unknown, limit: number) => {
+      calls.push("liveOfficeRequests");
+      liveLimits.push(limit);
+      return Promise.resolve(options.liveRows ?? []);
+    },
   } as unknown as AdminDashboardRepository;
   const amadeusAccounts = {
     list: () =>
@@ -119,7 +149,7 @@ function harness(options: {
     logger,
   );
   service.onModuleInit();
-  return { service, clock, calls, since, warnings, transactions };
+  return { service, clock, calls, since, warnings, transactions, liveLimits };
 }
 
 afterEach(() => {
@@ -146,8 +176,9 @@ describe("AdminDashboardService.get", () => {
       settlementsToReview: null,
       stripeEventsFailed: null,
       subscriptionsPastDue: null,
+      liveOfficeRequests: [],
     });
-    expect(calls).toEqual(["tenantsByStatus", "jobsFailedSince"]);
+    expect(calls).toEqual(["tenantsByStatus", "jobsFailedSince", "liveOfficeRequests"]);
     expect(since).toEqual([new Date(clock.now().getTime() - PROVISIONING_FAILED_WINDOW_MS)]);
     expect(transactions).toEqual(["repeatable read, read only"]);
   });
@@ -169,7 +200,39 @@ describe("AdminDashboardService.get", () => {
       stripeEventsFailed: 6,
       subscriptionsPastDue: null,
     });
-    expect(ownStripe.calls).toEqual(["tenantsByStatus", "jobsFailedSince", "failedStripeEvents"]);
+    expect(ownStripe.calls).toEqual([
+      "tenantsByStatus",
+      "jobsFailedSince",
+      "failedStripeEvents",
+      "liveOfficeRequests",
+    ]);
+  });
+
+  it("[FIX-W41-PLATFORM AC9] answers the live office requests of the repository, in its order, bounded, in the snapshot", async () => {
+    const { service, liveLimits, transactions } = harness({ liveRows: LIVE_ROWS });
+
+    const dashboard = await service.get();
+
+    expect(dashboard.liveOfficeRequests).toEqual([
+      {
+        tenantId: "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+        tenantKey: "acme",
+        tenantName: "Acme Travel",
+        connectionId: "sc_01JC4M2P6R0T4W8Y2A6C0E4G8K",
+        requestedAt: "2027-03-01T09:12:00.000Z",
+      },
+      {
+        tenantId: "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5G",
+        tenantKey: "nordic",
+        tenantName: "Nordic Fares",
+        connectionId: "sc_01JC4M2P6R0T4W8Y2A6C0E4G8M",
+        requestedAt: "2027-03-02T14:02:00.000Z",
+      },
+    ]);
+    // Bounded by the document's `maxItems`, and read in the dashboard's one read-only snapshot.
+    expect(liveLimits).toEqual([LIVE_OFFICE_REQUESTS_LIMIT]);
+    expect(LIVE_OFFICE_REQUESTS_LIMIT).toBe(50);
+    expect(transactions).toEqual(["repeatable read, read only"]);
   });
 
   it("answers 503 SERVICE_UNAVAILABLE when a BullMQ count fails, and logs it without the counts", async () => {

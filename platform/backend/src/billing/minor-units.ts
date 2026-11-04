@@ -13,32 +13,52 @@
 // The `invoices` columns hold two decimals. An amount that needs more (a three-decimal currency whose last digit is
 // not 0, which Stripe does not charge) or more than ten integer digits does not fit: `toStoredAmount` throws
 // MinorUnitsError and the invoice event fails for good, instead of a rounded amount being stored. Nothing here logs.
-import { Decimal } from "decimal.js";
+//
+// The conversions themselves live in common/money.ts, shared with the settlement statements since FIX-W41-PLATFORM
+// (lead decision (2i) of 2026-11-04); this module keeps billing's shape around them: decimal strings in and out, and
+// MinorUnitsError with billing's messages.
+import {
+  checkCurrencyExponent,
+  decimalOf,
+  fitsStoredAmount as fitsStoredValue,
+  fromMinorUnits as fromMinorUnitsValue,
+  MAX_CURRENCY_EXPONENT,
+  MAX_STORED_AMOUNT,
+  MoneyError,
+  PlatformMoney,
+  STORED_DECIMALS,
+  toStoredAmount as toStoredValue,
+  type MoneyErrorReason,
+  type MoneyValue,
+} from "../common/money";
 
-/** decimal.js for billing amounts, independent of the global `Decimal` settings: exact for every stored amount. */
-export const BillingMoney = Decimal.clone({ precision: 40, rounding: Decimal.ROUND_HALF_EVEN });
+export { MAX_CURRENCY_EXPONENT, MAX_STORED_AMOUNT, STORED_DECIMALS };
 
-/** The highest exponent `reference.currencies.minor_units` allows (`CHECK (minor_units BETWEEN 0 AND 4)`). */
-export const MAX_CURRENCY_EXPONENT = 4;
-
-/** The decimals of the `numeric(12,2)` amount columns of `invoices`. */
-export const STORED_DECIMALS = 2;
-
-/** The largest absolute amount a `numeric(12,2)` column holds. */
-export const MAX_STORED_AMOUNT = "9999999999.99";
-
-/** A decimal string such as `"49.00"`, `"5000"` or `"-12.5"`, as PostgreSQL prints `numeric`. No exponent. */
-const DECIMAL_STRING = /^-?\d+(?:\.\d+)?$/;
+/** decimal.js for billing amounts, independent of the global `Decimal` settings: common/money.ts's PlatformMoney. */
+export const BillingMoney = PlatformMoney;
 
 /** An amount that cannot be converted or stored exactly. The message names no amount. */
 export class MinorUnitsError extends Error {
   override readonly name = "MinorUnitsError";
 }
 
-/** Throws MinorUnitsError unless `exponent` is an exponent of `reference.currencies` (an integer from 0 to 4). */
-function checkExponent(exponent: number): void {
-  if (!Number.isInteger(exponent) || exponent < 0 || exponent > MAX_CURRENCY_EXPONENT) {
-    throw new MinorUnitsError(`a currency exponent is not an integer from 0 to ${MAX_CURRENCY_EXPONENT}`);
+/** Billing's message of each reason of common/money.ts. */
+const MINOR_UNITS_TEXT: Readonly<Record<MoneyErrorReason, string>> = Object.freeze({
+  amount_not_integer: "a Stripe amount is not an integer",
+  exponent_out_of_range: `a currency exponent is not an integer from 0 to ${MAX_CURRENCY_EXPONENT}`,
+  not_decimal_string: "an amount is not a decimal string",
+  does_not_fit: "an amount does not fit numeric(12,2) exactly",
+});
+
+/** Runs `compute`, turning common/money.ts's MoneyError into MinorUnitsError with billing's message. */
+function billing<T>(compute: () => T): T {
+  try {
+    return compute();
+  } catch (error) {
+    if (error instanceof MoneyError) {
+      throw new MinorUnitsError(MINOR_UNITS_TEXT[error.reason]);
+    }
+    throw error;
   }
 }
 
@@ -48,25 +68,17 @@ function checkExponent(exponent: number): void {
  * Throws MinorUnitsError for a `minor` that is not a safe integer or an exponent outside 0 to 4.
  */
 export function fromMinorUnits(minor: number, exponent: number): string {
-  if (!Number.isSafeInteger(minor)) {
-    throw new MinorUnitsError("a Stripe amount is not an integer");
-  }
-  checkExponent(exponent);
-  return new BillingMoney(minor).dividedBy(new BillingMoney(10).pow(exponent)).toFixed(exponent);
+  return billing(() => fromMinorUnitsValue(minor, exponent).toFixed(exponent));
 }
 
 /** `amount` as a BillingMoney value; throws MinorUnitsError when it is not a decimal string. */
-function moneyOf(amount: string): Decimal {
-  if (typeof amount !== "string" || !DECIMAL_STRING.test(amount)) {
-    throw new MinorUnitsError("an amount is not a decimal string");
-  }
-  return new BillingMoney(amount);
+function moneyOf(amount: string): MoneyValue {
+  return billing(() => decimalOf(amount));
 }
 
 /** True when `amount` fits a `numeric(12,2)` column exactly: at most 2 significant decimals and 10 integer digits. */
 export function fitsStoredAmount(amount: string): boolean {
-  const value = moneyOf(amount);
-  return value.decimalPlaces() <= STORED_DECIMALS && value.abs().lte(MAX_STORED_AMOUNT);
+  return fitsStoredValue(moneyOf(amount));
 }
 
 /**
@@ -74,10 +86,8 @@ export function fitsStoredAmount(amount: string): boolean {
  * decimal do not count (`"1.230"` is `"1.23"`). Throws MinorUnitsError when it does not fit exactly: it is never rounded.
  */
 export function toStoredAmount(amount: string): string {
-  if (!fitsStoredAmount(amount)) {
-    throw new MinorUnitsError("an amount does not fit numeric(12,2) exactly");
-  }
-  return moneyOf(amount).toFixed(STORED_DECIMALS);
+  const value = moneyOf(amount);
+  return billing(() => toStoredValue(value));
 }
 
 /**
@@ -88,7 +98,7 @@ export function toStoredAmount(amount: string): string {
  * or an exponent outside 0 to 4.
  */
 export function toCurrencyAmount(stored: string, exponent: number): string {
-  checkExponent(exponent);
+  billing(() => checkCurrencyExponent(exponent));
   const value = moneyOf(stored);
   return value.toFixed(Math.max(exponent, value.decimalPlaces()));
 }

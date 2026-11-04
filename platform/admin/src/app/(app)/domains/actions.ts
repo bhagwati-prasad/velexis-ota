@@ -132,7 +132,8 @@ function formExpired(domainId: string): DomainActionFailure {
  * Checks a host now (`adminRecheckDomain`) from the fields `domainId` and `hostname` (for the outcome's words): the API
  * queues the DNS check that fits a custom domain's status and the TLS probe, writes its audit row and answers `202`
  * before the jobs run, so the outcome says the checks are queued and the list shows their result once they ran. A
- * verified domain's failed check counts as that day's daily re-check (at most once per UTC day, FIX-W40-PLATFORM).
+ * verified domain's DNS check runs every time, and its failure counts at most one strike per UTC day (FIX-W41-PLATFORM,
+ * lead decision (2b) of 2026-11-04).
  * `SERVICE_UNAVAILABLE` (Redis did not take the jobs, which are the whole effect) is worded.
  */
 export async function recheckDomain(

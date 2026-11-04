@@ -18,6 +18,7 @@ import {
   ONBOARDING_ITEMS,
   onboardingChecklist,
   OnboardingService,
+  planChosen,
   type OnboardingFacts,
   type OnboardingItemId,
 } from "./onboarding.service";
@@ -55,7 +56,7 @@ const NOTHING_DONE: OnboardingFacts = Object.freeze({
   amadeusTestActive: false,
   invitationNotRevoked: false,
   activeMembers: 1,
-  stripeSubscriptionCurrent: false,
+  currentSubscription: null,
   customDomainVerified: false,
   testPaymentConnection: null,
   payoutAccountVerified: false,
@@ -128,8 +129,19 @@ const ITEM_CASES: readonly ItemCase[] = [
   },
   {
     id: "plan_chosen",
-    becomesDone: [{ change: { stripeSubscriptionCurrent: true } }],
-    staysOpen: [{ tenantStatus: "active" }],
+    becomesDone: [
+      { change: { currentSubscription: { billingProvider: "stripe", status: "trialing" } } },
+      { change: { currentSubscription: { billingProvider: "stripe", status: "active" } } },
+      // A platform admin's plan, as go-live counts it (PADR-0018, note of 2026-11-04).
+      { change: { currentSubscription: { billingProvider: "manual", status: "active" } } },
+    ],
+    staysOpen: [
+      { tenantStatus: "active" },
+      // A manual trial is not a chosen plan.
+      { currentSubscription: { billingProvider: "manual", status: "trialing" } },
+      { currentSubscription: { billingProvider: "stripe", status: "past_due" } },
+      { currentSubscription: { billingProvider: "invoice", status: "active" } },
+    ],
   },
   {
     id: "custom_domain",
@@ -165,6 +177,26 @@ const ITEM_CASES: readonly ItemCase[] = [
     staysOpen: [{ amadeusTestActive: true }],
   },
 ];
+
+describe("planChosen", () => {
+  it("[FIX-W41-PLATFORM AC1] counts a trialing or active Stripe subscription and an active manual one, never a manual trial", () => {
+    const cases: ReadonlyArray<[string, string, boolean]> = [
+      ["stripe", "trialing", true],
+      ["stripe", "active", true],
+      ["manual", "active", true],
+      ["manual", "trialing", false],
+      ["stripe", "past_due", false],
+      ["manual", "past_due", false],
+      ["stripe", "incomplete", false],
+      ["manual", "canceled", false],
+      ["invoice", "active", false],
+    ];
+    for (const [billingProvider, status, expected] of cases) {
+      expect(planChosen({ billingProvider, status }), `${billingProvider} ${status}`).toBe(expected);
+    }
+    expect(planChosen(null)).toBe(false);
+  });
+});
 
 describe("onboardingChecklist", () => {
   it("covers every item of PADR-0018 with one case", () => {
@@ -281,7 +313,8 @@ const FACTS_ROW: FactsRow = {
   amadeus_live_exists: false,
   invitation_not_revoked: false,
   active_members: "3",
-  stripe_subscription_current: false,
+  subscription_provider: null,
+  subscription_status: null,
   custom_domain_verified: false,
   payout_account_verified: true,
 };
@@ -394,6 +427,25 @@ describe("OnboardingService.get", () => {
     expect(byId.get("team_invited")?.done).toBe(false);
     expect(byId.get("payments_ready")?.done).toBe(false);
     expect(byId.get("storefront_open")?.href).toBe("https://travel.acme.example/");
+  });
+
+  it("[FIX-W41-PLATFORM AC1] reads the current subscription: an active manual plan is chosen, a manual trial is not", async () => {
+    const chosen = async (provider: string | null, status: string | null): Promise<boolean | undefined> => {
+      const { onboarding, statements } = service(
+        [{ ...FACTS_ROW, subscription_provider: provider, subscription_status: status }],
+        ["stripe_billing"],
+      );
+      const { items } = await onboarding.get(MEMBERSHIP);
+      // Only the statuses that can make the item done are read (`subscriptions_current_uq` holds at most one).
+      expect(statements[1]).toMatch(/"b"\."status" in \(\$\d+, \$\d+\)/);
+      return items.find((item) => item.id === "plan_chosen")?.done;
+    };
+
+    expect(await chosen("manual", "active")).toBe(true);
+    expect(await chosen("manual", "trialing")).toBe(false);
+    expect(await chosen("stripe", "trialing")).toBe(true);
+    expect(await chosen("stripe", "active")).toBe(true);
+    expect(await chosen(null, null)).toBe(false);
   });
 
   it("answers 404 NOT_FOUND for a tenant that is gone, after a read-only transaction that wrote nothing", async () => {

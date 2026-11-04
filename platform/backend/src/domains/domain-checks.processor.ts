@@ -5,7 +5,8 @@
 //
 // - **DomainJobs** (API and worker) queues `domain.verify {domainId}` (the 5-minute run of verify-pending.scheduler.ts,
 //   `checkDomain`, the admin's re-check of a pending domain), `domain.recheck {domainId}` (the daily run of
-//   recheck.scheduler.ts, the admin's re-check of a verified domain) and `domain.tls_probe {domainId}` (one minute
+//   recheck.scheduler.ts under the day's job id, the admin's re-check of a verified domain under a job id of its own,
+//   admin-domains.service.ts) and `domain.tls_probe {domainId}` (one minute
 //   after a verification, TLS_PROBE_DELAY_MS; the daily run; the admin's re-check, at once). The job data is the domain
 //   id and nothing else (ADR-0009 item 10). `enqueue…` never throws: Redis failing, or not answering within
 //   DOMAIN_ENQUEUE_TIMEOUT_MS, is logged (`domains.enqueue_failed`, `domains.enqueue_timeout`) and answers `false`; the
@@ -37,15 +38,23 @@
 //   verified custom domain (else `domains.recheck_skipped`); then, under the tenant's domain lock and with the row
 //   locked and still verified with the same token (else `domains.recheck_superseded`):
 //   - both proofs hold: `check_failures = 0`, `last_checked_at`, no `last_check_error` (one success resets the count);
-//   - otherwise `check_failures` grows by one and `last_checked_at` and the error code are stored; every failed check
-//     counts, `dns_timeout` included (a host whose DNS servers do not answer is not reachable by travellers either).
-//     At the third consecutive failure (RECHECK_FAILURE_LIMIT) the domain becomes `failed` and loses the primary flag,
+//   - otherwise `last_checked_at` and the error code are stored, and `check_failures` grows by one when no strike was
+//     counted yet that UTC day (`strikeCountedOn`): at most one strike per domain and UTC day, whoever asked (the
+//     04:10 run, a retry, a platform admin's re-checks), so quick repeated re-checks cannot fail a domain (FIX-W41-
+//     PLATFORM, lead decision (2b) of 2026-11-04). The day's strike is read from the locked row, without a column of
+//     its own: a failed re-check is the only write that leaves `last_check_error` set on a verified domain (a pass,
+//     the verification and `markVerified` clear it), and the first failure of a day always counts, so a verified row
+//     checked that UTC day with an error and a count above zero holds that day's strike. Every failure that counts
+//     counts the same, `dns_timeout` included (a host whose DNS servers do not answer is not reachable by travellers
+//     either). At the third consecutive failure (RECHECK_FAILURE_LIMIT) the domain becomes `failed` and loses the
+//     primary flag,
 //     the OTA's sub-domain becomes primary again when the domain was, the audit row `domain.recheck_failed` is
 //     written, `domain.failed` goes to every active owner (once per owner and verification, idempotency key with
 //     `verified_at`), and after the commit the `domain` invalidations of the host (and of the sub-domain when the flag
 //     moved) are published and the cached `tlsask:<host>` answer is deleted, so neither the OTA backend nor TLS `ask`
 //     serves the host any more (architecture §6.3: failed, primary changed).
-//   The platform admin's re-check of a verified domain is one such check too (admin-domains.service.ts).
+//   The platform admin's re-check of a verified domain is one such check too (admin-domains.service.ts): it always
+//   runs DNS, also after the day's 04:10 run, and its failure counts only under the rule above.
 // - **DomainTlsProbe** (tls-probe.ts, PBE-051) is one `domain.tls_probe` job.
 // - **DomainOwnerNotices** queues one domain e-mail to every active owner of a domain's OTA in the caller's
 //   transaction, while the OTA's members see it: `domain.verified`, `domain.failed` (both PBE-050) and
@@ -110,6 +119,32 @@ export const DOMAIN_ENQUEUE_TIMEOUT_MS = 2000;
 
 /** Consecutive failed daily re-checks that fail a verified domain (PADR-0004 item 5). */
 export const RECHECK_FAILURE_LIMIT = 3;
+
+/** One UTC day: the slot of the daily runs (recheck.scheduler.ts) and of the re-check's strikes. */
+export const UTC_DAY_MS = 24 * 60 * 60 * 1000;
+
+/** The UTC day of `at`, as days since the epoch. */
+export function utcDayOf(at: Date): number {
+  return Math.floor(at.getTime() / UTC_DAY_MS);
+}
+
+/**
+ * Whether a re-check of the verified domain `row` counted a strike already on the UTC day of `now` (FIX-W41-PLATFORM,
+ * lead decision (2b) of 2026-11-04): it was checked that day, the check left an error and the count is above zero.
+ * Exact for a verified domain, because a failed re-check is the only write that leaves `last_check_error` set on one
+ * (a passed re-check and the verification clear it and reset the count) and the first failure of a day always counts.
+ */
+export function strikeCountedOn(
+  row: Pick<DomainCheckRow, "check_failures" | "last_checked_at" | "last_check_error">,
+  now: Date,
+): boolean {
+  return (
+    row.check_failures > 0 &&
+    row.last_check_error !== null &&
+    row.last_checked_at !== null &&
+    utcDayOf(row.last_checked_at) === utcDayOf(now)
+  );
+}
 
 /** The owners' e-mails (PADR-0013 item 5 and its note of 2026-11-03). */
 export const DOMAIN_VERIFIED_TEMPLATE = "domain.verified";
@@ -187,7 +222,10 @@ export class DomainJobs {
     return this.enqueue(DOMAIN_VERIFY_JOB, domainId, jobId === undefined ? {} : { jobId });
   }
 
-  /** Queues `domain.recheck` for the domain; `jobId` (the daily run's) makes a second add of the same run a no-op. */
+  /**
+   * Queues `domain.recheck` for the domain; `jobId` (the daily run's, or the slot of an admin's re-checks) makes a
+   * second add of the same run or slot a no-op.
+   */
   enqueueRecheck(domainId: string, jobId?: string): Promise<boolean> {
     return this.enqueue(DOMAIN_RECHECK_JOB, domainId, jobId === undefined ? {} : { jobId });
   }
@@ -477,6 +515,11 @@ export interface DomainRecheckResult {
   readonly checked: boolean;
   /** The consecutive failed re-checks after this one. */
   readonly checkFailures?: number;
+  /**
+   * False for a failed check that counted no strike, because one was counted already that UTC day; absent otherwise
+   * (a pass, a counted failure, or no check).
+   */
+  readonly counted?: false;
   /** The error code of a failed check. */
   readonly error?: DnsCheckError;
   /** The sub-domain that became primary again when the failed domain was primary. */
@@ -545,6 +588,24 @@ export class DomainRecheck {
           checkFailures: 0,
         } satisfies DomainRecheckResult;
       }
+      if (strikeCountedOn(current, now)) {
+        // The day's strike was counted already (the 04:10 run, or an earlier re-check): the check is stored, the
+        // count stays.
+        await this.domains.recordRecheckFailure(trx, current.id, {
+          error: result.error,
+          failures: current.check_failures,
+          failed: false,
+          now,
+        });
+        return {
+          domainId,
+          status: "verified",
+          checked: true,
+          checkFailures: current.check_failures,
+          counted: false,
+          error: result.error,
+        } satisfies DomainRecheckResult;
+      }
       const failures = current.check_failures + 1;
       const failed = failures >= RECHECK_FAILURE_LIMIT;
       await this.domains.recordRecheckFailure(trx, current.id, {
@@ -574,6 +635,7 @@ export class DomainRecheck {
         tenantId: row.tenant_id,
         status: outcome.status,
         checkFailures: outcome.checkFailures,
+        ...(outcome.counted === undefined ? {} : { counted: outcome.counted }),
         ...(outcome.error === undefined ? {} : { error: outcome.error }),
       },
       outcome.status === "failed"

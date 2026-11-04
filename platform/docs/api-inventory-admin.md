@@ -22,13 +22,13 @@ Related: [`flows/platform-admin-operations.md`](flows/platform-admin-operations.
 | `adminStepUp` | `POST /v1/admin/auth/step-up` | Fresh TOTP | `{code}` → `AdminSession` | `account_sessions` | `MFA_CODE_INVALID` | M1 |
 | `adminSignOut` | `POST /v1/admin/auth/sign-out` | Sign out | `{refreshToken}` → `204` | `account_sessions` | — | M1 |
 | `adminGetMe` | `GET /v1/admin/me` | Current admin and milestone switches | → `{id, email, fullName, features}` (`features` as in `getMe`) | `accounts` | — | M1 |
-| `adminGetDashboard` | `GET /v1/admin/dashboard` | Counters | → `{tenantsByStatus, provisioningFailed24h, jobsFailedByQueue, officePool: [{environment, available, assigned}], domainsPending (M5), settlementsToReview (M5), stripeEventsFailed (M5), subscriptionsPastDue (M5)}` | several, read-only; BullMQ counts | — | M1 |
+| `adminGetDashboard` | `GET /v1/admin/dashboard` | Counters | → `{tenantsByStatus, provisioningFailed24h, jobsFailedByQueue, officePool: [{environment, available, assigned}], domainsPending (M5), settlementsToReview (M5), stripeEventsFailed (M5), subscriptionsPastDue (M5), liveOfficeRequests: [{tenantId, tenantKey, tenantName, connectionId, requestedAt}] (M5, 2026-11-04)}` | several, read-only (`supplier_connections` for the live office requests); BullMQ counts | — | M1 |
 
 `AdminSession` = `{accessToken, accessTokenExpiresAt, refreshToken, refreshTokenExpiresAt, admin: {id, email, fullName, features}}`. Tokens appear only there; the admin server moves them into its own cookies at once.
 
 `adminGetMe` (and `AdminSession.admin`) also answers `features`, the milestone switches of `getMe` ([part 1](api-inventory.md) §5): the admin cannot call the portal-scoped `getMe`, and [PADR-0015](adr/0015-milestone-feature-switches.md) item 3 makes the backend the only source of the switches, so the admin hides the M5 areas from this answer (added by PBE-007).
 
-The M5 counters of `adminGetDashboard` are always present and `null` while their switch is off: `domainsPending` (`custom_domains`), `settlementsToReview` (`settlements`), `stripeEventsFailed` (`stripe_billing` or `own_stripe`) and `subscriptionsPastDue` (`stripe_billing`).
+The M5 counters of `adminGetDashboard` are always present and `null` while their switch is off: `domainsPending` (`custom_domains`), `settlementsToReview` (`settlements`), `stripeEventsFailed` (`stripe_billing` or `own_stripe`) and `subscriptionsPastDue` (`stripe_billing`). Since 2026-11-04 (lead decision (2n), FIX-W41-PLATFORM) `liveOfficeRequests` lists the OTAs whose live Velexis connection waits for an office (`pending_verification`, no office; the OTA not being deleted), oldest request first, at most 50, read from `supplier_connections`, never from the audit log; it is always present (empty when no OTA waits).
 
 ## 3. Tenants, provisioning jobs, queues
 
@@ -60,7 +60,7 @@ The M5 counters of `adminGetDashboard` are always present and `null` while their
 | `adminListSubscriptions` | `GET /v1/admin/subscriptions?status=&provider=&planCode=&cursor=` | Subscriptions | → `{data, page}` | `subscriptions`, `tenants` | — | M1 |
 | `adminGetSubscription` | `GET /v1/admin/subscriptions/{subscriptionId}` | Detail and history | → `{subscription, invoices[], events[]}` | `subscriptions`, `invoices`, `stripe_events` | `NOT_FOUND` | M1 |
 | `adminResyncSubscription` | `POST /v1/admin/subscriptions/{subscriptionId}/resync` | Re-fetch from Stripe | → `200 subscription` | `subscriptions`, `tenants` | `CONFLICT` (manual), `PROVIDER_ERROR` | M5 |
-| `adminUpdateManualSubscription` | `PATCH /v1/admin/subscriptions/{subscriptionId}` | Manual plans only (**reason**) | `If-Match`, `{planCode?, trialEndsAt?, status?: "trialing" \| "canceled", reason}` → subscription | `subscriptions`, `tenants` | `CONFLICT` (Stripe-billed, or a second current subscription), `UNPROCESSABLE` (`plan_not_active`) | M1 |
+| `adminUpdateManualSubscription` | `PATCH /v1/admin/subscriptions/{subscriptionId}` | Manual plans only (**reason**); a later trial end reopens a `past_due` trial (`trialing`, the banner as the daily run sets it; 2026-11-04) | `If-Match`, `{planCode?, trialEndsAt?, status?: "trialing" \| "canceled", reason}` → subscription | `subscriptions`, `tenants` | `CONFLICT` (Stripe-billed, or a second current subscription), `UNPROCESSABLE` (`plan_not_active`) | M1 |
 | `adminListInvoices` | `GET /v1/admin/invoices?tenantId=&status=&cursor=` | Invoices | → `{data, page}` | `invoices` | — | M5 |
 | `adminListStripeEvents` | `GET /v1/admin/stripe-events?status=&type=&tenantId=&cursor=` | Webhook inbox | → `{data: [{id, endpoint, type, status, attempts, lastError, tenantId, receivedAt, processedAt}], page}` | `stripe_events` | — | M5 |
 | `adminReprocessStripeEvent` | `POST /v1/admin/stripe-events/{eventId}/reprocess` | Re-run a failed or ignored event | → `202` | `stripe_events` | `CONFLICT` (`details.reason` is the event's status: `processing`, `received` or `processed`) | M5 |
@@ -102,7 +102,7 @@ The M5 counters of `adminGetDashboard` are always present and `null` while their
 | Operation | Method and path | Purpose | Request → response | Tables | Errors | M |
 |---|---|---|---|---|---|---|
 | `adminListDomains` | `GET /v1/admin/domains?kind=&verificationStatus=&tlsStatus=&cursor=` | All domains | → `{data, page}` | `tenant_domains` | — | M5 |
-| `adminRecheckDomain` | `POST /v1/admin/domains/{domainId}/recheck` | DNS check and TLS probe now | → `202` | jobs | — | M5 |
+| `adminRecheckDomain` | `POST /v1/admin/domains/{domainId}/recheck` | DNS check and TLS probe now (a verified domain's DNS check runs every time, under a job id of its own; its failure counts at most one strike per UTC day, 2026-11-04) | → `202` | jobs | — | M5 |
 | `adminRemoveDomain` | `POST /v1/admin/domains/{domainId}/remove` | Remove an abusive custom domain (**reason**) | `{reason}` → `204`; `domain` invalidation; owner e-mailed | `tenant_domains` | `CONFLICT` (sub-domain) | M5 |
 | `adminListAccounts` | `GET /v1/admin/accounts?q=&status=&cursor=` | Accounts | → `{data: [{id, email, fullName, status, mfaEnabled, isPlatformAdmin, lastLoginAt, createdAt}], page}` | `accounts` | — | M1 |
 | `adminGetAccount` | `GET /v1/admin/accounts/{accountId}` | Detail | → `{account, memberships[], activeSessions, recentAudit[]}` | `accounts`, `tenant_memberships`, `account_sessions`, audit | `NOT_FOUND` | M1 |

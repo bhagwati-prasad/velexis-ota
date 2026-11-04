@@ -45,8 +45,13 @@
 //    finalized_at`; due = `due_date`; paid = `status_transitions.paid_at`; the Stripe-hosted page and PDF.
 // 4. The row is inserted (`inv_…`), or updated when anything differs (`updated_at` then), always with
 //    `provider_synced_at`. `subscription_id` links the OTA's row of the subscription (its Stripe row, else the
-//    pre-inserted row that `velexis_subscription_id` names); an unknown one keeps the stored link. Another invoice with
-//    the same number fails for good (`INVOICE_NUMBER_CONFLICT`).
+//    pre-inserted row that `velexis_subscription_id` names). An invoice whose subscription has no row of the OTA yet
+//    fails with the retryable `UNKNOWN_SUBSCRIPTION` and writes nothing (FIX-W41-PLATFORM, lead decision (2h) of
+//    2026-11-04): Stripe may send the first invoice of a Checkout before `checkout.session.completed`, whose handler
+//    writes the row, so the processor's normal attempts and backoff (5 attempts from 30 s, ADR-0009) try it again and
+//    the invoice links once the row is there; after the last attempt the event is `failed` for good, and
+//    `adminReprocessStripeEvent` (PBE-048) queues it again. An invoice without a subscription is stored without a
+//    link, as before. Another invoice with the same number fails for good (`INVOICE_NUMBER_CONFLICT`).
 // 5. `invoice.payment_failed`, while the re-fetched invoice is still unpaid (`open` or `uncollectible`) and its write
 //    was not skipped: `billing.payment_failed` (PADR-0013 item 5) is queued to every active owner of the OTA, once per
 //    owner, invoice and payment attempt (`attempt_count`), in the transaction, besides Stripe's own e-mail. A failure
@@ -442,12 +447,7 @@ export class InvoiceHandler implements StripeEventHandler {
     const subscriptionId =
       context.subscriptionId === undefined
         ? null
-        : ((await this.invoices.subscriptionRowOf(
-            trx,
-            tenant.id,
-            context.subscriptionId,
-            input.pendingRowId,
-          )) ?? null);
+        : await this.subscriptionRowOf(trx, tenant.id, context.subscriptionId, input.pendingRowId);
     const now = this.clock.now();
     let row: InvoiceRecord;
     let changed: boolean;
@@ -487,6 +487,28 @@ export class InvoiceHandler implements StripeEventHandler {
         ? await this.notifyOwners(trx, tenant, invoice, input)
         : 0;
     return { row, created: storedRow === undefined, changed, stale: false, emailed };
+  }
+
+  /**
+   * The OTA's row of the Stripe subscription `providerSubscriptionId` (step 4 of the file header). Throws the retryable
+   * StripeEventFailure `UNKNOWN_SUBSCRIPTION` when the OTA has none yet: the completed Checkout writes it, and the
+   * processor tries the event again.
+   */
+  private async subscriptionRowOf(
+    trx: PlatformTransaction,
+    tenantId: string,
+    providerSubscriptionId: string,
+    pendingRowId: string | undefined,
+  ): Promise<string> {
+    const rowId = await this.invoices.subscriptionRowOf(trx, tenantId, providerSubscriptionId, pendingRowId);
+    if (rowId === undefined) {
+      throw new StripeEventFailure(
+        "UNKNOWN_SUBSCRIPTION",
+        "no row of the invoice's subscription yet; the completed Checkout writes it",
+        { retryable: true, tenantId },
+      );
+    }
+    return rowId;
   }
 
   /**

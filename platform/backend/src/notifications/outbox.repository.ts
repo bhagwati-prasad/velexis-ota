@@ -11,7 +11,14 @@
 // A CHECK of the table refuses a `sent`, `failed` or `canceled` row that still holds a ciphertext
 // (`email_outbox_secret_purge_ck`), so the updates that finalise a row always erase it.
 import { Injectable } from "@nestjs/common";
-import type { Kysely, PlatformDatabase, ReferenceDatabase, Selectable, Transaction } from "@velexis/db";
+import {
+  sql,
+  type Kysely,
+  type PlatformDatabase,
+  type ReferenceDatabase,
+  type Selectable,
+  type Transaction,
+} from "@velexis/db";
 
 type PlatformSchemas = PlatformDatabase & ReferenceDatabase;
 
@@ -159,6 +166,28 @@ export class OutboxRepository {
       .where("status", "in", ["pending", "sending"])
       .executeTakeFirst();
     return result.numUpdatedRows > 0n;
+  }
+
+  /**
+   * True when a row of `template` about the OTA `tenantId` whose non-secret variables hold every pair of `data` exists,
+   * in any state (FIX-W41-PLATFORM: the manual-trial run asks whether a trial's notice was ever queued). The row's
+   * variables are compared with jsonb containment (`data @> …`), so other variables do not matter.
+   */
+  async existsFor(
+    executor: OutboxExecutor,
+    template: string,
+    tenantId: string,
+    data: Readonly<Record<string, string>>,
+  ): Promise<boolean> {
+    const row = await executor
+      .selectFrom("platform.email_outbox")
+      .select("id")
+      .where("template", "=", template)
+      .where("tenant_id", "=", tenantId)
+      .where(sql<boolean>`data @> ${JSON.stringify(data)}::jsonb`)
+      .limit(1)
+      .executeTakeFirst();
+    return row !== undefined;
   }
 
   /**

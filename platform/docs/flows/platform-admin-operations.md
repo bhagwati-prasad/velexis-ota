@@ -89,10 +89,15 @@ sequenceDiagram
 - Create and edit plans (limits, features, trial days, settlement fee); link Stripe product and price ids; review price warnings ([`subscription-billing.md`](subscription-billing.md) §A).
 - Subscriptions and invoices lists with filters; resync a Stripe subscription; edit a **manual** subscription (plan, trial end, cancel) with a reason.
 - Stripe events: failed or ignored events with their error; reprocess after fixing the cause.
+- *Note (2026-11-04, lead decision (2l), FIX-W41-PLATFORM).* Moving the trial end of a `past_due` manual subscription to a later day reopens it: it is a trial again (`trialing`), and the OTA's banner becomes the trial's as the daily run sets it (`trial_ending` within 14 days of the new end, none otherwise), audited with the edit ([`subscription-billing.md`](subscription-billing.md) §G).
 
 ### E. Velexis Amadeus account and offices
 
 Enter and verify shared credentials per environment; add offices in bulk; assign an office to a tenant (live requests appear in the dashboard); release a `releasing` office after confirming with the OTA; retire offices. The dashboard shows pool levels ([`amadeus-connection.md`](amadeus-connection.md)).
+
+*Note (2026-11-04, lead decision (2o), FIX-W41-PLATFORM).* **Release** is offered on assigned offices too, not only on `releasing` ones (PAD-014, lead decision (1f) of 2026-11-04; [PADR-0012](../adr/0012-amadeus-office-pool.md) item 8), with the dialog's warning that the OTA loses the office: the API refuses an office that an `active` `velexis` connection holds with `409 CONFLICT` (`details.reason = connection_active`), and an office held only by the OTA's connections that are not active (`pending_verification`, `invalid_credentials` or `disabled`) is released and taken off each of them (FIX-W40-PLATFORM, lead decision (2b) of 2026-11-03), so the admin never has to wait for the office to be `releasing`.
+
+*Note (2026-11-04, lead decision (2n), FIX-W41-PLATFORM).* The dashboard's **live office requests** come from `adminGetDashboard`'s `liveOfficeRequests` (one call): the OTAs whose `live` `velexis` connection waits for an office (no office yet, not disabled), oldest request first, each with "Assign office"; they are read from the connections themselves, not from the audit log, so no request is missed however many other audit rows there are.
 
 ### F. Settlements and payout accounts (M5)
 

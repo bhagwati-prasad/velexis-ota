@@ -202,6 +202,17 @@ const SAMPLES: Readonly<Record<EmailTemplateKey, EmailVariables>> = {
     },
     secretData: {},
   },
+  "billing.trial_ended": {
+    data: {
+      fullName: "Ana Lima",
+      tenantName: "Acme Travel",
+      tenantKey: "acme",
+      trialEndsOn: "2027-03-20",
+      suspensionOn: "2027-04-14",
+      billingUrl: "https://platform.example.com/otas/ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/billing",
+    },
+    secretData: {},
+  },
 };
 
 const templates = EmailTemplates.load();
@@ -266,8 +277,9 @@ describe("e-mail templates", () => {
         "domain.removed",
         // M5: a failed payment of an invoice of the OTA's subscription (PBE-046).
         "billing.payment_failed",
-        // M5: the notices before a manual trial ends (PBE-047).
+        // M5: the notices before a manual trial ends (PBE-047), and the late one after its end (FIX-W41-PLATFORM).
         "billing.trial_ending",
+        "billing.trial_ended",
       ].sort(),
     );
     for (const key of EMAIL_TEMPLATE_KEYS) {

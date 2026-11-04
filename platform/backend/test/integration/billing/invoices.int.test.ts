@@ -12,21 +12,24 @@
 // a re-fetch at a barrier: Stripe answers when the call is made, and the answer reaches the handler only when the test
 // says. The job schedulers are not registered. The Stripe keys are the development values of `.env.example`.
 import { randomBytes } from "node:crypto";
+import { getQueueToken } from "@nestjs/bullmq";
 import { Test, type TestingModule } from "@nestjs/testing";
 import { expectResponseToMatch, responseChecker } from "@velexis/testing";
 import { uniqueEmail, waitForMessage } from "@velexis/testing/mailpit";
 import { signedStripeEvent, stripeFixture } from "@velexis/testing/stripe";
+import type { Queue } from "bullmq";
 import type Stripe from "stripe";
 import type { Response } from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { TokenService } from "../../../src/auth/token.service";
 import { Clock } from "../../../src/common/clock";
 import { PLATFORM_POOL, type PlatformPool } from "../../../src/common/database";
+import { PLATFORM_QUEUE } from "../../../src/common/queues/queue-names";
 import { JobSchedulerRegistry } from "../../../src/common/queues/scheduler.registry";
 import { StripeClient } from "../../../src/common/stripe/stripe.client";
 import { createProcessLogger, PLATFORM_PROCESSES } from "../../../src/config";
 import { WorkerModule } from "../../../src/worker.module";
-import { insertAccount, insertRow, testId, type PlatformRow } from "../../builders/platform-rows";
+import { insertAccount, insertPlan, insertRow, testId, type PlatformRow } from "../../builders/platform-rows";
 import { insertMember, insertOta } from "../../builders/tenants";
 import { createTestApp, LogSink, type TestApp } from "../../support/app";
 import { FakeStripe } from "../../support/fake-stripe";
@@ -57,11 +60,15 @@ const FAMILY = testId("asn", FIRST_ID);
 type Row = Record<string, unknown>;
 type InvoiceEventType = "invoice.finalized" | "invoice.paid" | "invoice.payment_failed" | "invoice.voided";
 
+/** The plan and Stripe Price of this file's Checkouts (FIX-W41-PLATFORM, the invoice before its Checkout). */
+const CHECKOUT_PLAN = { code: "fixw41_invoice", month: "price_TestFixW41InvoiceMonth" };
+
 const stripe = new FakeStripe();
 let t: TestApp;
 let pool: PlatformPool;
 let worker: TestingModule;
 let tokens: TokenService;
+let stripeEvents: Queue;
 const workerLogs = new LogSink();
 let next = FIRST_ID + 1;
 
@@ -71,8 +78,11 @@ beforeAll(async () => {
   t = await createTestApp({ env: STRIPE_ENV, overrides: [{ provide: StripeClient, useValue: stripe }] });
   pool = t.app.get<PlatformPool>(PLATFORM_POOL);
   tokens = t.app.get(TokenService);
+  stripeEvents = t.app.get<Queue>(getQueueToken(PLATFORM_QUEUE.stripeEvents), { strict: false });
   responseChecker("platform");
   stripeFixture("invoice.paid");
+  stripeFixture("checkout.session.completed");
+  stripeFixture("customer.subscription.updated");
 
   const logger = createProcessLogger(PLATFORM_PROCESSES.worker, t.config, workerLogs);
   worker = await Test.createTestingModule({ imports: [WorkerModule.forRoot(t.config, logger)] })
@@ -85,6 +95,7 @@ beforeAll(async () => {
     .compile();
   await worker.init();
 
+  await insertPlan(pool, { code: CHECKOUT_PLAN.code, stripe_price_id_month: CHECKOUT_PLAN.month });
   // The yen (no minor unit), as the reference loader writes it; the test clones hold EUR, GBP and USD only.
   await pool.query(
     `INSERT INTO reference.currencies (code, numeric_code, name, symbol, minor_units)
@@ -751,6 +762,179 @@ describe("overlapping events of one invoice (PBE-046 step 4, PADR-0002 item 5 re
     });
     expect(syncLinesOf(newer)).toEqual([
       expect.objectContaining({ stale: false, changed: true, status: "paid" }),
+    ]);
+  });
+});
+
+// ---- The invoice before its Checkout (FIX-W41-PLATFORM, lead decision (2h) of 2026-11-04) ---------------------------
+
+/** The fixture's completed Checkout Session of `ids` for `tenantId` (no pre-inserted row), as Stripe answers it. */
+function completedCheckout(
+  ids: InvoiceIds,
+  sessionId: string,
+  tenantId: string,
+  email: string,
+): Stripe.Checkout.Session {
+  const base = stripeFixture("checkout.session.completed").data.object;
+  return {
+    ...base,
+    id: sessionId,
+    mode: "subscription",
+    client_reference_id: tenantId,
+    customer: ids.customerId,
+    customer_details: base.customer_details === null ? null : { ...base.customer_details, email },
+    invoice: null,
+    subscription: ids.subscriptionId,
+    metadata: { velexis_tenant_id: tenantId, velexis_plan_code: CHECKOUT_PLAN.code },
+  };
+}
+
+/** The fixture's subscription of `ids`, `active` on CHECKOUT_PLAN's Price, as Stripe answers a retrieve. */
+function activeSubscription(ids: InvoiceIds, tenantId: string): Stripe.Subscription {
+  const base = stripeFixture("customer.subscription.updated").data.object;
+  const [item] = base.items.data;
+  if (item === undefined) {
+    throw new Error("the subscription fixture has no item");
+  }
+  return {
+    ...base,
+    id: ids.subscriptionId,
+    customer: ids.customerId,
+    status: "active",
+    trial_end: null,
+    cancel_at: null,
+    cancel_at_period_end: false,
+    canceled_at: null,
+    latest_invoice: null,
+    metadata: { velexis_tenant_id: tenantId, velexis_plan_code: CHECKOUT_PLAN.code },
+    items: {
+      ...base.items,
+      data: [
+        {
+          ...item,
+          subscription: ids.subscriptionId,
+          price: { ...item.price, id: CHECKOUT_PLAN.month },
+          plan: { ...item.plan, id: CHECKOUT_PLAN.month },
+        },
+      ],
+      url: `/v1/subscription_items?subscription=${ids.subscriptionId}`,
+    },
+  };
+}
+
+/** A signed `checkout.session.completed` delivery of `sessionId`. */
+function checkoutEvent(sessionId: string): Delivery {
+  const eventId = `evt_test_fixw41_checkout_${next++}`;
+  const { payload, header } = signedStripeEvent(
+    "checkout.session.completed",
+    { id: eventId, data: { object: { id: sessionId } } },
+    SECRET,
+    { timestamp: t.clock.now() },
+  );
+  return { eventId, payload, header };
+}
+
+describe("an invoice that arrives before its Checkout (FIX-W41-PLATFORM, lead decision (2h) of 2026-11-04)", () => {
+  it("[FIX-W41-PLATFORM AC4] fails retryably while its subscription has no row, then links once checkout.session.completed wrote it, and adminGetSubscription lists it", async () => {
+    // An OTA on a manual trial chooses a plan: its Stripe Customer is known, its Stripe subscription has no row yet
+    // (createCheckoutSession of an existing OTA writes none, flow §B item 2). The Stripe ids have the admin document's
+    // shape (letters and digits after the prefix).
+    const n = next++;
+    const ids: InvoiceIds = {
+      invoiceId: `in_TestFixW41N${n}`,
+      subscriptionId: `sub_TestFixW41N${n}`,
+      customerId: `cus_TestFixW41N${n}`,
+      number: `VXTEST-FIXW41-${n}`,
+    };
+    const owner = await newAccount("owner-fixw41");
+    const ota = await insertOta(pool, {
+      tenant: { id: testId("ten", n), key: `fixw${n}`, name: `Agency ${n} Travel` },
+      subscription: { id: testId("sub", n), status: "trialing", billing_provider: "manual" },
+      members: [[owner, "owner"]],
+    });
+    await insertRow(pool, "billing_customers", {
+      tenant_id: ota.tenant.id,
+      provider_customer_id: ids.customerId,
+      livemode: false,
+      billing_email: owner.email,
+    });
+    const sessionId = `cs_test_fixw41_${n}`;
+    stripe.put(
+      completedCheckout(ids, sessionId, ota.tenant.id, owner.email),
+      activeSubscription(ids, ota.tenant.id),
+    );
+    stripeNow(ids, { status: "paid", tenantId: ota.tenant.id });
+
+    // Stripe sends the first invoice before the completed Checkout: no row to link, so the attempt fails, retryably.
+    const invoice = invoiceEvent("invoice.paid", ids.invoiceId);
+    expect(await deliver(invoice)).toMatchObject({
+      status: "failed",
+      attempts: 1,
+      processed_at: null,
+      tenant_id: ota.tenant.id,
+      last_error:
+        "UNKNOWN_SUBSCRIPTION: no row of the invoice's subscription yet; the completed Checkout writes it",
+    });
+    expect(await invoiceOf(ids.invoiceId)).toBeUndefined();
+    // BullMQ holds the event for its next attempt (backoff from 30 s, ADR-0009).
+    const job = await vi.waitFor(async () => {
+      const found = await stripeEvents.getJob(invoice.eventId);
+      expect(await found?.getState()).toBe("delayed");
+      return found;
+    }, WAIT);
+
+    // The completed Checkout writes the Stripe row of the subscription.
+    expect(await deliver(checkoutEvent(sessionId))).toMatchObject({ status: "processed" });
+    const [stripeRow] = await rowsOf(
+      "SELECT id FROM platform.subscriptions WHERE tenant_id = $1 AND provider_subscription_id = $2",
+      [ota.tenant.id, ids.subscriptionId],
+    );
+    expect(stripeRow?.["id"]).toEqual(expect.any(String));
+
+    // The invoice's next attempt, without waiting for the backoff: it links to that row.
+    await job?.promote();
+    await vi.waitFor(async () => {
+      expect(
+        (
+          await rowsOf("SELECT status, attempts FROM platform.stripe_events WHERE id = $1", [invoice.eventId])
+        )[0],
+      ).toEqual({ status: "processed", attempts: 2 });
+    }, WAIT);
+    const stored = await invoiceOf(ids.invoiceId);
+    expect(stored).toMatchObject({
+      tenant_id: ota.tenant.id,
+      subscription_id: stripeRow?.["id"],
+      number: ids.number,
+      status: "paid",
+    });
+
+    // The platform admin sees it on the subscription's page.
+    const admin = await insertAccount(pool, {
+      id: testId("acc", next++),
+      email: uniqueEmail("admin-fixw41"),
+      is_platform_admin: true,
+      mfa_enabled: true,
+    });
+    const { token } = await tokens.sign({
+      aud: "platform_admin",
+      sub: admin.id,
+      sid: testId("asn", next++),
+      ev: true,
+      amr: ["pwd", "otp"],
+    });
+    const res = await t.http
+      .get(`/v1/admin/subscriptions/${String(stripeRow?.["id"])}`)
+      .set({ Authorization: `Bearer ${token}`, ...t.bffHeaders("203.0.113.47") });
+    expect(res.status).toBe(200);
+    expectResponseToMatch("adminGetSubscription", res, { document: "platform" });
+    expect((res.body as { invoices: Array<Record<string, unknown>> }).invoices).toEqual([
+      expect.objectContaining({
+        id: stored?.["id"],
+        subscriptionId: stripeRow?.["id"],
+        number: ids.number,
+        status: "paid",
+        providerInvoiceId: ids.invoiceId,
+      }),
     ]);
   });
 });

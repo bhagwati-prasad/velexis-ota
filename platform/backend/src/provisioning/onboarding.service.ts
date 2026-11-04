@@ -11,6 +11,9 @@
 //   cached or audited. The account items (`email_verified`, `mfa_enabled`) are the caller's: the account of the
 //   membership that TenantRoleGuard read. The facts of the M5 items are read whatever the switches say (a few indexed
 //   lookups); the switches only decide which items the answer lists.
+// - `plan_chosen` (`planChosen`) is done for a Stripe subscription that is `trialing` or `active`, and for a manual one
+//   that is `active` (a platform admin's plan, as go-live counts it); a manual trial is not a chosen plan (PADR-0018,
+//   note of 2026-11-04, lead decision (2a), FIX-W41-PLATFORM).
 import { Inject, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type { components } from "@velexis/api-types/platform";
@@ -20,7 +23,11 @@ import { PLATFORM_DB, type PlatformDb } from "../common/database";
 import { FeatureSwitches, type Feature } from "../common/features";
 import type { PlatformBackendConfig } from "../config";
 import { storefrontHost } from "../tenants/tenant-key";
-import { OnboardingRepository, type OnboardingRecord } from "./onboarding.repository";
+import {
+  OnboardingRepository,
+  type OnboardingRecord,
+  type OnboardingSubscription,
+} from "./onboarding.repository";
 
 export type OnboardingChecklist = components["schemas"]["OnboardingChecklist"];
 export type OnboardingItem = components["schemas"]["OnboardingItem"];
@@ -51,6 +58,24 @@ const otaPage =
   (page: string) =>
   (tenantId: string): string =>
     `/otas/${tenantId}/${page}`;
+
+/**
+ * Whether the OTA's current subscription means a plan was chosen (PADR-0018 and its note of 2026-11-04): a Stripe one
+ * that is `trialing` or `active`, or a manual one that is `active`; never a manual trial, nor no subscription.
+ */
+export function planChosen(subscription: OnboardingSubscription | null): boolean {
+  if (subscription === null) {
+    return false;
+  }
+  switch (subscription.billingProvider) {
+    case "stripe":
+      return subscription.status === "trialing" || subscription.status === "active";
+    case "manual":
+      return subscription.status === "active";
+    default:
+      return false;
+  }
+}
 
 /** The payment modes in which the OTA charges on a Stripe account of its own (PADR-0011). */
 const OWN_STRIPE_MODES: ReadonlySet<string> = new Set(["connect_standard", "api_keys"]);
@@ -122,7 +147,7 @@ export const ONBOARDING_ITEMS: readonly OnboardingItemRule[] = Object.freeze([
     label: "Choose a plan",
     milestone: "M5",
     switches: ["stripe_billing"],
-    done: (facts) => facts.stripeSubscriptionCurrent,
+    done: (facts) => planChosen(facts.currentSubscription),
     href: otaPage("billing"),
   }),
   rule({

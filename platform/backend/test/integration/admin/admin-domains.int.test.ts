@@ -35,6 +35,7 @@ import {
   DomainJobs,
 } from "../../../src/domains/domain-checks.processor";
 import { ownershipRecordName, type DnsResolver } from "../../../src/domains/domain-checks";
+import { adminRecheckJobId } from "../../../src/domains/admin-domains.service";
 import { DAILY_SLOT_MS, dailyJobId } from "../../../src/domains/recheck.scheduler";
 import { TLS_PROBE_TARGET } from "../../../src/domains/tls-probe";
 import { WorkerModule } from "../../../src/worker.module";
@@ -68,7 +69,8 @@ const IPV6 = "2001:db8::10";
 const TOKEN = "vx-verify-K7Q4M2XP9TRWH5ZDB3NV8QKE1MZT6RYC";
 /** An admin's written reason, with the white space the API trims (5–500 characters once trimmed). */
 const REASON = "Phishing pages reported by the registrar (case 88231).";
-const HOUR_MS = 60 * 60 * 1000;
+const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
 
 type Row = Record<string, unknown>;
 type RecordType = "TXT" | "CNAME" | "A" | "AAAA";
@@ -213,6 +215,15 @@ async function arrangeOta(status = "active"): Promise<Ota> {
       { id: coOwner.id, email: coOwner.email },
     ],
   };
+}
+
+/**
+ * Moves the shared FakeClock forward to `hour`:`minute` UTC of the next UTC day, so a test's re-checks of one day stay
+ * in that day whatever the earlier tests did to the clock.
+ */
+function nextUtcDayAt(hour: number, minute: number): void {
+  const day = Math.floor(t.clock.now().getTime() / DAILY_SLOT_MS) + 1;
+  t.clock.set(day * DAILY_SLOT_MS + hour * HOUR_MS + minute * MINUTE_MS);
 }
 
 /** A host name of this file: `<label>-<random>.example.net`, watched for `domain` events. */
@@ -504,39 +515,121 @@ describe("adminRecheckDomain", () => {
     ]);
   });
 
-  it("[FIX-W40-PLATFORM AC6] three quick re-checks of a verified domain whose DNS fails count one strike that day, and the next UTC day's counts again", async () => {
+  it("[FIX-W41-PLATFORM AC2] an admin re-check after the day's daily run queues and runs DNS under its own job id, and its pass resets the strikes", async () => {
+    const ota = await arrangeOta();
+    const hostname = host("after-daily");
+    const domainId = await customDomain(ota, hostname, "verified");
+    nextUtcDayAt(4, 10);
+    // The day's 04:10 run queues the domain's check in the daily slot; DNS has no records yet, so it fails.
+    const dailyId = dailyJobId(DOMAIN_RECHECK_JOB, domainId, t.clock.now());
+    expect(await t.app.get(DomainJobs, { strict: false }).enqueueRecheck(domainId, dailyId)).toBe(true);
+    expect(await completedJobsFor(domainId, 1)).toEqual([DOMAIN_RECHECK_JOB]);
+    expect(await domainRow(domainId)).toMatchObject({ check_failures: 1, last_check_error: "txt_missing" });
+
+    // The owner publishes the records, and later that day a platform admin re-checks.
+    publishRecords(ota, hostname);
+    t.clock.advance(5 * HOUR_MS);
+    expect((await recheck(domainId)).status).toBe(202);
+
+    expect(await completedJobsFor(domainId, 3)).toEqual(
+      [DOMAIN_RECHECK_JOB, DOMAIN_RECHECK_JOB, DOMAIN_TLS_PROBE_JOB].sort(),
+    );
+    const dnsJobs = (await jobsFor(domainId)).filter((job) => job.name === DOMAIN_RECHECK_JOB);
+    expect(dnsJobs.map((job) => job.id)).toEqual([dailyId, adminRecheckJobId(domainId, t.clock.now())]);
+    expect(dnsJobs[1]?.returnvalue).toEqual({
+      domainId,
+      status: "verified",
+      checked: true,
+      checkFailures: 0,
+    });
+    expect(await domainRow(domainId)).toMatchObject({
+      verification_status: "verified",
+      check_failures: 0,
+      last_check_error: null,
+      last_checked_at: t.clock.now(),
+    });
+  });
+
+  it("[FIX-W41-PLATFORM AC2] three failing admin re-checks the same UTC day leave one strike, a double click queues one DNS check, and the next UTC day's counts again", async () => {
+    // Replaces FIX-W40-PLATFORM AC6's check that the re-checks shared the daily job (lead decision (2b) of
+    // 2026-11-04): every re-check now runs DNS, and the worker counts one strike per domain and UTC day.
     const ota = await arrangeOta();
     const hostname = host("strikes");
     const domainId = await customDomain(ota, hostname, "verified");
     // No records: every DNS check of the host fails (`txt_missing`).
+    nextUtcDayAt(10, 0);
 
-    for (let click = 0; click < 3; click += 1) {
-      expect((await recheck(domainId)).status).toBe(202);
-    }
-
-    // One `domain.recheck` in the daily re-check's slot of the domain and the UTC day, and a TLS probe per click.
-    const names = await completedJobsFor(domainId, 4);
-    expect(names).toEqual([DOMAIN_RECHECK_JOB, ...Array<string>(3).fill(DOMAIN_TLS_PROBE_JOB)].sort());
-    const [dnsJob] = (await jobsFor(domainId)).filter((job) => job.name === DOMAIN_RECHECK_JOB);
-    expect(dnsJob?.id).toBe(dailyJobId(DOMAIN_RECHECK_JOB, domainId, t.clock.now()));
+    // A double click within the slot: one DNS check, and a TLS probe per click.
+    expect((await recheck(domainId)).status).toBe(202);
+    expect((await recheck(domainId)).status).toBe(202);
+    expect(await completedJobsFor(domainId, 3)).toEqual(
+      [DOMAIN_RECHECK_JOB, ...Array<string>(2).fill(DOMAIN_TLS_PROBE_JOB)].sort(),
+    );
     expect(await domainRow(domainId)).toMatchObject({
       verification_status: "verified",
       check_failures: 1,
       last_check_error: "txt_missing",
+      last_checked_at: t.clock.now(),
     });
+
+    // Two more re-checks later that day: each runs DNS, which still fails, and neither adds a strike.
+    for (const [click, minutes] of [
+      [1, 1],
+      [2, 30],
+    ] as const) {
+      t.clock.advance(minutes * MINUTE_MS);
+      expect((await recheck(domainId)).status).toBe(202);
+      expect(await completedJobsFor(domainId, 3 + 2 * click)).toHaveLength(3 + 2 * click);
+      expect(await domainRow(domainId)).toMatchObject({
+        verification_status: "verified",
+        check_failures: 1,
+        last_check_error: "txt_missing",
+        last_checked_at: t.clock.now(),
+      });
+    }
+    const dnsJobs = (await jobsFor(domainId)).filter((job) => job.name === DOMAIN_RECHECK_JOB);
+    expect(dnsJobs).toHaveLength(3);
+    expect(dnsJobs.every((job) => job.id?.startsWith(`${DOMAIN_RECHECK_JOB}.admin.${domainId}.`))).toBe(true);
+    expect(dnsJobs.map((job) => job.returnvalue as unknown)).toEqual([
+      { domainId, status: "verified", checked: true, checkFailures: 1, error: "txt_missing" },
+      { domainId, status: "verified", checked: true, checkFailures: 1, counted: false, error: "txt_missing" },
+      { domainId, status: "verified", checked: true, checkFailures: 1, counted: false, error: "txt_missing" },
+    ]);
     // Every click is audited with the jobs it asked for.
     expect(
       (await auditOf(domainId)).filter((row) => row["action"] === "domain.recheck_requested"),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
 
-    // The next UTC day has a slot of its own: a re-check counts again.
+    // The next UTC day, a failure counts again.
     t.clock.advance(DAILY_SLOT_MS);
     expect((await recheck(domainId)).status).toBe(202);
 
-    expect(await completedJobsFor(domainId, 6)).toEqual(
-      [DOMAIN_RECHECK_JOB, DOMAIN_RECHECK_JOB, ...Array<string>(4).fill(DOMAIN_TLS_PROBE_JOB)].sort(),
-    );
+    expect(await completedJobsFor(domainId, 9)).toHaveLength(9);
     expect(await domainRow(domainId)).toMatchObject({ verification_status: "verified", check_failures: 2 });
+  });
+
+  it("[FIX-W41-PLATFORM AC2] the daily run's strike and a later failing admin re-check the same UTC day count once", async () => {
+    const ota = await arrangeOta();
+    const domainId = await customDomain(ota, host("daily-strike"), "verified");
+    nextUtcDayAt(4, 10);
+    const dailyId = dailyJobId(DOMAIN_RECHECK_JOB, domainId, t.clock.now());
+    expect(await t.app.get(DomainJobs, { strict: false }).enqueueRecheck(domainId, dailyId)).toBe(true);
+    expect(await completedJobsFor(domainId, 1)).toEqual([DOMAIN_RECHECK_JOB]);
+    expect(await domainRow(domainId)).toMatchObject({ check_failures: 1, last_check_error: "txt_missing" });
+
+    t.clock.advance(8 * HOUR_MS);
+    expect((await recheck(domainId)).status).toBe(202);
+
+    expect(await completedJobsFor(domainId, 3)).toHaveLength(3);
+    const [daily, admin] = (await jobsFor(domainId)).filter((job) => job.name === DOMAIN_RECHECK_JOB);
+    expect([daily?.id, admin?.id]).toEqual([dailyId, adminRecheckJobId(domainId, t.clock.now())]);
+    expect(admin?.returnvalue).toMatchObject({ checked: true, checkFailures: 1, counted: false });
+    expect(await domainRow(domainId)).toMatchObject({
+      verification_status: "verified",
+      check_failures: 1,
+      last_check_error: "txt_missing",
+      last_checked_at: t.clock.now(),
+    });
   });
 
   it("[PBE-051 AC3] a pending domain gets its verification, the sub-domain and a failed domain the probe only", async () => {

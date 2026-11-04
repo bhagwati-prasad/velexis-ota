@@ -21,16 +21,32 @@
 // FIX-W36-PLATFORM, says `stripe_fees` never counts it again), in `stripe_fees` for the others, so `net` is the sum of
 // the lines' amounts less their Stripe fees and the Velexis fee, and the CSV of the lines reconciles with the
 // statement.
+//
+// The conversions (`fromMinorUnits`, `fitsStoredAmount`, `toStoredAmount`) live in common/money.ts, shared with
+// billing's invoices since FIX-W41-PLATFORM (lead decision (2i) of 2026-11-04); this module keeps the settlements'
+// shape around them: SettlementMoney values in and out, and SettlementDataError with the settlements' messages.
 import { Decimal } from "decimal.js";
+import {
+  fitsStoredAmount as fitsStoredValue,
+  fromMinorUnits as fromMinorUnitsValue,
+  isDecimalString,
+  MAX_STORED_AMOUNT,
+  MoneyError,
+  PlatformMoney,
+  STORED_DECIMALS,
+  toStoredAmount as toStoredValue,
+  type MoneyErrorReason,
+  type MoneyValue,
+} from "../common/money";
+
+export { MAX_STORED_AMOUNT, STORED_DECIMALS, type MoneyValue };
 
 /**
  * decimal.js for settlements, independent of the global `Decimal` settings: 40 significant digits (a 12-digit amount
- * times a fee in basis points stays exact) and half-even rounding, the rounding of PADR-0003 item 5.
+ * times a fee in basis points stays exact) and half-even rounding, the rounding of PADR-0003 item 5. It is
+ * common/money.ts's PlatformMoney.
  */
-export const SettlementMoney = Decimal.clone({ precision: 40, rounding: Decimal.ROUND_HALF_EVEN });
-
-/** A decimal.js value of SettlementMoney. */
-export type MoneyValue = Decimal;
+export const SettlementMoney = PlatformMoney;
 
 /** The line types of `settlement_lines.line_type`. */
 export const SETTLEMENT_LINE_TYPES = Object.freeze([
@@ -45,26 +61,37 @@ export const SETTLEMENT_LINE_TYPES = Object.freeze([
 /** One line type. */
 export type SettlementLineType = (typeof SETTLEMENT_LINE_TYPES)[number];
 
-/** The decimals of the `numeric(12,2)` amount columns. */
-export const STORED_DECIMALS = 2;
-
-/** The largest absolute amount a `numeric(12,2)` column holds. */
-export const MAX_STORED_AMOUNT = "9999999999.99";
-
 /** The highest fee in basis points (`plans.settlement_fee_bps BETWEEN 0 AND 10000`). */
 export const MAX_FEE_BPS = 10_000;
-
-/** A decimal string such as `"512.40"` or `"-5"`, as PostgreSQL prints `numeric`. No exponent. */
-const DECIMAL_STRING = /^-?\d+(?:\.\d+)?$/;
 
 /** Data that cannot become a statement: an amount the columns cannot hold, an unknown currency, a bad fee. */
 export class SettlementDataError extends Error {
   override readonly name = "SettlementDataError";
 }
 
+/** The settlements' message of each reason of common/money.ts (a statement's failure records it). */
+const SETTLEMENT_MONEY_TEXT: Readonly<Record<MoneyErrorReason, string>> = Object.freeze({
+  amount_not_integer: "a Stripe amount is not an integer",
+  exponent_out_of_range: "a currency exponent is not between 0 and 4",
+  not_decimal_string: "an amount is not a decimal string",
+  does_not_fit: "an amount does not fit numeric(12,2)",
+});
+
+/** Runs `compute`, turning common/money.ts's MoneyError into SettlementDataError with the settlements' message. */
+function settlement<T>(compute: () => T): T {
+  try {
+    return compute();
+  } catch (error) {
+    if (error instanceof MoneyError) {
+      throw new SettlementDataError(SETTLEMENT_MONEY_TEXT[error.reason]);
+    }
+    throw error;
+  }
+}
+
 /** `value` as a SettlementMoney value; throws SettlementDataError naming `field` when it is not a decimal string. */
 export function toMoney(value: string, field: string): MoneyValue {
-  if (typeof value !== "string" || !DECIMAL_STRING.test(value)) {
+  if (!isDecimalString(value)) {
     throw new SettlementDataError(`${field} is not a decimal string`);
   }
   return new SettlementMoney(value);
@@ -75,26 +102,17 @@ export function toMoney(value: string, field: string): MoneyValue {
  * `decimals`, the exponent of its currency (2 for EUR, 0 for JPY).
  */
 export function fromMinorUnits(minor: number, decimals: number): MoneyValue {
-  if (!Number.isSafeInteger(minor)) {
-    throw new SettlementDataError("a Stripe amount is not an integer");
-  }
-  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 4) {
-    throw new SettlementDataError("a currency exponent is not between 0 and 4");
-  }
-  return new SettlementMoney(minor).dividedBy(new SettlementMoney(10).pow(decimals));
+  return settlement(() => fromMinorUnitsValue(minor, decimals));
 }
 
 /** True when `value` fits a `numeric(12,2)` column exactly: at most 2 decimals and 10 integer digits. */
 export function fitsStoredAmount(value: MoneyValue): boolean {
-  return value.decimalPlaces() <= STORED_DECIMALS && value.abs().lte(MAX_STORED_AMOUNT);
+  return fitsStoredValue(value);
 }
 
 /** `value` as the decimal string of a `numeric(12,2)` column (`"-12.50"`); throws when it does not fit exactly. */
 export function toStoredAmount(value: MoneyValue): string {
-  if (!fitsStoredAmount(value)) {
-    throw new SettlementDataError("an amount does not fit numeric(12,2)");
-  }
-  return value.toFixed(STORED_DECIMALS);
+  return settlement(() => toStoredValue(value));
 }
 
 /**

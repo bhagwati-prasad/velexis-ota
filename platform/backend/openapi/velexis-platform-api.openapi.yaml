@@ -6850,6 +6850,12 @@ paths:
         custom domains, `custom_domains`), `settlementsToReview` (draft settlements, `settlements`),
         `stripeEventsFailed` (failed Stripe events, `stripe_billing` or `own_stripe`) and `subscriptionsPastDue`
         (`stripe_billing`).
+
+
+        **Live office requests** (2026-11-04, lead decision (2n), FIX-W41-PLATFORM): `liveOfficeRequests` lists the
+        OTAs whose owner requested live access on the Velexis account (`requestLiveAmadeus`) and whose live connection
+        still waits for an office, read from the connections themselves (not from the audit log), oldest request
+        first, at most 50, so the admin assigns offices from one read of this page.
       tags:
         - Admin dashboard
       security:
@@ -6866,6 +6872,7 @@ paths:
         - provisioning_jobs
         - amadeus_accounts
         - amadeus_offices
+        - supplier_connections
         - tenant_domains
         - settlements
         - stripe_events
@@ -6906,6 +6913,7 @@ paths:
                     settlementsToReview: null
                     stripeEventsFailed: null
                     subscriptionsPastDue: null
+                    liveOfficeRequests: []
                 m5:
                   summary: From M5, every switch on
                   value:
@@ -6934,6 +6942,12 @@ paths:
                     settlementsToReview: 9
                     stripeEventsFailed: 1
                     subscriptionsPastDue: 2
+                    liveOfficeRequests:
+                      - tenantId: ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F
+                        tenantKey: acme
+                        tenantName: Acme Travel
+                        connectionId: sc_01JC4M2P6R0T4W8Y2A6C0E4G8K
+                        requestedAt: '2027-03-01T09:12:00Z'
         '401':
           $ref: '#/components/responses/AdminUnauthenticated'
         '429':
@@ -8836,6 +8850,14 @@ paths:
         give the OTA a second current subscription (`details.reason = current_exists`). A `planCode` that names no
         active plan answers `422 UNPROCESSABLE` (`details.reason = plan_not_active`); plans that are not public are
         allowed.
+
+
+        **Reopening a past-due trial** (2026-11-04, lead decision (2l), FIX-W41-PLATFORM): moving the `trialEndsAt` of
+        a `past_due` manual trial to a later UTC day than today, without `status` or with `trialing`, reopens it: the
+        status becomes `trialing`, and the OTA's banner (`tenants.billing_notice`) becomes what the daily
+        `billing.manual_trials` run sets for a trial with that end: `trial_ending` when the new end is within 14 days,
+        none otherwise (a banner of another kind stays). The audit row records the status before and after and, when
+        it changed, the banner; a changed banner publishes a `tenant` invalidation after the commit.
       tags:
         - Admin billing
       security:
@@ -11536,11 +11558,15 @@ paths:
         is unreachable, because the jobs are the whole effect.
 
 
-        **One strike a day** (2026-11-03, lead decision (2f), FIX-W40-PLATFORM): the re-check of a verified domain
-        counts toward the three consecutive failures that fail a domain at most once per UTC day. Its `domain.recheck`
-        shares the daily re-check's job of the domain and the UTC day: while that day's check is queued, running or
-        done (from the 04:10 run or an earlier click), a second re-check queues no second DNS check that day, so quick
-        repeated clicks cannot fail a domain; the TLS probe is queued every time.
+        **DNS every time, one strike a day** (2026-11-04, lead decision (2b), FIX-W41-PLATFORM; it replaces the
+        shared daily job of 2026-11-03, lead decision (2f), FIX-W40-PLATFORM): the re-check of a verified domain always
+        queues its DNS check (`domain.recheck`), also after the day's 04:10 run, under a job id of its own (re-checks of
+        one domain in the same 10-second slot of the server's clock share one check, so a double click queues one
+        unless it falls on both sides of a slot's end), and that check counts
+        toward the three consecutive failures that fail a domain at most once per UTC day: a failure adds a strike only
+        when none was counted that UTC day (by the daily run or an earlier re-check), and a pass resets the count as
+        the daily run does, so quick repeated clicks cannot fail a domain. `lastCheckedAt` and `lastCheckError` show
+        every check. The TLS probe is queued every time.
       tags:
         - Admin domains
       security:
@@ -17724,6 +17750,7 @@ components:
         - settlementsToReview
         - stripeEventsFailed
         - subscriptionsPastDue
+        - liveOfficeRequests
       properties:
         tenantsByStatus:
           type: object
@@ -17793,6 +17820,44 @@ components:
             - 'null'
           minimum: 0
           description: Subscriptions in `past_due` (M5); `null` while `stripe_billing` is off.
+        liveOfficeRequests:
+          type: array
+          maxItems: 50
+          description: >-
+            The OTAs waiting for a live office (M5, 2026-11-04, FIX-W41-PLATFORM): each OTA whose `live` Amadeus
+            connection on the Velexis account (`credentialSource` `velexis`) is `pending_verification` without an
+            office, as `requestLiveAmadeus` inserted it, of an OTA that is not being deleted. Read from the connections
+            themselves, never from the audit log. Oldest request first (then by connection id), at most 50; empty when
+            no OTA waits. An admin serves a request with `adminAssignAmadeusOffice`, which takes it off this list.
+          items:
+            $ref: '#/components/schemas/LiveOfficeRequest'
+    LiveOfficeRequest:
+      type: object
+      description: >-
+        An OTA waiting for a live office: its live Velexis Amadeus connection, inserted without an office by the
+        owner's `requestLiveAmadeus`.
+      additionalProperties: false
+      required:
+        - tenantId
+        - tenantKey
+        - tenantName
+        - connectionId
+        - requestedAt
+      properties:
+        tenantId:
+          $ref: '#/components/schemas/TenantId'
+        tenantKey:
+          $ref: '#/components/schemas/TenantKey'
+        tenantName:
+          $ref: '#/components/schemas/TenantName'
+        connectionId:
+          type: string
+          pattern: ^sc_[0-9A-HJKMNP-TV-Z]{26}$
+          description: The waiting live connection (`AmadeusConnection.id`), shown on the OTA's connections.
+        requestedAt:
+          type: string
+          format: date-time
+          description: When the owner requested live access (the connection's creation).
     OfficePoolLevel:
       type: object
       description: The offices of the Velexis Amadeus account of one environment, by status.

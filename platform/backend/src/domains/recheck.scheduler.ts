@@ -5,8 +5,8 @@
 // queues one job per domain on `platform-domains`, whose processor does the work (domain-checks.processor.ts):
 //
 // - `domains.recheck_verified` (04:10): one `domain.recheck` per verified custom domain, oldest first. The job asks DNS
-//   for both proofs again; a failure counts, a success resets the count, and the third consecutive failure fails the
-//   domain and gives the primary flag back to the sub-domain.
+//   for both proofs again; a failure counts (once per UTC day at most, `strikeCountedOn`), a success resets the count,
+//   and the third consecutive failure fails the domain and gives the primary flag back to the sub-domain.
 // - `domains.tls_probe` (04:40): one `domain.tls_probe` per verified storefront host (the Velexis sub-domains and the
 //   custom domains) of an OTA whose hosts may be served (`provisioning`, `active`, `suspended`: the tenants of `ask`
 //   rule 1), oldest first. The job connects to Caddy with the host as SNI and stores what it finds (tls-probe.ts).
@@ -14,27 +14,35 @@
 // Each job id names the domain and the UTC day of the Clock's now when the run (or its retry) starts
 // (`domain.recheck.<domainId>.<day>`, `domain.tls_probe.<domainId>.<day>`), so a retry on the same day adds no second
 // job for a domain queued already (completed jobs are kept a day, ADR-0009 item 7). A platform admin's re-check of a
-// verified domain takes the same `domain.recheck` id (admin-domains.service.ts), so the daily run and the admin's
-// clicks count one strike a day at most (FIX-W40-PLATFORM, lead decision (2f) of 2026-11-03). When a job cannot be
-// queued (Redis down or too slow) the run fails after trying every domain, and BullMQ tries it again with the defaults
-// of ADR-0009 (5 attempts, backoff from 30 s); the next day's run comes anyway.
+// verified domain does not take this id: it has one of its own (`adminRecheckJobId`, admin-domains.service.ts), so it
+// always runs DNS, also after the day's 04:10 run, while the re-check job itself counts one strike per domain and UTC
+// day at most, whoever queued it (domain-checks.processor.ts, FIX-W41-PLATFORM, lead decision (2b) of 2026-11-04; it
+// replaces the shared id of FIX-W40-PLATFORM's decision (2f) of 2026-11-03). When a job cannot be queued (Redis down
+// or too slow) the run fails after trying every domain, and BullMQ tries it again with the defaults of ADR-0009 (5
+// attempts, backoff from 30 s); the next day's run comes anyway.
 import { Injectable } from "@nestjs/common";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { Clock } from "../common/clock";
 import { MaintenanceJob, type MaintenanceJobHandler } from "../common/queues/maintenance.processor";
-import { DOMAIN_RECHECK_JOB, DOMAIN_TLS_PROBE_JOB, DomainJobs } from "./domain-checks.processor";
+import {
+  DOMAIN_RECHECK_JOB,
+  DOMAIN_TLS_PROBE_JOB,
+  DomainJobs,
+  UTC_DAY_MS,
+  utcDayOf,
+} from "./domain-checks.processor";
 import { DomainsRepository } from "./domains.repository";
 
 /** The schedules and job names (scheduler.registry.ts). */
 export const DOMAINS_RECHECK_VERIFIED_JOB = "domains.recheck_verified";
 export const DOMAINS_TLS_PROBE_JOB = "domains.tls_probe";
 
-/** The length of one run's slot: a day. */
-export const DAILY_SLOT_MS = 24 * 60 * 60 * 1000;
+/** The length of one run's slot: a UTC day. */
+export const DAILY_SLOT_MS = UTC_DAY_MS;
 
 /** The BullMQ job id of a domain's `job` in the daily run of `now` (no `:`, which BullMQ refuses in ids). */
 export function dailyJobId(job: string, domainId: string, now: Date): string {
-  return `${job}.${domainId}.${Math.floor(now.getTime() / DAILY_SLOT_MS)}`;
+  return `${job}.${domainId}.${utcDayOf(now)}`;
 }
 
 /** What a finished run returns (BullMQ keeps it with the job): counts only. */

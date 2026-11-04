@@ -38,6 +38,7 @@ import {
   DOMAIN_RECHECK_JOB,
   DOMAIN_TLS_PROBE_JOB,
   RECHECK_FAILURE_LIMIT,
+  UTC_DAY_MS,
 } from "../../../src/domains/domain-checks.processor";
 import {
   DNS_CHECK_ERROR_TEXT,
@@ -580,6 +581,57 @@ describe("domain.recheck: the daily DNS re-check", () => {
     expect(await runJob(DOMAIN_RECHECK_JOB, domainId)).toMatchObject({
       status: "verified",
       checkFailures: 1,
+    });
+    await settle();
+    expect(eventsFor(hostname)).toEqual([]);
+    expect(await auditOf(domainId)).toEqual([]);
+  });
+
+  it("[FIX-W41-PLATFORM AC2] a second failing re-check the same UTC day stores its check and adds no strike; the next UTC day's counts", async () => {
+    const ota = await arrangeOta();
+    const hostname = host("twice");
+    const domainId = await verifiedDomain(ota, hostname);
+    publishRecords(ota, hostname);
+    withdrawRouting(hostname);
+    // 04:10 UTC of the next day, so both checks below fall on one UTC day whatever the earlier tests did to the clock.
+    t.clock.set((Math.floor(t.clock.now().getTime() / UTC_DAY_MS) + 1) * UTC_DAY_MS + 250 * 60 * 1000);
+
+    const first = await runJob(DOMAIN_RECHECK_JOB, domainId);
+    // Later that day the TXT record goes too: the check and its error are stored, the count stays.
+    resolver.clear("TXT", ownershipRecordName(hostname));
+    t.clock.advance(19 * HOUR_MS);
+    const second = await runJob(DOMAIN_RECHECK_JOB, domainId);
+
+    expect(first).toEqual({
+      domainId,
+      status: "verified",
+      checked: true,
+      checkFailures: 1,
+      error: "cname_missing",
+    });
+    expect(second).toEqual({
+      domainId,
+      status: "verified",
+      checked: true,
+      checkFailures: 1,
+      counted: false,
+      error: "txt_missing",
+    });
+    expect(await domainRow(domainId)).toMatchObject({
+      verification_status: "verified",
+      check_failures: 1,
+      last_check_error: "txt_missing",
+      last_checked_at: t.clock.now(),
+    });
+
+    // The next UTC day, a failure counts again.
+    t.clock.advance(HOUR_MS);
+    expect(await runJob(DOMAIN_RECHECK_JOB, domainId)).toEqual({
+      domainId,
+      status: "verified",
+      checked: true,
+      checkFailures: 2,
+      error: "txt_missing",
     });
     await settle();
     expect(eventsFor(hostname)).toEqual([]);

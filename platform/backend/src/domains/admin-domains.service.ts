@@ -15,12 +15,14 @@
 //   the TLS probe of the host at once (the sub-domain has no DNS records, so it gets the probe only). The jobs are the
 //   whole effect: one that cannot be queued answers `503 SERVICE_UNAVAILABLE` (the others stay queued); otherwise the
 //   audit row `domain.recheck_requested` (the host and the jobs) is written and `202` answered before the jobs run. A
-//   verified domain's re-check counts like a daily one (a failure grows `check_failures`), but at most once per UTC
-//   day (FIX-W40-PLATFORM, lead decision (2f) of 2026-11-03): its `domain.recheck` takes the daily re-check's job id
-//   of the domain and the Clock's UTC day (`dailyJobId`, recheck.scheduler.ts), so while that day's job is queued,
-//   running or kept as completed (a day, ADR-0009 item 7) a second add is a no-op. Quick repeated clicks, or a click
-//   after the 04:10 run, add no second strike that day; the TLS probe is queued each time. Nothing is published here:
-//   the jobs publish what they change.
+//   verified domain's re-check always runs DNS, also after the day's 04:10 run (FIX-W41-PLATFORM, lead decision (2b)
+//   of 2026-11-04, which replaces the shared daily job id of FIX-W40-PLATFORM's decision (2f)): its `domain.recheck`
+//   has a job id of its own, the domain and the Clock's slot of ADMIN_RECHECK_SLOT_MS (`adminRecheckJobId`), so a
+//   double click within the slot adds one job, not two (a click on each side of a slot's end adds a second, which the
+//   strike rule keeps harmless), and each later click adds one. The job counts like a daily one, but a failure adds a
+//   strike only when none was counted that UTC day, and a pass resets the count (domain-checks.processor.ts,
+//   `strikeCountedOn`), so quick repeated clicks cannot fail a domain; the TLS probe is queued each time. Nothing is
+//   published here: the jobs publish what they change.
 // - `adminRemoveDomain` (`remove`): an abusive custom domain of any OTA, whatever the OTA's status, with a reason. As
 //   the portal's `removeDomain` does (domains.service.ts), in one transaction under the tenant's domain lock: the row
 //   is deleted and, when it was primary, the sub-domain becomes primary again; the audit row `domain.removed` (actor
@@ -51,7 +53,6 @@ import {
   forgetTlsAsk,
 } from "./domain-checks.processor";
 import { DomainsRepository, type AdminDomainRow } from "./domains.repository";
-import { dailyJobId } from "./recheck.scheduler";
 
 export type AdminDomain = components["schemas"]["AdminDomain"];
 export type AdminDomainList = components["schemas"]["AdminDomainList"];
@@ -67,6 +68,18 @@ export interface ListAdminDomainsQuery {
 
 /** The page size without `limit` (the document's default). */
 export const DEFAULT_ADMIN_DOMAIN_PAGE_LIMIT = 50;
+
+/** The slot in which a platform admin's re-checks of one verified domain share one DNS check: 10 s of the Clock. */
+export const ADMIN_RECHECK_SLOT_MS = 10_000;
+
+/**
+ * The BullMQ job id of a platform admin's DNS re-check of the verified domain `domainId` at `now`:
+ * `domain.recheck.admin.<domainId>.<slot>`, never the daily run's id (`dailyJobId`, recheck.scheduler.ts), and no `:`,
+ * which BullMQ refuses in ids. Two clicks in one slot share the job; completed jobs are kept a day (ADR-0009 item 7).
+ */
+export function adminRecheckJobId(domainId: string, now: Date): string {
+  return `${DOMAIN_RECHECK_JOB}.admin.${domainId}.${Math.floor(now.getTime() / ADMIN_RECHECK_SLOT_MS)}`;
+}
 
 /** The occasion of the removal e-mail: one per owner and removed domain. */
 const REMOVAL_OCCASION = "removed";
@@ -192,11 +205,8 @@ export class AdminDomainsService {
         job === DOMAIN_VERIFY_JOB
           ? await this.jobs.enqueueVerify(domain.id)
           : job === DOMAIN_RECHECK_JOB
-            ? // The daily re-check's slot of the domain and the UTC day: one strike a day at most (file header).
-              await this.jobs.enqueueRecheck(
-                domain.id,
-                dailyJobId(DOMAIN_RECHECK_JOB, domain.id, this.clock.now()),
-              )
+            ? // A job id of its own, not the daily run's: DNS always runs (file header).
+              await this.jobs.enqueueRecheck(domain.id, adminRecheckJobId(domain.id, this.clock.now()))
             : await this.jobs.enqueueTlsProbe(domain.id);
       queued &&= added;
     }

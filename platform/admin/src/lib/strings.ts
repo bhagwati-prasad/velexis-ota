@@ -385,23 +385,16 @@ export const DASHBOARD_STRINGS = Object.freeze({
   liveRequestsIntro:
     "OTAs whose owner requested live access and whose live Velexis connection still waits for an office. Assign a live office once the commercial onboarding is done; the owners get an e-mail.",
   liveRequestsEmpty: "No OTA waits for a live office.",
-  liveRequestsUnavailable: "The live office requests could not be loaded. Reload the page in a moment.",
-  liveRequestsCaption: "OTAs waiting for a live office, newest request first",
+  liveRequestsCaption: "OTAs waiting for a live office, oldest request first",
   liveRequestOta: "OTA",
   liveRequestRequested: "Requested",
-  liveRequestNote: "Owner's note",
-  liveRequestNoNote: "No note",
   liveRequestAction: "Action",
   /** The link to the OTA's connections, where "Assign office" is; the OTA's name follows for screen readers. */
   assignOffice: "Assign office",
   assignOfficeFor: (name: string) => ` to ${name}`,
-  /** Only the most recent requests are checked against the OTAs' connections. */
-  liveRequestsTruncated: (checked: number) =>
-    `Only the OTAs of the ${counted(checked, "most recent live request", "most recent live requests")} were checked.`,
-  /** Some OTAs could not be read: their requests are not shown. */
-  liveRequestsUnchecked: (count: number) =>
-    `${counted(count, "request", "requests")} could not be checked right now. Reload the page in a moment.`,
-  liveRequestsAuditLink: "Every live request in the audit log",
+  /** The API answers at most this many requests, the oldest ones (FIX-W41-PLATFORM). */
+  liveRequestsOldest: (limit: number) =>
+    `The ${counted(limit, "oldest request is", "oldest requests are")} shown. Assign their offices to see the next ones.`,
   // The M5 counters (PAD-014), each shown while its milestone switch is on
   m5Title: "To review",
   m5Intro: "Work that waits for Velexis staff. Each count opens the list behind it.",

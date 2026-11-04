@@ -55,6 +55,9 @@ export const EMAIL_TEMPLATE_KEYS = [
   "billing.payment_failed",
   // M5: a manual trial ends in 14 or 3 days (PBE-047, `billing.manual_trials`; PADR-0013 item 5).
   "billing.trial_ending",
+  // M5: a manual trial ended and became past due without any of its notices sent before (FIX-W41-PLATFORM,
+  // `billing.manual_trials`; PADR-0013 item 5, note of 2026-11-04).
+  "billing.trial_ended",
 ] as const;
 
 /** A key of EMAIL_TEMPLATE_KEYS. */
@@ -184,6 +187,10 @@ export const EMAIL_TEMPLATES: Readonly<Record<EmailTemplateKey, EmailTemplateDef
   "billing.trial_ending": definition(
     "The OTA's manual trial ends in 14 or 3 days: choose a plan, or the OTA is suspended 14 days after the end (to the owners)",
     ["fullName", "tenantName", "tenantKey", "trialEndsOn", "timeLeft", "suspensionOn", "billingUrl"],
+  ),
+  "billing.trial_ended": definition(
+    "The OTA's manual trial ended and is past due, and no notice of it was sent before: choose a plan, or the OTA is suspended on the date named (to the owners)",
+    ["fullName", "tenantName", "tenantKey", "trialEndsOn", "suspensionOn", "billingUrl"],
   ),
 });
 

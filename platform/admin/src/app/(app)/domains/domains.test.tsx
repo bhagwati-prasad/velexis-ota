@@ -72,7 +72,7 @@ type AdminDomain = Schemas["AdminDomain"];
 type Office = Schemas["AdminAmadeusOffice"];
 type AmadeusConnection = Schemas["AmadeusConnection"];
 type TenantDetail = Schemas["AdminTenantDetail"];
-type AuditEntry = Schemas["AuditEntry"];
+type LiveOfficeRequest = Schemas["LiveOfficeRequest"];
 
 const ACCESS_TOKEN = "pad014-dummy-admin-access-token";
 const FORWARDED_FOR = "198.51.100.23, 203.0.113.7";
@@ -97,8 +97,9 @@ const NORDIC_LIVE_CONNECTION = "sc_01JD1M3N4P5Q6R7S8T9V0W1X2Y";
 const REASON = "Phishing pages reported by the registrar on 2027-03-02 (case 88231).";
 const RELEASE_REASON =
   "Nordic confirmed on 2027-05-03 that no booking with future travel remains on MUC1A0100.";
-/** The note of acme's live request, as its owner wrote it. */
-const LIVE_NOTE = "Contract signed with Velexis sales on 2027-02-20.";
+/** When the owners of acme and nordic requested live access (their live connections' creation). */
+const ACME_REQUESTED_AT = "2027-03-01T09:12:00Z";
+const NORDIC_REQUESTED_AT = "2027-01-11T14:02:00Z";
 
 /**
  * The budget of the warm-up hook: the first render of these pages in a fresh worker loads the module graph of the
@@ -114,8 +115,11 @@ const WARM_UP_TIMEOUT_MS = 30_000;
  */
 const UI_WAIT = { timeout: 3_000 } as const;
 
-/** `LIVE_REQUEST_CHECKS` of `(app)/page.tsx` (a page module exports nothing else): the OTAs the dashboard reads. */
-const LIVE_REQUEST_CHECKS = 10;
+/**
+ * `LIVE_OFFICE_REQUESTS_LIMIT` of `(app)/page.tsx` (a page module exports nothing else): the `maxItems` of
+ * `AdminDashboard.liveOfficeRequests`, at which the section says the oldest requests are shown.
+ */
+const LIVE_OFFICE_REQUESTS_LIMIT = 50;
 
 function domain(overrides: Partial<AdminDomain> = {}): AdminDomain {
   return {
@@ -326,33 +330,6 @@ function tenantDetail(
   };
 }
 
-/** The audit row of an owner's live request (`amadeus.live_requested`, PBE-054): the target is the live connection. */
-function liveRequest(
-  id: string,
-  tenantId: string,
-  key: string,
-  connectionId: string,
-  createdAt: string,
-  note?: string,
-): AuditEntry {
-  return {
-    id,
-    tenantId,
-    tenantKey: key,
-    actorType: "account",
-    actorAccountId: "acc_01JA2YQ3M7R1T5W9Z3C7F1H5K9",
-    actorLabel: `owner@${key}.example.com`,
-    action: "amadeus.live_requested",
-    targetType: "supplier_connection",
-    targetId: connectionId,
-    requestId: "req_01JC4M2P6R0T4W8Y2A6C0E4G8K",
-    ipAddress: "203.0.113.7",
-    userAgent: "Mozilla/5.0",
-    details: { environment: "live", ...(note === undefined ? {} : { note }) },
-    createdAt,
-  };
-}
-
 function dashboard(overrides: Partial<Schemas["AdminDashboard"]> = {}): Schemas["AdminDashboard"] {
   return {
     tenantsByStatus: { provisioning: 0, active: 2, suspended: 0, failed: 0 },
@@ -374,8 +351,20 @@ function dashboard(overrides: Partial<Schemas["AdminDashboard"]> = {}): Schemas[
     settlementsToReview: 9,
     stripeEventsFailed: 1,
     subscriptionsPastDue: 2,
+    liveOfficeRequests: [],
     ...overrides,
   };
+}
+
+/** One request of `AdminDashboard.liveOfficeRequests`. */
+function liveOfficeRequest(
+  tenantId: string,
+  tenantKey: string,
+  tenantName: string,
+  connectionId: string,
+  requestedAt: string,
+): LiveOfficeRequest {
+  return { tenantId, tenantKey, tenantName, connectionId, requestedAt };
 }
 
 // ---- The in-memory platform ----------------------------------------------------------------------------------------
@@ -384,10 +373,15 @@ interface Platform {
   domains: AdminDomain[];
   offices: Office[];
   tenants: Map<string, TenantDetail>;
-  audit: AuditEntry[];
+  /** When each live connection was requested (its creation), by connection id. */
+  liveRequestedAt: Map<string, string>;
+  /**
+   * The dashboard's counters; its `liveOfficeRequests` are the live connections of `tenants` that wait for an office,
+   * oldest request first (the API's rule), unless a test sets `liveOfficeRequests` below.
+   */
   dashboard: Schemas["AdminDashboard"];
-  /** The audit list answers a next page (`nextCursor`). */
-  auditHasMore: boolean;
+  /** The live office requests the dashboard answers as they are, instead of the ones of `tenants`. */
+  liveOfficeRequests: LiveOfficeRequest[] | undefined;
   /** The checks each re-check queued, by host id. */
   rechecks: string[];
   overrides: Record<string, Route>;
@@ -424,12 +418,12 @@ function freshPlatform(): Platform {
         ]),
       ],
     ]),
-    audit: [
-      liveRequest("2203", ACME_ID, "acme", ACME_LIVE_CONNECTION, "2027-03-01T09:12:00Z", LIVE_NOTE),
-      liveRequest("1987", NORDIC_ID, "nordic", NORDIC_LIVE_CONNECTION, "2027-01-11T14:02:00Z"),
-    ],
+    liveRequestedAt: new Map([
+      [ACME_LIVE_CONNECTION, ACME_REQUESTED_AT],
+      [NORDIC_LIVE_CONNECTION, NORDIC_REQUESTED_AT],
+    ]),
     dashboard: dashboard(),
-    auditHasMore: false,
+    liveOfficeRequests: undefined,
     rechecks: [],
     overrides: {},
   };
@@ -478,6 +472,37 @@ function empty(status: number): Response {
   return new Response(null, { status, headers: { "content-length": "0" } });
 }
 
+/**
+ * The live office requests of the in-memory platform, as the API reads them from the connections: each OTA's `live`
+ * Velexis connection that is `pending_verification` without an office, oldest request first, then by connection id.
+ */
+function waitingLiveRequests(): LiveOfficeRequest[] {
+  const requests: LiveOfficeRequest[] = [];
+  for (const detail of platform.tenants.values()) {
+    for (const candidate of detail.amadeusConnections) {
+      if (
+        candidate.environment === "live" &&
+        candidate.credentialSource === "velexis" &&
+        candidate.status === "pending_verification" &&
+        candidate.officeIds.length === 0
+      ) {
+        requests.push(
+          liveOfficeRequest(
+            detail.tenant.id,
+            detail.tenant.key,
+            detail.tenant.name,
+            candidate.id,
+            platform.liveRequestedAt.get(candidate.id) ?? "2027-01-01T00:00:00Z",
+          ),
+        );
+      }
+    }
+  }
+  return requests.sort(
+    (a, b) => a.requestedAt.localeCompare(b.requestedAt) || a.connectionId.localeCompare(b.connectionId),
+  );
+}
+
 /** Answers one call as the platform API would. */
 async function answer(request: Request): Promise<Response> {
   const url = new URL(request.url);
@@ -490,19 +515,8 @@ async function answer(request: Request): Promise<Response> {
   const query = url.searchParams;
 
   if (key === "GET /v1/admin/dashboard") {
-    return json(platform.dashboard, 200);
-  }
-
-  if (key === "GET /v1/admin/audit-log") {
-    const rows = platform.audit.filter(
-      (row) => query.get("action") === null || row.action === query.get("action"),
-    );
-    const limit = Number(query.get("limit") ?? 50);
     return json(
-      {
-        data: rows.slice(0, limit),
-        page: { nextCursor: platform.auditHasMore ? "MjIwMw" : null, limit },
-      },
+      { ...platform.dashboard, liveOfficeRequests: platform.liveOfficeRequests ?? waitingLiveRequests() },
       200,
     );
   }
@@ -688,6 +702,16 @@ function sortedQuery(search: string): [string, string][] {
 /** The query of each call of `GET path`, as sorted entries. */
 function queriesOf(path: string): [string, string][][] {
   return calls("GET", path).map((request) => sortedQuery(new URL(request.url).search));
+}
+
+/** Every call so far, as `METHOD /path`. */
+function callKeys(): string[] {
+  return fetchMock.mock.calls.map(([input]) => `${input.method} ${new URL(input.url).pathname}`);
+}
+
+/** The instant a live office request row shows (its `<time>` element's `dateTime`). */
+function requestedAtOf(row: HTMLElement): string | null {
+  return row.querySelector("time")?.getAttribute("datetime") ?? null;
 }
 
 /** Every call carries the admin session and the end-user headers of PADR-0019. */
@@ -1349,16 +1373,15 @@ describe("amadeus/offices: releasing an office", () => {
 describe("(app)/page.tsx: live office requests and the M5 counters", () => {
   it("[PAD-014 AC2] serves a live office request from the dashboard: the link opens the OTA, where an office is assigned [PF-90]", async () => {
     await openDashboard();
-    expect(queriesOf("/v1/admin/audit-log")).toEqual([
-      [
-        ["action", "amadeus.live_requested"],
-        ["limit", "100"],
-      ],
-    ]);
-    // Both OTAs that requested live access are read; only acme's live connection still waits for an office.
-    expect(calls("GET", `/v1/admin/tenants/${ACME_ID}`)).toHaveLength(1);
-    expect(calls("GET", `/v1/admin/tenants/${NORDIC_ID}`)).toHaveLength(1);
+    // [FIX-W41-PLATFORM AC9] One call: the requests come with adminGetDashboard; no audit row and no OTA is read.
+    expect(callKeys()).toEqual(["GET /v1/admin/dashboard"]);
     const section = screen.getByRole("region", { name: D.liveRequestsTitle });
+    expect(
+      within(section)
+        .getAllByRole("columnheader")
+        .map((header) => header.textContent),
+    ).toEqual([D.liveRequestOta, D.liveRequestRequested, D.liveRequestAction]);
+    // Only acme's live connection still waits for an office; nordic's was served.
     const rows = within(section).getAllByRole("row").slice(1);
     expect(rows).toHaveLength(1);
     const [request] = rows;
@@ -1367,8 +1390,9 @@ describe("(app)/page.tsx: live office requests and the M5 counters", () => {
     }
     expect(request.textContent).toContain("Acme Travel");
     expect(request.textContent).toContain("acme");
-    expect(request.textContent).toContain(LIVE_NOTE);
+    expect(requestedAtOf(request)).toBe(ACME_REQUESTED_AT);
     expect(within(section).queryByText("Nordic Fares")).toBeNull();
+    expect(section.querySelector('[data-notice="live-requests-oldest"]')).toBeNull();
     const assign = link(`${D.assignOffice}${D.assignOfficeFor("Acme Travel")}`, request);
     expect(hrefOf(assign)).toBe(`/tenants/${ACME_ID}?tab=connections#connection-${ACME_LIVE_CONNECTION}`);
     // The dashboard writes nothing.
@@ -1409,114 +1433,115 @@ describe("(app)/page.tsx: live office requests and the M5 counters", () => {
 
     // The served request leaves the dashboard.
     await openDashboard();
-    expect(
-      within(screen.getByRole("region", { name: D.liveRequestsTitle })).getByText(D.liveRequestsEmpty),
-    ).toBeTruthy();
+    const after = screen.getByRole("region", { name: D.liveRequestsTitle });
+    expect(within(after).getByText(D.liveRequestsEmpty)).toBeTruthy();
+    expect(within(after).queryByRole("table")).toBeNull();
   });
 
-  it("lists only a live Velexis connection that is pending without an office as a request", async () => {
-    // Nordic's live connection after its request, in each state that is no waiting request; acme's test connection
-    // waits for a test office (the pool was empty at set-up), which is no live request either.
-    const nordicLive = (overrides: Partial<AmadeusConnection>) =>
-      tenantDetail(NORDIC_ID, "nordic", "Nordic Fares", [
-        connection({ ...waitingLiveConnection(NORDIC_LIVE_CONNECTION), ...overrides }),
-      ]);
-    const states: Partial<AmadeusConnection>[] = [
-      // The owner moved to its own credentials while it waited (verification pending, no Velexis office).
-      { credentialSource: "tenant", clientId: "pad014-dummy-own-client-1234" },
-      // Disabled by an admin, its office released from it.
-      { status: "disabled" },
-      // An office is already on it: nothing left to assign.
-      { officeIds: ["LIV1A0002"], defaultOfficeId: "LIV1A0002" },
-    ];
-    for (const overrides of states) {
-      platform = freshPlatform();
-      platform.tenants.set(NORDIC_ID, nordicLive(overrides));
-      platform.tenants.set(
-        ACME_ID,
-        tenantDetail(ACME_ID, "acme", "Acme Travel", [
-          connection({ status: "pending_verification", officeIds: [], defaultOfficeId: null }),
-        ]),
-      );
-      await openDashboard();
-      const section = screen.getByRole("region", { name: D.liveRequestsTitle });
-      expect(within(section).getByText(D.liveRequestsEmpty)).toBeTruthy();
-      expect(within(section).queryByRole("table")).toBeNull();
-      cleanup();
-    }
-
-    // The same connection, still waiting: listed, with the link to its card.
-    platform = freshPlatform();
-    platform.tenants.set(NORDIC_ID, nordicLive({}));
-    await openDashboard();
-    const section = screen.getByRole("region", { name: D.liveRequestsTitle });
-    expect(hrefOf(link(`${D.assignOffice}${D.assignOfficeFor("Nordic Fares")}`, section))).toBe(
-      `/tenants/${NORDIC_ID}?tab=connections#connection-${NORDIC_LIVE_CONNECTION}`,
+  it("[FIX-W41-PLATFORM AC9] shows the requests as adminGetDashboard answers them, oldest first, each with Assign office", async () => {
+    // Nordic waits too now (its live connection after its request, no office yet), and requested before acme.
+    platform.tenants.set(
+      NORDIC_ID,
+      tenantDetail(NORDIC_ID, "nordic", "Nordic Fares", [waitingLiveConnection(NORDIC_LIVE_CONNECTION)]),
     );
-  });
-
-  it("checks the OTAs of the newest requests only, says when more exist or some could not be read, and asks nothing without a live account", async () => {
-    // Twelve OTAs requested live access; none of them is known any more but acme (the others answer 404).
-    platform.audit = [
-      liveRequest("3000", ACME_ID, "acme", ACME_LIVE_CONNECTION, "2027-03-02T09:00:00Z"),
-      // An older request of the same OTA counts once.
-      liveRequest("2999", ACME_ID, "acme", ACME_LIVE_CONNECTION, "2027-03-01T09:00:00Z"),
-      ...Array.from({ length: 11 }, (_, index) =>
-        liveRequest(
-          String(2900 - index),
-          `ten_01JF0000000000000000000${String(index).padStart(3, "0")}`,
-          `ota${index}x`,
-          NORDIC_LIVE_CONNECTION,
-          "2027-02-01T09:00:00Z",
+    await openDashboard();
+    expect(callKeys()).toEqual(["GET /v1/admin/dashboard"]);
+    const section = screen.getByRole("region", { name: D.liveRequestsTitle });
+    expect(within(section).getByRole("table").querySelector("caption")?.textContent).toBe(
+      D.liveRequestsCaption,
+    );
+    const rows = within(section).getAllByRole("row").slice(1);
+    expect(rows.map((row) => row.getAttribute("data-tenant-id"))).toEqual([NORDIC_ID, ACME_ID]);
+    expect(rows.map(requestedAtOf)).toEqual([NORDIC_REQUESTED_AT, ACME_REQUESTED_AT]);
+    expect(
+      rows.map((row) =>
+        hrefOf(
+          within(row).getByRole("link", { name: new RegExp(`^${D.assignOffice}`) }) as HTMLAnchorElement,
         ),
       ),
+    ).toEqual([
+      `/tenants/${NORDIC_ID}?tab=connections#connection-${NORDIC_LIVE_CONNECTION}`,
+      `/tenants/${ACME_ID}?tab=connections#connection-${ACME_LIVE_CONNECTION}`,
+    ]);
+    cleanup();
+
+    // The page keeps the API's order as it is: it sorts and filters nothing itself.
+    platform.liveOfficeRequests = [
+      liveOfficeRequest(ACME_ID, "acme", "Acme Travel", ACME_LIVE_CONNECTION, ACME_REQUESTED_AT),
+      liveOfficeRequest(NORDIC_ID, "nordic", "Nordic Fares", NORDIC_LIVE_CONNECTION, NORDIC_REQUESTED_AT),
     ];
     await openDashboard();
-    const tenantReads = fetchMock.mock.calls.filter(([input]) =>
-      /^\/v1\/admin\/tenants\/ten_/.test(new URL(input.url).pathname),
+    expect(
+      within(screen.getByRole("region", { name: D.liveRequestsTitle }))
+        .getAllByRole("row")
+        .slice(1)
+        .map((row) => row.getAttribute("data-tenant-id")),
+    ).toEqual([ACME_ID, NORDIC_ID]);
+  });
+
+  it("[FIX-W41-PLATFORM AC9] says when the oldest requests are shown, and replaces the audit notices", async () => {
+    // As many requests as the API answers at most: the section says the oldest ones are shown.
+    const requests = Array.from({ length: LIVE_OFFICE_REQUESTS_LIMIT }, (_, index) =>
+      liveOfficeRequest(
+        `ten_01JF0000000000000000000${String(index).padStart(3, "0")}`,
+        `ota${index}x`,
+        `OTA ${index}`,
+        `sc_01JF0000000000000000000${String(index).padStart(3, "0")}`,
+        new Date(Date.UTC(2027, 0, 1, 9, index)).toISOString(),
+      ),
     );
-    expect(tenantReads).toHaveLength(LIVE_REQUEST_CHECKS);
-    const section = screen.getByRole("region", { name: D.liveRequestsTitle });
-    expect(within(section).getAllByRole("row")).toHaveLength(2);
-    expect(
-      within(section).getByText(D.liveRequestsTruncated(LIVE_REQUEST_CHECKS), { exact: false }),
-    ).toBeTruthy();
-    expect(hrefOf(link(D.liveRequestsAuditLink, section))).toBe("/audit?action=amadeus.live_requested");
+    platform.liveOfficeRequests = requests;
+    await openDashboard();
+    expect(callKeys()).toEqual(["GET /v1/admin/dashboard"]);
+    const full = screen.getByRole("region", { name: D.liveRequestsTitle });
+    expect(within(full).getAllByRole("row").slice(1)).toHaveLength(LIVE_OFFICE_REQUESTS_LIMIT);
+    const oldest = full.querySelector('[data-notice="live-requests-oldest"]');
+    expect(oldest?.textContent).toBe(D.liveRequestsOldest(LIVE_OFFICE_REQUESTS_LIMIT));
+    expect(D.liveRequestsOldest(LIVE_OFFICE_REQUESTS_LIMIT)).toBe(
+      "The 50 oldest requests are shown. Assign their offices to see the next ones.",
+    );
+    // Neither the "only the most recent were checked" notice nor the audit link of before.
+    expect(full.querySelector('[data-notice="live-requests-truncated"]')).toBeNull();
+    expect(within(full).queryByRole("link", { name: /audit/i })).toBeNull();
     cleanup();
 
-    // A next page of the audit log is said the same way; an OTA that cannot be read now is counted.
-    platform = freshPlatform();
-    platform.auditHasMore = true;
-    platform.overrides[`GET /v1/admin/tenants/${NORDIC_ID}`] = () => apiError("SERVICE_UNAVAILABLE", 503);
+    // One fewer: every waiting request is shown, nothing to say.
+    platform.liveOfficeRequests = requests.slice(1);
     await openDashboard();
-    const partial = screen.getByRole("region", { name: D.liveRequestsTitle });
-    expect(partial.querySelector('[data-notice="live-requests-truncated"]')).not.toBeNull();
-    expect(within(partial).getByText(D.liveRequestsUnchecked(1))).toBeTruthy();
-    expect(within(partial).getAllByRole("row")).toHaveLength(2);
-    cleanup();
+    const some = screen.getByRole("region", { name: D.liveRequestsTitle });
+    expect(within(some).getAllByRole("row").slice(1)).toHaveLength(LIVE_OFFICE_REQUESTS_LIMIT - 1);
+    expect(some.querySelector('[data-notice="live-requests-oldest"]')).toBeNull();
+  });
 
-    // The audit log cannot be read: the section says so, the rest of the dashboard shows.
-    platform = freshPlatform();
-    platform.overrides["GET /v1/admin/audit-log"] = () => apiError("SERVICE_UNAVAILABLE", 503);
+  it("[FIX-W41-PLATFORM AC9] leaves the section out without a live account and a request, and signs in again once the session ended", async () => {
+    // Without a Velexis live account no OTA can have requested live access: nothing shown.
+    platform.dashboard = dashboard({ officePool: [{ environment: "test", available: 4, assigned: 1 }] });
+    platform.liveOfficeRequests = [];
     await openDashboard();
-    expect(
-      within(screen.getByRole("region", { name: D.liveRequestsTitle })).getByText(D.liveRequestsUnavailable),
-    ).toBeTruthy();
+    expect(screen.queryByRole("region", { name: D.liveRequestsTitle })).toBeNull();
     expect(screen.getByRole("region", { name: D.tenantsTitle })).toBeTruthy();
     cleanup();
 
-    // Without a Velexis live account no OTA can have requested live access: nothing is asked, nothing shown.
-    platform = freshPlatform();
-    platform.dashboard = dashboard({ officePool: [{ environment: "test", available: 4, assigned: 1 }] });
-    fetchMock.mockClear();
+    // A request the API still answers is shown all the same.
+    platform.liveOfficeRequests = [
+      liveOfficeRequest(ACME_ID, "acme", "Acme Travel", ACME_LIVE_CONNECTION, ACME_REQUESTED_AT),
+    ];
     await openDashboard();
-    expect(calls("GET", "/v1/admin/audit-log")).toHaveLength(0);
-    expect(screen.queryByRole("region", { name: D.liveRequestsTitle })).toBeNull();
+    const section = screen.getByRole("region", { name: D.liveRequestsTitle });
+    expect(within(section).getAllByRole("row").slice(1)).toHaveLength(1);
+    cleanup();
+
+    // With a live account and no request: the section says that none waits.
+    platform = freshPlatform();
+    platform.liveOfficeRequests = [];
+    await openDashboard();
+    const none = screen.getByRole("region", { name: D.liveRequestsTitle });
+    expect(within(none).getByText(D.liveRequestsEmpty)).toBeTruthy();
+    expect(within(none).queryByRole("table")).toBeNull();
     cleanup();
 
     // An ended session signs in again.
-    platform = freshPlatform();
-    platform.overrides["GET /v1/admin/audit-log"] = () => apiError("TOKEN_EXPIRED", 401);
+    platform.overrides["GET /v1/admin/dashboard"] = () => apiError("TOKEN_EXPIRED", 401);
     await expect(DashboardPage()).rejects.toThrow("NEXT_REDIRECT /sign-in");
   });
 

@@ -98,6 +98,7 @@ function dashboard(overrides: Partial<Schemas["AdminDashboard"]> = {}): Schemas[
     settlementsToReview: null,
     stripeEventsFailed: null,
     subscriptionsPastDue: null,
+    liveOfficeRequests: [],
     ...overrides,
   };
 }

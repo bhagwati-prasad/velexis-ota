@@ -209,6 +209,20 @@ export class OutboxService {
     return { emailId, queued: inserted };
   }
 
+  /**
+   * True when an e-mail of `templateKey` about the OTA `tenantId` whose non-secret variables hold every pair of `data`
+   * was queued before (in any state, while its row is kept: 30 days after it was sent, PADR-0013 item 8), read in
+   * `trx`.
+   */
+  wasQueued(
+    trx: OutboxTransaction,
+    templateKey: EmailTemplateKey,
+    tenantId: string,
+    data: Readonly<Record<string, string>>,
+  ): Promise<boolean> {
+    return this.repository.existsFor(trx, templateKey, tenantId, data);
+  }
+
   /** Queues an `ops.alert` e-mail to OPS_ALERT_EMAIL, as `queue` does. */
   queueOpsAlert(trx: OutboxTransaction, alert: OpsAlertInput): Promise<QueuedEmail> {
     return this.queue(trx, {

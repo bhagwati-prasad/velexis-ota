@@ -17,6 +17,12 @@
 //   the subscription and clears `canceled_at`, unless the OTA has another current subscription (`409 CONFLICT`,
 //   `current_exists`; `subscriptions_current_uq` refuses a concurrent one the same way). Only the fields that differ
 //   from the stored ones are written (`version + 1`); a request that changes nothing writes nothing.
+// - Moving the end of a `past_due` manual trial to a later UTC day than today (without `status`, or with `trialing`)
+//   reopens it (FIX-W41-PLATFORM, lead decision (2l) of 2026-11-04): the status becomes `trialing`, and the OTA's banner
+//   (`tenants.billing_notice`) is what the daily run (`billing.manual_trials`, `manualTrialStep`) sets for a trial of
+//   that end: `trial_ending` when the new end is within the notice window (14 days), cleared otherwise (a banner of
+//   another kind stays). The audit row says so (`status` before and after, and `billingNotice` in its details when it
+//   changed), and a changed banner publishes `tenant` after the commit, so the portal and the OTA admin follow.
 // - The tenant's plan follows its current subscription: when the edited subscription is current after the edit
 //   (trialing or past due) and its plan differs from `tenants.plan_code`, the tenant moves to it (`version + 1`) in the
 //   same transaction and a `tenant` invalidation goes out after the commit, so the OTA backend reloads the quotas. A
@@ -38,6 +44,7 @@ import { PLATFORM_DB, type PlatformDb } from "../common/database";
 import { InvalidationPublisher, runInTransaction } from "../common/redis/invalidation.publisher";
 import { TenantsRepository } from "../tenants/tenants.repository";
 import { PlansRepository } from "./plans.repository";
+import { manualTrialStep, utcDay } from "./sync/manual-trials.scheduler";
 import {
   CURRENT_SUBSCRIPTION_INDEX,
   CURRENT_SUBSCRIPTION_STATUSES,
@@ -259,7 +266,8 @@ export class SubscriptionsService {
     return runInTransaction(this.db, async (trx) => {
       // Billing's lock order (file header): the tenant's row, then the subscription's.
       const ref = await this.subscriptions.findRef(subscriptionId, trx);
-      if (ref === undefined || (await this.tenants.lockForUpdate(trx, ref.tenant_id)) === undefined) {
+      const tenant = ref === undefined ? undefined : await this.tenants.lockForUpdate(trx, ref.tenant_id);
+      if (tenant === undefined) {
         throw new AppError("NOT_FOUND");
       }
       const current = await this.subscriptions.lockForUpdate(trx, subscriptionId);
@@ -303,6 +311,18 @@ export class SubscriptionsService {
         before["status"] = current.status;
         after["status"] = request.status;
       }
+      // A past-due trial whose end moves to a later UTC day than today is open again (file header).
+      const reopened =
+        current.status === "past_due" &&
+        changes.trial_ends_at !== undefined &&
+        utcDay(changes.trial_ends_at) > utcDay(now) &&
+        (request.status === undefined || request.status === "trialing");
+      if (reopened && changes.status === undefined) {
+        changes.status = "trialing";
+        changes.canceled_at = null;
+        before["status"] = current.status;
+        after["status"] = "trialing";
+      }
 
       if (Object.keys(changes).length > 0) {
         try {
@@ -316,6 +336,21 @@ export class SubscriptionsService {
           ? await this.tenants.setPlanCode(trx, current.tenant_id, planCode, now)
           : undefined;
         const tenantPlanChanged = tenantPlanBefore !== undefined;
+        // The banner the daily run sets for the reopened trial: `trial_ending` within the notice window, else none.
+        const billingNotice = reopened
+          ? manualTrialStep(
+              {
+                status: "trialing",
+                trialEndsAt: changes.trial_ends_at ?? current.trial_ends_at,
+                updatedAt: now,
+                billingNotice: tenant.billing_notice,
+              },
+              now,
+            ).billingNotice
+          : tenant.billing_notice;
+        const billingNoticeChanged =
+          billingNotice !== tenant.billing_notice &&
+          (await this.tenants.setBillingNotice(trx, current.tenant_id, billingNotice, now));
         await this.audit.record(trx, {
           actorType: "platform_admin",
           actorAccountId: claims.sub,
@@ -328,9 +363,12 @@ export class SubscriptionsService {
           details: {
             reason: request.reason,
             ...(tenantPlanChanged ? { tenantPlan: { before: tenantPlanBefore, after: planCode } } : {}),
+            ...(billingNoticeChanged
+              ? { billingNotice: { before: tenant.billing_notice, after: billingNotice } }
+              : {}),
           },
         });
-        if (tenantPlanChanged) {
+        if (tenantPlanChanged || billingNoticeChanged) {
           this.invalidations.publishAfterCommit(trx, { v: 1, type: "tenant", id: current.tenant_id });
         }
       }

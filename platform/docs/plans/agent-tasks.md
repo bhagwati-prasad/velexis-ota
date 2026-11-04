@@ -1892,6 +1892,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Acceptance:**
   - The `portal` specs pass in the `e2e` workflow and the `portal-stripe` spec passes in the nightly run, covering PF-14, PF-41, PF-64, PF-71 and PF-72 from the browser.
 - **Verify:** `pnpm test:e2e -- --project=portal specs/portal-domains.e2e.ts specs/portal-payments.e2e.ts specs/portal-go-live.e2e.ts`
+- **Note (2026-11-04, lead decision (2p), FIX-W41-PLATFORM):** the portal's M5 journey also visits `/otas/[tenantId]/domains` (PFE-022, platform/frontend/README.md §2): `portal-domains.e2e.ts` runs the axe check on that page with the custom domain pending, as on every page of a journey, and presses one copy button of a DNS record in `DnsRecordsTable`. This Note adds to step 2 and changes no Status.
 
 ### PAD-012 · Build the plan price links, subscriptions, invoices and Stripe events pages
 - **Component:** platform-admin

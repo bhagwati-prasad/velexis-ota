@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Platform delivery lead. Decided during planning; revisit when the OTA backend can report storefront traffic or console use to the platform (for example through `platform-tenant-events`).
+**Revisions:** 2026-11-04 (lead decision (2a) of 2026-11-04, recorded with FIX-W41-PLATFORM): `plan_chosen` also counts an `active` manual subscription, never a manual trial (dated note under the table).
 
 ## Context
 
@@ -23,11 +24,12 @@ Two items had no exact rule. "Storefront opened" cannot be observed: the platfor
 | `storefront_open` | Open your storefront | the tenant is `active`, so the storefront answers on its primary host | `https://<primary host>/` | M1 |
 | `amadeus_test` | Amadeus test office active | the `test` supplier connection is `active` | `/otas/{id}/amadeus` | M1 |
 | `team_invited` | Invite your team | the tenant has an invitation that is not `revoked`, or more than one active member | `/otas/{id}/team` | M1 |
-| `plan_chosen` | Choose a plan | the current subscription has `billing_provider = 'stripe'` and status `trialing` or `active` | `/otas/{id}/billing` | M5, `FEATURE_STRIPE_BILLING` |
+| `plan_chosen` | Choose a plan | the current subscription has `billing_provider = 'stripe'` and status `trialing` or `active`, or (2026-11-04) `billing_provider = 'manual'` and status `active` | `/otas/{id}/billing` | M5, `FEATURE_STRIPE_BILLING` |
 | `custom_domain` | Connect your domain | a custom storefront domain is `verified` | `/otas/{id}/domains` | M5, `FEATURE_CUSTOM_DOMAINS` |
 | `payments_ready` | Set up payouts or your own Stripe | the test payment connection is `connect_standard` or `api_keys` and `active`, or it is `velexis` and the payout account is `verified` | `/otas/{id}/payments` | M5, `FEATURE_OWN_STRIPE` or `FEATURE_SETTLEMENTS` |
 | `live_requested` | Go live | a `live` supplier connection exists (any status) or `tenants.storefront_environment = 'live'` | `/otas/{id}/go-live` | M5, `FEATURE_LIVE_SWITCH` |
 
+- *Note (2026-11-04, lead decision (2a), FIX-W41-PLATFORM): a platform admin's plan.* `plan_chosen` is also done when the OTA's current subscription is a manual one (`billing_provider = 'manual'`, set by a platform admin with `adminUpdateManualSubscription`) in status `active`, as go-live's `subscription` precondition counts it ([PADR-0002](0002-stripe-billing-integration.md), FIX-W40-PLATFORM). A manual trial (`trialing` on a manual row) is never a chosen plan: it is the trial an OTA starts with, and the item stays open until the owner chooses a plan in Stripe Checkout or an admin makes the manual plan `active`. The rule is `planChosen` of `platform/backend/src/provisioning/onboarding.service.ts`; the read takes the OTA's subscription in `trialing` or `active` (at most one, `subscriptions_current_uq`).
 - "Storefront opened" is reduced to a link item that is done as soon as the storefront can be opened. The platform does not try to detect visits.
 - Nothing is written when the checklist is read. The portal may hide a done item; it never stores state about it.
 

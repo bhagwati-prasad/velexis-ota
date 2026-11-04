@@ -442,6 +442,91 @@ describe("adminUpdateManualSubscription", () => {
     });
   });
 
+  it("[FIX-W41-PLATFORM AC7] moving a past-due manual trial's end into the future reopens it: trialing, the banner cleared, audited and announced", async () => {
+    const ota = await otaWith({ status: "past_due", trial_ends_at: daysFromNow(-3) });
+    await pool.query("UPDATE platform.tenants SET billing_notice = 'trial_ending' WHERE id = $1", [
+      ota.tenant.id,
+    ]);
+    const tenantBefore = await storedTenant(ota.tenant.id);
+    const trialEndsAt = daysFromNow(30);
+    const from = events.length;
+
+    const res = await patchSubscription(ota.sub, 1, {
+      trialEndsAt: trialEndsAt.toISOString(),
+      reason: REASON,
+    });
+
+    expect(res.status).toBe(200);
+    expectResponseToMatch("adminUpdateManualSubscription", res, { document: "platform" });
+    expect(res.body).toMatchObject({
+      status: "trialing",
+      trialEndsAt: trialEndsAt.toISOString(),
+      version: 2,
+    });
+    expect(await storedSubscription(ota.sub)).toMatchObject({
+      status: "trialing",
+      trial_ends_at: trialEndsAt,
+      canceled_at: null,
+    });
+    // Outside the notice window: the trial's banner goes, as the daily run would clear it.
+    expect(await storedTenant(ota.tenant.id)).toMatchObject({
+      billing_notice: null,
+      version: (tenantBefore["version"] as number) + 1,
+    });
+    const audit = await auditOf(ota.sub);
+    expect(audit).toHaveLength(1);
+    expect(audit[0]?.["details"]).toEqual({
+      reason: REASON,
+      billingNotice: { before: "trial_ending", after: null },
+      before: { status: "past_due", trialEndsAt: daysFromNow(-3).toISOString() },
+      after: { status: "trialing", trialEndsAt: trialEndsAt.toISOString() },
+    });
+    const index = await eventAfter(from, isTenantEvent(ota.tenant.id));
+    expect(events[index]).toEqual({ v: 1, type: "tenant", id: ota.tenant.id });
+  });
+
+  it("[FIX-W41-PLATFORM AC7] a reopened trial whose new end is within 14 days keeps the trial_ending banner; an end still today or past, or a cancel, does not reopen", async () => {
+    // Within the notice window: `trial_ending`, as the run sets it (set here from no banner).
+    const soon = await otaWith({ status: "past_due", trial_ends_at: daysFromNow(-1) });
+    const soonEnd = daysFromNow(5);
+    const reopened = await patchSubscription(soon.sub, 1, {
+      trialEndsAt: soonEnd.toISOString(),
+      reason: REASON,
+    });
+    expect(reopened.status).toBe(200);
+    expect(reopened.body).toMatchObject({ status: "trialing" });
+    expect(await storedTenant(soon.tenant.id)).toMatchObject({ billing_notice: "trial_ending" });
+    expect((await auditOf(soon.sub))[0]?.["details"]).toMatchObject({
+      billingNotice: { before: null, after: "trial_ending" },
+      before: { status: "past_due" },
+      after: { status: "trialing" },
+    });
+
+    // An end moved within the past: still past due, the banner untouched.
+    const past = await otaWith({ status: "past_due", trial_ends_at: daysFromNow(-10) });
+    await pool.query("UPDATE platform.tenants SET billing_notice = 'trial_ending' WHERE id = $1", [
+      past.tenant.id,
+    ]);
+    const stillPast = await patchSubscription(past.sub, 1, {
+      trialEndsAt: daysFromNow(-2).toISOString(),
+      reason: REASON,
+    });
+    expect(stillPast.status).toBe(200);
+    expect(stillPast.body).toMatchObject({ status: "past_due" });
+    expect(await storedTenant(past.tenant.id)).toMatchObject({ billing_notice: "trial_ending" });
+    expect((await auditOf(past.sub))[0]?.["details"]).not.toHaveProperty("billingNotice");
+
+    // A later end with `canceled`: canceled, not reopened.
+    const canceled = await otaWith({ status: "past_due", trial_ends_at: daysFromNow(-1) });
+    const ended = await patchSubscription(canceled.sub, 1, {
+      trialEndsAt: daysFromNow(20).toISOString(),
+      status: "canceled",
+      reason: REASON,
+    });
+    expect(ended.status).toBe(200);
+    expect(ended.body).toMatchObject({ status: "canceled" });
+  });
+
   it("answers 422 UNPROCESSABLE (plan_not_active) for a retired or unknown plan and changes nothing", async () => {
     const ota = await otaWith();
     for (const planCode of ["legacy", "no_such_plan"]) {

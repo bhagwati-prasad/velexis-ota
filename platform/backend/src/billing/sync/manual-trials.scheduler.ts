@@ -20,7 +20,15 @@
 // Each notice goes out once per owner, trial end and notice (the outbox's idempotency key `trial_ending:<sub>:<end
 // day>:<14|3>`), so a second run on the same day, or the next days of the window, queue nothing new; a trial whose end
 // an admin moved gets the notices of its new end. A notice the run missed (the trial began less than 4 days before its
-// end, or the run came late) is not sent afterwards: only the notice of the window the day is in. The suspension also
+// end, or the run came late) is not sent afterwards: only the notice of the window the day is in. But a trial the run
+// moves to `past_due` without any notice of its end ever queued (it ended before FEATURE_STRIPE_BILLING was switched
+// on, or every run of its windows was missed) gets `billing.trial_ended` then, to every active owner: it ended, it is
+// past due and the OTA is suspended from the date it names (the end day of the grace, counted from today because the
+// row became past due today), at most once per owner and trial (`trial_ended:<sub>`, whatever its end: a trial an
+// admin reopened that lapses again gets no second one; FIX-W41-PLATFORM, lead decision (2j) of 2026-11-04;
+// `billing.trial_ending` reads "ends in …" and cannot be sent after the end, PADR-0013 item 5 and its note of
+// 2026-11-04). Whether a notice was queued is read from the outbox (a `billing.trial_ending` row of the OTA for this
+// end day, kept 30 days after it was sent). The suspension also
 // waits until the row has been `past_due` for 14 days (its `updated_at`, set when the run moved it): a trial that ended
 // before the switch went on (or before an admin moved its end into the past) shows the banner for 14 days before its OTA
 // is suspended, never on the first run. The row's step after `past_due` is the suspension's: SuspensionService (PADR-0014)
@@ -70,6 +78,10 @@ export const MANUAL_TRIALS_JOB = "billing.manual_trials";
 
 /** The audit rows' `actor_label` and the suspension's system actor. */
 export const MANUAL_TRIALS_ACTOR = "billing.manual_trials";
+
+/** The notices before the end, and the one after the end that no notice came before (PADR-0013 item 5). */
+export const TRIAL_ENDING_TEMPLATE = "billing.trial_ending";
+export const TRIAL_ENDED_TEMPLATE = "billing.trial_ended";
 
 /** The banner of a trial that ends (`tenants.billing_notice`), shown by the portal and the OTA admin. */
 export const TRIAL_ENDING_NOTICE = "trial_ending";
@@ -317,6 +329,11 @@ export class ManualTrialsScheduler implements MaintenanceJobHandler {
         step.notice === null || trialEndsAt === null
           ? 0
           : await this.notifyOwners(trx, tenant, row, trialEndsAt, step.notice, now);
+      // A trial that ends without any notice before: the e-mail after its end (file header).
+      const endedEmails =
+        step.transition === "past_due" && trialEndsAt !== null
+          ? await this.notifyEndedTrial(trx, tenant, row, trialEndsAt, now)
+          : null;
       const bannerChanged =
         step.billingNotice !== tenant.billing_notice &&
         (await this.tenants.setBillingNotice(trx, tenant.id, step.billingNotice, now));
@@ -350,6 +367,7 @@ export class ManualTrialsScheduler implements MaintenanceJobHandler {
             billingProvider: "manual",
             trialEndsAt: trialEndsAt?.toISOString() ?? null,
             ...(step.notice === null ? {} : { notice: step.notice, emailsQueued: emails }),
+            ...(endedEmails === null ? {} : { endedNotice: true, emailsQueued: endedEmails }),
           },
         });
       }
@@ -357,7 +375,12 @@ export class ManualTrialsScheduler implements MaintenanceJobHandler {
         const jobId = await this.suspension.suspendInTransaction(trx, tenant.id, "billing", this.actor);
         afterCommit(trx, () => this.suspension.dispatchQuietly(jobId, tenant.id, this.actor));
       }
-      return { outcome: "done", emails, bannerChanged, transition: step.transition };
+      return {
+        outcome: "done",
+        emails: emails + (endedEmails ?? 0),
+        bannerChanged,
+        transition: step.transition,
+      };
     });
   }
 
@@ -389,12 +412,55 @@ export class ManualTrialsScheduler implements MaintenanceJobHandler {
     let queued = 0;
     for (const owner of owners) {
       const email = await this.outbox.queue(trx, {
-        templateKey: "billing.trial_ending",
+        templateKey: TRIAL_ENDING_TEMPLATE,
         to: owner.email,
         accountId: owner.account_id,
         tenantId: tenant.id,
         data: { fullName: owner.full_name, ...data },
         idempotencyKey: `trial_ending:${row.id}:${trialEndsOn}:${notice}`,
+      });
+      queued += email.queued ? 1 : 0;
+    }
+    return queued;
+  }
+
+  /**
+   * The trial `row` (ended at `trialEndsAt`) becomes `past_due` today: when no notice of that end was ever queued to
+   * the OTA, queues `billing.trial_ended` to every active owner of `tenant` in `trx`, naming the suspension date (the
+   * end of the grace counted from today, when the row became past due), at most once per owner and trial (lead decision
+   * (2j) of 2026-11-04): the key leaves the end out, so a reopened trial that lapses again sends none. Returns the
+   * e-mails queued now, or `null` when a notice had been queued before (nothing to send).
+   */
+  private async notifyEndedTrial(
+    trx: PlatformTransaction,
+    tenant: TenantRecord,
+    row: LockedManualTrial,
+    trialEndsAt: Date,
+    now: Date,
+  ): Promise<number | null> {
+    const trialEndsOn = utcDate(utcDay(trialEndsAt));
+    if (await this.outbox.wasQueued(trx, TRIAL_ENDING_TEMPLATE, tenant.id, { trialEndsOn })) {
+      return null;
+    }
+    const data = {
+      tenantName: tenant.name,
+      tenantKey: tenant.key,
+      trialEndsOn,
+      suspensionOn: utcDate(Math.max(utcDay(trialEndsAt), utcDay(now)) + GRACE_DAYS),
+      billingUrl: this.outbox.portalLink(`/otas/${tenant.id}/billing`),
+    };
+    const owners = (await this.memberships.listActive(tenant.id, trx)).filter(
+      (member) => member.role === "owner",
+    );
+    let queued = 0;
+    for (const owner of owners) {
+      const email = await this.outbox.queue(trx, {
+        templateKey: TRIAL_ENDED_TEMPLATE,
+        to: owner.email,
+        accountId: owner.account_id,
+        tenantId: tenant.id,
+        data: { fullName: owner.full_name, ...data },
+        idempotencyKey: `trial_ended:${row.id}`,
       });
       queued += email.queued ? 1 : 0;
     }

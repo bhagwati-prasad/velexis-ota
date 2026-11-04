@@ -808,6 +808,8 @@ describe("adminGetDashboard", () => {
         "settlementsToReview",
         "stripeEventsFailed",
         "subscriptionsPastDue",
+        // Always present, whatever the switches say (FIX-W41-PLATFORM, admin-dashboard.int.test.ts).
+        "liveOfficeRequests",
       ].sort(),
     );
   });
