@@ -26,6 +26,7 @@ When you add, rename or remove a platform document, update this index in the sam
 | [`data-model-migration-0002.md`](data-model-migration-0002.md) | The exact SQL of `platform/backend/migrations/platform/0002_add_mvp_platform_deltas.sql`, part 1: identity, tenants, domains, Amadeus. |
 | [`data-model-migration-0002-part2.md`](data-model-migration-0002-part2.md) | Part 2: payment connection modes, plans ↔ Stripe prices, settlements, payout accounts. |
 | [`data-model-migration-0002-part3.md`](data-model-migration-0002-part3.md) | Part 3: billing customers, subscription statuses, invoices, Stripe event inbox, e-mail outbox, privileges. |
+| [`security-review.md`](security-review.md) | The M6 security review (PBE-062): the §12 checklist per module, the auth matrix, rate limits, secrets at rest, `pnpm audit`, CSP and cookies, the findings and their tasks. |
 
 ## Flows
 

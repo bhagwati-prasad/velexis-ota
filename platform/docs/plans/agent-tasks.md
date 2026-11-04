@@ -27,7 +27,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 | M3 Book & pay | PBE-037, PBE-038, PFE-016 | Owners edit the card statement descriptor of the Velexis payment connection. |
 | M4 OTA admin | PBE-039, PBE-040, PFE-017 … PFE-019 | "Open console" signs a member into the OTA admin; Amadeus office settings are editable. |
 | M5 Monetisation & self-service | PBE-041 … PBE-061, PFE-020 … PFE-027, PAD-012 … PAD-015 | Checkout and Customer Portal, own Stripe (Connect or keys), payout account and settlements, own Amadeus credentials and live office, custom domains with TLS, go-live. |
-| M6 Hardening & launch | PBE-062 … PBE-065, PFE-028, PAD-016 | Security review closed, performance measured, end-to-end suite green nightly, launch checklist ready. The switches are removed after the launch: PBE-064 is a named exception to "every M6 task done" ([ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 4). |
+| M6 Hardening & launch | PBE-062 … PBE-065, PBE-067 … PBE-070, PFE-028, PFE-029, PAD-016, PAD-017 | Security review closed, performance measured, end-to-end suite green nightly, launch checklist ready. The switches are removed after the launch: PBE-064 is a named exception to "every M6 task done" ([ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 4). |
 
 ## M0 — Foundations
 
@@ -1965,7 +1965,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 
 ## M6 — Hardening & launch
 
-### PBE-062 · Run the platform security review and close the auth matrix gaps
+### PBE-062 · Run the platform security review and close the auth matrix gaps ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M6
 - **Depends on:** PBE-061, PBE-060, PBE-036
@@ -2064,6 +2065,92 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - The three specs pass in the nightly run; no serious accessibility violation on any admin route.
 - **Verify:** `pnpm test:e2e -- --project=platform-admin`
 
+### PBE-067 · Refuse the portal tokens of disabled and deleted accounts at once
+- **Component:** platform-backend
+- **Milestone:** M6
+- **Depends on:** PBE-062
+- **Size:** M
+- **Read first:** platform/docs/security-review.md (finding F-1, question 1); platform/docs/adr/0009-platform-api-surface-and-authentication.md (item 4); platform/docs/architecture.md §3.1; docs/mvp/adr/0008-identity-accounts-customers-sessions.md (Common mechanics, the note of 2026-10-24)
+- **Files:** `platform/backend/src/common/auth/portal-auth.guard.ts`, `platform/backend/src/common/auth/guards.test.ts`, `platform/backend/test/integration/common/auth-guards.int.test.ts`, `platform/backend/test/integration/security/auth-matrix.int.test.ts`, `platform/docs/architecture.md`, `platform/docs/adr/0009-platform-api-surface-and-authentication.md`
+- **Steps:**
+  1. **Gate:** the lead has confirmed the rule of the security review's question 1 (a portal token of a `disabled` or deleted account answers `401 UNAUTHENTICATED` at once; `locked` and `pending_verification` keep their answers). If not, stop and report.
+  2. `PortalAuthGuard`, after the token verifies, reads the account with `AccountAuthStates` (one primary-key read per request, no cache, as `AdminAuthGuard` does) and refuses a missing, erased or `disabled` account with `401 UNAUTHENTICATED`, before the e-mail check; the guard's header comment says why.
+  3. Add a dated note to PADR-0009 item 4 and to architecture §3.1 (the portal guard re-reads `status` too), a unit test per state in `guards.test.ts`, the disabled and erased cases (`getTenant`, `createApiKey`, `setPayoutAccount` with a fresh step-up) in `auth-guards.int.test.ts`, and a `disabledAccount` caller to the auth matrix that expects `401 UNAUTHENTICATED` on every `portal_unverified` and `portal` operation.
+- **Acceptance:**
+  - The unexpired token of a disabled or erased account answers `401 UNAUTHENTICATED` on every portal operation, sensitive actions included, and the auth matrix's new column passes.
+  - Every other answer of the auth matrix is unchanged.
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int common/auth-guards security/auth-matrix`
+
+### PBE-068 · Upgrade nodemailer in the platform backend past its high advisories
+- **Component:** platform-backend
+- **Milestone:** M6
+- **Depends on:** PBE-062
+- **Size:** S
+- **Read first:** platform/docs/security-review.md (finding F-2, §7); docs/mvp/tech-stack.md (E-mail row); docs/mvp/adr/0017-email-documents-storage.md; platform/backend/README.md §8
+- **Files:** `platform/backend/package.json`, `platform/backend/src/notifications/mailer.gateway.ts`, `platform/backend/src/notifications/mailer.gateway.test.ts`, `docs/mvp/tech-stack.md`
+- **Steps:**
+  1. Upgrade `nodemailer` to the latest 10.x (at least 10.0.6) and `@types/nodemailer` to the release that matches it, exact versions checked with `npm view`, and adapt `mailer.gateway.ts` (the transport from `SMTP_URL`, `parseConnectionUrl`) to the new API.
+  2. Run the gateway's unit tests and the outbox integration tests against Mailpit; update the tech-stack row (the OTA backend and `@velexis/testing` move with the OTA review's and the foundation plan's tasks).
+- **Acceptance:**
+  - `pnpm audit --prod` lists no `nodemailer` advisory for `platform/backend`, and the platform e-mails are sent as before.
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int notifications/email-outbox auth/sign-up`
+
+### PBE-069 · Move the platform backend to a NestJS release without the multer advisory
+- **Component:** platform-backend
+- **Milestone:** M6
+- **Depends on:** PBE-062
+- **Size:** M
+- **Read first:** platform/docs/security-review.md (finding F-3, §7); docs/mvp/tech-stack.md (Backend framework row); platform/backend/README.md
+- **Files:** `platform/backend/package.json`, `platform/backend/src/entry-points.test.ts`, `docs/mvp/tech-stack.md`
+- **Steps:**
+  1. If a NestJS 11.x patch release requires `multer` 2.5.0 or later, upgrade `@nestjs/common`, `@nestjs/core`, `@nestjs/platform-express` and `@nestjs/testing` to it (exact versions). Otherwise stop after step 2 and report: the NestJS 12 upgrade of both backends needs the lead's decision and a tech-stack revision.
+  2. Add a unit test that walks the API's module graph and fails when a route uses a file interceptor (multipart parsing), so the advisory stays unreachable until the upgrade lands.
+- **Acceptance:**
+  - The API has no multipart route (the new test), and `pnpm audit --prod` lists no `multer` advisory for `platform/backend` once a fixed NestJS release is in.
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int health`
+
+### PBE-070 · Upgrade the test and contract tooling past the audit's critical and high advisories
+- **Component:** platform-backend
+- **Milestone:** M6
+- **Depends on:** PBE-062
+- **Size:** L
+- **Read first:** platform/docs/security-review.md (finding F-5, §7); docs/mvp/tech-stack.md (testing rows); docs/mvp/adr/0015-testing-strategy.md; AGENTS.md §7
+- **Files:** `package.json`, `vitest.workspace.ts`, `packages/api-types/package.json`, `packages/config/package.json`, `packages/crypto/package.json`, `packages/db/package.json`, `packages/errors/package.json`, `packages/logger/package.json`, `packages/testing/package.json`, `platform/backend/package.json`, `platform/frontend/package.json`, `platform/admin/package.json`, `ota/backend/package.json`, `ota/frontend/package.json`, `ota/admin/package.json`, `ota/sdk/package.json`, `tools/amadeus-stub/package.json`, `tools/e2e/package.json`, `tools/reference-data/package.json`, `docs/mvp/tech-stack.md`
+- **Steps:**
+  1. Upgrade `vitest` (with its `tinypool` at 2.1.2 or later) and `happy-dom` (21.0.4 or later) in every package that pins them (the package files above; `happy-dom` in the portal, the platform admin, the OTA admin, the storefront and the SDK), and `@redocly/cli` to a release without `undici` older than 6.29.1 and `@faker-js/faker` older than 10.5.0; exact versions checked with `npm view`, no override.
+  2. Run the whole workspace's `pnpm test`, `pnpm test:int` and `pnpm contracts:lint` and fix what the new majors change, never weakening a test; update the tech-stack rows. The lead may move this task to the foundation plan (security review question 3).
+- **Acceptance:**
+  - `pnpm audit --audit-level high` lists no advisory of `vitest`, `tinypool`, `happy-dom`, `undici` or `@faker-js/faker`, and every suite passes as before.
+- **Verify:** `pnpm test && pnpm contracts:lint && pnpm audit --audit-level high`
+
+### PFE-029 · Upgrade zod in the portal past its high advisory
+- **Component:** platform-frontend
+- **Milestone:** M6
+- **Depends on:** PBE-062
+- **Size:** M
+- **Read first:** platform/docs/security-review.md (finding F-4, §7); docs/mvp/tech-stack.md (Validation row); platform/frontend/README.md
+- **Files:** `platform/frontend/package.json`, `platform/frontend/src/app`, `docs/mvp/tech-stack.md`
+- **Steps:**
+  1. Upgrade `zod` to the latest 4.x (at least 4.6.6, exact version) and adapt every schema of the portal's server actions to its API.
+  2. Run the portal's UI tests and the portal journeys; update the tech-stack row (once for the portal and the admin).
+- **Acceptance:**
+  - `pnpm audit --prod` lists no `zod` advisory for `platform/frontend`, and every form answers its field errors as before.
+- **Verify:** `pnpm --filter @velexis/platform-frontend test && pnpm --filter @velexis/platform-frontend typecheck`
+
+### PAD-017 · Upgrade zod in the platform admin past its high advisory
+- **Component:** platform-admin
+- **Milestone:** M6
+- **Depends on:** PBE-062
+- **Size:** S
+- **Read first:** platform/docs/security-review.md (finding F-4, §7); docs/mvp/tech-stack.md (Validation row); platform/admin/README.md
+- **Files:** `platform/admin/package.json`, `platform/admin/src/app`
+- **Steps:**
+  1. Upgrade `zod` to the version PFE-029 chose (at least 4.6.6) and adapt every schema of the admin's server actions to its API.
+  2. Run the admin's UI tests and the platform admin journeys.
+- **Acceptance:**
+  - `pnpm audit --prod` lists no `zod` advisory for `platform/admin`, and every form answers its field errors as before.
+- **Verify:** `pnpm --filter @velexis/platform-admin test && pnpm --filter @velexis/platform-admin typecheck`
+
 ## Dependency overview
 
 The full graph is printed by `node tools/plan-lint/plan-lint.mjs --graph platform/docs/plans/agent-tasks.md docs/mvp/plans/foundation-tasks.md`. In short:
@@ -2082,7 +2169,7 @@ flowchart LR
   PFE --> M24["M2–M4<br/>PBE-036…PBE-040, PFE-016…PFE-019, PAD-011"]
   PAD --> M24
   M24 --> M5["M5<br/>PBE-041…PBE-061, PFE-020…PFE-027, PAD-012…PAD-015"]
-  M5 --> M6["M6<br/>PBE-062…PBE-065, PFE-028, PAD-016<br/>(PBE-064 after launch)"]
+  M5 --> M6["M6<br/>PBE-062…PBE-065, PFE-028, PAD-016<br/>review findings PBE-067…PBE-070, PFE-029, PAD-017<br/>(PBE-064 after launch)"]
   OTA(["OTA plan gates<br/>OF-11 (M1), OF-01 (M2), OF-09 (M4)"]) -.-> LC
   OTA -.-> M24
 ```

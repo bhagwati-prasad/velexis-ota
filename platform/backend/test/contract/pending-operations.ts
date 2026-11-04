@@ -4,7 +4,9 @@
 //
 // The implementing task removes its own entries in the pull request that binds the route. A task that adds operations
 // to the document (PBE-037, PBE-041, PBE-042) adds them here with their implementing tasks. The list is empty at the
-// M5 exit (PADR-0016 item 2).
+// M5 exit (PADR-0016 item 2), which PBE-048 reached; from M6 on it stays empty: the auth matrix of the security review
+// (test/integration/security/auth-matrix.int.test.ts, PBE-062 step 4) asserts it and calls every operation of the
+// document through its bound route.
 import type { PlatformOperationId } from "@velexis/api-types/operations";
 
 /** A documented operation without a route, and the plan task that implements it. */
