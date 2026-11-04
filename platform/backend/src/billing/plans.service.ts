@@ -28,20 +28,22 @@
 //   the price links (`lockStripeLinks`) while it checks, and the unique indexes of migration 0002 refuse a race in one
 //   column the same way. One price as both the monthly and the yearly price of a plan answers `400 VALIDATION_FAILED`
 //   (`/stripePriceIdMonth` or `/stripePriceIdYear`, code `same_price`): billing sync could not tell its interval.
-// - `adminCheckPlanPrices` runs the comparison again for the plan as it is (no linked price: no warning, no call), and
-//   writes one `plan.prices_checked` audit row with the warnings before and after, under the plan's row lock. A plan
-//   whose prices or links changed during the Stripe calls is compared again (at most CHECK_ATTEMPTS times).
-// - The plan's `priceWarnings` are those of its last comparison. `platform.plans` has no column for them (migrations
-//   0001 and 0002): the audit row of each comparison records them in `details.priceWarnings` (`plan.updated` of an
-//   update that compared, `plan.prices_checked`), and the admin reads take them from the plan's newest such row
-//   through AuditService (`latestDetail`; AuditModule owns `platform_audit_log`, architecture §2.2), so a plan never
-//   compared has none. Every comparison writes its row while it holds the plan's row lock (`lockForUpdate`), so the
-//   newest row (the log's identity order) is the comparison that committed last. A comparison does not change the
-//   plan's version: an admin's open edit form stays valid.
+// - `adminCheckPlanPrices` runs the comparison again for the plan as it is (no linked price: no warning, no call),
+//   stores its warnings as the plan's and writes one `plan.prices_checked` audit row with the warnings before and
+//   after, under the plan's row lock. A plan whose prices or links changed during the Stripe calls is compared again
+//   (at most CHECK_ATTEMPTS times). A Stripe failure stores nothing: the plan keeps its warnings.
+// - The plan's `priceWarnings` are those of its last comparison, kept in the plan's row: the column
+//   `plans.price_warnings` (platform migration 0004; FIX-W42-PLATFORM, lead decision (4c) of 2026-11-04, second set).
+//   Each comparison (an update that compared, `adminCheckPlanPrices`) stores them with `storePriceWarnings` while its
+//   transaction holds the plan's row lock (`lockForUpdate`), so the stored warnings are those of the comparison that
+//   committed last, and every admin read of a plan (`adminListPlans`, the answers of `adminCreatePlan` and
+//   `adminUpdatePlan`) takes them from the row it reads (`storedWarningsOf`); a plan never compared has none. The audit
+//   rows of the comparisons (`plan.updated` with `details.priceWarnings`, `plan.prices_checked`) keep recording them,
+//   but nothing reads them back, so a retention purge of platform_audit_log (PADR-0006) loses no warning. A comparison
+//   does not change the plan's version: an admin's open edit form stays valid.
 import { Inject, Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types/platform";
 import { AppError, type FieldError } from "@velexis/errors";
-import type { AuditAction } from "../audit/audit-actions";
 import type { PlatformTransaction } from "../audit/audit.repository";
 import { AuditService } from "../audit/audit.service";
 import type { AccessTokenClaims } from "../auth/token.service";
@@ -78,12 +80,6 @@ type PlanLimits = components["schemas"]["PlanLimits"];
 /** How often `adminCheckPlanPrices` compares a plan whose prices or links change during its Stripe calls. */
 export const CHECK_ATTEMPTS = 3;
 
-/** The audit actions whose rows record a comparison of a plan with its Stripe prices (file header). */
-export const PRICE_CHECK_ACTIONS: readonly AuditAction[] = Object.freeze([
-  "plan.updated",
-  "plan.prices_checked",
-] satisfies AuditAction[]);
-
 const UNIQUE_VIOLATION = "23505";
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -93,8 +89,8 @@ const isWarningValue = (value: unknown): value is string | null =>
   value === null || typeof value === "string";
 
 /**
- * The stored warnings of a plan (`details.priceWarnings` of its last comparison's audit row, file header) as
- * `PlanPriceWarning`s: an array of `{field, expected, actual}`, or none for anything else (a plan never compared).
+ * The stored warnings of a plan (`plans.price_warnings`, written by its last comparison, file header) as
+ * `PlanPriceWarning`s: the items of the array that are `{field, expected, actual}`; none for anything else.
  */
 export function storedWarningsOf(value: unknown): PlanPriceWarning[] {
   if (!Array.isArray(value)) {
@@ -116,13 +112,9 @@ export function storedWarningsOf(value: unknown): PlanPriceWarning[] {
 
 /**
  * The admin's plan of a row: the public `Plan` and the admin fields; `checkoutEnabled` is FEATURE_STRIPE_BILLING,
- * `priceWarnings` the warnings of the plan's last comparison with Stripe (file header).
+ * `priceWarnings` the warnings of the plan's last comparison with Stripe, as the row stores them (file header).
  */
-export function toAdminPlan(
-  row: AdminPlanRow,
-  checkoutEnabled: boolean,
-  priceWarnings: readonly PlanPriceWarning[],
-): AdminPlan {
+export function toAdminPlan(row: AdminPlanRow, checkoutEnabled: boolean): AdminPlan {
   return {
     ...toPlan(row, checkoutEnabled),
     currency: row.currency,
@@ -133,7 +125,7 @@ export function toAdminPlan(
     stripeProductId: row.stripe_product_id,
     stripePriceIdMonth: row.stripe_price_id_month,
     stripePriceIdYear: row.stripe_price_id_year,
-    priceWarnings: [...priceWarnings],
+    priceWarnings: storedWarningsOf(row.price_warnings),
     tenantCount: row.tenant_count,
     version: planVersion(row.updated_at),
     createdAt: row.created_at.toISOString(),
@@ -318,9 +310,7 @@ export class PlansService {
   async list(): Promise<AdminPlanList> {
     const checkoutEnabled = this.checkoutEnabled();
     const rows = await this.plans.listWithTenantCounts();
-    const codes = rows.map((row) => row.code);
-    const warnings = await this.storedWarnings(codes, this.db);
-    return { data: rows.map((row) => toAdminPlan(row, checkoutEnabled, warnings.get(row.code) ?? [])) };
+    return { data: rows.map((row) => toAdminPlan(row, checkoutEnabled)) };
   }
 
   /** adminCreatePlan: a new, active plan, with a `plan.created` audit row. */
@@ -366,16 +356,16 @@ export class PlansService {
         targetId: row.code,
         after: auditedPlan(row),
       });
-      return this.adminPlanOf(row, trx);
+      return toAdminPlan(row, this.checkoutEnabled());
     });
   }
 
   /**
    * adminUpdatePlan: the fields of `request` that differ from the stored ones, with a `plan.updated` audit row (the
-   * changed fields before and after, and the warnings of the comparison with Stripe when it ran) and, when `limits` or
-   * `features` changed, a `plan` invalidation after the commit. `404` for an unknown plan, `412` for a stale version,
-   * `400` for a price in another currency or one price for both intervals, `409` for a price another plan links, `502`
-   * when Stripe fails (file header).
+   * changed fields before and after, and the warnings of the comparison with Stripe when it ran, which become the
+   * plan's stored warnings) and, when `limits` or `features` changed, a `plan` invalidation after the commit. `404` for
+   * an unknown plan, `412` for a stale version, `400` for a price in another currency or one price for both intervals,
+   * `409` for a price another plan links, `502` when Stripe fails (file header).
    */
   async update(
     claims: Pick<AccessTokenClaims, "sub">,
@@ -454,17 +444,21 @@ export class PlansService {
       );
 
       if (Object.keys(changes).length > 0) {
-        if (compared !== undefined) {
-          const storedWarnings = (await this.storedWarnings([code], trx)).get(code) ?? [];
-          if (canonicalJson(storedWarnings) !== canonicalJson(compared)) {
-            before["priceWarnings"] = storedWarnings;
-            after["priceWarnings"] = compared;
-          }
+        // The comparison's warnings become the plan's, under the row lock taken above (file header).
+        const storedWarnings = storedWarningsOf(row.price_warnings);
+        const warningsChanged =
+          compared !== undefined && canonicalJson(storedWarnings) !== canonicalJson(compared);
+        if (warningsChanged) {
+          before["priceWarnings"] = storedWarnings;
+          after["priceWarnings"] = compared;
         }
         try {
           await this.plans.update(trx, code, changes, now);
         } catch (error) {
           throw isStripePriceConflict(error) ? stripePriceTaken() : error;
+        }
+        if (warningsChanged) {
+          await this.plans.storePriceWarnings(trx, code, JSON.stringify(compared));
         }
         await this.audit.record(trx, {
           actorType: "platform_admin",
@@ -476,7 +470,7 @@ export class PlansService {
           after,
           details: {
             changed: Object.keys(after),
-            // The record of the comparison: the plan's stored warnings from now on (file header).
+            // The record of the comparison, whose warnings the plan's row now holds (file header).
             ...(compared === undefined ? {} : { priceWarnings: compared }),
           },
         });
@@ -484,14 +478,14 @@ export class PlansService {
           this.invalidations.publishAfterCommit(trx, { v: 1, type: "plan", code });
         }
       }
-      return this.adminPlanOf(await this.mustFind(code, trx), trx);
+      return toAdminPlan(await this.mustFind(code, trx), this.checkoutEnabled());
     });
   }
 
   /**
-   * adminCheckPlanPrices: the comparison of the plan as it is with its Stripe prices, recorded by a
-   * `plan.prices_checked` audit row (the warnings before and after); no call and no row for a plan without a linked
-   * price. `404` for an unknown plan, `502` when Stripe fails (the stored warnings stay as they were).
+   * adminCheckPlanPrices: the comparison of the plan as it is with its Stripe prices, stored as the plan's warnings and
+   * recorded by a `plan.prices_checked` audit row (the warnings before and after); no call and no row for a plan
+   * without a linked price. `404` for an unknown plan, `502` when Stripe fails (the stored warnings stay as they were).
    */
   async checkPrices(claims: Pick<AccessTokenClaims, "sub">, code: string): Promise<PlanPriceCheck> {
     for (let attempt = 1; ; attempt += 1) {
@@ -513,7 +507,11 @@ export class PlansService {
           // Its prices or links changed during the Stripe calls: these warnings are not the plan's.
           return false;
         }
-        const storedWarnings = (await this.storedWarnings([code], trx)).get(code) ?? [];
+        // The comparison's warnings become the plan's, under the row lock taken above (file header).
+        const storedWarnings = storedWarningsOf(locked.price_warnings);
+        if (canonicalJson(storedWarnings) !== canonicalJson(warnings)) {
+          await this.plans.storePriceWarnings(trx, code, JSON.stringify(warnings));
+        }
         await this.audit.record(trx, {
           actorType: "platform_admin",
           actorAccountId: claims.sub,
@@ -579,29 +577,6 @@ export class PlansService {
       throw stripePriceTaken();
     }
     return this.priceCheck.compare(after);
-  }
-
-  /**
-   * The stored warnings of the plans `codes` (file header), read on `db` through AuditService, by plan code; a plan
-   * never compared is absent.
-   */
-  private async storedWarnings(
-    codes: readonly string[],
-    db: PlatformDb | PlatformTransaction,
-  ): Promise<Map<string, PlanPriceWarning[]>> {
-    const stored = await this.audit.latestDetail(db, {
-      targetType: "plan",
-      targetIds: codes,
-      actions: PRICE_CHECK_ACTIONS,
-      key: "priceWarnings",
-    });
-    return new Map([...stored].map(([code, value]) => [code, storedWarningsOf(value)]));
-  }
-
-  /** The admin's plan of `row` with its stored warnings, read in `trx`, which holds the plan. */
-  private async adminPlanOf(row: AdminPlanRow, trx: PlatformTransaction): Promise<AdminPlan> {
-    const warnings = await this.storedWarnings([row.code], trx);
-    return toAdminPlan(row, this.checkoutEnabled(), warnings.get(row.code) ?? []);
   }
 
   /** The plan `code` with its tenant count, read in `trx`, which holds it (just inserted or locked). */

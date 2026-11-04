@@ -9,7 +9,8 @@
 //     `migrate` script of packages/db/package.json, through runMigrateCli, as velexis_migrator. The platform folder
 //     also holds 0002_add_mvp_platform_deltas.sql (PBE-002), so its 11 tables and its two OTA grants
 //     (amadeus_accounts, amadeus_offices) are expected next to the baseline's, and
-//     0003_add_billing_customer_attempts.sql (FIX-W29-PLATFORM), one table the OTA role may not read;
+//     0003_add_billing_customer_attempts.sql (FIX-W29-PLATFORM), one table the OTA role may not read, and
+//     0004_add_plan_price_warnings.sql (FIX-W42-PLATFORM), one column of plans and no table;
 //   - the tenant set is applied to tenant_alpha through the runner library (readMigrationFiles, recordMigration)
 //     in one provisioning transaction as velexis_provisioner (db README §3; migrateTenantSchema of X-013 replaces
 //     this helper). The tenant folder also holds 0002_add_mvp_tenant_deltas.sql (OBE-008), so its 2 tables are
@@ -81,6 +82,10 @@ const MIGRATION_0002 = {
 const MIGRATION_0003 = {
   file: "0003_add_billing_customer_attempts.sql",
   tables: ["billing_customer_attempts"],
+};
+/** Platform migration 0004 (FIX-W42-PLATFORM): one column of `plans` (`price_warnings`), no table. */
+const MIGRATION_0004 = {
+  file: "0004_add_plan_price_warnings.sql",
 };
 /** What tenant migration 0002 (OBE-008, ota/docs/data-model-migration-0002.md) adds after the tenant baseline. */
 const TENANT_MIGRATION_0002 = {
@@ -417,7 +422,8 @@ describe("the baselines and the OTA read grants on PostgreSQL", () => {
     const referenceTables = await ddlTables("reference.sql");
     expect(platformTables).toHaveLength(16);
     expect(referenceTables).toHaveLength(7);
-    // The platform set continues with 0002 (PBE-002), which creates 11 more tables, and 0003 (FIX-W29-PLATFORM), one.
+    // The platform set continues with 0002 (PBE-002), which creates 11 more tables, 0003 (FIX-W29-PLATFORM), one, and
+    // 0004 (FIX-W42-PLATFORM), none.
     const migrationTables = createdTables(
       await readFile(join(REPO, "platform/backend/migrations/platform", MIGRATION_0002.file), "utf8"),
     );
@@ -426,6 +432,11 @@ describe("the baselines and the OTA read grants on PostgreSQL", () => {
       await readFile(join(REPO, "platform/backend/migrations/platform", MIGRATION_0003.file), "utf8"),
     );
     expect(migration0003Tables).toEqual(MIGRATION_0003.tables);
+    expect(
+      createdTables(
+        await readFile(join(REPO, "platform/backend/migrations/platform", MIGRATION_0004.file), "utf8"),
+      ),
+    ).toEqual([]);
     expect(await tablesOf("platform")).toEqual(
       [...platformTables, ...migrationTables, ...migration0003Tables, "schema_migrations"].sort(),
     );
@@ -778,6 +789,7 @@ describe("the baselines and the OTA read grants on PostgreSQL", () => {
       ["platform", "0001_baseline.sql", "applied"],
       ["platform", MIGRATION_0002.file, "applied"],
       ["platform", MIGRATION_0003.file, "applied"],
+      ["platform", MIGRATION_0004.file, "applied"],
       ["platform", "R__ota_read_access.sql", "applied"],
       ["reference", "0001_baseline.sql", "applied"],
     ]);

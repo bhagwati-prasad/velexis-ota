@@ -41,9 +41,10 @@ const MIGRATION_ID = "0002_add_mvp_platform_deltas";
  */
 const LATER_MIGRATIONS = [
   { id: "0003_add_billing_customer_attempts", tables: ["billing_customer_attempts"] },
+  { id: "0004_add_plan_price_warnings", tables: [] },
 ] as const;
 const LATER_IDS = LATER_MIGRATIONS.map((migration) => migration.id);
-const LATER_TABLES = LATER_MIGRATIONS.flatMap((migration) => migration.tables);
+const LATER_TABLES: string[] = LATER_MIGRATIONS.flatMap((migration) => migration.tables);
 
 /** The 16 tables of the baseline (docs/velexis-sdk/db/platform.sql), plus the runner's ledger. */
 const BASELINE_TABLES = [

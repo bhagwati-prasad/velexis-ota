@@ -4,7 +4,8 @@
 //   - from scratch: the template database of @velexis/testing (the real runner and the real folders), cloned here;
 //   - as an upgrade: a new empty database prepared like deploy/postgres/bootstrap.sql, the runner applied to a
 //     temporary folder holding the files before 0003 (0001, 0002 and the repeatable grants), one tenant written by
-//     velexis_platform_app, then the runner applied to the real folder: only 0003 is applied, the tenant survives.
+//     velexis_platform_app, then the runner applied to the real folder: 0003 is applied (and after it the later files
+//     of LATER_IDS, which migrate-0004.int.test.ts and later files test), the tenant survives.
 // The table's rules are checked as the roles that use it: velexis_platform_app writes it (the CHECK and the foreign
 // key refuse what the code must never write), and velexis_ota_app may not read it ("permission denied", SQLSTATE
 // 42501). checkout.int.test.ts uses it through createTenant and createCheckoutSession.
@@ -37,6 +38,8 @@ const SCHEMAS_SQL = join(REPO, "deploy", "postgres", "schemas.sql");
 const MIGRATION_ID = "0003_add_billing_customer_attempts";
 /** The files of the version before 0003. */
 const PREVIOUS_FILES = ["0001_baseline.sql", "0002_add_mvp_platform_deltas.sql", "R__ota_read_access.sql"];
+/** The numbered platform migrations after 0003: the real folder holds them, so the upgrade applies them after it. */
+const LATER_IDS = ["0004_add_plan_price_warnings"] as const;
 
 type Pool = ReturnType<typeof createPool>;
 type Row = Record<string, unknown>;
@@ -217,15 +220,23 @@ describe("migration 0003 as an upgrade from 0002", () => {
     }
   });
 
-  it("[FIX-W29-PLATFORM AC2] applies only 0003 on top of 0002, in a transaction, and keeps the tenant written before", async () => {
+  it("[FIX-W29-PLATFORM AC2] applies 0003 on top of 0002, in a transaction, and keeps the tenant written before", async () => {
     expect(previousRun.applied.map((event) => event.id)).toEqual([
       "0001_baseline",
       "0002_add_mvp_platform_deltas",
       "R__ota_read_access",
     ]);
+    // 0003 first, then only the later numbered files; the unchanged repeatable grants are not applied again.
     expect(
       upgradeRun.applied.map(({ id, phase, status, transaction }) => ({ id, phase, status, transaction })),
-    ).toEqual([{ id: MIGRATION_ID, phase: "expand", status: "applied", transaction: true }]);
+    ).toEqual(
+      [MIGRATION_ID, ...LATER_IDS].map((id) => ({
+        id,
+        phase: "expand",
+        status: "applied",
+        transaction: true,
+      })),
+    );
     expect(await columnsOf(migrator)).toHaveLength(3);
     expect(
       (await platformApp.query("SELECT * FROM platform.tenants WHERE id = $1", [tenantBefore["id"]])).rows,

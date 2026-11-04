@@ -2170,7 +2170,7 @@ export interface paths {
         };
         /**
          * List every plan with its Stripe link state
-         * @description Every plan, public or not and active or retired, in `sortOrder` then `code` order, with the fields the pricing page does not show: visibility, the active flag, the settlement fee, the Stripe product and price ids (`null` until `adminUpdatePlan` links them, M5), the price warnings of the last comparison with Stripe (empty while no price is linked) and the number of OTAs on the plan. The list is short, so it is not paginated. The `version` of each plan is what `adminUpdatePlan` needs in `If-Match`.
+         * @description Every plan, public or not and active or retired, in `sortOrder` then `code` order, with the fields the pricing page does not show: visibility, the active flag, the settlement fee, the Stripe product and price ids (`null` until `adminUpdatePlan` links them, M5), the price warnings of the last comparison with Stripe (empty while no price is linked), which are kept with the plan, and the number of OTAs on the plan. The list is short, so it is not paginated. The `version` of each plan is what `adminUpdatePlan` needs in `If-Match`.
          */
         get: operations["adminListPlans"];
         put?: never;
@@ -2210,7 +2210,7 @@ export interface paths {
          *
          *     **Stripe prices (M5, PADR-0002, subscription-billing flow §A).** `stripeProductId`, `stripePriceIdMonth` and `stripePriceIdYear` link the plan to the Stripe product and recurring prices that Velexis created in Stripe first; `null` unlinks one, and an interval without a price cannot start Checkout (`checkoutAvailable`). When the request links or changes a price, or changes a price of the plan while one is linked, the API retrieves every linked price from Stripe before saving and answers the differences in `priceWarnings`: the amount, the currency or the interval of a price differs from the plan, or the price is inactive. Warnings never block the save. If Stripe fails or cannot be reached, nothing is saved and the answer is `502 PROVIDER_ERROR`; retry later. A price id can link one plan only: a price that another plan links answers `409 CONFLICT` (`details.reason = stripe_price_taken`).
          *
-         *     How the comparison reads (PBE-048): the amount is compared in the minor unit of the plan's currency, with its exponent from `reference.currencies`, and shown with that currency's decimals; a price that Stripe does not know answers the warning `<link>.active` with `actual: null`. One price as both the monthly and the yearly price of the plan answers `400 VALIDATION_FAILED` (`/stripePriceIdMonth` or `/stripePriceIdYear`, code `same_price`): billing sync could not tell its interval. The warnings are stored as the plan's `priceWarnings` and a comparison does not change the plan's `version`.
+         *     How the comparison reads (PBE-048): the amount is compared in the minor unit of the plan's currency, with its exponent from `reference.currencies`, and shown with that currency's decimals; a price that Stripe does not know answers the warning `<link>.active` with `actual: null`. One price as both the monthly and the yearly price of the plan answers `400 VALIDATION_FAILED` (`/stripePriceIdMonth` or `/stripePriceIdYear`, code `same_price`): billing sync could not tell its interval. The warnings are stored with the plan as its `priceWarnings`, in the transaction that saves it, and the change's audit row records the comparison with them; a comparison does not change the plan's `version`.
          */
         patch: operations["adminUpdatePlan"];
         trace?: never;
@@ -2232,7 +2232,7 @@ export interface paths {
         put?: never;
         /**
          * Compare a plan with its Stripe prices
-         * @description Runs the price comparison of `adminUpdatePlan` again (M5, subscription-billing flow §A), for example after a price was changed or archived in the Stripe dashboard: retrieves every Stripe price linked to the plan and answers one warning per difference, `{field, expected, actual}`, where `field` names the linked price and the attribute (`amount`, `currency`, `interval` or `active`), `expected` the value the plan implies and `actual` the value Stripe answered. A plan without a linked price answers no warning and calls nothing. The warnings become the plan's `priceWarnings`, and an audit row records the check with them, as `adminVerifyAmadeusAccount` does for its request. If Stripe fails or cannot be reached, the answer is `502 PROVIDER_ERROR` and the stored warnings stay as they were.
+         * @description Runs the price comparison of `adminUpdatePlan` again (M5, subscription-billing flow §A), for example after a price was changed or archived in the Stripe dashboard: retrieves every Stripe price linked to the plan and answers one warning per difference, `{field, expected, actual}`, where `field` names the linked price and the attribute (`amount`, `currency`, `interval` or `active`), `expected` the value the plan implies and `actual` the value Stripe answered. A plan without a linked price answers no warning and calls nothing. The warnings are stored with the plan as its `priceWarnings`, and an audit row records the check with them, as `adminVerifyAmadeusAccount` does for its request. If Stripe fails or cannot be reached, the answer is `502 PROVIDER_ERROR` and the stored warnings stay as they were.
          */
         post: operations["adminCheckPlanPrices"];
         delete?: never;
@@ -5092,7 +5092,7 @@ export interface components {
         PlanPriceCheck: {
             warnings: components["schemas"]["PlanPriceWarning"][];
         };
-        /** @description A plan as Velexis staff see it: the fields of `Plan`, plus the currency, the visibility, the active flag, the order, the settlement fee, the Stripe link state and the number of OTAs on it. The Stripe ids stay `null` and `priceWarnings` empty until `adminUpdatePlan` links prices (M5); the warnings are those of the last comparison with Stripe (`adminUpdatePlan` or `adminCheckPlanPrices`). */
+        /** @description A plan as Velexis staff see it: the fields of `Plan`, plus the currency, the visibility, the active flag, the order, the settlement fee, the Stripe link state and the number of OTAs on it. The Stripe ids stay `null` and `priceWarnings` empty until `adminUpdatePlan` links prices (M5); the warnings are those of the last comparison with Stripe (`adminUpdatePlan` or `adminCheckPlanPrices`), stored with the plan. */
         AdminPlan: {
             code: components["schemas"]["PlanCode"];
             name: string;
@@ -5127,7 +5127,7 @@ export interface components {
             stripePriceIdMonth: string | null;
             /** @description The recurring Stripe Price of yearly billing; `null` until linked (M5). */
             stripePriceIdYear: string | null;
-            /** @description The differences found by the last comparison with Stripe; empty while no price is linked. */
+            /** @description The differences found by the last comparison with Stripe (`adminUpdatePlan` or `adminCheckPlanPrices`), stored with the plan; empty while no price is linked. */
             priceWarnings: components["schemas"]["PlanPriceWarning"][];
             /** @description The OTAs on the plan (`tenants.plan_code`), in any status. */
             tenantCount: number;

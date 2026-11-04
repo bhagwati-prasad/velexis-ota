@@ -17,7 +17,7 @@ const REPO = resolve(__dirname, "..", "..", "..", "..");
 const MIGRATIONS_DIR = join(REPO, "platform", "backend", "migrations", "platform");
 const MIGRATION_FILE = "0002_add_mvp_platform_deltas.sql";
 /** The numbered platform files after 0002, deltas found during implementation (migration-0003.contract.test.ts, …). */
-const LATER_FILES = ["0003_add_billing_customer_attempts.sql"] as const;
+const LATER_FILES = ["0003_add_billing_customer_attempts.sql", "0004_add_plan_price_warnings.sql"] as const;
 /** The three documents, in the order their SQL blocks are concatenated. */
 const DOCUMENTS = [
   "platform/docs/data-model-migration-0002.md",

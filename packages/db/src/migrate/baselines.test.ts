@@ -107,6 +107,8 @@ describe("the baseline migrations", () => {
               ["0002_add_mvp_platform_deltas", "numbered", "expand", false],
               // The attempts of a tenant's Stripe Customer creation (FIX-W29-PLATFORM).
               ["0003_add_billing_customer_attempts", "numbered", "expand", false],
+              // The price warnings of a plan's last comparison with Stripe, a column of plans (FIX-W42-PLATFORM).
+              ["0004_add_plan_price_warnings", "numbered", "expand", false],
             ]
           : []),
         ...(set === "tenant"

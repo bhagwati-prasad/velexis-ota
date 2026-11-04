@@ -12,7 +12,7 @@ Related: [`architecture.md`](architecture.md), [`api-inventory.md`](api-inventor
 | Column descriptions | [`dictionary.json`](../../docs/velexis-sdk/db/dictionary.json) |
 | Baseline ER diagrams | [`er/er-platform.mmd`](../../docs/velexis-sdk/db/er/er-platform.mmd), [`er/er-reference.mmd`](../../docs/velexis-sdk/db/er/er-reference.mmd), [`er/er-overview.mmd`](../../docs/velexis-sdk/db/er/er-overview.mmd) |
 | Design (provisioning, runner, routing, security) | [`db/README.md`](../../docs/velexis-sdk/db/README.md) §3, §4, §5, §8 |
-| Platform migrations | `platform/backend/migrations/platform/0001_baseline.sql`, `0002_add_mvp_platform_deltas.sql`, and the deltas found during implementation: `0003_add_billing_customer_attempts.sql` (§4.10) |
+| Platform migrations | `platform/backend/migrations/platform/0001_baseline.sql`, `0002_add_mvp_platform_deltas.sql`, and the deltas found during implementation: `0003_add_billing_customer_attempts.sql`, `0004_add_plan_price_warnings.sql` (§4.10) |
 | Reference migrations | `platform/backend/migrations/reference/0001_baseline.sql` (no delta in the MVP) |
 | Reference data files and loader | `tools/reference-data/data/*.csv` (`@velexis/reference-data`), loaded by `pnpm db:seed:reference` with the `velexis_platform_app` role; the backend's `ref:load` script is only a shortcut for it ([ADR-0024](../../docs/mvp/adr/0024-reference-data-sources-and-loader.md)) |
 
@@ -24,7 +24,7 @@ Related: [`architecture.md`](architecture.md), [`api-inventory.md`](api-inventor
 
 | Table | Origin | Owning module | OTA reads | Milestone first written |
 |---|---|---|---|---|
-| `plans` | baseline + `0002` | billing | ✓ | M1 (seed `early_access`) |
+| `plans` | baseline + `0002` + `0004` | billing | ✓ | M1 (seed `early_access`) |
 | `accounts` | baseline + `0002` | auth, accounts | ✓ (identity and MFA columns) | M1 |
 | `account_sessions` | baseline + `0002` | auth | | M1 |
 | `account_tokens` | **new** | auth | | M1 |
@@ -170,6 +170,7 @@ Deltas found during implementation, one numbered migration each ([`conventions.m
 | Migration | Change | Why |
 |---|---|---|
 | `0003_add_billing_customer_attempts` (FIX-W29-PLATFORM) | New `billing_customer_attempts` (`tenant_id` primary key and foreign key, `attempt` from 1, `updated_at`), DML for `velexis_platform_app`, nothing for the OTA role | Stripe replays a stored 5xx for the same idempotency key for 24 hours, so the Customer creation of a tenant's Checkout moves to the key `customer:<tenantId>:<attempt>` after a failure that spent `customer:<tenantId>` (no row is attempt 0), and the next attempt first looks for a Customer the failed one made. It cannot live in `billing_customers`, whose rows exist only once a Customer does ([PADR-0002](adr/0002-stripe-billing-integration.md) item 3, revision of 2026-10-24). |
+| `0004_add_plan_price_warnings` (FIX-W42-PLATFORM) | New column `plans.price_warnings` (`jsonb NOT NULL DEFAULT '[]'`, CHECK `plans_price_warnings_ck`: a JSON array) with its comment; no grant (the table-level privileges on `plans` cover it: the platform role writes it, the OTA role may read it with the rest of `plans`), no backfill | The warnings of a plan's last comparison with its linked Stripe prices (`AdminPlan.priceWarnings`, `[{field, expected, actual}]`), written by `adminUpdatePlan` and `adminCheckPlanPrices` under the plan's row lock and read by every admin read of a plan. PBE-048 read them back from the comparison's audit row, which a retention purge of `platform_audit_log` would take with it ([PADR-0006](adr/0006-platform-admin-access-and-audit.md), Audit items 3 and 4); the audit rows keep recording each comparison (lead decision (4c) of 2026-11-04, second set; [PADR-0002](adr/0002-stripe-billing-integration.md) item 2). A plan compared before the column shows its warnings again after its next comparison. |
 
 ## 5. Encrypted columns and their associated data
 

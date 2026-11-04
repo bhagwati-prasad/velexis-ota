@@ -53,7 +53,7 @@ export const JSONB_COLUMNS: {
   email_outbox: ["data"],
   invoices: ["line_items"],
   payment_provider_connections: ["capabilities"],
-  plans: ["limits", "features"],
+  plans: ["limits", "features", "price_warnings"],
   platform_audit_log: ["details"],
   provisioning_jobs: ["payload", "result", "steps"],
   supplier_connections: ["ticketing_defaults", "monitored_queues"],

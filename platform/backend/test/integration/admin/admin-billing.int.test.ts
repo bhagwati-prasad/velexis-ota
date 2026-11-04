@@ -3,8 +3,10 @@
 // FEATURE_STRIPE_BILLING on) on this file's database clone and Redis database:
 //
 // - `adminUpdatePlan` with the Stripe ids and `adminCheckPlanPrices`: the comparison with the prices of the FakeStripe
-//   (test/support/fake-stripe.ts), its warnings stored as the plan's and recorded by its audit row, a price of another
-//   plan refused, nothing saved when Stripe fails;
+//   (test/support/fake-stripe.ts), its warnings stored in the plan's row (`plans.price_warnings`, FIX-W42-PLATFORM)
+//   and recorded by its audit row, a price of another plan refused, nothing saved when Stripe fails; the warnings
+//   outlive a purge of the plan's audit rows (deleted as velexis_migrator, as a retention purge would: PADR-0006,
+//   Audit item 3) and stay as they were when Stripe fails;
 // - `adminResyncSubscription`: a drifted Stripe row brought back to Stripe's state through billing sync's update path,
 //   under the subscription's lock, with the admin's audit row; the refusals;
 // - `adminListInvoices` (and the invoices of `adminGetSubscription`): every OTA's invoices with the decimals of their
@@ -21,6 +23,7 @@
 import { randomBytes } from "node:crypto";
 import { getQueueToken } from "@nestjs/bullmq";
 import { Test, type TestingModule } from "@nestjs/testing";
+import { createPool } from "@velexis/db";
 import { expectResponseToMatch, responseChecker } from "@velexis/testing";
 import { signedStripeEvent, stripeFixture } from "@velexis/testing/stripe";
 import type { Queue } from "bullmq";
@@ -77,6 +80,8 @@ let tokens: TokenService;
 let redis: Redis;
 let stripeEvents: Queue;
 let admin: string;
+/** velexis_migrator on this file's clone: the role a retention purge of platform_audit_log runs as (PADR-0006). */
+let migrator: ReturnType<typeof createPool>;
 const workerLogs = new LogSink();
 let next = FIRST_ID + 1;
 
@@ -104,6 +109,11 @@ beforeAll(async () => {
 
   redis = new Redis(t.redis.url, { lazyConnect: true });
   await redis.connect();
+  migrator = createPool(t.db.urlFor("migrator"), {
+    applicationName: "platform-int-admin-billing-migrator",
+    logger: { error: () => undefined },
+    max: 1,
+  });
   admin = (await insertAccount(pool, { is_platform_admin: true, mfa_enabled: true })).id;
   await insertPlan(pool, { code: GROWTH.code, name: "Growth", stripe_price_id_month: GROWTH.month });
   // The yen (no minor unit), as the reference loader writes it; the test clones hold EUR, GBP and USD only.
@@ -115,6 +125,7 @@ beforeAll(async () => {
 }, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
+  await migrator?.end();
   await redis?.quit();
   await worker?.close();
   await t?.close();
@@ -195,6 +206,18 @@ const auditOf = (targetType: string, targetId: string, action: string): Promise<
     "SELECT * FROM platform.platform_audit_log WHERE target_type = $1 AND target_id = $2 AND action = $3 ORDER BY id",
     [targetType, targetId, action],
   );
+
+/**
+ * Deletes every audit row about the plan `code` as velexis_migrator, as a reviewed retention purge would (PADR-0006,
+ * Audit item 3: velexis_platform_app may not delete them); answers how many it deleted.
+ */
+async function purgePlanAuditRows(code: string): Promise<number> {
+  const { rowCount } = await migrator.query(
+    "DELETE FROM platform.platform_audit_log WHERE target_type = 'plan' AND target_id = $1",
+    [code],
+  );
+  return rowCount ?? 0;
+}
 
 /** The version of a plan as `adminListPlans` answers it (`updated_at` in epoch milliseconds). */
 const versionOf = async (code: string): Promise<number> => (await listedPlan(code))["version"] as number;
@@ -621,6 +644,80 @@ describe("adminCheckPlanPrices", () => {
     expect(failed.status).toBe(502);
     expectResponseToMatch("adminCheckPlanPrices", failed, { document: "platform" });
     expect((await listedPlan(code))["priceWarnings"]).toEqual(warnings);
+    expect(await auditOf("plan", code, "plan.prices_checked")).toEqual([]);
+  });
+});
+
+describe("the stored price warnings of a plan", () => {
+  it("[FIX-W42-PLATFORM AC3] outlive a purge of the plan's audit rows: every plan read takes them from the plans row", async () => {
+    const code = await newPlan();
+    const [month, year] = [newPriceId("Kept"), newPriceId("KeptYear")];
+    stripe.put(
+      stripePrice(month, { currency: "usd" }),
+      stripePrice(year, { interval: "year", unitAmount: 149000 }),
+    );
+    const linked = await patchPlan(code, await versionOf(code), {
+      stripePriceIdMonth: month,
+      stripePriceIdYear: year,
+    });
+    expect(linked.status).toBe(200);
+    // Then the yearly price is archived in the Stripe dashboard, and a check finds it.
+    stripe.put(stripePrice(year, { interval: "year", unitAmount: 149000, active: false }));
+    const checked = await checkPrices(code);
+    expect(checked.status).toBe(200);
+    expectResponseToMatch("adminCheckPlanPrices", checked, { document: "platform" });
+    const warnings = [
+      { field: "stripePriceIdMonth.currency", expected: "EUR", actual: "USD" },
+      { field: "stripePriceIdYear.active", expected: "true", actual: "false" },
+    ];
+    expect(checked.body).toEqual({ warnings });
+    expect((await planRow(code))["price_warnings"]).toEqual(warnings);
+
+    // A retention purge removes the comparisons' audit rows (plan.updated, plan.prices_checked).
+    expect(await purgePlanAuditRows(code)).toBe(2);
+    expect(await auditOf("plan", code, "plan.prices_checked")).toEqual([]);
+
+    const res = await t.http.get("/v1/admin/plans").set(await adminHeaders());
+    expect(res.status).toBe(200);
+    expectResponseToMatch("adminListPlans", res, { document: "platform" });
+    expect(await listedPlan(code)).toMatchObject({ priceWarnings: warnings });
+    // An update that compares nothing answers them too, from the row it saved.
+    const renamed = await patchPlan(code, (linked.body as { version: number }).version, { name: "Renamed" });
+    expect(renamed.status).toBe(200);
+    expectResponseToMatch("adminUpdatePlan", renamed, { document: "platform" });
+    expect((renamed.body as Row)["priceWarnings"]).toEqual(warnings);
+    expect((await planRow(code))["price_warnings"]).toEqual(warnings);
+  });
+
+  it("[FIX-W42-PLATFORM AC3] stay as they were when Stripe fails, in adminUpdatePlan and adminCheckPlanPrices", async () => {
+    const code = await newPlan();
+    const month = newPriceId("Steady");
+    stripe.put(stripePrice(month, { unitAmount: 15900 }));
+    const linked = await patchPlan(code, await versionOf(code), { stripePriceIdMonth: month });
+    expect(linked.status).toBe(200);
+    const warnings = [{ field: "stripePriceIdMonth.amount", expected: "149.00", actual: "159.00" }];
+    expect((linked.body as Row)["priceWarnings"]).toEqual(warnings);
+    // Without its audit rows, so what the reads answer can come from the plans row only.
+    expect(await purgePlanAuditRows(code)).toBe(1);
+    const before = await planRow(code);
+    expect(before["price_warnings"]).toEqual(warnings);
+
+    // The price is corrected in Stripe, but Stripe cannot be reached: nothing is saved or stored.
+    stripe.put(stripePrice(month)).failNext("prices.retrieve", FakeStripe.apiError(503));
+    const update = await patchPlan(code, (linked.body as { version: number }).version, {
+      monthlyPrice: { amount: "159.00", currency: "EUR" },
+    });
+    expect(update.status).toBe(502);
+    expectResponseToMatch("adminUpdatePlan", update, { document: "platform" });
+    expect(await planRow(code)).toEqual(before);
+    expect(await auditOf("plan", code, "plan.updated")).toEqual([]);
+
+    stripe.failNext("prices.retrieve", FakeStripe.connectionError());
+    const check = await checkPrices(code);
+    expect(check.status).toBe(502);
+    expectResponseToMatch("adminCheckPlanPrices", check, { document: "platform" });
+    expect(await planRow(code)).toEqual(before);
+    expect(await listedPlan(code)).toMatchObject({ priceWarnings: warnings });
     expect(await auditOf("plan", code, "plan.prices_checked")).toEqual([]);
   });
 });

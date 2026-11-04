@@ -582,6 +582,10 @@ export interface PlatformPlans {
   name: string;
   per_booking_fee: Generated<Numeric>;
   /**
+   * Differences found by the last comparison of the plan with its linked Stripe prices ([{field, expected, actual}], AdminPlan.priceWarnings); written by adminUpdatePlan and adminCheckPlanPrices under the plan's row lock; empty when never compared or nothing is linked.
+   */
+  price_warnings: Generated<Json>;
+  /**
    * Velexis fee in basis points on net captured volume of velexis-mode payments, deducted in settlements.
    */
   settlement_fee_bps: Generated<number>;

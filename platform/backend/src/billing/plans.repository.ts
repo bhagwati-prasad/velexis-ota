@@ -2,8 +2,8 @@
 // of the pricing page and the create-OTA wizard; PBE-033 the admin's plan management (list with tenant counts, create,
 // update, the active-plan check of a manual subscription). The Stripe price links come with PBE-042 (M5); billing sync
 // (PBE-045) reads the plans a Stripe Price is linked to; PBE-048 writes the links (`update`, under `lockStripeLinks`
-// with `otherPlansLinking`) and reads the currency's exponent of the price comparison. Kysely on the API's
-// `PLATFORM_DB` (ADR-0005).
+// with `otherPlansLinking`) and reads the currency's exponent of the price comparison; FIX-W42-PLATFORM keeps the
+// comparison's warnings in the plan's row (`storePriceWarnings`). Kysely on the API's `PLATFORM_DB` (ADR-0005).
 //
 // **The version of a plan.** Unlike the other versioned tables, `platform.plans` has no `version` column (migrations
 // 0001 and 0002). The version that `adminUpdatePlan` takes in `If-Match` is derived from `updated_at` instead:
@@ -11,11 +11,16 @@
 // Every write of a plan goes through `update` here, which moves `updated_at` to
 // `GREATEST(now, date_trunc('milliseconds', updated_at) + 1 ms)`: the version grows by at least one on every change,
 // also when two changes fall within the same millisecond or the clock stands still (the FakeClock of the tests), so a
-// stale `If-Match` never matches again. A writer outside this repository must keep that rule.
+// stale `If-Match` never matches again. A writer outside this repository must keep that rule. The one write that
+// leaves the version is `storePriceWarnings` below: a comparison with Stripe is not a change of the plan.
 //
-// **The price warnings of a plan** (PBE-048, `AdminPlan.priceWarnings`) are not a column of `platform.plans`: the
-// audit row of each comparison records them, and PlansService reads them back through AuditService
-// (plans.service.ts).
+// **The price warnings of a plan** (`AdminPlan.priceWarnings`) are the column `plans.price_warnings` (platform
+// migration 0004, FIX-W42-PLATFORM, lead decision (4c) of 2026-11-04, second set): a JSON array of `{field, expected,
+// actual}`, `[]` until a comparison found a difference. `adminUpdatePlan` and `adminCheckPlanPrices` write it with
+// `storePriceWarnings` while their transaction holds the plan's row lock (`lockForUpdate`), and every admin read of a
+// plan selects it with the other PlanRecord columns (plans.service.ts). PBE-048 read them back from the comparison's
+// audit row instead, which a retention purge of platform_audit_log (PADR-0006) would have taken with it; the audit
+// rows still record each comparison, but nothing reads them back.
 import { Inject, Injectable } from "@nestjs/common";
 import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
@@ -46,7 +51,7 @@ export type PublicPlanRow = Pick<
   | "stripe_price_id_year"
 >;
 
-/** What the admin's plan answers read of a plan. */
+/** What the admin's plan answers read of a plan, its stored price warnings included (see the file header). */
 export type PlanRecord = PublicPlanRow &
   Pick<
     PlanTable,
@@ -55,6 +60,7 @@ export type PlanRecord = PublicPlanRow &
     | "sort_order"
     | "settlement_fee_bps"
     | "stripe_product_id"
+    | "price_warnings"
     | "created_at"
     | "updated_at"
   >;
@@ -128,6 +134,7 @@ const PLAN_RECORD_COLUMNS = [
   "p.sort_order",
   "p.settlement_fee_bps",
   "p.stripe_product_id",
+  "p.price_warnings",
   "p.created_at",
   "p.updated_at",
 ] as const;
@@ -244,6 +251,19 @@ export class PlansRepository {
         ...(featuresJson === undefined ? {} : { features: featuresJson }),
         updated_at: sql<Date>`GREATEST(${now}::timestamptz, date_trunc('milliseconds', updated_at) + interval '1 millisecond')`,
       })
+      .where("code", "=", code)
+      .executeTakeFirstOrThrow();
+  }
+
+  /**
+   * Stores `warningsJson` (the JSON text of the warnings of a comparison with Stripe, an array) as the price warnings
+   * of the plan `code` in `trx`, which holds the plan's row lock (`lockForUpdate`). It leaves `updated_at`, and so the
+   * plan's version, as it is: a comparison does not change the plan (see the file header).
+   */
+  async storePriceWarnings(trx: PlatformTransaction, code: string, warningsJson: string): Promise<void> {
+    await trx
+      .updateTable("platform.plans")
+      .set({ price_warnings: warningsJson })
       .where("code", "=", code)
       .executeTakeFirstOrThrow();
   }
