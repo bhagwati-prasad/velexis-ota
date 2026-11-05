@@ -2568,8 +2568,8 @@ The platform turns on own Stripe, own Amadeus credentials, custom domains and go
 
 Security review, the PCI controls of the airline-card flow and the gate for live airline-card payments, the erasure job, performance, runbooks, complete end-to-end suites and the SDK's first npm release. Foundation tasks X-029 … X-032 (monitoring, on-VM checks, restore drill, managed-services proof) run in the same milestone.
 
-### OBE-084 · Run the OTA backend security review and close the gaps
-- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: `pnpm audit --prod` still reports 1 high advisory, `zod` (OTA-SR-03), until OAD-020 and the platform's PFE-029 and PAD-017 are merged; OBE-093 and OBE-094 closed OTA-SR-01, OTA-SR-02 and OTA-SR-04)
+### OBE-084 · Run the OTA backend security review and close the gaps ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M6
 - **Depends on:** OBE-075, OBE-083, OBE-052

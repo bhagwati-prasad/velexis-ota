@@ -199,6 +199,8 @@ No token reaches browser JavaScript in either app: the platform tokens exist onl
 
 **Impact.** A signed-in person could post an oversized form to a server action whose schema validates a constrained collection; Next.js caps a server action's body at 1 MB by default (neither app raises it) and Caddy the apps' request bodies at 5 MB, which bounds the memory the validation can take.
 
+**Status: fixed (2026-11-05, PFE-029 and PAD-017).** The portal and the platform admin pin `zod` 4.6.7, the release OAD-020 pins in the OTA admin (one [tech-stack](../../docs/mvp/tech-stack.md) row for the three apps), and every list their server actions parse carries a `.max(n)` that Zod checks before any item (the portal's monitored queues and own office ids, the admin's added office ids and a plan's feature rows); each form keeps what it accepts and the messages it shows. `pnpm audit --prod` lists no `zod` advisory any more and reports no known vulnerabilities at all; the one `zod` 3.25.76 left in the lockfile is `kysely-codegen`'s, a development tool of `packages/db` that `--prod` does not count.
+
 **Fix.** Upgrade to zod 4.x in each app, adapt the form schemas to its API and run the app's UI tests; update the tech-stack row once for both. **Tasks:** PFE-029 (portal), PAD-017 (admin).
 
 ### F-5 · Critical (advisory); reachable: Low · Test and contract tooling

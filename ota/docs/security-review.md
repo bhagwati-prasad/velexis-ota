@@ -25,6 +25,10 @@ audit and the secret scan, and every finding with its severity and status. Every
 - **2026-11-05 (OAD-020):** OTA-SR-03 (`zod`) is closed: the OTA admin pins `zod` 4.6.7, and `pnpm audit --prod`
   lists no `zod` advisory reaching `ota/admin` (§5). The same advisory stays listed for the portal's and the platform
   admin's 3.25.76 (the platform review's F-4: PFE-029, PAD-017) until they move to the same release.
+- **2026-11-05 (PFE-029, PAD-017):** the portal and the platform admin pin `zod` 4.6.7 as well (the platform review's
+  F-4 is closed), so `pnpm audit --prod` reports no known vulnerabilities: 0 critical, 0 high. No finding of this
+  review is open: OTA-SR-01 to OTA-SR-05 are closed and OTA-SR-06 and OTA-SR-07 accepted (§7), which is OBE-084's
+  acceptance.
 
 ## 1. Scope
 
