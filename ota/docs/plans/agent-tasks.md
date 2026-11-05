@@ -2618,7 +2618,8 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - `pnpm audit --prod` lists no `multer`, `fast-uri` or `qs` advisory reaching `ota/backend`; `pnpm install --frozen-lockfile` passes; lint, typecheck, `test`, `test:int` and `test:xb` of the OTA backend pass, the `test/integration/m6` tests unchanged.
 - **Verify:** `pnpm install --frozen-lockfile && pnpm --filter @velexis/ota-backend test && pnpm --filter @velexis/ota-backend test:int && pnpm --filter @velexis/ota-backend test:xb && pnpm audit --prod`
 
-### OBE-095 · Document the generic refusals of every OTA operation
+### OBE-095 · Document the generic refusals of every OTA operation ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M6
 - **Depends on:** OBE-084

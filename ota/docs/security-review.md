@@ -19,6 +19,9 @@ audit and the secret scan, and every finding with its severity and status. Every
 - **2026-11-05 (OBE-093):** OTA-SR-01 (`nodemailer`) is closed: the OTA backend and `@velexis/testing` pin `nodemailer`
   10.3.1, and `pnpm audit --prod` lists no `nodemailer` advisory reaching either of them (§5). The same advisories stay
   listed for the platform backend's 6.10.1 until PBE-068 (the platform review's F-2) moves it to the same release.
+- **2026-11-05 (OBE-095):** OTA-SR-05 is closed: the OTA document lists every answer of the authentication matrix but
+  a pending operation's `501` (the `400` of 18 operations and the `401` and `403` of the three Stripe receivers, with
+  the shared error responses), and the matrix now checks each of those answers against it (§3.1).
 
 ## 1. Scope
 
@@ -32,7 +35,7 @@ audit and the secret scan, and every finding with its severity and status. Every
 
 | Area | How | Evidence |
 |---|---|---|
-| Authentication matrix | Every operation of the operations index (`otaOperations`, generated from the document) called with 12 credentials: none, the storefront edge, `pk_`, `sk_` scoped `storefront`, `sk_` scoped `console`, the OTA admin's service key, a wrong-tenant credential, the right one, a `console:automation` key with exactly the operation's `x-permission` and one with every other permission, and the service key with the forwarding headers of `api.ota.example.com` and of a storefront's `/api/*`. The expected answer of each cell is computed from the operation's `x-scope`, `x-edge-only`, `x-permission`, `security` and pending state, not read back from the code. 1,454 requests (135 operations by 10 credentials, and the two permission keys on the 52 guarded console operations). | [`auth-matrix.int.test.ts`](../backend/test/integration/m6/auth-matrix.int.test.ts) |
+| Authentication matrix | Every operation of the operations index (`otaOperations`, generated from the document) called with 12 credentials: none, the storefront edge, `pk_`, `sk_` scoped `storefront`, `sk_` scoped `console`, the OTA admin's service key, a wrong-tenant credential, the right one, a `console:automation` key with exactly the operation's `x-permission` and one with every other permission, and the service key with the forwarding headers of `api.ota.example.com` and of a storefront's `/api/*`. The expected answer of each cell is computed from the operation's `x-scope`, `x-edge-only`, `x-permission`, `security` and pending state, not read back from the code. 1,454 requests (135 operations by 10 credentials, and the two permission keys on the 52 guarded console operations). Every answer but a pending operation's `501` is also checked against the document: a status the operation lists and a body of that response's schema (OBE-095). | [`auth-matrix.int.test.ts`](../backend/test/integration/m6/auth-matrix.int.test.ts) |
 | Rate limits | One test per limit of architecture §8, through the real routes: the limit used up by one end user, the next request `429 RATE_LIMITED` with `Retry-After`, another end user not limited; `console.auth.signIn` per forwarded end-user IP through the service caller (two staff members never share a bucket, the service key without `X-Velexis-End-User-IP` is `400`); the handler-side counters (customer sign-in lockout, airline-card attempts per checkout, the tenant's decline suspension); no counted value in clear in the Redis keys or the log lines. A coverage test fails when a limit of `RATE_LIMITS` has no test. | [`rate-limits.int.test.ts`](../backend/test/integration/m6/rate-limits.int.test.ts); the counting of airline-card declines with the Amadeus stub: [`airline-card-completion.int.test.ts`](../backend/test/integration/payments/airline-card-completion.int.test.ts) (OBE-051) |
 | Response headers | helmet's headers and no `X-Powered-By` on every kind of answer (successes, every guard's refusal, validation, unknown route, `501`, health); `Cache-Control` with `no-store` on every answer with personal data, a session or an error; the document download and the public image with `nosniff`, their own type, CSP and caching. | [`headers.int.test.ts`](../backend/test/integration/m6/headers.int.test.ts) |
 | Redaction coverage | Every schema property marked `x-sensitive`, every property the central list names (`REDACT_PATHS` of `@velexis/logger`) and the document and card numbers of its literal paths, found by walking the whole document (more than a thousand places), with a marker value at its place: absent from log lines (top level and one level down), `supplier_requests`, `staff_actions`, `idempotency_keys` (plain copy; the answer is kept encrypted), `payment_events` and `notifications.payload` (no template variable is sensitive). A test fails when a new writer of one of these tables appears. | [`redaction-coverage.contract.test.ts`](../backend/test/contract/redaction-coverage.contract.test.ts) |
@@ -45,7 +48,8 @@ audit and the secret scan, and every finding with its severity and status. Every
 
 ### 3.1 Authentication matrix
 
-Every one of the 135 operations answered every credential as its contract metadata says (all 15 tests pass):
+Every one of the 135 operations answered every credential as its contract metadata says (all 15 tests of OBE-084
+pass, and the 16th of OBE-095 since 2026-11-05):
 
 - **No credential:** `401 INVALID_API_KEY` on every authenticated route and every pending (`501`) route; the open routes
   (`getPublicAsset`, `downloadFile`, the three Stripe receivers, health) answer without one.
@@ -71,6 +75,14 @@ Every one of the 135 operations answered every credential as its contract metada
   `/api/*`), `400 INVALID_REQUEST` (`edge_with_api_key`), refused before the key is compared. Each request of the
   first kind is logged exactly once as `caller.service_key_not_direct` with the reason `forwarded`, the second kind
   not at all; no log line holds the key.
+- **Conformance (OBE-095, 2026-11-05):** every answer but a pending operation's `501` matches the OTA document
+  (`expectResponseToMatch` on every such cell, in the 12 column tests and in a 16th test that lists every mismatch of
+  the whole matrix at once and proves that the cells left out are exactly the pending `501`s). Before OBE-095 the
+  matrix checked only the answers whose status the operation listed; the others were finding OTA-SR-05: `400
+  VALIDATION_FAILED` for a path value and `400 INVALID_REQUEST` for the edge header beside a key on 18 operations
+  without a `400` (5 of them pending), and the `401 INVALID_API_KEY` and `403` (`ORIGIN_NOT_ALLOWED`,
+  `SCOPE_NOT_ALLOWED`) of the three Stripe receivers, 84 cells in all. Against the document before the change the
+  strict check fails in 10 of the 16 tests.
 
 ### 3.2 Rate limits
 
@@ -207,7 +219,7 @@ no change). A dependency advisory keeps the advisory's severity; its reachabilit
 | OTA-SR-02 | High | Dependencies | `multer` 2.4.0 through `@nestjs/platform-express` 11.2.8 (DoS by a pending asynchronous `fileFilter`). Reachability: none today, the API parses multipart bodies itself (`common/http/body-parsers.ts`) and never mounts multer. Proposed fix: override `multer` to 2.5.0 below `@nestjs/platform-express` 11.2.8 (NestJS 12 would change a decision of the owner). | Closed 2026-11-05 by **OBE-094**: `multer` 2.5.0 through the root override `@nestjs/platform-express@11>multer`, NestJS on 11.2.8, both backends (§5) |
 | OTA-SR-03 | High | Dependencies (OTA admin) | `zod` 3.25.76 (memory exhaustion validating oversized constrained collections) in the OTA admin's server actions. | Open: **OAD-020** |
 | OTA-SR-04 | Medium | Dependencies | `fast-uri` 3.1.8 and `qs` 6.16.0 (moderate and low advisories), fixed by a lockfile refresh inside their dependents' ranges. | Closed 2026-11-05 by **OBE-094**: `fast-uri` 3.1.9 and `qs` 6.17.1 by a lockfile refresh, no override (§5) |
-| OTA-SR-05 | Low | Contract | The OTA document does not list every answer the API gives: `400 VALIDATION_FAILED` (a path value) or `INVALID_REQUEST` (an edge header beside an API key) on 18 operations (5 of them pending), and the credential refusals (`401`, `403`) of the three Stripe receivers. Clients and the response conformance of the matrix cannot check those answers' shape. | Open: **OBE-095** |
+| OTA-SR-05 | Low | Contract | The OTA document does not list every answer the API gives: `400 VALIDATION_FAILED` (a path value) or `INVALID_REQUEST` (an edge header beside an API key) on 18 operations (5 of them pending), and the credential refusals (`401`, `403`) of the three Stripe receivers. Clients and the response conformance of the matrix cannot check those answers' shape. | Closed 2026-11-05 by **OBE-095**: the 18 operations list `400 BadRequest` (`VALIDATION_FAILED`, `INVALID_REQUEST` in `x-error-codes`), the Stripe receivers `401 Unauthorized` and `403 Forbidden` with their codes and a paragraph on a credential sent anyway; the matrix checks every answer but a pending `501` against the document (§3.1) |
 | OTA-SR-06 | Info | Redaction | The `payment_events` rows built by the bookings, cancellation and refund code carry objects of ids, codes and amounts the code builds itself, not copies of a supplier or gateway payload, so they do not pass the redactor; every copied payload does (§3.4). | Accepted |
 | OTA-SR-07 | Info | Card data | A Stripe card summary (`PaymentCard`: brand, BIN, last 4, expiry month and year) is answered and kept in idempotency copies; it holds no card number (Stripe keeps it) and the document marks it "no sensitive data". | Accepted |
 

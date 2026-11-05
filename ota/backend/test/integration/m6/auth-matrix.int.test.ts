@@ -37,8 +37,10 @@
 // operations on one booking name a booking id of the right shape that no booking has, because their booking access
 // guard runs before the validation (an allowed caller gets its `404 NOT_FOUND`); and the wrong-tenant session operations
 // of the console (sign-in, refresh) send a real body with beta's portal or refresh token, which the handler refuses.
-// Every answer whose status the document lists for the operation is also checked against the document; the statuses
-// it does not list (pending `501`s, some `400`s and the webhooks' credential refusals) are finding OTA-SR-05.
+// Every answer but a pending operation's `501` (route parity) is also checked against the document
+// (`expectResponseToMatch`: a status the operation lists and a body of that response's schema). The document lists
+// all of them since OBE-095 closed finding OTA-SR-05: the `400`s of a path value and of the edge header beside an API
+// key, and the credential refusals (`401`, `403`) of the Stripe receivers, were missing before.
 //
 // Every request has an end-user IP address of its own (X-Forwarded-For through "Caddy", X-Velexis-End-User-IP for the
 // key servers and the service caller), so no per-IP limit of architecture §8 ever answers 429 here. All requests run in
@@ -129,10 +131,6 @@ function specOf(operation: Operation): JsonObject {
   return ((paths[operation.path] ?? {})[operation.method] ?? {}) as JsonObject;
 }
 
-/** The response statuses the document lists for an operation. */
-const documentedStatuses = (operation: Operation): string[] =>
-  Object.keys((specOf(operation)["responses"] as JsonObject | undefined) ?? {});
-
 /** The `security` alternatives of an operation (its own, else the document's), each as its scheme names. */
 function securityOf(operation: Operation): string[][] {
   const own = specOf(operation)["security"] as JsonObject[] | undefined;
@@ -171,6 +169,12 @@ const keyStaff = (operation: Operation): Requirement => requirementOf(operation,
 /** An operation the API answers without any credential: `security: []` (public files, webhooks, health). */
 const isOpen = (operation: Operation): boolean => securityOf(operation).length === 0;
 const isPending = (operation: Operation): boolean => Object.hasOwn(PENDING_OPERATIONS, operation.operationId);
+/**
+ * A pending operation's `501 NOT_IMPLEMENTED` (route parity): the one answer of the matrix that the document does not
+ * list; every other answer, the pending operations' guard refusals included, is a documented response (OBE-095).
+ */
+const isPendingAnswer = (operation: Operation, res: Response): boolean =>
+  isPending(operation) && res.status === 501;
 /** A console operation whose `x-permission` the permission guard checks (not the four staff-session operations). */
 const isGuardedConsole = (operation: Operation): boolean =>
   operation.scope === "console" && operation.permission !== null && operation.permission !== "none";
@@ -831,10 +835,11 @@ const cells: Cell[] = [];
 
 beforeAll(async () => {
   preloadOpenApiDocument();
-  // The response validators of every operation, compiled once here rather than inside the first test.
+  // The response validators of every operation, compiled once here rather than inside the first test: every answer of
+  // the matrix but a pending 501 is checked against the document (the 404 of the booking access guard included).
   const checker = responseChecker("ota");
   for (const operation of otaOperations) {
-    for (const status of [200, 400, 401, 403]) {
+    for (const status of [200, 400, 401, 403, ...(opensBooking(operation) ? [404] : [])]) {
       try {
         checker.check(operation.operationId, { status, body: {} });
       } catch {
@@ -965,14 +970,58 @@ describe("the authentication matrix", () => {
       const selected = cells.filter((cell) => cell.column === column);
       expect(selected.length).toBeGreaterThan(0);
       expect(mismatches(selected)).toEqual([]);
-      // Every answer with a status the document lists for the operation has the documented body (the error envelope).
+      // Every answer but a pending operation's 501 is a documented response of the operation, with the documented
+      // body (the error envelope): its status is listed and its body validates (OBE-095).
       for (const { operation, res } of selected) {
-        if (documentedStatuses(operation).includes(String(res.status))) {
+        if (!isPendingAnswer(operation, res)) {
           expectResponseToMatch(operation.operationId, res);
         }
       }
     },
   );
+
+  it("[OBE-095 AC1] matches every answer but a pending operation's 501 to the OTA document: a documented status and body", () => {
+    const checker = responseChecker("ota");
+    const label = ({ operation, column }: Cell): string => `${operation.operationId} [${column}]`;
+    const checked = cells.filter(({ operation, res }) => !isPendingAnswer(operation, res));
+    const problems = checked.flatMap((cell) =>
+      checker
+        .check(cell.operation.operationId, cell.res)
+        .map(
+          (problem) => `${label(cell)} ${cell.res.status}: ${problem.path || "(body)"} ${problem.message}`,
+        ),
+    );
+    expect(problems).toEqual([]);
+    // Left out: exactly the cells the table expects a pending operation's 501 for, and nothing else.
+    const leftOut = cells.filter(({ operation, res }) => isPendingAnswer(operation, res));
+    expect(leftOut.length).toBeGreaterThan(0);
+    expect(leftOut.map(label)).toEqual(
+      cells
+        .filter(
+          ({ operation, column }) =>
+            isPending(operation) && expectedAnswer(operation, column).answer === NOT_IMPLEMENTED,
+        )
+        .map(label),
+    );
+    expect(checked.length + leftOut.length).toBe(cells.length);
+    // The answers OTA-SR-05 found undocumented are among them: the edge header beside an API key (400) and the
+    // service key through Caddy (401) on every operation, the pending ones included, and every credential's refusal
+    // on the Stripe receivers (`x-scope: internal`).
+    for (const column of ["serviceViaEdge", "serviceViaApi"] as const) {
+      expect(checked.filter((cell) => cell.column === column)).toHaveLength(otaOperations.length);
+    }
+    const receivers = otaOperations.filter((operation) => operation.path.startsWith("/webhooks/"));
+    expect(receivers.map((operation) => operation.operationId).sort()).toEqual([
+      "receiveStripeConnectWebhook",
+      "receiveStripeConnectionWebhook",
+      "receiveStripeVelexisWebhook",
+    ]);
+    for (const receiver of receivers) {
+      expect(checked.filter((cell) => cell.operation === receiver).map((cell) => cell.column)).toEqual(
+        columnsOf(receiver),
+      );
+    }
+  });
 
   it("[OBE-084 AC1] leaves the other tenant's sessions as they were: its tokens presented at alpha changed nothing", () => {
     expect(answerOf(betaAfter?.staffMe as Response)).toEqual(OK);

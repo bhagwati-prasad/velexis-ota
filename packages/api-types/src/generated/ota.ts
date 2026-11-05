@@ -3080,6 +3080,8 @@ export interface paths {
          *     **Effect.** In one transaction of the OTA's schema a `payment_events` row is written (`source = webhook`, `type = webhook.<event type>`, `provider_event_id` = the event id, a payload of ids, statuses and amounts only, never the client secret or card details); an event id that is already stored is a duplicate and writes nothing. Then `stripe.event {tenantId, paymentEventId}` is queued on `ota-stripe-events` with the event id as job id, so a duplicate queues no second job, and the answer is `200`. The worker reads the PaymentIntent, charge, refund or dispute again from Stripe and applies that state, never the event body.
          *
          *     **Acknowledged without effect** (`200`, nothing written, logged without the payload): an unknown OTA or payment, an OTA that is neither active nor suspended, and every mismatch of step 2 to 4, which is logged as a security event. **`503 SERVICE_UNAVAILABLE`** when the OTA cannot be looked up, the event cannot be queued, or the PaymentIntent of a dispute cannot be read, and **`500 INTERNAL_ERROR`** when the event cannot be stored: Stripe delivers it again either way, and the delivery that finds it stored queues it again.
+         *
+         *     **A credential sent anyway.** Stripe sends none and none is needed (`security: []`), but one sent anyway is checked as on every route, before the signature or the body is read: an unknown key or edge secret answers `401 INVALID_API_KEY`, the edge credential beside `X-Api-Key` `400 INVALID_REQUEST`, a publishable key from an origin it does not list `403 ORIGIN_NOT_ALLOWED`, and a key or an OTA that cannot be looked up `503 SERVICE_UNAVAILABLE`. A valid one gets its OTA's refusals (`403 TENANT_SUSPENDED`, `403 HOST_NOT_ALLOWED`), and otherwise `403 SCOPE_NOT_ALLOWED` (`details.reason: no_scope`), because no credential's scope reaches an `x-scope: internal` operation.
          */
         post: operations["receiveStripeVelexisWebhook"];
         delete?: never;
@@ -3106,6 +3108,8 @@ export interface paths {
          *     **Effect.** As on the Velexis endpoint (receiveStripeVelexisWebhook): in one transaction of the OTA's schema a `payment_events` row (`source = webhook`, `type = webhook.<event type>`, `provider_event_id` = the event id, a payload of ids, statuses and amounts only); an event id that is already stored is a duplicate and writes nothing. Then `stripe.event {tenantId, paymentEventId}` is queued on `ota-stripe-events` with the event id as job id and the answer is `200`. The worker reads the object again from Stripe on the payment's account (the connected account, `Stripe-Account: <acct_…>`, or the key of the OTA's `api_keys` connection of that same account once it moved there: OADR-0010 point 1 notes) and applies that state, never the event body.
          *
          *     **Acknowledged without effect** (`200`, nothing written, no staff alert, logged without the payload): an event without `account` or for an `acct_…` that no connection, or more than one, has, an unknown payment, an OTA that is neither active nor suspended, and every mismatch of step 2 to 4, which is logged as a security event: one OTA's signed events can never write into another OTA's schema. **`503 SERVICE_UNAVAILABLE`** when the connection or the OTA cannot be looked up or the event cannot be queued, and **`500 INTERNAL_ERROR`** when the event cannot be stored: Stripe delivers it again either way.
+         *
+         *     **A credential sent anyway.** Stripe sends none and none is needed (`security: []`), but one sent anyway is checked as on every route, before the signature or the body is read: an unknown key or edge secret answers `401 INVALID_API_KEY`, the edge credential beside `X-Api-Key` `400 INVALID_REQUEST`, a publishable key from an origin it does not list `403 ORIGIN_NOT_ALLOWED`, and a key or an OTA that cannot be looked up `503 SERVICE_UNAVAILABLE`. A valid one gets its OTA's refusals (`403 TENANT_SUSPENDED`, `403 HOST_NOT_ALLOWED`), and otherwise `403 SCOPE_NOT_ALLOWED` (`details.reason: no_scope`), because no credential's scope reaches an `x-scope: internal` operation.
          */
         post: operations["receiveStripeConnectWebhook"];
         delete?: never;
@@ -3132,6 +3136,8 @@ export interface paths {
          *     **Effect.** As on the Velexis endpoint (receiveStripeVelexisWebhook): in one transaction of the OTA's schema a `payment_events` row (`source = webhook`, `type = webhook.<event type>`, `provider_event_id` = the event id, a payload of ids, statuses and amounts only); an event id that is already stored is a duplicate and writes nothing. Then `stripe.event {tenantId, paymentEventId}` is queued on `ota-stripe-events` with the event id as job id and the answer is `200`. The worker reads the object again from Stripe with the connection's own key (for a payment of that account, whichever mode it was created in) and applies that state, never the event body.
          *
          *     **Acknowledged without effect** (`200`, nothing written, no staff alert, logged without the payload): an unknown payment, an OTA that is neither active nor suspended, and every mismatch of step 2 to 4, which is logged as a security event: one OTA's signed events can never write into another OTA's schema. **`503 SERVICE_UNAVAILABLE`** when the connection or the OTA cannot be looked up or the event cannot be queued, and **`500 INTERNAL_ERROR`** when the event cannot be stored: Stripe delivers it again either way.
+         *
+         *     **A credential sent anyway.** Stripe sends none and none is needed (`security: []`), but one sent anyway is checked as on every route, before the signature or the body is read: an unknown key or edge secret answers `401 INVALID_API_KEY`, the edge credential beside `X-Api-Key` `400 INVALID_REQUEST`, a publishable key from an origin it does not list `403 ORIGIN_NOT_ALLOWED`, and a key or an OTA that cannot be looked up `503 SERVICE_UNAVAILABLE`. A valid one gets its OTA's refusals (`403 TENANT_SUSPENDED`, `403 HOST_NOT_ALLOWED`), and otherwise `403 SCOPE_NOT_ALLOWED` (`details.reason: no_scope`), because no credential's scope reaches an `x-scope: internal` operation.
          */
         post: operations["receiveStripeConnectionWebhook"];
         delete?: never;
@@ -16321,6 +16327,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             429: components["responses"]["RateLimited"];
@@ -17483,6 +17490,7 @@ export interface operations {
                     "application/json": components["schemas"]["AuthSessionInfo"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             429: components["responses"]["RateLimited"];
@@ -17558,6 +17566,7 @@ export interface operations {
                     "application/json": components["schemas"]["Customer"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             429: components["responses"]["RateLimited"];
@@ -17725,6 +17734,7 @@ export interface operations {
                     "application/json": components["schemas"]["CustomerPreferences"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             429: components["responses"]["RateLimited"];
@@ -18045,6 +18055,7 @@ export interface operations {
                     "application/json": components["schemas"]["AccountDataExport"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -18496,6 +18507,7 @@ export interface operations {
                     "application/json": components["schemas"]["SavedTraveler"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -18544,6 +18556,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -18911,6 +18924,7 @@ export interface operations {
                     "application/json": components["schemas"]["Airport"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -19085,6 +19099,7 @@ export interface operations {
                     "application/json": components["schemas"]["Airline"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -19516,6 +19531,7 @@ export interface operations {
                     "application/json": components["schemas"]["FlightSearch"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -20312,6 +20328,7 @@ export interface operations {
                     "application/json": components["schemas"]["FlightOffer"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -20648,6 +20665,7 @@ export interface operations {
                     "application/json": components["schemas"]["PricedOffer"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -20674,6 +20692,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["AncillaryCatalogueOk"];
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -20704,6 +20723,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["FareRuleSetOk"];
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -20775,6 +20795,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["CheckoutOk"];
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -20999,6 +21020,7 @@ export interface operations {
         requestBody?: never;
         responses: {
             200: components["responses"]["PaymentOk"];
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -21351,6 +21373,7 @@ export interface operations {
                     "application/json": components["schemas"]["CancellationQuote"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -21702,6 +21725,7 @@ export interface operations {
                     "application/json": components["schemas"]["BookingAncillaryOptions"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
@@ -27210,6 +27234,8 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["ServiceUnavailable"];
         };
@@ -27280,6 +27306,8 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["ServiceUnavailable"];
         };
@@ -27349,6 +27377,8 @@ export interface operations {
                 };
             };
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["ServiceUnavailable"];
         };

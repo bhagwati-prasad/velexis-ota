@@ -405,6 +405,8 @@ paths:
       x-reference-tables:
         - currencies
       x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_REQUEST
         - INVALID_API_KEY
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
@@ -631,6 +633,8 @@ paths:
               $ref: '#/components/headers/ETag'
             Set-Cookie:
               $ref: '#/components/headers/Set-Cookie'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -2229,6 +2233,8 @@ paths:
         - customers
         - customer_identities
       x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_REQUEST
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - INVALID_API_KEY
@@ -2288,6 +2294,8 @@ paths:
                   authMethod: password
                   userAgent: Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15 Safari/17.6
                   ipCountry: GB
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -2322,6 +2330,8 @@ paths:
         - customers
         - customer_identities
       x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_REQUEST
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - INVALID_API_KEY
@@ -2372,6 +2382,8 @@ paths:
                 createdAt: '2026-10-10T08:12:00Z'
                 updatedAt: '2026-10-10T09:05:00Z'
                 version: 3
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -2541,6 +2553,8 @@ paths:
       x-tenant-tables:
         - customer_preferences
       x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_REQUEST
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - INVALID_API_KEY
@@ -2581,6 +2595,8 @@ paths:
                     checkInReminders: false
                 updatedAt: '2026-10-10T09:10:00Z'
                 version: 2
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -2983,6 +2999,8 @@ paths:
       x-tenant-tables:
         - customer_data_exports
       x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_REQUEST
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - INVALID_API_KEY
@@ -3027,6 +3045,8 @@ paths:
                   https://files.velexis.travel/t/acme/exports/dex_9Zx3Cv6Bn2Mq8Wl4.zip?X-Amz-Expires=900&X-Amz-Signature=3f9a1c
                 sizeBytes: 48213
                 deliveredTo: a***.b***@example.com
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -3400,6 +3420,8 @@ paths:
         - saved_travelers
         - saved_traveler_documents
       x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_REQUEST
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - INVALID_API_KEY
@@ -3467,6 +3489,8 @@ paths:
                 createdAt: '2026-10-10T09:35:00Z'
                 updatedAt: '2026-10-10T09:35:00Z'
                 version: 1
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -3638,6 +3662,8 @@ paths:
         - saved_travelers
         - saved_traveler_documents
       x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_REQUEST
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - INVALID_API_KEY
@@ -3656,6 +3682,8 @@ paths:
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -3869,6 +3897,8 @@ paths:
         - countries
         - time_zones
       x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_REQUEST
         - INVALID_API_KEY
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
@@ -3920,6 +3950,8 @@ paths:
                   latitude: 51.4706
                   longitude: -0.461941
                 active: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -4064,6 +4096,8 @@ paths:
       x-reference-tables:
         - airlines
       x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_REQUEST
         - INVALID_API_KEY
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
@@ -4110,6 +4144,8 @@ paths:
                 logoSquareUrl: https://cdn.velexis.travel/ref/airlines/BA-square.png
                 websiteUrl: https://www.britishairways.com
                 active: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -4636,6 +4672,8 @@ paths:
         - aircraft
         - currencies
       x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_REQUEST
         - INVALID_API_KEY
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
@@ -4811,6 +4849,8 @@ paths:
                 retryAfterSeconds: null
                 error: null
                 completedAt: '2026-10-10T09:42:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -5028,6 +5068,8 @@ paths:
         - aircraft
         - currencies
       x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_REQUEST
         - INVALID_API_KEY
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
@@ -5569,6 +5611,8 @@ paths:
                           includedCheckedBags:
                             quantity: 0
                 createdAt: '2026-10-10T09:42:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -6256,6 +6300,8 @@ paths:
         - aircraft
         - currencies
       x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_REQUEST
         - INVALID_API_KEY
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
@@ -6291,6 +6337,8 @@ paths:
               examples:
                 priced:
                   $ref: '#/components/examples/PricedOfferExample'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -6380,6 +6428,8 @@ paths:
       x-platform-tables:
         - supplier_connections
       x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_REQUEST
         - INVALID_API_KEY
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
@@ -6411,6 +6461,8 @@ paths:
       responses:
         '200':
           $ref: '#/components/responses/AncillaryCatalogueOk'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -6488,6 +6540,8 @@ paths:
       x-platform-tables:
         - supplier_connections
       x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_REQUEST
         - INVALID_API_KEY
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
@@ -6518,6 +6572,8 @@ paths:
       responses:
         '200':
           $ref: '#/components/responses/FareRuleSetOk'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -6732,6 +6788,8 @@ paths:
         - payments
         - storefront_settings
       x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_REQUEST
         - INVALID_API_KEY
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
@@ -6754,6 +6812,8 @@ paths:
       responses:
         '200':
           $ref: '#/components/responses/CheckoutOk'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -7672,6 +7732,8 @@ paths:
       x-platform-tables:
         - payment_provider_connections
       x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_REQUEST
         - INVALID_API_KEY
         - TOKEN_EXPIRED
         - ORIGIN_NOT_ALLOWED
@@ -7694,6 +7756,8 @@ paths:
       responses:
         '200':
           $ref: '#/components/responses/PaymentOk'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -9479,6 +9543,8 @@ paths:
       x-platform-tables:
         - supplier_connections
       x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_REQUEST
         - UNAUTHENTICATED
         - INVALID_API_KEY
         - TOKEN_EXPIRED
@@ -9587,6 +9653,8 @@ paths:
                     expiresAt: '2026-10-12T08:40:00Z'
                     source: refunding_preview
                     warnings: []
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -10823,6 +10891,8 @@ paths:
       x-platform-tables:
         - supplier_connections
       x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_REQUEST
         - UNAUTHENTICATED
         - INVALID_API_KEY
         - TOKEN_EXPIRED
@@ -10899,6 +10969,8 @@ paths:
                     loadedAt: '2026-10-12T08:30:00Z'
                     expiresAt: '2026-10-12T09:00:00Z'
                     warnings: []
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -19939,6 +20011,15 @@ paths:
         security event. **`503 SERVICE_UNAVAILABLE`** when the OTA cannot be looked up, the event cannot be queued, or
         the PaymentIntent of a dispute cannot be read, and **`500 INTERNAL_ERROR`** when the event cannot be stored:
         Stripe delivers it again either way, and the delivery that finds it stored queues it again.
+
+
+        **A credential sent anyway.** Stripe sends none and none is needed (`security: []`), but one sent anyway is
+        checked as on every route, before the signature or the body is read: an unknown key or edge secret answers `401
+        INVALID_API_KEY`, the edge credential beside `X-Api-Key` `400 INVALID_REQUEST`, a publishable key from an
+        origin it does not list `403 ORIGIN_NOT_ALLOWED`, and a key or an OTA that cannot be looked up `503
+        SERVICE_UNAVAILABLE`. A valid one gets its OTA's refusals (`403 TENANT_SUSPENDED`, `403 HOST_NOT_ALLOWED`), and
+        otherwise `403 SCOPE_NOT_ALLOWED` (`details.reason: no_scope`), because no credential's scope reaches an
+        `x-scope: internal` operation.
       tags:
         - Internal
       security: []
@@ -19948,6 +20029,11 @@ paths:
       x-error-codes:
         - VALIDATION_FAILED
         - INVALID_REQUEST
+        - INVALID_API_KEY
+        - ORIGIN_NOT_ALLOWED
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - INTERNAL_ERROR
         - SERVICE_UNAVAILABLE
       x-tenant-tables:
@@ -20023,6 +20109,10 @@ paths:
                 received: true
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
         '503':
@@ -20073,6 +20163,15 @@ paths:
         OTA's signed events can never write into another OTA's schema. **`503 SERVICE_UNAVAILABLE`** when the connection
         or the OTA cannot be looked up or the event cannot be queued, and **`500 INTERNAL_ERROR`** when the event cannot
         be stored: Stripe delivers it again either way.
+
+
+        **A credential sent anyway.** Stripe sends none and none is needed (`security: []`), but one sent anyway is
+        checked as on every route, before the signature or the body is read: an unknown key or edge secret answers `401
+        INVALID_API_KEY`, the edge credential beside `X-Api-Key` `400 INVALID_REQUEST`, a publishable key from an
+        origin it does not list `403 ORIGIN_NOT_ALLOWED`, and a key or an OTA that cannot be looked up `503
+        SERVICE_UNAVAILABLE`. A valid one gets its OTA's refusals (`403 TENANT_SUSPENDED`, `403 HOST_NOT_ALLOWED`), and
+        otherwise `403 SCOPE_NOT_ALLOWED` (`details.reason: no_scope`), because no credential's scope reaches an
+        `x-scope: internal` operation.
       tags:
         - Internal
       security: []
@@ -20082,6 +20181,11 @@ paths:
       x-error-codes:
         - VALIDATION_FAILED
         - INVALID_REQUEST
+        - INVALID_API_KEY
+        - ORIGIN_NOT_ALLOWED
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - INTERNAL_ERROR
         - SERVICE_UNAVAILABLE
       x-tenant-tables:
@@ -20159,6 +20263,10 @@ paths:
                 received: true
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
         '503':
@@ -20207,6 +20315,15 @@ paths:
         logged as a security event: one OTA's signed events can never write into another OTA's schema. **`503
         SERVICE_UNAVAILABLE`** when the connection or the OTA cannot be looked up or the event cannot be queued, and
         **`500 INTERNAL_ERROR`** when the event cannot be stored: Stripe delivers it again either way.
+
+
+        **A credential sent anyway.** Stripe sends none and none is needed (`security: []`), but one sent anyway is
+        checked as on every route, before the signature or the body is read: an unknown key or edge secret answers `401
+        INVALID_API_KEY`, the edge credential beside `X-Api-Key` `400 INVALID_REQUEST`, a publishable key from an
+        origin it does not list `403 ORIGIN_NOT_ALLOWED`, and a key or an OTA that cannot be looked up `503
+        SERVICE_UNAVAILABLE`. A valid one gets its OTA's refusals (`403 TENANT_SUSPENDED`, `403 HOST_NOT_ALLOWED`), and
+        otherwise `403 SCOPE_NOT_ALLOWED` (`details.reason: no_scope`), because no credential's scope reaches an
+        `x-scope: internal` operation.
       tags:
         - Internal
       security: []
@@ -20216,6 +20333,11 @@ paths:
       x-error-codes:
         - VALIDATION_FAILED
         - INVALID_REQUEST
+        - INVALID_API_KEY
+        - ORIGIN_NOT_ALLOWED
+        - SCOPE_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - INTERNAL_ERROR
         - SERVICE_UNAVAILABLE
       x-tenant-tables:
@@ -20290,6 +20412,10 @@ paths:
                 received: true
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
         '503':

@@ -1215,12 +1215,25 @@ describe("receiveStripeVelexisWebhook (api-changes-console-and-internal §5)", (
     expect(stripeEvent.object).toBe("event");
   });
 
-  it("answers 200 with an acknowledgement, 400, 500 and 503, and lists exactly those error codes [OBE-039]", () => {
+  it("answers 200 with an acknowledgement, 400, 401, 403, 500 and 503, and lists exactly those error codes [OBE-039]", () => {
     const op = operation(VELEXIS_WEBHOOK);
-    expect(Object.keys(objectAt(op.spec, "responses")).sort()).toEqual(["200", "400", "500", "503"]);
+    // 401 and 403 since OBE-095: the refusals of a credential sent anyway (OTA-SR-05).
+    expect(Object.keys(objectAt(op.spec, "responses")).sort()).toEqual([
+      "200",
+      "400",
+      "401",
+      "403",
+      "500",
+      "503",
+    ]);
     expect(op.spec["x-error-codes"]).toEqual([
       "VALIDATION_FAILED",
       "INVALID_REQUEST",
+      "INVALID_API_KEY",
+      "ORIGIN_NOT_ALLOWED",
+      "SCOPE_NOT_ALLOWED",
+      "TENANT_SUSPENDED",
+      "HOST_NOT_ALLOWED",
       "INTERNAL_ERROR",
       "SERVICE_UNAVAILABLE",
     ]);
