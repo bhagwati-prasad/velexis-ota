@@ -633,12 +633,16 @@ describe("[OBE-055 AC2] a booking flow", () => {
   });
 
   it("[OBE-055 AC2] queues each e-mail once, sends it after one attempt and erases nothing it did not hold", async () => {
-    const rows = await notificationsOf("alpha", booking.id);
-
-    expect(rows.map((row) => [row.template_key, row.status, row.attempts, row.recipient])).toEqual([
-      ["booking.confirmed", "sent", 1, traveller],
-      ["booking.ticketed", "sent", 1, traveller],
-    ]);
+    // The processor records `sent` only after the SMTP answer, so a message can be in Mailpit a moment before its row
+    // says so (as in the FIX-W28-NOTIFY test below): the same assertion, waited for.
+    const rows = await vi.waitFor(async () => {
+      const found = await notificationsOf("alpha", booking.id);
+      expect(found.map((row) => [row.template_key, row.status, row.attempts, row.recipient])).toEqual([
+        ["booking.confirmed", "sent", 1, traveller],
+        ["booking.ticketed", "sent", 1, traveller],
+      ]);
+      return found;
+    }, ROW_AFTER_SEND_WAIT);
     expect(rows.map((row) => row.dedupe_key)).toEqual([
       `booking.confirmed:${booking.id}`,
       expect.stringMatching(new RegExp(`^booking\\.ticketed:${booking.id}:v\\d+$`)) as unknown,
@@ -855,8 +859,11 @@ describe("[OBE-055 step 3] a confirmation whose itinerary is not ready within 2 
     expect(message.Attachments).toEqual([]);
     expect(message.Text).toContain("Your itinerary will be ready to download on your booking page shortly.");
     expect(message.Text).toContain(`https://alpha.ota.example.com/booking.html?id=${booking.id}`);
-    const [row] = await notificationsOf("alpha", booking.id);
-    expect(row).toMatchObject({ status: "sent", attempts: 1 });
+    // Sent once Mailpit has the message, but its row may record it a moment later: the same assertion, waited for.
+    await vi.waitFor(async () => {
+      const [row] = await notificationsOf("alpha", booking.id);
+      expect(row).toMatchObject({ status: "sent", attempts: 1 });
+    }, ROW_AFTER_SEND_WAIT);
   });
 });
 
@@ -917,29 +924,37 @@ describe("[OBE-055 AC3] staff alerts", () => {
   it("[OBE-055 AC3] go to ops_alert_email when the OTA set it", async () => {
     expect(alphaAlert.Subject).toMatch(/^\[Action needed\] Booking [A-Z0-9]+ needs a review$/);
     expect(alphaAlert.Text).toContain("A test of the staff alert recipients.");
-    const rows = await tx("alpha", (trx) =>
-      trx
-        .selectFrom("notifications")
-        .select(["recipient", "recipient_type as recipientType", "status"])
-        .where("template_key", "=", "staff.manual_review")
-        .execute(),
-    );
-    expect(rows).toEqual([{ recipient: ALPHA_OPS, recipientType: "staff", status: "sent" }]);
+    // The message is in Mailpit; its row may record the send a moment later: the same assertion, waited for.
+    await vi.waitFor(async () => {
+      const rows = await tx("alpha", (trx) =>
+        trx
+          .selectFrom("notifications")
+          .select(["recipient", "recipient_type as recipientType", "status"])
+          .where("template_key", "=", "staff.manual_review")
+          .execute(),
+      );
+      expect(rows).toEqual([{ recipient: ALPHA_OPS, recipientType: "staff", status: "sent" }]);
+    }, ROW_AFTER_SEND_WAIT);
   });
 
   it("[OBE-055 AC3] go to the owners read from the platform when it is not set, and to no other member", async () => {
     expect(gaveUp).toMatchObject({ outcome: "gave_up", reason: "payment" });
     expect(founderAlert.Text).toContain(betaBooking.reference);
     expect(partnerAlert.Text).toContain("Attempts made:");
-    const rows = (await notificationsOf("beta", betaBooking.id)).filter(
-      (row) => row.template_key === "staff.ticketing_failed",
-    );
-    expect(rows.map((row) => [row.recipient, row.recipient_type, row.status])).toEqual(
-      expect.arrayContaining([
-        [BETA_FOUNDER, "staff", "sent"],
-        [BETA_PARTNER, "staff", "sent"],
-      ]),
-    );
+    // Both messages are in Mailpit; a row may record its send a moment later (CI run 42057935780 read the partner's
+    // as `pending`): the same assertion, waited for.
+    const rows = await vi.waitFor(async () => {
+      const found = (await notificationsOf("beta", betaBooking.id)).filter(
+        (row) => row.template_key === "staff.ticketing_failed",
+      );
+      expect(found.map((row) => [row.recipient, row.recipient_type, row.status])).toEqual(
+        expect.arrayContaining([
+          [BETA_FOUNDER, "staff", "sent"],
+          [BETA_PARTNER, "staff", "sent"],
+        ]),
+      );
+      return found;
+    }, ROW_AFTER_SEND_WAIT);
     expect(rows).toHaveLength(2);
     // The founder's row keeps the caller's dedupe key; the partner's adds the account id.
     expect(Object.fromEntries(rows.map((row) => [row.recipient, row.dedupe_key]))).toEqual({
