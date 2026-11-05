@@ -189,7 +189,7 @@ export interface paths {
          * Confirm an email address with the emailed token
          * @description Consumes the one-time token from the verification link (the storefront page at the link reads `token` from the URL and calls this operation). Works for the first verification after sign-up and for confirming a new address requested through `account.update` (`pendingEmail`).
          *
-         *     **Behaviour.** Looks up the SHA-256 hash of the token in `customer_identities`; unknown, used or expired (24 h) tokens fail with `400 VERIFICATION_TOKEN_INVALID` (`details.reason`). On success sets `email_verified=true` and `email_verified_at` (a `pending_verification` customer becomes `active`), or moves `pending_email` into `customers.email` (re-checking uniqueness: `409 EMAIL_ALREADY_REGISTERED`), invalidates the token, and attaches guest bookings of this OTA made with the same verified email (`bookings.customer_id`, `booking_events` entry) so they appear in My trips. No session is created — the link may be opened on another device; if the browser already has a session, the SDK keeps it.
+         *     **Behaviour.** Looks up the SHA-256 hash of the token in `customer_identities`; unknown, used or expired (24 h) tokens fail with `400 VERIFICATION_TOKEN_INVALID` (`details.reason`). On success sets `email_verified=true` and `email_verified_at` (a `pending_verification` customer becomes `active`), or moves `pending_email` into `customers.email` (re-checking uniqueness: `409 EMAIL_ALREADY_REGISTERED`), invalidates the token, and attaches guest bookings of this OTA made with the same verified email (`bookings.customer_id`, `booking_events` entry) so they appear in My trips. A booking that the erasure of a deleted account detached (account.delete's **Erasure job**) is never attached again, whoever verifies its contact address. No session is created — the link may be opened on another device; if the browser already has a session, the SDK keeps it.
          *
          *     **Idempotency.** `Idempotency-Key` required; replaying the same key returns the original result, while a new key with an already-used token returns `VERIFICATION_TOKEN_INVALID` with reason `used`.
          *
@@ -491,7 +491,7 @@ export interface paths {
          *
          *     **Immediate effects (one transaction).** All `customer_sessions` are revoked (`account_deleted`), the identity is disabled, open password reset links end, `customers.status` becomes `deleted` and the email is replaced by a salted hash so the address can register again; marketing consent is withdrawn (`customer_consents`). Open and payment-pending checkouts are abandoned, and the payments of those checkouts that are not confirmed yet or only authorised are voided after the commit. A confirmation email is queued to the address before it was replaced (template `account.deleted`: when, the erasure date, whether booking records are kept).
          *
-         *     **Erasure job.** Within 30 days (normally 24 h after the export is delivered) a background job hard-deletes `saved_travelers`, `saved_traveler_documents`, `customer_preferences`, sessions, reset tokens and personal `notifications`, and anonymises `customers`. Bookings, their travellers, tickets and payments are **retained** (detached and minimised) for the legal retention period because airlines, tax and accounting rules require them; `retainedRecords` explains this to the customer.
+         *     **Erasure job.** Within 30 days, before `erasureDueBy` (an hourly job takes the accounts deleted 30 days less one hour ago or earlier), a background job hard-deletes `saved_travelers`, `saved_traveler_documents`, `customer_preferences`, consents, identities, sessions, reset tokens and the `customers` row; removes the address and the variables of the account's own e-mails (`notifications` of the verification, password reset, address change and deletion e-mails: the rows stay without personal data) and the travellers and contacts of the customer's checkouts that never became bookings. Bookings, their travellers, tickets and payments are **retained** (detached and minimised) for the legal retention period because airlines, tax and accounting rules require them; `retainedRecords` explains this to the customer. A booking the erasure detached is never attached to an account again, not even by a later verification of its contact address (`auth.verifyEmail`).
          *
          *     **Idempotency.** `Idempotency-Key` required. **Amadeus.** None (Amadeus orders are not touched). Clear the session cookies after the call.
          */
@@ -6218,7 +6218,7 @@ export interface components {
             verifiedEmail: string;
             /** @description True when a pending email change was confirmed (sign in with the new address from now on). */
             emailChanged: boolean;
-            /** @description Number of earlier guest bookings with this email that were attached to the account. */
+            /** @description Number of earlier guest bookings with this email that were attached to the account (never a booking that the erasure of a deleted account detached). */
             claimedGuestBookings: number;
             /** @description returnPath given at sign-up/resend; redirect there. */
             returnPath: string | null;

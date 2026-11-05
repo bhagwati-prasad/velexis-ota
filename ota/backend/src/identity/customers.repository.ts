@@ -1,11 +1,12 @@
 // The customer rows of the identity module (OBE-033 for sign-in, OBE-032 for sign-up and e-mail verification):
 // `customers`, the password identities of `customer_identities` with their verification tokens (db README §7),
 // `customer_preferences`, the `customer_consents` log, the guest bookings an e-mail verification attaches to its
-// customer (`bookings.customer_id` and a `booking_events` row each), and the storefront settings sign-up and sign-in
-// read. Kysely on the caller's tenant transaction (`TenantTx`, search_path `tenant_<key>`); tables are never
-// schema-qualified. Times come from the service's `Clock`, never the database's `now()`. Password hashes leave this
-// file only towards the sign-in's Argon2id verification, never towards a log or an answer; verification tokens are
-// only ever stored and looked up as their SHA-256.
+// customer (`bookings.customer_id` and a `booking_events` row each; never a booking the erasure of a deleted account
+// detached, which carries a `customer.erased` event: lead decision (5h) of 2026-11-05, FIX-W43-OTA), and the
+// storefront settings sign-up and sign-in read. Kysely on the caller's tenant transaction (`TenantTx`, search_path
+// `tenant_<key>`); tables are never schema-qualified. Times come from the service's `Clock`, never the database's
+// `now()`. Password hashes leave this file only towards the sign-in's Argon2id verification, never towards a log or an
+// answer; verification tokens are only ever stored and looked up as their SHA-256.
 //
 // Locks: a change of a customer's verification state or address takes the customer's `FOR UPDATE` lock first
 // (`lockCustomer`), then writes the identity and the bookings, the order of the sign-in (customer, then identity) and of
@@ -119,6 +120,14 @@ export interface ClaimGuestBookings {
 
 /** The `booking_events.type` of a guest booking attached to the customer who verified its contact address. */
 export const BOOKING_CLAIMED_EVENT = "booking.claimed";
+
+/**
+ * The `booking_events.type` the erasure of a deleted customer writes on each booking it detaches
+ * (account/erasure.service.ts, lead decision (5h) of 2026-11-05): a marker without personal data (`actor_type` system,
+ * no actor, empty `data`, not visible to customers). `claimGuestBookings` never attaches a booking that carries it, so
+ * the bookings of an erased account are never attached to another account, not even to a new one of the same address.
+ */
+export const CUSTOMER_ERASED_EVENT = "customer.erased";
 
 @Injectable()
 export class CustomersRepository {
@@ -402,8 +411,9 @@ export class CustomersRepository {
 
   /**
    * Attaches the guest bookings of the environment whose contact address is the verified one and that have no
-   * customer to `customerId`, each with a `booking.claimed` event the customer sees; returns how many. The bookings'
-   * `version` stays: nothing an `If-Match` of bookings.update covers changes.
+   * customer to `customerId`, each with a `booking.claimed` event the customer sees; returns how many. A booking the
+   * erasure of a deleted customer detached (its `customer.erased` event, CUSTOMER_ERASED_EVENT) is never attached
+   * again. The bookings' `version` stays: nothing an `If-Match` of bookings.update covers changes.
    */
   async claimGuestBookings(trx: TenantTransaction, claim: ClaimGuestBookings): Promise<number> {
     const claimed = await trx
@@ -412,6 +422,17 @@ export class CustomersRepository {
       .where("environment", "=", claim.environment)
       .where(sql<string>`lower(contact_email)`, "=", claim.email.trim().toLowerCase())
       .where("customer_id", "is", null)
+      .where((eb) =>
+        eb.not(
+          eb.exists(
+            eb
+              .selectFrom("booking_events")
+              .select("booking_events.id")
+              .whereRef("booking_events.booking_id", "=", "bookings.id")
+              .where("booking_events.type", "=", CUSTOMER_ERASED_EVENT),
+          ),
+        ),
+      )
       .returning("id")
       .execute();
     if (claimed.length > 0) {

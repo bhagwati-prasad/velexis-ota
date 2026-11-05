@@ -179,13 +179,16 @@ export const OTA_SCHEDULES: readonly ScheduleDefinition[] = Object.freeze([
   }),
   schedule({
     id: "customers.erase",
-    pattern: "50 3 * * *",
+    // Hourly, with a cut-off of 30 days less one hour: the erasure lands before the erasureDueBy that account.delete
+    // promised (deletion + 30 days), where a daily run could land up to a day after it (lead decision (5f) of
+    // 2026-11-05, FIX-W43-OTA).
+    pattern: "50 * * * *",
     milestone: "M6",
     // The erasure is owed to the deleted customers and touches the tenant's own tables only: it starts no supplier
     // activity, so a suspended OTA's deleted customers are erased too (OADR-0014 point 4).
     statuses: ["active", "suspended"],
     description:
-      "Erase the customers deleted (account.delete) 30 days ago or more, 100 per job, oldest deletion first, each in a transaction of its own: their checkouts, bookings and payments are detached (customer_id NULL, amounts and references kept), their saved travellers, preferences, data exports, sessions, reset tokens, consents and identities are deleted, and so is the customer row (db README §7; account/erasure.service.ts)",
+      "Erase the customers deleted (account.delete) 30 days less one hour ago or more, so before their erasureDueBy, 100 per job, oldest deletion first, each in a transaction of its own: their checkouts, bookings and payments are detached (customer_id NULL, amounts and references kept; each booking gets a customer.erased event, so no e-mail verification attaches it again), the travellers and contacts of their checkouts that never became bookings are deleted, their account e-mails lose the address and variables, their saved travellers, preferences, data exports, sessions, reset tokens, consents and identities are deleted, and so is the customer row (db README §7; account/erasure.service.ts)",
   }),
 ]);
 

@@ -230,10 +230,11 @@ describe("the schedules", () => {
       milestone: "M4",
       statuses: ["active"],
     });
-    // OBE-087: the erasure of deleted customers at 03:50 UTC every day, for suspended tenants too: it starts no
-    // supplier activity, and the erasure is owed to the customers (OADR-0014 point 4).
+    // OBE-087: the erasure of deleted customers at minute 50 of every hour (lead decision (5f) of 2026-11-05,
+    // FIX-W43-OTA: before the erasureDueBy the deletion promised), for suspended tenants too: it starts no supplier
+    // activity, and the erasure is owed to the customers (OADR-0014 point 4).
     expect(scheduleById(ERASE)).toMatchObject({
-      pattern: "50 3 * * *",
+      pattern: "50 * * * *",
       milestone: "M6",
       statuses: ["active", "suspended"],
     });
@@ -304,7 +305,7 @@ describe("the schedules", () => {
     );
     expect(upsertJobScheduler).toHaveBeenCalledWith(
       ERASE,
-      { pattern: "50 3 * * *", tz: SCHEDULE_TIME_ZONE },
+      { pattern: "50 * * * *", tz: SCHEDULE_TIME_ZONE },
       { name: FAN_OUT_JOB, data: { task: ERASE } },
     );
     expect(removeJobScheduler).toHaveBeenCalledExactlyOnceWith("offers.legacy_sweep");

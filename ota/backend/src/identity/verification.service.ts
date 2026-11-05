@@ -20,9 +20,11 @@
 //   is `409 EMAIL_ALREADY_REGISTERED`), or its address is marked verified; `pending_verification` becomes `active` and
 //   the customer's `version` goes up. Then the guest bookings of the request's environment whose `contact_email` is
 //   the verified address and that have no customer are attached to the customer, each with a `booking.claimed` event
-//   (`claimedGuestBookings`). No session is opened (the link may be opened on another device). The token's hash stays,
-//   so presenting it again is told apart from an unknown token (`used`); the two of one token presented at the same
-//   time wait for each other on the customer's lock: one `200` and one `used`.
+//   (`claimedGuestBookings`), never a booking the erasure of a deleted account detached (its `customer.erased` event;
+//   customers.repository.ts `claimGuestBookings`, lead decision (5h) of 2026-11-05, FIX-W43-OTA). No session is opened
+//   (the link may be opened on another device). The token's hash stays, so presenting it again is told apart from an
+//   unknown token (`used`); the two of one token presented at the same time wait for each other on the customer's
+//   lock: one `200` and one `used`.
 // - `resend({customerId?, email?})` is auth.resendVerification: a signed-in customer (the customer guard read the
 //   token) gets a new link for its pending address, else for its unverified address; an anonymous call names the
 //   address (`400 VALIDATION_FAILED` on `/email` without it) and gets a link only when that address is an unverified

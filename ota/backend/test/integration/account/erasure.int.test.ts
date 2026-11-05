@@ -13,6 +13,14 @@
 // from `Clock`, which the file points at its FakeClock; the clock only moves forward, a minute or more between runs, so
 // every run has a bucket of its own. Each scenario does its work in its `beforeAll` hook, with a budget of its own; its
 // tests read what it left. Names, addresses and numbers are made up per run; nothing is a real person's.
+//
+// FIX-W43-OTA (lead decisions (5f), (5g) and (5h) of 2026-11-05) adds to each seeded customer its account e-mails (one
+// still pending, with a secret) and a checkout that never became a booking, with the customer as its traveller and
+// contact, and gives its booked checkout a traveller and a contact; the scenarios prove the hourly cut-off of 30 days
+// less one hour (29 days untouched, erased before its erasureDueBy, the boundary), that no name, address or document
+// ciphertext of an erased customer is left in its account e-mails or in the travellers and contacts of its checkouts
+// that never became bookings, and the `customer.erased` marker on each booking the erasure detached. That a new
+// account verifying the address claims none of those bookings is proven through the API in account.int.test.ts.
 import { randomBytes } from "node:crypto";
 import { getQueueToken } from "@nestjs/bullmq";
 import type { INestApplicationContext } from "@nestjs/common";
@@ -30,9 +38,17 @@ import type { Job, Queue } from "bullmq";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { ERASURE_DUE_AFTER_MS } from "../../../src/account/account.mapper";
 import { CUSTOMERS_ERASE_JOB } from "../../../src/account/erasure.processor";
-import { ERASURE_BATCH, type ErasureCounts } from "../../../src/account/erasure.service";
+import {
+  CUSTOMER_ERASED_SUMMARY,
+  ERASED_RECIPIENT,
+  ERASURE_BATCH,
+  ERASURE_CUTOFF_AFTER_MS,
+  ERASURE_RUN_INTERVAL_MS,
+  type ErasureCounts,
+} from "../../../src/account/erasure.service";
 import { Clock } from "../../../src/common/clock";
 import { newId } from "../../../src/common/ids";
+import { CUSTOMER_ERASED_EVENT } from "../../../src/identity/customers.repository";
 import { OTA_QUEUE } from "../../../src/common/queues/queue-names";
 import { loadWorkerConfig } from "../../../src/config";
 import { minuteBucket, tenantJobId, type TenantJobResult } from "../../../src/jobs/fan-out";
@@ -183,21 +199,38 @@ interface CustomerSeed {
 /** A seeded customer: its id, the values no log line may show, and the ids of the rows of its trip. */
 interface SeededCustomer {
   readonly id: string;
-  /** Names, the address it signed up with, the placeholder, the phone number. */
+  /**
+   * Names, the address it signed up with, the placeholder, the phone number, the new address it asked for (only its
+   * verification e-mail holds it) and the street of its abandoned checkout's contact.
+   */
   readonly personalData: readonly string[];
   readonly searchId: string;
   readonly checkoutId: string;
   readonly bookingId: string;
   readonly paymentId: string;
   readonly refundId: string;
+  /** The booking's confirmation e-mail (a booking e-mail: it stays with the booking). */
   readonly notificationId: string;
+  /** A checkout that never became a booking, with the customer as its traveller and contact. */
+  readonly abandonedCheckoutId: string;
+  /** The encrypted documents of the abandoned checkout's traveller (random bytes in place of a ciphertext). */
+  readonly abandonedDocuments: Buffer;
+  /** The customer's account e-mails, sorted: four sent and a password reset still pending with its secret. */
+  readonly accountEmailIds: readonly string[];
 }
+
+/** The account e-mails each seeded customer has. */
+const ACCOUNT_EMAILS_PER_CUSTOMER = 5;
 
 /**
  * A customer as sign-up, its use of the storefront and (when `deletedInMs` is given) account.delete leave it, in one
  * transaction: the customer, a password identity, a session, a reset token, two consent events, preferences, a saved
- * traveller with a document; a search, a completed checkout, a ticketed booking with a traveller, a contact and an
- * event, its captured and partly refunded Stripe payment, the refund, and the confirmation e-mail.
+ * traveller with a document; a search, a completed checkout with a traveller and a contact, a ticketed booking with a
+ * traveller, a contact and an event, its captured and partly refunded Stripe payment, the refund, and the confirmation
+ * e-mail; an abandoned checkout that never became a booking, with the customer as its traveller (encrypted documents)
+ * and contact; and the account e-mails: the verification of a new address (to that address), a password reset, the
+ * notice of the address change and the deletion's confirmation, sent, and a password reset still pending with its
+ * secret (due in a year: no worker sends it).
  */
 async function seedCustomer(tenant: TenantKey, seed: CustomerSeed): Promise<SeededCustomer> {
   const id = seed.id ?? newId("cus");
@@ -206,6 +239,9 @@ async function seedCustomer(tenant: TenantKey, seed: CustomerSeed): Promise<Seed
   const address = `${madeUp("traveller.")}@example.com`;
   const placeholder = `${hash()}@deleted.invalid`;
   const phone = `7700${String(randomBytes(3).readUIntBE(0, 3)).padStart(6, "0")}`;
+  const newAddress = `${madeUp("renamed.")}@example.com`;
+  const street = `${madeUp("Fjordgata ")} 12`;
+  const abandonedDocuments = randomBytes(64);
   const deletedAt = seed.deletedInMs === null ? null : fromNow(seed.deletedInMs);
   const signedUpAt = fromNow(-400 * DAY_MS);
   const ids = {
@@ -215,7 +251,10 @@ async function seedCustomer(tenant: TenantKey, seed: CustomerSeed): Promise<Seed
     paymentId: newId("pay"),
     refundId: newId("rfd"),
     notificationId: newId("ntf"),
+    abandonedCheckoutId: newId("chk"),
   };
+  const accountEmailIds = Array.from({ length: ACCOUNT_EMAILS_PER_CUSTOMER }, () => newId("ntf")).sort();
+  const phones = JSON.stringify([{ deviceType: "MOBILE", countryCallingCode: "44", number: phone }]);
   await txOf(tenant)(async (trx) => {
     await trx
       .insertInto("customers")
@@ -476,8 +515,123 @@ async function seedCustomer(tenant: TenantKey, seed: CustomerSeed): Promise<Seed
         sent_at: fromNow(-60 * DAY_MS),
       })
       .execute();
+    // The booked checkout's traveller and contact: they became the booking's, and stay.
+    await trx
+      .insertInto("checkout_travelers")
+      .values({
+        id: newId("ctr"),
+        checkout_id: ids.checkoutId,
+        amadeus_traveler_id: "1",
+        traveler_type: "ADULT",
+        first_name: firstName,
+        last_name: lastName,
+        date_of_birth: "1988-04-17",
+        documents_ciphertext: randomBytes(64),
+        encryption_key_id: "local:v1",
+      })
+      .execute();
+    await trx
+      .insertInto("checkout_contacts")
+      .values({ id: newId("cco"), checkout_id: ids.checkoutId, is_primary: true, email: address })
+      .execute();
+    // A checkout that never became a booking: abandoned (account.delete abandons the open ones), the customer its
+    // traveller (contact details, encrypted documents) and its contact (name, address, phone, street).
+    await trx
+      .insertInto("checkouts")
+      .values({
+        id: ids.abandonedCheckoutId,
+        environment: "test",
+        customer_id: id,
+        is_guest: false,
+        base_priced_offer_id: pricedOfferIds[tenant],
+        priced_offer_id: pricedOfferIds[tenant],
+        status: "abandoned",
+        currency: "EUR",
+        offer_amount: "440.00",
+        total_amount: "440.00",
+        expires_at: fromNow(-41 * DAY_MS),
+        version: 3,
+      })
+      .execute();
+    await trx
+      .insertInto("checkout_travelers")
+      .values({
+        id: newId("ctr"),
+        checkout_id: ids.abandonedCheckoutId,
+        amadeus_traveler_id: "1",
+        traveler_type: "ADULT",
+        first_name: firstName,
+        last_name: lastName,
+        date_of_birth: "1988-04-17",
+        gender: "FEMALE",
+        contact: JSON.stringify({ emailAddress: address, phones: JSON.parse(phones) as unknown }),
+        // Random bytes in place of a ciphertext: no document number exists anywhere in this file.
+        documents_ciphertext: abandonedDocuments,
+        encryption_key_id: "local:v1",
+      })
+      .execute();
+    await trx
+      .insertInto("checkout_contacts")
+      .values({
+        id: newId("cco"),
+        checkout_id: ids.abandonedCheckoutId,
+        purpose: "STANDARD",
+        is_primary: true,
+        first_name: firstName,
+        last_name: lastName,
+        email: address,
+        phones,
+        address: JSON.stringify({ lines: [street], postalCode: "0150", countryCode: "NO", cityName: "Oslo" }),
+        language: "en",
+      })
+      .execute();
+    // The account e-mails, as the outbox leaves them: sent, with the rendered subject (a tenant's template may name
+    // the customer), the variables and the provider's id; the pending one holds its secret until it is sent.
+    const accountEmails = [
+      { template: "auth.verify_email", to: newAddress, pending: false },
+      { template: "auth.password_reset", to: address, pending: false },
+      { template: "account.email_changed", to: address, pending: false },
+      { template: "account.deleted", to: address, pending: false },
+      { template: "auth.password_reset", to: address, pending: true },
+    ] as const;
+    await trx
+      .insertInto("notifications")
+      .values(
+        accountEmails.map((email, index) => ({
+          id: accountEmailIds[index] ?? newId("ntf"),
+          template_key: email.template,
+          channel: "email",
+          recipient: email.to,
+          recipient_type: "customer",
+          customer_id: id,
+          locale: "en",
+          subject: email.pending ? null : `${firstName}, about your Alpha Travel account`,
+          payload: JSON.stringify({
+            customer: { firstName },
+            change: { requestedAt: signedUpAt.toISOString() },
+          }),
+          secret_payload_ciphertext: email.pending ? randomBytes(48) : null,
+          encryption_key_id: email.pending ? "local:v1" : null,
+          dedupe_key: `${email.template}:${newId("pwr")}`,
+          status: email.pending ? "pending" : "sent",
+          attempts: email.pending ? 0 : 1,
+          next_attempt_at: email.pending ? fromNow(400 * DAY_MS) : fromNow(-45 * DAY_MS),
+          provider: email.pending ? null : "smtp",
+          provider_message_id: email.pending ? null : `<${hash()}@mail.example.com>`,
+          sent_at: email.pending ? null : fromNow(-45 * DAY_MS),
+          created_at: fromNow(-45 * DAY_MS),
+          updated_at: fromNow(-45 * DAY_MS),
+        })),
+      )
+      .execute();
   });
-  return { id, personalData: [firstName, lastName, address, placeholder, phone], ...ids };
+  return {
+    id,
+    personalData: [firstName, lastName, address, placeholder, phone, newAddress, street],
+    ...ids,
+    abandonedDocuments,
+    accountEmailIds,
+  };
 }
 
 /**
@@ -544,7 +698,10 @@ async function ownRowsOf(tenant: TenantKey, customerId: string): Promise<Record<
   });
 }
 
-/** Every column of the rows of a seeded customer's trip and of the customer itself, as the database holds them. */
+/**
+ * Every column of the rows of a seeded customer's trips, of its account e-mails and of the customer itself, as the
+ * database holds them.
+ */
 async function recordsOf(tenant: TenantKey, seeded: SeededCustomer): Promise<Record<string, unknown>> {
   return await txOf(tenant)(async (trx) => ({
     customer: await trx.selectFrom("customers").selectAll().where("id", "=", seeded.id).executeTakeFirst(),
@@ -593,8 +750,89 @@ async function recordsOf(tenant: TenantKey, seeded: SeededCustomer): Promise<Rec
       .selectAll()
       .where("id", "=", seeded.notificationId)
       .executeTakeFirstOrThrow(),
+    bookedTravelers: await trx
+      .selectFrom("checkout_travelers")
+      .selectAll()
+      .where("checkout_id", "=", seeded.checkoutId)
+      .execute(),
+    bookedContacts: await trx
+      .selectFrom("checkout_contacts")
+      .selectAll()
+      .where("checkout_id", "=", seeded.checkoutId)
+      .execute(),
+    abandonedCheckout: await trx
+      .selectFrom("checkouts")
+      .selectAll()
+      .where("id", "=", seeded.abandonedCheckoutId)
+      .executeTakeFirstOrThrow(),
+    abandonedTravelers: await trx
+      .selectFrom("checkout_travelers")
+      .selectAll()
+      .where("checkout_id", "=", seeded.abandonedCheckoutId)
+      .execute(),
+    abandonedContacts: await trx
+      .selectFrom("checkout_contacts")
+      .selectAll()
+      .where("checkout_id", "=", seeded.abandonedCheckoutId)
+      .execute(),
+    accountEmails: await trx
+      .selectFrom("notifications")
+      .selectAll()
+      .where("id", "in", [...seeded.accountEmailIds])
+      .orderBy("id")
+      .execute(),
   }));
 }
+
+/**
+ * The rows of tenant `tenant` that could hold an erased customer's personal data after the erasure (lead decision (5g)
+ * of 2026-11-05): every `notifications` row, every traveller and contact of a checkout that no booking names, and the
+ * document ciphertexts of every checkout traveller.
+ */
+async function personalTables(tenant: TenantKey) {
+  return await txOf(tenant)(async (trx) => ({
+    notifications: await trx.selectFrom("notifications").selectAll().execute(),
+    unbookedTravelers: await trx
+      .selectFrom("checkout_travelers")
+      .selectAll()
+      .where((eb) =>
+        eb.not(
+          eb.exists(
+            eb
+              .selectFrom("bookings")
+              .select("bookings.id")
+              .whereRef("bookings.checkout_id", "=", "checkout_travelers.checkout_id"),
+          ),
+        ),
+      )
+      .execute(),
+    unbookedContacts: await trx
+      .selectFrom("checkout_contacts")
+      .selectAll()
+      .where((eb) =>
+        eb.not(
+          eb.exists(
+            eb
+              .selectFrom("bookings")
+              .select("bookings.id")
+              .whereRef("bookings.checkout_id", "=", "checkout_contacts.checkout_id"),
+          ),
+        ),
+      )
+      .execute(),
+    documents: (await trx.selectFrom("checkout_travelers").select("documents_ciphertext").execute()).map(
+      (row) => row.documents_ciphertext,
+    ),
+  }));
+}
+
+/** A row as text, its bytea columns as hex, for a search of personal values. */
+const rowText = (row: unknown): string =>
+  JSON.stringify(row, (_key, value: unknown) =>
+    value !== null && typeof value === "object" && (value as { type?: unknown }).type === "Buffer"
+      ? Buffer.from((value as { data: number[] }).data).toString("hex")
+      : value,
+  );
 
 /** What a seeded customer has before any erasure: one of each, two consent events, no data export. */
 const SEEDED_OWN_ROWS = {
@@ -671,9 +909,13 @@ function seededCounts(customers: number): ErasureCounts {
   return {
     customers,
     failed: 0,
-    checkoutsDetached: customers,
+    // The booked checkout and the abandoned one; the abandoned one's traveller and contact.
+    checkoutsDetached: 2 * customers,
+    checkoutTravelers: customers,
+    checkoutContacts: customers,
     bookingsDetached: customers,
     paymentsDetached: customers,
+    accountEmails: ACCOUNT_EMAILS_PER_CUSTOMER * customers,
     savedTravelerDocuments: customers,
     savedTravelers: customers,
     preferences: customers,
@@ -756,6 +998,9 @@ describe("customers.erase: who is erased, what goes and what stays", () => {
   const ownBefore: Record<string, Record<string, number>> = {};
   const ownAfter: Record<string, Record<string, number>> = {};
   let run: RunJobs;
+  /** The run's instant: the time of its booking events and of its changes to the account e-mails. */
+  let runAt: Date;
+  const tablesAfter: Partial<Record<TenantKey, Awaited<ReturnType<typeof personalTables>>>> = {};
 
   beforeAll(async () => {
     vi.spyOn(worker.get(Clock, { strict: false }), "now").mockImplementation(() => clock.now());
@@ -772,12 +1017,15 @@ describe("customers.erase: who is erased, what goes and what stays", () => {
       ownBefore[name] = await ownRowsOf(tenantOf(name), customer.id);
     }
 
+    runAt = clock.now();
     run = await iteration();
 
     for (const [name, customer] of Object.entries(seeded)) {
       after[name] = await recordsOf(tenantOf(name), customer);
       ownAfter[name] = await ownRowsOf(tenantOf(name), customer.id);
     }
+    tablesAfter.alpha = await personalTables("alpha");
+    tablesAfter.beta = await personalTables("beta");
   }, SCENARIO_TIMEOUT_MS);
 
   it("[OBE-087 AC1] erases a customer deleted 31 days ago: the row, its identities, consents, sessions and saved data are gone", () => {
@@ -823,10 +1071,13 @@ describe("customers.erase: who is erased, what goes and what stays", () => {
       booking_id: due.bookingId,
       status: "succeeded",
     });
-    // The booking's travellers, contact and timeline are its financial and audit record (db README §7).
+    // The booking's travellers, contact and timeline are its financial and audit record (db README §7); the erasure
+    // only adds its marker to the timeline (lead decision (5h) of 2026-11-05).
     expect(is["travelers"]).toEqual(was["travelers"]);
     expect(is["contacts"]).toEqual(was["contacts"]);
-    expect(is["events"]).toEqual(was["events"]);
+    expect(
+      (is["events"] as { type: string }[]).filter((event) => event.type !== CUSTOMER_ERASED_EVENT),
+    ).toEqual(was["events"]);
   });
 
   it("detaches the checkout, the search and the e-mail record too, and keeps the checkout's guest flag and status", () => {
@@ -834,8 +1085,129 @@ describe("customers.erase: who is erased, what goes and what stays", () => {
     const is = after["due"] ?? {};
     expect(is["checkout"]).toEqual({ ...(was["checkout"] as object), customer_id: null });
     expect(is["checkout"]).toMatchObject({ is_guest: false, status: "completed", version: 4 });
+    expect(is["abandonedCheckout"]).toEqual({ ...(was["abandonedCheckout"] as object), customer_id: null });
+    expect(is["abandonedCheckout"]).toMatchObject({ is_guest: false, status: "abandoned", version: 3 });
     expect(is["search"]).toEqual({ ...(was["search"] as object), customer_id: null });
+    // A booking e-mail stays with its booking: only detached from the customer.
     expect(is["notification"]).toEqual({ ...(was["notification"] as object), customer_id: null });
+  });
+
+  it("[FIX-W43-OTA AC2] leaves the customer's account e-mails without an address, variables or subject, and cancels the one still pending", () => {
+    const was = before["due"]?.["accountEmails"] as Record<string, unknown>[];
+    const is = after["due"]?.["accountEmails"] as Record<string, unknown>[];
+    expect(was).toHaveLength(ACCOUNT_EMAILS_PER_CUSTOMER);
+    expect(is.map((row) => row["id"])).toEqual(was.map((row) => row["id"]));
+    for (const [index, row] of is.entries()) {
+      const prior = was[index] ?? {};
+      const pending = prior["status"] === "pending";
+      // The template, the time it was sent, the provider's id and the ids in its dedupe key stay: the record that an
+      // e-mail was sent, and nothing of the person it went to.
+      expect(row).toEqual({
+        ...prior,
+        recipient: ERASED_RECIPIENT,
+        payload: {},
+        subject: null,
+        customer_id: null,
+        status: pending ? "cancelled" : "sent",
+        secret_payload_ciphertext: null,
+        secrets_purged_at: pending ? runAt : prior["secrets_purged_at"],
+        updated_at: runAt,
+      });
+      for (const value of due.personalData) {
+        expect(rowText(row)).not.toContain(value);
+      }
+    }
+    expect(is.filter((row) => row["status"] === "cancelled")).toHaveLength(1);
+  });
+
+  it("[FIX-W43-OTA AC2] leaves no name, address or phone number of the customer in the outbox but the booking e-mail's recipient", () => {
+    const [firstName, lastName, address, placeholder, phone, newAddress, street] = due.personalData;
+    const rows = tablesAfter.alpha?.notifications ?? [];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const value of [firstName, lastName, placeholder, phone, newAddress, street]) {
+      expect(rows.filter((row) => rowText(row).includes(value ?? "-"))).toEqual([]);
+    }
+    // The booking's confirmation still goes to the booking's contact address: the booking's record (db README §7).
+    expect(rows.filter((row) => rowText(row).includes(address ?? "-")).map((row) => row.id)).toEqual([
+      due.notificationId,
+    ]);
+  });
+
+  it("[FIX-W43-OTA AC2] deletes the travellers and contacts of the customer's checkouts that never became bookings, document ciphertexts included", () => {
+    const was = before["due"] ?? {};
+    const is = after["due"] ?? {};
+    expect(was["abandonedTravelers"]).toHaveLength(1);
+    expect(was["abandonedContacts"]).toHaveLength(1);
+    expect(is["abandonedTravelers"]).toEqual([]);
+    expect(is["abandonedContacts"]).toEqual([]);
+    // Nowhere in the tenant's checkouts that no booking names is anything of the customer left, nor its documents
+    // in any checkout traveller.
+    const tables = tablesAfter.alpha;
+    for (const row of [...(tables?.unbookedTravelers ?? []), ...(tables?.unbookedContacts ?? [])]) {
+      for (const value of due.personalData) {
+        expect(rowText(row)).not.toContain(value);
+      }
+    }
+    expect(tables?.documents.some((document) => document?.equals(due.abandonedDocuments) === true)).toBe(
+      false,
+    );
+    // The suspended tenant's erased customer too.
+    expect(after["suspendedDue"]?.["abandonedTravelers"]).toEqual([]);
+    expect(after["suspendedDue"]?.["abandonedContacts"]).toEqual([]);
+    expect(
+      tablesAfter.beta?.documents.some(
+        (document) => document?.equals(suspendedDue.abandonedDocuments) === true,
+      ),
+    ).toBe(false);
+  });
+
+  it("[FIX-W43-OTA AC2] keeps the traveller and contact of the checkout that became the booking, as the booking keeps its own", () => {
+    const was = before["due"] ?? {};
+    const is = after["due"] ?? {};
+    expect(was["bookedTravelers"]).toHaveLength(1);
+    expect(is["bookedTravelers"]).toEqual(was["bookedTravelers"]);
+    expect(is["bookedContacts"]).toEqual(was["bookedContacts"]);
+  });
+
+  it("[FIX-W43-OTA AC3] marks the detached booking with a customer.erased event without personal data, staff only", () => {
+    const events = after["due"]?.["events"] as Record<string, unknown>[];
+    const markers = events.filter((event) => event["type"] === CUSTOMER_ERASED_EVENT);
+    expect(markers).toEqual([
+      {
+        id: expect.stringMatching(/^evt_/) as unknown,
+        booking_id: due.bookingId,
+        type: CUSTOMER_ERASED_EVENT,
+        actor_type: "system",
+        actor_id: null,
+        status_from: null,
+        status_to: null,
+        summary: CUSTOMER_ERASED_SUMMARY,
+        data: {},
+        visible_to_customer: false,
+        supplier_request_id: null,
+        request_id: null,
+        created_at: runAt,
+        updated_at: runAt,
+      },
+    ]);
+    for (const value of [...due.personalData, due.id]) {
+      expect(rowText(markers)).not.toContain(value);
+    }
+    expect(
+      (after["suspendedDue"]?.["events"] as { type: string }[]).filter(
+        (event) => event.type === CUSTOMER_ERASED_EVENT,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("[FIX-W43-OTA AC1] the hourly cut-off leaves the customer deleted 29 days ago untouched: account e-mails, checkouts and bookings", () => {
+    // 29 days is more than a day short of the cut-off of 30 days less one hour.
+    expect(29 * DAY_MS).toBeLessThan(ERASURE_CUTOFF_AFTER_MS);
+    expect(after["recent"]?.["accountEmails"]).toEqual(before["recent"]?.["accountEmails"]);
+    expect(after["recent"]?.["abandonedTravelers"]).toEqual(before["recent"]?.["abandonedTravelers"]);
+    expect(after["recent"]?.["abandonedContacts"]).toEqual(before["recent"]?.["abandonedContacts"]);
+    expect(after["recent"]?.["events"]).toEqual(before["recent"]?.["events"]);
+    expect(after["twin"]).toEqual(before["twin"]);
   });
 
   it("erases a suspended tenant's due customers (OADR-0014 point 4) in that tenant's schema only", () => {
@@ -860,9 +1232,12 @@ describe("customers.erase: who is erased, what goes and what stays", () => {
       expect(ofTenant(tenant)).toEqual([
         expect.objectContaining({
           customerId: customer.id,
-          checkoutsDetached: 1,
+          checkoutsDetached: 2,
+          checkoutTravelers: 1,
+          checkoutContacts: 1,
           bookingsDetached: 1,
           paymentsDetached: 1,
+          accountEmails: ACCOUNT_EMAILS_PER_CUSTOMER,
           sessions: 1,
           consents: 2,
           identities: 1,
@@ -899,7 +1274,10 @@ describe("customers.erase: idempotent", () => {
         "saved_travelers",
         "saved_traveler_documents",
         "checkouts",
+        "checkout_travelers",
+        "checkout_contacts",
         "bookings",
+        "booking_events",
         "payments",
         "refunds",
         "notifications",
@@ -933,7 +1311,7 @@ describe("customers.erase: idempotent", () => {
     });
   }, SCENARIO_TIMEOUT_MS);
 
-  it("[OBE-087 AC1] a second run erases nothing and changes nothing", () => {
+  it("[OBE-087 AC1] [FIX-W43-OTA AC2] [FIX-W43-OTA AC3] a second run erases nothing and changes nothing: no second marker, nothing more cleared", () => {
     expect(resultOf(again.alpha)).toEqual(done("alpha", seededCounts(0)));
     expect(resultOf(again.beta)).toEqual(done("beta", seededCounts(0)));
     expect(unchanged.after).toEqual(unchanged.before);
@@ -993,30 +1371,68 @@ describe("customers.erase: batches", () => {
   });
 });
 
-describe("customers.erase: the 30-day boundary", () => {
-  /** Alpha: deleted exactly 30 days before the run, so its erasureDueBy is the run's instant. */
+describe("customers.erase: the cut-off of 30 days less one hour, and the next hourly run", () => {
+  /** Alpha: deleted exactly 30 days before the first run, so its erasureDueBy is that run's instant. */
   let onTheDay: SeededCustomer;
-  /** Alpha: deleted one second less than 30 days before the run. */
+  /** Alpha: deleted 30 days less one hour before the first run: at the cut-off, an hour before its erasureDueBy. */
+  let atTheCutoff: SeededCustomer;
+  /** Alpha: deleted one second after that: a second short of the first run's cut-off. */
   let aSecondShort: SeededCustomer;
-  let run: RunJobs;
-  const ownAfter: Record<string, Record<string, number>> = {};
+  /** The erasureDueBy account.delete answered each of them: its deletion + 30 days. */
+  const dueBy: Record<string, Date> = {};
+  let first: RunJobs;
+  let firstAt: Date;
+  let next: RunJobs;
+  let nextAt: Date;
+  const ownAfterFirst: Record<string, Record<string, number>> = {};
+  const ownAfterNext: Record<string, Record<string, number>> = {};
 
   beforeAll(async () => {
     vi.spyOn(worker.get(Clock, { strict: false }), "now").mockImplementation(() => clock.now());
     clock.advance(MINUTE_MS);
-    onTheDay = await seedCustomer("alpha", { deletedInMs: -ERASURE_DUE_AFTER_MS });
-    aSecondShort = await seedCustomer("alpha", { deletedInMs: -ERASURE_DUE_AFTER_MS + 1000 });
+    const deletions = {
+      onTheDay: -ERASURE_DUE_AFTER_MS,
+      atTheCutoff: -ERASURE_CUTOFF_AFTER_MS,
+      aSecondShort: -ERASURE_CUTOFF_AFTER_MS + 1000,
+    };
+    onTheDay = await seedCustomer("alpha", { deletedInMs: deletions.onTheDay });
+    atTheCutoff = await seedCustomer("alpha", { deletedInMs: deletions.atTheCutoff });
+    aSecondShort = await seedCustomer("alpha", { deletedInMs: deletions.aSecondShort });
+    for (const [name, deletedInMs] of Object.entries(deletions)) {
+      dueBy[name] = fromNow(deletedInMs + ERASURE_DUE_AFTER_MS);
+    }
+    const seeded = { onTheDay, atTheCutoff, aSecondShort };
 
-    run = await iteration();
+    firstAt = clock.now();
+    first = await iteration();
+    for (const [name, customer] of Object.entries(seeded)) {
+      ownAfterFirst[name] = await ownRowsOf("alpha", customer.id);
+    }
 
-    ownAfter["onTheDay"] = await ownRowsOf("alpha", onTheDay.id);
-    ownAfter["aSecondShort"] = await ownRowsOf("alpha", aSecondShort.id);
+    // The schedule's next run, an hour later (minute 50 of the next hour).
+    clock.advance(ERASURE_RUN_INTERVAL_MS);
+    nextAt = clock.now();
+    next = await iteration();
+    for (const [name, customer] of Object.entries(seeded)) {
+      ownAfterNext[name] = await ownRowsOf("alpha", customer.id);
+    }
   }, SCENARIO_TIMEOUT_MS);
 
-  it("[OBE-087 AC1] erases a customer at its erasureDueBy (30 days after the deletion) and leaves one a second short of it", () => {
-    expect(ownAfter["onTheDay"]).toEqual(NO_OWN_ROWS);
-    expect(ownAfter["aSecondShort"]).toEqual(SEEDED_OWN_ROWS);
-    expect(resultOf(run.alpha)).toEqual(done("alpha", seededCounts(1)));
-    expect(resultOf(run.beta)).toEqual(done("beta", seededCounts(0)));
+  it("[FIX-W43-OTA AC1] erases a customer at the cut-off, an hour before its erasureDueBy, and leaves one a second short of the cut-off", () => {
+    expect(ownAfterFirst["atTheCutoff"]).toEqual(NO_OWN_ROWS);
+    expect(firstAt.getTime()).toBe((dueBy["atTheCutoff"]?.getTime() ?? 0) - ERASURE_RUN_INTERVAL_MS);
+    // One deleted exactly 30 days ago is due too: its erasureDueBy is this run's instant.
+    expect(ownAfterFirst["onTheDay"]).toEqual(NO_OWN_ROWS);
+    expect(ownAfterFirst["aSecondShort"]).toEqual(SEEDED_OWN_ROWS);
+    expect(resultOf(first.alpha)).toEqual(done("alpha", seededCounts(2)));
+    expect(resultOf(first.beta)).toEqual(done("beta", seededCounts(0)));
+  });
+
+  it("[FIX-W43-OTA AC1] the next hourly run erases the customer a second short of the cut-off before its erasureDueBy", () => {
+    expect(nextAt.getTime() - firstAt.getTime()).toBe(ERASURE_RUN_INTERVAL_MS);
+    expect(ownAfterNext["aSecondShort"]).toEqual(NO_OWN_ROWS);
+    expect(nextAt.getTime()).toBeLessThan(dueBy["aSecondShort"]?.getTime() ?? 0);
+    expect(resultOf(next.alpha)).toEqual(done("alpha", seededCounts(1)));
+    expect(resultOf(next.beta)).toEqual(done("beta", seededCounts(0)));
   });
 });

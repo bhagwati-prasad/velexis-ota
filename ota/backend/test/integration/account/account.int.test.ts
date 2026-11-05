@@ -13,7 +13,9 @@
 // addresses of its own and every customer has an address of its own (`uniqueEmail`), so the limits of architecture §8
 // and the sign-in lockout never mix the scenarios, and every e-mail is found by its recipient. Scenarios that sign
 // in, wait for Mailpit or hash passwords run in their `beforeAll` hook with a budget of their own; the tests only read
-// what they left. Passwords are made up per run; no value is a secret.
+// what they left. Passwords are made up per run; no value is a secret. FIX-W43-OTA (lead decision (5h) of 2026-11-05)
+// adds a deletion followed by the erasure's statements and a new sign-up of the same address, whose verification
+// claims none of the erased customer's bookings.
 import { randomBytes, randomUUID } from "node:crypto";
 import { getQueueToken } from "@nestjs/bullmq";
 import type { INestApplicationContext } from "@nestjs/common";
@@ -49,10 +51,12 @@ import type { Queue } from "bullmq";
 import request, { type Response } from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isDeadlock } from "../../../src/account/account.service";
+import { CustomerErasureRepository, type ErasedCustomer } from "../../../src/account/erasure.service";
 import { newBookingReference } from "../../../src/bookings/booking-reference";
 import { newId } from "../../../src/common/ids";
 import { OTA_QUEUE } from "../../../src/common/queues/queue-names";
 import { APP_DIR, loadWorkerConfig } from "../../../src/config";
+import { BOOKING_CLAIMED_EVENT, CUSTOMER_ERASED_EVENT } from "../../../src/identity/customers.repository";
 import { hashCustomerPassword } from "../../../src/identity/sign-in.service";
 import { seedStorefrontSettings } from "../../../src/provisioning/seeds";
 import type { OtaPool } from "../../../src/tenancy/tenancy.module";
@@ -84,6 +88,8 @@ const SETUP_TIMEOUT_MS = Math.max(OPENAPI_SETUP_TIMEOUT_MS, 90_000);
 const SCENARIO_TIMEOUT_MS = 60_000;
 /** How long a scenario waits at most for one e-mail. */
 const MAIL_WAIT_MS = 20_000;
+/** The subject of the verification e-mail (`auth.verify_email`'s code default). */
+const VERIFY_EMAIL_SUBJECT = /^Confirm your e-mail address/;
 /** The subjects of the account e-mails of FIX-W29-OTA (OADR-0013 item 4 as revised on 2026-10-24). */
 const EMAIL_CHANGED_SUBJECT = /account is being changed$/;
 const ACCOUNT_DELETED_SUBJECT = /account has been deleted$/;
@@ -203,7 +209,10 @@ async function insertCustomer(schema: Schema, email: string): Promise<string> {
 
 /** What a seeded booking looks like. */
 interface BookingSeed {
-  readonly customerId: string;
+  /** The customer the booking belongs to; `null`: a guest's booking. */
+  readonly customerId: string | null;
+  /** `bookings.contact_email` (a fixed sample address by default). */
+  readonly contactEmail?: string;
   readonly status: "pending" | "confirmed" | "ticketed" | "cancelled" | "failed";
   readonly ticketingStatus?: string;
   readonly environment?: "test" | "live";
@@ -255,7 +264,7 @@ async function insertBooking(seed: BookingSeed): Promise<string> {
         markup_amount: "12.00",
         taxes_amount: "42.47",
         total_amount: "110.47",
-        contact_email: "contact-1@example.com",
+        contact_email: seed.contactEmail ?? "contact-1@example.com",
         lead_last_name: "SAMPLE",
         create_order_started_at: seed.status === "pending" ? new Date(now) : null,
         cancelled_at: seed.status === "cancelled" ? new Date(now) : null,
@@ -704,6 +713,7 @@ beforeAll(async () => {
     ["getAccount", [200, 401]],
     ["updateAccount", [200, 400, 409, 412, 422, 429]],
     ["deleteAccount", [202, 403, 409, 422]],
+    ["verifyEmail", [200]],
   ] as const) {
     for (const status of statuses) {
       checker.check(operationId, { status, body: {} });
@@ -1631,6 +1641,126 @@ describe("account.delete by a key caller, its replay, and the bookings that hold
     expect([answers["blockedAccount"]?.status, answers["blockedAccount"]?.body.status]).toEqual([
       200,
       "active",
+    ]);
+  });
+});
+
+describe("[FIX-W43-OTA AC3] a new account at an erased customer's address claims none of its bookings", () => {
+  // Lead decision (5h) of 2026-11-05: the erasure (account/erasure.service.ts) marks each booking it detaches with a
+  // `customer.erased` event, and auth.verifyEmail's claim of guest bookings (customers.repository.ts
+  // `claimGuestBookings`) skips the bookings that carry it. The customer deletes the account through the API; its
+  // erasure runs the job's statements on its row (`CustomerErasureRepository.erase`, with the cut-off the hourly run
+  // reaches 30 days less one hour later: here the instant itself); then someone signs up with the address again and
+  // verifies it through the e-mailed link.
+  const email = uniqueEmail("fixw43-reclaim");
+  let erasedId = "";
+  let erasedBooking = "";
+  let guestBooking = "";
+  let otherGuestBooking = "";
+  let erased: ErasedCustomer | undefined;
+  const answers: Record<string, Response> = {};
+  let newCustomerId = "";
+  let owners: Map<string, string | null>;
+  let events: { booking_id: string; type: string; actor_id: string | null }[];
+
+  beforeAll(async () => {
+    erasedId = await insertCustomer("tenant_alpha", email);
+    // A trip the customer booked while signed in, with the account's address as its contact.
+    erasedBooking = await insertBooking({
+      customerId: erasedId,
+      status: "ticketed",
+      ageSeconds: 30,
+      payment: "captured",
+      contactEmail: email,
+    });
+    // Bookings made as a guest with the same address (in another case) and with another address: never attached.
+    guestBooking = await insertBooking({
+      customerId: null,
+      status: "ticketed",
+      ageSeconds: 20,
+      contactEmail: email.toUpperCase(),
+    });
+    otherGuestBooking = await insertBooking({
+      customerId: null,
+      status: "ticketed",
+      ageSeconds: 10,
+      contactEmail: uniqueEmail("fixw43-reclaim-other"),
+    });
+    const session = await bearerSignIn(email);
+    answers["delete"] = await new KeyClient().post(
+      "/v1/account/deletion",
+      { currentPassword: PASSWORD },
+      session.accessToken,
+    );
+    const now = new Date();
+    erased = await inTenant("tenant_alpha", (trx) =>
+      new CustomerErasureRepository().erase(trx, erasedId, now, now),
+    );
+
+    // The address signs up again: a new customer, which verifies it through the e-mailed link.
+    const client = new KeyClient();
+    answers["signUp"] = await client.post("/v1/auth/sign-up", {
+      email,
+      password: `Fjord-${randomBytes(9).toString("base64url")}`,
+      firstName: "Anna",
+      lastName: "Berg",
+      marketingConsent: false,
+      termsVersion: TERMS_VERSION,
+    });
+    secrets.push(
+      answers["signUp"]?.body.session?.accessToken ?? "",
+      answers["signUp"]?.body.session?.refreshToken ?? "",
+    );
+    newCustomerId = (answers["signUp"]?.body.customer?.id as string | undefined) ?? "";
+    const verification = await waitForMessage({
+      to: email,
+      subject: VERIFY_EMAIL_SUBJECT,
+      timeoutMs: MAIL_WAIT_MS,
+    });
+    const link = extractLinks(verification).find((url) => url.includes("/account/verify.html?token=")) ?? "";
+    const token = new URL(link).searchParams.get("token") ?? "";
+    secrets.push(token);
+    answers["verify"] = await client.post("/v1/auth/email-verification/confirm", { token });
+
+    const ids = [erasedBooking, guestBooking, otherGuestBooking];
+    const rows = await inTenant("tenant_alpha", (trx) =>
+      trx.selectFrom("bookings").select(["id", "customer_id"]).where("id", "in", ids).execute(),
+    );
+    owners = new Map(rows.map((row) => [row.id, row.customer_id]));
+    events = await inTenant("tenant_alpha", (trx) =>
+      trx
+        .selectFrom("booking_events")
+        .select(["booking_id", "type", "actor_id"])
+        .where("booking_id", "in", ids)
+        .where("type", "in", [BOOKING_CLAIMED_EVENT, CUSTOMER_ERASED_EVENT])
+        .orderBy("booking_id")
+        .execute(),
+    );
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W43-OTA AC3] the erasure detaches the customer's booking and marks it customer.erased", () => {
+    expect(answers["delete"]?.status).toBe(202);
+    expect(erased).toMatchObject({ bookingsDetached: 1, paymentsDetached: 1 });
+    expect(events.filter((event) => event.type === CUSTOMER_ERASED_EVENT)).toEqual([
+      { booking_id: erasedBooking, type: CUSTOMER_ERASED_EVENT, actor_id: null },
+    ]);
+  });
+
+  it("[FIX-W43-OTA AC3] verifying the address attaches the ordinary guest booking and never the erased customer's", () => {
+    expect(answers["signUp"]?.status).toBe(201);
+    expect(newCustomerId).not.toBe(erasedId);
+    expect(answers["verify"]?.status).toBe(200);
+    expectResponseToMatch("verifyEmail", answers["verify"] as Response);
+    expect(answers["verify"]?.body.claimedGuestBookings).toBe(1);
+    expect(owners).toEqual(
+      new Map([
+        [erasedBooking, null],
+        [guestBooking, newCustomerId],
+        [otherGuestBooking, null],
+      ]),
+    );
+    expect(events.filter((event) => event.type === BOOKING_CLAIMED_EVENT)).toEqual([
+      { booking_id: guestBooking, type: BOOKING_CLAIMED_EVENT, actor_id: newCustomerId },
     ]);
   });
 });
