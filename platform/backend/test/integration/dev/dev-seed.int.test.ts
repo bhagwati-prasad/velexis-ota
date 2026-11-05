@@ -1,11 +1,12 @@
 // `dev:seed` of dist/cli.js (PBE-034; README §5 and §6, platform/docs/flows/amadeus-connection.md §A item 4): refused
 // with exit 1 and nothing written when APP_ENV=production; otherwise it creates, once, the platform admin
 // `admin@example.com` with MFA (printing its password and `otpauth://` URI once), the Velexis test Amadeus account at
-// AMADEUS_BASE_URL_TEST (the stub), verified, and 20 test offices, DEV1A0001 to DEV1A0020 (ten until the lead's
-// decision (2f) of 2026-10-30, FIX-W34-SHARED). A second run creates no duplicates, adds no office, prints no secret
-// and writes no audit row. When the stub is not running the account stays `pending_verification` and the command exits
-// 1; once the stub runs, the next run verifies it. A test account that an admin disabled or configured is left as it
-// is.
+// AMADEUS_BASE_URL_TEST (the stub), verified, and 40 test offices, DEV1A0001 to DEV1A0040 (twenty until the lead's
+// decision (5m) of 2026-11-05, PAD-015; ten until decision (2f) of 2026-10-30, FIX-W34-SHARED). A second run creates
+// no duplicates, adds no office, prints no secret and writes no audit row. When the stub is not running the account
+// stays `pending_verification` and the command exits 1; once the stub runs, the next run verifies it. A test account
+// that an admin disabled or configured is left as it is, and a pool that holds the twenty offices of the earlier size
+// gets only the new ids.
 //
 // The command runs in-process through `runCli` (the dispatcher of dist/cli.js) with the configuration of this file's
 // database clone and Redis database and the API's key folder (`CliOptions.env`), in its own application context (the
@@ -42,6 +43,7 @@ import { clientSecretPlace } from "../../../src/supplier-connections/verificatio
 import {
   insertAccount,
   insertAmadeusAccount,
+  insertAmadeusOffice,
   type PlatformRow,
   type Queryable,
 } from "../../builders/platform-rows";
@@ -334,17 +336,17 @@ describe("dev:seed", () => {
     expect(invalidatedAfterFirst, "the amadeus_account invalidation of the account").toBe(true);
   });
 
-  it("[PBE-034 AC2] adds the 20 test offices DEV1A0001 to DEV1A0020 to the test account's pool", async () => {
+  it("[PBE-034 AC2] [PAD-015] adds the 40 test offices DEV1A0001 to DEV1A0040 to the test account's pool", async () => {
     const account = await testAmadeusAccount();
-    const pool20 = await offices();
-    const expected = Array.from({ length: 20 }, (_, index) => `DEV1A${String(index + 1).padStart(4, "0")}`);
+    const pool40 = await offices();
+    const expected = Array.from({ length: 40 }, (_, index) => `DEV1A${String(index + 1).padStart(4, "0")}`);
     expect(DEV_SEED_OFFICE_IDS).toEqual(expected);
-    expect(pool20.map((office) => office.office_id)).toEqual(expected);
-    expect(new Set(pool20.map((office) => office.amadeus_account_id))).toEqual(new Set([account?.id]));
+    expect(pool40.map((office) => office.office_id)).toEqual(expected);
+    expect(new Set(pool40.map((office) => office.amadeus_account_id))).toEqual(new Set([account?.id]));
     expect(
-      pool20.every((office) => office.status === "available" && office.assigned_tenant_id === null),
+      pool40.every((office) => office.status === "available" && office.assigned_tenant_id === null),
     ).toBe(true);
-    expect(first.stdout).toContain("Test offices DEV1A0001 to DEV1A0020: 20 added, 0 in the pool already.");
+    expect(first.stdout).toContain("Test offices DEV1A0001 to DEV1A0040: 40 added, 0 in the pool already.");
   });
 
   it("[PBE-034 AC2] writes one audit row per change, as the system with the operator", async () => {
@@ -379,7 +381,7 @@ describe("dev:seed", () => {
     expect(second.stdout).not.toContain(printedSecrets(first).password ?? "no password printed");
     expect(second.stdout).toContain(`Platform admin ${DEV_SEED_ADMIN_EMAIL} (`);
     expect(second.stdout).toContain("exists already; nothing changed");
-    expect(second.stdout).toContain("Test offices DEV1A0001 to DEV1A0020: 0 added, 20 in the pool already.");
+    expect(second.stdout).toContain("Test offices DEV1A0001 to DEV1A0040: 0 added, 40 in the pool already.");
   });
 
   it("[PBE-034] the new admin signs in to the platform admin with the printed password and a code of the URI", async () => {
@@ -510,6 +512,12 @@ describe("dev:seed while the Amadeus stub is not running", () => {
   });
 });
 
+/** The twenty office ids of the pool's earlier size (DEV1A0001 to DEV1A0020, lead decision (2f) of 2026-10-30). */
+const EARLIER_POOL = DEV_SEED_OFFICE_IDS.slice(0, 20);
+
+/** An office of the earlier pool that an admin retired: dev:seed skips an id the pool holds, whatever its status. */
+const RETIRED_OFFICE = "DEV1A0007";
+
 describe("dev:seed with an admin@example.com account and a test Amadeus account that it did not create", () => {
   let third: TestDatabase;
   let thirdPool: PlatformPool;
@@ -525,7 +533,8 @@ describe("dev:seed with an admin@example.com account and a test Amadeus account 
 
   beforeAll(async () => {
     // A clone of its own: someone signed up as admin@example.com in the portal (no platform admin, no MFA), and an
-    // admin created the test account (another client id), whose verification is open.
+    // admin created the test account (another client id), whose verification is open, with the twenty offices of the
+    // pool's earlier size in it, one of them retired since (PAD-015: the pool grew from twenty to forty).
     third = await createTestDatabase();
     thirdPool = createPool(third.urlFor("platform"), {
       applicationName: "platform-dev-seed-test",
@@ -538,6 +547,12 @@ describe("dev:seed with an admin@example.com account and a test Amadeus account 
       client_id: "admin-configured-client",
       status: "pending_verification",
     });
+    for (const officeId of EARLIER_POOL) {
+      await insertAmadeusOffice(thirdPool, configured, {
+        office_id: officeId,
+        status: officeId === RETIRED_OFFICE ? "retired" : "available",
+      });
+    }
     tokensBefore = tokenRequests();
     run = await cli(["dev:seed"], { ...cliEnv, DATABASE_URL: third.urlFor("platform") });
     tokensAfter = tokenRequests();
@@ -569,7 +584,20 @@ describe("dev:seed with an admin@example.com account and a test Amadeus account 
     expect(tokensAfter).toBe(tokensBefore);
     expect(
       officesAfter.map((office) => [office.office_id, office.amadeus_account_id, office.status]),
-    ).toEqual(DEV_SEED_OFFICE_IDS.map((officeId) => [officeId, configured.id, "available"]));
+    ).toEqual(
+      DEV_SEED_OFFICE_IDS.map((officeId) => [
+        officeId,
+        configured.id,
+        officeId === RETIRED_OFFICE ? "retired" : "available",
+      ]),
+    );
     expect(actionsAfter).toEqual(["amadeus_office.added"]);
+  });
+
+  it("[PBE-034] [PAD-015] adds only the twenty new ids to a pool of the earlier size, whatever its offices' status", () => {
+    expect(EARLIER_POOL).toHaveLength(20);
+    expect(run.stdout).toContain("Test offices DEV1A0001 to DEV1A0040: 20 added, 20 in the pool already.");
+    expect(officesAfter).toHaveLength(DEV_SEED_OFFICE_IDS.length);
+    expect(officesAfter.find((office) => office.office_id === RETIRED_OFFICE)?.status).toBe("retired");
   });
 });

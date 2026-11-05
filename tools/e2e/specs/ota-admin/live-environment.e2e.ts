@@ -12,7 +12,7 @@
 //
 // Arranged in `beforeAll` through the platform API and the OTA API (PADR-0017 item 5), as roles.e2e.ts does:
 //   - the owner's OTA with its Amadeus test office from the Velexis test pool (`newOwnerWithActiveOta`: one of the
-//     twenty offices of the platform's dev:seed, which every OTA journey of a run shares), its airline card switched on
+//     forty offices of the platform's dev:seed, which every OTA journey of a run shares), its airline card switched on
 //     for its test storefront and two bookings made through the OTA API as its storefront edge (`EdgeApi`): one that the
 //     airline ticketed (it stays a test booking) and one that the airline left without tickets (the stub's
 //     `ticketing-failed` scenario), so it waits in manual review: a booking whose page offers an agent Issue and Cancel;
@@ -23,7 +23,7 @@
 //     (PBE-061), so its platform row is set `storefront_environment = live` as velexis_migrator and the platform's
 //     `tenant` invalidation published, as the platform does after its commit;
 //   - and the go-live's first live booking is seeded: the stack has no live Amadeus account (dev:seed seeds the test
-//     account and its twenty test offices only; a live connection's secret is sealed by the platform), so no live
+//     account and its forty test offices only; a live connection's secret is sealed by the platform), so no live
 //     storefront search can reach Amadeus. The manual-review booking's rows that the console reads (the booking and
 //     its payment, with the checkout they came from) are moved into the live environment through `tenantTx` as
 //     velexis_ota_app, as moveBookingIntoThePast of support/ota.ts moves a booking into the past. The console reads

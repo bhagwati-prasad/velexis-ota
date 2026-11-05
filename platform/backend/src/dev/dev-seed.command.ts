@@ -17,9 +17,10 @@
 //    `pending_verification` with `last_error`, and the command exits 1 asking to start the stub and run it again. A run
 //    verifies an account it created whenever it is not `active` (and not `disabled`), so the second run after starting
 //    the stub completes the seed. A test account that an admin configured is left as it is.
-// 3. Twenty test offices (DEV_SEED_OFFICE_IDS: DEV1A0001 to DEV1A0020) in that account's pool, `available`; an office
-//    id the pool holds already is skipped, whatever its status. Twenty since 2026-10-30 (ten before; lead decision
-//    (2f), FIX-W34-SHARED): a whole e2e run sets up one OTA per journey on an office of this pool
+// 3. Forty test offices (DEV_SEED_OFFICE_IDS: DEV1A0001 to DEV1A0040) in that account's pool, `available`; an office
+//    id the pool holds already is skipped, whatever its status, so a run on a pool of an earlier size adds only the
+//    new ids. Forty since 2026-11-05 (lead decision (5m), PAD-015; twenty since 2026-10-30, lead decision (2f),
+//    FIX-W34-SHARED; ten before): a whole e2e run sets up one OTA per journey on an office of this pool
 //    (tools/e2e/README.md).
 //
 // Every change writes its audit row in its transaction (actor `system`, label `cli dev:seed by <operator>`, the user of
@@ -28,7 +29,7 @@
 // account status publishes `vx:invalidate {type: "amadeus_account", id}` after the commit, as the verification job does.
 //
 // Exit codes are those of cli.ts: 0 when the admin (an active platform admin with MFA), the active test account and the
-// twenty offices are in place, 1 when the command refused (production, an invalid configuration) or something is still
+// forty offices are in place, 1 when the command refused (production, an invalid configuration) or something is still
 // missing (each said on stderr), 2 for an argument (the command takes none; it is never echoed). It runs in a Nest
 // application context of its own (DevSeedModule: the CLI's common providers, the audit, the Amadeus repositories and
 // the token check); log lines go to stderr. cli.ts loads this file only when the command runs.
@@ -83,11 +84,12 @@ export const DEV_SEED_AMADEUS_CLIENT_ID = "velexis-dev-seed";
 export const DEV_SEED_AMADEUS_NAME = "Velexis test account (dev:seed)";
 
 /**
- * The twenty test office ids `DEV1A0001` to `DEV1A0020` (9 upper-case letters and digits, as
- * `amadeus_offices.office_id` requires; ten until lead decision (2f) of 2026-10-30).
+ * The forty test office ids `DEV1A0001` to `DEV1A0040` (9 upper-case letters and digits, as
+ * `amadeus_offices.office_id` requires; twenty until lead decision (5m) of 2026-11-05, ten until lead decision (2f) of
+ * 2026-10-30).
  */
 export const DEV_SEED_OFFICE_IDS: readonly string[] = Object.freeze(
-  Array.from({ length: 20 }, (_, index) => `DEV1A${String(index + 1).padStart(4, "0")}`),
+  Array.from({ length: 40 }, (_, index) => `DEV1A${String(index + 1).padStart(4, "0")}`),
 );
 
 /** The notes of the offices dev:seed adds. */

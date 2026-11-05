@@ -32,7 +32,7 @@
 //      Reference rows the journeys need beyond the template's fixture (the time zone `Europe/Paris` and CDG's, as
 //      `pnpm db:seed:reference` loads them) are written as velexis_migrator.
 //   3. **`dev:seed`** of the platform: `node platform/backend/dist/cli.js dev:seed` with the Velexis stub as
-//      AMADEUS_BASE_URL_TEST: the platform admin, the verified Velexis test account and its twenty test offices, so
+//      AMADEUS_BASE_URL_TEST: the platform admin, the verified Velexis test account and its forty test offices, so
 //      provisioning assigns an office. Its stdout holds the new admin's password and TOTP URI: it is never read (the
 //      child's stdout is not even piped); only its stderr appears in an error.
 //   4. **The four processes**, at once, each with `--require` of the stack's Stripe preload (below), and each ready when

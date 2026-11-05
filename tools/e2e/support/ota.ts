@@ -955,7 +955,7 @@ export interface NewOwnerOptions {
 /**
  * A new portal account (`fullName`), verified and signed in, that creates an OTA through `createTenant` (a key of
  * `keyPrefix` and 10 random hex digits) and waits for the OTA worker to set it up (`active`, about 2 s locally) with
- * its Amadeus test connection on an office of the Velexis test pool (twenty from the platform's dev:seed).
+ * its Amadeus test connection on an office of the Velexis test pool (forty from the platform's dev:seed).
  *
  * The set-up passes over offices that another transaction holds, and admin-amadeus-pool.e2e.ts holds every available
  * one while its own OTA is set up (`withAvailableOfficesHeld`): an OTA set up in those seconds gets a connection that
@@ -1587,8 +1587,9 @@ export async function forgetStorefrontCopies(page: StorageEvaluator): Promise<vo
 // Stripe's pages; go-live copies it to live), and the custom domain verified with its certificate issued (no DNS or
 // ACME in the stack). The live Amadeus connection is no submission through the platform API because that needs
 // FEATURE_OWN_AMADEUS, whose portal and admin pages change what PAD-010's journey reads (a second region named after
-// the test environment), and the Velexis live account and its pool belong to PAD-010's journey alone
-// (admin-amadeus-pool.e2e.ts counts its offices exactly), so no Velexis live office is used either. goLive itself, the
+// the test environment), and the Velexis live account and its pool belong to the two platform admin journeys that
+// hold them in turn (admin-amadeus-pool.e2e.ts, which counts its offices exactly, and admin-live-office.e2e.ts since
+// PAD-015: `holdVelexisLivePool` of support/seed.ts), so no Velexis live office is used here either. goLive itself, the
 // owner's MFA and step-up are real.
 //
 // In the browser, the OTA's two hosts are its own origins: its sub-domain `<key>.ota.example.com` is mapped to the

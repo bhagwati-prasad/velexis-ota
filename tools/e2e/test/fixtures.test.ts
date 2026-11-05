@@ -159,6 +159,31 @@ describe("callPlatformApi", () => {
     await expect(failure).rejects.toBeInstanceOf(PlatformApiError);
     await expect(failure).rejects.toThrow(/^adminUpdateManualSubscription answered 412 PRECONDITION_FAILED$/);
   });
+
+  it("sends a PUT with its JSON body and the owner's token, and answers the JSON [PAD-015 AC1]", async () => {
+    const requests = fakePlatformApi(() => ({
+      status: 200,
+      body: { scheme: "iban", last4: "7947", status: "pending_review", version: 1 },
+    }));
+    const body = { accountHolderName: "Stina AS", countryCode: "NO", currency: "EUR", scheme: "iban" };
+    const answer = await callPlatformApi<{ last4: string; version: number }>({
+      operation: "setPayoutAccount",
+      method: "PUT",
+      path: "/v1/tenants/ten_1/payout-account",
+      endUserIp: "198.18.0.9",
+      accessToken: "owner-access-token",
+      body,
+    });
+    expect(answer).toMatchObject({ last4: "7947", version: 1 });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({ method: "PUT", body });
+    expect(path(requests[0])).toBe("/v1/tenants/ten_1/payout-account");
+    expect(requests[0]?.headers).toMatchObject({
+      Authorization: "Bearer owner-access-token",
+      "Content-Type": "application/json",
+      "X-Velexis-End-User-IP": "198.18.0.9",
+    });
+  });
 });
 
 describe("createVerifiedAccount", () => {

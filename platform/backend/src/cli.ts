@@ -100,13 +100,13 @@ function devSeedCommands(): Promise<typeof DevSeedCommand> {
 
 /**
  * `dev:seed`: development data, refused when APP_ENV=production (README §5 and §6; dev/dev-seed.command.ts): the
- * platform admin admin@example.com with MFA, the Velexis test Amadeus account at the stub and 20 test offices.
+ * platform admin admin@example.com with MFA, the Velexis test Amadeus account at the stub and 40 test offices.
  */
 const devSeedCommand: CliCommand = {
   name: "dev:seed",
   args: "",
   summary:
-    "Development only: a platform admin with MFA, the test Amadeus account at the stub, 20 test offices.",
+    "Development only: a platform admin with MFA, the test Amadeus account at the stub, 40 test offices.",
   async run(args, context) {
     return (await devSeedCommands()).runDevSeed(args, context);
   },

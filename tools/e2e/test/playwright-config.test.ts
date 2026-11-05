@@ -160,6 +160,45 @@ describe("projectsFor", () => {
       selects(storefrontStripe, "the OTA admin's settings › a new primary colour reaches the storefront"),
     ).toBe(false);
   });
+
+  it("runs the platform admin's M5 journeys in platform-admin, and both journeys of the live pool hold it [PAD-015 AC1]", () => {
+    const spec = (file: string): string => readFileSync(join(REPO_ROOT, "tools/e2e/specs", file), "utf8");
+    for (const withStripe of [false, true]) {
+      const projects = projectsFor({ withOta: true, withStripe });
+      const platformAdmin = byName(projects, "platform-admin");
+      // The files are the platform admin's (`specs/admin-*.e2e.ts`), never the portal's.
+      expect([platformAdmin?.testMatch].flat()).toContain("specs/admin-*.e2e.ts");
+      expect([byName(projects, "portal")?.testMatch].flat()).not.toContain("specs/admin-*.e2e.ts");
+      for (const journey of [
+        "specs/admin-settlements.e2e.ts › marking it paid asks for a step-up too, and the owners get the e-mail",
+        "specs/admin-live-office.e2e.ts › releasing the office needs the confirmation and a reason",
+        "specs/admin-domains.e2e.ts › Remove asks for a reason, removes the domain and e-mails the owners",
+      ]) {
+        expect(selects(platformAdmin, journey), journey).toBe(true);
+      }
+    }
+    // Every step of the three journeys proves the task's criterion; none is a Stripe journey or skipped.
+    for (const file of ["admin-settlements.e2e.ts", "admin-live-office.e2e.ts", "admin-domains.e2e.ts"]) {
+      const source = spec(file);
+      expect(source, file).not.toMatch(/PROJECT_TAGS\.stripe|["'`]@stripe|\.skip\(|\.only\(/);
+      const steps = source.match(/^test\("[^"]+"/gm) ?? [];
+      expect(steps.length, file).toBeGreaterThanOrEqual(4);
+      for (const step of steps) {
+        expect(step, file).toMatch(/\[PAD-015 AC1\]"$/);
+      }
+      expect(source, file).toContain('test.describe.configure({ mode: "serial" });');
+    }
+    // The Velexis live pool: the two journeys that use the live account take it before their first step and give it
+    // back at their end (support/seed.ts `holdVelexisLivePool`), and the live office journey leaves it as it found it.
+    for (const file of ["admin-amadeus-pool.e2e.ts", "admin-live-office.e2e.ts"]) {
+      const source = spec(file);
+      expect(source, file).toMatch(/test\.beforeAll\([\s\S]*livePool = await holdVelexisLivePool\(\);/);
+      expect(source, file).toMatch(/test\.afterAll\([\s\S]*await livePool\?\.release\(\);/);
+    }
+    expect(spec("admin-live-office.e2e.ts")).toMatch(
+      /test\.afterAll\([\s\S]*await restoreVelexisLivePool\(\{/,
+    );
+  });
 });
 
 describe("the configuration's projects from the environment", () => {

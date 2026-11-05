@@ -14,8 +14,10 @@
 // all. The waiting connection needs a set-up that finds no available office; the pool is shared by every journey of the
 // run, so instead of emptying it the journey holds its available offices' row locks while its OTA is set up
 // (`withAvailableOfficesHeld`, support/tenants.ts): the set-up step passes over locked offices, as it does when another
-// set-up is taking them. The live environment is this journey's alone (no other journey and no seed uses it), so its
-// pool levels are exact.
+// set-up is taking them. The live environment: no seed creates a Velexis live account, and the only other journey that
+// uses one, admin-live-office.e2e.ts (PAD-015), leaves the live pool as it found it; both hold the live pool for their
+// whole run (`holdVelexisLivePool` of support/seed.ts, an advisory lock), so this journey creates the live account and
+// counts its offices exactly whichever of the two a worker starts first.
 //
 // The steps are tests in order (`mode: "serial"`): a failed step stops the rest. Every page the journey visits passes
 // `expectNoSeriousA11yViolations` once its title is in place. The live account's client secret is random, typed into
@@ -34,7 +36,15 @@ import {
   test,
   type MfaAccount,
 } from "../support/fixtures";
-import { buildAccount, grantPlatformAdmin, runPlatformCli, stack } from "../support/seed";
+import {
+  buildAccount,
+  grantPlatformAdmin,
+  holdVelexisLivePool,
+  LIVE_POOL_WAIT_MS,
+  runPlatformCli,
+  stack,
+  type LivePoolHold,
+} from "../support/seed";
 import { AMADEUS_STUB_URL, PLATFORM_ADMIN_URL, PORTAL_URL } from "../support/stack";
 import { createOtaWithApi, waitForOtaStatus, withAvailableOfficesHeld, type Ota } from "../support/tenants";
 
@@ -61,6 +71,7 @@ const liveOffices = [uniqueOfficeId(), uniqueOfficeId(), uniqueOfficeId()];
 
 let admin: MfaAccount;
 let ota: Ota;
+let livePool: LivePoolHold | undefined;
 let adminContext: BrowserContext;
 let adminPage: Page;
 let ownerContext: BrowserContext;
@@ -72,10 +83,13 @@ test.beforeAll(async ({ browser }) => {
       "admin-amadeus-pool.e2e.ts sets up an OTA: run it with E2E_WITH_OTA=1 (the Amadeus stub and the OTA worker)",
     );
   }
-  // Budget: the platform's dev:seed (a Node process, a token request to the stub), two sign-ups with their
-  // verification e-mails (up to 15 s each, in parallel), an MFA set-up, `admin:grant` and the OTA's set-up on the OTA
-  // worker (about 2 s locally; PF-11 allows a minute).
-  test.setTimeout(120_000);
+  // Budget: the wait for the Velexis live pool (at most LIVE_POOL_WAIT_MS, while admin-live-office.e2e.ts runs), the
+  // platform's dev:seed (a Node process, a token request to the stub), two sign-ups with their verification e-mails (up
+  // to 15 s each, in parallel), an MFA set-up, `admin:grant` and the OTA's set-up on the OTA worker (about 2 s locally;
+  // PF-11 allows a minute).
+  test.setTimeout(120_000 + LIVE_POOL_WAIT_MS);
+  // The live pool to this journey alone until its end (see the file header).
+  livePool = await holdVelexisLivePool();
   // Its stdout (the development admin's password and TOTP set-up URI, on a first run) is dropped unread.
   await runPlatformCli(["dev:seed"]);
   const [owner, adminAccount] = await Promise.all([
@@ -102,8 +116,12 @@ test.beforeAll(async ({ browser }) => {
 });
 
 test.afterAll(async () => {
-  await adminContext.close();
-  await ownerContext.close();
+  try {
+    await adminContext?.close();
+    await ownerContext?.close();
+  } finally {
+    await livePool?.release();
+  }
 });
 
 test("the OTA's test connection waits for an office, on the admin's OTA page and the owner's Amadeus page [PAD-010 AC1]", async () => {

@@ -75,8 +75,11 @@ function bffKey(): string {
 export interface ApiCall {
   /** The operationId, for error messages. */
   readonly operation: string;
-  /** PATCH for the admin's edits that take `If-Match` (`adminUpdateManualSubscription`, PFE-027), in `headers`. */
-  readonly method: "GET" | "POST" | "PATCH";
+  /**
+   * PATCH for the admin's edits that take `If-Match` (`adminUpdateManualSubscription`, PFE-027), in `headers`; PUT for
+   * the operations that replace a resource (the owner's `setPayoutAccount`, PAD-015).
+   */
+  readonly method: "GET" | "POST" | "PATCH" | "PUT";
   /** The path under PLATFORM_API_URL, for example `/v1/auth/sign-in`. */
   readonly path: string;
   readonly endUserIp: string;

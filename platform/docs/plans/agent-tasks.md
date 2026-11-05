@@ -760,7 +760,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 - **Files:** `platform/backend/src/common/purge.scheduler.ts`, `platform/backend/src/common/purge.repository.ts`, `platform/backend/src/dev/dev-seed.command.ts`, `platform/backend/src/cli.ts`, `platform/backend/package.json`, `platform/backend/test/integration/common/purge.int.test.ts`, `platform/backend/test/integration/dev/dev-seed.int.test.ts`, `platform/backend/README.md`
 - **Steps:**
   1. `purge.daily` (02:50 UTC): consumed or expired `account_tokens` older than 7 days, `account_sessions` expired more than 30 days ago, `sent` outbox rows older than 30 days, `processed` `stripe_events` older than 90 days, final `credential_submissions` older than 90 days. Batches of 1 000 rows; counts logged.
-  2. `dev:seed` CLI command and `pnpm --filter @velexis/platform-backend dev:seed`: refused when `APP_ENV=production`; creates (idempotently) a platform admin `admin@example.com` with MFA and prints its `otpauth://` URI once, a Velexis test Amadeus account pointing at `AMADEUS_BASE_URL_TEST` (the stub) and verified, and 10 test offices (20 since lead decision (2f) of 2026-10-30, `DEV1A0001` to `DEV1A0020`: the lead raised it to 20 for the e2e journeys, which set up one OTA per journey on an office of this pool; FIX-W34-SHARED).
+  2. `dev:seed` CLI command and `pnpm --filter @velexis/platform-backend dev:seed`: refused when `APP_ENV=production`; creates (idempotently) a platform admin `admin@example.com` with MFA and prints its `otpauth://` URI once, a Velexis test Amadeus account pointing at `AMADEUS_BASE_URL_TEST` (the stub) and verified, and 10 test offices (20 since lead decision (2f) of 2026-10-30, `DEV1A0001` to `DEV1A0020`: the lead raised it to 20 for the e2e journeys, which set up one OTA per journey on an office of this pool; FIX-W34-SHARED; 40 since lead decision (5m) of 2026-11-05, `DEV1A0001` to `DEV1A0040`, before the platform admin's M5 journeys added three more OTAs; PAD-015).
 - **Acceptance:**
   - The purge removes only rows past their retention (FakeClock) and never touches `platform_audit_log`.
   - Running `dev:seed` twice creates no duplicates; with `APP_ENV=production` it exits 1 without writing.
@@ -1949,7 +1949,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - Releasing an office requires the confirmation and a reason; a live request can be served from the dashboard [PF-90].
 - **Verify:** `pnpm --filter @velexis/platform-admin test`
 
-### PAD-015 · Write the platform admin M5 end-to-end journeys
+### PAD-015 · Write the platform admin M5 end-to-end journeys ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-admin
 - **Milestone:** M5
 - **Depends on:** PAD-010, PAD-012, PAD-013, PAD-014
