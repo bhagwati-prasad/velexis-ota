@@ -1613,6 +1613,28 @@ describe("the tenants, team, API keys and M1 reads slice (PBE-006)", () => {
     const item = objectAt(objectAt(objectAt(platform, "components"), "schemas"), "OnboardingItem");
     expect(objectAt(objectAt(item, "properties"), "id")["enum"]).toEqual(ids);
   });
+
+  it("[FIX-W43-PLATFORM AC1] words trial_ending of BillingNotice as the OTA document's ConsoleTenant.billingNotice does", () => {
+    // Lead decision (5j) of 2026-11-05: the banner the platform keeps on the tenant row lasts from the first trial
+    // reminder until a plan replaces the trial or the OTA is suspended (subscription-billing flow §G), the words
+    // FIX-W42-OTA gave the OTA's copy of the same value. Description only: the type and the values stay.
+    const notice = objectAt(objectAt(objectAt(platform, "components"), "schemas"), "BillingNotice");
+    const otaTenant = objectAt(objectAt(objectAt(ota, "components"), "schemas"), "ConsoleTenant");
+    const otaNotice = objectAt(objectAt(otaTenant, "properties"), "billingNotice");
+    expect(notice["type"]).toEqual(["string", "null"]);
+    expect(notice["enum"]).toEqual(["past_due", "trial_ending", null]);
+    expect(otaNotice["enum"]).toEqual(notice["enum"]);
+    const rule =
+      "`trial_ending` from the first trial reminder (14 days before a trial's end) until a plan replaces the trial or the OTA is suspended";
+    const lapsed = "after the end while a lapsed manual trial is `past_due`";
+    for (const [name, description] of [
+      ["BillingNotice", String(notice["description"])],
+      ["ConsoleTenant.billingNotice", String(otaNotice["description"])],
+    ] as const) {
+      expect([name, description.includes(rule), description.includes(lapsed)]).toEqual([name, true, true]);
+    }
+    expect(String(notice["description"])).not.toContain("before the trial ends");
+  });
 });
 
 /** The JSON request body schema of an operation, `$ref`s of the request body resolved. */

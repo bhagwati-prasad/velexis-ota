@@ -15442,7 +15442,10 @@ components:
         - 'null'
       description: >-
         The billing banner state that billing sync keeps on the tenant row for the portal and the OTA admin
-        (ADR-0013): `past_due` while a payment failed, `trial_ending` before the trial ends; `null` otherwise.
+        (`tenants.billing_notice`, ADR-0013): `past_due` while a payment failed; `trial_ending` from the first trial
+        reminder (14 days before a trial's end) until a plan replaces the trial or the OTA is suspended, so it is also
+        kept after the end while a lapsed manual trial is `past_due` (subscription-billing flow §G; lead decision (5j)
+        of 2026-11-05: the words of the OTA document's `ConsoleTenant.billingNotice`); `null` otherwise.
       enum:
         - past_due
         - trial_ending

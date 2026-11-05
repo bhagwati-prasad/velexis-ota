@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Platform tech lead. Decided during planning; revisit at the M6 security review, when the first OTA goes live, or if account-takeover attempts are seen.
+**Revisions:** 2026-11-05 (lead decision (5b) of 2026-11-05, recorded with FIX-W43-PLATFORM; the follow-up of the M6 security review, [`../security-review.md`](../security-review.md) §9): MFA is mandatory for the owners and admins of a **live** OTA, enforced when the OTA goes live and at the first portal sign-in of each such owner or admin after that, with the enrolment then and there before any other portal page (dated note under the MFA table; tasks PBE-071 and PFE-030). Test-only OTAs keep MFA optional, and so do agents, finance members and viewers.
 
 ## Context
 
@@ -28,6 +29,14 @@
 | OTA admin access of a **live** OTA (`storefront_environment = 'live'`) | Every member needs MFA enabled; the console token is refused otherwise (`MFA_REQUIRED`). Test-only OTAs do not require it. |
 | OTA admin access of a test-only OTA | MFA optional; the token tells the OTA backend whether the account has MFA (`mfa` field), so the OTA admin can show a reminder. |
 
+*Note (2026-11-05, lead decision (5b), FIX-W43-PLATFORM).* **MFA is mandatory for the owners and admins of a live OTA** (`storefront_environment = 'live'`); the "Portal users" row above stays true for everyone else.
+
+- **Why** ([`../security-review.md`](../security-review.md) §9). Every sensitive action of the table already needs MFA and a recent step-up, but a stolen owner or admin password alone still opens the Stripe Customer Portal (change the card, or cancel the subscription, which suspends the OTA), invites a member who stays after a password reset, revokes or rolls API keys and removes members (an outage of the storefront), adds custom domains, edits the OTA profile, and reads everything of the OTA, its team and its masked connections. A live OTA takes real money from real travellers, so its owners and admins get the same second factor that its back office (the console row above) already demands. Agents, finance members and viewers cannot change money, credentials or the team, so their rule does not change. Test-only OTAs keep MFA optional, so the "OTA in minutes" promise of [`decisions.md`](../../../docs/mvp/decisions.md) §2 is not slowed down (Alternatives, "MFA mandatory for everyone").
+- **When the OTA goes live.** `goLive` keeps needing the acting owner's MFA and a recent step-up (`x-mfa-step-up` and the `mfa` precondition of `LIVE_PRECONDITIONS_UNMET`), so a live OTA always starts with an owner who has MFA.
+- **At the first portal sign-in after that.** An account that is an active `owner` or `admin` of a live OTA and has no MFA enrols at its first portal page after the OTA went live (or after it was granted the role on a live OTA, or after a support MFA reset), then and there, before any other portal page: the API answers its `portal` operations `403 MFA_REQUIRED`, reads included, and keeps open only the operations that an unverified account may call too (`portal_unverified`: `getMe`, which says so, the profile, the MFA set-up and enable, sessions, sign-out and the list of its OTAs), which is all an enrolment needs; the portal shows the enrolment page alone until MFA is on, then continues where the account was going. The API reads the rule from PostgreSQL on each request, as `TenantRoleGuard` reads memberships, so a session opened before the go-live meets it at its next request too.
+- **It stays on.** While the account is an owner or admin of a live OTA it cannot disable MFA itself; losing the device still goes through a recovery code or a support reset (Additional rules, item 5), after which the account enrols again at its next portal page.
+- **Tasks.** PBE-071 (the API rule, its contract and tests, the auth matrix column) and PFE-030 (the portal's enrolment gate and its tests).
+
 Additional rules:
 
 1. **TOTP**: `otplib`, SHA-1, 6 digits, 30 s, ±1 step window; a code is accepted once per account (the last used time step is kept in Redis for 90 s to stop replay).
@@ -48,13 +57,14 @@ Additional rules:
 ### Negative
 
 - Members of live OTAs must set up MFA before their next console access; the portal must guide them.
+- Owners and admins of live OTAs must set up MFA at their first portal sign-in after the go-live, before any other portal page (revision of 2026-11-05); the API reads their memberships on each portal request for it.
 - Step-up prompts interrupt sensitive flows; the 15-minute window keeps them rare.
 - E-mail changes need support until a self-service flow exists.
 
 ### Follow-ups
 
 - WebAuthn passkeys as a second factor after the MVP.
-- Revisit making MFA mandatory for all owners at the M6 security review.
+- Revisit making MFA mandatory for all owners at the M6 security review: decided on 2026-11-05 (revision above), mandatory for the owners and admins of live OTAs and optional for test-only OTAs; PBE-071 and PFE-030 implement it.
 - Self-service e-mail change (verify the new address, notify the old one).
 
 ## Alternatives considered

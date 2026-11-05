@@ -70,8 +70,10 @@ import {
   PLAN_FORM_STRINGS,
   PLAN_LIST_STRINGS,
   PLAN_STRINGS,
+  PRICE_WARNING_ATTRIBUTES,
   REASON_STRINGS,
   STEP_UP_STRINGS,
+  STRIPE_PRICES_STRINGS,
   SUBSCRIPTION_DETAIL_STRINGS,
   SUBSCRIPTION_LIST_STRINGS,
 } from "@/lib/strings";
@@ -649,6 +651,20 @@ function planRow(code: string): HTMLElement {
   return row;
 }
 
+/** A price field of "Link Stripe prices" (PAD-012), with its hint and the warnings shown next to it. */
+function priceField(form: HTMLElement, name: "stripePriceIdMonth" | "stripePriceIdYear"): HTMLElement {
+  const element = form.querySelector<HTMLElement>(`[data-stripe-field="${name}"]`);
+  if (element === null) {
+    throw new Error(`no field ${name}`);
+  }
+  return element;
+}
+
+/** The warnings shown next to a price field, as the `data-warning` fields of their items. */
+function warningsOf(field: HTMLElement): (string | null)[] {
+  return [...field.querySelectorAll("[data-warning]")].map((item) => item.getAttribute("data-warning"));
+}
+
 /** The edit section of a manual subscription. */
 function editSection(): HTMLElement {
   return screen.getByRole("region", { name: MANUAL_SUBSCRIPTION_STRINGS.title });
@@ -819,7 +835,7 @@ describe("plans/page.tsx: the plan list", () => {
     expect(codes).toEqual(["early_access", "growth", "pilot"]);
   });
 
-  it("shows the Stripe link state and the price warnings of a linked plan (M5)", async () => {
+  it("shows the Stripe link state of a linked plan and its price warnings next to their prices, not as a raw table (M5) [FIX-W43-PLATFORM AC2]", async () => {
     routes({
       [`GET ${PLANS_PATH}`]: () =>
         json(
@@ -848,8 +864,53 @@ describe("plans/page.tsx: the plan list", () => {
     await openPlan();
     const stripe = screen.getByRole("region", { name: PLAN_DETAIL_STRINGS.stripeTitle });
     expect(within(stripe).getByText("prod_QxLm2Np9Rt4Vw")).toBeTruthy();
-    expect(within(stripe).getByText("stripePriceIdMonth.amount")).toBeTruthy();
-    expect(within(stripe).getByText("159.00")).toBeTruthy();
+    // The summary counts the warnings and no longer lists them as a raw table (lead decision (5k) of 2026-11-05)...
+    expect(within(stripe).getByText("2 price warnings")).toBeTruthy();
+    expect(within(stripe).queryByRole("table")).toBeNull();
+    expect(within(stripe).queryByText("stripePriceIdMonth.amount")).toBeNull();
+    expect(within(stripe).queryByText("159.00")).toBeNull();
+    // ...because "Link Stripe prices" shows each one in words next to its price.
+    const form = screen.getByRole("region", { name: STRIPE_PRICES_STRINGS.title });
+    const month = priceField(form, "stripePriceIdMonth");
+    expect(warningsOf(month)).toEqual(["stripePriceIdMonth.amount"]);
+    for (const text of [PRICE_WARNING_ATTRIBUTES.amount, "€149.00", "€159.00"]) {
+      expect(within(month).getByText(text)).toBeTruthy();
+    }
+    const year = priceField(form, "stripePriceIdYear");
+    expect(warningsOf(year)).toEqual(["stripePriceIdYear.active"]);
+    for (const text of [
+      PRICE_WARNING_ATTRIBUTES.active,
+      STRIPE_PRICES_STRINGS.active,
+      STRIPE_PRICES_STRINGS.archived,
+    ]) {
+      expect(within(year).getByText(text)).toBeTruthy();
+    }
+    cleanup();
+
+    // A linked plan whose prices agree with Stripe says so in the summary and under each price.
+    routes({
+      [`GET ${PLANS_PATH}`]: () =>
+        json(
+          {
+            data: [
+              adminPlan({
+                stripeProductId: "prod_QxLm2Np9Rt4Vw",
+                stripePriceIdMonth: "price_1QxLm2Np9Rt4VwMonth",
+                stripePriceIdYear: "price_1QxLm2Np9Rt4VwYear",
+              }),
+            ],
+          },
+          200,
+        ),
+    });
+    await openPlan();
+    const agreeing = screen.getByRole("region", { name: PLAN_DETAIL_STRINGS.stripeTitle });
+    expect(within(agreeing).getByText(PLAN_DETAIL_STRINGS.warningsNone)).toBeTruthy();
+    const agreeingForm = screen.getByRole("region", { name: STRIPE_PRICES_STRINGS.title });
+    for (const name of ["stripePriceIdMonth", "stripePriceIdYear"] as const) {
+      expect(warningsOf(priceField(agreeingForm, name))).toEqual([]);
+      expect(within(priceField(agreeingForm, name)).getByText(STRIPE_PRICES_STRINGS.noWarning)).toBeTruthy();
+    }
   });
 
   it("shows the admin's message when the plans cannot be loaded, and sends an ended session to sign-in", async () => {

@@ -988,7 +988,7 @@ export const PLAN_DETAIL_STRINGS = Object.freeze({
   version: "Version",
   stripeTitle: "Stripe",
   stripeIntro:
-    "The Stripe product and the monthly and yearly prices linked to the plan, whether Stripe Checkout can start for each interval, and the differences the last comparison with Stripe found. An interval without a linked price cannot check out with Stripe.",
+    "The Stripe product and the monthly and yearly prices linked to the plan, whether Stripe Checkout can start for each interval, and how many differences the last comparison with Stripe found. An interval without a linked price cannot check out with Stripe. Each difference shows in words next to its price under “Link Stripe prices”.",
   stripeProduct: "Stripe product",
   stripePriceMonth: "Monthly Stripe price",
   stripePriceYear: "Yearly Stripe price",
@@ -998,15 +998,12 @@ export const PLAN_DETAIL_STRINGS = Object.freeze({
   checkoutYear: "Yearly",
   checkoutOpen: "Available",
   checkoutClosed: "Not available",
-  warningsTitle: "Price warnings",
-  warningsIntro:
-    "Differences between the plan and its linked Stripe prices at the last comparison. They never block saving.",
-  warningsEmpty: "No price warning.",
-  warningsCaption: "Price warnings of the last comparison with Stripe",
-  warningField: "Price and attribute",
-  warningExpected: "The plan implies",
-  warningActual: "Stripe answered",
-  none: "None",
+  /**
+   * The number of warnings of the last comparison; the warnings themselves show only in words next to their price in
+   * "Link Stripe prices" (lead decision (5k) of 2026-11-05 dropped PAD-008's raw table of them here).
+   */
+  warnings: "Price warnings",
+  warningsNone: "No price warning",
   // Retire and reactivate (`isActive` of `adminUpdatePlan`)
   lifecycleTitle: "Offer the plan",
   retiredNotice:

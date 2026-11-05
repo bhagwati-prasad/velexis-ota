@@ -62,6 +62,7 @@ import {
   MANUAL_SUBSCRIPTION_STRINGS,
   PLAN_DETAIL_STRINGS,
   PLAN_FORM_STRINGS,
+  PLAN_STRINGS,
   PRICE_WARNING_ATTRIBUTES,
   RESYNC_STRINGS as R,
   STRIPE_EVENT_ACTION_STRINGS as EA,
@@ -1051,7 +1052,7 @@ describe("plans/[planCode]/page.tsx: Link Stripe prices", () => {
     expect(warningFields("stripePriceIdMonth")).toEqual([]);
   });
 
-  it("shows the stored warnings of every attribute in words next to their price", async () => {
+  it("shows the stored warnings of every attribute in words next to their price, and only there [FIX-W43-PLATFORM AC2]", async () => {
     fleet.plans[0] = linkedGrowth({
       annualPrice: null,
       priceWarnings: [
@@ -1077,14 +1078,24 @@ describe("plans/[planCode]/page.tsx: Link Stripe prices", () => {
     }
     expect(within(month).queryByText("€159.00")).toBeNull();
     const year = stripeField("stripePriceIdYear");
+    expect(warningFields("stripePriceIdYear")).toEqual([
+      "stripePriceIdYear.amount",
+      "stripePriceIdYear.active",
+    ]);
+    expect(within(year).getByText(SP.warningCount(2))).toBeTruthy();
     // A plan without a yearly price says so in the hint and in the warning; a price Stripe does not know is named.
     expect(within(year).getByText(SP.yearHintNoAnnual)).toBeTruthy();
     expect(within(year).getByText(SP.noAnnualPrice)).toBeTruthy();
     expect(within(year).getByText("€1,490.00")).toBeTruthy();
+    expect(within(year).getByText(PRICE_WARNING_ATTRIBUTES.active)).toBeTruthy();
     expect(within(year).getByText(SP.unknownPrice)).toBeTruthy();
-    // The summary of the Stripe link above still lists the same comparison.
-    const summary = screen.getByRole("region", { name: "Stripe" });
-    expect(within(summary).getByText("stripePriceIdYear.active")).toBeTruthy();
+    // The Stripe summary above only counts the same comparison: its raw table of the warnings is gone, so they show in
+    // words next to their price only (lead decision (5k) of 2026-11-05) [FIX-W43-PLATFORM AC2].
+    const summary = screen.getByRole("region", { name: PLAN_DETAIL_STRINGS.stripeTitle });
+    expect(within(summary).getByText(PLAN_STRINGS.priceWarnings(5))).toBeTruthy();
+    expect(within(summary).queryByRole("table")).toBeNull();
+    expect(within(summary).queryByText("stripePriceIdYear.active")).toBeNull();
+    expect(screen.queryAllByText(/^stripePrice(?:IdMonth|IdYear)\.[a-z]+$/)).toEqual([]);
   });
 
   it("reads Stripe's amount of a price in another currency back with that currency's decimals", async () => {

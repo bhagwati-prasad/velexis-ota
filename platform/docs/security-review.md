@@ -13,19 +13,21 @@ This is the security review of the platform group before launch ([`../../docs/mv
 | Secrets at rest after the main flows | none outside the ciphertext columns, and none in clear inside them | [`secrets-at-rest.int.test.ts`](../backend/test/integration/security/secrets-at-rest.int.test.ts) |
 | `pending-operations.ts` (PADR-0016 item 2) | empty; every operation of the document is bound and answers its guards | the auth matrix |
 | `pnpm audit` | 3 critical and 15 high advisories (7 high in production dependencies) | §7, findings F-2 to F-5 |
-| MFA mandatory for owners (PADR-0008 follow-up) | recommended for owners and admins of **live** OTAs; a question to the lead, no policy change | §9 |
+| MFA mandatory for owners (PADR-0008 follow-up) | recommended for owners and admins of **live** OTAs; decided on 2026-11-05 (lead decision (5b), [PADR-0008](adr/0008-email-verification-and-mfa-policy.md) revision): mandatory for them, enforced at go-live and at their first portal sign-in after it; tasks PBE-071 and PFE-030 | §9 |
 
 ### Findings
 
 | Id | Severity | Finding | Task |
 |---|---|---|---|
 | F-1 | Medium | A disabled or deleted account keeps using the portal API for up to 15 minutes with an access token it holds, sensitive actions included | [PBE-067](plans/agent-tasks.md#pbe-067--refuse-the-portal-tokens-of-disabled-and-deleted-accounts-at-once) |
-| F-2 | Medium | `nodemailer` 6.10.1 in the platform backend: five high advisories (production dependency) | [PBE-068](plans/agent-tasks.md#pbe-068--upgrade-nodemailer-in-the-platform-backend-past-its-high-advisories) |
-| F-3 | Low | `multer` 2.4.0 through `@nestjs/platform-express` 11.2.8: one high advisory, not reachable on the platform API | [PBE-069](plans/agent-tasks.md#pbe-069--move-the-platform-backend-to-a-nestjs-release-without-the-multer-advisory) |
-| F-4 | Low | `zod` 3.25.76 in the portal and the platform admin: one high advisory (production dependency) | [PFE-029](plans/agent-tasks.md#pfe-029--upgrade-zod-in-the-portal-past-its-high-advisory), [PAD-017](plans/agent-tasks.md#pad-017--upgrade-zod-in-the-platform-admin-past-its-high-advisory) |
-| F-5 | Low | Test and contract tooling (`vitest` → `tinypool`, `happy-dom`; `@redocly/cli` → `undici`, `@faker-js/faker`): 3 critical and 8 high advisories in development dependencies | [PBE-070](plans/agent-tasks.md#pbe-070--upgrade-the-test-and-contract-tooling-past-the-audits-critical-and-high-advisories) |
+| F-2 | High (advisory); reachable: Medium | `nodemailer` 6.10.1 in the platform backend: five high advisories (production dependency) | [PBE-068](plans/agent-tasks.md#pbe-068--upgrade-nodemailer-in-the-platform-backend-past-its-high-advisories) |
+| F-3 | High (advisory); reachable: Low | `multer` 2.4.0 through `@nestjs/platform-express` 11.2.8: one high advisory, not reachable on the platform API; OBE-094's root `pnpm.overrides` entry lifts it to 2.5.0 for both backends, NestJS stays on 11 | OBE-094 (the override), [PBE-069](plans/agent-tasks.md#pbe-069--confirm-the-multer-override-in-the-platform-backend-and-keep-its-api-free-of-multipart-routes) (its confirmation and the multipart-route guard) |
+| F-4 | High (advisory); reachable: Low | `zod` 3.25.76 in the portal and the platform admin: one high advisory (production dependency) | [PFE-029](plans/agent-tasks.md#pfe-029--upgrade-zod-in-the-portal-past-its-high-advisory), [PAD-017](plans/agent-tasks.md#pad-017--upgrade-zod-in-the-platform-admin-past-its-high-advisory) |
+| F-5 | Critical (advisory); reachable: Low | Test and contract tooling (`vitest` → `tinypool`, `happy-dom`; `@redocly/cli` → `undici`, `@faker-js/faker`): 3 critical and 8 high advisories in development dependencies | [PBE-070](plans/agent-tasks.md#pbe-070--upgrade-the-test-and-contract-tooling-past-the-audits-critical-and-high-advisories) |
 
 Severity: **High** — exploitable from the internet against production data or money; **Medium** — exploitable with a precondition (a stolen token, a crafted input) or a weakening of a stated control; **Low** — not reachable in production as built, or development tooling only.
+
+A dependency finding (F-2 to F-5) shows two ratings side by side (lead decision (5d) of 2026-11-05): first the advisory's own severity, the highest one its advisories carry in `pnpm audit` (the rating that `--audit-level` gates count, and that the M6 go/no-go criterion "`pnpm audit --prod` clean of high and critical" counts for the production dependencies of F-2 to F-4, so it never drops because the code does not reach the package), then the reachability that this review rates on the scale above (how urgent the fix is for the platform as built). The review's own findings (F-1) have the second rating only.
 
 ## 2. How the review was done
 
@@ -149,6 +151,8 @@ No token reaches browser JavaScript in either app: the platform tokens exist onl
 
 **Recommendation.** Keep MFA optional while an OTA is test-only, as decided for the "OTA in minutes" promise ([`decisions.md`](../../docs/mvp/decisions.md) §2, PADR-0008 "Alternatives"), and make it mandatory for the **owners and admins of a live OTA**: on every portal operation of a live OTA, an owner or admin without MFA answers `403 MFA_REQUIRED` (reads included, as the console rule does), the portal sends them to the MFA set-up, and granting owner or admin on a live OTA (`updateMember`, `acceptInvitation`) needs MFA. The other roles stay as they are: they cannot change money, credentials or the team. This closes the "password alone" list above for the OTAs that take real money, without slowing anyone's first test OTA. It is a policy change of PADR-0008, so it is a question to the lead, not a task: if approved, it needs a dated revision of PADR-0008, a backend task (the rule in the tenant guard's path, with tests and a matrix column) and a portal task (the set-up prompt).
 
+**Decision (2026-11-05, lead decision (5b)).** Approved: MFA is mandatory for the owners and admins of live OTAs, enforced when the OTA goes live (`goLive` already needs the acting owner's MFA and a step-up) and at the first portal sign-in of any owner or admin of a live OTA after that, with the enrolment then and there before any other portal page. The reasons are the ones above. [PADR-0008](adr/0008-email-verification-and-mfa-policy.md) records it in its revision of 2026-11-05 (the dated note under its MFA table, FIX-W43-PLATFORM), and two tasks of the plan implement it: [PBE-071](plans/agent-tasks.md#pbe-071--make-mfa-mandatory-for-the-owners-and-admins-of-live-otas-in-the-platform-api) (the API: `403 MFA_REQUIRED` on the `portal` operations of such an account until it enrols, `getMe` saying so, no self-service disabling while the role lasts, and a column of the auth matrix) and [PFE-030](plans/agent-tasks.md#pfe-030--send-the-owners-and-admins-of-live-otas-to-mfa-enrolment-before-any-other-portal-page) (the portal's enrolment gate). Test-only OTAs, agents, finance members and viewers keep MFA optional. Unlike the recommendation above, granting owner or admin on a live OTA (`updateMember`, `acceptInvitation`) is not refused for an account without MFA: the account meets the gate at its next portal request and enrols there (the PADR-0008 note), which closes the same gap without a new refusal on the team pages.
+
 ## 10. Findings
 
 ### F-1 · Medium · A disabled or deleted account keeps the portal API for up to 15 minutes
@@ -159,7 +163,7 @@ No token reaches browser JavaScript in either app: the platform tokens exist onl
 
 **Fix.** `PortalAuthGuard` re-reads the account (`AccountAuthStates`, one primary-key read, as the admin guard) and refuses a missing, deleted or disabled one with `401 UNAUTHENTICATED`; a dated note in PADR-0009 item 4 and architecture §3.1; a disabled-account column in the auth matrix. **Task:** PBE-067 (its first step is the lead's confirmation of the rule).
 
-### F-2 · Medium · `nodemailer` 6.10.1 in the platform backend
+### F-2 · High (advisory); reachable: Medium · `nodemailer` 6.10.1 in the platform backend
 
 **Evidence.** §7: five high advisories, fixed in 10.0.6 and later (a major upgrade; [tech-stack](../../docs/mvp/tech-stack.md) pins 6.x).
 
@@ -167,15 +171,15 @@ No token reaches browser JavaScript in either app: the platform tokens exist onl
 
 **Fix.** Upgrade to nodemailer 10.x in the platform backend, adapt `mailer.gateway.ts` to its API, run the outbox tests against Mailpit, update the tech-stack row. **Task:** PBE-068. (The OTA backend and `@velexis/testing` use the same version; the OTA review, OBE-084, and the foundation plan own those.)
 
-### F-3 · Low · `multer` 2.4.0 through NestJS 11.2.8
+### F-3 · High (advisory); reachable: Low · `multer` 2.4.0 through NestJS 11.2.8
 
 **Evidence.** §7: GHSA-q7qp-rjg7-q26m, fixed in multer 2.5.0, which `@nestjs/platform-express` 12.x requires; 11.2.8 is the latest 11.x.
 
 **Impact.** None as built: multer runs only on routes with a file interceptor, and the platform API has none (multipart bodies are not parsed at all).
 
-**Fix.** Take a NestJS 11.x patch release that requires multer 2.5.0 when one ships; otherwise plan the NestJS 12 upgrade of both backends with the tech-stack change it needs. The task also adds a test that keeps the API free of multipart routes until then. **Task:** PBE-069.
+**Fix.** *Revised 2026-11-05 (lead decision (5c)).* NestJS stays on 11 ([`decisions.md`](../../docs/mvp/decisions.md), components 1 and 4), so no move to NestJS 12 is planned for it (the review first proposed one when no 11.x patch would require multer 2.5.0). OBE-094 adds a root `pnpm.overrides` entry that resolves `multer` below `@nestjs/platform-express` to 2.5.0; one lockfile serves the workspace, so the entry lifts the platform backend's copy too. PBE-069 confirms with `pnpm audit --prod` and `pnpm why multer` that the platform backend resolves 2.5.0 once OBE-094 has merged, and adds the test that keeps the API free of multipart routes (file interceptors), so the parser stays unreachable whatever its version. **Tasks:** OBE-094 (the override), PBE-069 (the confirmation and the guard test).
 
-### F-4 · Low · `zod` 3.25.76 in the portal and the platform admin
+### F-4 · High (advisory); reachable: Low · `zod` 3.25.76 in the portal and the platform admin
 
 **Evidence.** §7: GHSA-mrhx-c7xc-m3w5, fixed in 4.6.6 (a major upgrade; tech-stack pins 3.x).
 
@@ -183,7 +187,7 @@ No token reaches browser JavaScript in either app: the platform tokens exist onl
 
 **Fix.** Upgrade to zod 4.x in each app, adapt the form schemas to its API and run the app's UI tests; update the tech-stack row once for both. **Tasks:** PFE-029 (portal), PAD-017 (admin).
 
-### F-5 · Low · Test and contract tooling
+### F-5 · Critical (advisory); reachable: Low · Test and contract tooling
 
 **Evidence.** §7: `tinypool` and `happy-dom` (through and next to `vitest` 3.2.7), `undici` and `@faker-js/faker` (through `@redocly/cli` 1.34.22): 3 critical and 8 high advisories (`happy-dom` 4, `undici` 3, `@faker-js/faker` 1; with the 7 high of production dependencies, the 15 of the workspace).
 
@@ -195,4 +199,6 @@ No token reaches browser JavaScript in either app: the platform tokens exist onl
 
 1. **F-1:** confirm the rule of PBE-067 — the portal guard refuses the tokens of disabled and deleted accounts at once, as the admin guard and the OTA's customer guard do; `locked` (a sign-in lockout) and `pending_verification` keep their answers.
 2. **MFA for owners:** approve the recommendation of §9 (mandatory for owners and admins of live OTAs), keep MFA optional, or make it mandatory for every owner.
+   - *Closed 2026-11-05 (lead decision (5b)).* The recommendation is approved: mandatory for the owners and admins of live OTAs, enforced at go-live and at their first portal sign-in after it, with the enrolment then and there ([PADR-0008](adr/0008-email-verification-and-mfa-policy.md) revision of 2026-11-05, §9 "Decision"). Tasks: PBE-071 (platform backend) and PFE-030 (portal).
 3. **The audit gate:** PBE-062's Verify ends with `pnpm audit --audit-level high`, which fails until F-2 to F-5 are fixed by major upgrades that the review may not make; confirm that the review is done with its findings recorded, and whether F-5 belongs to the foundation plan.
+   - *Closed 2026-11-05 (lead decision (5d)).* PBE-062 stays done on its acceptance criteria, with its findings recorded; the dependency findings keep the advisory's own severity with the reachability beside it (§1, findings table), the M6 go/no-go keeps "`pnpm audit --prod` clean of high and critical", and PBE-070 (F-5) stays in the platform plan.

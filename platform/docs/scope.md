@@ -101,6 +101,7 @@ Each feature has an id used by the plans and by test names. "AC" lines are what 
 - AC1: Set-up shows a QR code and the base32 secret; enabling requires a valid code and returns 10 recovery codes shown once.
 - AC2: With MFA on, sign-in returns an MFA challenge; a valid TOTP (±1 step) or an unused recovery code completes it; five wrong codes end the challenge.
 - AC3: Disabling MFA requires a fresh TOTP code. Platform admins cannot disable it.
+- *Note (2026-11-05, lead decision (5b), FIX-W43-PLATFORM).* AC4: MFA is mandatory for the owners and admins of a live OTA ([PADR-0008](adr/0008-email-verification-and-mfa-policy.md), revision of 2026-11-05). Going live keeps needing the acting owner's MFA (PF-14); an active owner or admin of a live OTA without MFA enrols at its first portal page after the go-live (or after it was granted the role on a live OTA, or after a support MFA reset), before any other portal page: its `portal` operations answer `403 MFA_REQUIRED` until MFA is on, and it cannot disable MFA while it holds that role. Test-only OTAs and the other roles keep MFA optional (PF-22 AC3 still asks every member of a live OTA for MFA before the console). Tasks: PBE-071, PFE-030.
 
 **PF-05 Password reset.** AC1: The request always answers `202`; the link is valid 1 hour and once. AC2: A reset revokes every session of the account and every OTA admin staff session ([PADR-0007](adr/0007-portal-to-ota-admin-sso-token.md)).
 

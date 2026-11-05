@@ -16,15 +16,6 @@ import { StripePricesForm, type StripePricesFormProps } from "@/app/(app)/plans/
 import { DateTime } from "@/components/date-time";
 import { Money } from "@/components/money";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import {
-  Table,
-  TableBody,
-  TableCaption,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { platformApi } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
 import {
@@ -211,7 +202,11 @@ function StripeId({ value }: { readonly value: string | null }) {
   return value === null ? <Muted>{S.notLinked}</Muted> : <Mono>{value}</Mono>;
 }
 
-/** The Stripe product and prices (M5), whether Checkout can start, and the price warnings of the last comparison. */
+/**
+ * The Stripe product and prices (M5) and whether Checkout can start. The warnings of the last comparison with Stripe
+ * are not repeated here as a raw table: "Link Stripe prices" below shows each in words next to its price (lead decision
+ * (5k) of 2026-11-05).
+ */
 function StripePanel({ plan }: { readonly plan: AdminPlan }) {
   return (
     <Panel id="plan-stripe" title={S.stripeTitle} intro={S.stripeIntro}>
@@ -231,39 +226,14 @@ function StripePanel({ plan }: { readonly plan: AdminPlan }) {
         <Field label={`${S.checkoutTitle}, ${S.checkoutYear.toLowerCase()}`}>
           {plan.checkoutAvailable.year ? S.checkoutOpen : <Muted>{S.checkoutClosed}</Muted>}
         </Field>
-      </Fields>
-      <div className="grid gap-2">
-        <h3 className="text-base font-semibold">{S.warningsTitle}</h3>
-        <p className="text-sm text-muted-foreground">{S.warningsIntro}</p>
-        {plan.priceWarnings.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{S.warningsEmpty}</p>
-        ) : (
-          <>
+        <Field label={S.warnings}>
+          {plan.priceWarnings.length === 0 ? (
+            <Muted>{S.warningsNone}</Muted>
+          ) : (
             <PlanBadge tone="warning">{P.priceWarnings(plan.priceWarnings.length)}</PlanBadge>
-            <Table>
-              <TableCaption className="sr-only">{S.warningsCaption}</TableCaption>
-              <TableHeader>
-                <TableRow>
-                  <TableHead scope="col">{S.warningField}</TableHead>
-                  <TableHead scope="col">{S.warningExpected}</TableHead>
-                  <TableHead scope="col">{S.warningActual}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {plan.priceWarnings.map((warning) => (
-                  <TableRow key={warning.field}>
-                    <TableCell>
-                      <Mono>{warning.field}</Mono>
-                    </TableCell>
-                    <TableCell>{warning.expected ?? <Muted>{S.none}</Muted>}</TableCell>
-                    <TableCell>{warning.actual ?? <Muted>{S.none}</Muted>}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </>
-        )}
-      </div>
+          )}
+        </Field>
+      </Fields>
     </Panel>
   );
 }
@@ -278,9 +248,10 @@ function BackLink() {
 
 /**
  * `/plans/[planCode]` (README §2; subscription-billing flow §A): one plan of `adminListPlans` (the API has no read of a
- * single plan, and the list is short) with its fields, the OTAs on it, its Stripe link state and price warnings (M5),
- * "Link Stripe prices" (`StripePricesForm`, PAD-012, PF-88: the Stripe product and the two recurring prices with the
- * version in `If-Match`, each price with its warnings next to it, and "Check prices"), "Edit the plan" (`EditPlanForm`:
+ * single plan, and the list is short) with its fields, the OTAs on it, its Stripe link state and the number of price
+ * warnings (M5), "Link Stripe prices" (`StripePricesForm`, PAD-012, PF-88: the Stripe product and the two recurring
+ * prices with the version in `If-Match`, each price with its warnings in words next to it, the only place they are
+ * shown since lead decision (5k) of 2026-11-05, and "Check prices"), "Edit the plan" (`EditPlanForm`:
  * every field but the code and the currency, the limits and the features as structured fields, the version in
  * `If-Match`) and "Retire plan" or "Make the plan active again" (`PlanStatusForm`). A value that is no plan code
  * renders the not-found page without a call, and so does a code the list does not have.

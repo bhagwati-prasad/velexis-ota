@@ -27,7 +27,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 | M3 Book & pay | PBE-037, PBE-038, PFE-016 | Owners edit the card statement descriptor of the Velexis payment connection. |
 | M4 OTA admin | PBE-039, PBE-040, PFE-017 … PFE-019 | "Open console" signs a member into the OTA admin; Amadeus office settings are editable. |
 | M5 Monetisation & self-service | PBE-041 … PBE-061, PFE-020 … PFE-027, PAD-012 … PAD-015 | Checkout and Customer Portal, own Stripe (Connect or keys), payout account and settlements, own Amadeus credentials and live office, custom domains with TLS, go-live. |
-| M6 Hardening & launch | PBE-062 … PBE-065, PBE-067 … PBE-070, PFE-028, PFE-029, PAD-016, PAD-017 | Security review closed, performance measured, end-to-end suite green nightly, launch checklist ready. The switches are removed after the launch: PBE-064 is a named exception to "every M6 task done" ([ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 4). |
+| M6 Hardening & launch | PBE-062 … PBE-065, PBE-067 … PBE-071, PFE-028 … PFE-030, PAD-016, PAD-017 | Security review closed, performance measured, end-to-end suite green nightly, launch checklist ready. The switches are removed after the launch: PBE-064 is a named exception to "every M6 task done" ([ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 4). |
 
 ## M0 — Foundations
 
@@ -1985,6 +1985,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - No secret pattern is found outside the allowed ciphertext columns.
   - `pending-operations.ts` is empty; the review document lists findings with task ids or "none".
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int security && pnpm audit --audit-level high`
+- **Note (2026-11-05, lead decision (5e), FIX-W43-PLATFORM):** the acceptance criteria gain "Every rate limit of api-inventory §2 has a test answering `429` with `Retry-After`" (step 2): `rate-limits.int.test.ts` proves it with one group per row of the table (and the sign-in lockout's `423` with `Retry-After`), its first test failing when the table and the file disagree, and its tests stay tagged `[PBE-062 step 2]` as they already are. The task stays done (lead decision (5d)): the other criteria are unchanged, and the audit's findings are F-2 to F-5 of `platform/docs/security-review.md`.
 
 ### PBE-063 · Measure platform performance and memory against the VM budget
 - **Component:** platform-backend
@@ -2096,19 +2097,21 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - `pnpm audit --prod` lists no `nodemailer` advisory for `platform/backend`, and the platform e-mails are sent as before.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int notifications/email-outbox auth/sign-up`
 
-### PBE-069 · Move the platform backend to a NestJS release without the multer advisory
+### PBE-069 · Confirm the multer override in the platform backend and keep its API free of multipart routes
 - **Component:** platform-backend
 - **Milestone:** M6
-- **Depends on:** PBE-062
-- **Size:** M
-- **Read first:** platform/docs/security-review.md (finding F-3, §7); docs/mvp/tech-stack.md (Backend framework row); platform/backend/README.md
-- **Files:** `platform/backend/package.json`, `platform/backend/src/entry-points.test.ts`, `docs/mvp/tech-stack.md`
+- **Depends on:** PBE-062, OBE-094
+- **Size:** S
+- **Read first:** platform/docs/security-review.md (finding F-3, §7); docs/mvp/decisions.md (components 1 and 4: NestJS 11); the OBE-094 block of ota/docs/plans/agent-tasks.md (the root `pnpm.overrides` entry for `multer`); docs/mvp/tech-stack.md (Backend framework row); platform/backend/README.md
+- **Files:** `platform/backend/src/entry-points.test.ts`, `platform/docs/security-review.md`
 - **Steps:**
-  1. If a NestJS 11.x patch release requires `multer` 2.5.0 or later, upgrade `@nestjs/common`, `@nestjs/core`, `@nestjs/platform-express` and `@nestjs/testing` to it (exact versions). Otherwise stop after step 2 and report: the NestJS 12 upgrade of both backends needs the lead's decision and a tech-stack revision.
-  2. Add a unit test that walks the API's module graph and fails when a route uses a file interceptor (multipart parsing), so the advisory stays unreachable until the upgrade lands.
+  1. After OBE-094 merges, confirm with `pnpm audit --prod` and `pnpm --filter @velexis/platform-backend why multer` that the platform backend resolves `multer` 2.5.0 through the root override (and no other copy of it), with every `@nestjs/*` package still on 11.x; no `package.json` of the platform backend changes. If it resolves anything else, stop and report.
+  2. Add a unit test that walks the API's module graph and fails when a route uses a file interceptor (multipart parsing), so the parser stays unreachable whatever its version.
+  3. Close F-3 in `security-review.md` with the version, the override and the date.
 - **Acceptance:**
-  - The API has no multipart route (the new test), and `pnpm audit --prod` lists no `multer` advisory for `platform/backend` once a fixed NestJS release is in.
-- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int health`
+  - `pnpm audit --prod` lists no `multer` advisory for `platform/backend`, which resolves `multer` 2.5.0 through OBE-094's override on NestJS 11, and the API has no multipart route (the new test).
+- **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend why multer && pnpm audit --prod`
+- **Note (2026-11-05, lead decision (5c), FIX-W43-PLATFORM):** NestJS stays on 11 (`docs/mvp/decisions.md`, components 1 and 4). OBE-094's root `pnpm.overrides` entry lifts `multer` to 2.5.0 for both backends, so this task no longer moves NestJS: its title was "Move the platform backend to a NestJS release without the multer advisory", its step 1 upgraded the four `@nestjs/*` packages to an 11.x patch that requires `multer` 2.5.0 or stopped for a NestJS 12 decision, and its Files were the platform backend's `package.json`, the guard test and `docs/mvp/tech-stack.md`. Step 1 now confirms the override after OBE-094 merges; step 2, the multipart-route guard test, stays as it was; step 3 closes the finding. Depends on gains OBE-094.
 
 ### PBE-070 · Upgrade the test and contract tooling past the audit's critical and high advisories
 - **Component:** platform-backend
@@ -2152,6 +2155,42 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - `pnpm audit --prod` lists no `zod` advisory for `platform/admin`, and every form answers its field errors as before.
 - **Verify:** `pnpm --filter @velexis/platform-admin test && pnpm --filter @velexis/platform-admin typecheck`
 
+### PBE-071 · Make MFA mandatory for the owners and admins of live OTAs in the platform API
+- **Component:** platform-backend
+- **Milestone:** M6
+- **Depends on:** PBE-062, and FIX-W43-PLATFORM's PADR-0008 revision of 2026-11-05 (merged with this block)
+- **Size:** L
+- **Read first:** platform/docs/adr/0008-email-verification-and-mfa-policy.md (the revision of 2026-11-05 and the dated note under the MFA table, FIX-W43-PLATFORM); platform/docs/security-review.md §9 (the decision) and §4 (the auth matrix); platform/docs/scope.md PF-04 (note of 2026-11-05, AC4) and PF-22 AC3; platform/docs/adr/0009-platform-api-surface-and-authentication.md (items 4 and 5); platform/docs/architecture.md §3 (the order of the guards); platform/backend/openapi/README.md §6 and §8 (changing the document, the change log); the PBE-067 block (its per-request account read in `PortalAuthGuard`, to share when it has merged)
+- **Files:** `platform/backend/openapi/velexis-platform-api.openapi.yaml`, `platform/backend/openapi/README.md`, `packages/api-types/src/generated/platform.ts`, `platform/backend/src/common/auth/mfa-enrolment.guard.ts`, `platform/backend/src/common/common.module.ts`, `platform/backend/src/common/auth/guards.test.ts`, `platform/backend/src/memberships/memberships.repository.ts`, `platform/backend/src/memberships/memberships.module.ts`, `platform/backend/src/accounts/accounts.service.ts`, `platform/backend/src/accounts/accounts.mapper.ts`, `platform/backend/src/accounts/mfa.service.ts`, `platform/backend/src/accounts/mfa.service.test.ts`, `platform/backend/test/integration/accounts/mfa-enrolment.int.test.ts`, `platform/backend/test/integration/security/auth-matrix.int.test.ts`, `platform/backend/test/integration` (only the arrangements of step 4's last sentence), `platform/frontend/src` (only the test fixtures that build a whole Account, step 1), `platform/docs/api-inventory.md`, `platform/docs/architecture.md`, `platform/docs/security-review.md`, `platform/backend/README.md`
+- **Steps:**
+  1. Contract first: `Account` (the answer of `getMe` and `updateMe`) gains the required boolean `mfaEnrolmentRequired` (true while the account is an active `owner` or `admin` of a live OTA, `storefront_environment = 'live'` in a status members see, and has MFA off); the `403` of every `portal` operation names `MFA_REQUIRED` with a shared example whose `details.reason` is `enrolment_required`, as it names `EMAIL_NOT_VERIFIED`; `disableMfa` answers `409 CONFLICT` with `details.reason = mfa_mandatory`. Add the change-log row, run `pnpm contracts:lint` and `pnpm contracts:generate`, and update api-inventory §2 (the authentication notation), §3 (`MFA_REQUIRED`) and §5 (`getMe`, `updateMe`, `disableMfa`). The portal's test fixtures that build a whole `Account` gain `mfaEnrolmentRequired: false`, so the workspace still typechecks; no portal behaviour changes here (PFE-030).
+  2. `MfaEnrolmentGuard` (`common/auth/mfa-enrolment.guard.ts`, layer 0) runs after `AccountRateLimitGuard` and before `TenantRoleGuard` (API_GUARDS, architecture §3) on `portal` operations only, so `portal_unverified` (`getMe`, `updateMe`, `startMfaSetup`, `enableMfa`, sessions, sign-out, `listTenants`), `public`, `internal`, `webhook` and admin operations pass untouched. It reads through an abstract lookup that MembershipsModule provides: one indexed query per request for an active `owner` or `admin` membership of a live OTA and the account's `mfa_enabled`, no cache, as TenantRoleGuard reads memberships (shared with PBE-067's account read when that has merged), and refuses with `403 MFA_REQUIRED` (`details.reason = enrolment_required`) on every such operation, reads included; the guard's header comment gives the rule and the reasons of PADR-0008.
+  3. `getMe` and `updateMe` answer `mfaEnrolmentRequired` from the same lookup; `disableMfa` refuses such an account with `409 CONFLICT` (`mfa_mandatory`) once its step-up has passed (the account has MFA, so `RecentMfaGuard` runs first as today), and writes nothing. `goLive` stays as it is (it already needs the acting owner's MFA and a step-up), and so do `adminResetAccountMfa` (a lost device: the account then meets the guard at its next portal request) and `createConsoleToken` (every member of a live OTA already needs MFA).
+  4. Tests: in `guards.test.ts`, the guard refuses an owner and an admin of a live OTA without MFA on a `portal` operation and lets them through on `portal_unverified` ones, and lets through an account with MFA, a member of a test-only OTA, an agent, a finance member or a viewer of a live OTA and a removed membership; in `mfa-enrolment.int.test.ts`, through the API, an admin of an OTA that went live through `goLive` gets `mfaEnrolmentRequired: true` and `403 MFA_REQUIRED` on `getTenant`, `listApiKeys`, `createApiKey` and `createCustomerPortalSession`, enrols with `startMfaSetup` and `enableMfa`, and then answers as before; `disableMfa` answers `409`; after `adminResetAccountMfa` the account meets the guard again; an agent of the same OTA and the owner of a test-only OTA are never refused; the auth matrix gains a `liveAdminWithoutMfa` caller (`portal_unverified` allowed, every `portal` operation `403 MFA_REQUIRED`, admin operations `401`) and every other cell stays as it is. Run the whole `test:int` and both backends' `test:xb`: an existing test whose owner or admin of a live OTA calls a `portal` operation without MFA (a tenant made live by a fixture, for example) enables MFA for that account in its arrangement, and a test that expected the console's `MFA_REQUIRED` for such an account keeps its assertion; no assertion is weakened.
+  5. Update architecture §3 (the guard and its place), security-review §9 (implemented, with the task) and the backend README where it lists the guards and the integration tests.
+- **Acceptance:**
+  - An active owner or admin of a live OTA without MFA gets `403 MFA_REQUIRED` (`enrolment_required`) on every `portal` operation, reads included, and on nothing else, until MFA is on; `getMe` says `mfaEnrolmentRequired: true`, and after `enableMfa` every answer is as before [PF-04 AC4].
+  - `disableMfa` refuses such an account with `409 CONFLICT` (`mfa_mandatory`), and a support MFA reset brings it back to the enrolment.
+  - Agents, finance members and viewers of live OTAs, members of test-only OTAs and accounts with MFA keep their answers; the auth matrix's new column passes and every other cell is unchanged; the rest of `test:int` and both backends' `test:xb` pass.
+- **Verify:** `pnpm contracts:lint && pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend exec vitest run --config vitest.int.config.ts test/integration/accounts/mfa-enrolment.int.test.ts test/integration/security/auth-matrix.int.test.ts`
+
+### PFE-030 · Send the owners and admins of live OTAs to MFA enrolment before any other portal page
+- **Component:** platform-frontend
+- **Milestone:** M6
+- **Depends on:** PBE-062, PBE-071 (the API's rule and `Account.mfaEnrolmentRequired`, which the gate reads), and FIX-W43-PLATFORM's PADR-0008 revision of 2026-11-05 (merged with this block)
+- **Size:** L
+- **Read first:** platform/docs/adr/0008-email-verification-and-mfa-policy.md (the revision of 2026-11-05 and the dated note under the MFA table, FIX-W43-PLATFORM); platform/docs/scope.md PF-04 (note of 2026-11-05, AC4); the PBE-071 block (`Account.mfaEnrolmentRequired`, `403 MFA_REQUIRED` with `details.reason = enrolment_required`); platform/frontend/README.md §2 (the sign-in and `/account/security` rows: `mfa-setup.tsx`) and §6 (the `next` rule, `safeNextPath()`); tools/e2e/README.md; tools/e2e/support/ota.ts (OFE-022's helpers for going live)
+- **Files:** `platform/frontend/src/app/(app)/layout.tsx`, `platform/frontend/src/app/(auth)/mfa-enrolment/page.tsx`, `platform/frontend/src/app/(auth)/mfa-enrolment/actions.ts`, `platform/frontend/src/app/(auth)/mfa-enrolment/mfa-enrolment.test.tsx`, `platform/frontend/src/app/(app)/account/security/mfa-setup.tsx`, `platform/frontend/src/lib/errors.ts`, `platform/frontend/src/lib/strings.ts`, `platform/frontend/src/components/components.test.tsx`, `platform/frontend/README.md`, `tools/e2e/specs/portal-mfa-enrolment.e2e.ts`, `tools/e2e/README.md`
+- **Steps:**
+  1. The signed-in layout reads `mfaEnrolmentRequired` of the `getMe` it already calls and, when it is true, sends every page of the signed-in area to `/mfa-enrolment?next=<the page>`, a page outside the shell, so no other portal page renders first; a server action or route handler (the console launch included) that gets `403 MFA_REQUIRED` with `details.reason = enrolment_required` sends the browser there too, through one helper of `lib/errors.ts`.
+  2. `/mfa-enrolment` says why (an owner or admin of a live OTA needs two-factor sign-in, PADR-0008), runs the set-up of `mfa-setup.tsx` (QR code and base32 secret, the confirming code, the ten recovery codes shown once; nothing more reaches the browser than on the security page) and then continues to `next`, kept only when `safeNextPath()` accepts it, as the sign-in's `next` is; "Sign out" stays offered; an account that no longer needs it goes to `next` at once, and one without a session to `/sign-in`.
+  3. UI tests (`mfa-enrolment.test.tsx` and `components.test.tsx`, Testing Library): the layout sends a gated account to the page and nobody else; the enrolment with a wrong and a right code and the recovery codes; the `next` rule (an outside URL falls back to `/dashboard`); a server action's `enrolment_required` answer leads to the page.
+  4. `portal-mfa-enrolment.e2e.ts` (`portal` project): an admin invited to an OTA that goes live through OFE-022's helpers signs in without MFA, lands on the enrolment page, is sent back to it from an OTA page, enrols with a TOTP code, sees the recovery codes and continues to the OTA; an agent of the same OTA signs in without being asked; axe on every visited page; the README rows.
+- **Acceptance:**
+  - An owner or admin of a live OTA without MFA sees only the enrolment page after signing in, enrols there and then reaches the page they asked for [PF-04 AC4].
+  - Every other account never sees the enrolment page, and every journey of the e2e suite (the portal ones and those that sign in through the portal to open the console) passes as before.
+- **Verify:** `pnpm --filter @velexis/platform-frontend test && pnpm test:e2e -- --project=portal specs/portal-mfa-enrolment.e2e.ts`
+
 ## Dependency overview
 
 The full graph is printed by `node tools/plan-lint/plan-lint.mjs --graph platform/docs/plans/agent-tasks.md docs/mvp/plans/foundation-tasks.md`. In short:
@@ -2170,7 +2209,7 @@ flowchart LR
   PFE --> M24["M2–M4<br/>PBE-036…PBE-040, PFE-016…PFE-019, PAD-011"]
   PAD --> M24
   M24 --> M5["M5<br/>PBE-041…PBE-061, PFE-020…PFE-027, PAD-012…PAD-015"]
-  M5 --> M6["M6<br/>PBE-062…PBE-065, PFE-028, PAD-016<br/>review findings PBE-067…PBE-070, PFE-029, PAD-017<br/>(PBE-064 after launch)"]
+  M5 --> M6["M6<br/>PBE-062…PBE-065, PFE-028, PAD-016<br/>review findings PBE-067…PBE-070, PFE-029, PAD-017<br/>MFA for live OTAs PBE-071, PFE-030<br/>(PBE-064 after launch)"]
   OTA(["OTA plan gates<br/>OF-11 (M1), OF-01 (M2), OF-09 (M4)"]) -.-> LC
   OTA -.-> M24
 ```
