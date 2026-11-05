@@ -2083,7 +2083,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - Every other answer of the auth matrix is unchanged.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int common/auth-guards security/auth-matrix`
 
-### PBE-068 · Upgrade nodemailer in the platform backend past its high advisories
+### PBE-068 · Upgrade nodemailer in the platform backend past its high advisories ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M6
 - **Depends on:** PBE-062

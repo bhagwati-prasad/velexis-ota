@@ -5,15 +5,23 @@
 // What it sends is fixed by the processor: one recipient, from MAIL_FROM, a subject, an HTML part and a text part, and a
 // Message-ID made of the e-mail's id (`<eml_…@sender domain>`), so every attempt of one e-mail is the same message for
 // the receiving servers. The recipient must be one plain address (EMAIL_ADDRESS of config.ts) and is also given as the
-// SMTP envelope, so no display name, comment or second address can reach the RCPT TO command. Nodemailer may not read
-// files or URLs for a message (`disableFileAccess`, `disableUrlAccess`), writes no logs of its own, and waits at most
-// 10 seconds for a connection or a greeting and 30 seconds for a reply.
+// SMTP envelope, so no display name, comment or second address can reach the RCPT TO command. Nodemailer (10.x since
+// PBE-068, with its own type declarations) may not read files or URLs for a message (`disableFileAccess`,
+// `disableUrlAccess`, which it applies to `raw` content too and which no message field can turn off again), writes no
+// logs of its own, and waits at most 10 seconds for a connection or a greeting and 30 seconds for a reply. The gateway
+// never hands it a `raw` message, a path or a URL: the parts are strings the processor rendered.
 //
 // A failure is a `MailerError` with the SMTP error code, response code and command only: the server's reply text may
 // quote the recipient, so it is never kept, logged or stored.
 import { Inject, Injectable, type OnApplicationShutdown } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { createTransport, type SendMailOptions, type Transporter } from "nodemailer";
+import {
+  createTransport,
+  type SendMailOptions,
+  type SMTPSentMessageInfo,
+  type SMTPTransportOptions,
+  type Transporter,
+} from "nodemailer";
 import { parseConnectionUrl } from "nodemailer/lib/shared";
 import { EMAIL_ADDRESS, type PlatformBackendConfig } from "../config";
 
@@ -116,20 +124,32 @@ export type MailTransport = Pick<Transporter, "sendMail" | "close">;
 /** Injection token of the MailTransport. */
 export const MAIL_TRANSPORT = "MAIL_TRANSPORT";
 
+/** The Nodemailer SMTP transport createSmtpTransport makes. */
+export type SmtpTransport = Transporter<SMTPSentMessageInfo, SMTPTransportOptions>;
+
 /**
- * The SMTP transport of SMTP_URL: no pooling (one connection per e-mail), no logs, no file or URL access, the timeouts
- * above. The URL is parsed here (host, port, `smtps:` for implicit TLS, the credentials, query options) because
- * Nodemailer drops every other option of a configuration that carries a `url`.
+ * The options of the SMTP transport of SMTP_URL: the URL's host, port, `smtps:` for implicit TLS, credentials and query
+ * options, then the gateway's own settings (no logs, no file or URL access, the timeouts above). The URL is parsed here
+ * instead of being given as Nodemailer's `url` option because Nodemailer 10 lets the values of that URL win over the
+ * other keys of the configuration (6.x dropped those keys altogether); here the gateway's settings come last, so no
+ * query parameter of SMTP_URL (`?logger=true`, `?disableFileAccess=false`) changes them, and a `url` query parameter
+ * (another URL whose values would win again) is dropped.
  */
-export function createSmtpTransport(smtpUrl: string): MailTransport {
-  return createTransport({
-    ...parseConnectionUrl(smtpUrl),
+export function smtpTransportOptions(smtpUrl: string): SMTPTransportOptions {
+  const { url: _nestedUrl, ...connection } = parseConnectionUrl(smtpUrl);
+  return {
+    ...connection,
     ...SMTP_TIMEOUTS,
     logger: false,
     debug: false,
     disableFileAccess: true,
     disableUrlAccess: true,
-  } as Parameters<typeof createTransport>[0]);
+  };
+}
+
+/** The SMTP transport of SMTP_URL (smtpTransportOptions): no pooling, one connection per e-mail. */
+export function createSmtpTransport(smtpUrl: string): SmtpTransport {
+  return createTransport(smtpTransportOptions(smtpUrl));
 }
 
 /** The provider of MAIL_TRANSPORT from SMTP_URL. */
