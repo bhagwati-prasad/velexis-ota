@@ -1,9 +1,10 @@
 // The erasure of deleted customers without a database (OBE-087; lead decisions (5f) and (5g) of 2026-11-05,
-// FIX-W43-OTA): when an erasure falls due (the cut-off of `erasureCutoff`, one hour before the `erasureDueBy`
-// account.delete's answer promises, so the hourly run lands before it), the `customers.erase` schedule and its handler,
-// the account e-mails it clears, and what CustomerErasureService does with a job's batch (one transaction per
-// customer, the counts, `more`, the log lines, a failure) over a fake repository and a fake TenantTx. The statements
-// themselves run against PostgreSQL in test/integration/account/erasure.int.test.ts.
+// FIX-W43-OTA, and (7b) of 2026-11-05, second set, FIX-W44-OTA): when an erasure falls due (the cut-off of
+// `erasureCutoff`, one hour and five minutes before the `erasureDueBy` account.delete's answer promises, so the hourly
+// run lands before it even when it starts a few minutes late), the `customers.erase` schedule and its handler, the
+// account e-mails it clears, and what CustomerErasureService does with a job's batch (one transaction per customer, the
+// counts, `more`, the log lines, a failure) over a fake repository and a fake TenantTx. The statements themselves run
+// against PostgreSQL in test/integration/account/erasure.int.test.ts.
 import { Reflector } from "@nestjs/core";
 import { FakeClock } from "@velexis/testing";
 import type { PinoLogger } from "nestjs-pino";
@@ -22,6 +23,7 @@ import {
   ERASED_RECIPIENT,
   ERASURE_BATCH,
   ERASURE_CUTOFF_AFTER_MS,
+  ERASURE_MARGIN_MS,
   ERASURE_RUN_INTERVAL_MS,
   ErasureIncompleteError,
   erasureCutoff,
@@ -45,6 +47,8 @@ const ONE_OF_EACH: ErasedCustomer = {
   checkoutsDetached: 1,
   checkoutTravelers: 2,
   checkoutContacts: 1,
+  checkoutRemarks: 2,
+  checkoutsCleared: 1,
   bookingsDetached: 2,
   paymentsDetached: 2,
   accountEmails: 4,
@@ -119,24 +123,30 @@ describe("erasureCutoff", () => {
     expect(ago(29 * DAY_MS).getTime()).toBeGreaterThan(cutoff.getTime());
   });
 
-  it("[FIX-W43-OTA AC1] falls due one hour before the erasureDueBy that account.delete's answer promised (30 days)", () => {
+  it("[FIX-W43-OTA AC1] [FIX-W44-OTA AC2] falls due one hour and five minutes before the erasureDueBy that account.delete's answer promised (30 days)", () => {
     expect(ERASURE_DUE_AFTER_MS).toBe(30 * DAY_MS);
     expect(ERASURE_RUN_INTERVAL_MS).toBe(HOUR_MS);
-    expect(ERASURE_CUTOFF_AFTER_MS).toBe(30 * DAY_MS - HOUR_MS);
-    // Deleted 30 days less one hour ago: due now, an hour before its erasureDueBy.
-    const deletedAt = ago(30 * DAY_MS - HOUR_MS);
+    expect(ERASURE_MARGIN_MS).toBe(5 * MINUTE_MS);
+    expect(ERASURE_CUTOFF_AFTER_MS).toBe(30 * DAY_MS - HOUR_MS - 5 * MINUTE_MS);
+    // Deleted 30 days less one hour and five minutes ago: due now, an hour and five minutes before its erasureDueBy.
+    const deletedAt = ago(30 * DAY_MS - HOUR_MS - 5 * MINUTE_MS);
     const promised = toAccountDeletion({ requestedAt: deletedAt, hasBookings: true }).erasureDueBy;
-    expect(new Date(promised).getTime()).toBe(NOW.getTime() + HOUR_MS);
+    expect(new Date(promised).getTime()).toBe(NOW.getTime() + HOUR_MS + 5 * MINUTE_MS);
     expect(erasureCutoff(NOW).getTime()).toBe(deletedAt.getTime());
-    // A second later is not due yet; a customer deleted exactly 30 days ago is long due.
-    expect(ago(30 * DAY_MS - HOUR_MS - 1000).getTime()).toBeGreaterThan(erasureCutoff(NOW).getTime());
+    // A second later is not due yet; one deleted 30 days less one hour ago (the cut-off before the margin), or exactly
+    // 30 days ago, is due.
+    expect(ago(30 * DAY_MS - HOUR_MS - 5 * MINUTE_MS - 1000).getTime()).toBeGreaterThan(
+      erasureCutoff(NOW).getTime(),
+    );
+    expect(ago(30 * DAY_MS - HOUR_MS).getTime()).toBeLessThan(erasureCutoff(NOW).getTime());
     expect(ago(30 * DAY_MS).getTime()).toBeLessThan(erasureCutoff(NOW).getTime());
     expect(() => erasureCutoff(new Date(Number.NaN))).toThrow(RangeError);
   });
 
-  it("[FIX-W43-OTA AC1] the first hourly run that finds a customer due comes before its erasureDueBy, never before 29 days", () => {
+  it("[FIX-W43-OTA AC1] [FIX-W44-OTA AC2] the first hourly run that finds a customer due starts more than five minutes before its erasureDueBy, never before 29 days", () => {
     // The runs of `50 * * * *` (UTC): for deletions spread over two days, seven minutes and a second apart, the first
-    // run whose cut-off reaches the deletion, looked for from the first run 29 days after it on.
+    // run whose cut-off reaches the deletion, looked for from the first run 29 days after it on. Even started up to
+    // five minutes late (a busy queue), or still working through its batch five minutes on, it is before the date.
     const runAtOrAfter = (ms: number): number => {
       const run = Math.floor(ms / HOUR_MS) * HOUR_MS + 50 * MINUTE_MS;
       return run >= ms ? run : run + HOUR_MS;
@@ -151,6 +161,7 @@ describe("erasureCutoff", () => {
         run += HOUR_MS;
       }
       expect(run, deletedAt.toISOString()).toBeLessThan(dueBy.getTime());
+      expect(run + ERASURE_MARGIN_MS, deletedAt.toISOString()).toBeLessThan(dueBy.getTime());
       expect(run - deletedAt.getTime(), deletedAt.toISOString()).toBeGreaterThanOrEqual(
         ERASURE_CUTOFF_AFTER_MS,
       );
@@ -184,6 +195,22 @@ describe("the account e-mails an erasure clears", () => {
   });
 });
 
+describe("the counts of an erasure", () => {
+  it("[FIX-W44-OTA AC1] name the never-booked checkouts' special requests and cleared request data after their travellers and contacts", () => {
+    // In the order the statements run: the checkouts' detachment, then what of the never-booked ones goes, then the
+    // bookings.
+    expect(ERASED_FIELDS.slice(0, 6)).toEqual([
+      "checkoutsDetached",
+      "checkoutTravelers",
+      "checkoutContacts",
+      "checkoutRemarks",
+      "checkoutsCleared",
+      "bookingsDetached",
+    ]);
+    expect(new Set(ERASED_FIELDS).size).toBe(ERASED_FIELDS.length);
+  });
+});
+
 describe("CustomerErasureService.eraseDue", () => {
   it("[OBE-087 AC1] asks for 100 customers due at the job's instant and erases each in a transaction of its own", async () => {
     const due = customerIds(3);
@@ -192,8 +219,9 @@ describe("CustomerErasureService.eraseDue", () => {
     const run = await service.eraseDue(TENANT_ID);
 
     expect(repository.dueCustomers).toHaveBeenCalledTimes(1);
-    // The cut-off of the job's instant (30 days less one hour before it), and that instant for the booking events.
-    const cutoff = ago(30 * DAY_MS - HOUR_MS);
+    // The cut-off of the job's instant (30 days less one hour and five minutes before it), and that instant for the
+    // booking events.
+    const cutoff = ago(30 * DAY_MS - HOUR_MS - 5 * MINUTE_MS);
     expect(repository.dueCustomers).toHaveBeenCalledWith(TRX, cutoff, ERASURE_BATCH);
     expect(ERASURE_BATCH).toBe(100);
     expect(repository.erase.mock.calls).toEqual(due.map((id) => [TRX, id, cutoff, NOW]));

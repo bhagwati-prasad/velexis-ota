@@ -1,58 +1,68 @@
 // The erasure of deleted customers (OBE-087; db README §7 "End-customer erasure inside a tenant",
 // ota/docs/data-model.md §6, ota/docs/scope.md §3.1 `account.delete`, OADR-0014 points 2, 4 and 5; lead decisions (5f),
-// (5g) and (5h) of 2026-11-05, FIX-W43-OTA). account.delete deletes an account at once (account.service.ts: sessions
-// revoked, identities disabled, the address replaced by the `…@deleted.invalid` placeholder, a marketing withdrawal in
-// the consent log, `customers.status = 'deleted'` and `deleted_at`); its answer promises the erasure of the rest of the
-// customer's personal data within 30 days (`erasureDueBy`, account.mapper.ts `ERASURE_DUE_AFTER_MS`; the
-// `account.deleted` e-mail says the same, OADR-0013 point 4). The hourly `customers.erase` job (erasure.processor.ts,
-// fanned out per tenant by jobs/schedulers.ts, `active` and `suspended` tenants) erases them:
+// (5g) and (5h) of 2026-11-05, FIX-W43-OTA, and (7a) and (7b) of 2026-11-05, second set, FIX-W44-OTA). account.delete
+// deletes an account at once (account.service.ts: sessions revoked, identities disabled, the address replaced by the
+// `…@deleted.invalid` placeholder, a marketing withdrawal in the consent log, `customers.status = 'deleted'` and
+// `deleted_at`); its answer promises the erasure of the rest of the customer's personal data within 30 days
+// (`erasureDueBy`, account.mapper.ts `ERASURE_DUE_AFTER_MS`; the `account.deleted` e-mail says the same, OADR-0013
+// point 4). The hourly `customers.erase` job (erasure.processor.ts, fanned out per tenant by jobs/schedulers.ts,
+// `active` and `suspended` tenants) erases them:
 //
-// - Due: `status = 'deleted'` and `deleted_at` at least ERASURE_CUTOFF_AFTER_MS (30 days less one hour) before the
-//   job's instant (`Clock`, one instant per job), so a customer deleted 29 days ago is left as it is, and one becomes
-//   due one hour before its `erasureDueBy`. The status is final (no writer ever turns a deleted customer back), so a
-//   customer due once stays due.
-// - When: the job runs every hour (minute 50), so the first run at or after a customer's cut-off comes within the hour
-//   that is left before its `erasureDueBy`: the erasure lands before the date the deletion promised, between 30 days
-//   less one hour and 30 days after the deletion, where a daily run could land up to a day after it (lead decision
-//   (5f) of 2026-11-05). The cut-off is computed from the job's own instant, so a run that starts late erases all that
-//   is due by then.
+// - Due: `status = 'deleted'` and `deleted_at` at least ERASURE_CUTOFF_AFTER_MS (30 days less one hour and five
+//   minutes: one run interval and ERASURE_MARGIN_MS) before the job's instant (`Clock`, one instant per job), so a
+//   customer deleted 29 days ago is left as it is, and one becomes due one hour and five minutes before its
+//   `erasureDueBy`. The status is final (no writer ever turns a deleted customer back), so a customer due once stays
+//   due.
+// - When: the job runs every hour (minute 50), so the first run at or after a customer's cut-off starts within the
+//   hour that follows it, more than five minutes before its `erasureDueBy`: the erasure lands before the date the
+//   deletion promised, between 30 days less one hour and five minutes and 30 days after the deletion, where a daily
+//   run could land up to a day after it (lead decision (5f) of 2026-11-05). The five minutes (lead decision (7b) of
+//   2026-11-05, second set) are for a run that starts late (a busy `ota-maintenance` queue, a worker restart) or works
+//   through a full batch and its continuations slowly: it still erases before `erasureDueBy`. The cut-off is computed
+//   from the job's own instant, so a run that starts late erases all that is due by then, and a continuation takes
+//   its own.
 // - Batches: at most ERASURE_BATCH (100) customers per job, oldest deletion first; a full batch asks for more and the
 //   runner queues the job again (jobs/fan-out.ts, at most MAX_CONTINUATIONS times per run). Each customer is erased in
 //   a short transaction of its own (`tenantTx`), so one customer's erasure never waits for another's, and what was
 //   erased stays erased if a later one fails.
-// - One erasure (`CustomerErasureRepository.erase`), in this order: the customer is checked to be due (without a
-//   lock); its checkouts are detached (`customer_id` set to NULL), and of those that never became bookings (no
-//   `bookings` row names them: abandoned or expired, as account.delete and the expiry left them) the travellers and
-//   contacts are deleted (`checkout_travelers` with their names, contact details and encrypted documents, whose
-//   ancillary selections go with them by their ON DELETE CASCADE, and `checkout_contacts`); its bookings are detached,
-//   each with a `customer.erased` booking event (a marker without personal data: no actor, no data, staff only;
-//   identity/customers.repository.ts CUSTOMER_ERASED_EVENT), so `claimGuestBookings` never attaches the booking to an
-//   account again, not even to a new one of the same address (lead decision (5h)); then its payments are detached. The
-//   detachments follow the lock order of checkout, booking, payment, and nothing else of those rows changes, neither
-//   `version` nor an amount, a reference or a status; a guest flag stays as it was. Then the customer's account
-//   e-mails (its `notifications` whose template is one of ACCOUNT_EMAIL_TEMPLATE_KEYS: the verification, password
-//   reset, address change and deletion e-mails, every key of the `customer` audience) lose their recipient address
-//   (ERASED_RECIPIENT, a neutral placeholder for the NOT NULL column), their variables (`payload` `{}`), their rendered
-//   subject (a tenant's template may name the customer) and any secret still held; a row still `pending` becomes
-//   `cancelled`, so nothing is ever sent to the placeholder (lead decision (5g)). The rows stay as the record that an
-//   e-mail was sent. Then its saved traveller documents and saved travellers, preferences, data exports, sessions
-//   (refresh tokens with their IP addresses and user agents), password reset tokens, consent log and identities are
-//   deleted; last the customer row itself (names, phone, date of birth, the placeholder address, metadata), which locks
-//   it and whose foreign keys detach what remains (`notifications` and `flight_searches` rows: ON DELETE SET NULL) or
-//   would delete what a statement above missed (ON DELETE CASCADE).
+// - One erasure (`CustomerErasureRepository.erase`), in this order: the customer is checked to be due (without a lock);
+//   its checkouts are detached (`customer_id` set to NULL), and of those that never became bookings (no `bookings` row
+//   names them: abandoned or expired, as account.delete and the expiry left them) the travellers and contacts are
+//   deleted (`checkout_travelers` with their names, contact details and encrypted documents, whose ancillary selections
+//   go with them by their ON DELETE CASCADE, and `checkout_contacts`), and so are their special requests
+//   (`checkout_remarks`, free text the customer or staff typed: it may name the traveller or a health need), and the
+//   checkouts' own request data is cleared: `ip_address` (nullable) becomes NULL and `metadata` (NOT NULL, default
+//   `{}`) becomes `{}`, on the rows that hold either (lead decision (7a) of 2026-11-05, second set; the reference
+//   schema is unchanged); its bookings are detached, each with a `customer.erased` booking event (a marker without
+//   personal data: no actor, no data, staff only; identity/customers.repository.ts CUSTOMER_ERASED_EVENT), so
+//   `claimGuestBookings` never attaches the booking to an account again, not even to a new one of the same address
+//   (lead decision (5h)); then its payments are detached. The detachments follow the lock order of checkout, booking,
+//   payment, and nothing else of those rows changes, neither `version` nor `updated_at`, an amount, a reference or a
+//   status (a never-booked checkout loses only its request data besides); a guest flag stays as it was. Then the
+//   customer's account e-mails (its `notifications` whose template is one of ACCOUNT_EMAIL_TEMPLATE_KEYS: the
+//   verification, password reset, address change and deletion e-mails, every key of the `customer` audience) lose their
+//   recipient address (ERASED_RECIPIENT, a neutral placeholder for the NOT NULL column), their variables (`payload`
+//   `{}`), their rendered subject (a tenant's template may name the customer) and any secret still held; a row still
+//   `pending` becomes `cancelled`, so nothing is ever sent to the placeholder (lead decision (5g)). The rows stay as
+//   the record that an e-mail was sent. Then its saved traveller documents and saved travellers, preferences, data
+//   exports, sessions (refresh tokens with their IP addresses and user agents), password reset tokens, consent log and
+//   identities are deleted; last the customer row itself (names, phone, date of birth, the placeholder address,
+//   metadata), which locks it and whose foreign keys detach what remains (`notifications` and `flight_searches` rows:
+//   ON DELETE SET NULL) or would delete what a statement above missed (ON DELETE CASCADE).
 // - What stays: bookings, payments and refunds keep their amounts, references, travellers and contacts: they are the
 //   financial record the deletion kept (account.mapper.ts `RETAINED_BOOKING_RECORDS`), and their traveller data stays
 //   for the legal retention period (db README §7; data-model §6: kept until the tenant is deleted). So do the
-//   travellers and contacts of the checkouts that became bookings, and the booking e-mails. Booking events and refunds
-//   keep the `cus_…` id by value of the customer who caused them; it names no row any more. Data exports are deferred
-//   in the MVP (scope §3.1: account.dataExports.* answer 501, `exportData` is refused), so `customer_data_exports`
-//   holds no row and no file; the task that brings them deletes an export's file with its row. The bookings' customer
+//   travellers, contacts, special requests, IP address and metadata of the checkouts that became bookings (their
+//   special requests became the booking's `booking_remarks`), and the booking e-mails. Booking events and refunds keep
+//   the `cus_…` id by value of the customer who caused them; it names no row any more. Data exports are deferred in
+//   the MVP (scope §3.1: account.dataExports.* answer 501, `exportData` is refused), so `customer_data_exports` holds
+//   no row and no file; the task that brings them deletes an export's file with its row. The bookings' customer
 //   indexes are partial (by status), so their detachment reads the table, as the foreign key's own SET NULL would: a
 //   job of at most 100 customers.
 // - Idempotent: everything of one customer is erased in one transaction, and an erased customer has no row, so a
-//   second run (a job run again after a failure, a duplicate, the next hour's) finds nothing to do and writes no second
-//   marker; a customer another job erased meanwhile is not counted (that job's commit left nothing for these
-//   statements to find).
+//   second run (a job run again after a failure, a duplicate, the next hour's) finds nothing to do, writes no second
+//   marker and clears nothing more; a customer another job erased meanwhile is not counted (that job's commit left
+//   nothing for these statements to find).
 // - A customer whose erasure fails is logged (`customer.erasure_failed`, the error's code only) and the job goes on
 //   with the next one; at the end the job fails (`ErasureIncompleteError`), so BullMQ tries it again with the defaults
 //   of ADR-0009 and the failed-job counts show it, while the others stay erased.
@@ -81,14 +91,23 @@ export const DELETED_CUSTOMER_STATUS = "deleted";
 export const ERASURE_RUN_INTERVAL_MS = 60 * 60 * 1000;
 
 /**
- * How long after its deletion a customer is due: 30 days (`erasureDueBy`) less one run interval, so the hourly run
- * that first finds it due comes before the promised date (lead decision (5f) of 2026-11-05).
+ * The time the cut-off keeps in hand beyond one run interval (five minutes): the run that first finds a customer due
+ * starts more than this long before its `erasureDueBy`, so one that starts late (a busy `ota-maintenance` queue, a
+ * worker restart) or works through a full batch and its continuations slowly still erases before the promised date
+ * (lead decision (7b) of 2026-11-05, second set).
  */
-export const ERASURE_CUTOFF_AFTER_MS = ERASURE_DUE_AFTER_MS - ERASURE_RUN_INTERVAL_MS;
+export const ERASURE_MARGIN_MS = 5 * 60 * 1000;
+
+/**
+ * How long after its deletion a customer is due: 30 days (`erasureDueBy`) less one run interval and ERASURE_MARGIN_MS
+ * (30 days less one hour and five minutes), so the hourly run that first finds it due starts more than five minutes
+ * before the promised date (lead decisions (5f) and (7b) of 2026-11-05).
+ */
+export const ERASURE_CUTOFF_AFTER_MS = ERASURE_DUE_AFTER_MS - ERASURE_RUN_INTERVAL_MS - ERASURE_MARGIN_MS;
 
 /**
  * The latest deletion instant (`customers.deleted_at`) whose erasure is due at `now`: ERASURE_CUTOFF_AFTER_MS (30 days
- * less one hour) earlier.
+ * less one hour and five minutes) earlier.
  */
 export function erasureCutoff(now: Date): Date {
   const ms = now.getTime();
@@ -125,6 +144,10 @@ export interface ErasedCustomer {
   readonly checkoutTravelers: number;
   /** `checkout_contacts` of those checkouts, deleted. */
   readonly checkoutContacts: number;
+  /** `checkout_remarks` (special requests) of those checkouts, deleted. */
+  readonly checkoutRemarks: number;
+  /** Those checkouts whose `ip_address` or `metadata` held a value: cleared (NULL and `{}`). */
+  readonly checkoutsCleared: number;
   /** Bookings whose `customer_id` was set to NULL, each with a `customer.erased` event. */
   readonly bookingsDetached: number;
   /** Payments whose `customer_id` was set to NULL. */
@@ -146,6 +169,8 @@ export const ERASED_FIELDS: readonly (keyof ErasedCustomer)[] = Object.freeze([
   "checkoutsDetached",
   "checkoutTravelers",
   "checkoutContacts",
+  "checkoutRemarks",
+  "checkoutsCleared",
   "bookingsDetached",
   "paymentsDetached",
   "accountEmails",
@@ -204,10 +229,10 @@ export class CustomerErasureRepository {
 
   /**
    * Erases customer `customerId` if it was deleted at or before `cutoff`: detaches its checkouts (deleting the
-   * travellers and contacts of those that never became bookings), its bookings (each with a `customer.erased` event at
-   * `now`) and its payments, clears its account e-mails, deletes its own rows and then the customer (see the file
-   * header). Answers the counts, or `undefined` when the customer is not due or no longer exists (another job erased
-   * it).
+   * travellers, contacts and special requests of those that never became bookings and clearing their IP address and
+   * metadata), its bookings (each with a `customer.erased` event at `now`) and its payments, clears its account
+   * e-mails, deletes its own rows and then the customer (see the file header). Answers the counts, or `undefined` when
+   * the customer is not due or no longer exists (another job erased it).
    */
   async erase(
     trx: TenantTransaction,
@@ -236,28 +261,57 @@ export class CustomerErasureRepository {
     ).map((checkout) => checkout.id);
     let checkoutTravelers = 0;
     let checkoutContacts = 0;
+    let checkoutRemarks = 0;
+    let checkoutsCleared = 0;
     if (checkoutIds.length > 0) {
       // The checkouts just detached (and locked) that no booking names: they never became bookings.
-      const abandoned = trx
-        .selectFrom("checkouts")
-        .select("checkouts.id")
-        .where("checkouts.id", "in", checkoutIds)
-        .where((eb) =>
-          eb.not(
-            eb.exists(
-              eb
-                .selectFrom("bookings")
-                .select("bookings.id")
-                .whereRef("bookings.checkout_id", "=", "checkouts.id"),
+      const neverBooked = (
+        await trx
+          .selectFrom("checkouts")
+          .select("checkouts.id")
+          .where("checkouts.id", "in", checkoutIds)
+          .where((eb) =>
+            eb.not(
+              eb.exists(
+                eb
+                  .selectFrom("bookings")
+                  .select("bookings.id")
+                  .whereRef("bookings.checkout_id", "=", "checkouts.id"),
+              ),
             ),
-          ),
+          )
+          .execute()
+      ).map((checkout) => checkout.id);
+      if (neverBooked.length > 0) {
+        checkoutTravelers = rows(
+          await trx
+            .deleteFrom("checkout_travelers")
+            .where("checkout_id", "in", neverBooked)
+            .executeTakeFirst(),
         );
-      checkoutTravelers = rows(
-        await trx.deleteFrom("checkout_travelers").where("checkout_id", "in", abandoned).executeTakeFirst(),
-      );
-      checkoutContacts = rows(
-        await trx.deleteFrom("checkout_contacts").where("checkout_id", "in", abandoned).executeTakeFirst(),
-      );
+        checkoutContacts = rows(
+          await trx
+            .deleteFrom("checkout_contacts")
+            .where("checkout_id", "in", neverBooked)
+            .executeTakeFirst(),
+        );
+        checkoutRemarks = rows(
+          await trx.deleteFrom("checkout_remarks").where("checkout_id", "in", neverBooked).executeTakeFirst(),
+        );
+        // The checkout's own request data (lead decision (7a) of 2026-11-05, second set): the client IP (nullable)
+        // becomes NULL and the OTA-defined key/values (NOT NULL, default `{}`) become `{}`; only the rows that hold
+        // either are written, and nothing else of them changes (status, amounts, version and times stay).
+        checkoutsCleared = rows(
+          await trx
+            .updateTable("checkouts")
+            .set({ ip_address: null, metadata: JSON.stringify({}) })
+            .where("id", "in", neverBooked)
+            .where((eb) =>
+              eb.or([eb("ip_address", "is not", null), eb("metadata", "<>", JSON.stringify({}))]),
+            )
+            .executeTakeFirst(),
+        );
+      }
     }
     const bookingIds = (
       await trx
@@ -371,6 +425,8 @@ export class CustomerErasureRepository {
       checkoutsDetached: checkoutIds.length,
       checkoutTravelers,
       checkoutContacts,
+      checkoutRemarks,
+      checkoutsCleared,
       bookingsDetached: bookingIds.length,
       paymentsDetached,
       accountEmails,

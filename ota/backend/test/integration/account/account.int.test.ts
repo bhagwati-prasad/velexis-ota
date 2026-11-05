@@ -1650,8 +1650,8 @@ describe("[FIX-W43-OTA AC3] a new account at an erased customer's address claims
   // `customer.erased` event, and auth.verifyEmail's claim of guest bookings (customers.repository.ts
   // `claimGuestBookings`) skips the bookings that carry it. The customer deletes the account through the API; its
   // erasure runs the job's statements on its row (`CustomerErasureRepository.erase`, with the cut-off the hourly run
-  // reaches 30 days less one hour later: here the instant itself); then someone signs up with the address again and
-  // verifies it through the e-mailed link.
+  // reaches 30 days less one hour and five minutes later: here the instant itself); then someone signs up with the
+  // address again and verifies it through the e-mailed link.
   const email = uniqueEmail("fixw43-reclaim");
   let erasedId = "";
   let erasedBooking = "";

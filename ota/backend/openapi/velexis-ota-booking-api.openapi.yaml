@@ -2731,11 +2731,12 @@ paths:
 
 
         **Erasure job.** Within 30 days, before `erasureDueBy` (an hourly job takes the accounts deleted 30 days less
-        one hour ago or earlier), a background job hard-deletes `saved_travelers`, `saved_traveler_documents`,
-        `customer_preferences`, consents, identities, sessions, reset tokens and the `customers` row; removes the
-        address and the variables of the account's own e-mails (`notifications` of the verification, password reset,
-        address change and deletion e-mails: the rows stay without personal data) and the travellers and contacts of
-        the customer's checkouts that never became bookings. Bookings, their travellers, tickets and payments are
+        one hour and five minutes ago or earlier), a background job hard-deletes `saved_travelers`,
+        `saved_traveler_documents`, `customer_preferences`, consents, identities, sessions, reset tokens and the
+        `customers` row; removes the address and the variables of the account's own e-mails (`notifications` of the
+        verification, password reset, address change and deletion e-mails: the rows stay without personal data) and,
+        of the customer's checkouts that never became bookings, the travellers, contacts and special requests and the
+        checkout's IP address and metadata. Bookings, their travellers, tickets and payments are
         **retained** (detached and minimised) for the legal retention period because airlines, tax and accounting rules
         require them; `retainedRecords` explains this to the customer. A booking the erasure detached is never attached
         to an account again, not even by a later verification of its contact address (`auth.verifyEmail`).

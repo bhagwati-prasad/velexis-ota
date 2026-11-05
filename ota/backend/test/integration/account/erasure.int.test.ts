@@ -21,6 +21,13 @@
 // ciphertext of an erased customer is left in its account e-mails or in the travellers and contacts of its checkouts
 // that never became bookings, and the `customer.erased` marker on each booking the erasure detached. That a new
 // account verifying the address claims none of those bookings is proven through the API in account.int.test.ts.
+//
+// FIX-W44-OTA (lead decisions (7a) and (7b) of 2026-11-05, second set) gives each seeded checkout a client IP address,
+// OTA metadata naming the customer and special requests (`checkout_remarks`); the scenarios prove that none of them is
+// left in the checkouts that never became bookings (the booked checkout keeps its own; one without request data is
+// only detached and not counted as cleared), and the cut-off of 30 days less one hour and five minutes: 29 days
+// untouched, the boundary, the next hourly run more than five minutes before the erasureDueBy, and a next run that
+// starts almost five minutes late still before it (the decision's five minutes, written out in the file).
 import { randomBytes } from "node:crypto";
 import { getQueueToken } from "@nestjs/bullmq";
 import type { INestApplicationContext } from "@nestjs/common";
@@ -78,6 +85,11 @@ const WAIT_MS = 30_000;
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
 const DAY_MS = 24 * HOUR_MS;
+/**
+ * The five minutes lead decision (7b) of 2026-11-05 (second set) keeps in hand before an erasureDueBy, written out
+ * rather than read from the code under test, so the scenarios prove the decision and not only the constant.
+ */
+const DECIDED_MARGIN_MS = 5 * MINUTE_MS;
 
 const quietPoolLogger = { error: (): void => undefined };
 
@@ -117,6 +129,12 @@ const stripeId = (prefix: string): string => `${prefix}_test_${randomBytes(10).t
 const bookingReference = (): string => `VX${randomBytes(3).toString("hex").toUpperCase()}`;
 /** A made-up word of this run: names and addresses that no log line may ever show. */
 const madeUp = (prefix: string): string => `${prefix}${randomBytes(4).toString("hex")}`;
+let addresses = 0;
+/**
+ * A fresh client IP address of a documentation range (RFC 5737; `net` 198.51.100 or 203.0.113) for a checkout: its last
+ * part has three digits, so no address of the file is a prefix of another (155 of them per range).
+ */
+const clientIp = (net: "198.51.100" | "203.0.113"): string => `${net}.${100 + (addresses++ % 155)}`;
 
 async function insertTenant(key: TenantKey, status: "active" | "suspended"): Promise<string> {
   const id = newId("ten");
@@ -194,6 +212,11 @@ interface CustomerSeed {
   readonly id?: string;
   /** When account.delete deleted it, relative to the clock; `null`: an active customer. */
   readonly deletedInMs: number | null;
+  /**
+   * `false`: the checkout that never became a booking holds no client IP address and no metadata (`NULL` and the
+   * column's default `{}`), only its special requests (FIX-W44-OTA); both by default.
+   */
+  readonly abandonedRequestData?: boolean;
 }
 
 /** A seeded customer: its id, the values no log line may show, and the ids of the rows of its trip. */
@@ -201,7 +224,8 @@ interface SeededCustomer {
   readonly id: string;
   /**
    * Names, the address it signed up with, the placeholder, the phone number, the new address it asked for (only its
-   * verification e-mail holds it) and the street of its abandoned checkout's contact.
+   * verification e-mail holds it) and the street of its abandoned checkout's contact; then the client IP addresses, the
+   * metadata values and the special requests of its two checkouts (FIX-W44-OTA).
    */
   readonly personalData: readonly string[];
   readonly searchId: string;
@@ -215,6 +239,21 @@ interface SeededCustomer {
   readonly abandonedCheckoutId: string;
   /** The encrypted documents of the abandoned checkout's traveller (random bytes in place of a ciphertext). */
   readonly abandonedDocuments: Buffer;
+  /**
+   * The abandoned checkout's client IP address, its metadata and its special requests (FIX-W44-OTA); `null` and `{}`
+   * when the seed gave it none.
+   */
+  readonly abandonedRequest: {
+    readonly ipAddress: string | null;
+    readonly metadata: Record<string, string>;
+    readonly remarks: readonly string[];
+  };
+  /** The booked checkout's client IP address, its metadata and its special request: they stay (FIX-W44-OTA). */
+  readonly bookedRequest: {
+    readonly ipAddress: string;
+    readonly metadata: Record<string, string>;
+    readonly remarks: readonly string[];
+  };
   /** The customer's account e-mails, sorted: four sent and a password reset still pending with its secret. */
   readonly accountEmailIds: readonly string[];
 }
@@ -228,9 +267,10 @@ const ACCOUNT_EMAILS_PER_CUSTOMER = 5;
  * traveller with a document; a search, a completed checkout with a traveller and a contact, a ticketed booking with a
  * traveller, a contact and an event, its captured and partly refunded Stripe payment, the refund, and the confirmation
  * e-mail; an abandoned checkout that never became a booking, with the customer as its traveller (encrypted documents)
- * and contact; and the account e-mails: the verification of a new address (to that address), a password reset, the
- * notice of the address change and the deletion's confirmation, sent, and a password reset still pending with its
- * secret (due in a year: no worker sends it).
+ * and contact; both checkouts with special requests and (unless `abandonedRequestData` is `false` for the abandoned
+ * one) a client IP address and metadata; and the account e-mails: the verification of a new address (to that address),
+ * a password reset, the notice of the address change and the deletion's confirmation, sent, and a password reset still
+ * pending with its secret (due in a year: no worker sends it).
  */
 async function seedCustomer(tenant: TenantKey, seed: CustomerSeed): Promise<SeededCustomer> {
   const id = seed.id ?? newId("cus");
@@ -242,6 +282,22 @@ async function seedCustomer(tenant: TenantKey, seed: CustomerSeed): Promise<Seed
   const newAddress = `${madeUp("renamed.")}@example.com`;
   const street = `${madeUp("Fjordgata ")} 12`;
   const abandonedDocuments = randomBytes(64);
+  // What the storefront sends with a checkout (FIX-W44-OTA): the OTA's metadata may name the customer, a special
+  // request may name a traveller or a need.
+  const withRequestData = seed.abandonedRequestData ?? true;
+  const abandonedMetadata: Record<string, string> = withRequestData
+    ? { referrer: madeUp("newsletter-"), loyaltyNote: `${firstName} ${lastName}` }
+    : {};
+  const abandonedRequest = {
+    ipAddress: withRequestData ? clientIp("198.51.100") : null,
+    metadata: abandonedMetadata,
+    remarks: [`Wheelchair at the gate for ${firstName}`, madeUp("Seat next to my daughter ")],
+  };
+  const bookedRequest = {
+    ipAddress: clientIp("203.0.113"),
+    metadata: { referrer: madeUp("search-") },
+    remarks: [madeUp("Vegetarian meal ")],
+  };
   const deletedAt = seed.deletedInMs === null ? null : fromNow(seed.deletedInMs);
   const signedUpAt = fromNow(-400 * DAY_MS);
   const ids = {
@@ -400,6 +456,8 @@ async function seedCustomer(tenant: TenantKey, seed: CustomerSeed): Promise<Seed
         currency: "EUR",
         offer_amount: "440.00",
         total_amount: "440.00",
+        ip_address: bookedRequest.ipAddress,
+        metadata: JSON.stringify(bookedRequest.metadata),
         expires_at: fromNow(-60 * DAY_MS),
         version: 4,
       })
@@ -549,6 +607,8 @@ async function seedCustomer(tenant: TenantKey, seed: CustomerSeed): Promise<Seed
         currency: "EUR",
         offer_amount: "440.00",
         total_amount: "440.00",
+        ip_address: abandonedRequest.ipAddress,
+        metadata: JSON.stringify(abandonedRequest.metadata),
         expires_at: fromNow(-41 * DAY_MS),
         version: 3,
       })
@@ -584,6 +644,27 @@ async function seedCustomer(tenant: TenantKey, seed: CustomerSeed): Promise<Seed
         address: JSON.stringify({ lines: [street], postalCode: "0150", countryCode: "NO", cityName: "Oslo" }),
         language: "en",
       })
+      .execute();
+    // The special requests of both checkouts (checkout.setRemarks; the second of the abandoned one entered by staff).
+    await trx
+      .insertInto("checkout_remarks")
+      .values([
+        ...abandonedRequest.remarks.map((text, position) => ({
+          id: newId("crm"),
+          checkout_id: ids.abandonedCheckoutId,
+          text,
+          traveler_ids: ["1"],
+          position,
+          source: position === 0 ? "customer" : "staff",
+          created_by_staff_id: position === 0 ? null : newId("stf"),
+        })),
+        ...bookedRequest.remarks.map((text, position) => ({
+          id: newId("crm"),
+          checkout_id: ids.checkoutId,
+          text,
+          position,
+        })),
+      ])
       .execute();
     // The account e-mails, as the outbox leaves them: sent, with the rendered subject (a tenant's template may name
     // the customer), the variables and the provider's id; the pending one holds its secret until it is sent.
@@ -627,9 +708,24 @@ async function seedCustomer(tenant: TenantKey, seed: CustomerSeed): Promise<Seed
   });
   return {
     id,
-    personalData: [firstName, lastName, address, placeholder, phone, newAddress, street],
+    personalData: [
+      firstName,
+      lastName,
+      address,
+      placeholder,
+      phone,
+      newAddress,
+      street,
+      ...[abandonedRequest, bookedRequest].flatMap((request) => [
+        ...(request.ipAddress === null ? [] : [request.ipAddress]),
+        ...Object.values(request.metadata),
+        ...request.remarks,
+      ]),
+    ],
     ...ids,
     abandonedDocuments,
+    abandonedRequest,
+    bookedRequest,
     accountEmailIds,
   };
 }
@@ -760,6 +856,12 @@ async function recordsOf(tenant: TenantKey, seeded: SeededCustomer): Promise<Rec
       .selectAll()
       .where("checkout_id", "=", seeded.checkoutId)
       .execute(),
+    bookedRemarks: await trx
+      .selectFrom("checkout_remarks")
+      .selectAll()
+      .where("checkout_id", "=", seeded.checkoutId)
+      .orderBy("position")
+      .execute(),
     abandonedCheckout: await trx
       .selectFrom("checkouts")
       .selectAll()
@@ -775,6 +877,12 @@ async function recordsOf(tenant: TenantKey, seeded: SeededCustomer): Promise<Rec
       .selectAll()
       .where("checkout_id", "=", seeded.abandonedCheckoutId)
       .execute(),
+    abandonedRemarks: await trx
+      .selectFrom("checkout_remarks")
+      .selectAll()
+      .where("checkout_id", "=", seeded.abandonedCheckoutId)
+      .orderBy("position")
+      .execute(),
     accountEmails: await trx
       .selectFrom("notifications")
       .selectAll()
@@ -785,9 +893,9 @@ async function recordsOf(tenant: TenantKey, seeded: SeededCustomer): Promise<Rec
 }
 
 /**
- * The rows of tenant `tenant` that could hold an erased customer's personal data after the erasure (lead decision (5g)
- * of 2026-11-05): every `notifications` row, every traveller and contact of a checkout that no booking names, and the
- * document ciphertexts of every checkout traveller.
+ * The rows of tenant `tenant` that could hold an erased customer's personal data after the erasure (lead decisions (5g)
+ * and (7a) of 2026-11-05): every `notifications` row, every traveller, contact and special request of a checkout that
+ * no booking names and the request data of those checkouts, and the document ciphertexts of every checkout traveller.
  */
 async function personalTables(tenant: TenantKey) {
   return await txOf(tenant)(async (trx) => ({
@@ -816,6 +924,34 @@ async function personalTables(tenant: TenantKey) {
               .selectFrom("bookings")
               .select("bookings.id")
               .whereRef("bookings.checkout_id", "=", "checkout_contacts.checkout_id"),
+          ),
+        ),
+      )
+      .execute(),
+    unbookedRemarks: await trx
+      .selectFrom("checkout_remarks")
+      .selectAll()
+      .where((eb) =>
+        eb.not(
+          eb.exists(
+            eb
+              .selectFrom("bookings")
+              .select("bookings.id")
+              .whereRef("bookings.checkout_id", "=", "checkout_remarks.checkout_id"),
+          ),
+        ),
+      )
+      .execute(),
+    unbookedCheckouts: await trx
+      .selectFrom("checkouts")
+      .select(["id", "ip_address", "metadata"])
+      .where((eb) =>
+        eb.not(
+          eb.exists(
+            eb
+              .selectFrom("bookings")
+              .select("bookings.id")
+              .whereRef("bookings.checkout_id", "=", "checkouts.id"),
           ),
         ),
       )
@@ -909,10 +1045,13 @@ function seededCounts(customers: number): ErasureCounts {
   return {
     customers,
     failed: 0,
-    // The booked checkout and the abandoned one; the abandoned one's traveller and contact.
+    // The booked checkout and the abandoned one; the abandoned one's traveller, contact, two special requests and
+    // request data.
     checkoutsDetached: 2 * customers,
     checkoutTravelers: customers,
     checkoutContacts: customers,
+    checkoutRemarks: 2 * customers,
+    checkoutsCleared: customers,
     bookingsDetached: customers,
     paymentsDetached: customers,
     accountEmails: ACCOUNT_EMAILS_PER_CUSTOMER * customers,
@@ -1085,7 +1224,13 @@ describe("customers.erase: who is erased, what goes and what stays", () => {
     const is = after["due"] ?? {};
     expect(is["checkout"]).toEqual({ ...(was["checkout"] as object), customer_id: null });
     expect(is["checkout"]).toMatchObject({ is_guest: false, status: "completed", version: 4 });
-    expect(is["abandonedCheckout"]).toEqual({ ...(was["abandonedCheckout"] as object), customer_id: null });
+    // The checkout that never became a booking loses its request data besides (FIX-W44-OTA), nothing else.
+    expect(is["abandonedCheckout"]).toEqual({
+      ...(was["abandonedCheckout"] as object),
+      customer_id: null,
+      ip_address: null,
+      metadata: {},
+    });
     expect(is["abandonedCheckout"]).toMatchObject({ is_guest: false, status: "abandoned", version: 3 });
     expect(is["search"]).toEqual({ ...(was["search"] as object), customer_id: null });
     // A booking e-mail stays with its booking: only detached from the customer.
@@ -1169,6 +1314,55 @@ describe("customers.erase: who is erased, what goes and what stays", () => {
     expect(is["bookedContacts"]).toEqual(was["bookedContacts"]);
   });
 
+  it("[FIX-W44-OTA AC1] deletes the special requests and clears the IP address and metadata of the customer's checkouts that never became bookings", () => {
+    const was = before["due"] ?? {};
+    const is = after["due"] ?? {};
+    // Seeded: two special requests (the customer's and staff's), the client IP address and metadata naming the
+    // customer.
+    expect((was["abandonedRemarks"] as { text: string }[]).map((remark) => remark.text)).toEqual(
+      due.abandonedRequest.remarks,
+    );
+    expect(was["abandonedCheckout"]).toMatchObject({
+      ip_address: due.abandonedRequest.ipAddress,
+      metadata: due.abandonedRequest.metadata,
+    });
+    expect(is["abandonedRemarks"]).toEqual([]);
+    expect(is["abandonedCheckout"]).toMatchObject({ ip_address: null, metadata: {} });
+    // Nowhere in the tenant's checkouts that no booking names, nor in their special requests, is a value of the
+    // customer left: in alpha and in the suspended beta.
+    for (const [tenant, customer] of [
+      ["alpha", due],
+      ["beta", suspendedDue],
+    ] as const) {
+      const tables = tablesAfter[tenant];
+      expect(tables?.unbookedCheckouts.map((row) => row.id)).toContain(customer.abandonedCheckoutId);
+      expect(tables?.unbookedCheckouts.find((row) => row.id === customer.abandonedCheckoutId)).toEqual({
+        id: customer.abandonedCheckoutId,
+        ip_address: null,
+        metadata: {},
+      });
+      for (const row of [...(tables?.unbookedCheckouts ?? []), ...(tables?.unbookedRemarks ?? [])]) {
+        for (const value of customer.personalData) {
+          expect(rowText(row)).not.toContain(value);
+        }
+      }
+    }
+    expect(after["suspendedDue"]?.["abandonedRemarks"]).toEqual([]);
+  });
+
+  it("[FIX-W44-OTA AC1] keeps the special request, IP address and metadata of the checkout that became the booking", () => {
+    const was = before["due"] ?? {};
+    const is = after["due"] ?? {};
+    expect((was["bookedRemarks"] as { text: string }[]).map((remark) => remark.text)).toEqual(
+      due.bookedRequest.remarks,
+    );
+    expect(is["bookedRemarks"]).toEqual(was["bookedRemarks"]);
+    expect(is["checkout"]).toMatchObject({
+      ip_address: due.bookedRequest.ipAddress,
+      metadata: due.bookedRequest.metadata,
+    });
+  });
+
   it("[FIX-W43-OTA AC3] marks the detached booking with a customer.erased event without personal data, staff only", () => {
     const events = after["due"]?.["events"] as Record<string, unknown>[];
     const markers = events.filter((event) => event["type"] === CUSTOMER_ERASED_EVENT);
@@ -1200,12 +1394,14 @@ describe("customers.erase: who is erased, what goes and what stays", () => {
     ).toHaveLength(1);
   });
 
-  it("[FIX-W43-OTA AC1] the hourly cut-off leaves the customer deleted 29 days ago untouched: account e-mails, checkouts and bookings", () => {
-    // 29 days is more than a day short of the cut-off of 30 days less one hour.
+  it("[FIX-W43-OTA AC1] [FIX-W44-OTA AC2] the hourly cut-off leaves the customer deleted 29 days ago untouched: account e-mails, checkouts and bookings", () => {
+    // 29 days is more than a day short of the cut-off of 30 days less one hour and five minutes.
     expect(29 * DAY_MS).toBeLessThan(ERASURE_CUTOFF_AFTER_MS);
     expect(after["recent"]?.["accountEmails"]).toEqual(before["recent"]?.["accountEmails"]);
     expect(after["recent"]?.["abandonedTravelers"]).toEqual(before["recent"]?.["abandonedTravelers"]);
     expect(after["recent"]?.["abandonedContacts"]).toEqual(before["recent"]?.["abandonedContacts"]);
+    expect(after["recent"]?.["abandonedRemarks"]).toEqual(before["recent"]?.["abandonedRemarks"]);
+    expect(after["recent"]?.["abandonedCheckout"]).toEqual(before["recent"]?.["abandonedCheckout"]);
     expect(after["recent"]?.["events"]).toEqual(before["recent"]?.["events"]);
     expect(after["twin"]).toEqual(before["twin"]);
   });
@@ -1235,6 +1431,8 @@ describe("customers.erase: who is erased, what goes and what stays", () => {
           checkoutsDetached: 2,
           checkoutTravelers: 1,
           checkoutContacts: 1,
+          checkoutRemarks: 2,
+          checkoutsCleared: 1,
           bookingsDetached: 1,
           paymentsDetached: 1,
           accountEmails: ACCOUNT_EMAILS_PER_CUSTOMER,
@@ -1276,6 +1474,7 @@ describe("customers.erase: idempotent", () => {
         "checkouts",
         "checkout_travelers",
         "checkout_contacts",
+        "checkout_remarks",
         "bookings",
         "booking_events",
         "payments",
@@ -1291,6 +1490,12 @@ describe("customers.erase: idempotent", () => {
         .where("customer_id", "is not", null)
         .execute();
       sizes["bookingsWithCustomer"] = attached.length;
+      const withRequestData = await trx
+        .selectFrom("checkouts")
+        .select("id")
+        .where((eb) => eb.or([eb("ip_address", "is not", null), eb("metadata", "<>", JSON.stringify({}))]))
+        .execute();
+      sizes["checkoutsWithRequestData"] = withRequestData.length;
       return sizes;
     });
   }
@@ -1311,7 +1516,7 @@ describe("customers.erase: idempotent", () => {
     });
   }, SCENARIO_TIMEOUT_MS);
 
-  it("[OBE-087 AC1] [FIX-W43-OTA AC2] [FIX-W43-OTA AC3] a second run erases nothing and changes nothing: no second marker, nothing more cleared", () => {
+  it("[OBE-087 AC1] [FIX-W43-OTA AC2] [FIX-W43-OTA AC3] [FIX-W44-OTA AC1] a second run erases nothing and changes nothing: no second marker, nothing more cleared", () => {
     expect(resultOf(again.alpha)).toEqual(done("alpha", seededCounts(0)));
     expect(resultOf(again.beta)).toEqual(done("beta", seededCounts(0)));
     expect(unchanged.after).toEqual(unchanged.before);
@@ -1371,10 +1576,13 @@ describe("customers.erase: batches", () => {
   });
 });
 
-describe("customers.erase: the cut-off of 30 days less one hour, and the next hourly run", () => {
+describe("customers.erase: the cut-off of 30 days less one hour and five minutes, and the next hourly run", () => {
   /** Alpha: deleted exactly 30 days before the first run, so its erasureDueBy is that run's instant. */
   let onTheDay: SeededCustomer;
-  /** Alpha: deleted 30 days less one hour before the first run: at the cut-off, an hour before its erasureDueBy. */
+  /**
+   * Alpha: deleted 30 days less one hour and five minutes before the first run: at the cut-off, an hour and five
+   * minutes before its erasureDueBy.
+   */
   let atTheCutoff: SeededCustomer;
   /** Alpha: deleted one second after that: a second short of the first run's cut-off. */
   let aSecondShort: SeededCustomer;
@@ -1418,9 +1626,9 @@ describe("customers.erase: the cut-off of 30 days less one hour, and the next ho
     }
   }, SCENARIO_TIMEOUT_MS);
 
-  it("[FIX-W43-OTA AC1] erases a customer at the cut-off, an hour before its erasureDueBy, and leaves one a second short of the cut-off", () => {
+  it("[FIX-W43-OTA AC1] [FIX-W44-OTA AC2] erases a customer at the cut-off, an hour and five minutes before its erasureDueBy, and leaves one a second short of the cut-off", () => {
     expect(ownAfterFirst["atTheCutoff"]).toEqual(NO_OWN_ROWS);
-    expect(firstAt.getTime()).toBe((dueBy["atTheCutoff"]?.getTime() ?? 0) - ERASURE_RUN_INTERVAL_MS);
+    expect(firstAt.getTime()).toBe((dueBy["atTheCutoff"]?.getTime() ?? 0) - HOUR_MS - DECIDED_MARGIN_MS);
     // One deleted exactly 30 days ago is due too: its erasureDueBy is this run's instant.
     expect(ownAfterFirst["onTheDay"]).toEqual(NO_OWN_ROWS);
     expect(ownAfterFirst["aSecondShort"]).toEqual(SEEDED_OWN_ROWS);
@@ -1428,11 +1636,89 @@ describe("customers.erase: the cut-off of 30 days less one hour, and the next ho
     expect(resultOf(first.beta)).toEqual(done("beta", seededCounts(0)));
   });
 
-  it("[FIX-W43-OTA AC1] the next hourly run erases the customer a second short of the cut-off before its erasureDueBy", () => {
+  it("[FIX-W43-OTA AC1] [FIX-W44-OTA AC2] the next hourly run erases the customer a second short of the cut-off more than five minutes before its erasureDueBy", () => {
     expect(nextAt.getTime() - firstAt.getTime()).toBe(ERASURE_RUN_INTERVAL_MS);
     expect(ownAfterNext["aSecondShort"]).toEqual(NO_OWN_ROWS);
     expect(nextAt.getTime()).toBeLessThan(dueBy["aSecondShort"]?.getTime() ?? 0);
+    expect(nextAt.getTime() + DECIDED_MARGIN_MS).toBeLessThan(dueBy["aSecondShort"]?.getTime() ?? 0);
     expect(resultOf(next.alpha)).toEqual(done("alpha", seededCounts(1)));
     expect(resultOf(next.beta)).toEqual(done("beta", seededCounts(0)));
+  });
+});
+
+describe("customers.erase: a next run that starts almost five minutes late", () => {
+  /** Alpha: deleted a second after the scheduled run's cut-off, so the next hourly run is the first that finds it due. */
+  let lateCustomer: SeededCustomer;
+  /** The erasureDueBy account.delete answered it: its deletion + 30 days. */
+  let dueBy: Date;
+  let scheduledAt: Date;
+  let scheduled: RunJobs;
+  let ownAfterScheduled: Record<string, number>;
+  let lateAt: Date;
+  let late: RunJobs;
+  let ownAfterLate: Record<string, number>;
+
+  beforeAll(async () => {
+    vi.spyOn(worker.get(Clock, { strict: false }), "now").mockImplementation(() => clock.now());
+    clock.advance(MINUTE_MS);
+    const deletedInMs = -ERASURE_CUTOFF_AFTER_MS + 1000;
+    lateCustomer = await seedCustomer("alpha", { deletedInMs });
+    dueBy = fromNow(deletedInMs + ERASURE_DUE_AFTER_MS);
+
+    scheduledAt = clock.now();
+    scheduled = await iteration();
+    ownAfterScheduled = await ownRowsOf("alpha", lateCustomer.id);
+
+    // The schedule's next run, an hour later, starts a second short of five minutes late (a busy `ota-maintenance`
+    // queue, a worker restart): the latest start the margin of lead decision (7b) covers for this customer. The five
+    // minutes are the decision's, written out: with a smaller margin in the code this run would come after the date.
+    clock.advance(HOUR_MS + DECIDED_MARGIN_MS - 1000);
+    lateAt = clock.now();
+    late = await iteration();
+    ownAfterLate = await ownRowsOf("alpha", lateCustomer.id);
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W44-OTA AC2] still erases the customer, before its erasureDueBy", () => {
+    // The scheduled run: a second short of the cut-off, untouched.
+    expect(ownAfterScheduled).toEqual(SEEDED_OWN_ROWS);
+    expect(resultOf(scheduled.alpha)).toEqual(done("alpha", seededCounts(0)));
+    // Its next run, almost five minutes late.
+    expect(lateAt.getTime() - scheduledAt.getTime()).toBe(HOUR_MS + DECIDED_MARGIN_MS - 1000);
+    expect(ownAfterLate).toEqual(NO_OWN_ROWS);
+    expect(resultOf(late.alpha)).toEqual(done("alpha", seededCounts(1)));
+    expect(resultOf(late.beta)).toEqual(done("beta", seededCounts(0)));
+    expect(lateAt.getTime()).toBeLessThan(dueBy.getTime());
+  });
+});
+
+describe("customers.erase: a checkout that never became a booking and holds no request data", () => {
+  /** Alpha: deleted 31 days ago; its abandoned checkout has special requests but no client IP address or metadata. */
+  let bare: SeededCustomer;
+  let before: Record<string, unknown>;
+  let after: Record<string, unknown>;
+  let run: RunJobs;
+
+  beforeAll(async () => {
+    vi.spyOn(worker.get(Clock, { strict: false }), "now").mockImplementation(() => clock.now());
+    clock.advance(MINUTE_MS);
+    bare = await seedCustomer("alpha", { deletedInMs: -31 * DAY_MS, abandonedRequestData: false });
+    before = await recordsOf("alpha", bare);
+    run = await iteration();
+    after = await recordsOf("alpha", bare);
+  }, SCENARIO_TIMEOUT_MS);
+
+  it("[FIX-W44-OTA AC1] deletes its special requests, and counts as cleared only the checkouts that held request data", () => {
+    expect(before["abandonedCheckout"]).toMatchObject({ ip_address: null, metadata: {} });
+    expect((before["abandonedRemarks"] as { text: string }[]).map((remark) => remark.text)).toEqual(
+      bare.abandonedRequest.remarks,
+    );
+    expect(after["abandonedRemarks"]).toEqual([]);
+    // Only detached: nothing of the row was there to clear, and nothing else of it changes.
+    expect(after["abandonedCheckout"]).toEqual({
+      ...(before["abandonedCheckout"] as object),
+      customer_id: null,
+    });
+    expect(resultOf(run.alpha)).toEqual(done("alpha", { ...seededCounts(1), checkoutsCleared: 0 }));
+    expect(resultOf(run.beta)).toEqual(done("beta", seededCounts(0)));
   });
 });
