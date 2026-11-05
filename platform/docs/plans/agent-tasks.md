@@ -1880,7 +1880,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Verify:** `pnpm --filter @velexis/platform-frontend test`
 
 ### PFE-027 · Write the portal M5 end-to-end journeys
-- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the nightly `portal-stripe` run of `portal-checkout.e2e.ts`, which needs Stripe Billing on and a `stripe listen` forwarder to `/webhooks/stripe/billing` in that step's stack, the Stripe CLI in the nightly step, the Stripe test secrets and the Customer Portal's test-mode configuration; the `e2e` workflow run of the `portal` specs on GitHub)
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the nightly `portal-stripe` run of `portal-checkout.e2e.ts`, which needs the Stripe test secrets and the Customer Portal's test-mode configuration (human steps; Stripe Billing, the billing forwarder and the pinned Stripe CLI of that step came with FIX-W43-SHARED); the `e2e` workflow run of the `portal` specs on GitHub)
 - **Component:** platform-frontend
 - **Milestone:** M5
 - **Depends on:** PFE-020, PFE-021, PFE-022, PFE-024, PFE-025, PFE-026

@@ -174,6 +174,8 @@ No token reaches browser JavaScript in either app: the platform tokens exist onl
 
 **Impact.** The address-parser DoS needs a crafted address list in a message's headers; the API validates every recipient as one e-mail address (`format: email`) before it queues an e-mail, which leaves little room, but the worker still runs the vulnerable parser on every send. The OAuth2 and `raw` advisories concern options the mailer does not use.
 
+**Status: fixed (2026-11-05, PBE-068).** The platform backend pins `nodemailer` 10.3.1, the release OBE-093 pins in the OTA backend and `@velexis/testing`, without `@types/nodemailer` (Nodemailer ships its own declarations from 10.0). `pnpm audit --prod` lists no `nodemailer` advisory any more; the gateway keeps `disableFileAccess`, `disableUrlAccess` and no `raw` messages, which `mailer.gateway.test.ts` proves through the real transport.
+
 **Fix.** Upgrade to nodemailer 10.x in the platform backend, adapt `mailer.gateway.ts` to its API, run the outbox tests against Mailpit, update the tech-stack row. **Task:** PBE-068. (The OTA backend and `@velexis/testing` use the same version; the OTA review, OBE-084, and the foundation plan own those.)
 
 ### F-3 · High (advisory); reachable: Low · `multer` 2.4.0 through NestJS 11.2.8
