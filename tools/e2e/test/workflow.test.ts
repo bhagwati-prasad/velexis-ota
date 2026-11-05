@@ -120,6 +120,42 @@ describe(".github/workflows/e2e.yml", () => {
     expect(runs.filter((run) => /portal-stripe/.test(run))).toHaveLength(1);
   });
 
+  it("[PFE-027 AC1] runs portal-stripe with Stripe Billing on and the pinned Stripe CLI, checksum checked as storefront-stripe does", () => {
+    // Lead decision 5(l) of 2026-11-05, approved by the owner (FIX-W43-SHARED).
+    const portal = steps.find((step) => /--project=portal-stripe/.test(step.run ?? ""));
+    const storefront = steps.find((step) => /--project=storefront-stripe/.test(step.run ?? ""));
+    // The platform's two Stripe test values, and the harness setting that turns Stripe Billing on for this step's stack
+    // and starts the billing forwarder; no OTA key, so the stack starts no forwarder of the OTA's.
+    expect(portal?.env).toEqual({
+      E2E_STRIPE: "1",
+      STRIPE_SECRET_KEY: "${{ secrets.E2E_STRIPE_SECRET_KEY }}",
+      STRIPE_BILLING_WEBHOOK_SECRET: "${{ secrets.E2E_STRIPE_BILLING_WEBHOOK_SECRET }}",
+      E2E_STRIPE_BILLING: "1",
+    });
+    // One pinned release for both steps, in the job's environment; neither step names another.
+    expect(job?.env).toMatchObject({
+      STRIPE_CLI_VERSION: expect.stringMatching(/^1\.\d+\.\d+$/),
+      STRIPE_CLI_SHA256: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+    for (const step of [portal, storefront]) {
+      expect(step?.env?.["STRIPE_CLI_VERSION"]).toBeUndefined();
+      expect(step?.env?.["STRIPE_CLI_SHA256"]).toBeUndefined();
+    }
+    // The same download and checksum check as the storefront-stripe step, then the project with that CLI, every test
+    // of it counted: no --pass-with-no-tests now that PFE-027's journey is there.
+    const portalLines = (portal?.run ?? "").trim().split("\n");
+    const storefrontLines = (storefront?.run ?? "").trim().split("\n");
+    expect(portalLines.slice(0, -1)).toEqual(storefrontLines.slice(0, -1));
+    expect(portalLines[1]).toBe('echo "${STRIPE_CLI_SHA256}  $RUNNER_TEMP/stripe.tgz" | sha256sum -c -');
+    expect(portalLines.at(-1)).toBe(
+      'E2E_STRIPE_CLI="$RUNNER_TEMP/stripe-cli/stripe" pnpm test:e2e -- --project=portal-stripe',
+    );
+    expect(portal?.run).not.toContain("--pass-with-no-tests");
+    // Stripe Billing stays off in every other step's stack, the storefront-stripe one's among them.
+    expect(steps.filter((step) => step.env?.["E2E_STRIPE_BILLING"] !== undefined)).toEqual([portal]);
+    expect(job?.env["E2E_STRIPE_BILLING"]).toBeUndefined();
+  });
+
   it("runs storefront-stripe only at night, with the Stripe test keys and the Stripe CLI whose checksum it checked [OFE-017 AC1]", () => {
     const index = steps.findIndex((step) => /--project=storefront-stripe/.test(step.run ?? ""));
     const step = steps[index];
@@ -140,6 +176,10 @@ describe(".github/workflows/e2e.yml", () => {
       STRIPE_BILLING_WEBHOOK_SECRET: "${{ secrets.E2E_STRIPE_BILLING_WEBHOOK_SECRET }}",
       STRIPE_SECRET_KEY_TEST: "${{ secrets.E2E_STRIPE_SECRET_KEY }}",
       STRIPE_PUBLISHABLE_KEY_TEST: "${{ secrets.E2E_STRIPE_PUBLISHABLE_KEY }}",
+    });
+    // The pinned release and its SHA-256, in the job's environment since the portal-stripe step downloads the same CLI
+    // (lead decision 5(l) of 2026-11-05).
+    expect(job?.env).toMatchObject({
       STRIPE_CLI_VERSION: expect.stringMatching(/^1\.\d+\.\d+$/),
       STRIPE_CLI_SHA256: expect.stringMatching(/^[0-9a-f]{64}$/),
     });

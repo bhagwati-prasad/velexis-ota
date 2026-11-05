@@ -604,6 +604,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - GitHub accepts `dependabot.yml` without errors.
   - Every `uses:` in `.github/workflows/` is pinned to a 40-character commit SHA (`check-package-json.mjs` or a grep step fails otherwise).
 - **Verify:** `node tools/ci/check-package-json.mjs && node tools/plan-lint/plan-lint.mjs`
+- **Note (2026-11-05, lead decision (5o), approved by the owner, FIX-W43-SHARED):** `ci.yml` runs `pnpm test:int` and the PAN-absence proof that reads its report (OBE-052) in a job of their own, `integration` (check name **Integration tests**), in parallel with `build-test` (**Build and test**), with the same runner, service containers, environment, setup steps and 45-minute limit; `build-test` keeps everything else. Step 5's protection of `main` requires **Integration tests** too, beside **Plan lint**, **Deploy files** and **Build and test** ([`tools/ci/README.md`](../../../tools/ci/README.md), Human steps); `tools/ci/ci-workflow.test.mjs` covers the new job. This Note changes no Status.
 
 ### X-020 · Finalise provision-vm.sh and provision the VM
 - **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: human step 3, two provision-vm.sh runs on a throwaway VM with only-PASS check-vm.sh outputs (AC2); human step 4, check-vm.sh on the production VM (AC5), the only place the Verify's `sudo bash deploy/scripts/check-vm.sh` can pass; step 5 after those runs)

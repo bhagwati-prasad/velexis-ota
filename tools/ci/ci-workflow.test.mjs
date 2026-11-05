@@ -53,7 +53,7 @@ function stepFields(lines) {
   return fields;
 }
 
-/** jobId -> { lines, steps: [{ name, uses, run, ... }] } */
+/** jobId -> { lines, steps: [{ name, uses, run, ..., raw }] }; `raw` holds a step's own lines as written. */
 function parseWorkflow(text) {
   const jobs = new Map();
   let inJobs = false;
@@ -83,13 +83,37 @@ function parseWorkflow(text) {
         step.push(line);
       }
     }
-    current.steps = current.steps.map(stepFields);
+    current.steps = current.steps.map((lines) => ({ ...stepFields(lines), raw: lines }));
   }
   return jobs;
 }
 
 const JOBS = parseWorkflow(CI_YML);
 const stepIndex = (job, predicate) => JOBS.get(job).steps.findIndex(predicate);
+
+/** The lines of a job's own key (`services`, `env`, `timeout-minutes`, ...) as written, or [] when it has none. */
+function jobKey(job, key) {
+  const lines = JOBS.get(job)?.lines ?? [];
+  const at = lines.findIndex((line) => line === `    ${key}:` || line.startsWith(`    ${key}: `));
+  if (at < 0) {
+    return [];
+  }
+  const block = [lines[at]];
+  for (let i = at + 1; i < lines.length && /^ {6}/.test(lines[i]); i += 1) {
+    block.push(lines[i]);
+  }
+  return block;
+}
+
+/** The `with:` inputs of a step, as written. */
+function withOf(step) {
+  const at = step.raw.findIndex((line) => /^ {8}with:\s*$/.test(line));
+  const inputs = [];
+  for (let i = at + 1; at >= 0 && i < step.raw.length && /^ {10}/.test(step.raw[i]); i += 1) {
+    inputs.push(step.raw[i].trim());
+  }
+  return inputs;
+}
 const GUARDS = JOBS.get("build-test")?.steps.find((s) => s.name === "Repository guards")?.run;
 
 // ---- Scratch git repositories ----------------------------------------------------------------------------
@@ -171,7 +195,9 @@ describe("workflow shape", () => {
     );
     const lintAt = stepIndex("build-test", (s) => s.run === "pnpm lint");
     const testAt = stepIndex("build-test", (s) => s.run === "pnpm test");
-    const intAt = stepIndex("build-test", (s) => s.run === "pnpm test:int");
+    // The integration tests run in their own job since lead decision (5o) of 2026-11-05 (the next test).
+    const intInstallAt = stepIndex("integration", (s) => s.run === "pnpm install --frozen-lockfile");
+    const intAt = stepIndex("integration", (s) => s.run === "pnpm test:int");
     for (const [name, at] of Object.entries({
       guardsAt,
       checkAt,
@@ -179,16 +205,91 @@ describe("workflow shape", () => {
       ciTestsAt,
       lintAt,
       testAt,
+      intInstallAt,
       intAt,
     })) {
       assert.ok(at >= 0, `step ${name} exists`);
     }
     assert.ok(guardsAt < installAt && checkAt < installAt, "guards and package checks need no install");
-    assert.ok(
-      installAt < ciTestsAt && ciTestsAt < testAt && testAt < intAt,
-      "CI-script tests run before the tests",
-    );
+    assert.ok(installAt < ciTestsAt && ciTestsAt < testAt, "CI-script tests run before the tests");
+    assert.ok(intInstallAt < intAt, "the integration tests run after their job's install");
     assert.ok(lintAt < testAt);
+  });
+
+  it("[X-019 AC2] the integration tests and the PAN-absence proof run in their own job beside build-test, set up as it is", () => {
+    // Lead decision (5o) of 2026-11-05, approved by the owner.
+    assert.ok(JOBS.get("integration"), "ci.yml has an integration job");
+    assert.deepEqual(jobKey("integration", "name"), ["    name: Integration tests"]);
+    // In parallel: neither job waits for the other (no `needs`), and the same 45-minute budget.
+    assert.deepEqual(jobKey("integration", "needs"), []);
+    assert.deepEqual(jobKey("build-test", "needs"), []);
+    assert.deepEqual(jobKey("integration", "timeout-minutes"), ["    timeout-minutes: 45"]);
+    assert.deepEqual(jobKey("build-test", "timeout-minutes"), ["    timeout-minutes: 45"]);
+    // The same runner, service containers and environment as build-test, line for line.
+    for (const key of ["runs-on", "services", "env"]) {
+      assert.ok(jobKey("integration", key).length > 0, `integration has ${key}`);
+      assert.deepEqual(jobKey("integration", key), jobKey("build-test", key), key);
+    }
+
+    // Its steps: the setup of build-test (the same pinned actions and the same commands), then the tests and the proof.
+    const steps = JOBS.get("integration").steps;
+    const buildTest = JOBS.get("build-test").steps;
+    const uses = (list, action) => list.find((s) => (s.uses ?? "").startsWith(`${action}@`));
+    const same = (list, run) => list.find((s) => s.run === run);
+    const bootstrap = (list) => list.find((s) => /deploy\/postgres\/bootstrap\.sql/.test(s.run ?? ""));
+    const pan = steps.find((s) => (s.name ?? "").startsWith("PAN-absence proof"));
+    const order = [
+      uses(steps, "actions/checkout"),
+      uses(steps, "pnpm/action-setup"),
+      uses(steps, "actions/setup-node"),
+      same(steps, "pnpm install --frozen-lockfile"),
+      uses(steps, "actions/cache/restore"),
+      bootstrap(steps),
+      same(steps, "pnpm dev:keys"),
+      same(steps, "pnpm test:int"),
+      pan,
+    ];
+    assert.ok(order.every(Boolean), "every step of the integration job is there");
+    assert.deepEqual(order, steps, "and nothing else, in this order");
+    for (const action of ["actions/checkout", "pnpm/action-setup", "actions/setup-node"]) {
+      assert.equal(uses(steps, action).uses, uses(buildTest, action).uses, action);
+    }
+    assert.ok(withOf(uses(steps, "actions/checkout")).includes("persist-credentials: false"));
+    assert.deepEqual(
+      withOf(uses(steps, "actions/setup-node")),
+      withOf(uses(buildTest, "actions/setup-node")),
+    );
+    assert.equal(bootstrap(steps).run, bootstrap(buildTest).run);
+    assert.ok(same(buildTest, "pnpm dev:keys"));
+    // The Turborepo cache of build-test, restored only (build-test saves it), at the same pinned commit.
+    const cache = uses(buildTest, "actions/cache");
+    const restore = uses(steps, "actions/cache/restore");
+    assert.equal(restore.uses.split("@")[1], cache.uses.split("@")[1]);
+    assert.deepEqual(withOf(restore), withOf(cache));
+
+    // The proof reads the report that pnpm test:int leaves, after it, and fails without it (OBE-052).
+    assert.match(pan.run, /ota\/backend\/node_modules\/\.cache\/pan-absence\/report\.json/);
+    assert.match(pan.run, /The PAN-absence test did not run/);
+    assert.equal(pan.if, undefined, "it runs whenever the tests passed");
+
+    // build-test keeps everything else: no integration tests or proof there any more; Build, then the cross-backend
+    // tests and the release dry run.
+    assert.equal(
+      stepIndex("build-test", (s) => s.run === "pnpm test:int"),
+      -1,
+    );
+    assert.equal(
+      stepIndex("build-test", (s) => /pan-absence/.test(s.run ?? "")),
+      -1,
+    );
+    const buildAt = stepIndex("build-test", (s) => s.run === "pnpm build");
+    const xbAt = stepIndex("build-test", (s) => s.run === "pnpm --filter @velexis/platform-backend test:xb");
+    const packAt = stepIndex("build-test", (s) => /pack-release\.sh/.test(s.run ?? ""));
+    assert.ok(buildAt > stepIndex("build-test", (s) => s.run === "pnpm test"));
+    assert.ok(buildAt < xbAt && xbAt < packAt);
+    // Only build-test saves the Turborepo cache.
+    assert.ok(cache, "build-test restores and saves the cache with actions/cache");
+    assert.equal(uses(steps, "actions/cache"), undefined);
   });
 
   it("[X-019 AC5] every uses: in .github/workflows is pinned to a 40-character commit SHA", () => {

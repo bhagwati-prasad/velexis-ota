@@ -9,16 +9,21 @@
 //
 // What the run needs, and checks first in `beforeAll` (each missing piece fails at once with its name, never a pass):
 // E2E_STRIPE=1 with the Stripe test values of the harness (STRIPE_SECRET_KEY, STRIPE_BILLING_WEBHOOK_SECRET),
-// E2E_WITH_OTA=1 (the OTA worker sets the OTA up after the payment), Stripe Billing on in the stack's platform processes
-// (`getMe.features.stripeBilling`), and Stripe's billing events forwarded to the platform API's
-// `/webhooks/stripe/billing` and signed with STRIPE_BILLING_WEBHOOK_SECRET (`stripe listen`); the Customer Portal also
-// needs its test-mode configuration saved once in the Stripe dashboard (a human step). tools/e2e/README.md ("Tests of
-// PFE-027") says which of these the stack and the nightly workflow provide today.
+// E2E_STRIPE_BILLING=1 (lead decision 5(l) of 2026-11-05, FIX-W43-SHARED: support/stack.ts turns Stripe Billing on in
+// the stack's platform processes and forwards Stripe's billing events to the platform API's `/webhooks/stripe/billing`
+// with `stripe listen`, whose signing secret the API verifies them with; the API's `getMe.features.stripeBilling` proves
+// the first), and E2E_WITH_OTA=1 (the OTA worker sets the OTA up after the payment). The Customer Portal also needs its
+// test-mode configuration saved once in the Stripe dashboard (a human step). The nightly `portal-stripe` step of
+// .github/workflows/e2e.yml gives all of it but that configuration (tools/e2e/README.md, "Tests of PFE-027").
 //
-// Arranged in `beforeAll`: a Stripe product with a monthly price in the test account (Stripe's API, the test key), and
-// a public plan `e2epaid_<random>` linked to them, as velexis_migrator fixtures (a platform admin links a plan's prices
-// with `adminUpdatePlan`, PAD-012; the journey is the portal's). The plan has no free trial, so Checkout charges the
-// card at once. The owner is a verified account signed in through the platform API.
+// Arranged in `beforeAll` through the public APIs (PADR-0017 item 5), as Velexis staff link a plan to Stripe
+// (platform/docs/flows/subscription-billing.md §A): a Stripe product with a monthly price in the test account (Stripe's
+// API with the test key, support/stripe.ts), then a platform admin of the journey's own (MFA, `admin:grant`) creates the
+// public plan `e2epaid_<random>` with `adminCreatePlan` and links it to that product and price with `adminUpdatePlan`
+// (`If-Match`; the API compares the price with the plan at Stripe and finds no difference). The plan has no free trial,
+// so Checkout charges the card at once. The owner is a verified account signed in through the platform API. No
+// velexis_migrator fixture. `afterAll` archives the product and the price in Stripe (`archiveStripeTestObjects`), also
+// after a failed arrangement; the stack's database, with the plan, goes with the stack.
 //
 // Card data is Stripe's documented test number only (STRIPE_TEST_CARDS of support/stripe.ts), typed into Stripe's own
 // page as an owner would. Every page of the portal the journey visits passes axe once its title is in place; Stripe's
@@ -31,26 +36,38 @@ import {
   addSessionCookies,
   callPlatformApi,
   createVerifiedAccount,
+  enableMfa,
   expect,
   newAccountContext,
   PROJECT_TAGS,
+  signInToAdminWithApi,
   signInWithApi,
   test,
   type PortalAccount,
   type SessionTokens,
 } from "../support/fixtures";
-import { buildAccount, stack, withDatabase } from "../support/seed";
+import { buildAccount, grantPlatformAdmin, stack } from "../support/seed";
 import { PORTAL_URL } from "../support/stack";
-import { STRIPE_API_URL, STRIPE_TEST_CARDS, testCardExpiry } from "../support/stripe";
+import {
+  archiveStripeTestObjects,
+  createMonthlyTestPrice,
+  createTestProduct,
+  STRIPE_TEST_CARDS,
+  testCardExpiry,
+} from "../support/stripe";
 import { waitForOtaStatus, type Ota } from "../support/tenants";
 
 type Schemas = components["schemas"];
 
 /**
- * The budget of the one-time arrangement in `beforeAll` (a hook, not a step of the journey): an account through the
- * platform API and Mailpit (at most 15 s), and two calls to Stripe's API.
+ * The budget of the one-time arrangement in `beforeAll` (a hook, not a step of the journey): two accounts through the
+ * platform API and Mailpit (at most 15 s each), the platform CLI's `admin:grant`, the admin's sign-in, two calls to
+ * Stripe's API, and `adminCreatePlan` and `adminUpdatePlan` (which reads the price from Stripe).
  */
-const ARRANGE_BUDGET_MS = 90_000;
+const ARRANGE_BUDGET_MS = 120_000;
+
+/** The budget of `afterAll`: archiving the price and the product, one call to Stripe's API each (at most 15 s). */
+const CLEAN_UP_BUDGET_MS = 45_000;
 
 /**
  * How long a step waits for Stripe: its hosted pages to load and answer, its webhook to reach the platform, and the
@@ -58,8 +75,11 @@ const ARRANGE_BUDGET_MS = 90_000;
  */
 const STRIPE_WAIT_MS = 25_000;
 
-/** The monthly price of the journey's plan, in EUR: the Stripe price and the plan row say the same. */
+/** The monthly price of the journey's plan, in EUR: the Stripe price and the plan say the same. */
 const MONTHLY_PRICE = { amount: "19.00", minorUnits: 1900 } as const;
+
+/** The `metadata[velexis_e2e]` of what the journey makes in Stripe's test account. */
+const STRIPE_LABEL = "portal-checkout";
 
 /** The portal's title of a page (`%s · Velexis`). */
 const portalTitle = (title: string): string => `${title} · Velexis`;
@@ -81,30 +101,8 @@ function stripeSecretKey(): string {
   return key;
 }
 
-/**
- * POSTs `fields` (form-encoded, as Stripe's API takes them) to `path` of Stripe's API with the test key, and answers the
- * `id` of what Stripe created. A refusal throws with the status alone, never the key or the body.
- */
-async function createInStripe(path: string, fields: Readonly<Record<string, string>>): Promise<string> {
-  const response = await fetch(`${STRIPE_API_URL}${path}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${stripeSecretKey()}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams(fields).toString(),
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!response.ok) {
-    await response.body?.cancel();
-    throw new Error(`Stripe answered ${response.status} to POST ${path}`);
-  }
-  const { id } = (await response.json()) as { id?: unknown };
-  if (typeof id !== "string") {
-    throw new Error(`Stripe's answer to POST ${path} has no id`);
-  }
-  return id;
-}
+/** What the journey made in Stripe's test account, as soon as Stripe answered each: `afterAll` archives it. */
+const madeInStripe: { productId?: string; priceId?: string } = {};
 
 /** The journey's plan: its code and name, and the Stripe product and monthly price it is linked to. */
 interface PaidPlan {
@@ -116,32 +114,73 @@ interface PaidPlan {
 
 /**
  * A Stripe product with a monthly price of MONTHLY_PRICE in the test account, and a public plan linked to them (no free
- * trial, EUR), written as velexis_migrator (see the file header).
+ * trial, EUR), created and linked through the platform admin API by a platform admin of the journey's own (see the file
+ * header).
  */
 async function createPaidPlan(): Promise<PaidPlan> {
+  const key = stripeSecretKey();
   const suffix = randomBytes(4).toString("hex");
   const name = `E2E Paid ${suffix}`;
-  const productId = await createInStripe("/v1/products", {
-    name,
-    "metadata[velexis_e2e]": "portal-checkout",
+  // Prices are made in Stripe first (subscription-billing flow §A step 1).
+  const productId = await createTestProduct(key, name, STRIPE_LABEL);
+  madeInStripe.productId = productId;
+  const priceId = await createMonthlyTestPrice(key, {
+    productId,
+    currency: "EUR",
+    unitAmount: MONTHLY_PRICE.minorUnits,
+    label: STRIPE_LABEL,
   });
-  const priceId = await createInStripe("/v1/prices", {
-    product: productId,
-    currency: "eur",
-    unit_amount: String(MONTHLY_PRICE.minorUnits),
-    "recurring[interval]": "month",
-  });
+  madeInStripe.priceId = priceId;
+
+  const admin = await enableMfa(
+    await createVerifiedAccount(buildAccount({ fullName: "Carla Checkout Admin" })),
+  );
+  await grantPlatformAdmin(admin.email);
+  const { accessToken } = await signInToAdminWithApi(admin);
+  const asAdmin = { endUserIp: admin.endUserIp, accessToken } as const;
+
   const code = `e2epaid_${suffix}`;
-  await withDatabase("migrator", async (client) => {
-    await client.query(
-      `INSERT INTO platform.plans (code, name, description, currency, monthly_price, per_booking_fee,
-                                   included_bookings, limits, features, is_public, is_active, sort_order, trial_days,
-                                   settlement_fee_bps, stripe_product_id, stripe_price_id_month)
-       VALUES ($1, $2, 'A paid plan for the portal Checkout journey (PFE-027).', 'EUR', $3, 0, 0,
-               '{"staffSeats":5,"apiKeys":10,"customDomains":0,"liveMode":false}'::jsonb, '{}'::jsonb, true, true,
-               92, 0, 0, $4, $5)`,
-      [code, name, MONTHLY_PRICE.amount, productId, priceId],
-    );
+  const plan: Schemas["CreatePlanRequest"] = {
+    code,
+    name,
+    description: "A paid plan for the portal Checkout journey (PFE-027).",
+    currency: "EUR",
+    monthlyPrice: { amount: MONTHLY_PRICE.amount, currency: "EUR" },
+    limits: { staffSeats: 5, apiKeys: 10, customDomains: 0, liveMode: false },
+    features: {},
+    isPublic: true,
+    trialDays: 0,
+    settlementFeeBps: 0,
+    sortOrder: 92,
+  };
+  const created = await callPlatformApi<Schemas["AdminPlan"]>({
+    operation: "adminCreatePlan",
+    method: "POST",
+    path: "/v1/admin/plans",
+    ...asAdmin,
+    body: plan,
+  });
+  expect(created).toMatchObject({ code, isPublic: true, isActive: true, stripePriceIdMonth: null });
+
+  // The admin links the plan to the product and its monthly price (PAD-012's form sends the same request).
+  const link: Schemas["UpdatePlanRequest"] = { stripeProductId: productId, stripePriceIdMonth: priceId };
+  const linked = await callPlatformApi<Schemas["AdminPlan"]>({
+    operation: "adminUpdatePlan",
+    method: "PATCH",
+    path: `/v1/admin/plans/${encodeURIComponent(code)}`,
+    ...asAdmin,
+    headers: { "If-Match": `"${String(created.version)}"` },
+    body: link,
+  });
+  // The API read the price from Stripe and found it as the plan says (amount, currency, interval, active); Checkout can
+  // start for monthly billing, which needs Stripe Billing on in the stack's platform API.
+  expect(linked).toMatchObject({
+    code,
+    stripeProductId: productId,
+    stripePriceIdMonth: priceId,
+    stripePriceIdYear: null,
+    priceWarnings: [],
+    checkoutAvailable: { month: true, year: false },
   });
   return { code, name, productId, priceId };
 }
@@ -195,6 +234,12 @@ test.describe(
           "portal-checkout.e2e.ts pays in Stripe's test mode: run it with E2E_STRIPE=1 (project portal-stripe)",
         );
       }
+      if (!settings.E2E_STRIPE_BILLING) {
+        throw new Error(
+          "portal-checkout.e2e.ts needs Stripe Billing in the stack: run it with E2E_STRIPE_BILLING=1 (Stripe Billing on " +
+            "and the billing forwarder to /webhooks/stripe/billing, tools/e2e/README.md, Tests of PFE-027)",
+        );
+      }
       if (!settings.E2E_WITH_OTA) {
         throw new Error(
           "portal-checkout.e2e.ts needs the OTA worker to set the paid OTA up: run it with E2E_WITH_OTA=1",
@@ -213,8 +258,8 @@ test.describe(
       });
       if (!me.features.stripeBilling) {
         throw new Error(
-          "portal-checkout.e2e.ts needs Stripe Billing on in the stack's platform processes (FEATURE_STRIPE_BILLING) and " +
-            "Stripe's billing events forwarded to /webhooks/stripe/billing (tools/e2e/README.md, Tests of PFE-027)",
+          "portal-checkout.e2e.ts needs Stripe Billing on in the stack's platform processes (FEATURE_STRIPE_BILLING), " +
+            "which E2E_STRIPE_BILLING=1 turns on (tools/e2e/README.md, Tests of PFE-027)",
         );
       }
       plan = await createPaidPlan();
@@ -224,8 +269,17 @@ test.describe(
       page = await context.newPage();
     });
 
+    // Also after a failed arrangement: whatever Stripe made of the product and the price is archived again.
     test.afterAll(async () => {
+      test.setTimeout(CLEAN_UP_BUDGET_MS);
       await context?.close();
+      const { productId, priceId } = madeInStripe;
+      if (productId !== undefined || priceId !== undefined) {
+        await archiveStripeTestObjects(stripeSecretKey(), {
+          prices: priceId === undefined ? [] : [priceId],
+          products: productId === undefined ? [] : [productId],
+        });
+      }
     });
 
     test("the owner chooses the paid plan in the wizard and goes to Stripe Checkout [PFE-027 AC1]", async () => {

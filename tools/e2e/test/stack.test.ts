@@ -32,6 +32,8 @@ import {
   STACK_DNS_RESOLVERS,
   STACK_PORTS,
   STOREFRONT_URL,
+  stripeBillingOn,
+  stripeForwarders,
   SUSPENDED_STOREFRONT_HOST,
   SUSPENDED_STOREFRONT_URL,
   SUSPENDED_TENANT_KEY,
@@ -40,6 +42,7 @@ import {
   type ServiceSpec,
   type StackSettings,
 } from "../support/stack";
+import { BILLING_STRIPE_EVENTS, OTA_STRIPE_EVENTS } from "../support/stripe";
 
 /** The harness settings of the CI job (.github/workflows/e2e.yml). */
 const CI_SETTINGS = {
@@ -255,6 +258,135 @@ describe("the OTA's Stripe test keys (OFE-017)", () => {
         expect(serviceEnv(name, context)[variable]).toBe(dummies[variable]);
       }
     }
+  });
+});
+
+describe("Stripe Billing in the stack: E2E_STRIPE_BILLING (lead decision 5(l) of 2026-11-05, FIX-W43-SHARED)", () => {
+  // Built at run time, so that no secret scanner takes these test values for leaked keys.
+  const PLATFORM_KEY = ["sk", "test", "fixw43billing"].join("_");
+  const HARNESS_SECRET = ["whsec", "fixw43harness"].join("_");
+  const FORWARDER_SECRET = ["whsec", "fixw43forwarder"].join("_");
+  const OTA_SECRET_KEY = ["sk", "test", "fixw43ota"].join("_");
+  const OTA_PUBLISHABLE_KEY = ["pk", "test", "fixw43ota"].join("_");
+  const PLATFORM = {
+    E2E_STRIPE: "1",
+    STRIPE_SECRET_KEY: PLATFORM_KEY,
+    STRIPE_BILLING_WEBHOOK_SECRET: HARNESS_SECRET,
+  } as const;
+  /** The env of the nightly portal-stripe step (.github/workflows/e2e.yml), with the job's E2E_WITH_OTA=1. */
+  const PORTAL_STRIPE = { ...PLATFORM, E2E_WITH_OTA: "1", E2E_STRIPE_BILLING: "1" } as const;
+  /** The env of the nightly storefront-stripe step: the OTA's keys too, and no E2E_STRIPE_BILLING. */
+  const STOREFRONT_STRIPE = {
+    ...PLATFORM,
+    E2E_WITH_OTA: "1",
+    STRIPE_SECRET_KEY_TEST: OTA_SECRET_KEY,
+    STRIPE_PUBLISHABLE_KEY_TEST: OTA_PUBLISHABLE_KEY,
+  } as const;
+  const PLATFORM_PROCESSES = ["platform-api", "platform-worker", "platform-cli"] as const;
+  const examples = exampleEnv([".env.example", "platform/backend/.env.example"]);
+
+  it("[PFE-027 AC1] is off by default and needs E2E_STRIPE=1 with its Stripe test values", () => {
+    expect(settings().E2E_STRIPE_BILLING).toBe(false);
+    expect(stripeBillingOn(settings(PLATFORM))).toBe(false);
+    expect(() => settings({ E2E_STRIPE_BILLING: "1" })).toThrow(
+      /E2E_STRIPE_BILLING=1 needs E2E_STRIPE=1 with its Stripe test-mode values/,
+    );
+    expect(() => settings({ E2E_STRIPE: "1", E2E_STRIPE_BILLING: "1" })).toThrow(
+      /STRIPE_SECRET_KEY, STRIPE_BILLING_WEBHOOK_SECRET/,
+    );
+    expect(stripeBillingOn(settings(PORTAL_STRIPE))).toBe(true);
+  });
+
+  it("[PFE-027 AC1] forwards Stripe Billing's events to the platform API with the platform's test key", () => {
+    expect(stripeForwarders(settings(PORTAL_STRIPE))).toEqual([
+      {
+        name: "stripe-cli-billing",
+        secretKey: PLATFORM_KEY,
+        forwardTo: `${PLATFORM_API_URL}/webhooks/stripe/billing`,
+        events: BILLING_STRIPE_EVENTS,
+        signingSecret: "billingWebhookSecret",
+      },
+    ]);
+    // With the OTA's keys as well, both forwarders, the OTA's first (each with its own key and events).
+    expect(
+      stripeForwarders(settings({ ...STOREFRONT_STRIPE, E2E_STRIPE_BILLING: "1" })).map((forwarder) => [
+        forwarder.name,
+        forwarder.secretKey,
+        forwarder.forwardTo,
+        forwarder.signingSecret,
+      ]),
+    ).toEqual([
+      ["stripe-cli", OTA_SECRET_KEY, `${OTA_API_URL}/webhooks/stripe/velexis/test`, "webhookSecret"],
+      [
+        "stripe-cli-billing",
+        PLATFORM_KEY,
+        `${PLATFORM_API_URL}/webhooks/stripe/billing`,
+        "billingWebhookSecret",
+      ],
+    ]);
+    // No Stripe, no forwarder.
+    expect(stripeForwarders(settings({ E2E_WITH_OTA: "1" }))).toEqual([]);
+    expect(stripeForwarders(settings(PLATFORM))).toEqual([]);
+  });
+
+  it("[PFE-027 AC1] turns Stripe Billing on for the platform processes, the forwarder's signing secret for the API alone", () => {
+    const context = stackContext(settings(PORTAL_STRIPE), DATABASE, {
+      billingWebhookSecret: FORWARDER_SECRET,
+    });
+    expect(context.stripeBillingWebhookSecret).toBe(FORWARDER_SECRET);
+    expect(serviceEnv("platform-api", context)).toMatchObject({
+      FEATURE_STRIPE_BILLING: "true",
+      STRIPE_SECRET_KEY: PLATFORM_KEY,
+      STRIPE_BILLING_WEBHOOK_SECRET: FORWARDER_SECRET,
+    });
+    // The worker and the CLI read the switch too, and keep the harness's signing secret, which the switch requires.
+    for (const name of ["platform-worker", "platform-cli"] as const) {
+      expect(serviceEnv(name, context), name).toMatchObject({
+        FEATURE_STRIPE_BILLING: "true",
+        STRIPE_SECRET_KEY: PLATFORM_KEY,
+        STRIPE_BILLING_WEBHOOK_SECRET: HARNESS_SECRET,
+      });
+    }
+    // The other switches as the stack has them anyway (PLATFORM_SWITCHES_ON, the .env.example ones).
+    for (const name of PLATFORM_PROCESSES) {
+      const values = serviceEnv(name, context);
+      expect(values, name).toMatchObject(PLATFORM_SWITCHES_ON);
+      for (const variable of ["FEATURE_OWN_STRIPE", "FEATURE_OWN_AMADEUS"]) {
+        expect(values[variable], `${name} ${variable}`).toBe(examples[variable]);
+      }
+    }
+    // Only the platform backend reads the switch; no other process gets the forwarder's secret.
+    for (const name of ALL_SERVICES.filter(
+      (service) => !(PLATFORM_PROCESSES as readonly string[]).includes(service),
+    )) {
+      const values = serviceEnv(name, context);
+      expect(values["FEATURE_STRIPE_BILLING"], name).not.toBe("true");
+      expect(values["STRIPE_BILLING_WEBHOOK_SECRET"], name).not.toBe(FORWARDER_SECRET);
+    }
+  });
+
+  it("[OFE-017 AC1] leaves the storefront-stripe stack as it was: Stripe Billing off, the OTA's forwarder only", () => {
+    const storefront = settings(STOREFRONT_STRIPE);
+    expect(stripeBillingOn(storefront)).toBe(false);
+    expect(stripeForwarders(storefront)).toEqual([
+      {
+        name: "stripe-cli",
+        secretKey: OTA_SECRET_KEY,
+        forwardTo: `${OTA_API_URL}/webhooks/stripe/velexis/test`,
+        events: OTA_STRIPE_EVENTS,
+        signingSecret: "webhookSecret",
+      },
+    ]);
+    const context = stackContext(storefront, DATABASE, { webhookSecret: FORWARDER_SECRET });
+    for (const name of PLATFORM_PROCESSES) {
+      expect(serviceEnv(name, context), name).toMatchObject({
+        FEATURE_STRIPE_BILLING: examples["FEATURE_STRIPE_BILLING"],
+        STRIPE_SECRET_KEY: PLATFORM_KEY,
+        STRIPE_BILLING_WEBHOOK_SECRET: HARNESS_SECRET,
+      });
+    }
+    expect(examples["FEATURE_STRIPE_BILLING"]).toBe("false");
+    expect(serviceEnv("ota-api", context)["STRIPE_WEBHOOK_SECRET_VELEXIS_TEST"]).toBe(FORWARDER_SECRET);
   });
 });
 

@@ -6,7 +6,7 @@ This folder holds the plain-Node checks that [`.github/workflows/ci.yml`](../../
 |---|---|
 | `check-package-json.mjs` | Fails on version ranges, misplaced test packages, packages that depend on apps, and actions not pinned to a commit SHA (below) |
 | `check-package-json.test.mjs` | Tests of the script, on small repositories built in a temporary folder |
-| `ci-workflow.test.mjs` | Tests of `ci.yml` itself: the job layout, the "Repository guards" step run on scratch git repositories, and the `.only` lint rule |
+| `ci-workflow.test.mjs` | Tests of `ci.yml` itself: the job layout (the `integration` job set up as `build-test` is, in parallel with it), the "Repository guards" step run on scratch git repositories, and the `.only` lint rule |
 
 ## Run it locally
 
@@ -50,9 +50,10 @@ git ls-remote --tags https://github.com/actions/checkout.git 'refs/tags/v4.4.0*'
 | `deploy-files` (Deploy files) | No | `shellcheck -S style deploy/scripts/*.sh deploy/scripts/test/*.sh deploy/systemd/test/*.sh deploy/caddy/test/*.sh`; Caddy 2.8.4 (SHA-512 checked) validates and `fmt`-checks the Caddyfile; `deploy/caddy/test/caddy-smoke.sh` runs the real Caddyfile with a local CA, test ports and an echo upstream on Node 22 ([`deploy/caddy/test/README.md`](../../deploy/caddy/test/README.md), X-022); `deploy/scripts/test/deploy.test.sh` runs `velexis-deploy` against fake releases with a fake `systemctl` and fake apps, without root (X-023); `systemd-analyze verify` of the units, which may report only the paths that exist on the VM alone (`/usr/bin/node`, the `/usr/local/sbin/velexis-*` helpers); `systemd-analyze security` keeps every app unit and `velexis-alert@` at exposure 2.0 or lower (X-021) |
 | `systemd-units` (systemd units smoke test) | No | `deploy/systemd/test/units-smoke.sh` runs the real units with a stand-in app under systemd, with PostgreSQL, Redis and Mailpit service containers, and checks that a unit killed into `failed` mails one alert (X-021) |
 | `dev-setup` (Local development setup) | Yes | [`docs/mvp/local-development.md`](../../docs/mvp/local-development.md) §2 on a clean runner: PostgreSQL 16 and Redis 7.4 from apt, `deploy/scripts/dev-setup.sh` and `tools/dev/dev-keys.mjs` twice, then the roles, every login of `.env.local`, the Redis password and the key files (X-016) |
-| `build-test` (Build and test) | Yes | Repository guards; `check-package-json.mjs`; install; Turborepo cache; database bootstrap; `pnpm dev:keys`; ESLint and tests of `tools/ci`; `pnpm format:check`, `lint`, `typecheck`, `test`; generated files up to date; the SDK route table up to date (SDK-002); `pnpm test:int` with PostgreSQL 16, Redis 7.4 and Mailpit; the PAN-absence report check, which fails when `ota/backend/node_modules/.cache/pan-absence/report.json` is missing, lacks one of the airline card's paths or holds a finding (OBE-052, [`ota/backend/README.md`](../../ota/backend/README.md) §8); `pnpm build`; a dry run of `deploy/scripts/pack-release.sh` |
+| `build-test` (Build and test) | Yes | Repository guards; `check-package-json.mjs`; install; Turborepo cache; database bootstrap; `pnpm dev:keys`; ESLint and tests of `tools/ci`; `pnpm format:check`, `lint`, `typecheck`, `test`; generated files up to date; the SDK route table up to date (SDK-002); `pnpm build`; the cross-backend tests of both backends (`test:xb`, PBE-035 and OBE-083); a dry run of `deploy/scripts/pack-release.sh` |
+| `integration` (Integration tests) | Yes | In parallel with `build-test` (lead decision (5o) of 2026-11-05, approved by the owner), with the same runner, PostgreSQL 16, Redis 7.4 and Mailpit service containers, environment and 45-minute limit: checkout, pnpm, Node, install, the Turborepo cache (restored only), database bootstrap, `pnpm dev:keys`; then `pnpm test:int` (its files make their own databases as `TEST_DATABASE_ADMIN_URL` with `@velexis/testing`, so this job leaves `velexis` unmigrated, as the bootstrap made it) and the PAN-absence report check, which fails when `ota/backend/node_modules/.cache/pan-absence/report.json` is missing, lacks one of the airline card's paths or holds a finding (OBE-052, [`ota/backend/README.md`](../../ota/backend/README.md) §8) |
 
-The guards and `check-package-json.mjs` run before `pnpm install`, so a broken rule fails in seconds.
+The guards and `check-package-json.mjs` run before `pnpm install`, so a broken rule fails in seconds. The integration tests have their own job since 2026-11-05: on run 41847581727 they took 16.4 of `build-test`'s 31.5 minutes, so the two jobs together now finish in about the time of the longer one.
 
 ### Repository guards
 
@@ -67,7 +68,7 @@ To see a guard fail on GitHub, open a throwaway pull request with one of: a test
 
 ### Turborepo cache
 
-`build-test` restores `.turbo/cache` with the key `turbo-<os>-<commit>` and falls back to the newest cache of any commit (`restore-keys`), so unchanged packages replay their lint, typecheck, test and build results. The cache is saved when the job succeeds, so a re-run of the same commit restores the exact key: its log shows `cache hit, replaying logs` for every cached task. `test:int` is never cached. The cache only grows (Turborepo 2 does not prune it); if restoring it becomes slow, delete the `turbo-` caches under Actions → Caches.
+`build-test` restores `.turbo/cache` with the key `turbo-<os>-<commit>` and falls back to the newest cache of any commit (`restore-keys`), so unchanged packages replay their lint, typecheck, test and build results. The cache is saved when the job succeeds, so a re-run of the same commit restores the exact key: its log shows `cache hit, replaying logs` for every cached task. `test:int` is never cached. The `integration` job and `e2e.yml` only restore it (`actions/cache/restore`, the same key and fallback): `build-test` alone saves it, so two jobs never race to save one key and the saved cache always holds the whole build. The cache only grows (Turborepo 2 does not prune it); if restoring it becomes slow, delete the `turbo-` caches under Actions → Caches.
 
 ## Dependabot
 
@@ -84,6 +85,6 @@ Known gap: in `deploy.yml` the `pnpm/action-setup` comment has text after the ta
 
 ## Human steps (the developer)
 
-- **Protect `main`** (Settings → Branches, or Rules → Rulesets): require a pull request with one approval, require the status checks **Plan lint**, **Deploy files** and **Build and test** to pass, allow squash merging only, require linear history, and block force pushes. Record it in the X-019 pull request ([ADR-0020](../../docs/mvp/adr/0020-ai-agent-development-workflow.md); [roadmap](../../docs/mvp/plans/roadmap.md) M0 human steps).
+- **Protect `main`** (Settings → Branches, or Rules → Rulesets): require a pull request with one approval, require the status checks **Plan lint**, **Deploy files**, **Build and test** and **Integration tests** (since lead decision (5o) of 2026-11-05) to pass, allow squash merging only, require linear history, and block force pushes. Record it in the X-019 pull request ([ADR-0020](../../docs/mvp/adr/0020-ai-agent-development-workflow.md); [roadmap](../../docs/mvp/plans/roadmap.md) M0 human steps).
 - Turn on Dependabot alerts and security updates, and secret scanning with push protection, in the repository's security settings.
 - After the first merge, re-run the CI of a commit on `main` and check its log for Turborepo cache hits.

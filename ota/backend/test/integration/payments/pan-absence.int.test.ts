@@ -41,9 +41,9 @@
 //
 // CI: the file is part of the default `pnpm test:int` run (vitest.int.config.ts includes every
 // `test/integration/**/*.int.test.ts`). It writes what it scanned, without any card value, to
-// `node_modules/.cache/pan-absence/report.json` of this package, and the build-test job of .github/workflows/ci.yml
-// fails when that report is missing (the file skipped, renamed or filtered out by a pattern), lacks a path, or found
-// anything.
+// `node_modules/.cache/pan-absence/report.json` of this package, and the integration job of .github/workflows/ci.yml
+// (Integration tests, which runs `pnpm test:int` since lead decision (5o) of 2026-11-05) fails when that report is
+// missing (the file skipped, renamed or filtered out by a pattern), lacks a path, or found anything.
 //
 // Every scenario runs in its `beforeAll` hook, with a budget of its own, and keeps what it saw; its tests read it. Card
 // values are test data only: Visa's documented test PAN, the stub's declined test card and a made-up holder and code.

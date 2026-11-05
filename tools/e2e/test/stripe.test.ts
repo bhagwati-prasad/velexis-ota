@@ -1,5 +1,7 @@
-// support/stripe.ts (OFE-017): the Stripe CLI forwarder against a stand-in `stripe` (no network, no key), the
-// redaction of its output, the PaymentIntent read against a fake fetch, and the test-card guards.
+// support/stripe.ts (OFE-017): the Stripe CLI forwarders against a stand-in `stripe` (no network, no key), the
+// redaction of their output, the PaymentIntent read against a fake fetch, and the test-card guards; since FIX-W43-SHARED
+// (lead decision 5(l) of 2026-11-05) the billing forwarder's events and the Stripe test objects of PFE-027's Checkout
+// journey, against a fake fetch.
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +9,11 @@ import { type Page } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { REPO_ROOT } from "../support/stack";
 import {
+  archiveStripeTestObjects,
+  BILLING_STRIPE_EVENTS,
+  BILLING_WEBHOOK_PATH,
+  createMonthlyTestPrice,
+  createTestProduct,
   fillCardForm,
   isReadyLine,
   OTA_STRIPE_EVENTS,
@@ -28,6 +35,7 @@ const TEST_KEY = ["sk", "test", "ofe017unit"].join("_");
 const LIVE_KEY = ["sk", "live", "ofe017unit"].join("_");
 const SECRET = ["whsec", "ofe017forwarder0secret"].join("_");
 const FORWARD_TO = `http://127.0.0.1:4000${OTA_WEBHOOK_PATH}`;
+const BILLING_FORWARD_TO = `http://127.0.0.1:3100${BILLING_WEBHOOK_PATH}`;
 
 describe("stripeListenArgs and stripeCliEnv", () => {
   it("forwards the OTA's events of the account itself to the OTA API, the key never on the command line [OFE-017 AC1]", () => {
@@ -47,6 +55,29 @@ describe("stripeListenArgs and stripeCliEnv", () => {
     const script = readFileSync(join(REPO_ROOT, "tools/dev/stripe-listen.sh"), "utf8");
     const events = /^readonly OTA_EVENTS=(.+)$/m.exec(script)?.[1]?.split(",");
     expect(events).toEqual([...OTA_STRIPE_EVENTS]);
+  });
+
+  it("[PFE-027 AC1] forwards Stripe Billing's events of the account itself to the platform API, as stripe-listen.sh's billing listener", () => {
+    const forwardTo = `http://127.0.0.1:3100${BILLING_WEBHOOK_PATH}`;
+    const args = stripeListenArgs(forwardTo, BILLING_STRIPE_EVENTS);
+    expect(args.slice(0, 3)).toEqual(["listen", "--forward-to", forwardTo]);
+    expect(args[args.indexOf("--events") + 1]?.split(",")).toEqual([...BILLING_STRIPE_EVENTS]);
+    expect(args[args.indexOf("--events-from") + 1]).toBe("@self");
+    expect(args.join(" ")).not.toMatch(/sk_|rk_|whsec_|--api-key|--live/);
+    // The billing listener of the development script: the same events, the same route of the platform API.
+    const script = readFileSync(join(REPO_ROOT, "tools/dev/stripe-listen.sh"), "utf8");
+    expect(/^readonly BILLING_EVENTS=(.+)$/m.exec(script)?.[1]?.split(",")).toEqual([
+      ...BILLING_STRIPE_EVENTS,
+    ]);
+    expect(/^readonly BILLING_URL=(.+)$/m.exec(script)?.[1]).toBe(`localhost:3100${BILLING_WEBHOOK_PATH}`);
+    // The platform API's route, which verifies them with STRIPE_BILLING_WEBHOOK_SECRET.
+    expect(BILLING_WEBHOOK_PATH).toBe("/webhooks/stripe/billing");
+    const controller = readFileSync(
+      join(REPO_ROOT, "platform/backend/src/billing/sync/billing-webhook.controller.ts"),
+      "utf8",
+    );
+    expect(controller).toContain('@Controller("webhooks/stripe")');
+    expect(controller).toContain('@Post("billing")');
   });
 });
 
@@ -131,6 +162,7 @@ describe("startStripeForwarder", () => {
 
   let readySecret = "";
   let readyLog = "";
+  let billingLog = "";
   let exitedEarly = "";
   let withoutSecret = "";
   let tooSlow = "";
@@ -149,6 +181,18 @@ describe("startStripeForwarder", () => {
     await forwarder.stop();
     await forwarder.stop();
     readyLog = readFileSync(join(dir, "ready.log"), "utf8");
+    // The billing forwarder of E2E_STRIPE_BILLING=1: the same CLI with the billing events.
+    const billing = await startStripeForwarder({
+      cli: fakeCli("billing.js", {
+        ready: `> Ready! You are using Stripe API Version [2025-09-30]. Your webhook signing secret is ${SECRET} (^C to quit)`,
+      }),
+      env,
+      forwardTo: BILLING_FORWARD_TO,
+      events: BILLING_STRIPE_EVENTS,
+      logFile: join(dir, "billing.log"),
+    });
+    await billing.stop();
+    billingLog = readFileSync(join(dir, "billing.log"), "utf8");
     exitedEarly = await failureOf(
       start(
         fakeCli("refused.js", { extra: `Authorization failed for ${TEST_KEY}, status=401`, exitCode: 1 }),
@@ -170,6 +214,16 @@ describe("startStripeForwarder", () => {
     expect(readyLog).not.toContain(TEST_KEY);
     // stop() sent SIGTERM and waited for the exit; a second stop() changes nothing.
     expect(readyLog).toContain("stopped");
+  });
+
+  it("[PFE-027 AC1] runs the billing forwarder with the billing events, its log redacted", () => {
+    expect(billingLog).toContain(
+      `args: ${stripeListenArgs(BILLING_FORWARD_TO, BILLING_STRIPE_EVENTS).join(" ")}`,
+    );
+    expect(billingLog).toContain(`--events ${BILLING_STRIPE_EVENTS.join(",")}`);
+    expect(billingLog).toContain("key: set");
+    expect(billingLog).not.toContain(SECRET);
+    expect(billingLog).not.toContain(TEST_KEY);
   });
 
   it("fails with the CLI's redacted output when it exits before it is ready, never with the key", () => {
@@ -238,6 +292,125 @@ describe("retrievePaymentIntent", () => {
     await expect(retrievePaymentIntent(TEST_KEY, "pi_3QofeTest", other.fetchImpl)).rejects.toThrow(
       /is not that PaymentIntent/,
     );
+  });
+});
+
+describe("the Stripe test objects of a journey (FIX-W43-SHARED)", () => {
+  /** A fake fetch that records each call and answers with `answer(url, call number)`. */
+  const fakeStripe = (answer: (url: string, n: number) => { status: number; body: unknown }) => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchImpl: StripeFetch = (url, init) => {
+      calls.push({ url, init });
+      const { status, body } = answer(url, calls.length);
+      return Promise.resolve(new Response(JSON.stringify(body), { status }));
+    };
+    const forms = (): Record<string, string>[] =>
+      calls.map((call) => Object.fromEntries(new URLSearchParams(String(call.init.body))));
+    return { calls, fetchImpl, forms };
+  };
+
+  it("[PFE-027 AC1] creates a labelled product and its monthly price with the test key, as Stripe's API takes them", async () => {
+    const stripe = fakeStripe((url) => ({
+      status: 200,
+      body: { id: url.endsWith("/v1/products") ? "prod_Fix43" : "price_1Fix43" },
+    }));
+    await expect(
+      createTestProduct(TEST_KEY, "E2E Paid 1a2b", "portal-checkout", stripe.fetchImpl),
+    ).resolves.toBe("prod_Fix43");
+    await expect(
+      createMonthlyTestPrice(
+        TEST_KEY,
+        { productId: "prod_Fix43", currency: "EUR", unitAmount: 1900, label: "portal-checkout" },
+        stripe.fetchImpl,
+      ),
+    ).resolves.toBe("price_1Fix43");
+    expect(stripe.calls.map((call) => [call.init.method, call.url])).toEqual([
+      ["POST", "https://api.stripe.com/v1/products"],
+      ["POST", "https://api.stripe.com/v1/prices"],
+    ]);
+    for (const call of stripe.calls) {
+      expect(call.init.headers).toEqual({
+        Authorization: `Bearer ${TEST_KEY}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      });
+    }
+    expect(stripe.forms()).toEqual([
+      { name: "E2E Paid 1a2b", "metadata[velexis_e2e]": "portal-checkout" },
+      {
+        product: "prod_Fix43",
+        currency: "eur",
+        unit_amount: "1900",
+        "recurring[interval]": "month",
+        "metadata[velexis_e2e]": "portal-checkout",
+      },
+    ]);
+  });
+
+  it("refuses a live key, a bad product id or amount before any request, and names only the status of a refusal", async () => {
+    const stripe = fakeStripe(() => ({ status: 200, body: { id: "prod_Fix43" } }));
+    await expect(createTestProduct(LIVE_KEY, "x", "y", stripe.fetchImpl)).rejects.toThrow(/test-mode key/);
+    const price = { productId: "prod_Fix43", currency: "EUR", unitAmount: 1900, label: "y" };
+    await expect(
+      createMonthlyTestPrice(TEST_KEY, { ...price, productId: "prod_1/../x" }, stripe.fetchImpl),
+    ).rejects.toThrow(/not a Stripe product id/);
+    await expect(
+      createMonthlyTestPrice(TEST_KEY, { ...price, unitAmount: 19.5 }, stripe.fetchImpl),
+    ).rejects.toThrow(/positive amount in minor units/);
+    expect(stripe.calls).toEqual([]);
+    const refused = fakeStripe(() => ({
+      status: 401,
+      body: { error: { message: `Invalid API Key provided: ${TEST_KEY}` } },
+    }));
+    const failure = await createTestProduct(TEST_KEY, "x", "y", refused.fetchImpl).catch(String);
+    expect(failure).toBe("Error: Stripe answered 401 to POST /v1/products");
+    // An answer that names another kind of object is no product.
+    const other = fakeStripe(() => ({ status: 200, body: { id: "price_1Fix43" } }));
+    await expect(createTestProduct(TEST_KEY, "x", "y", other.fetchImpl)).rejects.toThrow(/names no product/);
+  });
+
+  it("[PFE-027 AC1] archives the prices, then the products, with active=false", async () => {
+    const stripe = fakeStripe((url) => ({ status: 200, body: { id: url.split("/").at(-1), active: false } }));
+    await archiveStripeTestObjects(
+      TEST_KEY,
+      { prices: ["price_1Fix43"], products: ["prod_Fix43"] },
+      stripe.fetchImpl,
+    );
+    expect(stripe.calls.map((call) => [call.init.method, call.url])).toEqual([
+      ["POST", "https://api.stripe.com/v1/prices/price_1Fix43"],
+      ["POST", "https://api.stripe.com/v1/products/prod_Fix43"],
+    ]);
+    expect(stripe.forms()).toEqual([{ active: "false" }, { active: "false" }]);
+  });
+
+  it("tries every object when one is refused, then names each refusal, never the key or the body", async () => {
+    const stripe = fakeStripe((url, n) =>
+      n === 1
+        ? { status: 404, body: { error: { message: `No such price; key ${TEST_KEY}` } } }
+        : { status: 200, body: { id: url.split("/").at(-1) } },
+    );
+    const failure = await archiveStripeTestObjects(
+      TEST_KEY,
+      { prices: ["price_1Gone"], products: ["prod_Fix43"] },
+      stripe.fetchImpl,
+    ).catch(String);
+    expect(stripe.calls).toHaveLength(2);
+    expect(failure).toBe(
+      "Error: Stripe test objects left active:\n  - Stripe answered 404 to POST /v1/prices/price_1Gone",
+    );
+    expect(failure).not.toContain(TEST_KEY);
+    // Every id is checked before the first request, and a live key is refused.
+    const untouched = fakeStripe(() => ({ status: 200, body: {} }));
+    await expect(
+      archiveStripeTestObjects(
+        TEST_KEY,
+        { prices: ["price_1Ok"], products: ["prod_1?x=1"] },
+        untouched.fetchImpl,
+      ),
+    ).rejects.toThrow(/not a Stripe product id/);
+    await expect(
+      archiveStripeTestObjects(LIVE_KEY, { prices: ["price_1Ok"], products: [] }, untouched.fetchImpl),
+    ).rejects.toThrow(/Stripe test objects left active:[\s\S]*test-mode key/);
+    expect(untouched.calls).toEqual([]);
   });
 });
 

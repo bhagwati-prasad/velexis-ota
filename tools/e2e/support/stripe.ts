@@ -1,20 +1,31 @@
 // Stripe in the end-to-end journeys (OFE-017; ota/frontend/README.md §13 journey 2, ota/docs/flows/checkout-stripe.md
-// §6, docs/mvp/local-development.md §6, PADR-0017 item 4): the Stripe CLI forwarder of the stack, and the browser and
-// API helpers of the nightly `storefront-stripe` journeys. Test mode only; nothing here runs without E2E_STRIPE=1.
+// §6, docs/mvp/local-development.md §6, PADR-0017 item 4): the Stripe CLI forwarders of the stack, and the browser and
+// API helpers of the nightly `storefront-stripe` and `portal-stripe` journeys. Test mode only; nothing here runs without
+// E2E_STRIPE=1.
 //
-// 1. The forwarder. With E2E_STRIPE=1, E2E_WITH_OTA=1 and the OTA's test keys (STRIPE_SECRET_KEY_TEST,
+// 1. The forwarders. With E2E_STRIPE=1, E2E_WITH_OTA=1 and the OTA's test keys (STRIPE_SECRET_KEY_TEST,
 //    STRIPE_PUBLISHABLE_KEY_TEST), support/stack.ts starts `stripe listen` before the apps: the events the OTA's
 //    production endpoint receives (the list of tools/dev/stripe-listen.sh), of the Velexis account only, forwarded to
 //    the OTA API's `/webhooks/stripe/velexis/test`. The signing secret the CLI prints with its "Ready!" line becomes the
-//    OTA API's STRIPE_WEBHOOK_SECRET_VELEXIS_TEST, so the API verifies what the CLI signs. The key reaches the CLI as
-//    STRIPE_API_KEY in its environment, never on its command line; its output goes to test-results/stack/stripe-cli.log
-//    with every `whsec_`, `sk_` and `rk_` value redacted, and an error shows only that redacted output.
+//    OTA API's STRIPE_WEBHOOK_SECRET_VELEXIS_TEST, so the API verifies what the CLI signs. With E2E_STRIPE_BILLING=1
+//    (the nightly `portal-stripe` step; lead decision 5(l) of 2026-11-05, FIX-W43-SHARED) the stack starts a second one
+//    the same way with the platform's test key (STRIPE_SECRET_KEY): the events of Stripe Billing's endpoint (the
+//    `billing` list of stripe-listen.sh) forwarded to the platform API's `/webhooks/stripe/billing`, whose signing
+//    secret becomes the platform API's STRIPE_BILLING_WEBHOOK_SECRET. The key reaches each CLI as STRIPE_API_KEY in its
+//    environment, never on its command line; its output goes to test-results/stack/stripe-cli.log (the billing one's
+//    to stripe-cli-billing.log) with every `whsec_`, `sk_` and `rk_` value redacted, and an error shows only that
+//    redacted output.
 // 2. The card page. `fillCardForm` types a Stripe test card into the Payment Element's iframe, `completeThreeDSecure`
 //    presses "Complete" in Stripe's 3-D Secure test challenge. Only Stripe's documented test cards are used.
 // 3. Stripe's own record. `retrievePaymentIntent` reads a PaymentIntent with the test key: after a void its status is
 //    `canceled` (OF-04 AC2). It never puts the key or a response body into an error.
+// 4. Stripe test objects of a journey (FIX-W43-SHARED). `createTestProduct` and `createMonthlyTestPrice` make the
+//    product and monthly price that the portal's Checkout journey links to its plan through the admin API (prices are
+//    made in Stripe first, platform/docs/flows/subscription-billing.md §A), and `archiveStripeTestObjects` archives them
+//    again in its `afterAll` (Stripe deletes no product that has a price: `active=false`). Test keys only; an error
+//    names the request and Stripe's status, never the key or a response body.
 //
-// This file never imports support/stack.ts (which imports it): the stack passes in what the forwarder needs.
+// This file never imports support/stack.ts (which imports it): the stack passes in what the forwarders need.
 import { spawn, type ChildProcess } from "node:child_process";
 import { closeSync, openSync, writeSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
@@ -22,6 +33,9 @@ import { expect, type Locator, type Page } from "@playwright/test";
 
 /** The OTA API's webhook route of the Velexis Stripe account in test mode (OADR-0010 point 4). */
 export const OTA_WEBHOOK_PATH = "/webhooks/stripe/velexis/test";
+
+/** The platform API's webhook route of Stripe Billing (platform/docs/flows/subscription-billing.md §C). */
+export const BILLING_WEBHOOK_PATH = "/webhooks/stripe/billing";
 
 /**
  * The events the OTA's production endpoint receives (ADR-0011, OADR-0010; the `ota` listener of
@@ -38,6 +52,22 @@ export const OTA_STRIPE_EVENTS = Object.freeze([
   "charge.dispute.closed",
 ] as const);
 
+/**
+ * The events the platform's billing endpoint receives (ADR-0013, platform/docs/flows/subscription-billing.md §D; the
+ * `billing` listener of tools/dev/stripe-listen.sh): the billing forwarder (E2E_STRIPE_BILLING=1) subscribes to these
+ * only.
+ */
+export const BILLING_STRIPE_EVENTS = Object.freeze([
+  "checkout.session.completed",
+  "customer.subscription.created",
+  "customer.subscription.updated",
+  "customer.subscription.deleted",
+  "invoice.finalized",
+  "invoice.paid",
+  "invoice.payment_failed",
+  "invoice.voided",
+] as const);
+
 /** How long `stripe listen` may take to connect to Stripe and print "Ready!". */
 export const STRIPE_READY_TIMEOUT_MS = 60_000;
 /** How long the forwarder may take to exit after SIGTERM before it gets SIGKILL. */
@@ -45,20 +75,21 @@ const STRIPE_STOP_TIMEOUT_MS = 10_000;
 /** How many lines of the forwarder's (redacted) output an error shows. */
 const OUTPUT_TAIL_LINES = 40;
 
-/** Stripe's API, which `retrievePaymentIntent` reads. */
+/** Stripe's API, which `retrievePaymentIntent` reads and the test-object helpers write (test mode only). */
 export const STRIPE_API_URL = "https://api.stripe.com";
 
 /**
- * The arguments of `stripe listen` for a forwarder to `forwardTo`: the OTA's events of the account itself
- * (`@self`: no connected account's events, which reach another endpoint), no update check, no colours in the log.
+ * The arguments of `stripe listen` for a forwarder of `events` (the OTA's by default) to `forwardTo`: the events of the
+ * account itself (`@self`: no connected account's events, which reach another endpoint), no update check, no colours in
+ * the log.
  */
-export function stripeListenArgs(forwardTo: string): string[] {
+export function stripeListenArgs(forwardTo: string, events: readonly string[] = OTA_STRIPE_EVENTS): string[] {
   return [
     "listen",
     "--forward-to",
     forwardTo,
     "--events",
-    OTA_STRIPE_EVENTS.join(","),
+    events.join(","),
     "--events-from",
     "@self",
     "--skip-update",
@@ -96,8 +127,10 @@ export interface StripeForwarderOptions {
   readonly cli: string;
   /** The CLI's whole environment, STRIPE_API_KEY included (`childEnv(stripeCliEnv(key))` of support/stack.ts). */
   readonly env: NodeJS.ProcessEnv;
-  /** Where the events go: the OTA API's OTA_WEBHOOK_PATH. */
+  /** Where the events go: the OTA API's OTA_WEBHOOK_PATH, or the platform API's BILLING_WEBHOOK_PATH. */
   readonly forwardTo: string;
+  /** The events it subscribes to: OTA_STRIPE_EVENTS (the default) or BILLING_STRIPE_EVENTS. */
+  readonly events?: readonly string[];
   /** The log file of its redacted output. */
   readonly logFile: string;
   /** Default STRIPE_READY_TIMEOUT_MS. */
@@ -106,7 +139,7 @@ export interface StripeForwarderOptions {
 
 /** A running `stripe listen`. */
 export interface StripeForwarder {
-  /** The signing secret of its deliveries (`whsec_…`): for the OTA API's environment only, never printed. */
+  /** The signing secret of its deliveries (`whsec_…`): for the receiving API's environment only, never printed. */
   readonly webhookSecret: string;
   /** SIGTERM, then SIGKILL after 10 s. Idempotent. */
   stop(): Promise<void>;
@@ -176,7 +209,7 @@ export async function startStripeForwarder(options: StripeForwarderOptions): Pro
 
   let child: ChildProcess;
   try {
-    child = spawn(options.cli, stripeListenArgs(options.forwardTo), {
+    child = spawn(options.cli, stripeListenArgs(options.forwardTo, options.events), {
       env: options.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -307,6 +340,150 @@ export async function retrievePaymentIntent(
     status: body.status,
     captureMethod: typeof body.capture_method === "string" ? body.capture_method : "",
   };
+}
+
+// ---- Stripe test objects of a journey ---------------------------------------------------------------------------
+
+/** A Stripe test-mode secret or restricted key; any other key is refused before a request. */
+const STRIPE_TEST_KEY = /^(?:sk|rk)_test_[A-Za-z0-9_]+$/;
+
+/** The ids of the two kinds of object a journey makes. */
+const STRIPE_IDS = Object.freeze({
+  product: /^prod_[A-Za-z0-9]+$/,
+  price: /^price_[A-Za-z0-9]+$/,
+} as const);
+
+type StripeObjectKind = keyof typeof STRIPE_IDS;
+
+/**
+ * POSTs `fields` (form-encoded, as Stripe's API takes them) to `path` of Stripe's API with the test-mode `secretKey` and
+ * answers the id of the `kind` of object Stripe answered with. A refusal throws with the request and Stripe's status
+ * alone, never the key or the body.
+ */
+async function postToStripe(
+  secretKey: string,
+  path: string,
+  fields: Readonly<Record<string, string>>,
+  kind: StripeObjectKind,
+  fetchImpl: StripeFetch,
+): Promise<string> {
+  if (!STRIPE_TEST_KEY.test(secretKey)) {
+    throw new TypeError("Stripe test objects are made with a test-mode key (sk_test_…, rk_test_…) only");
+  }
+  const response = await fetchImpl(`${STRIPE_API_URL}${path}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${secretKey}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams(fields).toString(),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(`Stripe answered ${response.status} to POST ${path}`);
+  }
+  const { id } = (await response.json()) as { id?: unknown };
+  if (typeof id !== "string" || !STRIPE_IDS[kind].test(id)) {
+    throw new Error(`Stripe's answer to POST ${path} names no ${kind}`);
+  }
+  return id;
+}
+
+/**
+ * Creates a product named `name` in Stripe's test account, labelled `metadata[velexis_e2e] = label` so that a person
+ * finds what a run left behind, and answers its id (`prod_…`).
+ */
+export function createTestProduct(
+  secretKey: string,
+  name: string,
+  label: string,
+  fetchImpl: StripeFetch = fetch,
+): Promise<string> {
+  return postToStripe(
+    secretKey,
+    "/v1/products",
+    { name, "metadata[velexis_e2e]": label },
+    "product",
+    fetchImpl,
+  );
+}
+
+/** The monthly price `createMonthlyTestPrice` makes. */
+export interface MonthlyTestPrice {
+  /** The product it belongs to (`createTestProduct`). */
+  readonly productId: string;
+  /** ISO 4217, in either case: Stripe takes it in lower case. */
+  readonly currency: string;
+  /** The monthly amount in the currency's minor unit (1900 for 19.00 EUR). */
+  readonly unitAmount: number;
+  /** Its `metadata[velexis_e2e]`. */
+  readonly label: string;
+}
+
+/** Creates a recurring monthly price of `price.productId` in Stripe's test account and answers its id (`price_…`). */
+export async function createMonthlyTestPrice(
+  secretKey: string,
+  price: MonthlyTestPrice,
+  fetchImpl: StripeFetch = fetch,
+): Promise<string> {
+  if (!STRIPE_IDS.product.test(price.productId)) {
+    throw new TypeError(`not a Stripe product id: ${price.productId}`);
+  }
+  if (!Number.isSafeInteger(price.unitAmount) || price.unitAmount <= 0) {
+    throw new TypeError("a monthly test price needs a positive amount in minor units");
+  }
+  return postToStripe(
+    secretKey,
+    "/v1/prices",
+    {
+      product: price.productId,
+      currency: price.currency.toLowerCase(),
+      unit_amount: String(price.unitAmount),
+      "recurring[interval]": "month",
+      "metadata[velexis_e2e]": price.label,
+    },
+    "price",
+    fetchImpl,
+  );
+}
+
+/** What a journey made in Stripe's test account and archives again. */
+export interface StripeTestObjects {
+  readonly prices: readonly string[];
+  readonly products: readonly string[];
+}
+
+/**
+ * Archives the prices and then the products of `objects` in Stripe's test account (`active=false`: Stripe deletes no
+ * product that has a price). Every id is checked before the first request; every object is tried even when one fails,
+ * then one error names each refusal by its request and Stripe's status.
+ */
+export async function archiveStripeTestObjects(
+  secretKey: string,
+  objects: StripeTestObjects,
+  fetchImpl: StripeFetch = fetch,
+): Promise<void> {
+  const requests = [
+    ...objects.prices.map((id) => ({ id, kind: "price" as const, path: `/v1/prices/${id}` })),
+    ...objects.products.map((id) => ({ id, kind: "product" as const, path: `/v1/products/${id}` })),
+  ];
+  for (const request of requests) {
+    if (!STRIPE_IDS[request.kind].test(request.id)) {
+      throw new TypeError(`not a Stripe ${request.kind} id: ${request.id}`);
+    }
+  }
+  const failures: string[] = [];
+  for (const request of requests) {
+    try {
+      await postToStripe(secretKey, request.path, { active: "false" }, request.kind, fetchImpl);
+    } catch (error) {
+      failures.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(`Stripe test objects left active:\n  - ${failures.join("\n  - ")}`);
+  }
 }
 
 // ---- The card page ----------------------------------------------------------------------------------------------

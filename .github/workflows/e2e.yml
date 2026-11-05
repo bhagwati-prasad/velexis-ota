@@ -6,10 +6,12 @@
 # the Amadeus stub, the OTA worker, API and admin, the storefront previews and the demo OTA), and run the `portal`,
 # `platform-admin`, `storefront` (OFE-008) and `ota-admin` (OAD-016) Playwright projects in one run. The nightly run
 # also runs `portal-stripe` when the repository has the Stripe test secrets E2E_STRIPE_SECRET_KEY and
-# E2E_STRIPE_BILLING_WEBHOOK_SECRET (PADR-0017 item 4), and `storefront-stripe` (OFE-017) with the pinned Stripe CLI
-# when E2E_STRIPE_PUBLISHABLE_KEY exists too. Nightly and on demand, the SDK's smoke tests (SDK-014) run last, against
-# the OTA backend started as in local development. When a step fails, the traces, screenshots, HTML report and the
-# stack's logs (tools/e2e/test-results/stack/, sdk-smoke/) are uploaded as the artefact e2e-<run id>-<attempt>.
+# E2E_STRIPE_BILLING_WEBHOOK_SECRET (PADR-0017 item 4), on a stack with Stripe Billing on and a Stripe CLI forwarder of
+# billing events to the platform API (E2E_STRIPE_BILLING=1, lead decision 5(l) of 2026-11-05, approved by the owner),
+# and `storefront-stripe` (OFE-017) when E2E_STRIPE_PUBLISHABLE_KEY exists too; both with the pinned Stripe CLI. Nightly
+# and on demand, the SDK's smoke tests (SDK-014) run last, against the OTA backend started as in local development. When
+# a step fails, the traces, screenshots, HTML report and the stack's logs (tools/e2e/test-results/stack/, sdk-smoke/)
+# are uploaded as the artefact e2e-<run id>-<attempt>.
 # Agents never change this file to get their own change through (AGENTS.md §7). Third-party actions are pinned to full
 # commit SHAs with the tag as the last thing in the comment (tools/ci/check-package-json.mjs, ADR-0023).
 name: E2E
@@ -74,6 +76,10 @@ jobs:
       STRIPE_CONFIGURED: ${{ secrets.E2E_STRIPE_SECRET_KEY != '' && secrets.E2E_STRIPE_BILLING_WEBHOOK_SECRET != '' }}
       # "true" when the storefront's Stripe journeys can run as well (OFE-017): the publishable key of the same test account.
       STOREFRONT_STRIPE_CONFIGURED: ${{ secrets.E2E_STRIPE_SECRET_KEY != '' && secrets.E2E_STRIPE_BILLING_WEBHOOK_SECRET != '' && secrets.E2E_STRIPE_PUBLISHABLE_KEY != '' }}
+      # The Stripe CLI release both Stripe steps download, with its SHA-256 (OFE-017; the portal-stripe step since lead
+      # decision 5(l) of 2026-11-05): its forwarders run in tools/e2e/support/stripe.ts.
+      STRIPE_CLI_VERSION: "1.53.1"
+      STRIPE_CLI_SHA256: "032fe0b849a9d6a222488bc846445bafeae993af1026b78a8121d02321ca1fd1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -118,14 +124,22 @@ jobs:
       - name: "[PFE-014 AC1] [OFE-008 AC1] [OAD-016 AC1] Playwright projects portal, platform-admin, storefront and ota-admin"
         run: pnpm test:e2e -- --project=portal --project=platform-admin --project=storefront --project=ota-admin
 
+      # PFE-027's Checkout journey (portal-checkout.e2e.ts, every test tagged @stripe): E2E_STRIPE_BILLING=1 turns Stripe
+      # Billing on for this step's stack only and starts the Stripe CLI forwarder of billing events to the platform API's
+      # /webhooks/stripe/billing, whose signing secret the platform API gets (tools/e2e/README.md, Tests of PFE-027).
       - name: Stripe journeys (nightly, project portal-stripe)
         if: github.event_name == 'schedule' && env.STRIPE_CONFIGURED == 'true'
         env:
           E2E_STRIPE: "1"
           STRIPE_SECRET_KEY: ${{ secrets.E2E_STRIPE_SECRET_KEY }}
           STRIPE_BILLING_WEBHOOK_SECRET: ${{ secrets.E2E_STRIPE_BILLING_WEBHOOK_SECRET }}
-        # --pass-with-no-tests: the project has no journey until PFE-027 adds the first one tagged @stripe.
-        run: pnpm test:e2e -- --project=portal-stripe --pass-with-no-tests
+          E2E_STRIPE_BILLING: "1"
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/stripe.tgz" "https://github.com/stripe/stripe-cli/releases/download/v${STRIPE_CLI_VERSION}/stripe_${STRIPE_CLI_VERSION}_linux_x86_64.tar.gz"
+          echo "${STRIPE_CLI_SHA256}  $RUNNER_TEMP/stripe.tgz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/stripe-cli"
+          tar -xzf "$RUNNER_TEMP/stripe.tgz" -C "$RUNNER_TEMP/stripe-cli" stripe
+          E2E_STRIPE_CLI="$RUNNER_TEMP/stripe-cli/stripe" pnpm test:e2e -- --project=portal-stripe
 
       - name: "[OFE-017 AC1] [OFE-017 AC2] [OAD-017] Stripe storefront and OTA admin payment journeys (nightly, project storefront-stripe)"
         if: github.event_name == 'schedule' && env.STOREFRONT_STRIPE_CONFIGURED == 'true'
@@ -136,8 +150,6 @@ jobs:
           # The same test account's keys for the OTA API and worker and the Stripe CLI forwarder (tools/e2e/support/stripe.ts).
           STRIPE_SECRET_KEY_TEST: ${{ secrets.E2E_STRIPE_SECRET_KEY }}
           STRIPE_PUBLISHABLE_KEY_TEST: ${{ secrets.E2E_STRIPE_PUBLISHABLE_KEY }}
-          STRIPE_CLI_VERSION: "1.53.1"
-          STRIPE_CLI_SHA256: "032fe0b849a9d6a222488bc846445bafeae993af1026b78a8121d02321ca1fd1"
         run: |
           curl -fsSL -o "$RUNNER_TEMP/stripe.tgz" "https://github.com/stripe/stripe-cli/releases/download/v${STRIPE_CLI_VERSION}/stripe_${STRIPE_CLI_VERSION}_linux_x86_64.tar.gz"
           echo "${STRIPE_CLI_SHA256}  $RUNNER_TEMP/stripe.tgz" | sha256sum -c -
