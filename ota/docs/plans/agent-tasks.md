@@ -2586,7 +2586,8 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - `security-review.md` lists no open high finding; `pnpm audit --prod` shows no high or critical issue.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- contract && pnpm --filter @velexis/ota-backend test:int m6 && bash deploy/caddy/test/caddy-smoke.sh && pnpm audit --prod`
 
-### OBE-093 · Upgrade nodemailer in the OTA backend past its audit advisories
+### OBE-093 · Upgrade nodemailer in the OTA backend past its audit advisories ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M6
 - **Depends on:** OBE-084

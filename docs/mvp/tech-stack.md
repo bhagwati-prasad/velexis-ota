@@ -51,7 +51,7 @@ Related: [`architecture.md`](architecture.md) (where each piece runs), [`convent
 | Dates | `date-fns` + `@date-fns/tz` | 4.x / 1.x | Deadline and time-zone arithmetic in backends. Formatting uses `Intl`. |
 | Payments and billing | `stripe` (Node SDK) | 18.x, with `apiVersion` pinned in code | Billing, PaymentIntents, Connect, webhook verification ([ADR-0011](adr/0011-payments-stripe-and-airline-card.md), [ADR-0013](adr/0013-subscription-billing-stripe-billing.md)). |
 | Amadeus HTTP | Node built-in `fetch` (undici) | — | No SDK dependency. A typed client in the OTA backend ([ADR-0012](adr/0012-amadeus-account-model.md)). |
-| E-mail | `nodemailer` | 6.x | SMTP to any provider. Mailpit in development ([ADR-0017](adr/0017-email-documents-storage.md)). |
+| E-mail | `nodemailer` | **10** (10.3.1 in both backends and `@velexis/testing`: OBE-093, PBE-068) | SMTP to any provider. Mailpit in development ([ADR-0017](adr/0017-email-documents-storage.md)). Ships its own type declarations since 10.0, so no `@types/nodemailer`. The mailer gateways never let it read a file or a URL (`disableFileAccess`, `disableUrlAccess`) and send no `raw` message. 6.x carried five high advisories (security reviews OTA-SR-01, F-2). |
 | E-mail templates | `handlebars` | 4.7.x | Logic-less, escaped by default, editable by OTAs. |
 | PDF | `pdfmake` | 0.2.x | Pure JS PDFs. No headless browser on the VM. |
 | HTTP hardening | `helmet`, `cookie-parser` | 8.x / 1.4.x | Security headers and cookie parsing in NestJS. |

@@ -9,10 +9,12 @@
 // and the Reply-To address must be one plain address (EMAIL_ADDRESS of config.ts); the recipient is also the SMTP
 // envelope, so no display name, comment or second address can reach the RCPT TO command. The Message-ID is made of
 // the notification's id (`<ntf_…@sender domain>`), so every attempt of one e-mail is the same message for the
-// receiving servers. Nodemailer may not read files or URLs for a message (`disableFileAccess`, `disableUrlAccess`),
+// receiving servers. Nodemailer (10.x since OBE-093) may not read files or URLs for a message (`disableFileAccess`,
+// `disableUrlAccess`, which Nodemailer applies to `raw` content too and which no message field can turn off again),
 // writes no logs of its own, and waits at most 10 seconds for a connection or a greeting and 30 seconds for a reply.
-// Attachments (the booking documents of OBE-055, attachments.ts) are given as bytes the worker read and checked, never
-// as a path or a URL; their file names are cut to one line of MAX_ATTACHMENT_NAME_LENGTH characters.
+// The gateway never hands it a `raw` message, a path or a URL: attachments (the booking documents of OBE-055,
+// attachments.ts) are given as bytes the worker read and checked; their file names are cut to one line of
+// MAX_ATTACHMENT_NAME_LENGTH characters.
 //
 // A failure is a `MailerError` with the SMTP error code, response code and command only: the server's reply text may
 // quote the recipient, so it is never kept, logged or stored. `transport` tells a failure of the connection to the
@@ -21,6 +23,7 @@ import { Inject, Injectable, type OnApplicationShutdown } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { createTransport, type SendMailOptions, type Transporter } from "nodemailer";
 import { parseConnectionUrl } from "nodemailer/lib/shared";
+import type SMTPTransport from "nodemailer/lib/smtp-transport";
 import { EMAIL_ADDRESS, type WorkerConfig } from "../config";
 
 /** How long Nodemailer waits for a TCP connection, for the server's greeting, and for any reply. */
@@ -186,20 +189,32 @@ export type MailTransport = Pick<Transporter, "sendMail" | "close">;
 /** Injection token of the MailTransport. */
 export const MAIL_TRANSPORT = "OTA_MAIL_TRANSPORT";
 
+/** The Nodemailer SMTP transport createSmtpTransport makes. */
+export type SmtpTransport = Transporter<SMTPTransport.SentMessageInfo, SMTPTransport.Options>;
+
 /**
- * The SMTP transport of SMTP_URL: no pooling (one connection per e-mail), no logs, no file or URL access, the timeouts
- * above. The URL is parsed here (host, port, `smtps:` for implicit TLS, the credentials, query options) because
- * Nodemailer drops every other option of a configuration that carries a `url`.
+ * The options of the SMTP transport of SMTP_URL: the URL's host, port, `smtps:` for implicit TLS, credentials and query
+ * options, then the gateway's own settings (no logs, no file or URL access, the timeouts above). The URL is parsed here
+ * instead of being given as Nodemailer's `url` option because Nodemailer lets the values of that URL win over the other
+ * keys of the configuration; here the gateway's settings come last, so no query parameter of SMTP_URL (`?logger=true`,
+ * `?disableFileAccess=false`) changes them, and a `url` query parameter (another URL whose values would win again) is
+ * dropped.
  */
-export function createSmtpTransport(smtpUrl: string): MailTransport {
-  return createTransport({
-    ...parseConnectionUrl(smtpUrl),
+export function smtpTransportOptions(smtpUrl: string): SMTPTransport.Options {
+  const { url: _nestedUrl, ...connection } = parseConnectionUrl(smtpUrl);
+  return {
+    ...connection,
     ...SMTP_TIMEOUTS,
     logger: false,
     debug: false,
     disableFileAccess: true,
     disableUrlAccess: true,
-  } as Parameters<typeof createTransport>[0]);
+  };
+}
+
+/** The SMTP transport of SMTP_URL (smtpTransportOptions): no pooling, one connection per e-mail. */
+export function createSmtpTransport(smtpUrl: string): SmtpTransport {
+  return createTransport(smtpTransportOptions(smtpUrl));
 }
 
 /** The provider of MAIL_TRANSPORT from SMTP_URL. */

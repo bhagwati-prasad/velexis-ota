@@ -16,6 +16,9 @@ audit and the secret scan, and every finding with its severity and status. Every
   entry lifts `multer` to 2.5.0 below `@nestjs/platform-express` 11 (NestJS stays on 11.2.8) and a lockfile refresh
   moves `fast-uri` to 3.1.9 and `qs` to 6.17.1 inside their dependents' ranges. `pnpm audit --prod` now reports **6
   high** (no critical), all of them OTA-SR-01 (`nodemailer`) and OTA-SR-03 (`zod`) (§5).
+- **2026-11-05 (OBE-093):** OTA-SR-01 (`nodemailer`) is closed: the OTA backend and `@velexis/testing` pin `nodemailer`
+  10.3.1, and `pnpm audit --prod` lists no `nodemailer` advisory reaching either of them (§5). The same advisories stay
+  listed for the platform backend's 6.10.1 until PBE-068 (the platform review's F-2) moves it to the same release.
 
 ## 1. Scope
 
@@ -155,6 +158,33 @@ audit of 2026-11-04 listed 16, as its total of 19 moderate shows, and so does a 
   API's parsers are JSON, raw webhook bytes and its own multipart) and Express 5's default `simple` query parser does
   not use `qs`, so `qs` runs inside the Stripe client's form encoding.
 
+**2026-11-05 (OBE-093): `nodemailer` 10.3.1 in the OTA backend.** `ota/backend` (dependency) and `packages/testing`
+(devDependency) pin `nodemailer` 10.3.1, the latest 10.x (`npm view nodemailer dist-tags`: `latest` 10.3.1, published
+2026-10-29), which closes all 22 advisories `pnpm audit --prod` lists for 6.10.1 (5 high, 16 moderate, 1 low: the table
+above counts one moderate fewer; the last ones, GHSA-8c8m-p3m8-cjg8, GHSA-m943-m63m-w62w and GHSA-85x2-q946-cp5h, are
+fixed from 10.1.4). Nodemailer ships its own type declarations from 10.0, so `@types/nodemailer` is dropped from both
+packages (its last release, 8.0.2, describes Nodemailer 8). `pnpm audit --prod` still lists the 22 `nodemailer`
+advisories (5 high) until PBE-068, because it counts each advisory once and the platform backend's 6.10.1 carries them;
+none of them has a path from `ota/backend` or `packages/testing` any more (`pnpm why nodemailer -r`: 10.3.1 for both,
+6.10.1 for `platform/backend` only). On this task's base (wave 42, `53b5f12`) the totals are the same before
+and after the change: 29 advisories, 0 critical, 7 high.
+
+- **Breaking changes from 6.10 to 10.3** (the changelog's majors): 7.0 rewrote the SES transport (unused here), 8.0
+  renamed the error code `NoAuth` to `ENOAUTH` (the gateway keeps any upper-case code as is), 9.0 checks TLS
+  certificates when fetching remote content (the gateway fetches none) and 10.0 needs Node.js 20 (the backends run 22)
+  and applies the other keys of a configuration beside its `url`, the URL's values winning. The gateway already parsed
+  SMTP_URL itself (`parseConnectionUrl` from `nodemailer/lib/shared`, still exported); it now puts its own settings
+  after the URL's (no logs, `disableFileAccess`, `disableUrlAccess`, the timeouts), so no query parameter of SMTP_URL
+  changes them, and drops a nested `url` parameter that would win over them again.
+- **Proof** (`mailer.gateway.test.ts`): the real transport of `createSmtpTransport`, with only its SMTP stage replaced by
+  one that builds the message from the same stream the SMTP stage sends in DATA, refuses a path or a URL for an
+  attachment, an HTML body and a `raw` message before reading it (`EFILEACCESS`, `EURLACCESS`; through SMTP the
+  connection reports that stream error as `ESTREAM` with the command `API`, and nothing is sent), also when the message
+  sets `disableFileAccess: false` and SMTP_URL asks for access; the gateway never hands Nodemailer `raw`, `path` or
+  `href`; and its e-mail (sender, Reply-To, Message-ID, envelope, attachment bytes) is built as before. The
+  notifications unit tests and the Mailpit integration tests (`outbox.int.test.ts`, `booking-emails.int.test.ts`) pass
+  unchanged.
+
 ## 6. Secret scan
 
 No secret was found. Every match is a development value of `.env.example` (`dev_*` database passwords, also in
@@ -173,7 +203,7 @@ no change). A dependency advisory keeps the advisory's severity; its reachabilit
 
 | ID | Severity | Area | Finding | Status |
 |---|---|---|---|---|
-| OTA-SR-01 | High | Dependencies | `nodemailer` 6.10.1 in the OTA backend: the address parser's quadratic and recursive parsing (DoS), the `raw` option and the OAuth2 token fetch advisories. Reachability: the worker sends to addresses the API validated (one plain address of at most 254 characters), with no `raw`, no OAuth2 and no file or URL content, so the DoS needs an address the validation lets through; still the shipped version is vulnerable. | Open: **OBE-093** |
+| OTA-SR-01 | High | Dependencies | `nodemailer` 6.10.1 in the OTA backend: the address parser's quadratic and recursive parsing (DoS), the `raw` option and the OAuth2 token fetch advisories. Reachability: the worker sends to addresses the API validated (one plain address of at most 254 characters), with no `raw`, no OAuth2 and no file or URL content, so the DoS needs an address the validation lets through; still the shipped version is vulnerable. | Closed 2026-11-05 by **OBE-093**: `nodemailer` 10.3.1 in `ota/backend` and `packages/testing`, the transport still without file or URL access and the gateway without `raw` messages (§5); the platform backend's copy: PBE-068 |
 | OTA-SR-02 | High | Dependencies | `multer` 2.4.0 through `@nestjs/platform-express` 11.2.8 (DoS by a pending asynchronous `fileFilter`). Reachability: none today, the API parses multipart bodies itself (`common/http/body-parsers.ts`) and never mounts multer. Proposed fix: override `multer` to 2.5.0 below `@nestjs/platform-express` 11.2.8 (NestJS 12 would change a decision of the owner). | Closed 2026-11-05 by **OBE-094**: `multer` 2.5.0 through the root override `@nestjs/platform-express@11>multer`, NestJS on 11.2.8, both backends (§5) |
 | OTA-SR-03 | High | Dependencies (OTA admin) | `zod` 3.25.76 (memory exhaustion validating oversized constrained collections) in the OTA admin's server actions. | Open: **OAD-020** |
 | OTA-SR-04 | Medium | Dependencies | `fast-uri` 3.1.8 and `qs` 6.16.0 (moderate and low advisories), fixed by a lockfile refresh inside their dependents' ranges. | Closed 2026-11-05 by **OBE-094**: `fast-uri` 3.1.9 and `qs` 6.17.1 by a lockfile refresh, no override (§5) |
@@ -191,6 +221,7 @@ pnpm --filter @velexis/ota-backend exec vitest run --config vitest.int.config.ts
 bash deploy/caddy/test/caddy-smoke.sh   # alone on the machine: ports 2019, 3000-3002, 3100, 4000, 8080, 8443 free
 pnpm audit --prod
 pnpm why multer -r       # 2.5.0 below @nestjs/platform-express 11 (the root override of §5)
+pnpm why nodemailer -r   # 10.3.1 in ota/backend and packages/testing (OBE-093)
 ```
 
 The matrix, the rate-limit coverage test and the redaction walk follow the document and `RATE_LIMITS` by themselves: a new
