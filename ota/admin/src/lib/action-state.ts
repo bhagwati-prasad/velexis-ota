@@ -130,9 +130,10 @@ export function actionFailure(message: string, details: FailureDetails = {}): Ac
 
 /**
  * The form field name of a path: segments joined with dots (`["contacts", 0, "email"]` → `contacts.0.email`), the
- * names forms use for nested inputs. The empty path is the form itself.
+ * names forms use for nested inputs. The empty path is the form itself. Zod 4 types an issue's path as `PropertyKey[]`
+ * (symbols too, which no form schema here uses).
  */
-export function fieldName(path: readonly (string | number)[]): string {
+export function fieldName(path: readonly PropertyKey[]): string {
   return path.map(String).join(".");
 }
 

@@ -169,7 +169,7 @@ export async function createPage(_state: ActionState, form: FormData): Promise<P
   if (key === undefined) {
     return staleForm();
   }
-  const parsed = newPageSchema.safeParse(pageFormInput(form));
+  const parsed = newPageSchema().safeParse(pageFormInput(form));
   if (!parsed.success) {
     return fromZod(parsed.error);
   }
@@ -199,7 +199,7 @@ export async function updatePage(_state: ActionState, form: FormData): Promise<P
   if (pageId === undefined || version === undefined) {
     return staleForm();
   }
-  const parsed = pageChangesSchema.safeParse(pageFormInput(form));
+  const parsed = pageChangesSchema().safeParse(pageFormInput(form));
   if (!parsed.success) {
     return fromZod(parsed.error);
   }

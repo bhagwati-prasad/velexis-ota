@@ -390,6 +390,74 @@ describe("searchOffers", () => {
     expect(actionRequests()).toEqual([]);
   });
 
+  it("[OAD-020] refuses more than ten airlines by their count before any code is checked, and still checks the trip", async () => {
+    signedIn("agent");
+
+    // Eleven well-formed codes of a complete form: the count alone refuses them (the form's own bound of 10).
+    expect(await searchOffers(offerForm({ carriers: "AF KL LH BA IB UX VY U2 FR W6 LX" }))).toEqual({
+      ok: false,
+      code: "VALIDATION_FAILED",
+      message: "Check the highlighted fields and try again.",
+      fieldErrors: { carriers: "Enter up to 10 two-character airline codes, like AF KL." },
+    });
+
+    // Eleven codes, malformed ones among them: the list's count is the field's one problem, and the rules across the
+    // form (the same origin and destination) are still checked beside it.
+    const state = await searchOffers(
+      offerForm({ destination: "MAD", carriers: "AF KL LH BA IB UX VY U2 FR W6 TOOLONG" }),
+    );
+    expect(state).toEqual({
+      ok: false,
+      code: "VALIDATION_FAILED",
+      message: "Check the highlighted fields and try again.",
+      fieldErrors: {
+        carriers: "Enter up to 10 two-character airline codes, like AF KL.",
+        destination: "Enter a destination other than the origin.",
+      },
+    });
+    expect(actionRequests()).toEqual([]);
+
+    // Ten codes are the bound.
+    expect(await searchOffers(offerForm({ carriers: "AF KL LH BA IB UX VY U2 FR W6" }))).toMatchObject({
+      ok: true,
+    });
+    expect(only(OFFERS).body).toMatchObject({
+      amadeus: {
+        searchCriteria: {
+          flightFilters: {
+            carrierRestrictions: {
+              includedCarrierCodes: ["AF", "KL", "LH", "BA", "IB", "UX", "VY", "U2", "FR", "W6"],
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("[OAD-020] keeps Zod 3's verdicts: a count that is not a number, or an airline text past ten codes, ends the form's checks", async () => {
+    signedIn("agent");
+
+    // The same origin and destination would be a problem across the form; Zod 3 never checked it once a count was not
+    // a number or the airlines' text was too long (the transform after the failed check was skipped), nor does this.
+    for (const [overrides, field, message] of [
+      [{ adults: "two" }, "adults", "Enter 1 to 9 adults."],
+      // Fourteen codes: 41 characters, past the text that ten codes and their separators can fill.
+      [
+        { carriers: "AF KL LH BA IB UX VY U2 FR W6 LX LO SK AY" },
+        "carriers",
+        "Enter up to 10 two-character airline codes, like AF KL.",
+      ],
+    ] as const) {
+      expect(await searchOffers(offerForm({ destination: "MAD", ...overrides }))).toEqual({
+        ok: false,
+        code: "VALIDATION_FAILED",
+        message: "Check the highlighted fields and try again.",
+        fieldErrors: { [field]: message },
+      });
+    }
+    expect(actionRequests()).toEqual([]);
+  });
+
   it("answers Amadeus's refusal with its issues and the request id, and the API's field errors on the form's fields", async () => {
     signedIn("agent");
     api.on(OFFERS, () =>

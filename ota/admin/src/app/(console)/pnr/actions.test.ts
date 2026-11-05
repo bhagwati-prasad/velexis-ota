@@ -342,6 +342,55 @@ describe("importBooking", () => {
     expect(actionRequests()).toEqual([]);
   });
 
+  it("[OAD-020] refuses more than ten tags by their count before any tag is checked; ten tags of 40 characters go out", async () => {
+    signedIn("agent");
+    const tag = (index: number) => `${String(index).padStart(2, "0")}${"t".repeat(38)}`;
+
+    // Eleven tags, the last one also too long (the text is within its own bound): the list's count is the one problem
+    // of the field (`tags.maxItems: 10`).
+    const state = await run(
+      importForm(randomUUID(), {
+        tags: [...Array.from({ length: 10 }, (_, index) => `tag${index}`), "x".repeat(41)].join(","),
+      }),
+    );
+    expect(state).toEqual({
+      ok: false,
+      code: "VALIDATION_FAILED",
+      message: "Check the highlighted fields and try again.",
+      fieldErrors: { tags: "Use at most 10 tags." },
+    });
+    expect(actionRequests()).toEqual([]);
+
+    // Ten tags of 40 characters are the bound.
+    api.on(IMPORT, () => importedAnswer());
+    const tags = Array.from({ length: 10 }, (_, index) => tag(index));
+    expect(await run(importForm(randomUUID(), { tags: tags.join(", ") }))).toMatchObject({ ok: true });
+    expect(only(IMPORT).body).toMatchObject({ tags });
+  });
+
+  it("[OAD-020] keeps Zod 3's verdict: a tags text longer than ten full tags ends the form's checks", async () => {
+    signedIn("agent");
+    const tag = (index: number) => `${String(index).padStart(2, "0")}${"t".repeat(38)}`;
+
+    // Eleven tags of 40 characters (450 characters, past 10 × 42), on an override without its selling total: Zod 3
+    // skipped the rule across the form once the text was too long, and so does this.
+    expect(
+      await run(
+        importForm(randomUUID(), {
+          pricingMode: "override",
+          sellingTotal: "",
+          tags: Array.from({ length: 11 }, (_, index) => tag(index)).join(","),
+        }),
+      ),
+    ).toEqual({
+      ok: false,
+      code: "VALIDATION_FAILED",
+      message: "Check the highlighted fields and try again.",
+      fieldErrors: { tags: "Use at most 10 tags." },
+    });
+    expect(actionRequests()).toEqual([]);
+  });
+
   it("asks for a reload when a hidden field is not the page's (an unknown record locator, no key)", async () => {
     signedIn("agent");
 

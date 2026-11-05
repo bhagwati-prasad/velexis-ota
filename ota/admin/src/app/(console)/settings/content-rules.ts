@@ -262,53 +262,70 @@ const PAGE_MESSAGES = Object.freeze({
 // eslint-disable-next-line no-control-regex -- the control characters are what is refused
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/;
 
-const titleSchema = z
-  .string()
-  .trim()
-  .refine((value) => value !== "" && codePoints(value) <= PAGE_LIMITS.title, PAGE_MESSAGES.title)
-  .refine((value) => !CONTROL_CHARACTERS.test(value), PAGE_MESSAGES.titleControl);
+// The Zod schemas of this module are built on their first use, never while the module loads: the client forms import
+// its constants, and a schema built at load time would bring Zod 4 with its English messages into the browser's chunks
+// (OAD-020; their "credit card number" is a card label for the built-pages test, OAD-008 AC2). So no schema is a
+// top-level constant here, and the actions call `newPageSchema()`, `pageChangesSchema()`, `templateInputSchema()` and
+// `templateDraftSchema()`.
 
-const bodySchema = z
-  .string()
-  .transform(normalizeLineBreaks)
-  .refine((value) => codePoints(value) <= PAGE_LIMITS.body, PAGE_MESSAGES.body);
-
-const sortOrderSchema = z
-  .string()
-  .trim()
-  .refine((value) => /^(0|[1-9][0-9]{0,4})$/.test(value) && Number(value) <= PAGE_LIMITS.sortOrderMax, {
-    message: PAGE_MESSAGES.sortOrder,
-  })
-  .transform(Number);
-
-const kindSchema = z.enum(PAGE_KINDS.map((choice) => choice.value) as [PageKind, ...PageKind[]], {
-  errorMap: () => ({ message: PAGE_MESSAGES.kind }),
-});
-
-/** The fields every page form posts: what StorefrontPageUpdate takes. */
-const pageContentSchema = z.object({
-  kind: kindSchema,
-  title: titleSchema,
-  bodyMarkdown: bodySchema,
-  isPublished: z.boolean(),
-  showInFooter: z.boolean(),
-  sortOrder: sortOrderSchema,
-});
-
-/** The form of a new page: StorefrontPageInput (the address and the language are fixed from then on). */
-export const newPageSchema = pageContentSchema.extend({
-  slug: z
+/** The page forms' schemas: the fields every page form posts, and those of a new page. */
+function buildPageSchemas() {
+  const title = z
     .string()
     .trim()
-    .refine((value) => value.length <= PAGE_LIMITS.slug && SLUG_PATTERN.test(value), PAGE_MESSAGES.slug),
-  locale: z
+    .refine((value) => value !== "" && codePoints(value) <= PAGE_LIMITS.title, PAGE_MESSAGES.title)
+    .refine((value) => !CONTROL_CHARACTERS.test(value), PAGE_MESSAGES.titleControl);
+  const body = z
     .string()
-    .transform(canonicalLocale)
-    .refine((value) => LOCALE_PATTERN.test(value), PAGE_MESSAGES.locale),
-});
+    .transform(normalizeLineBreaks)
+    .refine((value) => codePoints(value) <= PAGE_LIMITS.body, PAGE_MESSAGES.body);
+  const sortOrder = z
+    .string()
+    .trim()
+    .refine((value) => /^(0|[1-9][0-9]{0,4})$/.test(value) && Number(value) <= PAGE_LIMITS.sortOrderMax, {
+      error: PAGE_MESSAGES.sortOrder,
+    })
+    .transform(Number);
+  const kind = z.enum(PAGE_KINDS.map((choice) => choice.value) as [PageKind, ...PageKind[]], {
+    error: PAGE_MESSAGES.kind,
+  });
+  // The fields every page form posts: what StorefrontPageUpdate takes.
+  const content = z.object({
+    kind,
+    title,
+    bodyMarkdown: body,
+    isPublished: z.boolean(),
+    showInFooter: z.boolean(),
+    sortOrder,
+  });
+  return {
+    changes: content,
+    newPage: content.extend({
+      slug: z
+        .string()
+        .trim()
+        .refine((value) => value.length <= PAGE_LIMITS.slug && SLUG_PATTERN.test(value), PAGE_MESSAGES.slug),
+      locale: z
+        .string()
+        .transform(canonicalLocale)
+        .refine((value) => LOCALE_PATTERN.test(value), PAGE_MESSAGES.locale),
+    }),
+  };
+}
+
+let pageSchemas: ReturnType<typeof buildPageSchemas> | undefined;
+
+/** The form of a new page: StorefrontPageInput (the address and the language are fixed from then on). */
+export function newPageSchema() {
+  pageSchemas ??= buildPageSchemas();
+  return pageSchemas.newPage;
+}
 
 /** The form of a page's changes: StorefrontPageUpdate, every writable field. */
-export const pageChangesSchema = pageContentSchema;
+export function pageChangesSchema() {
+  pageSchemas ??= buildPageSchemas();
+  return pageSchemas.changes;
+}
 
 /** What a page form posts, before its schema. */
 export function pageFormInput(form: FormData): Record<string, unknown> {
@@ -666,20 +683,36 @@ const draftPart = (limit: number, message: string) =>
     .transform(normalizeLineBreaks)
     .refine((value) => codePoints(value) <= limit, message);
 
+/** The template forms' schemas, built on their first use (see the pages' schemas). */
+function buildTemplateSchemas() {
+  return {
+    input: z.object({
+      subject: requiredPart(TEMPLATE_LIMITS.subject, TEMPLATE_MESSAGES.subject),
+      bodyHtml: requiredPart(TEMPLATE_LIMITS.bodyHtml, TEMPLATE_MESSAGES.bodyHtml),
+      bodyText: requiredPart(TEMPLATE_LIMITS.bodyText, TEMPLATE_MESSAGES.bodyText),
+      isActive: z.boolean(),
+    }),
+    draft: z.object({
+      subject: draftPart(TEMPLATE_LIMITS.subject, TEMPLATE_MESSAGES.subject),
+      bodyHtml: draftPart(TEMPLATE_LIMITS.bodyHtml, TEMPLATE_MESSAGES.bodyHtml),
+      bodyText: draftPart(TEMPLATE_LIMITS.bodyText, TEMPLATE_MESSAGES.bodyText),
+    }),
+  };
+}
+
+let templateSchemas: ReturnType<typeof buildTemplateSchemas> | undefined;
+
 /** The form of a save: NotificationTemplateInput. */
-export const templateInputSchema = z.object({
-  subject: requiredPart(TEMPLATE_LIMITS.subject, TEMPLATE_MESSAGES.subject),
-  bodyHtml: requiredPart(TEMPLATE_LIMITS.bodyHtml, TEMPLATE_MESSAGES.bodyHtml),
-  bodyText: requiredPart(TEMPLATE_LIMITS.bodyText, TEMPLATE_MESSAGES.bodyText),
-  isActive: z.boolean(),
-});
+export function templateInputSchema() {
+  templateSchemas ??= buildTemplateSchemas();
+  return templateSchemas.input;
+}
 
 /** The draft of a preview: NotificationTemplatePreviewRequest's three parts. */
-export const templateDraftSchema = z.object({
-  subject: draftPart(TEMPLATE_LIMITS.subject, TEMPLATE_MESSAGES.subject),
-  bodyHtml: draftPart(TEMPLATE_LIMITS.bodyHtml, TEMPLATE_MESSAGES.bodyHtml),
-  bodyText: draftPart(TEMPLATE_LIMITS.bodyText, TEMPLATE_MESSAGES.bodyText),
-});
+export function templateDraftSchema() {
+  templateSchemas ??= buildTemplateSchemas();
+  return templateSchemas.draft;
+}
 
 /** What a template form posts, before its schema. */
 export function templateFormInput(form: FormData): Record<string, unknown> {

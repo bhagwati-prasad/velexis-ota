@@ -304,22 +304,26 @@ function checked(form: FormData, name: string): boolean {
 const blankToUndefined = (value: unknown): unknown =>
   typeof value === "string" && value.trim() === "" ? undefined : value;
 
-const BookingId = z
-  .string({ required_error: STRINGS.staleForm })
-  .regex(/^bkg_[0-9A-Za-z]{16,40}$/, STRINGS.staleForm);
-const PaymentId = z
-  .string({ required_error: STRINGS.staleForm })
-  .regex(/^pay_[0-9A-Za-z]{16,40}$/, STRINGS.staleForm);
-/** The version the page displayed: a whole number (`ifMatch`, sent as its ETag `"<n>"`). */
+// The fields come from `textOf` (a text or `undefined`), so a schema's `error` is the message of a missing field.
+const BookingId = z.string({ error: STRINGS.staleForm }).regex(/^bkg_[0-9A-Za-z]{16,40}$/, STRINGS.staleForm);
+const PaymentId = z.string({ error: STRINGS.staleForm }).regex(/^pay_[0-9A-Za-z]{16,40}$/, STRINGS.staleForm);
+/**
+ * The version the page displayed: a whole number (`ifMatch`, sent as its ETag `"<n>"`). A malformed one ends the form's
+ * checks (`abort`), so the rules across the form's fields (`superRefine`) wait for a form of this page, as before the
+ * Zod 4 upgrade (OAD-020): Zod 3 never ran them after a failed check that a `transform` follows.
+ */
 const Version = z
-  .string({ required_error: STRINGS.staleForm })
-  .regex(/^(?:0|[1-9][0-9]{0,14})$/, STRINGS.staleForm)
+  .string({ error: STRINGS.staleForm })
+  .regex(/^(?:0|[1-9][0-9]{0,14})$/, { error: STRINGS.staleForm, abort: true })
   .transform(Number);
-/** The dialog's idempotency key (`crypto.randomUUID()` of the page). */
-const ActionKey = z.string({ required_error: STRINGS.staleForm }).uuid(STRINGS.staleForm);
+/**
+ * The dialog's idempotency key (`crypto.randomUUID()` of the page): any 8-4-4-4-12 hexadecimal key (`z.guid()`, which
+ * is what Zod 3's `.uuid()` accepted; Zod 4's `z.uuid()` also checks the RFC 9562 version and variant).
+ */
+const ActionKey = z.string({ error: STRINGS.staleForm }).check(z.guid({ error: STRINGS.staleForm }));
 /** The staff action's reason: 3 to 500 characters after trimming, counted as the API counts (code points). */
 const Reason = z
-  .string({ required_error: "Enter a reason." })
+  .string({ error: "Enter a reason." })
   .trim()
   .refine((value) => [...value].length > 0, "Enter a reason.")
   .refine(
@@ -329,18 +333,44 @@ const Reason = z
   .refine((value) => [...value].length <= REASON_MAX_LENGTH, `Use at most ${REASON_MAX_LENGTH} characters.`);
 /** An amount staff typed: digits with at most two decimals, above zero. */
 const TypedAmount = z
-  .string({ required_error: "Enter an amount." })
+  .string({ error: "Enter an amount." })
   .trim()
   .refine((value) => value !== "", "Enter an amount.")
   .refine((value) => TYPED_AMOUNT_PATTERN.test(value), "Enter an amount like 120.50.")
   .refine(isPositiveAmount, "Enter an amount above zero.");
-const Currency = z.string({ required_error: STRINGS.staleForm }).regex(/^[A-Z]{3}$/, STRINGS.staleForm);
+const Currency = z.string({ error: STRINGS.staleForm }).regex(/^[A-Z]{3}$/, STRINGS.staleForm);
 /** An optional text: blank is absent. */
-const optional = <T extends z.ZodTypeAny>(schema: T) => z.preprocess(blankToUndefined, schema.optional());
+const optional = <T extends z.ZodType>(schema: T) => z.preprocess(blankToUndefined, schema.optional());
+/**
+ * The checks of `list` on a field's list, as checks of that field: each problem is the field's own and never ends the
+ * form's checks, so the rules across the form (`superRefine`) still run, as they did with Zod 3 (OAD-020). The
+ * list's `.max()` refuses an oversized list before any item is checked (GHSA-mrhx-c7xc-m3w5).
+ */
+const checkedBy =
+  <T>(list: z.ZodType<T>) =>
+  (value: T, context: z.RefinementCtx<T>): void => {
+    const result = list.safeParse(value);
+    for (const issue of result.success ? [] : result.error.issues) {
+      context.addIssue({ code: "custom", path: issue.path, message: issue.message });
+    }
+  };
+/**
+ * A text of at most `max` UTF-16 units, as the dialogs' `maxLength` counts it and as Zod 3's `.max()` did: Zod 4's
+ * `.max()` counts code points (OAD-020), which would let a longer text through.
+ */
+const units =
+  (max: number) =>
+  (value: string): boolean =>
+    value.length <= max;
 
 // ---- patchBooking ---------------------------------------------------------------------------------------------------
 
-const NAME = z.string().trim().min(1, "Required.").max(60, "Use at most 60 characters.");
+// A name or remark the form did not post at all gets the words Zod 3 gave a missing field.
+const NAME = z
+  .string({ error: "Required" })
+  .trim()
+  .min(1, "Required.")
+  .refine(units(60), "Use at most 60 characters.");
 const PHONE_COUNTRY = z
   .string()
   .trim()
@@ -349,10 +379,16 @@ const PHONE_NUMBER = z
   .string()
   .trim()
   .regex(/^[0-9]{1,15}$/, "Enter digits only, at most 15.");
-const EMAIL = z.string().trim().email("Enter an e-mail address.").max(120, "Use at most 120 characters.");
+// The address rule after the trim (`z.email()` on its own would check the untrimmed text). It refuses every character
+// outside ASCII, so `.max()` counts the same in code points as in UTF-16 units.
+const EMAIL = z
+  .string()
+  .trim()
+  .check(z.email({ error: "Enter an e-mail address." }))
+  .max(120, "Use at most 120 characters.");
 
 /** A text of the stored contact (`kept`): what the order holds, bounded; the API checks it again. */
-const KEPT_TEXT = z.string().max(500);
+const KEPT_TEXT = z.string().refine(units(500));
 /** The stored contact the traveller and contact dialogs post (action-rules.ts `KeptContact`, `keptContactOf`). */
 const KeptContactSchema = z
   .object({
@@ -377,10 +413,12 @@ const KeptContactSchema = z
           })
           .strict(),
       )
+      // At most three phones (`ContactInput.phones.maxItems`): a longer list is refused before any phone is checked.
       .max(3)
       .optional(),
     address: z
       .object({
+        // At most the ten lines the page writes (`keptContactOf`), the longer list refused before any line is checked.
         lines: z.array(KEPT_TEXT).max(10).optional(),
         postalCode: KEPT_TEXT.optional(),
         countryCode: KEPT_TEXT.optional(),
@@ -399,12 +437,12 @@ type KeptValue = z.infer<typeof KeptContactSchema>;
 /** The hidden `kept` (JSON of the stored contact); anything else means the form is out of date. */
 const Kept = z
   .string()
-  .max(KEPT_MAX_LENGTH, STRINGS.staleForm)
+  .refine(units(KEPT_MAX_LENGTH), STRINGS.staleForm)
   .transform((text, context): unknown => {
     try {
       return JSON.parse(text) as unknown;
     } catch {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: STRINGS.staleForm });
+      context.addIssue({ code: "custom", message: STRINGS.staleForm });
       return z.NEVER;
     }
   })
@@ -428,13 +466,11 @@ const PatchForm = z.discriminatedUnion("element", [
     .object({
       ...PatchBase,
       element: z.literal("traveler"),
-      travelerId: z
-        .string({ required_error: STRINGS.staleForm })
-        .regex(/^[0-9A-Za-z-]{1,20}$/, STRINGS.staleForm),
+      travelerId: z.string({ error: STRINGS.staleForm }).regex(/^[0-9A-Za-z-]{1,20}$/, STRINGS.staleForm),
       firstName: NAME,
       lastName: NAME,
       dateOfBirth: optional(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Enter a date.")),
-      gender: optional(z.enum(valuesOf(GENDERS), { message: "Choose a gender." })),
+      gender: optional(z.enum(valuesOf(GENDERS), { error: "Choose a gender." })),
       email: optional(EMAIL),
       ...phoneParts,
       kept: optional(Kept),
@@ -444,15 +480,15 @@ const PatchForm = z.discriminatedUnion("element", [
     .object({
       ...PatchBase,
       element: z.literal("contact"),
-      purpose: z.enum(valuesOf(CONTACT_PURPOSES), { message: STRINGS.staleForm }),
+      purpose: z.enum(valuesOf(CONTACT_PURPOSES), { error: STRINGS.staleForm }),
       firstName: optional(NAME),
       lastName: optional(NAME),
-      companyName: optional(z.string().trim().max(60, "Use at most 60 characters.")),
+      companyName: optional(z.string().trim().refine(units(60), "Use at most 60 characters.")),
       email: optional(EMAIL),
       ...phoneParts,
-      addressLine1: optional(z.string().trim().max(70, "Use at most 70 characters.")),
-      addressLine2: optional(z.string().trim().max(70, "Use at most 70 characters.")),
-      postalCode: optional(z.string().trim().max(17, "Use at most 17 characters.")),
+      addressLine1: optional(z.string().trim().refine(units(70), "Use at most 70 characters.")),
+      addressLine2: optional(z.string().trim().refine(units(70), "Use at most 70 characters.")),
+      postalCode: optional(z.string().trim().refine(units(17), "Use at most 17 characters.")),
       cityName: optional(
         z
           .string()
@@ -473,15 +509,19 @@ const PatchForm = z.discriminatedUnion("element", [
     .object({
       ...PatchBase,
       element: z.literal("remark"),
-      remarkType: z.enum(valuesOf(REMARK_TYPES), { message: "Choose a remark type." }),
-      remarkText: z.string().trim().min(1, "Enter the remark.").max(200, "Use at most 200 characters."),
+      remarkType: z.enum(valuesOf(REMARK_TYPES), { error: "Choose a remark type." }),
+      remarkText: z
+        .string({ error: "Required" })
+        .trim()
+        .min(1, "Enter the remark.")
+        .refine(units(200), "Use at most 200 characters."),
     })
     .strict(),
   z
     .object({
       ...PatchBase,
       element: z.literal("ticketingAgreement"),
-      agreementOption: z.enum(valuesOf(AGREEMENT_OPTIONS), { message: "Choose an option." }),
+      agreementOption: z.enum(valuesOf(AGREEMENT_OPTIONS), { error: "Choose an option." }),
       agreementDelay: optional(
         z.string().trim().toUpperCase().regex(AGREEMENT_DELAY_PATTERN, "Enter whole days, like 2D."),
       ),
@@ -760,6 +800,13 @@ function phoneMissingPart(input: {
 
 // ---- issueTickets ---------------------------------------------------------------------------------------------------
 
+/** The flight offers an airline-card dialog sends: 1 to 6 ids, the longer list refused before any id is checked. */
+const FlightOfferIds = z
+  .array(z.string())
+  .min(1, STRINGS.staleForm)
+  .max(6, STRINGS.staleForm)
+  .refine((ids) => ids.every((id) => FLIGHT_OFFER_ID_PATTERN.test(id)), STRINGS.staleForm);
+
 const IssueForm = z
   .object({
     bookingId: BookingId,
@@ -768,25 +815,19 @@ const IssueForm = z
     reason: Reason,
     notifyCustomer: z.boolean(),
     allowUnpaid: z.boolean(),
-    settlement: optional(z.enum(valuesOf(SETTLEMENT_METHODS), { message: "Choose CASH or ACCOUNT." })),
+    settlement: optional(z.enum(valuesOf(SETTLEMENT_METHODS), { error: "Choose CASH or ACCOUNT." })),
+    // The booking's flight offers (`flightOfferIds`: 1 to 6, the document's `minItems` and `maxItems`).
     flightOfferIds: optional(
       z
         .string()
         .transform((value) => value.split(",").map((id) => id.trim()))
-        .refine(
-          (ids) => ids.length >= 1 && ids.length <= 6 && ids.every((id) => FLIGHT_OFFER_ID_PATTERN.test(id)),
-          STRINGS.staleForm,
-        ),
+        .superRefine(checkedBy(FlightOfferIds)),
     ),
   })
   .superRefine((value, context) => {
     // The airline-card dialog sends the booking's flight offers: its issuance needs the OTA's settlement.
     if (value.flightOfferIds !== undefined && value.settlement === undefined) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: [SETTLEMENT_FIELD],
-        message: "Choose CASH or ACCOUNT.",
-      });
+      context.addIssue({ code: "custom", path: [SETTLEMENT_FIELD], message: "Choose CASH or ACCOUNT." });
     }
   });
 
@@ -874,15 +915,15 @@ const CancelForm = z
     version: Version,
     actionKey: ActionKey,
     reason: Reason,
-    reasonCode: z.enum(valuesOf(CANCEL_REASON_CODES), { message: "Choose a reason." }),
-    refundMode: z.enum(["none", "full", "amount"], { message: "Choose what happens to the money." }),
+    reasonCode: z.enum(valuesOf(CANCEL_REASON_CODES), { error: "Choose a reason." }),
+    refundMode: z.enum(["none", "full", "amount"], { error: "Choose what happens to the money." }),
     amount: optional(TypedAmount),
     currency: Currency,
     notifyCustomer: z.boolean(),
   })
   .superRefine((value, context) => {
     if (value.refundMode === "amount" && value.amount === undefined) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: [AMOUNT_FIELD], message: "Enter an amount." });
+      context.addIssue({ code: "custom", path: [AMOUNT_FIELD], message: "Enter an amount." });
     }
   });
 
@@ -1055,7 +1096,7 @@ const NoteForm = z.object({
   bookingId: BookingId,
   actionKey: ActionKey,
   text: z
-    .string({ required_error: "Enter the note." })
+    .string({ error: "Enter the note." })
     .trim()
     .min(1, "Enter the note.")
     .refine((value) => [...value].length <= 2000, "Use at most 2,000 characters."),
@@ -1187,7 +1228,7 @@ const RefundForm = z.object({
   bookingId: optional(BookingId),
   actionKey: ActionKey,
   reason: Reason,
-  refundReason: z.enum(valuesOf(REFUND_REASONS), { message: "Choose a reason category." }),
+  refundReason: z.enum(valuesOf(REFUND_REASONS), { error: "Choose a reason category." }),
   amount: TypedAmount,
   currency: Currency,
 });

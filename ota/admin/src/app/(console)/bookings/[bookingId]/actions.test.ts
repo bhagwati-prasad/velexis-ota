@@ -295,6 +295,77 @@ describe("issueTickets", () => {
     expect(actionRequests()).toEqual([]);
   });
 
+  it("[OAD-020] refuses more than six flight offers by their count before any is checked, and still asks for the settlement", async () => {
+    signedIn();
+
+    // Seven well-formed ids of a complete form: the count alone refuses them (`flightOfferIds.maxItems: 6`).
+    expect(
+      await issueTickets(
+        INITIAL_ACTION_STATE,
+        issueForm(randomUUID(), { settlement: "CASH", flightOfferIds: "1,2,3,4,5,6,7" }),
+      ),
+    ).toEqual({
+      ok: false,
+      code: "VALIDATION_FAILED",
+      message: "This form is out of date. Reload the page and try again.",
+      fieldErrors: { flightOfferIds: "This form is out of date. Reload the page and try again." },
+    });
+
+    // Seven ids, malformed ones among them: only the list's count is checked, and the form's other rule (the
+    // airline-card dialog needs the OTA's settlement) is still checked beside it.
+    const state = await issueTickets(
+      INITIAL_ACTION_STATE,
+      issueForm(randomUUID(), { flightOfferIds: "1,2,x!,4,5,6,7" }),
+    );
+
+    expect(state).toEqual({
+      ok: false,
+      code: "VALIDATION_FAILED",
+      message: "This form is out of date. Reload the page and try again.",
+      fieldErrors: {
+        flightOfferIds: "This form is out of date. Reload the page and try again.",
+        settlement: "Choose CASH or ACCOUNT.",
+      },
+    });
+    expect(actionRequests()).toEqual([]);
+
+    // Six ids are the bound: the issuance goes out with them.
+    api.on(ISSUE, () => bookingAnswer());
+    expect(
+      await issueTickets(
+        INITIAL_ACTION_STATE,
+        issueForm(randomUUID(), { settlement: "CASH", flightOfferIds: "1,2,3,4,5,6" }),
+      ),
+    ).toMatchObject({ ok: true });
+    expect(only(ISSUE).body).toMatchObject({
+      formOfPayments: [{ other: { method: "CASH", flightOfferIds: ["1", "2", "3", "4", "5", "6"] } }],
+    });
+  });
+
+  it("[OAD-020] keeps Zod 3's verdicts: a malformed version ends the form's checks, and any 8-4-4-4-12 key is the dialog's", async () => {
+    signedIn();
+
+    // The settlement rule across the form waits for a form of this page (Zod 3 skipped it after the failed version).
+    expect(
+      await issueTickets(
+        INITIAL_ACTION_STATE,
+        issueForm(randomUUID(), { version: "v3", flightOfferIds: "1" }),
+      ),
+    ).toEqual({
+      ok: false,
+      code: "VALIDATION_FAILED",
+      message: "This form is out of date. Reload the page and try again.",
+      fieldErrors: { version: "This form is out of date. Reload the page and try again." },
+    });
+    expect(actionRequests()).toEqual([]);
+
+    // A hexadecimal key with no RFC 9562 version or variant: Zod 3's `.uuid()` took it, Zod 4's `z.uuid()` would not.
+    const key = "12345678-1234-1234-1234-123456789abc";
+    api.on(ISSUE, () => bookingAnswer());
+    expect(await issueTickets(INITIAL_ACTION_STATE, issueForm(key))).toMatchObject({ ok: true });
+    expect(only(ISSUE).headers.get("Idempotency-Key")).toBe(key);
+  });
+
   it("answers the API's known codes as the dialog's state, never as an error thrown to error.tsx", async () => {
     signedIn();
     const cases: [Response, Partial<ActionState>][] = [
@@ -795,6 +866,64 @@ describe("patchBooking", () => {
       });
     }
     expect(actionRequests()).toEqual([]);
+  });
+
+  it("[OAD-020] refuses a stored contact with more than three phones or ten address lines by their count, before any is checked", async () => {
+    signedIn();
+    const malformedPhone = { deviceType: "PAGER", countryCallingCode: 47, number: ["1"] };
+
+    const phones = await patchBooking(
+      INITIAL_ACTION_STATE,
+      patchForm("traveler", {
+        travelerId: "1",
+        firstName: "ANNA",
+        lastName: "BERG",
+        kept: JSON.stringify({ phones: [1, 2, 3, 4].map(() => malformedPhone) }),
+      }),
+    );
+    const lines = await patchBooking(
+      INITIAL_ACTION_STATE,
+      patchForm("contact", {
+        purpose: "STANDARD",
+        companyName: "Acme",
+        kept: JSON.stringify({ address: { lines: Array.from({ length: 11 }, (_, index) => index) } }),
+      }),
+    );
+
+    // One problem each, on the list: none of its items was checked.
+    for (const [state, list] of [
+      [phones, "kept.phones"],
+      [lines, "kept.address.lines"],
+    ] as const) {
+      expect(state).toMatchObject({
+        ok: false,
+        code: "VALIDATION_FAILED",
+        message: "This form is out of date. Reload the page and try again.",
+      });
+      expect(Object.keys(state.fieldErrors ?? {}), list).toEqual([list]);
+    }
+    expect(actionRequests()).toEqual([]);
+  });
+
+  it("[OAD-020] counts a name in UTF-16 units, as the dialog's maxLength and Zod 3 did, not in code points", async () => {
+    signedIn();
+    const emoji = "\u{1F600}"; // one code point, two UTF-16 units
+    const traveller = (firstName: string) =>
+      patchForm("traveler", { travelerId: "1", firstName, lastName: "BERG" });
+
+    // 31 code points are 62 units: over the 60 the dialog allows.
+    expect(await patchBooking(INITIAL_ACTION_STATE, traveller(emoji.repeat(31)))).toEqual({
+      ok: false,
+      code: "VALIDATION_FAILED",
+      message: "Check the highlighted fields and try again.",
+      fieldErrors: { firstName: "Use at most 60 characters." },
+    });
+    expect(actionRequests()).toEqual([]);
+
+    // 30 of them are the 60 units.
+    api.on(PATCH, () => bookingAnswer());
+    expect(await patchBooking(INITIAL_ACTION_STATE, traveller(emoji.repeat(30)))).toMatchObject({ ok: true });
+    expect(bodyText(only(PATCH))).toContain(emoji.repeat(30));
   });
 
   it("[OAD-008 AC1] a stale version answers 412 as 'reload', and the API's field errors land on the dialog's fields", async () => {

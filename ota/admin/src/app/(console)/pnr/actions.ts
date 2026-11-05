@@ -181,15 +181,36 @@ const blankToUndefined = (value: unknown): unknown =>
   typeof value === "string" && value.trim() === "" ? undefined : value;
 
 /** An optional text: blank is absent. */
-const optional = <T extends z.ZodTypeAny>(schema: T) => z.preprocess(blankToUndefined, schema.optional());
+const optional = <T extends z.ZodType>(schema: T) => z.preprocess(blankToUndefined, schema.optional());
+/**
+ * The checks of `list` on a field's list, as checks of that field: each problem is the field's own and never ends the
+ * form's checks, so the rules across the form (`superRefine`) still run, as they did with Zod 3 (OAD-020). The
+ * list's `.max()` refuses an oversized list before any item is checked (GHSA-mrhx-c7xc-m3w5).
+ */
+const checkedBy =
+  <T>(list: z.ZodType<T>) =>
+  (value: T, context: z.RefinementCtx<T>): void => {
+    const result = list.safeParse(value);
+    for (const issue of result.success ? [] : result.error.issues) {
+      context.addIssue({ code: "custom", path: issue.path, message: issue.message });
+    }
+  };
+
+/** The tags (`tags`: at most 10, each of at most 40 characters), the longer list refused before any tag is checked. */
+const TagList = z
+  .array(z.string())
+  .max(TAGS_MAX, STRINGS.tooManyTags)
+  .refine((tags) => tags.every((tag) => [...tag].length <= TAG_MAX_LENGTH), STRINGS.tagTooLong);
+
+// The fields come from `importFormInput` (a text, or no key), so a schema's `error` is the message of a missing field.
 
 /** A hidden value the page rendered; a problem with it asks for a reload. */
 const hiddenText = (pattern: RegExp) =>
-  z.string({ required_error: STRINGS.staleForm }).regex(pattern, STRINGS.staleForm);
+  z.string({ error: STRINGS.staleForm }).regex(pattern, STRINGS.staleForm);
 
 /** The staff action's reason: 3 to 500 characters after trimming, counted as the API counts (code points). */
 const Reason = z
-  .string({ required_error: STRINGS.reasonRequired })
+  .string({ error: STRINGS.reasonRequired })
   .trim()
   .refine((value) => [...value].length > 0, STRINGS.reasonRequired)
   .refine((value) => [...value].length >= REASON_MIN_LENGTH, STRINGS.reasonTooShort)
@@ -201,11 +222,13 @@ const ImportForm = z
     // An Amadeus order id: visible ASCII (base64-like ids, sometimes URL-encoded), as the lookup answered it.
     [FLIGHT_ORDER_FIELD]: hiddenText(/^[\x21-\x7e]{1,200}$/),
     [CURRENCY_FIELD]: optional(hiddenText(/^[A-Z]{3}$/)),
-    [ACTION_KEY_FIELD]: z.string({ required_error: STRINGS.staleForm }).uuid(STRINGS.staleForm),
+    // Any 8-4-4-4-12 hexadecimal key (`z.guid()`, which is what Zod 3's `.uuid()` accepted; Zod 4's `z.uuid()` also
+    // checks the RFC 9562 version and variant).
+    [ACTION_KEY_FIELD]: z.string({ error: STRINGS.staleForm }).check(z.guid({ error: STRINGS.staleForm })),
     [REASON_FIELD]: Reason,
     [PRICING_MODE_FIELD]: z.preprocess(
       (value) => blankToUndefined(value) ?? "markup_rules",
-      z.enum(["markup_rules", "net", "override"], { errorMap: () => ({ message: STRINGS.pricingMode }) }),
+      z.enum(["markup_rules", "net", "override"], { error: STRINGS.pricingMode }),
     ),
     [SELLING_TOTAL_FIELD]: optional(
       z
@@ -215,16 +238,27 @@ const ImportForm = z
         .refine(isPositiveAmount, STRINGS.sellingTotalPositive),
     ),
     [CUSTOMER_FIELD]: optional(z.string().regex(/^cus_[0-9A-Za-z]{12,40}$/, STRINGS.customer)),
+    // The address rule after the trim (`z.email()` on its own would check the untrimmed text). It refuses every
+    // character outside ASCII, so `.max()` counts the same in code points as in UTF-16 units.
     [CONTACT_EMAIL_FIELD]: optional(
-      z.string().trim().email(STRINGS.contactEmail).max(254, STRINGS.contactEmail),
+      z
+        .string()
+        .trim()
+        .check(z.email({ error: STRINGS.contactEmail }))
+        .max(254, STRINGS.contactEmail),
     ),
     [SEND_CONFIRMATION_FIELD]: z.boolean(),
+    // The tags as one text, then the list (`TagList`). A text longer than ten full tags could only hold more of them:
+    // it is counted in UTF-16 units, as Zod 3's `.max()` counted it (Zod 4's counts code points), and ends the form's
+    // checks (`abort`), as Zod 3 did when the `transform` after it was skipped.
     [TAGS_FIELD]: z
       .string()
-      .max(TAGS_MAX * (TAG_MAX_LENGTH + 2), STRINGS.tooManyTags)
+      .refine((text) => text.length <= TAGS_MAX * (TAG_MAX_LENGTH + 2), {
+        error: STRINGS.tooManyTags,
+        abort: true,
+      })
       .transform(tagsOf)
-      .refine((tags) => tags.length <= TAGS_MAX, STRINGS.tooManyTags)
-      .refine((tags) => tags.every((tag) => [...tag].length <= TAG_MAX_LENGTH), STRINGS.tagTooLong),
+      .superRefine(checkedBy(TagList)),
     [NOTE_FIELD]: optional(
       z
         .string()

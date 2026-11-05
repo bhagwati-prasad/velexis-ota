@@ -2633,7 +2633,8 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - Every answer of the authentication matrix but a pending operation's `501` matches the OTA document.
 - **Verify:** `pnpm contracts:lint && pnpm --filter @velexis/ota-backend exec vitest run --config vitest.int.config.ts test/integration/m6/auth-matrix.int.test.ts`
 
-### OAD-020 · Upgrade zod in the OTA admin past GHSA-mrhx-c7xc-m3w5
+### OAD-020 · Upgrade zod in the OTA admin past GHSA-mrhx-c7xc-m3w5 ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-admin
 - **Milestone:** M6
 - **Depends on:** OBE-084

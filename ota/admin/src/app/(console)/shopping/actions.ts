@@ -211,7 +211,20 @@ const blankToUndefined = (value: unknown): unknown =>
   typeof value === "string" && value.trim() === "" ? undefined : value;
 
 /** A text of the form, with `message` when it is missing or not a text. */
-const text = (message: string) => z.string({ required_error: message, invalid_type_error: message });
+const text = (message: string) => z.string({ error: message });
+/**
+ * The checks of `list` on a field's list, as checks of that field: each problem is the field's own and never ends the
+ * form's checks, so the rules across the form (`superRefine`) still run, as they did with Zod 3 (OAD-020). The
+ * list's `.max()` refuses an oversized list before any item is checked (GHSA-mrhx-c7xc-m3w5).
+ */
+const checkedBy =
+  <T>(list: z.ZodType<T>) =>
+  (value: T, context: z.RefinementCtx<T>): void => {
+    const result = list.safeParse(value);
+    for (const issue of result.success ? [] : result.error.issues) {
+      context.addIssue({ code: "custom", path: issue.path, message: issue.message });
+    }
+  };
 
 /** A three-letter IATA airport or city code. */
 const Location = z.preprocess(upper, text(STRINGS.location).regex(/^[A-Z]{3}$/, STRINGS.location));
@@ -220,7 +233,11 @@ const Day = z.preprocess(
   trimmed,
   text(STRINGS.day).refine((value) => isCalendarDay(value), STRINGS.day),
 );
-/** A whole number from `min` to `max`, typed as digits; an empty field is `empty` when given. */
+/**
+ * A whole number from `min` to `max`, typed as digits; an empty field is `empty` when given. Text that is not one or
+ * two digits ends the form's checks (`abort`), so the rules across the form wait for a number, as with Zod 3, which
+ * skipped them once the `transform` after a failed check was skipped.
+ */
 const count = (min: number, max: number, message: string, empty?: number) =>
   z.preprocess(
     (value) => {
@@ -228,20 +245,26 @@ const count = (min: number, max: number, message: string, empty?: number) =>
       return typed === "" && empty !== undefined ? String(empty) : typed;
     },
     text(message)
-      .regex(/^[0-9]{1,2}$/, message)
+      .regex(/^[0-9]{1,2}$/, { error: message, abort: true })
       .transform(Number)
       .refine((value) => value >= min && value <= max, message),
   );
-/** Airline codes separated by spaces or commas, in capitals, at most 10 and each once. */
+/** The airlines a filter keeps: at most 10, the longer list refused before any code is checked. */
+const CarrierList = z
+  .array(z.string())
+  .max(MAX_CARRIERS, STRINGS.carriers)
+  .refine((codes) => codes.every((code) => /^[A-Z0-9]{2}$/.test(code)), STRINGS.carriers);
+/**
+ * Airline codes separated by spaces or commas, in capitals, at most 10 and each once. A text longer than ten codes with
+ * their separators is counted in UTF-16 units, as Zod 3's `.max()` counted it (Zod 4's counts code points), and ends
+ * the form's checks (`abort`), as Zod 3 did when the `transform` after it was skipped.
+ */
 const Carriers = z.preprocess(
   (value) => (value === undefined ? "" : upper(value)),
   text(STRINGS.carriers)
-    .max(MAX_CARRIERS * 4, STRINGS.carriers)
+    .refine((value) => value.length <= MAX_CARRIERS * 4, { error: STRINGS.carriers, abort: true })
     .transform((value) => [...new Set(value.split(/[\s,]+/).filter((code) => code !== ""))])
-    .refine(
-      (codes) => codes.length <= MAX_CARRIERS && codes.every((code) => /^[A-Z0-9]{2}$/.test(code)),
-      STRINGS.carriers,
-    ),
+    .superRefine(checkedBy(CarrierList)),
 );
 /** The staff action's reason: at most 500 characters after trimming, counted as the API counts (code points). */
 const Reason = z.preprocess(
@@ -260,7 +283,7 @@ const OfferSearchSchema = z
     infants: count(0, MAX_SEATED, STRINGS.infants, 0),
     cabin: z.preprocess(
       (value) => blankToUndefined(upper(value)),
-      z.enum(CABINS, { errorMap: () => ({ message: STRINGS.cabin }) }).optional(),
+      z.enum(CABINS, { error: STRINGS.cabin }).optional(),
     ),
     nonStop: z.boolean(),
     carriers: Carriers,
@@ -329,8 +352,14 @@ type AvailabilitySearchValues = z.infer<typeof AvailabilitySearchSchema>;
  * API checks the rest against the Amadeus schema.
  */
 const OfferSchema = z
-  .object({ type: z.literal("flight-offer"), id: z.string().min(1).max(64) })
-  .passthrough()
+  .looseObject({
+    type: z.literal("flight-offer"),
+    // At most 64 UTF-16 units, as Zod 3's `.max()` counted them (Zod 4's counts code points).
+    id: z
+      .string()
+      .min(1)
+      .refine((id) => id.length <= 64),
+  })
   .refine((offer) => {
     try {
       return JSON.stringify(offer).length <= OFFER_MAX_CHARACTERS;

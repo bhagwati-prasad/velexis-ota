@@ -687,6 +687,171 @@ describe("the section actions", () => {
     expect(actionRequests()).toEqual([]);
   });
 
+  it("[OAD-020] refuses more than 50 markets or 20 legal links by their count, before any row is checked", async () => {
+    signedIn("owner");
+    // 51 markets and 21 links, every row malformed (and the markets each the same country): the list's count is the
+    // one problem, so no row, duplicate or default market is checked.
+    const markets: Record<string, string> = { version: "12", "markets.default": "SE" };
+    for (let index = 0; index < 51; index += 1) {
+      markets[`markets.list.${index * 2}.countryCode`] = "no-way";
+      markets[`markets.list.${index * 2}.name`] = "";
+      markets[`markets.list.${index * 2}.currency`] = "KRONER";
+      markets[`markets.list.${index * 2}.locale`] = "nb";
+    }
+    const links: Record<string, string> = {
+      version: "12",
+      "legal.termsVersion": "",
+      "legal.privacyVersion": "",
+    };
+    for (let index = 0; index < 21; index += 1) {
+      links[`legal.links.${index}.kind`] = "letter";
+      links[`legal.links.${index}.label`] = "";
+      links[`legal.links.${index}.target`] = "url";
+      links[`legal.links.${index}.url`] = "http://insecure.example.com";
+      links[`legal.links.${index}.pageSlug`] = "";
+    }
+
+    const tooManyMarkets = await run(saveMarkets, formOf(markets));
+    const tooManyLinks = await run(saveLegal, formOf(links));
+
+    expect(tooManyMarkets.fieldErrors).toEqual({ "markets.list": "Add at most 50 markets." });
+    expect(tooManyLinks.fieldErrors).toEqual({ "legal.links": "Add at most 20 links." });
+    expect(actionRequests()).toEqual([]);
+
+    // 50 markets and 20 links are the bounds: their rows are checked (the first one here).
+    const without = (fields: Record<string, string>, row: string) =>
+      Object.fromEntries(Object.entries(fields).filter(([name]) => !name.startsWith(row)));
+    expect((await run(saveMarkets, formOf(without(markets, "markets.list.100.")))).fieldErrors).toMatchObject(
+      {
+        "markets.list.0.countryCode": "Enter a two-letter country code like NO.",
+      },
+    );
+    expect((await run(saveLegal, formOf(without(links, "legal.links.20.")))).fieldErrors).toMatchObject({
+      "legal.links.0.kind": "Choose what the link is for.",
+    });
+  });
+
+  it("[OAD-020] refuses more than 20 locales or currencies, or a card brand twice, by the list's count", async () => {
+    signedIn("owner");
+    const codes = (count: number, code: (index: number) => string) =>
+      Array.from({ length: count }, (_, index) => code(index)).join(", ");
+    const letter = (index: number) => String.fromCharCode(97 + index);
+    const policies = (brands: readonly string[]) =>
+      formOf({
+        version: "12",
+        "policies.ticketingPolicy": "issue_after_payment",
+        "policies.paymentTiming": "authorize_before_booking",
+        "policies.acceptedCardBrands": brands,
+        "policies.offerTtlMinutes": "20",
+        "policies.checkoutTtlMinutes": "30",
+      });
+
+    // 21 well-formed codes with the default among them, which the count alone refuses, and 14 ticked brands (one brand
+    // posted 14 times).
+    const locales = await run(
+      saveLocales,
+      formOf({
+        version: "12",
+        "locales.default": "aa",
+        "locales.supported": codes(21, (i) => `a${letter(i)}`),
+      }),
+    );
+    const currencies = await run(
+      saveCurrencies,
+      formOf({
+        version: "12",
+        "currencies.default": "AAA",
+        "currencies.supported": codes(21, (i) => `A${letter(i).toUpperCase()}A`),
+      }),
+    );
+    const brands = await run(savePolicies, policies(Array.from({ length: 14 }, () => "VISA")));
+
+    expect(locales.fieldErrors).toEqual({
+      "locales.supported": "Enter locales like en, fr-CA, separated by commas (at most 20).",
+    });
+    expect(currencies.fieldErrors).toEqual({
+      "currencies.supported": "Enter currency codes like EUR, USD, separated by commas (at most 20).",
+    });
+    expect(brands.fieldErrors).toEqual({
+      "policies.acceptedCardBrands": "Choose each card brand at most once.",
+    });
+    expect(actionRequests()).toEqual([]);
+
+    // 20 locales and currencies, and the 13 brands, are the bounds.
+    serveUpdate();
+    for (const [action, form] of [
+      [
+        saveLocales,
+        formOf({
+          version: "12",
+          "locales.default": "aa",
+          "locales.supported": codes(20, (i) => `a${letter(i)}`),
+        }),
+      ],
+      [
+        saveCurrencies,
+        formOf({
+          version: "12",
+          "currencies.default": "AAA",
+          "currencies.supported": codes(20, (i) => `A${letter(i).toUpperCase()}A`),
+        }),
+      ],
+      [
+        savePolicies,
+        policies([
+          "VISA",
+          "AMERICAN_EXPRESS",
+          "MASTERCARD",
+          "VISA_ELECTRON",
+          "VISA_DEBIT",
+          "MASTERCARD_DEBIT",
+          "MAESTRO",
+          "DINERS",
+          "MASTERCARD_IXARIS",
+          "VISA_IXARIS",
+          "MASTERCARD_AIRPLUS",
+          "UATP_AIRPLUS",
+          "PYTON",
+        ]),
+      ],
+    ] as const) {
+      expect(await run(action, form)).toMatchObject({ ok: true });
+    }
+  });
+
+  it("[OAD-020] refuses an empty or malformed list of locales or currencies at its field (Zod 3 threw from the default's rule)", async () => {
+    signedIn("owner");
+
+    for (const [action, form, field, message] of [
+      [
+        saveLocales,
+        formOf({ version: "12", "locales.default": "en", "locales.supported": "" }),
+        "locales.supported",
+        "Enter locales like en, fr-CA, separated by commas (at most 20).",
+      ],
+      [
+        saveLocales,
+        formOf({ version: "12", "locales.default": "en", "locales.supported": "en, x_y_z" }),
+        "locales.supported",
+        "Enter locales like en, fr-CA, separated by commas (at most 20).",
+      ],
+      [
+        saveCurrencies,
+        formOf({ version: "12", "currencies.default": "EUR", "currencies.supported": " " }),
+        "currencies.supported",
+        "Enter currency codes like EUR, USD, separated by commas (at most 20).",
+      ],
+    ] as const) {
+      expect(await run(action, form)).toEqual({
+        ok: false,
+        code: "VALIDATION_FAILED",
+        message: "Check the highlighted fields and try again.",
+        fieldErrors: { [field]: message },
+      });
+    }
+    expect(actionRequests()).toEqual([]);
+  });
+
   it("asks for a reload without the page's version", async () => {
     signedIn("owner");
 

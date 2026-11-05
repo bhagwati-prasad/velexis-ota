@@ -139,7 +139,7 @@ export async function saveTemplate(_state: ActionState, form: FormData): Promise
   if (ref === undefined || (version !== "" && !VERSION_PATTERN.test(version))) {
     return staleForm();
   }
-  const parsed = templateInputSchema.safeParse(templateFormInput(form));
+  const parsed = templateInputSchema().safeParse(templateFormInput(form));
   if (!parsed.success) {
     return fromZod(parsed.error);
   }
@@ -174,7 +174,7 @@ export async function previewTemplate(_state: ActionState, form: FormData): Prom
   if (ref === undefined) {
     return staleForm();
   }
-  const parsed = templateDraftSchema.safeParse(templateFormInput(form));
+  const parsed = templateDraftSchema().safeParse(templateFormInput(form));
   if (!parsed.success) {
     return fromZod(parsed.error);
   }

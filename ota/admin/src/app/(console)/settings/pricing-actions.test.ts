@@ -457,6 +457,42 @@ describe("createMarkupRule", () => {
     expect(actionRequests()).toEqual([]);
   });
 
+  it("[OAD-020] refuses a scope list longer than the document allows by its count, before any code or choice is checked", async () => {
+    signedIn("owner");
+    // Three-letter codes AAA, AAB, …: `count` of them, each once.
+    const codes = (count: number) =>
+      Array.from({ length: count }, (_, index) =>
+        [26 * 26, 26, 1].map((unit) => String.fromCharCode(65 + (Math.floor(index / unit) % 26))).join(""),
+      );
+    const cabins = ["ECONOMY", "PREMIUM_ECONOMY", "BUSINESS", "FIRST"];
+
+    // 201 origins (`maxItems: 200`), a malformed one among them, and five ticked cabins of four (`uniqueItems`).
+    const state = await run(
+      createMarkupRule,
+      newMarkupForm(randomUUID(), {
+        "scope.origins": [...codes(200), "PARIS"].join(", "),
+        "scope.cabins": [...cabins, "ECONOMY"],
+      }),
+    );
+    expect(state).toEqual({
+      ok: false,
+      code: "VALIDATION_FAILED",
+      message: "Check the highlighted fields and try again.",
+      fieldErrors: { "scope.origins": "Enter at most 200 codes.", "scope.cabins": "Choose from the list." },
+    });
+    expect(actionRequests()).toEqual([]);
+
+    // 200 origins and the four cabins are the bounds.
+    api.on(`POST ${MARKUPS}`, () => ruleAnswer(markupRule(), 201));
+    expect(
+      await run(
+        createMarkupRule,
+        newMarkupForm(randomUUID(), { "scope.origins": codes(200).join(" "), "scope.cabins": cabins }),
+      ),
+    ).toMatchObject({ ok: true });
+    expect(only(`POST ${MARKUPS}`).body).toMatchObject({ scope: { origins: codes(200), cabins } });
+  });
+
   it("asks for a reload without the page's key", async () => {
     signedIn("owner");
 

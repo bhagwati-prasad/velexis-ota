@@ -323,6 +323,7 @@ const MESSAGES = Object.freeze({
   ticketingPolicy: "Choose when tickets are issued.",
   paymentTiming: "The payment is authorised before the booking: the only timing of the MVP.",
   cardBrands: "Choose at least one card brand.",
+  cardBrandsTooMany: "Choose each card brand at most once.",
   offerTtl: "Enter a whole number of minutes from 5 to 240.",
   checkoutTtl: "Enter a whole number of minutes from 5 to 1440.",
   version: "Use at most 40 characters.",
@@ -357,7 +358,7 @@ const HTTPS = /^https:\/\/\S+$/;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** A trimmed text that is `null` when empty, else checked by `schema`. */
-function optional<T extends z.ZodTypeAny>(schema: T) {
+function optional<T extends z.ZodType<unknown, string>>(schema: T) {
   return z
     .string()
     .trim()
@@ -379,7 +380,9 @@ function optionalText(max: number, message: string) {
 }
 
 /** An optional asset id (the picker's empty choice is `null`). */
-const assetIdField = optional(z.string().regex(ASSET_ID, MESSAGES.assetId));
+function assetIdField() {
+  return optional(z.string().regex(ASSET_ID, MESSAGES.assetId));
+}
 
 /** A whole number from `min` to `max`. */
 function wholeNumber(min: number, max: number, message: string) {
@@ -391,263 +394,286 @@ function wholeNumber(min: number, max: number, message: string) {
     .pipe(z.number().int().min(min, message).max(max, message));
 }
 
-/** A list of codes typed in one field: normalised, unique, each matching `pattern`, 1 to `max` of them. */
+/**
+ * A list of codes typed in one field: normalised, unique, each matching `pattern`, 1 to `max` of them (the document's
+ * `maxItems`). The list's `.max()` refuses a longer one before any code is checked (OAD-020, GHSA-mrhx-c7xc-m3w5),
+ * and every problem is the field's, with `message`.
+ */
 function codeList(pattern: RegExp, normalise: (code: string) => string, max: number, message: string) {
-  return z.string().transform((value, context) => {
-    const codes = [...new Set(splitCodes(value).map(normalise))];
-    if (codes.length === 0 || codes.length > max || codes.some((code) => !pattern.test(code))) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message });
-      return z.NEVER;
-    }
-    return codes;
-  });
+  return z
+    .string()
+    .transform((value) => [...new Set(splitCodes(value).map(normalise))])
+    .pipe(
+      z
+        .array(z.string())
+        .min(1, message)
+        .max(max, message)
+        .refine((codes) => codes.every((code) => pattern.test(code)), message),
+    );
 }
 
-const brandSchema = z.object({
-  name: required(120, MESSAGES.brandName),
-  legalName: optionalText(200, MESSAGES.legalName),
-  timeZone: required(64, MESSAGES.timeZone),
-});
-
-const colorField = z.string().trim().regex(HEX, MESSAGES.color);
-const fontField = z.enum(FONT_FAMILIES, { errorMap: () => ({ message: MESSAGES.font }) });
-
-const brandingSchema = z.object({
-  logoAssetId: assetIdField,
-  logoDarkAssetId: assetIdField,
-  logoSquareAssetId: assetIdField,
-  faviconAssetId: assetIdField,
-  colors: z.object({
-    primary: colorField,
-    secondary: colorField,
-    accent: colorField,
-    background: colorField,
-    text: colorField,
-  }),
-  fonts: z.object({ heading: fontField, body: fontField }),
-  cornerRadius: z.enum(["none", "small", "medium", "large"], {
-    errorMap: () => ({ message: MESSAGES.cornerRadius }),
-  }),
-});
-
-const localesSchema = z
-  .object({
-    default: z.string().trim().transform(canonicalLocaleOf).pipe(z.string().regex(LOCALE, MESSAGES.locale)),
-    supported: codeList(LOCALE, canonicalLocaleOf, MAX_LIST_LENGTH.locales, MESSAGES.locales),
-  })
-  .superRefine((value, context) => {
-    if (!value.supported.includes(value.default)) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["supported"],
-        message: MESSAGES.defaultLocale(value.default),
-      });
-    }
-  });
+/**
+ * The rows a list's form posted, under the keys it posted them with (`markets.list.<key>.…`), at most `max` of them
+ * (the document's `maxItems`). A longer list is refused with `message` before any row is checked (OAD-020,
+ * GHSA-mrhx-c7xc-m3w5): the count is taken on the keys alone and ends the section's checks (`abort`), as a list's
+ * `.max()` does, so neither the rows nor the section's rules about them are checked then. (Zod has no `.max()` for a
+ * record; the rows stay keyed by the form's own keys, so each problem lands on the row the form posted.)
+ */
+function rowsOf<T extends z.ZodType>(row: T, max: number, message: string) {
+  return z
+    .record(z.string(), z.unknown())
+    .refine((rows) => Object.keys(rows).length <= max, { error: message, abort: true })
+    .pipe(z.record(z.string(), row));
+}
 
 const upper = (code: string): string => code.toUpperCase();
 
-const currenciesSchema = z
-  .object({
-    default: z.string().trim().transform(upper).pipe(z.string().regex(CURRENCY, MESSAGES.currency)),
-    supported: codeList(CURRENCY, upper, MAX_LIST_LENGTH.currencies, MESSAGES.currencies),
-  })
-  .superRefine((value, context) => {
-    if (!value.supported.includes(value.default)) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["supported"],
-        message: MESSAGES.defaultCurrency(value.default),
-      });
-    }
+/**
+ * The Zod mirror of each section of `StorefrontSettingsUpdate`, from the raw fields `formInputOf` reads. Built on its
+ * first use, never while the module loads: the client components import this module's constants, and a schema built at
+ * load time would bring Zod 4 with its English messages into the browser's chunks (OAD-020; their "credit card number"
+ * is a card label for the built-pages test, OAD-008 AC2).
+ */
+function buildSectionSchemas() {
+  const brand = z.object({
+    name: required(120, MESSAGES.brandName),
+    legalName: optionalText(200, MESSAGES.legalName),
+    timeZone: required(64, MESSAGES.timeZone),
   });
 
-const marketSchema = z.object({
-  countryCode: z.string().trim().transform(upper).pipe(z.string().regex(COUNTRY, MESSAGES.country)),
-  name: required(80, MESSAGES.marketName),
-  currency: z.string().trim().transform(upper).pipe(z.string().regex(CURRENCY, MESSAGES.currency)),
-  locale: z.string().trim().transform(canonicalLocaleOf).pipe(z.string().regex(LOCALE, MESSAGES.locale)),
-});
+  const colorField = z.string().trim().regex(HEX, MESSAGES.color);
+  const fontField = z.enum(FONT_FAMILIES, { error: MESSAGES.font });
 
-const marketsSchema = z
-  .object({
-    default: optional(z.string().transform(upper).pipe(z.string().regex(COUNTRY, MESSAGES.country))),
-    list: z.record(z.string(), marketSchema),
-  })
-  .superRefine((value, context) => {
-    const rows = Object.entries(value.list);
-    if (rows.length > MAX_LIST_LENGTH.markets) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ["list"], message: MESSAGES.markets });
-    }
-    const seen = new Set<string>();
-    for (const [key, market] of rows) {
-      if (seen.has(market.countryCode)) {
+  const branding = z.object({
+    logoAssetId: assetIdField(),
+    logoDarkAssetId: assetIdField(),
+    logoSquareAssetId: assetIdField(),
+    faviconAssetId: assetIdField(),
+    colors: z.object({
+      primary: colorField,
+      secondary: colorField,
+      accent: colorField,
+      background: colorField,
+      text: colorField,
+    }),
+    fonts: z.object({ heading: fontField, body: fontField }),
+    cornerRadius: z.enum(["none", "small", "medium", "large"], { error: MESSAGES.cornerRadius }),
+  });
+
+  const locales = z
+    .object({
+      default: z.string().trim().transform(canonicalLocaleOf).pipe(z.string().regex(LOCALE, MESSAGES.locale)),
+      supported: codeList(LOCALE, canonicalLocaleOf, MAX_LIST_LENGTH.locales, MESSAGES.locales),
+    })
+    .superRefine((value, context) => {
+      if (!value.supported.includes(value.default)) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["list", key, "countryCode"],
-          message: MESSAGES.duplicateMarket,
+          code: "custom",
+          path: ["supported"],
+          message: MESSAGES.defaultLocale(value.default),
         });
       }
-      seen.add(market.countryCode);
-    }
-    if (value.default !== null && !seen.has(value.default)) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ["default"], message: MESSAGES.defaultMarket });
-    }
-  })
-  .transform((value): StorefrontSettings["markets"] => ({
-    default: value.default,
-    list: Object.values(value.list) as Market[],
-  }));
+    });
 
-const featuresSchema = z.object({
-  guestCheckout: z.boolean(),
-  customerAccounts: z.boolean(),
-  ancillaries: z.boolean(),
-  brandedFareUpsell: z.boolean(),
-  selfServiceCancellation: z.boolean(),
-});
+  const currencies = z
+    .object({
+      default: z.string().trim().transform(upper).pipe(z.string().regex(CURRENCY, MESSAGES.currency)),
+      supported: codeList(CURRENCY, upper, MAX_LIST_LENGTH.currencies, MESSAGES.currencies),
+    })
+    .superRefine((value, context) => {
+      if (!value.supported.includes(value.default)) {
+        context.addIssue({
+          code: "custom",
+          path: ["supported"],
+          message: MESSAGES.defaultCurrency(value.default),
+        });
+      }
+    });
 
-const policiesSchema = z.object({
-  ticketingPolicy: z.enum(["issue_after_payment", "issue_at_booking", "manual_review"], {
-    errorMap: () => ({ message: MESSAGES.ticketingPolicy }),
-  }),
-  paymentTiming: z.literal(PAYMENT_TIMING, { errorMap: () => ({ message: MESSAGES.paymentTiming }) }),
-  require3ds: z.boolean(),
-  // The ticked boxes, in the document's order; a value the form does not offer is dropped.
-  acceptedCardBrands: z
-    .array(z.string())
-    .transform((brands): CardBrand[] =>
-      CARD_BRANDS.map((brand) => brand.value).filter((brand) => brands.includes(brand)),
-    )
-    .refine((brands) => brands.length > 0, MESSAGES.cardBrands),
-  requireEmailVerification: z.boolean(),
-  offerTtlMinutes: wholeNumber(5, 240, MESSAGES.offerTtl),
-  checkoutTtlMinutes: wholeNumber(5, 1440, MESSAGES.checkoutTtl),
-});
+  const market = z.object({
+    countryCode: z.string().trim().transform(upper).pipe(z.string().regex(COUNTRY, MESSAGES.country)),
+    name: required(80, MESSAGES.marketName),
+    currency: z.string().trim().transform(upper).pipe(z.string().regex(CURRENCY, MESSAGES.currency)),
+    locale: z.string().trim().transform(canonicalLocaleOf).pipe(z.string().regex(LOCALE, MESSAGES.locale)),
+  });
 
-const airlineCardSchema = z.object({ enabledTest: z.boolean(), enabledLive: z.boolean() });
+  const markets = z
+    .object({
+      default: optional(z.string().transform(upper).pipe(z.string().regex(COUNTRY, MESSAGES.country))),
+      list: rowsOf(market, MAX_LIST_LENGTH.markets, MESSAGES.markets),
+    })
+    .superRefine((value, context) => {
+      const seen = new Set<string>();
+      for (const [key, row] of Object.entries(value.list)) {
+        if (seen.has(row.countryCode)) {
+          context.addIssue({
+            code: "custom",
+            path: ["list", key, "countryCode"],
+            message: MESSAGES.duplicateMarket,
+          });
+        }
+        seen.add(row.countryCode);
+      }
+      if (value.default !== null && !seen.has(value.default)) {
+        context.addIssue({ code: "custom", path: ["default"], message: MESSAGES.defaultMarket });
+      }
+    })
+    .transform((value): StorefrontSettings["markets"] => ({
+      default: value.default,
+      list: Object.values(value.list) as Market[],
+    }));
 
-const legalLinkSchema = z
-  .object({
-    kind: z.enum(["terms", "privacy", "cookies", "refund_policy", "imprint", "accessibility", "other"], {
-      errorMap: () => ({ message: MESSAGES.legalKind }),
+  const features = z.object({
+    guestCheckout: z.boolean(),
+    customerAccounts: z.boolean(),
+    ancillaries: z.boolean(),
+    brandedFareUpsell: z.boolean(),
+    selfServiceCancellation: z.boolean(),
+  });
+
+  const policies = z.object({
+    ticketingPolicy: z.enum(["issue_after_payment", "issue_at_booking", "manual_review"], {
+      error: MESSAGES.ticketingPolicy,
     }),
-    label: required(80, MESSAGES.legalLabel),
-    target: z.enum(["url", "page"], { errorMap: () => ({ message: MESSAGES.legalTarget }) }),
-    url: z.string().trim(),
-    pageSlug: z.string().trim(),
-  })
-  .superRefine((value, context) => {
-    if (value.target === "url" && !(HTTPS.test(value.url) && URL.canParse(value.url))) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ["url"], message: MESSAGES.legalUrl });
-    }
-    if (value.target === "page" && !SLUG.test(value.pageSlug)) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ["pageSlug"], message: MESSAGES.pageSlug });
-    }
-  })
-  .transform((value): LegalLink =>
-    value.target === "url"
-      ? { kind: value.kind, label: value.label, url: value.url }
-      : { kind: value.kind, label: value.label, pageSlug: value.pageSlug },
-  );
+    paymentTiming: z.literal(PAYMENT_TIMING, { error: MESSAGES.paymentTiming }),
+    require3ds: z.boolean(),
+    // The ticked boxes, in the document's order; a value the form does not offer is dropped. At most one per brand
+    // (the document's `uniqueItems` of its 13 brands), counted before any is looked at (OAD-020).
+    acceptedCardBrands: z
+      .array(z.string())
+      .max(CARD_BRANDS.length, MESSAGES.cardBrandsTooMany)
+      .transform((brands): CardBrand[] =>
+        CARD_BRANDS.map((brand) => brand.value).filter((brand) => brands.includes(brand)),
+      )
+      .refine((brands) => brands.length > 0, MESSAGES.cardBrands),
+    requireEmailVerification: z.boolean(),
+    offerTtlMinutes: wholeNumber(5, 240, MESSAGES.offerTtl),
+    checkoutTtlMinutes: wholeNumber(5, 1440, MESSAGES.checkoutTtl),
+  });
 
-const legalSchema = z
-  .object({
-    termsVersion: optionalText(40, MESSAGES.version),
-    privacyVersion: optionalText(40, MESSAGES.version),
-    links: z.record(z.string(), legalLinkSchema),
-  })
-  .superRefine((value, context) => {
-    if (Object.keys(value.links).length > MAX_LIST_LENGTH.legalLinks) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ["links"], message: MESSAGES.legalLinks });
-    }
-  })
-  .transform((value): StorefrontSettings["legal"] => ({
-    termsVersion: value.termsVersion,
-    privacyVersion: value.privacyVersion,
-    links: Object.values(value.links),
-  }));
+  const airlineCard = z.object({ enabledTest: z.boolean(), enabledLive: z.boolean() });
 
-const httpsUrl = z
-  .string()
-  .regex(HTTPS, MESSAGES.legalUrl)
-  .refine((value) => URL.canParse(value), MESSAGES.legalUrl);
+  const legalLink = z
+    .object({
+      kind: z.enum(["terms", "privacy", "cookies", "refund_policy", "imprint", "accessibility", "other"], {
+        error: MESSAGES.legalKind,
+      }),
+      label: required(80, MESSAGES.legalLabel),
+      target: z.enum(["url", "page"], { error: MESSAGES.legalTarget }),
+      url: z.string().trim(),
+      pageSlug: z.string().trim(),
+    })
+    .superRefine((value, context) => {
+      if (value.target === "url" && !(HTTPS.test(value.url) && URL.canParse(value.url))) {
+        context.addIssue({ code: "custom", path: ["url"], message: MESSAGES.legalUrl });
+      }
+      if (value.target === "page" && !SLUG.test(value.pageSlug)) {
+        context.addIssue({ code: "custom", path: ["pageSlug"], message: MESSAGES.pageSlug });
+      }
+    })
+    .transform((value): LegalLink =>
+      value.target === "url"
+        ? { kind: value.kind, label: value.label, url: value.url }
+        : { kind: value.kind, label: value.label, pageSlug: value.pageSlug },
+    );
 
-const supportSchema = z.object({
-  email: optional(z.string().regex(EMAIL, MESSAGES.email)),
-  phone: optional(z.string().regex(E164, MESSAGES.phone)),
-  hours: optionalText(200, MESSAGES.hours),
-  helpCenterUrl: optional(httpsUrl),
-  emergencyPhone: optional(z.string().regex(E164, MESSAGES.phone)),
-});
+  const legal = z
+    .object({
+      termsVersion: optionalText(40, MESSAGES.version),
+      privacyVersion: optionalText(40, MESSAGES.version),
+      links: rowsOf(legalLink, MAX_LIST_LENGTH.legalLinks, MESSAGES.legalLinks),
+    })
+    .transform((value): StorefrontSettings["legal"] => ({
+      termsVersion: value.termsVersion,
+      privacyVersion: value.privacyVersion,
+      links: Object.values(value.links),
+    }));
 
-const seoSchema = z.object({
-  titleTemplate: optional(
-    z.string().refine((value) => [...value].length <= 120 && value.includes("%s"), MESSAGES.titleTemplate),
-  ),
-  defaultTitle: optionalText(120, MESSAGES.defaultTitle),
-  defaultDescription: optionalText(300, MESSAGES.defaultDescription),
-  ogImageAssetId: assetIdField,
-  robots: z.object({ index: z.boolean(), follow: z.boolean() }),
-});
-
-const consentCategorySchema = z.object({
-  id: z.enum(["necessary", "preferences", "analytics", "marketing"]),
-  required: z.boolean(),
-  defaultEnabled: z.boolean(),
-  title: required(80, MESSAGES.categoryTitle),
-  description: z
+  const httpsUrl = z
     .string()
-    .trim()
-    .refine((value) => [...value].length <= 500, MESSAGES.categoryDescription),
-});
+    .regex(HTTPS, MESSAGES.legalUrl)
+    .refine((value) => URL.canParse(value), MESSAGES.legalUrl);
 
-const consentSchema = z
-  .object({
-    regime: z.enum(["gdpr", "ccpa", "lgpd", "none"], { errorMap: () => ({ message: MESSAGES.regime }) }),
-    bannerRequired: z.boolean(),
-    policyVersion: optionalText(40, MESSAGES.version),
-    categories: z.record(z.string(), consentCategorySchema),
-  })
-  .transform((value): Consent => ({
-    regime: value.regime,
-    bannerRequired: value.bannerRequired,
-    policyVersion: value.policyVersion,
-    categories: Object.values(value.categories),
-  }));
+  const support = z.object({
+    email: optional(z.string().regex(EMAIL, MESSAGES.email)),
+    phone: optional(z.string().regex(E164, MESSAGES.phone)),
+    hours: optionalText(200, MESSAGES.hours),
+    helpCenterUrl: optional(httpsUrl),
+    emergencyPhone: optional(z.string().regex(E164, MESSAGES.phone)),
+  });
 
-const operationsSchema = z.object({
-  opsAlertEmail: optional(z.string().regex(EMAIL, MESSAGES.email)),
-  bookingQueue: z.object({
-    number: optional(
-      z
-        .string()
-        .regex(/^\d{1,2}$/, MESSAGES.queueNumber)
-        .transform(Number),
+  const seo = z.object({
+    titleTemplate: optional(
+      z.string().refine((value) => [...value].length <= 120 && value.includes("%s"), MESSAGES.titleTemplate),
     ),
-    category: wholeNumber(0, 255, MESSAGES.queueCategory),
-  }),
-});
+    defaultTitle: optionalText(120, MESSAGES.defaultTitle),
+    defaultDescription: optionalText(300, MESSAGES.defaultDescription),
+    ogImageAssetId: assetIdField(),
+    robots: z.object({ index: z.boolean(), follow: z.boolean() }),
+  });
 
-/** The Zod mirror of each section of `StorefrontSettingsUpdate`, from the raw fields `formInputOf` reads. */
-const SECTION_SCHEMAS = {
-  brand: brandSchema,
-  branding: brandingSchema,
-  locales: localesSchema,
-  currencies: currenciesSchema,
-  markets: marketsSchema,
-  features: featuresSchema,
-  policies: policiesSchema,
-  airlineCard: airlineCardSchema,
-  legal: legalSchema,
-  support: supportSchema,
-  seo: seoSchema,
-  consent: consentSchema,
-  operations: operationsSchema,
-} as const satisfies Record<SettingsSection, z.ZodTypeAny>;
+  const consentCategory = z.object({
+    id: z.enum(["necessary", "preferences", "analytics", "marketing"]),
+    required: z.boolean(),
+    defaultEnabled: z.boolean(),
+    title: required(80, MESSAGES.categoryTitle),
+    description: z
+      .string()
+      .trim()
+      .refine((value) => [...value].length <= 500, MESSAGES.categoryDescription),
+  });
+
+  const consent = z
+    .object({
+      regime: z.enum(["gdpr", "ccpa", "lgpd", "none"], { error: MESSAGES.regime }),
+      bannerRequired: z.boolean(),
+      policyVersion: optionalText(40, MESSAGES.version),
+      // Bounded by the form itself: `formInputOf` reads the four categories of CONSENT_CATEGORIES (the document's
+      // `maxItems: 4`) by their ids, never a key the form posted.
+      categories: z.record(z.string(), consentCategory),
+    })
+    .transform((value): Consent => ({
+      regime: value.regime,
+      bannerRequired: value.bannerRequired,
+      policyVersion: value.policyVersion,
+      categories: Object.values(value.categories),
+    }));
+
+  const operations = z.object({
+    opsAlertEmail: optional(z.string().regex(EMAIL, MESSAGES.email)),
+    bookingQueue: z.object({
+      number: optional(
+        z
+          .string()
+          .regex(/^\d{1,2}$/, MESSAGES.queueNumber)
+          .transform(Number),
+      ),
+      category: wholeNumber(0, 255, MESSAGES.queueCategory),
+    }),
+  });
+
+  return {
+    brand,
+    branding,
+    locales,
+    currencies,
+    markets,
+    features,
+    policies,
+    airlineCard,
+    legal,
+    support,
+    seo,
+    consent,
+    operations,
+  } as const satisfies Record<SettingsSection, z.ZodType>;
+}
+
+type SectionSchemas = ReturnType<typeof buildSectionSchemas>;
+let sectionSchemas: SectionSchemas | undefined;
 
 // Compile-time check: each schema's output is the section of the request body.
-type SchemaOutputs = { [S in SettingsSection]: z.output<(typeof SECTION_SCHEMAS)[S]> };
+type SchemaOutputs = { [S in SettingsSection]: z.output<SectionSchemas[S]> };
 type SectionBodies = { [S in SettingsSection]: NonNullable<StorefrontSettingsUpdate[S]> };
 const _schemasMatchTheContract: {
   [S in SettingsSection]: SchemaOutputs[S] extends SectionBodies[S] ? true : never;
@@ -849,7 +875,8 @@ export type SectionParse =
  */
 export function sectionChangesOf(section: SettingsSection, form: FormData): SectionParse {
   const { input, rows } = formInputOf(section, form);
-  const parsed = z.object({ [section]: SECTION_SCHEMAS[section] }).safeParse({ [section]: input });
+  sectionSchemas ??= buildSectionSchemas();
+  const parsed = z.object({ [section]: sectionSchemas[section] }).safeParse({ [section]: input });
   if (!parsed.success) {
     return { success: false, error: parsed.error };
   }

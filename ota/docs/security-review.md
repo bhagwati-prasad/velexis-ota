@@ -22,6 +22,9 @@ audit and the secret scan, and every finding with its severity and status. Every
 - **2026-11-05 (OBE-095):** OTA-SR-05 is closed: the OTA document lists every answer of the authentication matrix but
   a pending operation's `501` (the `400` of 18 operations and the `401` and `403` of the three Stripe receivers, with
   the shared error responses), and the matrix now checks each of those answers against it (§3.1).
+- **2026-11-05 (OAD-020):** OTA-SR-03 (`zod`) is closed: the OTA admin pins `zod` 4.6.7, and `pnpm audit --prod`
+  lists no `zod` advisory reaching `ota/admin` (§5). The same advisory stays listed for the portal's and the platform
+  admin's 3.25.76 (the platform review's F-4: PFE-029, PAD-017) until they move to the same release.
 
 ## 1. Scope
 
@@ -197,6 +200,50 @@ and after the change: 29 advisories, 0 critical, 7 high.
   notifications unit tests and the Mailpit integration tests (`outbox.int.test.ts`, `booking-emails.int.test.ts`) pass
   unchanged.
 
+**2026-11-05 (OAD-020): `zod` 4.6.7 in the OTA admin.** `ota/admin` pins `zod` 4.6.7, the latest 4.x (`npm view zod
+dist-tags`: `latest` 4.6.7), the release the portal and the platform admin take too (PFE-029, PAD-017,
+[tech-stack](../../docs/mvp/tech-stack.md)). `pnpm audit --prod` on this task's base (wave 43, `6c73a96`): **1
+advisory, 0 critical, 1 high** (GHSA-mrhx-c7xc-m3w5, paths `ota/admin`, `platform/admin` and `platform/frontend`);
+after the change the same 1 high with the two platform paths only, none from `ota/admin` (`pnpm why zod -r`: 4.6.7 for
+`ota/admin`; 3.25.76 for the two platform apps and for `kysely-codegen`, a development tool of `packages/db` that
+`--prod` does not count).
+
+- **What the forms accept and say stays as it was.** The server actions' schemas moved to the Zod 4 API (`error` for
+  `required_error`, `invalid_type_error`, `errorMap` and `message`; `"custom"` issues; `z.looseObject`; `z.record` with
+  its key schema). Where Zod 4 judges differently, the schema keeps Zod 3's verdict: a string's `.max()` now counts code
+  points, so the bounds that counted UTF-16 units (as the dialogs' `maxLength` does) count them with a refinement; Zod
+  4's `z.uuid()` checks the RFC 9562 version, so the dialogs' idempotency keys use `z.guid()` (any 8-4-4-4-12
+  hexadecimal key, Zod 3's `.uuid()`); the priority of the page's stored rule is any whole number, as Zod 3's `.int()`
+  took it (Zod 4's refuses one past 2^53); an absent key of the other rule kind is `z.undefined().optional()`; and a
+  check whose `transform` Zod 3 skipped after a failure now ends the form's checks (`abort`), so the rules across a
+  form's fields run exactly when they ran before. In a one-off comparison (not kept in the repository), every form's
+  schema ran against its Zod 3 version on about 67,000 generated forms (each field alone, then random mixes): the same
+  accepted values and the same messages on every field a dialog shows; the differences left are Zod's own English for a
+  hidden field (the stored contact a patch posts back) and for an offer the shopping page posts back, which nothing
+  shows (their forms answer "This form is out of date" and "This offer cannot be sent to Amadeus as it is"), the list
+  bounds below, and the locales and currencies section, whose empty or malformed list made Zod 3's refinement of the
+  default throw (a server error) where Zod 4 names the problem at the field. The second agent's review repeated the
+  comparison on about 130,000 generated forms (the bookings, PNR and shopping schemas, the storefront's thirteen
+  sections, the pricing rules and the stored rule, the content pages and templates) with the same result, and the action
+  tests named `[OAD-020] …` pin the kept verdicts (UTF-16 units, `z.guid()`, `abort`).
+- **Every list a server action parses is bounded** by the document's own `maxItems` (or, for a `uniqueItems` list of an
+  enum, the enum's size; the form's own bound where it is lower or the document sets none), and Zod 4.6.7's `.max()`
+  refuses a longer one before any item is checked: the stored contact's phones (3) and address lines (10, the lines
+  the page writes: the document sets no bound), an airline-card issuance's flight offers (6), the PNR import's tags
+  (10), the shopping filter's airlines (10, the form's own: the document allows 99), the storefront's locales and
+  currencies (20), markets (50, counted on the posted rows before any row is checked: a record has no `.max()`), legal
+  links (20) and card brands (13), and the pricing rules' scope lists (200 or 250 codes, a choice list's own
+  choices). The consent categories are the four ids the form reads, never posted keys. Where Zod 3 still checked a
+  form's other rules beside a list that was too long (the PNR import's selling total, the search's origin and
+  destination, an issuance's settlement), they are still checked: the list's own checks run as the field's, without
+  ending the form's. The tests `[OAD-020] …` of the action tests show each bound: a list past it is refused by its
+  count alone, and each test fails if its bound is taken out.
+- **No Zod in the browser.** Zod 4 registers its English messages on the first schema it builds, and they name a "credit
+  card number", which the built-pages test (OAD-008 AC2) refuses in a browser chunk. The modules that the client forms
+  import (`content-rules.ts`, `pricing-rules.ts`, `settings-rules.ts`) build their schemas on first use, so no browser
+  chunk holds Zod at all; `(console)/zod.test.ts` proves that importing them builds none, and that the pinned release is
+  exact and installed.
+
 ## 6. Secret scan
 
 No secret was found. Every match is a development value of `.env.example` (`dev_*` database passwords, also in
@@ -217,7 +264,7 @@ no change). A dependency advisory keeps the advisory's severity; its reachabilit
 |---|---|---|---|---|
 | OTA-SR-01 | High | Dependencies | `nodemailer` 6.10.1 in the OTA backend: the address parser's quadratic and recursive parsing (DoS), the `raw` option and the OAuth2 token fetch advisories. Reachability: the worker sends to addresses the API validated (one plain address of at most 254 characters), with no `raw`, no OAuth2 and no file or URL content, so the DoS needs an address the validation lets through; still the shipped version is vulnerable. | Closed 2026-11-05 by **OBE-093**: `nodemailer` 10.3.1 in `ota/backend` and `packages/testing`, the transport still without file or URL access and the gateway without `raw` messages (§5); the platform backend's copy: PBE-068 |
 | OTA-SR-02 | High | Dependencies | `multer` 2.4.0 through `@nestjs/platform-express` 11.2.8 (DoS by a pending asynchronous `fileFilter`). Reachability: none today, the API parses multipart bodies itself (`common/http/body-parsers.ts`) and never mounts multer. Proposed fix: override `multer` to 2.5.0 below `@nestjs/platform-express` 11.2.8 (NestJS 12 would change a decision of the owner). | Closed 2026-11-05 by **OBE-094**: `multer` 2.5.0 through the root override `@nestjs/platform-express@11>multer`, NestJS on 11.2.8, both backends (§5) |
-| OTA-SR-03 | High | Dependencies (OTA admin) | `zod` 3.25.76 (memory exhaustion validating oversized constrained collections) in the OTA admin's server actions. | Open: **OAD-020** |
+| OTA-SR-03 | High | Dependencies (OTA admin) | `zod` 3.25.76 (memory exhaustion validating oversized constrained collections) in the OTA admin's server actions. | Closed 2026-11-05 by **OAD-020**: `zod` 4.6.7 in `ota/admin`, every list a server action parses bounded by the document's limit before any item is checked (§5); the portal's and the platform admin's copies: the platform review's F-4 (PFE-029, PAD-017) |
 | OTA-SR-04 | Medium | Dependencies | `fast-uri` 3.1.8 and `qs` 6.16.0 (moderate and low advisories), fixed by a lockfile refresh inside their dependents' ranges. | Closed 2026-11-05 by **OBE-094**: `fast-uri` 3.1.9 and `qs` 6.17.1 by a lockfile refresh, no override (§5) |
 | OTA-SR-05 | Low | Contract | The OTA document does not list every answer the API gives: `400 VALIDATION_FAILED` (a path value) or `INVALID_REQUEST` (an edge header beside an API key) on 18 operations (5 of them pending), and the credential refusals (`401`, `403`) of the three Stripe receivers. Clients and the response conformance of the matrix cannot check those answers' shape. | Closed 2026-11-05 by **OBE-095**: the 18 operations list `400 BadRequest` (`VALIDATION_FAILED`, `INVALID_REQUEST` in `x-error-codes`), the Stripe receivers `401 Unauthorized` and `403 Forbidden` with their codes and a paragraph on a credential sent anyway; the matrix checks every answer but a pending `501` against the document (§3.1) |
 | OTA-SR-06 | Info | Redaction | The `payment_events` rows built by the bookings, cancellation and refund code carry objects of ids, codes and amounts the code builds itself, not copies of a supplier or gateway payload, so they do not pass the redactor; every copied payload does (§3.4). | Accepted |
@@ -234,6 +281,7 @@ bash deploy/caddy/test/caddy-smoke.sh   # alone on the machine: ports 2019, 3000
 pnpm audit --prod
 pnpm why multer -r       # 2.5.0 below @nestjs/platform-express 11 (the root override of §5)
 pnpm why nodemailer -r   # 10.3.1 in ota/backend and packages/testing (OBE-093)
+pnpm why zod -r          # 4.6.7 in ota/admin (OAD-020)
 ```
 
 The matrix, the rate-limit coverage test and the redaction walk follow the document and `RATE_LIMITS` by themselves: a new

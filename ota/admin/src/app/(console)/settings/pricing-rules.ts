@@ -642,12 +642,12 @@ export function ruleFormInput(kind: RuleKind, form: FormData): RuleFormInput {
 /** An empty or blank text is no value. */
 const blank = (value: unknown): unknown =>
   typeof value === "string" && value.trim() === "" ? undefined : value;
-const optionalText = <T extends z.ZodTypeAny>(schema: T) => z.preprocess(blank, schema.optional());
+const optionalText = <T extends z.ZodType>(schema: T) => z.preprocess(blank, schema.optional());
 
 /** A name-like text: trimmed, 1 to `max` code points (JSON Schema counts code points). */
 const sizedText = (max: number, required: string, tooLong: string) =>
   z
-    .string({ required_error: required, invalid_type_error: required })
+    .string({ error: required })
     .trim()
     .refine((value) => value !== "", required)
     .refine((value) => [...value].length <= max, tooLong);
@@ -664,19 +664,28 @@ function codesOf(value: string): string[] {
   ];
 }
 
+/**
+ * A scope list typed as text: the codes, at most `field.max` of them (the document's `maxItems`). The list's `.max()`
+ * refuses a longer one before any code is checked (OAD-020, GHSA-mrhx-c7xc-m3w5).
+ */
 const codeList = (field: ScopeCodeField) =>
   z.preprocess(
     (value) => (typeof value === "string" ? codesOf(value) : []),
     z
       .array(z.string().regex(field.pattern, RULE_MESSAGES.codes(field.example)), {
-        invalid_type_error: RULE_MESSAGES.codes(field.example),
+        error: RULE_MESSAGES.codes(field.example),
       })
       .max(field.max, RULE_MESSAGES.tooManyCodes(field.max)),
   );
 
+/**
+ * A scope list of ticked boxes: each a choice of the list, at most one per choice (the document's `uniqueItems` of
+ * its enum). The list's `.max()` refuses a longer one before any value is checked (OAD-020, GHSA-mrhx-c7xc-m3w5).
+ */
 const choiceList = (field: ScopeChoiceField) =>
   z
-    .array(z.string(), { invalid_type_error: RULE_MESSAGES.choice })
+    .array(z.string(), { error: RULE_MESSAGES.choice })
+    .max(field.choices.length, RULE_MESSAGES.choice)
     .default([])
     .refine(
       (values) => values.every((value) => field.choices.some((choice) => choice.value === value)),
@@ -688,7 +697,7 @@ const choiceList = (field: ScopeChoiceField) =>
     );
 
 const choice = <Value extends string>(choices: readonly Choice<Value>[], message: string) =>
-  z.enum(choices.map((entry) => entry.value) as [Value, ...Value[]], { errorMap: () => ({ message }) });
+  z.enum(choices.map((entry) => entry.value) as [Value, ...Value[]], { error: message });
 
 /** The form's values once its schema passed. */
 export interface RuleFormValues {
@@ -733,7 +742,7 @@ export function ruleFormSchema(kind: RuleKind) {
   const amount = kind === "markup" ? MARKUP_AMOUNT : FEE_AMOUNT;
   const amountMessage = kind === "markup" ? RULE_MESSAGES.markupAmount : RULE_MESSAGES.feeAmount;
   const money = optionalText(z.string().trim());
-  const fields: Record<string, z.ZodTypeAny> = {
+  const fields: Record<string, z.ZodType> = {
     [RULE_FIELDS.name]: sizedText(120, RULE_MESSAGES.nameRequired, RULE_MESSAGES.nameTooLong),
     ...(kind === "markup"
       ? {
@@ -770,7 +779,7 @@ export function ruleFormSchema(kind: RuleKind) {
     ),
     [RULE_FIELDS.appliesPer]: choice(APPLIES_PER, RULE_MESSAGES.appliesPer),
     [RULE_FIELDS.priority]: z
-      .string({ required_error: RULE_MESSAGES.priority, invalid_type_error: RULE_MESSAGES.priority })
+      .string({ error: RULE_MESSAGES.priority })
       .trim()
       .refine((value) => PRIORITY.test(value) && Number(value) <= PRIORITY_MAX, RULE_MESSAGES.priority)
       .transform(Number),
@@ -782,7 +791,7 @@ export function ruleFormSchema(kind: RuleKind) {
     ),
   };
 
-  return z.record(z.unknown()).transform((input, context): RuleFormValues => {
+  return z.record(z.string(), z.unknown()).transform((input, context): RuleFormValues => {
     const issue = (path: string, message: string) =>
       context.addIssue({ code: "custom", path: [path], message });
     const values: Record<string, unknown> = {};
@@ -1113,8 +1122,6 @@ export function updateBodyOf(
   return changes as MarkupRuleUpdate & FeeRuleUpdate;
 }
 
-const MoneySchema = z.object({ amount: z.string(), currency: z.string() }).nullable();
-
 /**
  * The page's `original` (JSON of `ruleBodyOfRule`), or `undefined` when it is not one: a form whose hidden field
  * does not parse is out of date.
@@ -1129,21 +1136,28 @@ export function parseOriginal(kind: RuleKind, json: unknown): RuleBody | undefin
   } catch {
     return undefined;
   }
+  // Built here, never while the module loads: the client form imports this module's constants, and a schema built at
+  // load time would bring Zod 4 with its English messages into the browser's chunks (OAD-020; their "credit card
+  // number" is a card label for the built-pages test, OAD-008 AC2). The other kind's fields are absent
+  // (`z.undefined().optional()`: Zod 4 refuses an absent key whose schema is not optional, even `z.undefined()`).
+  const absent = z.undefined().optional();
+  const money = z.object({ amount: z.string(), currency: z.string() }).nullable();
   const schema = z.object({
     name: z.string(),
-    description: kind === "markup" ? z.string().nullable() : z.undefined(),
-    label: kind === "fee" ? z.string() : z.undefined(),
-    feeType: kind === "fee" ? choice(FEE_TYPES, RULE_MESSAGES.feeType) : z.undefined(),
-    scope: z.record(z.unknown()),
+    description: kind === "markup" ? z.string().nullable() : absent,
+    label: kind === "fee" ? z.string() : absent,
+    feeType: kind === "fee" ? choice(FEE_TYPES, RULE_MESSAGES.feeType) : absent,
+    scope: z.record(z.string(), z.unknown()),
     calculation: choice(CALCULATIONS[kind], RULE_MESSAGES.calculation),
     percentage: z.string().nullable(),
-    fixed: MoneySchema,
+    fixed: money,
     appliesPer: choice(APPLIES_PER, RULE_MESSAGES.appliesPer),
-    min: MoneySchema,
-    max: MoneySchema,
-    priority: z.number().int(),
-    stackable: kind === "markup" ? z.boolean() : z.undefined(),
-    refundable: kind === "fee" ? z.boolean() : z.undefined(),
+    min: money,
+    max: money,
+    // A whole number as Zod 3's `.int()` took it: Zod 4's also refuses one beyond 2^53.
+    priority: z.number().refine((value) => Number.isInteger(value)),
+    stackable: kind === "markup" ? z.boolean() : absent,
+    refundable: kind === "fee" ? z.boolean() : absent,
     isActive: z.boolean(),
     activeFrom: z.string().nullable(),
     activeUntil: z.string().nullable(),

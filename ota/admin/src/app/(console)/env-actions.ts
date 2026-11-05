@@ -18,7 +18,7 @@ import { canOpenEnvironment } from "@/lib/permissions";
 import { environmentCookie, requireStaffSession, writeCookies } from "@/lib/session";
 
 const SwitchForm = z.object({
-  environment: z.enum(["test", "live"], { message: "Choose TEST or LIVE." }),
+  environment: z.enum(["test", "live"], { error: "Choose TEST or LIVE." }),
 });
 
 /** The refusal of a live environment the OTA or the role does not allow (routes.md §1). */

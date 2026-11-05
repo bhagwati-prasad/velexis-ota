@@ -590,7 +590,7 @@ function LegalLinkRow({
         onChange={(value) => setTarget(value === "page" ? "page" : "url")}
       />
       {/* The other target's field is kept, hidden (what was typed survives a change of mind); the form still posts it,
-          and the action reads only the chosen target's field (settings-rules.ts `legalLinkSchema`). */}
+          and the action reads only the chosen target's field (settings-rules.ts, the `legalLink` schema). */}
       <div hidden={target !== "url"}>
         <TextField
           name={`${prefix}.url`}
