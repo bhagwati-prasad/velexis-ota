@@ -2067,7 +2067,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - The three specs pass in the nightly run; no serious accessibility violation on any admin route.
 - **Verify:** `pnpm test:e2e -- --project=platform-admin`
 
-### PBE-067 · Refuse the portal tokens of disabled and deleted accounts at once
+### PBE-067 · Refuse the portal tokens of disabled and deleted accounts at once ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M6
 - **Depends on:** PBE-062

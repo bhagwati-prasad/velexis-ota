@@ -100,6 +100,8 @@ Platform access tokens are EdDSA JWTs signed with `platform-jwt-ed25519.pem`, 15
 
 The audiences never mix: the admin guard refuses portal tokens, and the reverse. `AdminAuthGuard` also re-reads `accounts.is_platform_admin` and `status` on every request. Refresh tokens are opaque, hashed in `account_sessions`, rotated on use; families have an absolute lifetime of 30 days (portal) or 12 hours (admin) ([PADR-0009](adr/0009-platform-api-surface-and-authentication.md)).
 
+*Note (2026-11-05, lead decision (5a), PBE-067; security review finding F-1).* `PortalAuthGuard` re-reads the account's `status` (and `deleted_at`) on every request too, with the same primary-key read as the admin guard (`AccountAuthStates`, no cache): the unexpired token of a `disabled`, `deleted`, erased or unknown account answers `401 UNAUTHENTICATED` at once on every `portal_unverified` and `portal` operation, before the e-mail check (step 5 of §3, so before the role, switch and step-up guards too); `active`, `locked` and `pending_verification` pass as before. Disabling an account therefore ends its access at once, not when its access token expires ([PADR-0009](adr/0009-platform-api-surface-and-authentication.md) item 4, dated note).
+
 ### 3.2 End-user IP and user agent
 
 The portal and the platform admin call the API from their own servers on `127.0.0.1`, so the socket address says nothing about the person. Without more, every portal user would share one rate-limit bucket and every audit row would show the portal server ([PADR-0019](adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md)).

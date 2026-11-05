@@ -1,23 +1,32 @@
 // The auth guards of PBE-012 through the HTTP pipeline (createTestApp): test-only routes bound to real operations of
 // the platform document (`getMe`, `getTenant`, `adminGetMe`, `disableMfa`, `listDomains`, `tlsAsk`) and the API's own
 // `/health/ready`, real tokens of the application's TokenService, and accounts in this file's database clone, which
-// AdminAuthGuard and RecentMfaGuard read on every request. A copy of the document tags `listDomains` with
-// `x-feature: custom_domains` (no M1 operation carries a switch yet); FEATURE_CUSTOM_DOMAINS keeps its default, false.
+// PortalAuthGuard (since PBE-067), AdminAuthGuard and RecentMfaGuard read on every request. A copy of the document tags
+// `listDomains` with `x-feature: custom_domains` (no M1 operation carries a switch yet); FEATURE_CUSTOM_DOMAINS keeps
+// its default, false. The PBE-067 tests also call the API's own `createApiKey` and `setPayoutAccount` routes, as the
+// probe of the security review's finding F-1 did, so the switches are the configured ones (every FEATURE_* off) with
+// `settlements` on.
 import { readFileSync } from "node:fs";
 import { Controller, Get, Post, Req } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+import type { PlatformOperationId } from "@velexis/api-types/operations";
 import { expectResponseToMatch } from "@velexis/testing";
+import type { Response } from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { TokenService, type AccessTokenInput } from "../../../src/auth/token.service";
 import { accessTokenOf } from "../../../src/common/auth/decorators";
 import { PLATFORM_POOL, type PlatformPool } from "../../../src/common/database";
+import { FeatureSwitches, type Feature, type MilestoneFeatures } from "../../../src/common/features";
 import { OpenApiOperation } from "../../../src/common/http/openapi-operation.decorator";
 import {
   PLATFORM_OPENAPI_FILE,
   PlatformOpenApi,
 } from "../../../src/common/http/openapi-validation.interceptor";
 import { RequestContext } from "../../../src/common/http/request-context";
+import type { PlatformBackendConfig } from "../../../src/config";
 import { insertAccount, testId } from "../../builders/platform-rows";
+import { insertOta } from "../../builders/tenants";
 import { createTestApp, type TestApp } from "../../support/app";
 
 const TENANT = testId("ten", 1);
@@ -89,6 +98,17 @@ function documentWithFeature(): PlatformOpenApi {
   return PlatformOpenApi.fromDocument(document);
 }
 
+/** The configured switches (every FEATURE_* off here) with `settlements` on, so setPayoutAccount reaches its step-up. */
+class SettlementsOn extends FeatureSwitches {
+  override isEnabled(feature: Feature): boolean {
+    return feature === "settlements" || super.isEnabled(feature);
+  }
+
+  override features(): MilestoneFeatures {
+    return { ...super.features(), settlements: true };
+  }
+}
+
 let t: TestApp;
 let pool: PlatformPool;
 let tokens: TokenService;
@@ -99,7 +119,14 @@ const signed: string[] = [];
 beforeAll(async () => {
   t = await createTestApp({
     controllers: [GuardedTestController],
-    overrides: [{ provide: PlatformOpenApi, useValue: documentWithFeature() }],
+    overrides: [
+      { provide: PlatformOpenApi, useValue: documentWithFeature() },
+      {
+        provide: FeatureSwitches,
+        useFactory: (config: ConfigService<PlatformBackendConfig, true>) => new SettlementsOn(config),
+        inject: [ConfigService],
+      },
+    ],
   });
   pool = t.app.get<PlatformPool>(PLATFORM_POOL);
   tokens = t.app.get(TokenService);
@@ -278,6 +305,121 @@ describe("InternalOnlyGuard", () => {
     expect(ready.status).toBe(200);
     expect(ask.status).toBe(200);
     expect(ask.body).toEqual({ actor: null, sub: null });
+  });
+});
+
+// PBE-067 (lead decision (5a) of 2026-11-05; platform/docs/security-review.md finding F-1): the review's probe, through
+// the API. An owner with MFA holds a token with a TOTP step-up now; the token answers `getTenant`, the API's own
+// `createApiKey` (a new test secret key) and `setPayoutAccount` (a new bank account); then the account is disabled or
+// erased behind the token's back, and the same unexpired token answers `401 UNAUTHENTICATED` on all of them at once.
+describe("PortalAuthGuard re-reads the account's state (PBE-067)", () => {
+  /** A documentation address (RFC 5737) for the BFF headers of these calls. */
+  const PROBE_IP = "203.0.113.67";
+  /** The ISO 13616 documentation example of an IBAN and a BIC: test values only. */
+  const PAYOUT_ACCOUNT = {
+    accountHolderName: "Agency Travel Ltd",
+    countryCode: "GB",
+    currency: "GBP",
+    scheme: "iban",
+    iban: "GB82 WEST 1234 5698 7654 32",
+    bic: "WESTGB2L",
+  };
+  let otas = 0;
+
+  /** An active OTA owned by a new account with MFA, and that owner's token with a TOTP step-up now. */
+  async function ownedOta(): Promise<{ owner: string; tenantId: string; headers: Record<string, string> }> {
+    otas += 1;
+    const owner = await insertAccount(pool, { mfa_enabled: true });
+    const { tenant } = await insertOta(pool, {
+      // Ids of their own, apart from the made-up TENANT of the tests above.
+      tenant: { id: testId("ten", 67_000 + otas), key: `pbe067ota${otas}` },
+      members: [[owner, "owner"]],
+    });
+    const headers = {
+      ...(await bearer({ aud: "portal", sub: owner.id, amr: ["pwd", "otp"], mfa_at: nowSeconds() })),
+      ...t.bffHeaders(PROBE_IP),
+    };
+    return { owner: owner.id, tenantId: tenant.id, headers };
+  }
+
+  /** The calls of the probe, by operation: getMe, getTenant, createApiKey and setPayoutAccount. */
+  async function probe(
+    tenantId: string,
+    headers: Record<string, string>,
+  ): Promise<Array<[PlatformOperationId, Response]>> {
+    return [
+      ["getMe", await t.http.get("/v1/me").set(headers)],
+      ["getTenant", await t.http.get(`/v1/tenants/${tenantId}`).set(headers)],
+      [
+        "createApiKey",
+        await t.http
+          .post(`/v1/tenants/${tenantId}/api-keys`)
+          .set(headers)
+          .send({ name: "Probe", kind: "secret", environment: "test" }),
+      ],
+      [
+        "setPayoutAccount",
+        await t.http.put(`/v1/tenants/${tenantId}/payout-account`).set(headers).send(PAYOUT_ACCOUNT),
+      ],
+    ];
+  }
+
+  /** What the tenant holds that the probe writes: its API keys and its payout account's version. */
+  async function written(tenantId: string): Promise<{ keys: number; payoutVersion: number | null }> {
+    const keys = await pool.query<{ n: number }>(
+      "SELECT count(*)::int AS n FROM platform.api_keys WHERE tenant_id = $1",
+      [tenantId],
+    );
+    const payout = await pool.query<{ version: number }>(
+      "SELECT version FROM platform.tenant_payout_accounts WHERE tenant_id = $1",
+      [tenantId],
+    );
+    return { keys: keys.rows[0]?.n ?? 0, payoutVersion: payout.rows[0]?.version ?? null };
+  }
+
+  it.each([
+    ["disabled", "UPDATE platform.accounts SET status = 'disabled' WHERE id = $1"],
+    ["erased", "UPDATE platform.accounts SET status = 'deleted', deleted_at = now() WHERE id = $1"],
+  ])(
+    "[PBE-067 AC1] answers 401 UNAUTHENTICATED at once to the unexpired token of an account %s after it was signed, the step-up actions included",
+    async (_state, change) => {
+      const { owner, tenantId, headers } = await ownedOta();
+
+      const before = await probe(tenantId, headers);
+      expect(before.map(([operationId, res]) => [operationId, res.status])).toEqual([
+        ["getMe", 200],
+        ["getTenant", 200],
+        ["createApiKey", 201],
+        ["setPayoutAccount", 200],
+      ]);
+      const stored = await written(tenantId);
+      expect(stored).toEqual({ keys: 1, payoutVersion: 1 });
+
+      await pool.query(change, [owner]);
+      const after = await probe(tenantId, headers);
+
+      for (const [operationId, res] of after) {
+        expect([operationId, res.status, errorOf(res)]).toEqual([operationId, 401, "UNAUTHENTICATED"]);
+        expectResponseToMatch(operationId, res, { document: "platform" });
+      }
+      // Refused before any handler ran: no new key, no new payout account version.
+      expect(await written(tenantId)).toEqual(stored);
+    },
+  );
+
+  it("[PBE-067 AC2] keeps the answers of a locked account: its unexpired token still works", async () => {
+    const { owner, tenantId, headers } = await ownedOta();
+    // A sign-in lockout is not a revocation (lead decision (5a)): the token the account already holds goes on working.
+    await pool.query(
+      "UPDATE platform.accounts SET status = 'locked', locked_until = now() + interval '15 minutes' WHERE id = $1",
+      [owner],
+    );
+
+    const me = await t.http.get("/v1/me").set(headers);
+    const tenant = await t.http.get(`/v1/tenants/${tenantId}`).set(headers);
+
+    expect([me.status, tenant.status]).toEqual([200, 200]);
+    expect(tenant.body).toEqual({ actor: { type: "account", accountId: owner }, sub: owner });
   });
 });
 

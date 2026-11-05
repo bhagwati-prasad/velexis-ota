@@ -19,7 +19,12 @@
 // - `platformAdmin`: an admin token of an active platform admin;
 // - `owner`, `admin`, `agent`, `finance`, `viewer`: portal tokens of active members of the OTA, one per role;
 // - `ownerWithoutStepUp` and `platformAdminWithoutStepUp`: an owner's and an admin's token whose last TOTP step-up is
-//   20 minutes old, for the operations marked `x-mfa-step-up` (PADR-0008 "Sensitive actions").
+//   20 minutes old, for the operations marked `x-mfa-step-up` (PADR-0008 "Sensitive actions");
+// - `disabledAccount` and `erasedAccount` (PBE-067, lead decision (5a) of 2026-11-05, security review F-1): unexpired
+//   portal tokens of owners of the OTA whose account was disabled, or erased (`status = 'deleted'`, `deleted_at` set),
+//   after the token was signed. Each would pass every other guard (a verified e-mail, an owner's membership, MFA and a
+//   step-up of now), so the matrix proves that PortalAuthGuard's read of the account refuses them with `401
+//   UNAUTHENTICATED` on every `portal_unverified` and `portal` operation, the sensitive actions included.
 //
 // Every account has MFA, and every other token a step-up of now (the FakeClock's time), so the step-up guard lets
 // them through; every milestone switch is on (a stand-in for FeatureSwitches), so FeatureGuard does. Each request sends
@@ -63,7 +68,7 @@ import { createTestApp, type TestApp } from "../../support/app";
 /** The database clone, the Nest module graph and the Ajv validators of the document take seconds on a loaded runner. */
 const SETUP_TIMEOUT_MS = 60_000;
 /**
- * The matrix: about 1 700 requests, each answered by a guard or the request validation, a few seconds locally; the
+ * The matrix: about 2 000 requests, each answered by a guard or the request validation, a few seconds locally; the
  * bound allows for a busy 4-CPU runner and only stops a run that hangs.
  */
 const MATRIX_TIMEOUT_MS = 120_000;
@@ -88,8 +93,13 @@ const CALLERS = [
   ...ROLES,
   "ownerWithoutStepUp",
   "platformAdminWithoutStepUp",
+  "disabledAccount",
+  "erasedAccount",
 ] as const;
 type Caller = (typeof CALLERS)[number];
+
+/** The portal tokens of accounts disabled or erased after the token was signed (PBE-067). */
+const REVOKED_ACCOUNT_CALLERS: readonly Caller[] = ["disabledAccount", "erasedAccount"];
 
 /** Who may call an operation, as an API inventory's auth column writes it (part 1 §2). */
 type Gate =
@@ -280,7 +290,9 @@ function expectedAnswer(row: MatrixRow, caller: Caller): Answer {
       // A portal token, an unverified one or none: the admin surface is another audience.
       return "401 UNAUTHENTICATED";
     case "portal": {
-      if (!PORTAL_CALLERS.includes(caller)) {
+      // PBE-067: the token of a disabled or erased account is refused at once, before the e-mail, role and step-up
+      // checks, as a missing token is.
+      if (!PORTAL_CALLERS.includes(caller) || REVOKED_ACCOUNT_CALLERS.includes(caller)) {
         return "401 UNAUTHENTICATED";
       }
       if (caller === "unverified") {
@@ -423,6 +435,21 @@ beforeAll(async () => {
   }
   const staleOwner = people.get("ownerWithoutStepUp") as PlatformRow<"accounts">;
   await insertMember(pool, tenant, staleOwner, "owner");
+  // PBE-067: two more owners with MFA, whose tokens are signed while they are active; then one account is disabled
+  // and the other erased, as an admin's disable or an erasure would leave them, behind the tokens' backs.
+  const revoked = new Map<Caller, PlatformRow<"accounts">>();
+  for (const caller of REVOKED_ACCOUNT_CALLERS) {
+    const account = await insertAccount(pool, { mfa_enabled: true });
+    await insertMember(pool, tenant, account, "owner");
+    bearer.set(caller, await sign(account, {}));
+    revoked.set(caller, account);
+  }
+  await pool.query("UPDATE platform.accounts SET status = 'disabled' WHERE id = $1", [
+    revoked.get("disabledAccount")?.id,
+  ]);
+  await pool.query("UPDATE platform.accounts SET status = 'deleted', deleted_at = now() WHERE id = $1", [
+    revoked.get("erasedAccount")?.id,
+  ]);
 
   const unverified = await insertAccount(pool, { status: "pending_verification", email_verified_at: null });
   const stranger = await insertAccount(pool, { mfa_enabled: true });
@@ -563,6 +590,37 @@ describe("the auth matrix of the platform API", () => {
       expect(roleAnswers, role).toContain("allowed");
       if (role !== "owner") {
         expect(roleAnswers, role).toContain("403 FORBIDDEN");
+      }
+    }
+  });
+
+  it("[PBE-067 AC1] refuses the unexpired tokens of a disabled and an erased account with 401 UNAUTHENTICATED on every portal operation, the sensitive actions included", () => {
+    const portalRows = ROWS.filter(
+      (row) => row.operation.scope === "portal" || row.operation.scope === "portal_unverified",
+    );
+    const ids = portalRows.map((row) => row.operation.operationId);
+    // 9 `portal_unverified` and 52 `portal` operations when the review ran (security-review.md §4).
+    expect(portalRows.length).toBeGreaterThanOrEqual(61);
+    expect(ids).toEqual(expect.arrayContaining(["getMe", "getTenant", "createApiKey", "setPayoutAccount"]));
+    expect(portalRows.filter((row) => row.stepUp).map((row) => row.operation.operationId)).toEqual(
+      expect.arrayContaining(["disableMfa", "goLive", "setPayoutAccount"]),
+    );
+
+    for (const caller of REVOKED_ACCOUNT_CALLERS) {
+      const observed = Object.fromEntries(ids.map((id) => [id, answers.get(id)?.get(caller)]));
+      expect(observed, caller).toEqual(Object.fromEntries(ids.map((id) => [id, "401 UNAUTHENTICATED"])));
+    }
+  });
+
+  it("[PBE-067 AC2] still lets the active owners' tokens, signed alike, through the account read on every portal operation", () => {
+    // The owner columns differ from the revoked ones only in the account's state: none of their answers is the 401 of
+    // a refused token.
+    for (const row of ROWS.filter((each) => each.gate?.kind === "portal")) {
+      for (const caller of ["owner", "ownerWithoutStepUp"] as const) {
+        expect(
+          answers.get(row.operation.operationId)?.get(caller),
+          `${row.operation.operationId} ${caller}`,
+        ).not.toBe("401 UNAUTHENTICATED");
       }
     }
   });

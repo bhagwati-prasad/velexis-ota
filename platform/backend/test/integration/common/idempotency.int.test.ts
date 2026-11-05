@@ -2,9 +2,10 @@
 // this file's Redis database. Test-only routes bind `createTenant`, the operation the document marks `x-idempotent`,
 // so the interceptor applies to them as to the real route; each request carries a portal access token of the
 // application's TokenService, so PortalAuthGuard (PBE-012) puts the account into the request context as it does for
-// the real route. The handler counts its side effects, and can be held at a gate to make two requests overlap. The
-// renewal of the lock on Redis itself (FIX-W29-PLATFORM) is checked here with the helper the interceptor uses; the
-// renewal while a handler runs longer than the lock's TTL is proven with fake timers in
+// the real route. The two accounts are rows of each application's database clone, since PortalAuthGuard reads the
+// account behind the token (PBE-067). The handler counts its side effects, and can be held at a gate to make two
+// requests overlap. The renewal of the lock on Redis itself (FIX-W29-PLATFORM) is checked here with the helper the
+// interceptor uses; the renewal while a handler runs longer than the lock's TTL is proven with fake timers in
 // src/common/http/idempotency.interceptor.test.ts.
 import { randomUUID } from "node:crypto";
 import { Controller, HttpCode, Post, Res } from "@nestjs/common";
@@ -15,13 +16,22 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { TokenService } from "../../../src/auth/token.service";
 import { OpenApiOperation, Validated } from "../../../src/common/http/openapi-operation.decorator";
 import { extendKeyIfValue, redisKeys, setKeyIfAbsent } from "../../../src/common/redis/redis-keys";
+import { PLATFORM_POOL, type PlatformPool } from "../../../src/common/database";
 import { REDIS_CLIENT } from "../../../src/common/redis/redis.module";
-import { testId } from "../../builders/platform-rows";
+import { insertAccount, testId } from "../../builders/platform-rows";
 import { createTestApp, type TestApp } from "../../support/app";
 
 const ACCOUNT_A = "acc_01JATESTRW0000000000000011";
 const ACCOUNT_B = "acc_01JATESTRW0000000000000012";
 const FAMILY = testId("asn", 1);
+
+/** Writes the accounts the tokens name into `t`'s database clone: PortalAuthGuard reads them (PBE-067). */
+async function insertAccounts(t: TestApp): Promise<void> {
+  const pool = t.app.get<PlatformPool>(PLATFORM_POOL);
+  for (const id of [ACCOUNT_A, ACCOUNT_B]) {
+    await insertAccount(pool, { id });
+  }
+}
 
 interface CreateTenantBody {
   readonly key: string;
@@ -128,6 +138,7 @@ describe("idempotent requests with Redis up", () => {
   beforeAll(async () => {
     t = await createTestApp({ controllers: [IdempotentTestController] });
     redis = t.app.get<Redis>(REDIS_CLIENT);
+    await insertAccounts(t);
   });
 
   afterAll(async () => {
@@ -301,6 +312,7 @@ describe("idempotent requests with Redis down", () => {
       controllers: [IdempotentTestController],
       overrides: [{ provide: REDIS_CLIENT, useValue: unreachable }],
     });
+    await insertAccounts(t);
   });
 
   afterAll(async () => {

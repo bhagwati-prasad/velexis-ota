@@ -640,7 +640,9 @@ describe("createTenant", () => {
     expect(await counts()).toEqual(before);
   });
 
-  it("answers 401 without a token and 403 EMAIL_NOT_VERIFIED to an unverified token and to an account that is no longer verified and active", async () => {
+  // A disabled account's still valid token answered the service's 403 EMAIL_NOT_VERIFIED until PBE-067; PortalAuthGuard
+  // now refuses it with 401 UNAUTHENTICATED before the service runs (lead decision (5a) of 2026-11-05).
+  it("[PBE-067 AC1] answers 401 without a token and for a disabled account, and 403 EMAIL_NOT_VERIFIED to an unverified token and to an account that is no longer verified", async () => {
     const verified = await account();
     const unverified = await account({ status: "pending_verification", email_verified_at: null });
     const disabled = await account({ status: "disabled" });
@@ -659,7 +661,7 @@ describe("createTenant", () => {
       "401 UNAUTHENTICATED",
       "403 EMAIL_NOT_VERIFIED",
       "403 EMAIL_NOT_VERIFIED",
-      "403 EMAIL_NOT_VERIFIED",
+      "401 UNAUTHENTICATED",
     ]);
     for (const res of [anonymous, unverifiedToken, staleUnverified, staleDisabled]) {
       expectResponseToMatch("createTenant", res, { document: "platform" });

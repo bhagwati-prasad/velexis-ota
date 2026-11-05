@@ -91,8 +91,11 @@ Notes:
 | `platformAdmin` | an active platform admin | admin operations allowed; portal operations `401` |
 | `owner` … `viewer` | members of each role | the inventory's roles allowed, the others `403 FORBIDDEN` |
 | `ownerWithoutStepUp`, `platformAdminWithoutStepUp` | tokens whose last TOTP is 20 minutes old | the 15 `x-mfa-step-up` operations `401 REAUTH_REQUIRED`, the rest as their fresh counterpart |
+| `disabledAccount`, `erasedAccount` (PBE-067) | unexpired portal tokens (verified e-mail, step-up of now) of two owners of the OTA, disabled and erased after the tokens were signed | every `portal_unverified` and `portal` operation `401 UNAUTHENTICATED`; admin `401`; `public` and `internal` allowed |
 
 Totals of a run: 580 allowed, 894 `401 UNAUTHENTICATED`, 117 `403 FORBIDDEN`, 52 `403 EMAIL_NOT_VERIFIED`, 46 `404 NOT_FOUND`, 24 `400 WEBHOOK_SIGNATURE_INVALID`, 15 `401 REAUTH_REQUIRED`. The operations by scope: 14 `public`, 9 `portal_unverified`, 52 `portal` (44 of them under `/v1/tenants/{tenantId}`), 65 `platform_admin`, 2 `internal`, 2 `webhook`. `removeMember` lets every member through the role guard (the inventory's "or the member themself"; the service decides who may remove whom, members.int.test.ts). Rules finer than a role — granting owner, live secret keys, Amadeus account rotation — are the services' and are tested with their operations.
+
+*Note (2026-11-05, PBE-067).* The two columns of the last row came with F-1's fix. The twelve columns of the review answer exactly the totals above; the two new ones add 32 allowed (the `public` and `internal` operations), 252 `401 UNAUTHENTICATED` (the 61 portal and 65 admin operations, twice) and 4 `400 WEBHOOK_SIGNATURE_INVALID`.
 
 ## 5. Rate limits
 
@@ -161,6 +164,8 @@ No token reaches browser JavaScript in either app: the platform tokens exist onl
 
 **Impact.** Disabling an account is the platform admin's answer to a compromised or abusive account (PADR-0006); revoking its refresh families does not end the access token it already holds, so the holder keeps up to 15 minutes to mint keys, change the payout account (a disabled account; the step-up actions refuse an erased one) or remove members. ADR-0008 accepts 15-minute stateless tokens for sign-out, but the lead's decision of 2026-10-24 (FIX-W29-SECURITY) already refuses the tokens of disabled or deleted customers on the OTA side, and the admin guard does the same for admins.
 
+**Status: fixed (2026-11-05, PBE-067; the rule confirmed by lead decision (5a)).** `PortalAuthGuard` reads the account on every request and answers `401 UNAUTHENTICATED` for a missing, erased, `deleted` or `disabled` one, before the e-mail check; `locked` and `pending_verification` keep their answers. The probe above, repeated in [`auth-guards.int.test.ts`](../backend/test/integration/common/auth-guards.int.test.ts), now answers `401` on `getMe`, `getTenant`, `createApiKey` and `setPayoutAccount` (with a step-up of now) once the account is disabled or erased, and writes nothing; the auth matrix's `disabledAccount` and `erasedAccount` columns (§4) prove the `401` on every `portal_unverified` and `portal` operation. Dated notes: [PADR-0009](adr/0009-platform-api-surface-and-authentication.md) item 4 and [architecture §3.1](architecture.md#31-tokens).
+
 **Fix.** `PortalAuthGuard` re-reads the account (`AccountAuthStates`, one primary-key read, as the admin guard) and refuses a missing, deleted or disabled one with `401 UNAUTHENTICATED`; a dated note in PADR-0009 item 4 and architecture §3.1; a disabled-account column in the auth matrix. **Task:** PBE-067 (its first step is the lead's confirmation of the rule).
 
 ### F-2 · High (advisory); reachable: Medium · `nodemailer` 6.10.1 in the platform backend
@@ -198,6 +203,7 @@ No token reaches browser JavaScript in either app: the platform tokens exist onl
 ## 11. Questions to the lead
 
 1. **F-1:** confirm the rule of PBE-067 — the portal guard refuses the tokens of disabled and deleted accounts at once, as the admin guard and the OTA's customer guard do; `locked` (a sign-in lockout) and `pending_verification` keep their answers.
+   - *Closed 2026-11-05 (lead decision (5a)).* Confirmed as written: an unexpired portal token of a disabled, deleted or erased account answers `401 UNAUTHENTICATED` at once; `locked` and `pending_verification` keep their answers. PBE-067 implements it (F-1, "Status").
 2. **MFA for owners:** approve the recommendation of §9 (mandatory for owners and admins of live OTAs), keep MFA optional, or make it mandatory for every owner.
    - *Closed 2026-11-05 (lead decision (5b)).* The recommendation is approved: mandatory for the owners and admins of live OTAs, enforced at go-live and at their first portal sign-in after it, with the enrolment then and there ([PADR-0008](adr/0008-email-verification-and-mfa-policy.md) revision of 2026-11-05, §9 "Decision"). Tasks: PBE-071 (platform backend) and PFE-030 (portal).
 3. **The audit gate:** PBE-062's Verify ends with `pnpm audit --audit-level high`, which fails until F-2 to F-5 are fixed by major upgrades that the review may not make; confirm that the review is done with its findings recorded, and whether F-5 belongs to the foundation plan.

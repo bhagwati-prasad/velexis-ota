@@ -2,8 +2,8 @@
 // through createTestApp, with the counters in this file's Redis database. Test-only routes bind the operations of the
 // inventory's rows, so they get the limits those operations get; the portal and admin servers' calls are made as they
 // make them, with the BFF key and the forwarded end-user IP (TestApp.bffHeaders). On a route bound to a `portal`
-// operation the account comes from a portal access token, through PortalAuthGuard (PBE-012); on the unbound route, which
-// no auth guard covers, from a test header.
+// operation the account comes from a portal access token, through PortalAuthGuard (PBE-012), which reads the account
+// from the database clone (PBE-067); on the unbound route, which no auth guard covers, from a test header.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -30,10 +30,11 @@ import {
   type RateLimit,
 } from "../../../src/common/http/throttler.config";
 import { OpenApiOperation } from "../../../src/common/http/openapi-operation.decorator";
+import { PLATFORM_POOL, type PlatformPool } from "../../../src/common/database";
 import { RequestContext } from "../../../src/common/http/request-context";
 import { REDIS_CLIENT } from "../../../src/common/redis/redis.module";
 import { APP_DIR } from "../../../src/config";
-import { testId } from "../../builders/platform-rows";
+import { insertAccount, testId } from "../../builders/platform-rows";
 import { createTestApp, TEST_BFF_KEY, type TestApp } from "../../support/app";
 
 // Documentation addresses (RFC 5737, RFC 3849), example.com mailboxes and made-up passwords only.
@@ -116,6 +117,11 @@ describe("the rate limits with Redis up", () => {
 
   beforeAll(async () => {
     t = await createTestApp({ controllers: [LimitedTestController], imports: [TestAccountModule] });
+    // The accounts of the portal tokens below: PortalAuthGuard reads them on every request (PBE-067).
+    const pool = t.app.get<PlatformPool>(PLATFORM_POOL);
+    for (const id of [ACCOUNT_A, ACCOUNT_B]) {
+      await insertAccount(pool, { id });
+    }
   });
 
   afterAll(async () => {

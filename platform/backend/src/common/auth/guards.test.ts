@@ -29,11 +29,16 @@ import { OpenApiOperation } from "../http/openapi-operation.decorator";
 import { PLATFORM_OPENAPI_FILE, PlatformOpenApi } from "../http/openapi-validation.interceptor";
 import { RequestContext, type RequestActor, type RequestContextStore } from "../http/request-context";
 import { AccountRateLimitGuard, RateLimitGuard } from "../http/throttler.config";
-import { AdminAuthGuard, type AccountAuthState, type AccountAuthStates } from "./admin-auth.guard";
+import {
+  AdminAuthGuard,
+  type AccountAuthState,
+  type AccountAuthStates,
+  type AccountStatus,
+} from "./admin-auth.guard";
 import { accessTokenOf, Feature, OperationPolicies, RequireRecentMfa } from "./decorators";
 import { FeatureGuard } from "./feature.guard";
 import { InternalOnlyGuard } from "./internal-only.guard";
-import { PortalAuthGuard } from "./portal-auth.guard";
+import { mayUsePortalToken, PortalAuthGuard } from "./portal-auth.guard";
 import { MFA_STEP_UP_WINDOW_SECONDS, RecentMfaGuard } from "./recent-mfa.guard";
 import { TenantRoleGuard } from "./tenant-role.guard";
 
@@ -49,6 +54,12 @@ const ADMIN = "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1D";
 const FORMER_ADMIN = "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1E";
 const DISABLED_ADMIN = "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1F";
 const FAMILY = "asn_01JA2Z9W5K7Q3M8N4P6R2T0V1G";
+// The portal accounts of PBE-067's states, each with MFA, so a step-up would let them through.
+const LOCKED = "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1H";
+const DISABLED = "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1J";
+const DELETED = "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1K";
+/** An account AccountAuthStates does not find: erased (`deleted_at` set), or never written. */
+const ERASED = "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1M";
 
 /** The accounts as `platform.accounts` would hold them. */
 const ACCOUNTS: ReadonlyMap<string, AccountAuthState> = new Map([
@@ -58,6 +69,9 @@ const ACCOUNTS: ReadonlyMap<string, AccountAuthState> = new Map([
   [ADMIN, { status: "active", isPlatformAdmin: true, mfaEnabled: true }],
   [FORMER_ADMIN, { status: "active", isPlatformAdmin: false, mfaEnabled: true }],
   [DISABLED_ADMIN, { status: "disabled", isPlatformAdmin: true, mfaEnabled: true }],
+  [LOCKED, { status: "locked", isPlatformAdmin: false, mfaEnabled: true }],
+  [DISABLED, { status: "disabled", isPlatformAdmin: false, mfaEnabled: true }],
+  [DELETED, { status: "deleted", isPlatformAdmin: false, mfaEnabled: true }],
 ]);
 
 let withFeature: PlatformOpenApi | undefined;
@@ -168,15 +182,20 @@ function harness(features: Partial<Record<FeatureName, boolean>> = {}) {
     true
   >;
   const tokens = new TokenService(config, clock);
+  /** The account of every read of `platform.accounts` the guards made, in order. */
+  const reads: string[] = [];
   const accounts = {
-    read: (id: string) => Promise.resolve(ACCOUNTS.get(id)),
+    read: (id: string) => {
+      reads.push(id);
+      return Promise.resolve(ACCOUNTS.get(id));
+    },
   } as unknown as AccountAuthStates;
   const cls = new ClsService<RequestContextStore>(new AsyncLocalStorage());
   const context = new RequestContext(cls);
   const policies = new OperationPolicies(documentWithFeature());
   const guards: CanActivate[] = [
     new InternalOnlyGuard(policies),
-    new PortalAuthGuard(policies, tokens, context),
+    new PortalAuthGuard(policies, tokens, accounts, context),
     new AdminAuthGuard(policies, tokens, accounts, context),
     new FeatureGuard(policies, new FeatureSwitches(config)),
     new RecentMfaGuard(policies, accounts, clock),
@@ -225,7 +244,7 @@ function harness(features: Partial<Record<FeatureName, boolean>> = {}) {
     });
   }
 
-  return { clock, tokens, bearer, call };
+  return { clock, tokens, reads, bearer, call };
 }
 
 describe("the guard order", () => {
@@ -344,6 +363,119 @@ describe("PortalAuthGuard and AdminAuthGuard", () => {
 
     expect(await h.call("plans")).toMatchObject({ result: "passed", actor: undefined, token: undefined });
     expect(await h.call("unbound", { peer: "203.0.113.7" })).toMatchObject({ result: "passed" });
+  });
+});
+
+// PBE-067 (lead decision (5a) of 2026-11-05, security review F-1): PortalAuthGuard re-reads the account behind the
+// token on every request. One test per state of `platform.accounts.status`, and the erased account, which
+// AccountAuthStates does not find. Each token would pass everything else: a verified e-mail and a TOTP step-up now,
+// with the settlements switch on, so `setPayoutAccount` (x-feature: settlements, x-mfa-step-up) reaches its step-up.
+describe("PortalAuthGuard and the account's state", () => {
+  /** The portal routes of both scopes and two sensitive actions (x-mfa-step-up). */
+  const PORTAL_ROUTES = ["me", "tenant", "disableMfa", "setPayoutAccount"] as const;
+
+  /** A portal token of `sub` with a verified e-mail and a TOTP step-up now. */
+  const steppedUp = (sub: string): Partial<AccessTokenInput> & Pick<AccessTokenInput, "aud" | "sub"> => ({
+    aud: "portal",
+    sub,
+    amr: ["pwd", "otp"],
+    mfa_at: NOW,
+  });
+
+  it.each([
+    ["a disabled", DISABLED],
+    ["a deleted", DELETED],
+    ["an erased (or unknown)", ERASED],
+  ])(
+    "[PBE-067 AC1] answers 401 UNAUTHENTICATED for the unexpired token of %s account on every portal route, sensitive actions included",
+    async (_state, sub) => {
+      const h = harness({ settlements: true });
+      const headers = await h.bearer(steppedUp(sub));
+
+      for (const route of PORTAL_ROUTES) {
+        const outcome = await h.call(route, { headers });
+        expect([route, outcome.result, outcome.error?.status]).toEqual([route, "UNAUTHENTICATED", 401]);
+        // Refused before the request gets an actor or claims, as AdminAuthGuard refuses.
+        expect(outcome, route).toMatchObject({ actor: undefined, token: undefined });
+      }
+      // One read of the account per request, by the portal guard; the step-up guard never ran.
+      expect(h.reads).toEqual(PORTAL_ROUTES.map(() => sub));
+    },
+  );
+
+  it("[PBE-067 AC1] refuses a disabled account before the e-mail check", async () => {
+    const h = harness();
+
+    const outcome = await h.call("tenant", {
+      headers: await h.bearer({ aud: "portal", sub: DISABLED, ev: false }),
+    });
+
+    expect([outcome.result, outcome.error?.status]).toEqual(["UNAUTHENTICATED", 401]);
+  });
+
+  it.each([
+    ["an active", PERSON],
+    ["a locked", LOCKED],
+  ])(
+    "[PBE-067 AC2] lets the token of %s account through, reading the account once per request",
+    async (_state, sub) => {
+      const h = harness({ settlements: true });
+      const headers = await h.bearer(steppedUp(sub));
+
+      for (const route of PORTAL_ROUTES) {
+        const outcome = await h.call(route, { headers });
+        expect([route, outcome.result]).toEqual([route, "passed"]);
+        expect(outcome.actor, route).toEqual({ type: "account", accountId: sub });
+      }
+      // The portal guard reads it on each request; the step-up guard reads it again for its two operations.
+      expect(h.reads).toEqual([sub, sub, sub, sub, sub, sub]);
+    },
+  );
+
+  it("[PBE-067 AC2] keeps the answers of a pending_verification account: portal_unverified passes, portal answers 403 EMAIL_NOT_VERIFIED", async () => {
+    const h = harness();
+    const headers = await h.bearer({ aud: "portal", sub: UNVERIFIED, ev: false });
+
+    const me = await h.call("me", { headers });
+    const tenant = await h.call("tenant", { headers });
+
+    expect(me).toMatchObject({ result: "passed", actor: { type: "account", accountId: UNVERIFIED } });
+    expect([tenant.result, tenant.error?.status]).toEqual(["EMAIL_NOT_VERIFIED", 403]);
+    expect(h.reads).toEqual([UNVERIFIED, UNVERIFIED]);
+  });
+
+  it("[PBE-067 AC1] lets only active, pending_verification and locked accounts use a portal token, and fails closed on any other state", () => {
+    const stateOf = (status: string): AccountAuthState => ({
+      // A value the column's CHECK does not list yet stands for a state a later migration adds.
+      status: status as AccountStatus,
+      isPlatformAdmin: false,
+      mfaEnabled: true,
+    });
+    const statuses = ["active", "pending_verification", "locked", "disabled", "deleted", "suspended"];
+
+    expect(statuses.map((status) => [status, mayUsePortalToken(stateOf(status))])).toEqual([
+      ["active", true],
+      ["pending_verification", true],
+      ["locked", true],
+      ["disabled", false],
+      ["deleted", false],
+      ["suspended", false],
+    ]);
+    // AccountAuthStates finds no account, or an erased one (`deleted_at` set).
+    expect(mayUsePortalToken(undefined)).toBe(false);
+  });
+
+  it("[PBE-067 AC2] reads no account on public and admin routes, and a portal token stays refused on the admin surface", async () => {
+    const h = harness();
+
+    expect((await h.call("plans")).result).toBe("passed");
+    const portalOnAdmin = await h.call("adminMe", {
+      headers: await h.bearer({ aud: "portal", sub: PERSON }),
+    });
+
+    expect(portalOnAdmin.result).toBe("UNAUTHENTICATED");
+    // AdminAuthGuard verifies the token's audience first and never reads the account of a portal token.
+    expect(h.reads).toEqual([]);
   });
 });
 

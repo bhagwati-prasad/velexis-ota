@@ -4,7 +4,8 @@
 // is `active` and is a platform admin passes. Anything else answers `401 UNAUTHENTICATED`, as a missing token does
 // (`TOKEN_EXPIRED` for an expired one), so a revoked admin loses access at once, not when the token expires.
 //
-// `AccountAuthStates` is that read (one indexed query by primary key, no cache), shared with RecentMfaGuard.
+// `AccountAuthStates` is that read (one indexed query by primary key, no cache), shared with PortalAuthGuard (PBE-067),
+// RecentMfaGuard and the services that check an account's state before their transaction.
 import type { IncomingHttpHeaders } from "node:http";
 import { Inject, Injectable, type CanActivate, type ExecutionContext } from "@nestjs/common";
 import { AppError } from "@velexis/errors";
