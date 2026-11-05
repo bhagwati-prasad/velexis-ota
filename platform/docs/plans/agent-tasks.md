@@ -2146,7 +2146,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - `pnpm audit --prod` lists no `zod` advisory for `platform/frontend`, and every form answers its field errors as before.
 - **Verify:** `pnpm --filter @velexis/platform-frontend test && pnpm --filter @velexis/platform-frontend typecheck`
 
-### PAD-017 · Upgrade zod in the platform admin past its high advisory
+### PAD-017 · Upgrade zod in the platform admin past its high advisory ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-admin
 - **Milestone:** M6
 - **Depends on:** PBE-062

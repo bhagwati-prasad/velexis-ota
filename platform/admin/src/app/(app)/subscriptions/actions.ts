@@ -68,8 +68,12 @@ const SUBSCRIPTION_ID = z.string().regex(/^sub_[0-9A-HJKMNP-TV-Z]{26}$/);
 const TENANT_ID = z.string().regex(/^ten_[0-9A-HJKMNP-TV-Z]{26}$/);
 const PLAN_CODE = z.string().regex(/^[a-z][a-z0-9_]{1,39}$/);
 const VERSION = z.string().regex(/^[1-9][0-9]{0,14}$/);
-/** An RFC 3339 instant in UTC, as the form writes it (`2027-02-12T08:20:11Z`). */
-const INSTANT = z.string().datetime();
+/**
+ * An RFC 3339 instant in UTC, as the form writes it (`2027-02-12T08:20:11.000Z`; fractions of a second optional). Its
+ * seconds are required, as the API's `format: date-time` requires them: Zod 3 also took `2027-02-12T08:20Z`, which the
+ * API then refused with the same message at the same field, and which the form never writes.
+ */
+const INSTANT = z.iso.datetime();
 const STATUS = z.enum(["trialing", "canceled"]);
 
 /** A text field of the submission; a file or a missing field reads as empty. */

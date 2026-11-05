@@ -205,24 +205,41 @@ function revalidatePool(): void {
 // ---- Add in bulk --------------------------------------------------------------------------------------------------
 
 /**
+ * `AddAmadeusOfficesRequest.officeIds`: at most `OFFICE_IDS_MAX` (`maxItems`), each an office id. Zod checks the bound
+ * before any item (GHSA-mrhx-c7xc-m3w5, fixed in 4.6.6), so a longer list is refused with that one issue and no id is
+ * looked at; within the bound every id is checked.
+ */
+const OFFICE_IDS = z.array(z.string().regex(OFFICE_ID)).max(OFFICE_IDS_MAX);
+
+/**
  * The office ids of the textarea: one per line, white space around each trimmed, empty lines dropped. `invalid` holds
  * the numbers (from 1) of the lines that are no office id; the API upper-cases the valid ones and skips repeats.
+ * `tooMany` says that there are more ids than the API takes, which are then not checked one by one.
  */
-function officeIdsOf(value: string): { ids: string[]; invalid: number[] } {
+function officeIdsOf(value: string): { ids: string[]; invalid: number[]; tooMany: boolean } {
   const ids: string[] = [];
-  const invalid: number[] = [];
-  value.split(/\r\n|\r|\n/).forEach((line, index) => {
-    const id = line.trim();
-    if (id === "") {
-      return;
-    }
-    if (OFFICE_ID.test(id)) {
+  const lines: number[] = [];
+  value.split(/\r\n|\r|\n/).forEach((text, index) => {
+    const id = text.trim();
+    if (id !== "") {
       ids.push(id);
-    } else {
-      invalid.push(index + 1);
+      lines.push(index + 1);
     }
   });
-  return { ids, invalid };
+  const parsed = OFFICE_IDS.safeParse(ids);
+  if (parsed.success) {
+    return { ids: parsed.data, invalid: [], tooMany: false };
+  }
+  // The bound is an issue of the list itself (an empty path); every other issue names its id by its index.
+  const invalid: number[] = [];
+  for (const { path } of parsed.error.issues) {
+    const [index] = path;
+    if (typeof index !== "number") {
+      return { ids: [], invalid: [], tooMany: true };
+    }
+    invalid.push(lines[index] ?? index + 1);
+  }
+  return { ids: [], invalid, tooMany: false };
 }
 
 function addRefused(
@@ -241,18 +258,18 @@ function addRefused(
  */
 export async function addOffices(previous: AddOfficesState, formData: FormData): Promise<AddOfficesState> {
   const accountId = ACCOUNT_ID.safeParse(text(formData, "amadeusAccountId"));
-  const { ids, invalid } = officeIdsOf(text(formData, "officeIds"));
+  const { ids, invalid, tooMany } = officeIdsOf(text(formData, "officeIds"));
   const notes = text(formData, "notes").trim();
   const fieldErrors: Partial<Record<AddOfficesField, string>> = {};
   if (!accountId.success) {
     fieldErrors.amadeusAccountId = ADD.accountInvalid;
   }
-  if (invalid.length > 0) {
+  if (tooMany) {
+    fieldErrors.officeIds = ADD.tooMany;
+  } else if (invalid.length > 0) {
     fieldErrors.officeIds = ADD.officeIdsInvalid(invalid);
   } else if (ids.length === 0) {
     fieldErrors.officeIds = ADD.officeIdsRequired;
-  } else if (ids.length > OFFICE_IDS_MAX) {
-    fieldErrors.officeIds = ADD.tooMany;
   }
   if (codePoints(notes) > NOTES_MAX) {
     fieldErrors.notes = ADD.notesTooLong;

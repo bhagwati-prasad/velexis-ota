@@ -1199,6 +1199,47 @@ describe("admins/page.tsx and admins/actions.ts: grant and revoke platform admin
       message: A.self,
     });
   });
+
+  it("[PAD-017 AC1] checks the trimmed address by the rule it had before Zod 4, and sends only the addresses it takes", async () => {
+    const idle: AdminActionState = { status: "idle" };
+    routes({ "POST /v1/admin/admins": () => apiError("NOT_FOUND", 404) });
+    const grant = (email: string) => grantAdmin(idle, formData({ email, reason: REASON }));
+    // 254 characters is the longest `EmailAddress`.
+    const longest = `${"a".repeat(64)}@${"b".repeat(185)}.com`;
+    const accepted = [
+      " anna.berg@example.com\n",
+      "\tAnna.Berg+admin@Example.COM ",
+      "o'brien@example.com",
+      longest,
+    ];
+    for (const email of accepted) {
+      expect(await grant(email)).toMatchObject({ status: "failed", code: "NOT_FOUND", message: A.noAccount });
+    }
+    expect(await bodies("POST", "/v1/admin/admins")).toEqual(
+      accepted.map((email) => ({ email: email.trim(), reason: REASON })),
+    );
+
+    fetchMock.mockClear();
+    for (const email of [
+      "",
+      "anna..berg@example.com",
+      ".anna@example.com",
+      "anna.@example.com",
+      "anna'@example.com",
+      "anna@example",
+      "ånna@example.com",
+      "anna@-example.com",
+      "anna berg@example.com",
+      `${longest}m`,
+    ]) {
+      expect(await grant(email)).toEqual({
+        status: "failed",
+        code: "VALIDATION_FAILED",
+        message: A.emailInvalid,
+      });
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
 
 // ---- The audit log -------------------------------------------------------------------------------------------------

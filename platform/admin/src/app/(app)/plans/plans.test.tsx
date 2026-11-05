@@ -1293,6 +1293,39 @@ describe("plans/[planCode]/page.tsx: one plan", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("[PAD-017 AC1] refuses more named feature rows than a plan holds with that one message, before any name is checked", async () => {
+    const create = (featureName: readonly string[], featureOn: readonly string[] = []) =>
+      createPlan(
+        IDLE_PLAN_FORM,
+        formData({ ...VALID_PLAN_FIELDS, code: "growth_plus", featureName, featureOn }),
+      );
+    const flags = Array.from({ length: 50 }, (_, index) => `flag${index}`);
+
+    // 51 named rows, one no flag name and one repeated: neither is looked at, only the bound of `maxProperties`.
+    const oversized = await create([...flags.slice(0, 49), "__proto__", "flag0"]);
+    expect(oversized.fieldErrors).toEqual({ features: PLAN_FORM_STRINGS.featuresTooMany });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // Within the bound the rows are checked in the form's order, as before: the first problem is the one shown.
+    expect((await create([...flags.slice(0, 48), "flag0", "__proto__"])).fieldErrors).toEqual({
+      features: PLAN_FORM_STRINGS.featureDuplicate,
+    });
+    expect((await create([...flags.slice(0, 48), "__proto__", "flag0"])).fieldErrors).toEqual({
+      features: PLAN_FORM_STRINGS.featureNameInvalid,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // Rows without a name are not counted: 50 named rows among empty ones are a valid plan of 50 features.
+    const withEmptyRows = flags.flatMap((name) => [name, " "]);
+    const saved = await create(withEmptyRows, ["0", "98"]);
+    expect(saved.status).toBe("saved");
+    const [body] = (await bodies("POST", PLANS_PATH)) as { features: Record<string, boolean> }[];
+    expect(Object.keys(body?.features ?? {})).toEqual(flags);
+    expect(body?.features["flag0"]).toBe(true);
+    expect(body?.features["flag49"]).toBe(true);
+    expect(body?.features["flag1"]).toBe(false);
+  });
+
   it("hands the forms only the plan fields they show, whatever else the answer holds", async () => {
     const sentinel = "PAD008-SENTINEL-PLAN";
     routes({
@@ -1697,6 +1730,59 @@ describe("subscriptions/[subscriptionId]/page.tsx: one subscription", () => {
         code: "VALIDATION_FAILED",
         message,
       });
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("[PAD-017 AC1] sends the trial ends the form writes as before, and answers the others at the field as the API's refusal did", async () => {
+    const idle: ManualSubscriptionState = { status: "idle" };
+    const save = (trialEndsAt: string, version: number) =>
+      updateManualSubscription(
+        idle,
+        formData({ subscriptionId: MANUAL_ID, version: String(version), trialEndsAt, reason: REASON }),
+      );
+    // What the form writes (milliseconds), whole seconds, a finer fraction and a leap day: each sent as it is.
+    const accepted = [
+      "2027-02-12T08:20:11.000Z",
+      "2027-02-12T08:20:11Z",
+      "2027-02-12T08:20:11.123456Z",
+      "2028-02-29T08:20:11Z",
+    ];
+    for (const [index, trialEndsAt] of accepted.entries()) {
+      expect(await save(trialEndsAt, index + 1)).toMatchObject({
+        status: "done",
+        subscription: { trialEndsAt },
+      });
+    }
+    expect(await bodies("PATCH", `${SUBSCRIPTIONS_PATH}/${MANUAL_ID}`)).toEqual(
+      accepted.map((trialEndsAt) => ({ trialEndsAt, reason: REASON })),
+    );
+
+    // The API refuses a trial end its `date-time` does not take with a field error, which the form shows at the field.
+    routes({
+      [`PATCH ${SUBSCRIPTIONS_PATH}/${MANUAL_ID}`]: () =>
+        apiError("VALIDATION_FAILED", 400, undefined, [{ path: "/trialEndsAt", code: "format" }]),
+    });
+    const apiRefusal = await save("2027-02-12T08:20:11Z", 5);
+    expect(apiRefusal).toEqual({
+      status: "failed",
+      code: "VALIDATION_FAILED",
+      message: MANUAL_SUBSCRIPTION_STRINGS.trialEndInvalid,
+      field: "trialEndsAt",
+    });
+    // A time without seconds (which Zod 3 passed on to the API), an offset, no zone, an impossible day or hour, and
+    // white space: the same answer, without a call.
+    fetchMock.mockClear();
+    for (const trialEndsAt of [
+      "2027-02-12T08:20Z",
+      "2027-02-12T08:20:11+01:00",
+      "2027-02-12T08:20:11",
+      "2027-02-29T08:20:11Z",
+      "2027-02-12T24:00:00Z",
+      "2027-02-12 08:20:11Z",
+      " 2027-02-12T08:20:11Z",
+    ]) {
+      expect(await save(trialEndsAt, 5)).toEqual(apiRefusal);
     }
     expect(fetchMock).not.toHaveBeenCalled();
   });

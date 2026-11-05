@@ -71,7 +71,8 @@ const SIGN_IN_FORM = z.object({
     .trim()
     .min(1, SIGN_IN_STRINGS.emailRequired)
     .max(EMAIL_MAX, SIGN_IN_STRINGS.emailInvalid)
-    .email(SIGN_IN_STRINGS.emailInvalid),
+    // The address rule after the trim (`z.email()` on its own would check the untrimmed text first).
+    .check(z.email({ error: SIGN_IN_STRINGS.emailInvalid })),
   // Only the bounds of the document: the password rules apply when a password is chosen, not when it is used.
   password: z
     .string()

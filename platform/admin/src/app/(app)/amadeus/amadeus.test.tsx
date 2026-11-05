@@ -1317,6 +1317,36 @@ describe("amadeus/offices/page.tsx: the office pool", () => {
     );
   });
 
+  it("[PAD-017 AC1] refuses more office ids than the API takes with that one message, before any line is checked", async () => {
+    const idle: AddOfficesState = { status: "idle" };
+    const add = (officeIds: string) =>
+      addOffices(idle, formData({ amadeusAccountId: TEST_ACCOUNT_ID, officeIds }));
+    const ids = Array.from({ length: 500 }, (_, index) => `NCE1A${String(index).padStart(4, "0")}`);
+
+    // 501 ids, two of them no office id: they are not named, only the bound of `maxItems` is.
+    expect(await add([...ids.slice(0, 499), "NCE 1A0955", "<script>"].join("\n"))).toEqual({
+      status: "failed",
+      code: "VALIDATION_FAILED",
+      message: "",
+      fieldErrors: { officeIds: ADD.tooMany },
+    });
+    // Within the bound every line is checked as before, and each line that is no office id is named once.
+    expect(await add([...ids.slice(0, 498), "NCE 1A0955", "<script>"].join("\n"))).toEqual({
+      status: "failed",
+      code: "VALIDATION_FAILED",
+      message: "",
+      fieldErrors: { officeIds: ADD.officeIdsInvalid([499, 500]) },
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // Empty lines are not counted: 500 ids with an empty line after each are sent, in their order.
+    routes({ [`POST ${OFFICES_PATH}`]: () => json({ created: [], skipped: [] }, 201) });
+    expect(await add(ids.map((id) => `${id}\n \r\n`).join(""))).toMatchObject({ status: "done" });
+    expect(await bodies("POST", OFFICES_PATH)).toEqual([
+      { amadeusAccountId: TEST_ACCOUNT_ID, officeIds: ids },
+    ]);
+  });
+
   it("keeps the list, and shows no earlier outcome, while a step-up is asked for after an earlier addition", async () => {
     let attempts = 0;
     routes({

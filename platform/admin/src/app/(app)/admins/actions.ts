@@ -47,8 +47,11 @@ export type AdminActionState = { readonly stepUp?: true } & (
 /** `AccountId` of the platform document. */
 const ACCOUNT_ID = /^acc_[0-9A-HJKMNP-TV-Z]{26}$/;
 
-/** `EmailAddress` of the platform document: at most 254 characters; spaces around it are dropped. */
-const EMAIL = z.string().trim().min(1).max(254).email();
+/**
+ * `EmailAddress` of the platform document: at most 254 characters; spaces around it are dropped. The address rule runs
+ * after the trim (`z.email()` on its own would check the untrimmed text first).
+ */
+const EMAIL = z.string().trim().min(1).max(254).check(z.email());
 
 /**
  * The longest name a revoke form carries back (only to word its outcome): the `maxLength` of an account's name in the

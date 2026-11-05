@@ -4,6 +4,7 @@ import type { components } from "@velexis/api-types/platform";
 import type { PlatformErrorCode } from "@velexis/errors";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { z } from "zod";
 
 import { platformApi, type ApiError } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
@@ -213,23 +214,34 @@ function whole(value: string, max: number): number | undefined {
   return number <= max ? number : undefined;
 }
 
-/** The feature flags of the rows, or the problem with them. Rows without a name are ignored. */
+/**
+ * The named feature rows of a form: at most `FEATURES_MAX`, the `maxProperties` of `PlanFeatures`. Zod checks the bound
+ * before any row (GHSA-mrhx-c7xc-m3w5, fixed in 4.6.6), so a longer list is refused with that one message and no name
+ * is looked at; within the bound the rows are checked in order below.
+ */
+const FEATURE_ROWS = z.array(z.object({ name: z.string(), on: z.boolean() })).max(FEATURES_MAX);
+
+/**
+ * The feature flags of the rows, or the problem with them: more rows than a plan holds, else the first row (in the
+ * form's order) whose name is no flag name or repeats an earlier one. Rows without a name are ignored.
+ */
 function featuresOf(rows: readonly FeatureRow[]): Record<string, boolean> | string {
+  const named = rows.flatMap(({ name, on }) => (name.trim() === "" ? [] : [{ name: name.trim(), on }]));
+  const bounded = FEATURE_ROWS.safeParse(named);
+  if (!bounded.success) {
+    return F.featuresTooMany;
+  }
   const features = new Map<string, boolean>();
-  for (const row of rows) {
-    const name = row.name.trim();
-    if (name === "") {
-      continue;
-    }
+  for (const { name, on } of bounded.data) {
     if (!FEATURE_NAME.test(name)) {
       return F.featureNameInvalid;
     }
     if (features.has(name)) {
       return F.featureDuplicate;
     }
-    features.set(name, row.on);
+    features.set(name, on);
   }
-  return features.size > FEATURES_MAX ? F.featuresTooMany : Object.fromEntries(features);
+  return Object.fromEntries(features);
 }
 
 /**

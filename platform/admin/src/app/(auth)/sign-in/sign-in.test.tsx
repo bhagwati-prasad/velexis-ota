@@ -444,6 +444,57 @@ describe("/sign-in: SignInForm and the signIn action", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("[PAD-017 AC1] checks the trimmed address by the rule and with the messages it had before Zod 4", async () => {
+    answer({ "/v1/admin/auth/sign-in": () => apiError("INVALID_CREDENTIALS", 401) });
+    const submitted = (email: string, password = PASSWORD) =>
+      signIn(IDLE_SIGN_IN, formData({ email, password }));
+    // 254 characters is the longest `EmailAddress`.
+    const longest = `${"a".repeat(64)}@${"b".repeat(185)}.com`;
+    const accepted = [
+      ` ${EMAIL}\n`,
+      "\tLena.Holm+admin@Example.COM ",
+      "o'brien@example.com",
+      "_a-b+c@x-y.io",
+      "lena@123.com",
+      longest,
+    ];
+    for (const email of accepted) {
+      expect(await submitted(email)).toMatchObject({ code: "INVALID_CREDENTIALS", fieldErrors: {} });
+    }
+    const sent = await Promise.all(fetchMock.mock.calls.map(([call]) => call.json() as Promise<unknown>));
+    expect(sent).toEqual(accepted.map((email) => ({ email: email.trim(), password: PASSWORD })));
+
+    fetchMock.mockClear();
+    for (const email of ["", " \n "]) {
+      expect((await submitted(email)).fieldErrors).toEqual({ email: SIGN_IN_STRINGS.emailRequired });
+    }
+    for (const email of [
+      "lena..holm@example.com",
+      ".lena@example.com",
+      "lena.@example.com",
+      "lena'@example.com",
+      "lena@example",
+      "lena@example.c",
+      "lena@example..com",
+      "lena@exa_mple.com",
+      "lena@-example.com",
+      "lena@example.123",
+      "lena holm@example.com",
+      '"lena"@example.com',
+      "léna@example.com",
+      "\u{1F600}@example.com",
+      `${longest}m`,
+    ]) {
+      expect((await submitted(email)).fieldErrors).toEqual({ email: SIGN_IN_STRINGS.emailInvalid });
+    }
+    // Each field keeps its own first problem.
+    expect((await submitted("", "")).fieldErrors).toEqual({
+      email: SIGN_IN_STRINGS.emailRequired,
+      password: SIGN_IN_STRINGS.passwordRequired,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("shows the API's field errors at their fields", async () => {
     answer({
       "/v1/admin/auth/sign-in": () =>
