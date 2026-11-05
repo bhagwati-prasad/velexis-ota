@@ -2054,6 +2054,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Verify:** `pnpm test:e2e -- --project=portal`
 
 ### PAD-016 · Complete the admin end-to-end suite with accessibility and header checks
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the three specs in the nightly e2e run on GitHub)
 - **Component:** platform-admin
 - **Milestone:** M6
 - **Depends on:** PAD-015
