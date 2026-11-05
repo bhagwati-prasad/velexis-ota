@@ -17,7 +17,9 @@ info:
 
     **Who may call (`x-scope`).** `public`: no token, rate limited. `portal_unverified`: a portal access token; the
     e-mail address need not be verified (the account, MFA set-up, sessions and sign-out, PADR-0008 item 2).
-    `portal`: a portal access token of a verified, active account, otherwise `403 EMAIL_NOT_VERIFIED`.
+    `portal`: a portal access token of a verified, active account, otherwise `403 EMAIL_NOT_VERIFIED`; an active
+    owner or admin of a live OTA must also have MFA on, otherwise `403 MFA_REQUIRED` with `details.reason =
+    enrolment_required` on every `portal` operation until it enrols (PADR-0008, revision of 2026-11-05).
     `platform_admin`: a platform admin access token (`/v1/admin/…`, except the `public` password, MFA and refresh
     steps of the admin sign-in). `internal`: loopback only and without `X-Forwarded-For`, no token; any other caller
     gets `404`. `webhook`: a Stripe signature on the raw body. Portal and admin tokens carry different audiences
@@ -839,7 +841,11 @@ paths:
       description: >-
         The account, its active memberships with the OTA's key, name, status and the member's role, and the milestone
         switches of PADR-0015 in `features`. The portal and the admin hide what a switch turns off; the backend stays
-        the only source of the switches. Works before the e-mail address is verified.
+        the only source of the switches. Works before the e-mail address is verified. `mfaEnrolmentRequired` says
+        whether the account is an active owner or admin of a live OTA without MFA (PADR-0008, revision of
+        2026-11-05): its `portal` operations then answer `403 MFA_REQUIRED` (`details.reason = enrolment_required`)
+        until it turns MFA on, and the portal shows the MFA enrolment before any other page; `getMe` itself stays
+        open.
       tags:
         - Account
       security:
@@ -880,7 +886,9 @@ paths:
       summary: Update the profile
       description: >-
         Changes the name, locale or time zone. `If-Match` carries the `ETag` of `getMe`; a stale version answers `412
-        PRECONDITION_FAILED`. The e-mail address cannot be changed here (PADR-0008 item 5). Writes an audit row.
+        PRECONDITION_FAILED`. The e-mail address cannot be changed here (PADR-0008 item 5). Writes an audit row. The
+        answer is the account as `getMe` shows it, `mfaEnrolmentRequired` included; like `getMe` it stays open to an
+        account that must enrol in MFA.
       tags:
         - Account
       security:
@@ -895,6 +903,8 @@ paths:
         - INTERNAL_ERROR
       x-platform-tables:
         - accounts
+        - tenant_memberships
+        - tenants
         - platform_audit_log
       parameters:
         - $ref: '#/components/parameters/IfMatch'
@@ -960,6 +970,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - CURRENT_PASSWORD_INCORRECT
         - PASSWORD_TOO_WEAK
         - RATE_LIMITED
@@ -989,7 +1000,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthenticated'
         '403':
-          $ref: '#/components/responses/EmailNotVerified'
+          $ref: '#/components/responses/PortalForbidden'
         '422':
           description: >-
             The current password is wrong, or the new one breaks the password rules. Possible codes:
@@ -1159,7 +1170,9 @@ paths:
       description: >-
         Needs a step-up within 15 minutes (`x-mfa-step-up`). Removes the TOTP secret and every recovery code, e-mails
         the account and writes an audit row. Platform admins cannot turn MFA off (`403 FORBIDDEN`, `details.reason =
-        platform_admin`).
+        platform_admin`). Neither can an active owner or admin of a live OTA (PADR-0008, revision of 2026-11-05): once
+        the step-up has passed it answers `409 CONFLICT` with `details.reason = mfa_mandatory` and changes nothing, for
+        as long as it holds the role; a lost device still goes through a recovery code or a support MFA reset.
       tags:
         - Account
       security:
@@ -1173,11 +1186,14 @@ paths:
         - EMAIL_NOT_VERIFIED
         - MFA_REQUIRED
         - FORBIDDEN
+        - CONFLICT
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-platform-tables:
         - accounts
         - account_recovery_codes
+        - tenant_memberships
+        - tenants
         - email_outbox
         - platform_audit_log
       responses:
@@ -1190,8 +1206,9 @@ paths:
           $ref: '#/components/responses/StepUpUnauthorized'
         '403':
           description: >-
-            The e-mail address is not verified, MFA is not enabled, or the account is a platform admin. Possible codes:
-            EMAIL_NOT_VERIFIED, MFA_REQUIRED, FORBIDDEN.
+            The e-mail address is not verified, MFA is not enabled, the account is a platform admin, or the caller is an
+            owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`,
+            PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED, FORBIDDEN.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
@@ -1214,6 +1231,30 @@ paths:
                       requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
                       details:
                         reason: platform_admin
+                MFA_REQUIRED_ENROLMENT:
+                  $ref: '#/components/examples/MfaEnrolmentRequired'
+        '409':
+          description: >-
+            The account is an active owner or admin of a live OTA, whose MFA must stay on (`details.reason =
+            mfa_mandatory`, PADR-0008). Possible codes: CONFLICT.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                CONFLICT:
+                  summary: An owner or admin of a live OTA cannot turn MFA off
+                  value:
+                    error:
+                      code: CONFLICT
+                      message: The request conflicts with the current state of the resource.
+                      status: 409
+                      requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                      details:
+                        reason: mfa_mandatory
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -1433,6 +1474,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - RATE_LIMITED
         - INTERNAL_ERROR
       x-platform-tables:
@@ -1478,7 +1520,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthenticated'
         '403':
-          $ref: '#/components/responses/EmailNotVerified'
+          $ref: '#/components/responses/PortalForbidden'
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -1569,6 +1611,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - TENANT_KEY_UNAVAILABLE
         - IDEMPOTENCY_KEY_REUSED
         - PLAN_NOT_AVAILABLE
@@ -1705,7 +1748,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthenticated'
         '403':
-          $ref: '#/components/responses/EmailNotVerified'
+          $ref: '#/components/responses/PortalForbidden'
         '409':
           description: >-
             The key is reserved or used by another OTA, or the `Idempotency-Key` was used with another body. Possible
@@ -1773,6 +1816,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - NOT_FOUND
         - RATE_LIMITED
         - INTERNAL_ERROR
@@ -1800,7 +1844,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthenticated'
         '403':
-          $ref: '#/components/responses/EmailNotVerified'
+          $ref: '#/components/responses/PortalForbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '429':
@@ -1826,6 +1870,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - TENANT_NOT_ACTIVE
@@ -1901,6 +1946,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - NOT_FOUND
         - RATE_LIMITED
         - INTERNAL_ERROR
@@ -2004,7 +2050,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthenticated'
         '403':
-          $ref: '#/components/responses/EmailNotVerified'
+          $ref: '#/components/responses/PortalForbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '429':
@@ -2032,6 +2078,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - PROVISIONING_NOT_RETRYABLE
@@ -2114,6 +2161,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - KEYS_ALREADY_REVEALED
@@ -2196,6 +2244,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - NOT_FOUND
         - RATE_LIMITED
         - INTERNAL_ERROR
@@ -2263,7 +2312,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthenticated'
         '403':
-          $ref: '#/components/responses/EmailNotVerified'
+          $ref: '#/components/responses/PortalForbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '429':
@@ -2389,9 +2438,10 @@ paths:
           $ref: '#/components/responses/StepUpUnauthorized'
         '403':
           description: >-
-            The e-mail address is not verified, the caller is not an owner, MFA is not enabled, or the live switch is
-            off (a plan without live mode is the missing precondition `plan_live_mode` of the `422`). Possible codes:
-            EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED.
+            The e-mail address is not verified, the caller is not an owner, MFA is not enabled, the live switch is off
+            (a plan without live mode is the missing precondition `plan_live_mode` of the `422`), or the caller is an
+            owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`,
+            PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
@@ -2408,6 +2458,8 @@ paths:
                   $ref: '#/components/examples/MFA_REQUIRED'
                 FEATURE_DISABLED:
                   $ref: '#/components/examples/FeatureDisabledLiveSwitch'
+                MFA_REQUIRED_ENROLMENT:
+                  $ref: '#/components/examples/MfaEnrolmentRequired'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -2450,6 +2502,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - NOT_FOUND
         - RATE_LIMITED
         - INTERNAL_ERROR
@@ -2491,7 +2544,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthenticated'
         '403':
-          $ref: '#/components/responses/EmailNotVerified'
+          $ref: '#/components/responses/PortalForbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '429':
@@ -2602,6 +2655,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - LAST_OWNER
@@ -2650,6 +2704,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - RATE_LIMITED
@@ -2711,6 +2766,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - ALREADY_MEMBER
@@ -2799,6 +2855,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - CONFLICT
@@ -2849,6 +2906,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - CONFLICT
@@ -2951,6 +3009,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - INVITATION_EMAIL_MISMATCH
         - ALREADY_MEMBER
         - RATE_LIMITED
@@ -3006,8 +3065,9 @@ paths:
           $ref: '#/components/responses/Unauthenticated'
         '403':
           description: >-
-            The e-mail address is not verified, or the invitation was sent to another address. Possible codes:
-            EMAIL_NOT_VERIFIED, INVITATION_EMAIL_MISMATCH.
+            The e-mail address is not verified, the invitation was sent to another address, or the caller is an owner or
+            admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`,
+            PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED, INVITATION_EMAIL_MISMATCH.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
@@ -3020,6 +3080,8 @@ paths:
                   $ref: '#/components/examples/EMAIL_NOT_VERIFIED'
                 INVITATION_EMAIL_MISMATCH:
                   $ref: '#/components/examples/INVITATION_EMAIL_MISMATCH'
+                MFA_REQUIRED_ENROLMENT:
+                  $ref: '#/components/examples/MfaEnrolmentRequired'
         '409':
           description: 'The account is already a member of this OTA. Possible codes: ALREADY_MEMBER.'
           headers:
@@ -3109,8 +3171,9 @@ paths:
           $ref: '#/components/responses/Unauthenticated'
         '403':
           description: >-
-            The e-mail address is not verified, or the OTA is live and the account has no MFA (set it up first).
-            Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED.
+            The e-mail address is not verified, the OTA is live and the account has no MFA (set it up first), or the
+            caller is an owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason =
+            enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
@@ -3129,6 +3192,8 @@ paths:
                       message: Turn on two-factor authentication first.
                       status: 403
                       requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                MFA_REQUIRED_ENROLMENT:
+                  $ref: '#/components/examples/MfaEnrolmentRequired'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -3182,6 +3247,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - RATE_LIMITED
@@ -3403,6 +3469,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - CONFLICT
@@ -3577,6 +3644,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - CONFLICT
@@ -3651,6 +3719,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - NOT_FOUND
         - RATE_LIMITED
         - INTERNAL_ERROR
@@ -3713,7 +3782,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthenticated'
         '403':
-          $ref: '#/components/responses/EmailNotVerified'
+          $ref: '#/components/responses/PortalForbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '429':
@@ -3758,6 +3827,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - FEATURE_DISABLED
         - NOT_FOUND
@@ -3823,8 +3893,10 @@ paths:
           $ref: '#/components/responses/Unauthenticated'
         '403':
           description: >-
-            The e-mail address is not verified, the caller's role does not allow it, or custom domains are off or not
-            in the plan. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED.
+            The e-mail address is not verified, the caller's role does not allow it, custom domains are off or not in
+            the plan, or the caller is an owner or admin of a live OTA without MFA and must turn MFA on first
+            (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED,
+            FORBIDDEN, FEATURE_DISABLED.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
@@ -3839,6 +3911,8 @@ paths:
                   $ref: '#/components/examples/FORBIDDEN'
                 FEATURE_DISABLED:
                   $ref: '#/components/examples/FeatureDisabledCustomDomains'
+                MFA_REQUIRED_ENROLMENT:
+                  $ref: '#/components/examples/MfaEnrolmentRequired'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -3910,6 +3984,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - CONFLICT
@@ -3990,6 +4065,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - FEATURE_DISABLED
         - NOT_FOUND
@@ -4046,8 +4122,10 @@ paths:
           $ref: '#/components/responses/Unauthenticated'
         '403':
           description: >-
-            The e-mail address is not verified, the caller's role does not allow it, or custom domains are off or not
-            in the plan. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED.
+            The e-mail address is not verified, the caller's role does not allow it, custom domains are off or not in
+            the plan, or the caller is an owner or admin of a live OTA without MFA and must turn MFA on first
+            (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED,
+            FORBIDDEN, FEATURE_DISABLED.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
@@ -4062,6 +4140,8 @@ paths:
                   $ref: '#/components/examples/FORBIDDEN'
                 FEATURE_DISABLED:
                   $ref: '#/components/examples/FeatureDisabledCustomDomains'
+                MFA_REQUIRED_ENROLMENT:
+                  $ref: '#/components/examples/MfaEnrolmentRequired'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -4131,6 +4211,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - FEATURE_DISABLED
         - NOT_FOUND
@@ -4186,8 +4267,10 @@ paths:
           $ref: '#/components/responses/Unauthenticated'
         '403':
           description: >-
-            The e-mail address is not verified, the caller's role does not allow it, or custom domains are off or not
-            in the plan. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED.
+            The e-mail address is not verified, the caller's role does not allow it, custom domains are off or not in
+            the plan, or the caller is an owner or admin of a live OTA without MFA and must turn MFA on first
+            (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED,
+            FORBIDDEN, FEATURE_DISABLED.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
@@ -4202,6 +4285,8 @@ paths:
                   $ref: '#/components/examples/FORBIDDEN'
                 FEATURE_DISABLED:
                   $ref: '#/components/examples/FeatureDisabledCustomDomains'
+                MFA_REQUIRED_ENROLMENT:
+                  $ref: '#/components/examples/MfaEnrolmentRequired'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -4247,6 +4332,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - RATE_LIMITED
@@ -4333,6 +4419,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - TENANT_NOT_ACTIVE
@@ -4466,6 +4553,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - FEATURE_DISABLED
         - NOT_FOUND
@@ -4522,8 +4610,10 @@ paths:
           $ref: '#/components/responses/Unauthenticated'
         '403':
           description: >-
-            The e-mail address is not verified, the caller is not an owner, or live mode is off or not in the plan.
-            Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED.
+            The e-mail address is not verified, the caller is not an owner, live mode is off or not in the plan, or the
+            caller is an owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason =
+            enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED, FORBIDDEN,
+            FEATURE_DISABLED.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
@@ -4538,6 +4628,8 @@ paths:
                   $ref: '#/components/examples/FORBIDDEN'
                 FEATURE_DISABLED:
                   $ref: '#/components/examples/FeatureDisabledLiveSwitch'
+                MFA_REQUIRED_ENROLMENT:
+                  $ref: '#/components/examples/MfaEnrolmentRequired'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -4690,9 +4782,10 @@ paths:
         '403':
           description: >-
             The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, own Amadeus
-            credentials are off (`details.feature = own_amadeus`), or the environment is `live` while the live switch
-            is off (`details.feature = live_switch`). Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED,
-            FEATURE_DISABLED.
+            credentials are off (`details.feature = own_amadeus`), the environment is `live` while the live switch is
+            off (`details.feature = live_switch`), or the caller is an owner or admin of a live OTA without MFA and must
+            turn MFA on first (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED,
+            FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
@@ -4711,6 +4804,8 @@ paths:
                   $ref: '#/components/examples/FeatureDisabledOwnAmadeus'
                 FEATURE_DISABLED_LIVE_SWITCH:
                   $ref: '#/components/examples/FeatureDisabledLiveSwitch'
+                MFA_REQUIRED_ENROLMENT:
+                  $ref: '#/components/examples/MfaEnrolmentRequired'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -4767,6 +4862,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - RATE_LIMITED
@@ -4842,6 +4938,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - RATE_LIMITED
@@ -4921,6 +5018,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - TENANT_NOT_ACTIVE
@@ -5056,8 +5154,10 @@ paths:
           $ref: '#/components/responses/StepUpUnauthorized'
         '403':
           description: >-
-            The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, or own Stripe
-            accounts are off. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED.
+            The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, own Stripe
+            accounts are off, or the caller is an owner or admin of a live OTA without MFA and must turn MFA on first
+            (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN,
+            MFA_REQUIRED, FEATURE_DISABLED.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
@@ -5074,6 +5174,8 @@ paths:
                   $ref: '#/components/examples/MFA_REQUIRED'
                 FEATURE_DISABLED:
                   $ref: '#/components/examples/FeatureDisabledOwnStripe'
+                MFA_REQUIRED_ENROLMENT:
+                  $ref: '#/components/examples/MfaEnrolmentRequired'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -5138,6 +5240,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - FEATURE_DISABLED
         - STRIPE_ACCOUNT_ALREADY_CONNECTED
@@ -5222,8 +5325,10 @@ paths:
           $ref: '#/components/responses/Unauthenticated'
         '403':
           description: >-
-            The e-mail address is not verified, the account that started is no longer an owner or admin of the OTA, or
-            own Stripe accounts are off. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED.
+            The e-mail address is not verified, the account that started is no longer an owner or admin of the OTA, own
+            Stripe accounts are off, or the caller is an owner or admin of a live OTA without MFA and must turn MFA on
+            first (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED,
+            FORBIDDEN, FEATURE_DISABLED.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
@@ -5238,6 +5343,8 @@ paths:
                   $ref: '#/components/examples/FORBIDDEN'
                 FEATURE_DISABLED:
                   $ref: '#/components/examples/FeatureDisabledOwnStripe'
+                MFA_REQUIRED_ENROLMENT:
+                  $ref: '#/components/examples/MfaEnrolmentRequired'
         '409':
           description: >-
             The Stripe account is connected to another OTA, the OTA is not active, or a platform admin disabled the
@@ -5438,9 +5545,10 @@ paths:
         '403':
           description: >-
             The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, own Stripe
-            accounts are off (`details.feature = own_stripe`), or the environment is `live` while the live switch is off
-            (`details.feature = live_switch`). Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED,
-            FEATURE_DISABLED.
+            accounts are off (`details.feature = own_stripe`), the environment is `live` while the live switch is off
+            (`details.feature = live_switch`), or the caller is an owner or admin of a live OTA without MFA and must
+            turn MFA on first (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED,
+            FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
@@ -5459,6 +5567,8 @@ paths:
                   $ref: '#/components/examples/FeatureDisabledOwnStripe'
                 FEATURE_DISABLED_LIVE_SWITCH:
                   $ref: '#/components/examples/FeatureDisabledLiveSwitch'
+                MFA_REQUIRED_ENROLMENT:
+                  $ref: '#/components/examples/MfaEnrolmentRequired'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -5616,6 +5726,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - RATE_LIMITED
@@ -5702,6 +5813,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - FEATURE_DISABLED
         - NOT_FOUND
@@ -5751,8 +5863,9 @@ paths:
           $ref: '#/components/responses/Unauthenticated'
         '403':
           description: >-
-            The e-mail address is not verified, the caller is not an owner, or Stripe billing is off. Possible codes:
-            EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED.
+            The e-mail address is not verified, the caller is not an owner, Stripe billing is off, or the caller is an
+            owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`,
+            PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED, FORBIDDEN, FEATURE_DISABLED.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
@@ -5767,6 +5880,8 @@ paths:
                   $ref: '#/components/examples/FORBIDDEN'
                 FEATURE_DISABLED:
                   $ref: '#/components/examples/FeatureDisabledStripeBilling'
+                MFA_REQUIRED_ENROLMENT:
+                  $ref: '#/components/examples/MfaEnrolmentRequired'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -5840,6 +5955,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - FEATURE_DISABLED
         - NOT_FOUND
@@ -5870,8 +5986,9 @@ paths:
           $ref: '#/components/responses/Unauthenticated'
         '403':
           description: >-
-            The e-mail address is not verified, the caller is not an owner, or Stripe billing is off. Possible codes:
-            EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED.
+            The e-mail address is not verified, the caller is not an owner, Stripe billing is off, or the caller is an
+            owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`,
+            PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED, FORBIDDEN, FEATURE_DISABLED.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
@@ -5886,6 +6003,8 @@ paths:
                   $ref: '#/components/examples/FORBIDDEN'
                 FEATURE_DISABLED:
                   $ref: '#/components/examples/FeatureDisabledStripeBilling'
+                MFA_REQUIRED_ENROLMENT:
+                  $ref: '#/components/examples/MfaEnrolmentRequired'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -5937,6 +6056,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - RATE_LIMITED
@@ -6009,6 +6129,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - RATE_LIMITED
@@ -6165,8 +6286,10 @@ paths:
           $ref: '#/components/responses/StepUpUnauthorized'
         '403':
           description: >-
-            The e-mail address is not verified, the caller is not an owner, MFA is not enabled, or settlements are off.
-            Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED.
+            The e-mail address is not verified, the caller is not an owner, MFA is not enabled, settlements are off, or
+            the caller is an owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason =
+            enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED,
+            FEATURE_DISABLED.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
@@ -6183,6 +6306,8 @@ paths:
                   $ref: '#/components/examples/MFA_REQUIRED'
                 FEATURE_DISABLED:
                   $ref: '#/components/examples/FeatureDisabledSettlements'
+                MFA_REQUIRED_ENROLMENT:
+                  $ref: '#/components/examples/MfaEnrolmentRequired'
         '404':
           $ref: '#/components/responses/NotFound'
         '429':
@@ -6212,6 +6337,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - RATE_LIMITED
@@ -6285,6 +6411,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - RATE_LIMITED
@@ -6375,6 +6502,7 @@ paths:
         - UNAUTHENTICATED
         - TOKEN_EXPIRED
         - EMAIL_NOT_VERIFIED
+        - MFA_REQUIRED
         - FORBIDDEN
         - NOT_FOUND
         - RATE_LIMITED
@@ -13302,8 +13430,11 @@ components:
               $ref: '#/components/examples/TOKEN_EXPIRED'
             REAUTH_REQUIRED:
               $ref: '#/components/examples/REAUTH_REQUIRED'
-    EmailNotVerified:
-      description: 'The account''s e-mail address is not verified yet. Possible codes: EMAIL_NOT_VERIFIED.'
+    PortalForbidden:
+      description: >-
+        The account's e-mail address is not verified yet, or the caller is an owner or admin of a live OTA without MFA
+        and must turn MFA on first (`details.reason = enrolment_required`, PADR-0008). Possible codes:
+        EMAIL_NOT_VERIFIED, MFA_REQUIRED.
       headers:
         X-Request-Id:
           $ref: '#/components/headers/X-Request-Id'
@@ -13314,9 +13445,12 @@ components:
           examples:
             EMAIL_NOT_VERIFIED:
               $ref: '#/components/examples/EMAIL_NOT_VERIFIED'
+            MFA_REQUIRED_ENROLMENT:
+              $ref: '#/components/examples/MfaEnrolmentRequired'
     StepUpForbidden:
       description: >-
-        The e-mail address is not verified, or MFA is not enabled, so no step-up is possible. Possible codes:
+        The e-mail address is not verified, or MFA is not enabled, so no step-up is possible; an owner or admin of a
+        live OTA without MFA must turn MFA on first (`details.reason = enrolment_required`, PADR-0008). Possible codes:
         EMAIL_NOT_VERIFIED, MFA_REQUIRED.
       headers:
         X-Request-Id:
@@ -13330,6 +13464,8 @@ components:
               $ref: '#/components/examples/EMAIL_NOT_VERIFIED'
             MFA_REQUIRED:
               $ref: '#/components/examples/MFA_REQUIRED'
+            MFA_REQUIRED_ENROLMENT:
+              $ref: '#/components/examples/MfaEnrolmentRequired'
     NotFound:
       description: 'Not found, or not visible to the caller. Possible codes: NOT_FOUND.'
       headers:
@@ -13382,8 +13518,9 @@ components:
               $ref: '#/components/examples/INTERNAL_ERROR'
     TenantRoleForbidden:
       description: >-
-        The e-mail address is not verified, or the caller's role in the OTA does not allow the operation. Possible
-        codes: EMAIL_NOT_VERIFIED, FORBIDDEN.
+        The e-mail address is not verified, the caller is an owner or admin of a live OTA without MFA and must turn MFA
+        on first (`details.reason = enrolment_required`, PADR-0008), or the caller's role in the OTA does not allow the
+        operation. Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED, FORBIDDEN.
       headers:
         X-Request-Id:
           $ref: '#/components/headers/X-Request-Id'
@@ -13396,10 +13533,14 @@ components:
               $ref: '#/components/examples/EMAIL_NOT_VERIFIED'
             FORBIDDEN:
               $ref: '#/components/examples/FORBIDDEN'
+            MFA_REQUIRED_ENROLMENT:
+              $ref: '#/components/examples/MfaEnrolmentRequired'
     TenantRoleOrStepUpForbidden:
       description: >-
-        The e-mail address is not verified, the caller's role in the OTA does not allow the operation, or the operation
-        needs a step-up and MFA is not enabled. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED.
+        The e-mail address is not verified, the caller is an owner or admin of a live OTA without MFA and must turn MFA
+        on first (`details.reason = enrolment_required`, PADR-0008), the caller's role in the OTA does not allow the
+        operation, or the operation needs a step-up and MFA is not enabled. Possible codes: EMAIL_NOT_VERIFIED,
+        FORBIDDEN, MFA_REQUIRED.
       headers:
         X-Request-Id:
           $ref: '#/components/headers/X-Request-Id'
@@ -13414,11 +13555,15 @@ components:
               $ref: '#/components/examples/FORBIDDEN'
             MFA_REQUIRED:
               $ref: '#/components/examples/MFA_REQUIRED'
+            MFA_REQUIRED_ENROLMENT:
+              $ref: '#/components/examples/MfaEnrolmentRequired'
     ApiKeyForbidden:
       description: >-
-        The e-mail address is not verified, the caller's role in the OTA does not allow the operation, a live key was
-        asked for while the live switch is off (`details.feature = live_switch`), or a live secret key needs a step-up
-        and MFA is not enabled. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED, MFA_REQUIRED.
+        The e-mail address is not verified, the caller is an owner or admin of a live OTA without MFA and must turn MFA
+        on first (`details.reason = enrolment_required`, PADR-0008), the caller's role in the OTA does not allow the
+        operation, a live key was asked for while the live switch is off (`details.feature = live_switch`), or a live
+        secret key needs a step-up and MFA is not enabled. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN,
+        FEATURE_DISABLED, MFA_REQUIRED.
       headers:
         X-Request-Id:
           $ref: '#/components/headers/X-Request-Id'
@@ -13435,6 +13580,8 @@ components:
               $ref: '#/components/examples/FeatureDisabledLiveSwitch'
             MFA_REQUIRED:
               $ref: '#/components/examples/MFA_REQUIRED'
+            MFA_REQUIRED_ENROLMENT:
+              $ref: '#/components/examples/MfaEnrolmentRequired'
     ApiKeyUnprocessable:
       description: >-
         The plan's API key limit is reached (`details.limit` and `details.used`), or a live key was asked for before
@@ -13723,6 +13870,7 @@ components:
           timeZone: Europe/Oslo
           mfaEnabled: true
           mfaEnabledAt: '2026-10-03T09:12:44Z'
+          mfaEnrolmentRequired: false
           isPlatformAdmin: false
           createdAt: '2026-10-01T10:02:17Z'
           version: 3
@@ -13751,6 +13899,7 @@ components:
         timeZone: Europe/Oslo
         mfaEnabled: true
         mfaEnabledAt: '2026-10-03T09:12:44Z'
+        mfaEnrolmentRequired: false
         isPlatformAdmin: false
         createdAt: '2026-10-01T10:02:17Z'
         version: 3
@@ -14356,6 +14505,20 @@ components:
           message: Turn on two-factor authentication first.
           status: 403
           requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    MfaEnrolmentRequired:
+      summary: MFA_REQUIRED (enrolment_required)
+      description: >-
+        An active owner or admin of a live OTA without MFA (PADR-0008, revision of 2026-11-05): every `portal`
+        operation answers this, reads included, until the account turns MFA on with `startMfaSetup` and `enableMfa`
+        (`portal_unverified`, still open); `getMe` says so in `mfaEnrolmentRequired`.
+      value:
+        error:
+          code: MFA_REQUIRED
+          message: Turn on two-factor authentication first.
+          status: 403
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+          details:
+            reason: enrolment_required
     FORBIDDEN:
       summary: FORBIDDEN
       value:
@@ -15012,6 +15175,7 @@ components:
         - timeZone
         - mfaEnabled
         - mfaEnabledAt
+        - mfaEnrolmentRequired
         - isPlatformAdmin
         - createdAt
         - version
@@ -15037,6 +15201,16 @@ components:
             - string
             - 'null'
           format: date-time
+        mfaEnrolmentRequired:
+          type: boolean
+          description: >-
+            True while the account is an active `owner` or `admin` of a live OTA (`storefrontEnvironment` `live`, in a
+            status members see) and has MFA off (PADR-0008, revision of 2026-11-05). Until it turns MFA on with
+            `startMfaSetup` and `enableMfa`, every `portal` operation answers `403 MFA_REQUIRED` with `details.reason =
+            enrolment_required`, those of its other OTAs included, and only the `portal_unverified` operations stay
+            open, which is all the enrolment needs. It is read from PostgreSQL on each request, so it turns true at the
+            account's next request after the OTA goes live, after the account is granted `owner` or `admin` of a live
+            OTA or after a support MFA reset, and false once MFA is on.
         isPlatformAdmin:
           type: boolean
         createdAt:

@@ -82,6 +82,7 @@ function account(overrides: Partial<Account> = {}): Account {
     timeZone: "Europe/Oslo",
     mfaEnabled: false,
     mfaEnabledAt: null,
+    mfaEnrolmentRequired: false,
     isPlatformAdmin: false,
     createdAt: "2026-10-01T10:02:17Z",
     version: 3,

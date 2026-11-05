@@ -153,6 +153,7 @@ function account(overrides: { features?: Partial<MilestoneFeatures>; mfaEnabled?
     timeZone: "UTC",
     mfaEnabled,
     mfaEnabledAt: mfaEnabled ? at(-20 * DAY_MS) : null,
+    mfaEnrolmentRequired: false,
     isPlatformAdmin: false,
     createdAt: at(-40 * DAY_MS),
     version: 2,

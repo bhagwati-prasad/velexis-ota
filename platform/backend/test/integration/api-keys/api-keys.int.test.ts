@@ -25,7 +25,7 @@ import {
 } from "../../../src/common/database";
 import { runInTransaction } from "../../../src/common/redis/invalidation.publisher";
 import { insertAccount, insertPlan, insertRow, testId } from "../../builders/platform-rows";
-import { insertOta, type OtaOptions } from "../../builders/tenants";
+import { insertMember, insertOta, type OtaOptions } from "../../builders/tenants";
 import { createTestApp, type TestApp } from "../../support/app";
 
 const FAMILY = testId("asn", 1);
@@ -69,12 +69,17 @@ let tokens: TokenService;
 let pepper: Buffer;
 let subscriber: Redis;
 
-/** The people of every OTA of this file: an owner with MFA, an admin without, an agent; and a stranger. */
-const people: Record<"owner" | "admin" | "agent" | "stranger", string> = {
+/**
+ * The people of every OTA of this file: an owner and an admin with MFA (an owner or admin of a live OTA must have it,
+ * PBE-071, and both are members of the live OTAs of this file too), an agent; a stranger; and an admin without MFA,
+ * whom the test of live secret keys makes an admin of its live OTA only.
+ */
+const people: Record<"owner" | "admin" | "agent" | "stranger" | "adminWithoutMfa", string> = {
   owner: "",
   admin: "",
   agent: "",
   stranger: "",
+  adminWithoutMfa: "",
 };
 
 /** The invalidation events of this file's keys, with the key's `revoked_at` and `expires_at` when they arrived. */
@@ -101,9 +106,10 @@ beforeAll(async () => {
   }
   pepper = read;
   people.owner = (await insertAccount(pool, { mfa_enabled: true, full_name: "Anna Berg" })).id;
-  people.admin = (await insertAccount(pool, { full_name: "Ben Admin" })).id;
+  people.admin = (await insertAccount(pool, { mfa_enabled: true, full_name: "Ben Admin" })).id;
   people.agent = (await insertAccount(pool)).id;
   people.stranger = (await insertAccount(pool)).id;
+  people.adminWithoutMfa = (await insertAccount(pool, { full_name: "Nils Admin" })).id;
 
   subscriber = new Redis(t.redis.url, { lazyConnect: true });
   subscriber.on("message", (_channel: string, message: string) => {
@@ -481,6 +487,9 @@ describe("createApiKey", () => {
 
   it("creates live keys once the OTA is live; a live secret key needs a TOTP step-up within 15 minutes", async () => {
     const tenantId = await ota({ storefront_environment: "live", live_enabled_at: t.clock.now() });
+    // An admin without MFA of the live OTA: it gets MFA_REQUIRED before any step-up (since PBE-071 already from the
+    // enrolment that an owner or admin of a live OTA needs, before the role and step-up guards).
+    await insertMember(pool, { id: tenantId }, { id: people.adminWithoutMfa }, "admin");
     const body = { name: "Live server", kind: "secret", environment: "live" };
 
     const publishable = await create(tenantId, {
@@ -494,7 +503,7 @@ describe("createApiKey", () => {
       body,
       await bearer("owner", { amr: ["pwd", "otp"], mfa_at: nowSeconds() - 16 * 60 }),
     );
-    const withoutMfa = await create(tenantId, body, await steppedUp("admin"));
+    const withoutMfa = await create(tenantId, body, await steppedUp("adminWithoutMfa"));
     const stepped = await create(tenantId, body, await steppedUp("owner"));
 
     expect(publishable.status).toBe(201);

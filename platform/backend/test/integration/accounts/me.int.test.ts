@@ -312,6 +312,7 @@ describe("getMe", () => {
       timeZone: "UTC",
       mfaEnabled: false,
       mfaEnabledAt: null,
+      mfaEnrolmentRequired: false,
       isPlatformAdmin: false,
       createdAt: unverified.created_at.toISOString(),
       version: 1,

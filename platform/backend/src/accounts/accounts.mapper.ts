@@ -6,7 +6,9 @@
 //   ones that really change, with the before and after values of the audit row (`profileChanges`).
 //
 // The `Account` of getMe and updateMe is `toAccount` of auth/sessions.service.ts, the one `PortalSession.account` uses,
-// so the portal sees the same account after a sign-in, a refresh and a profile change.
+// so the portal sees the same account after a sign-in, a refresh and a profile change; its `mfaEnrolmentRequired`
+// (PBE-071) is MfaEnrolmentGuard's rule (`requiresMfaEnrolment` of common/auth/mfa-enrolment.guard.ts), read through
+// the same lookup by every caller of `toAccount`.
 import type { components } from "@velexis/api-types/platform";
 import type { AccountProfileChanges, ProfileAccount } from "../auth/accounts.repository";
 import type { ActiveFamily } from "../auth/sessions.repository";

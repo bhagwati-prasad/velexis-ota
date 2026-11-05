@@ -24,9 +24,14 @@
 //   portal tokens of owners of the OTA whose account was disabled, or erased (`status = 'deleted'`, `deleted_at` set),
 //   after the token was signed. Each would pass every other guard (a verified e-mail, an owner's membership, MFA and a
 //   step-up of now), so the matrix proves that PortalAuthGuard's read of the account refuses them with `401
-//   UNAUTHENTICATED` on every `portal_unverified` and `portal` operation, the sensitive actions included.
+//   UNAUTHENTICATED` on every `portal_unverified` and `portal` operation, the sensitive actions included;
+// - `liveAdminWithoutMfa` (PBE-071, PADR-0008 revision of 2026-11-05): a portal token (verified e-mail, step-up of now)
+//   of an active admin of another OTA, a live one, who has no MFA. MfaEnrolmentGuard refuses it with `403
+//   MFA_REQUIRED` (`details.reason = enrolment_required`) on every `portal` operation, the matrix OTA's tenant paths
+//   included (the guard runs before TenantRoleGuard), and lets it through on the `portal_unverified` operations, which
+//   are all its enrolment needs.
 //
-// Every account has MFA, and every other token a step-up of now (the FakeClock's time), so the step-up guard lets
+// Every other account has MFA, and every other token a step-up of now (the FakeClock's time), so the step-up guard lets
 // them through; every milestone switch is on (a stand-in for FeatureSwitches), so FeatureGuard does. Each request sends
 // the JSON body `[]`, which no operation takes: request validation, which runs after every guard (common.module.ts
 // API_GUARDS, then the validation interceptor), refuses it with `400 VALIDATION_FAILED` and a body field error. So an
@@ -95,6 +100,7 @@ const CALLERS = [
   "platformAdminWithoutStepUp",
   "disabledAccount",
   "erasedAccount",
+  "liveAdminWithoutMfa",
 ] as const;
 type Caller = (typeof CALLERS)[number];
 
@@ -290,6 +296,11 @@ function expectedAnswer(row: MatrixRow, caller: Caller): Answer {
       // A portal token, an unverified one or none: the admin surface is another audience.
       return "401 UNAUTHENTICATED";
     case "portal": {
+      // PBE-071: an owner or admin of a live OTA without MFA must enrol before any `portal` operation, whatever the
+      // OTA of the path; the `portal_unverified` operations of the enrolment stay open.
+      if (caller === "liveAdminWithoutMfa") {
+        return gate.verified ? "403 MFA_REQUIRED" : "allowed";
+      }
       // PBE-067: the token of a disabled or erased account is refused at once, before the e-mail, role and step-up
       // checks, as a missing token is.
       if (!PORTAL_CALLERS.includes(caller) || REVOKED_ACCOUNT_CALLERS.includes(caller)) {
@@ -333,6 +344,11 @@ let tenantId = "";
 const bearer = new Map<Caller, string>();
 /** What each operation answered each caller. */
 const answers = new Map<string, Map<Caller, Answer>>();
+/**
+ * `details.reason` of each `403 MFA_REQUIRED` answer of `liveAdminWithoutMfa`, by operation (PBE-071): the enrolment's
+ * refusal names `enrolment_required`; RecentMfaGuard's and the services' `MFA_REQUIRED` name no reason.
+ */
+const enrolmentReasons = new Map<string, unknown>();
 /** The refusals whose status or body the document does not list for the operation. */
 const undocumented: string[] = [];
 /** Answers of 500 or more: a crash is a finding whatever the matrix expects. */
@@ -391,6 +407,13 @@ async function call(row: MatrixRow, caller: Caller, n: number): Promise<void> {
     answers.set(operation.operationId, byCaller);
   }
   byCaller.set(caller, answer);
+  if (caller === "liveAdminWithoutMfa" && answer === "403 MFA_REQUIRED") {
+    const error = isObject(res.body) && isObject(res.body["error"]) ? res.body["error"] : {};
+    enrolmentReasons.set(
+      operation.operationId,
+      isObject(error["details"]) ? error["details"]["reason"] : undefined,
+    );
+  }
   if (res.status >= 500) {
     crashes.push(`${operation.operationId} for ${caller}: ${answer}`);
   }
@@ -450,6 +473,16 @@ beforeAll(async () => {
   await pool.query("UPDATE platform.accounts SET status = 'deleted', deleted_at = now() WHERE id = $1", [
     revoked.get("erasedAccount")?.id,
   ]);
+  // PBE-071: an admin without MFA of another OTA, a live one whose owner has MFA (goLive needs it).
+  const liveAdmin = await insertAccount(pool, { mfa_enabled: false });
+  await insertOta(pool, {
+    tenant: { storefront_environment: "live", live_enabled_at: t.clock.now() },
+    members: [
+      [await insertAccount(pool, { mfa_enabled: true }), "owner"],
+      [liveAdmin, "admin"],
+    ],
+  });
+  bearer.set("liveAdminWithoutMfa", await sign(liveAdmin, {}));
 
   const unverified = await insertAccount(pool, { status: "pending_verification", email_verified_at: null });
   const stranger = await insertAccount(pool, { mfa_enabled: true });
@@ -623,6 +656,45 @@ describe("the auth matrix of the platform API", () => {
         ).not.toBe("401 UNAUTHENTICATED");
       }
     }
+  });
+
+  it("[PBE-071 AC3] refuses an admin of a live OTA without MFA with 403 MFA_REQUIRED on every portal operation, and on nothing else", () => {
+    const observed = Object.fromEntries(
+      ROWS.map((row) => [
+        row.operation.operationId,
+        answers.get(row.operation.operationId)?.get("liveAdminWithoutMfa"),
+      ]),
+    );
+    const byScope = (scope: string) =>
+      ROWS.filter((row) => row.operation.scope === scope).map((row) => row.operation.operationId);
+
+    // 52 `portal` operations and 9 `portal_unverified` ones when the column came (security-review.md §4).
+    expect(byScope("portal").length).toBeGreaterThanOrEqual(52);
+    expect(byScope("portal").map((id) => observed[id])).toEqual(
+      byScope("portal").map(() => "403 MFA_REQUIRED"),
+    );
+    // Each of them the enrolment's refusal, the step-up operations included (whose own MFA_REQUIRED names no reason).
+    expect(Object.fromEntries(byScope("portal").map((id) => [id, enrolmentReasons.get(id)]))).toEqual(
+      Object.fromEntries(byScope("portal").map((id) => [id, "enrolment_required"])),
+    );
+    expect([...enrolmentReasons.keys()].sort()).toEqual([...byScope("portal")].sort());
+    expect(byScope("portal_unverified").map((id) => observed[id])).toEqual(
+      byScope("portal_unverified").map(() => "allowed"),
+    );
+    expect(byScope("platform_admin").map((id) => observed[id])).toEqual(
+      byScope("platform_admin").map(() => "401 UNAUTHENTICATED"),
+    );
+    // The enrolment's own operations, and the reads and sensitive actions it refuses.
+    expect([observed["getMe"], observed["startMfaSetup"], observed["enableMfa"]]).toEqual([
+      "allowed",
+      "allowed",
+      "allowed",
+    ]);
+    expect([observed["getTenant"], observed["createCustomerPortalSession"], observed["disableMfa"]]).toEqual([
+      "403 MFA_REQUIRED",
+      "403 MFA_REQUIRED",
+      "403 MFA_REQUIRED",
+    ]);
   });
 
   it("[PBE-062 AC3] pending-operations.ts is empty: every operation of the document is bound (the M5 exit of PADR-0016)", () => {

@@ -235,7 +235,7 @@ export interface paths {
         };
         /**
          * Get the signed-in account
-         * @description The account, its active memberships with the OTA's key, name, status and the member's role, and the milestone switches of PADR-0015 in `features`. The portal and the admin hide what a switch turns off; the backend stays the only source of the switches. Works before the e-mail address is verified.
+         * @description The account, its active memberships with the OTA's key, name, status and the member's role, and the milestone switches of PADR-0015 in `features`. The portal and the admin hide what a switch turns off; the backend stays the only source of the switches. Works before the e-mail address is verified. `mfaEnrolmentRequired` says whether the account is an active owner or admin of a live OTA without MFA (PADR-0008, revision of 2026-11-05): its `portal` operations then answer `403 MFA_REQUIRED` (`details.reason = enrolment_required`) until it turns MFA on, and the portal shows the MFA enrolment before any other page; `getMe` itself stays open.
          */
         get: operations["getMe"];
         put?: never;
@@ -245,7 +245,7 @@ export interface paths {
         head?: never;
         /**
          * Update the profile
-         * @description Changes the name, locale or time zone. `If-Match` carries the `ETag` of `getMe`; a stale version answers `412 PRECONDITION_FAILED`. The e-mail address cannot be changed here (PADR-0008 item 5). Writes an audit row.
+         * @description Changes the name, locale or time zone. `If-Match` carries the `ETag` of `getMe`; a stale version answers `412 PRECONDITION_FAILED`. The e-mail address cannot be changed here (PADR-0008 item 5). Writes an audit row. The answer is the account as `getMe` shows it, `mfaEnrolmentRequired` included; like `getMe` it stays open to an account that must enrol in MFA.
          */
         patch: operations["updateMe"];
         trace?: never;
@@ -321,7 +321,7 @@ export interface paths {
         put?: never;
         /**
          * Turn MFA off
-         * @description Needs a step-up within 15 minutes (`x-mfa-step-up`). Removes the TOTP secret and every recovery code, e-mails the account and writes an audit row. Platform admins cannot turn MFA off (`403 FORBIDDEN`, `details.reason = platform_admin`).
+         * @description Needs a step-up within 15 minutes (`x-mfa-step-up`). Removes the TOTP secret and every recovery code, e-mails the account and writes an audit row. Platform admins cannot turn MFA off (`403 FORBIDDEN`, `details.reason = platform_admin`). Neither can an active owner or admin of a live OTA (PADR-0008, revision of 2026-11-05): once the step-up has passed it answers `409 CONFLICT` with `details.reason = mfa_mandatory` and changes nothing, for as long as it holds the role; a lost device still goes through a recovery code or a support MFA reset.
          */
         post: operations["disableMfa"];
         delete?: never;
@@ -3519,6 +3519,8 @@ export interface components {
             mfaEnabled: boolean;
             /** Format: date-time */
             mfaEnabledAt: string | null;
+            /** @description True while the account is an active `owner` or `admin` of a live OTA (`storefrontEnvironment` `live`, in a status members see) and has MFA off (PADR-0008, revision of 2026-11-05). Until it turns MFA on with `startMfaSetup` and `enableMfa`, every `portal` operation answers `403 MFA_REQUIRED` with `details.reason = enrolment_required`, those of its other OTAs included, and only the `portal_unverified` operations stay open, which is all the enrolment needs. It is read from PostgreSQL on each request, so it turns true at the account's next request after the OTA goes live, after the account is granted `owner` or `admin` of a live OTA or after a support MFA reset, and false once MFA is on. */
+            mfaEnrolmentRequired: boolean;
             isPlatformAdmin: boolean;
             /** Format: date-time */
             createdAt: string;
@@ -5883,8 +5885,8 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description The account's e-mail address is not verified yet. Possible codes: EMAIL_NOT_VERIFIED. */
-        EmailNotVerified: {
+        /** @description The account's e-mail address is not verified yet, or the caller is an owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED. */
+        PortalForbidden: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];
                 [name: string]: unknown;
@@ -5893,7 +5895,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description The e-mail address is not verified, or MFA is not enabled, so no step-up is possible. Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED. */
+        /** @description The e-mail address is not verified, or MFA is not enabled, so no step-up is possible; an owner or admin of a live OTA without MFA must turn MFA on first (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED. */
         StepUpForbidden: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -5944,7 +5946,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description The e-mail address is not verified, or the caller's role in the OTA does not allow the operation. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN. */
+        /** @description The e-mail address is not verified, the caller is an owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`, PADR-0008), or the caller's role in the OTA does not allow the operation. Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED, FORBIDDEN. */
         TenantRoleForbidden: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -5954,7 +5956,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description The e-mail address is not verified, the caller's role in the OTA does not allow the operation, or the operation needs a step-up and MFA is not enabled. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED. */
+        /** @description The e-mail address is not verified, the caller is an owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`, PADR-0008), the caller's role in the OTA does not allow the operation, or the operation needs a step-up and MFA is not enabled. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED. */
         TenantRoleOrStepUpForbidden: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -5964,7 +5966,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description The e-mail address is not verified, the caller's role in the OTA does not allow the operation, a live key was asked for while the live switch is off (`details.feature = live_switch`), or a live secret key needs a step-up and MFA is not enabled. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED, MFA_REQUIRED. */
+        /** @description The e-mail address is not verified, the caller is an owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`, PADR-0008), the caller's role in the OTA does not allow the operation, a live key was asked for while the live switch is off (`details.feature = live_switch`), or a live secret key needs a step-up and MFA is not enabled. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED, MFA_REQUIRED. */
         ApiKeyForbidden: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -6850,7 +6852,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["Unauthenticated"];
-            403: components["responses"]["EmailNotVerified"];
+            403: components["responses"]["PortalForbidden"];
             /** @description The current password is wrong, or the new one breaks the password rules. Possible codes: CURRENT_PASSWORD_INCORRECT, PASSWORD_TOO_WEAK. */
             422: {
                 headers: {
@@ -6978,8 +6980,18 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["StepUpUnauthorized"];
-            /** @description The e-mail address is not verified, MFA is not enabled, or the account is a platform admin. Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED, FORBIDDEN. */
+            /** @description The e-mail address is not verified, MFA is not enabled, the account is a platform admin, or the caller is an owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED, FORBIDDEN. */
             403: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The account is an active owner or admin of a live OTA, whose MFA must stay on (`details.reason = mfa_mandatory`, PADR-0008). Possible codes: CONFLICT. */
+            409: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
                     [name: string]: unknown;
@@ -7171,7 +7183,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["Unauthenticated"];
-            403: components["responses"]["EmailNotVerified"];
+            403: components["responses"]["PortalForbidden"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
         };
@@ -7253,7 +7265,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["Unauthenticated"];
-            403: components["responses"]["EmailNotVerified"];
+            403: components["responses"]["PortalForbidden"];
             /** @description The key is reserved or used by another OTA, or the `Idempotency-Key` was used with another body. Possible codes: TENANT_KEY_UNAVAILABLE, IDEMPOTENCY_KEY_REUSED. */
             409: {
                 headers: {
@@ -7307,7 +7319,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["Unauthenticated"];
-            403: components["responses"]["EmailNotVerified"];
+            403: components["responses"]["PortalForbidden"];
             404: components["responses"]["NotFound"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
@@ -7392,7 +7404,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["Unauthenticated"];
-            403: components["responses"]["EmailNotVerified"];
+            403: components["responses"]["PortalForbidden"];
             404: components["responses"]["NotFound"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
@@ -7602,7 +7614,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["Unauthenticated"];
-            403: components["responses"]["EmailNotVerified"];
+            403: components["responses"]["PortalForbidden"];
             404: components["responses"]["NotFound"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
@@ -7669,7 +7681,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["StepUpUnauthorized"];
-            /** @description The e-mail address is not verified, the caller is not an owner, MFA is not enabled, or the live switch is off (a plan without live mode is the missing precondition `plan_live_mode` of the `422`). Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED. */
+            /** @description The e-mail address is not verified, the caller is not an owner, MFA is not enabled, the live switch is off (a plan without live mode is the missing precondition `plan_live_mode` of the `422`), or the caller is an owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED. */
             403: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -7750,7 +7762,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["Unauthenticated"];
-            403: components["responses"]["EmailNotVerified"];
+            403: components["responses"]["PortalForbidden"];
             404: components["responses"]["NotFound"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
@@ -8138,7 +8150,7 @@ export interface operations {
             };
             400: components["responses"]["InvitationInvalid"];
             401: components["responses"]["Unauthenticated"];
-            /** @description The e-mail address is not verified, or the invitation was sent to another address. Possible codes: EMAIL_NOT_VERIFIED, INVITATION_EMAIL_MISMATCH. */
+            /** @description The e-mail address is not verified, the invitation was sent to another address, or the caller is an owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED, INVITATION_EMAIL_MISMATCH. */
             403: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -8197,7 +8209,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["Unauthenticated"];
-            /** @description The e-mail address is not verified, or the OTA is live and the account has no MFA (set it up first). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED. */
+            /** @description The e-mail address is not verified, the OTA is live and the account has no MFA (set it up first), or the caller is an owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED. */
             403: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -8645,7 +8657,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["Unauthenticated"];
-            403: components["responses"]["EmailNotVerified"];
+            403: components["responses"]["PortalForbidden"];
             404: components["responses"]["NotFound"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
@@ -8725,7 +8737,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["Unauthenticated"];
-            /** @description The e-mail address is not verified, the caller's role does not allow it, or custom domains are off or not in the plan. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED. */
+            /** @description The e-mail address is not verified, the caller's role does not allow it, custom domains are off or not in the plan, or the caller is an owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED, FORBIDDEN, FEATURE_DISABLED. */
             403: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -8876,7 +8888,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["Unauthenticated"];
-            /** @description The e-mail address is not verified, the caller's role does not allow it, or custom domains are off or not in the plan. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED. */
+            /** @description The e-mail address is not verified, the caller's role does not allow it, custom domains are off or not in the plan, or the caller is an owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED, FORBIDDEN, FEATURE_DISABLED. */
             403: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -8972,7 +8984,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["Unauthenticated"];
-            /** @description The e-mail address is not verified, the caller's role does not allow it, or custom domains are off or not in the plan. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED. */
+            /** @description The e-mail address is not verified, the caller's role does not allow it, custom domains are off or not in the plan, or the caller is an owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED, FORBIDDEN, FEATURE_DISABLED. */
             403: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -9204,7 +9216,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["Unauthenticated"];
-            /** @description The e-mail address is not verified, the caller is not an owner, or live mode is off or not in the plan. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED. */
+            /** @description The e-mail address is not verified, the caller is not an owner, live mode is off or not in the plan, or the caller is an owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED, FORBIDDEN, FEATURE_DISABLED. */
             403: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -9292,7 +9304,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["StepUpUnauthorized"];
-            /** @description The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, own Amadeus credentials are off (`details.feature = own_amadeus`), or the environment is `live` while the live switch is off (`details.feature = live_switch`). Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED. */
+            /** @description The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, own Amadeus credentials are off (`details.feature = own_amadeus`), the environment is `live` while the live switch is off (`details.feature = live_switch`), or the caller is an owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED. */
             403: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -9518,7 +9530,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["StepUpUnauthorized"];
-            /** @description The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, or own Stripe accounts are off. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED. */
+            /** @description The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, own Stripe accounts are off, or the caller is an owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED. */
             403: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -9596,7 +9608,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthenticated"];
-            /** @description The e-mail address is not verified, the account that started is no longer an owner or admin of the OTA, or own Stripe accounts are off. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED. */
+            /** @description The e-mail address is not verified, the account that started is no longer an owner or admin of the OTA, own Stripe accounts are off, or the caller is an owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED, FORBIDDEN, FEATURE_DISABLED. */
             403: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -9699,7 +9711,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["StepUpUnauthorized"];
-            /** @description The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, own Stripe accounts are off (`details.feature = own_stripe`), or the environment is `live` while the live switch is off (`details.feature = live_switch`). Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED. */
+            /** @description The e-mail address is not verified, the caller's role does not allow it, MFA is not enabled, own Stripe accounts are off (`details.feature = own_stripe`), the environment is `live` while the live switch is off (`details.feature = live_switch`), or the caller is an owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED. */
             403: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -9886,7 +9898,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["Unauthenticated"];
-            /** @description The e-mail address is not verified, the caller is not an owner, or Stripe billing is off. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED. */
+            /** @description The e-mail address is not verified, the caller is not an owner, Stripe billing is off, or the caller is an owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED, FORBIDDEN, FEATURE_DISABLED. */
             403: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -9956,7 +9968,7 @@ export interface operations {
             };
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["Unauthenticated"];
-            /** @description The e-mail address is not verified, the caller is not an owner, or Stripe billing is off. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, FEATURE_DISABLED. */
+            /** @description The e-mail address is not verified, the caller is not an owner, Stripe billing is off, or the caller is an owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, MFA_REQUIRED, FORBIDDEN, FEATURE_DISABLED. */
             403: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -10132,7 +10144,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["StepUpUnauthorized"];
-            /** @description The e-mail address is not verified, the caller is not an owner, MFA is not enabled, or settlements are off. Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED. */
+            /** @description The e-mail address is not verified, the caller is not an owner, MFA is not enabled, settlements are off, or the caller is an owner or admin of a live OTA without MFA and must turn MFA on first (`details.reason = enrolment_required`, PADR-0008). Possible codes: EMAIL_NOT_VERIFIED, FORBIDDEN, MFA_REQUIRED, FEATURE_DISABLED. */
             403: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];

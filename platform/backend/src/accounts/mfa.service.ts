@@ -28,8 +28,12 @@
 //   MFA_CODE_INVALID` for a wrong or replayed code.
 // - disableMfa and regenerateRecoveryCodes (`portal`, `x-mfa-step-up`: RecentMfaGuard has checked MFA and a step-up
 //   within 15 minutes): a platform admin cannot turn MFA off (`403 FORBIDDEN`, `details.reason = "platform_admin"`,
-//   PADR-0006). Disabling clears the secret and every recovery code; regenerating replaces the codes. Both queue
-//   `auth.mfa_changed` (PADR-0008 item 6) and audit; disabling publishes an `account` invalidation.
+//   PADR-0006), and neither can an active owner or admin of a live OTA (`409 CONFLICT`, `details.reason =
+//   "mfa_mandatory"`; PBE-071, PADR-0008 revision of 2026-11-05: MFA is mandatory for them while they hold the role,
+//   read through MfaEnrolmentGuard's lookup in the transaction that holds the account's lock, and nothing is
+//   written; a lost device still goes through a recovery code or a support reset). Disabling clears the secret and
+//   every recovery code; regenerating replaces the codes. Both queue `auth.mfa_changed` (PADR-0008 item 6) and
+//   audit; disabling publishes an `account` invalidation.
 //
 // Recovery codes (PADR-0008 item 3): 16 Crockford base32 characters (80 bits) shown as `XXXX-XXXX-XXXX-XXXX`; a code
 // is typed in any letter case, with or without dashes and spaces (O reads as 0, I and L as 1), and stored only as the
@@ -62,6 +66,7 @@ import type { SessionAudience } from "../auth/sessions.repository";
 import { maySignIn, SessionsService, type PortalSession } from "../auth/sessions.service";
 import { SignInService } from "../auth/sign-in.service";
 import type { AccessTokenClaims } from "../auth/token.service";
+import { MfaEnrolmentLookup } from "../common/auth/mfa-enrolment.guard";
 import { Clock } from "../common/clock";
 import { EnvelopeService, type CiphertextPlace } from "../common/crypto.provider";
 import { PLATFORM_DB, type PlatformDb } from "../common/database";
@@ -282,6 +287,7 @@ export class MfaService implements MfaVerification {
     @Inject(PLATFORM_DB) private readonly db: PlatformDb,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @InjectPinoLogger(MfaService.name) private readonly logger: PinoLogger,
+    private readonly mfaEnrolment: MfaEnrolmentLookup,
   ) {
     this.throttle = new RedisThrottlerStorage(redis);
   }
@@ -367,6 +373,10 @@ export class MfaService implements MfaVerification {
       }
       if (account.is_platform_admin) {
         throw new AppError("FORBIDDEN", { details: { reason: "platform_admin" } });
+      }
+      // PADR-0008, revision of 2026-11-05: MFA stays on while the account is an owner or admin of a live OTA.
+      if (await this.mfaEnrolment.holdsMfaMandatoryRole(accountId, trx)) {
+        throw new AppError("CONFLICT", { details: { reason: "mfa_mandatory" } });
       }
       const now = this.clock.now();
       if (!(await this.accounts.disableMfa(trx, accountId, now))) {

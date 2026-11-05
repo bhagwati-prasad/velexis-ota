@@ -6,7 +6,10 @@
 //   opaque 256-bit refresh token (`rt_…`), the end user's user agent and IP (request context, PADR-0019), an absolute
 //   end 30 days later (`family_expires_at`) and an idle expiry of 7 days for the token (never after the family's end).
 // - `portalSession` answers a family: a 15-minute access token (`sid` = the family, `ev` from the account, `amr`
-//   `["pwd"]` or `["pwd","otp"]`, `mfa_at` from `mfa_verified_at`), the refresh token and the `Account`.
+//   `["pwd"]` or `["pwd","otp"]`, `mfa_at` from `mfa_verified_at`), the refresh token and the `Account`, whose
+//   `mfaEnrolmentRequired` (PBE-071, PADR-0008 revision of 2026-11-05) is read in the same transaction through
+//   MembershipsModule's MfaEnrolmentLookup, as `getMe` reads it, so the portal knows at a sign-in or refresh that an
+//   owner or admin of a live OTA must enrol in MFA before any other page.
 // - refreshSession (`refresh`) rotates on use: the presented row is marked rotated and the next generation of the
 //   family is written with a new token. Presenting a token that was rotated already revokes the whole family (`401
 //   REFRESH_TOKEN_REUSED`, committed before the answer, so the newest token of the family stops working too). An
@@ -43,6 +46,7 @@ import { PLATFORM_DB, type PlatformDb } from "../common/database";
 import { FeatureSwitches, type MilestoneFeatures } from "../common/features";
 import { RequestContext } from "../common/http/request-context";
 import { IdGenerator } from "../common/ids";
+import { MfaEnrolmentLookup, requiresMfaEnrolment } from "../common/auth/mfa-enrolment.guard";
 import { InvalidationPublisher, runInTransaction } from "../common/redis/invalidation.publisher";
 import { redisKeys, setKey } from "../common/redis/redis-keys";
 import { REDIS_CLIENT } from "../common/redis/redis.module";
@@ -131,8 +135,15 @@ export function mfaAtOf(mfaVerifiedAt: Date | null): number | undefined {
 
 const iso = (value: Date | null): string | null => (value === null ? null : value.toISOString());
 
-/** The `Account` of the document for a record of `AccountsRepository.findPortalAccount` and the process's switches. */
-export function toAccount(record: PortalAccountRecord, features: MilestoneFeatures): Account {
+/**
+ * The `Account` of the document for a record of `AccountsRepository.findPortalAccount`, the process's switches and
+ * whether the account must enrol in MFA (`requiresMfaEnrolment` of MfaEnrolmentGuard, PBE-071).
+ */
+export function toAccount(
+  record: PortalAccountRecord,
+  features: MilestoneFeatures,
+  mfaEnrolmentRequired: boolean,
+): Account {
   return {
     id: record.id,
     email: record.email,
@@ -142,6 +153,7 @@ export function toAccount(record: PortalAccountRecord, features: MilestoneFeatur
     timeZone: record.time_zone,
     mfaEnabled: record.mfa_enabled,
     mfaEnabledAt: iso(record.mfa_enabled_at),
+    mfaEnrolmentRequired,
     isPlatformAdmin: record.is_platform_admin,
     createdAt: record.created_at.toISOString(),
     version: record.version,
@@ -183,6 +195,7 @@ export class SessionsService {
     @Inject(PLATFORM_DB) private readonly db: PlatformDb,
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
     @InjectPinoLogger(SessionsService.name) private readonly logger: PinoLogger,
+    private readonly mfaEnrolment: MfaEnrolmentLookup,
   ) {}
 
   /**
@@ -249,7 +262,11 @@ export class SessionsService {
       accessTokenExpiresAt: access.expiresAt.toISOString(),
       refreshToken: issued.refreshToken,
       refreshTokenExpiresAt: issued.refreshTokenExpiresAt.toISOString(),
-      account: toAccount(record, this.features.features()),
+      account: toAccount(
+        record,
+        this.features.features(),
+        await requiresMfaEnrolment(this.mfaEnrolment, { id: record.id, mfaEnabled: record.mfa_enabled }, trx),
+      ),
     };
   }
 

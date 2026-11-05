@@ -113,6 +113,7 @@ function account(): Schemas["Account"] {
     timeZone: "Europe/Oslo",
     mfaEnabled: false,
     mfaEnabledAt: null,
+    mfaEnrolmentRequired: false,
     isPlatformAdmin: false,
     createdAt: "2026-07-14T08:20:11Z",
     version: 3,

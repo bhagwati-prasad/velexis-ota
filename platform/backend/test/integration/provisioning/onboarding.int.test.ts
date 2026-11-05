@@ -584,6 +584,11 @@ describe("getOnboarding: one rule per item", () => {
   it("[PBE-024 AC1] live_requested flips to done when the storefront is switched to live", async () => {
     switches.on.add("live_switch");
     const { tenantId, owner } = await activeOta();
+    // Going live needs the acting owner's MFA, and the owner of a live OTA must have it (PBE-071).
+    await update("UPDATE platform.accounts SET mfa_enabled = true, mfa_enabled_at = $2 WHERE id = $1", [
+      owner,
+      t.clock.now(),
+    ]);
 
     const before = await done(owner, tenantId, "live_requested");
     await update(

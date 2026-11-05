@@ -16,7 +16,9 @@
 // - `portal` needs `ev = true`, else `403 EMAIL_NOT_VERIFIED`.
 //
 // The account behind the token becomes the request's actor (`account`) and the claims stay on the request
-// (`@AccessToken()`); a refused account leaves neither. Tenant roles are checked later by TenantRoleGuard (PBE-017),
+// (`@AccessToken()`); a refused account leaves neither. The account state it read stays on the request too
+// (`portalAccountStateOf`), so MfaEnrolmentGuard reads the account's MFA flag from this one read (PBE-071: MFA is
+// mandatory for the owners and admins of a live OTA). Tenant roles are checked later by TenantRoleGuard (PBE-017),
 // step-ups by RecentMfaGuard.
 import type { IncomingHttpHeaders } from "node:http";
 import { Injectable, type CanActivate, type ExecutionContext } from "@nestjs/common";
@@ -42,6 +44,18 @@ export function mayUsePortalToken(state: AccountAuthState | undefined): boolean 
   return state !== undefined && PORTAL_TOKEN_STATUSES.has(state.status);
 }
 
+/** Where PortalAuthGuard keeps the account state it read on the request. */
+const PORTAL_ACCOUNT_STATE = Symbol("velexis:portal-account-state");
+
+/**
+ * The state of the token's account as PortalAuthGuard read it for this request (MfaEnrolmentGuard reads its MFA flag
+ * from it, PBE-071); `undefined` before the guard ran, on another scope, or when it refused the token.
+ */
+export function portalAccountStateOf(request: object): AccountAuthState | undefined {
+  const state: unknown = Reflect.get(request, PORTAL_ACCOUNT_STATE);
+  return state === undefined ? undefined : (state as AccountAuthState);
+}
+
 @Injectable()
 export class PortalAuthGuard implements CanActivate {
   constructor(
@@ -58,10 +72,12 @@ export class PortalAuthGuard implements CanActivate {
     }
     const request = context.switchToHttp().getRequest<{ readonly headers: IncomingHttpHeaders }>();
     const claims = await this.tokens.verify(bearerTokenOf(request.headers), "portal");
-    if (!mayUsePortalToken(await this.accounts.read(claims.sub))) {
+    const state = await this.accounts.read(claims.sub);
+    if (state === undefined || !mayUsePortalToken(state)) {
       throw new AppError("UNAUTHENTICATED");
     }
     setAccessToken(request, claims);
+    Reflect.set(request, PORTAL_ACCOUNT_STATE, state);
     this.context.setActor({ type: "account", accountId: claims.sub });
     if (scope === "portal" && !claims.ev) {
       throw new AppError("EMAIL_NOT_VERIFIED");

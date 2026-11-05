@@ -20,6 +20,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createTestJwtKeyFile } from "../../test/support/jwt-key";
 import type { AuditRepository, AuditRowInsert } from "../audit/audit.repository";
 import { AuditService } from "../audit/audit.service";
+import type { MfaEnrolmentLookup } from "../common/auth/mfa-enrolment.guard";
 import type { PlatformDb } from "../common/database";
 import { featuresFor, type FeatureSwitches, type MilestoneFeatures } from "../common/features";
 import type { RequestContext } from "../common/http/request-context";
@@ -173,6 +174,10 @@ class World {
   /** Runs while a password is being verified: what a concurrent request commits meanwhile. */
   duringVerification: (() => void) | undefined;
   readonly challenges: Array<{ accountId: string; audience: SessionAudience }> = [];
+  /** The accounts that hold an active owner or admin membership of a live OTA (MfaEnrolmentLookup, PBE-071). */
+  readonly liveOwnersOrAdmins = new Set<string>();
+  /** The accounts MfaEnrolmentLookup was asked about, in order. */
+  readonly enrolmentLookups: string[] = [];
   readonly tokens: TokenService;
   readonly sessions: SessionsService;
   readonly signIns: SignInService;
@@ -232,6 +237,12 @@ class World {
       db as unknown as PlatformDb,
       redis as unknown as ConstructorParameters<typeof SessionsService>[10],
       logger,
+      {
+        holdsMfaMandatoryRole: (accountId: string) => {
+          this.enrolmentLookups.push(accountId);
+          return Promise.resolve(this.liveOwnersOrAdmins.has(accountId));
+        },
+      } satisfies MfaEnrolmentLookup,
     );
     const passwords = {
       hash: (password: string) => Promise.resolve(fakeHash(password)),
@@ -566,7 +577,7 @@ describe("the session rules", () => {
       ],
     };
 
-    expect(toAccount(record, FEATURES)).toEqual({
+    expect(toAccount(record, FEATURES, false)).toEqual({
       id: id("acc", 1),
       email: "anna.berg@example.com",
       emailVerified: false,
@@ -575,6 +586,7 @@ describe("the session rules", () => {
       timeZone: "Europe/Oslo",
       mfaEnabled: true,
       mfaEnabledAt: "2026-10-03T09:12:44.000Z",
+      mfaEnrolmentRequired: false,
       isPlatformAdmin: false,
       createdAt: "2026-10-01T10:02:17.000Z",
       version: 3,
@@ -590,9 +602,13 @@ describe("the session rules", () => {
       ],
       features: FEATURES,
     });
-    expect(toAccount({ ...record, mfa_enabled_at: null, memberships: [] }, FEATURES)).toMatchObject({
+    expect(toAccount({ ...record, mfa_enabled_at: null, memberships: [] }, FEATURES, false)).toMatchObject({
       mfaEnabledAt: null,
       memberships: [],
+    });
+    expect(toAccount({ ...record, mfa_enabled: false }, FEATURES, true)).toMatchObject({
+      mfaEnabled: false,
+      mfaEnrolmentRequired: true,
     });
   });
 
@@ -661,6 +677,24 @@ describe("SessionsService", () => {
     expect(claims.mfa_at).toBeUndefined();
     expect(claims.exp - claims.iat).toBe(15 * 60);
     expect(session.account).toMatchObject({ id: account.id, email: account.email, emailVerified: true });
+  });
+
+  it("[PBE-071 AC1] says in the session's account whether an owner or admin of a live OTA must enrol in MFA, and looks up only accounts without MFA", async () => {
+    const mustEnrol = world.addAccount();
+    const withMfa = world.addAccount({ mfa_enabled: true, mfa_enabled_at: new Date(START) });
+    const testOnly = world.addAccount();
+    world.liveOwnersOrAdmins.add(mustEnrol.id);
+    world.liveOwnersOrAdmins.add(withMfa.id);
+
+    const sessions = [
+      await world.signedIn(mustEnrol.id),
+      await world.signedIn(withMfa.id, new Date(START)),
+      await world.signedIn(testOnly.id),
+    ];
+
+    expect(sessions.map((session) => session.account.mfaEnrolmentRequired)).toEqual([true, false, false]);
+    // An account with MFA on is never looked up: it cannot need the enrolment.
+    expect(world.enrolmentLookups).toEqual([mustEnrol.id, testOnly.id]);
   });
 
   it("gives an unverified account a token with ev = false", async () => {

@@ -2,7 +2,8 @@
 // window, the recovery code format, its normalisation and hash, the pending set-up, the associated data of the two
 // places a secret is kept, and the decisions of MfaService that the integration test reaches only with effort (a
 // challenge of the admin surface, the per-account limit, Redis down, an account that lost MFA or may no longer sign
-// in, the attempt counting, the platform admin, a Redis failure once MFA is on). The stand-ins record what the service
+// in, the attempt counting, the platform admin, the owner or admin of a live OTA who may not turn MFA off (PBE-071), a
+// Redis failure once MFA is on). The stand-ins record what the service
 // asked of them; the integration test (test/integration/accounts/mfa.int.test.ts) runs the same rules through HTTP,
 // PostgreSQL and Redis. Every secret and code here is made up on the spot; none is a secret.
 import { sha256Hex } from "@velexis/crypto";
@@ -16,6 +17,7 @@ import type { AccountsRepository, MfaAccount } from "../auth/accounts.repository
 import { MfaRateLimitedError, type MfaChallenge, type MfaChallengeStore } from "../auth/mfa-challenge.store";
 import type { SessionsService } from "../auth/sessions.service";
 import type { SignInService } from "../auth/sign-in.service";
+import type { MfaEnrolmentLookup } from "../common/auth/mfa-enrolment.guard";
 import { associatedData, type EnvelopeService } from "../common/crypto.provider";
 import type { PlatformDb } from "../common/database";
 import type { InvalidationPublisher } from "../common/redis/invalidation.publisher";
@@ -192,6 +194,10 @@ class Harness {
   readonly queued: Array<Record<string, unknown>> = [];
   readonly sessionsStarted: Array<{ accountId: string; mfaVerifiedAt: Date | null }> = [];
   readonly disabled: string[] = [];
+  /** Whether the account holds an active owner or admin membership of a live OTA (MfaEnrolmentLookup, PBE-071). */
+  holdsMfaMandatoryRole = false;
+  /** The transactions MfaEnrolmentLookup was asked in (the stand-in database hands every work the same `{}`). */
+  readonly enrolmentLookups: Array<{ accountId: string; inTransaction: boolean }> = [];
   /** The pending set-up `mfasetup:<accountId>` holds: SECRET, "encrypted" as the envelope stand-in reads it. */
   pendingSetup: string | null = JSON.stringify({
     v: 1,
@@ -307,6 +313,12 @@ class Harness {
           this.warnings.push(message);
         },
       } as unknown as PinoLogger,
+      {
+        holdsMfaMandatoryRole: (accountId: string, trx?: unknown) => {
+          this.enrolmentLookups.push({ accountId, inTransaction: trx !== undefined });
+          return Promise.resolve(this.holdsMfaMandatoryRole);
+        },
+      } satisfies MfaEnrolmentLookup,
     );
   }
 
@@ -477,11 +489,37 @@ describe("MfaService.disable", () => {
     expect(h.audited).toEqual([]);
   });
 
+  it("[PBE-071 AC2] refuses an owner or admin of a live OTA with 409 CONFLICT (mfa_mandatory), read in the account's transaction, and changes nothing", async () => {
+    const h = new Harness();
+    h.holdsMfaMandatoryRole = true;
+
+    const error = await h.service.disable(ACCOUNT_ID).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ code: "CONFLICT", status: 409, details: { reason: "mfa_mandatory" } });
+    expect(h.enrolmentLookups).toEqual([{ accountId: ACCOUNT_ID, inTransaction: true }]);
+    expect(h.disabled).toEqual([]);
+    expect(h.queued).toEqual([]);
+    expect(h.audited).toEqual([]);
+  });
+
+  it("[PBE-071 AC2] answers a platform admin who is also an owner of a live OTA with the platform admin's FORBIDDEN", async () => {
+    const h = new Harness();
+    h.account = mfaAccount({ is_platform_admin: true });
+    h.holdsMfaMandatoryRole = true;
+
+    const error = await h.service.disable(ACCOUNT_ID).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ code: "FORBIDDEN", details: { reason: "platform_admin" } });
+    expect(h.disabled).toEqual([]);
+  });
+
   it("turns MFA off for anyone else, e-mails the account and audits without a secret", async () => {
     const h = new Harness();
 
     await h.service.disable(ACCOUNT_ID);
 
+    // PBE-071: an account that holds no owner or admin role of a live OTA (an agent of one, a member of test OTAs).
+    expect(h.enrolmentLookups).toEqual([{ accountId: ACCOUNT_ID, inTransaction: true }]);
     expect(h.disabled).toEqual([ACCOUNT_ID]);
     expect(h.queued).toEqual([
       {

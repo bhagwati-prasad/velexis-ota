@@ -212,6 +212,7 @@ function account(features: Partial<MilestoneFeatures> = {}): Account {
     timeZone: "UTC",
     mfaEnabled: true,
     mfaEnabledAt: daysFromStart(-50),
+    mfaEnrolmentRequired: false,
     isPlatformAdmin: false,
     createdAt: daysFromStart(-61),
     version: 2,

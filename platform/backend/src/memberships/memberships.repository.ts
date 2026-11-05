@@ -1,15 +1,22 @@
 // The `tenant_memberships` repository (platform/docs/architecture.md §2.1: MembershipsModule owns the table). It brings
-// the read of TenantRoleGuard (PBE-017): the caller's **active** membership of an OTA that members may see; the team
-// routes (PBE-025): the member list, the rows a role change or a removal locks, and its two writes; and the create-OTA
-// transaction (PBE-018): the owner membership of a new OTA and the count of the OTAs an account owns (the tenant limit
-// of scope PF-10 AC4). The membership of an accepted invitation is written by invitations.repository.ts (PBE-026); the
-// console token (PBE-039) reads the caller's membership with its account and tenant (`findConsoleTokenState`).
+// the read of TenantRoleGuard (PBE-017): the caller's **active** membership of an OTA that members may see; the read of
+// MfaEnrolmentGuard, `getMe` and `disableMfa` (PBE-071, PADR-0008 revision of 2026-11-05): whether an account holds an
+// active owner or admin membership of a live OTA, whose MFA is then mandatory; the team routes (PBE-025): the member
+// list, the rows a role change or a removal locks, and its two writes; and the create-OTA transaction (PBE-018): the
+// owner membership of a new OTA and the count of the OTAs an account owns (the tenant limit of scope PF-10 AC4). The
+// membership of an accepted invitation is written by invitations.repository.ts (PBE-026); the console token (PBE-039)
+// reads the caller's membership with its account and tenant (`findConsoleTokenState`).
 // Kysely on the API's `PLATFORM_DB`, schema-qualified tables (ADR-0005). The member reads join `platform.accounts` for
 // what the `Member` schema shows next to the membership (name, e-mail address, MFA flag), read only, as the operations'
 // `x-platform-tables` say.
 import { Inject, Injectable } from "@nestjs/common";
 import { sql } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
+import {
+  LIVE_STOREFRONT_ENVIRONMENT,
+  MFA_MANDATORY_ROLES,
+  MfaEnrolmentLookup,
+} from "../common/auth/mfa-enrolment.guard";
 import {
   isTenantRole,
   MEMBER_VISIBLE_TENANT_STATUSES,
@@ -76,7 +83,7 @@ export interface NewOwnerMembership {
 }
 
 @Injectable()
-export class MembershipsRepository implements TenantMembershipLookup {
+export class MembershipsRepository implements TenantMembershipLookup, MfaEnrolmentLookup {
   constructor(@Inject(PLATFORM_DB) private readonly db: PlatformDb) {}
 
   /**
@@ -98,6 +105,31 @@ export class MembershipsRepository implements TenantMembershipLookup {
       return undefined;
     }
     return { membershipId: row.id, tenantId: row.tenant_id, accountId: row.account_id, role: row.role };
+  }
+
+  /**
+   * True when `accountId` holds an **active** `owner` or `admin` membership of a live OTA (`storefront_environment =
+   * 'live'`) that members may see (MfaEnrolmentLookup, PBE-071): one indexed read (the partial index of active
+   * memberships by account and the tenants' primary key) on `db`, the pool unless the caller passes its transaction.
+   * A removed or suspended membership, an agent, finance member or viewer, and a test-only OTA do not count.
+   */
+  async holdsMfaMandatoryRole(
+    accountId: string,
+    db: PlatformDb | PlatformTransaction = this.db,
+  ): Promise<boolean> {
+    const row = await db
+      .selectFrom("platform.tenant_memberships as m")
+      .innerJoin("platform.tenants as t", "t.id", "m.tenant_id")
+      .select("m.id")
+      .where("m.account_id", "=", accountId)
+      .where("m.status", "=", "active" satisfies MembershipStatus)
+      .where("m.role", "in", MFA_MANDATORY_ROLES)
+      .where("t.storefront_environment", "=", LIVE_STOREFRONT_ENVIRONMENT)
+      .where("t.status", "in", MEMBER_VISIBLE_TENANT_STATUSES)
+      .where("t.deleted_at", "is", null)
+      .limit(1)
+      .executeTakeFirst();
+    return row !== undefined;
   }
 
   /**

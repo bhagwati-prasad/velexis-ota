@@ -7,8 +7,9 @@
 // the API marked `@InvalidationListener()` (PBE-027). The worker imports `CommonModule.forWorker()`: Clock, ids, the
 // worker's own pool, the envelope encryption and the `purge.daily` handler (PBE-034), without the request pipeline; a
 // CLI command `CommonModule.forCli()`, Clock, ids, the CLI's own small pool and the envelope encryption (PBE-028).
-// Later tasks add the Stripe pieces here. TenantRoleGuard's membership read (`TenantMembershipLookup`) comes from the
-// global MembershipsModule, which AppModule imports next to it (PBE-017).
+// Later tasks add the Stripe pieces here. TenantRoleGuard's membership read (`TenantMembershipLookup`) and
+// MfaEnrolmentGuard's (`MfaEnrolmentLookup`, PBE-071) come from the global MembershipsModule, which AppModule imports
+// next to it (PBE-017).
 import { Global, Module, type DynamicModule } from "@nestjs/common";
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, DiscoveryModule } from "@nestjs/core";
 import { ClsMiddleware } from "nestjs-cls";
@@ -18,6 +19,7 @@ import { AccountAuthStates, AdminAuthGuard } from "./auth/admin-auth.guard";
 import { OperationPolicies } from "./auth/decorators";
 import { FeatureGuard } from "./auth/feature.guard";
 import { InternalOnlyGuard } from "./auth/internal-only.guard";
+import { MfaEnrolmentGuard } from "./auth/mfa-enrolment.guard";
 import { PortalAuthGuard } from "./auth/portal-auth.guard";
 import { RecentMfaGuard } from "./auth/recent-mfa.guard";
 import { TenantRoleGuard } from "./auth/tenant-role.guard";
@@ -61,10 +63,13 @@ export const API_REQUEST_MIDDLEWARE = [jsonBodyParser, ClsMiddleware, EndUserMid
  *    (`portal_unverified`, `portal`) or AdminAuthGuard (`platform_admin`); `public` has none;
  * 3. AccountRateLimitGuard: the per-account rate limits, which need the account the auth guards put into the
  *    request context (PBE-009);
- * 4. TenantRoleGuard for `@TenantRoles(...)`: the caller's active membership of `{tenantId}` (step 6, PBE-017), so a
+ * 4. MfaEnrolmentGuard for `portal`: an active owner or admin of a live OTA without MFA answers `403 MFA_REQUIRED`
+ *    (`details.reason = enrolment_required`) on every `portal` operation until it enrols (step 5b, PBE-071, PADR-0008
+ *    revision of 2026-11-05), before the role, switch and step-up guards say anything about the operation;
+ * 5. TenantRoleGuard for `@TenantRoles(...)`: the caller's active membership of `{tenantId}` (step 6, PBE-017), so a
  *    non-member gets `404` before any switch or step-up says anything about the operation;
- * 5. FeatureGuard for `x-feature`;
- * 6. RecentMfaGuard for `x-mfa-step-up`.
+ * 6. FeatureGuard for `x-feature`;
+ * 7. RecentMfaGuard for `x-mfa-step-up`.
  *
  * The switch comes before the step-up (FIX-W38-PLATFORM, lead decision (2i) of 2026-10-31, second batch): an operation
  * whose milestone switch is off answers `403 FEATURE_DISABLED` whatever the caller's MFA state, so nobody is asked
@@ -78,6 +83,7 @@ export const API_GUARDS = [
   PortalAuthGuard,
   AdminAuthGuard,
   AccountRateLimitGuard,
+  MfaEnrolmentGuard,
   TenantRoleGuard,
   FeatureGuard,
   RecentMfaGuard,

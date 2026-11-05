@@ -28,8 +28,8 @@ Same conventions as the OTA document ([`conventions.md` §6](../../docs/mvp/conv
 | Notation | Meaning |
 |---|---|
 | `public` | No token. Rate limited. |
-| `portal*` | Portal access token, e-mail verification **not** required (account, resend, sign-out only). |
-| `portal` | Portal access token of a verified, active account. |
+| `portal*` | Portal access token, e-mail verification **not** required (account, resend, sign-out only). An account that must enrol in MFA (next row) keeps these operations: they are all its enrolment needs. |
+| `portal` | Portal access token of a verified, active account. An active `owner` or `admin` of a live OTA (`storefront_environment = 'live'`, in a status members see) must also have MFA on: otherwise every `portal` operation, reads included and those of its other OTAs too, answers `403 MFA_REQUIRED` with `details.reason = enrolment_required` until it turns MFA on (`MfaEnrolmentGuard`, before the role check; [PADR-0008](adr/0008-email-verification-and-mfa-policy.md) revision of 2026-11-05, PBE-071). `getMe` says so in `mfaEnrolmentRequired`. |
 | `portal: owner, admin` | Portal token plus an active membership of `{tenantId}` with one of these roles (`TenantRoleGuard`). Non-members get `404`. `member` means any role. |
 | `MFA↑` | Recent MFA step-up: `mfa_at` within 15 minutes (`401 REAUTH_REQUIRED`), or `403 MFA_REQUIRED` if MFA is off ([PADR-0008](adr/0008-email-verification-and-mfa-policy.md)). |
 | `F:<switch>` | Milestone feature switch and plan check ([PADR-0015](adr/0015-milestone-feature-switches.md)); `403 FEATURE_DISABLED` when off. An operation with both answers `FEATURE_DISABLED` before any `MFA↑` check (2026-10-31, lead decision (2i), FIX-W38-PLATFORM). |
@@ -70,7 +70,7 @@ The platform document has its own `x-error-catalogue`. It reuses the OTA codes a
 | `FORBIDDEN` | 403 | Role or rule forbids it (`details.reason`) |
 | `EMAIL_NOT_VERIFIED` | 403 | Verify the e-mail address first |
 | `ACCOUNT_DISABLED` | 403 | Account disabled by Velexis (only after a correct password) |
-| `MFA_REQUIRED` | 403 | The action or the OTA requires MFA to be enabled |
+| `MFA_REQUIRED` | 403 | The action or the OTA requires MFA to be enabled; `details.reason = enrolment_required` on every `portal` operation of an owner or admin of a live OTA without MFA (PBE-071) |
 | `INVITATION_EMAIL_MISMATCH` | 403 | Invitation was sent to another address |
 | `FEATURE_DISABLED` | 403 | Feature switch off, or the plan does not include it |
 | `NOT_FOUND` | 404 | Not found, or not visible to the caller |
@@ -125,12 +125,12 @@ The platform document has its own `x-error-catalogue`. It reuses the OTA codes a
 
 | Operation | Method and path | Auth | Purpose | Request → response | Tables | Errors | M |
 |---|---|---|---|---|---|---|---|
-| `getMe` | `GET /v1/me` | `portal*` | Current account and memberships | → `Account {id, email, emailVerified, fullName, locale, timeZone, mfaEnabled, mfaEnabledAt, isPlatformAdmin, createdAt, version, memberships: [{membershipId, tenantId, tenantKey, tenantName, tenantStatus, role}], features: {stripeBilling, ownStripe, settlements, ownAmadeus, customDomains, liveSwitch}}` (milestone switches, [PADR-0015](adr/0015-milestone-feature-switches.md)) | `accounts`, `tenant_memberships`, `tenants` | — | M1 |
-| `updateMe` | `PATCH /v1/me` | `portal*` | Profile | `If-Match`, `{fullName?, locale?, timeZone?}` → `Account` | `accounts`, audit | `VALIDATION_FAILED`, `PRECONDITION_FAILED` | M1 |
+| `getMe` | `GET /v1/me` | `portal*` | Current account and memberships | → `Account {id, email, emailVerified, fullName, locale, timeZone, mfaEnabled, mfaEnabledAt, mfaEnrolmentRequired, isPlatformAdmin, createdAt, version, memberships: [{membershipId, tenantId, tenantKey, tenantName, tenantStatus, role}], features: {stripeBilling, ownStripe, settlements, ownAmadeus, customDomains, liveSwitch}}` (milestone switches, [PADR-0015](adr/0015-milestone-feature-switches.md); `mfaEnrolmentRequired`: an active owner or admin of a live OTA without MFA, whose `portal` operations answer `403 MFA_REQUIRED` until it enrols, PBE-071) | `accounts`, `tenant_memberships`, `tenants` | — | M1 |
+| `updateMe` | `PATCH /v1/me` | `portal*` | Profile | `If-Match`, `{fullName?, locale?, timeZone?}` → `Account` (as `getMe`, `mfaEnrolmentRequired` included) | `accounts`, `tenant_memberships`, `tenants`, audit | `VALIDATION_FAILED`, `PRECONDITION_FAILED` | M1 |
 | `changePassword` | `POST /v1/me/password` | `portal` | Change password | `{currentPassword, newPassword}` → `204`; other sessions and staff sessions revoked | `accounts`, `account_sessions`, audit; `staffdeny` | `CURRENT_PASSWORD_INCORRECT`, `PASSWORD_TOO_WEAK` | M1 |
 | `startMfaSetup` | `POST /v1/me/mfa/setup` | `portal*` | New pending TOTP secret | → `200 {secret, otpauthUrl, expiresIn: 600}` (no-store) | Redis `mfasetup:<accountId>` | `MFA_ALREADY_ENABLED` | M1 |
 | `enableMfa` | `POST /v1/me/mfa/enable` | `portal*` | Confirm and enable | `{code}` → `200 {recoveryCodes: string[10]}` (no-store) | `accounts`, `account_recovery_codes`, audit, `email_outbox` | `MFA_CODE_INVALID`, `MFA_SETUP_EXPIRED` | M1 |
-| `disableMfa` | `POST /v1/me/mfa/disable` | `portal`, MFA↑ | Turn MFA off | → `204` | `accounts`, `account_recovery_codes`, audit, `email_outbox` | `FORBIDDEN` (platform admin), `REAUTH_REQUIRED` | M1 |
+| `disableMfa` | `POST /v1/me/mfa/disable` | `portal`, MFA↑ | Turn MFA off | → `204` | `accounts`, `account_recovery_codes`, `tenant_memberships`, `tenants`, audit, `email_outbox` | `FORBIDDEN` (platform admin), `REAUTH_REQUIRED`, `CONFLICT` (`mfa_mandatory`: an active owner or admin of a live OTA, after the step-up; nothing changes, PBE-071) | M1 |
 | `regenerateRecoveryCodes` | `POST /v1/me/mfa/recovery-codes` | `portal`, MFA↑ | Replace all codes | → `200 {recoveryCodes}` (no-store) | `account_recovery_codes`, audit | `REAUTH_REQUIRED` | M1 |
 | `listSessions` | `GET /v1/me/sessions` | `portal*` | Active sessions | → `{data: [{familyId, audience, userAgent, ipAddress, createdAt, lastUsedAt, current}]}` | `account_sessions` | — | M1 |
 | `revokeSession` | `DELETE /v1/me/sessions/{familyId}` | `portal*` | Revoke one family | → `204` | `account_sessions`, audit | `NOT_FOUND` | M1 |

@@ -258,13 +258,17 @@ describe("createConsoleToken", () => {
 
   it("[PBE-039 AC2] refuses a live OTA to an account without MFA (MFA_REQUIRED) and admits one with MFA", async () => {
     const live = { storefront_environment: "live", live_enabled_at: new Date("2026-10-10T09:00:00Z") };
+    // The console's own rule is shown with an agent: since PBE-071 an owner or admin of a live OTA without MFA meets
+    // MfaEnrolmentGuard first, on every portal operation (the admin below).
     const withoutMfa = await account({ mfa_enabled: false });
     const withMfa = await account({ mfa_enabled: true });
+    const adminWithoutMfa = await account({ mfa_enabled: false });
     const { tenant, memberships } = await insertOta(pool, {
       tenant: live,
       members: [
-        [{ id: withoutMfa }, "admin"],
+        [{ id: withoutMfa }, "agent"],
         [{ id: withMfa }, "viewer"],
+        [{ id: adminWithoutMfa }, "admin"],
       ],
     });
     const keysBefore = await portalTokenKeys();
@@ -274,6 +278,14 @@ describe("createConsoleToken", () => {
     expect(refused.status).toBe(403);
     expect(errorOf(refused)).toEqual({ code: "MFA_REQUIRED" });
     expect(await tokenAudits(memberships[0]?.id ?? "")).toEqual([]);
+    expect(await portalTokenKeys()).toEqual(keysBefore);
+    // PBE-071: the admin is refused too, by the enrolment that comes before the console's rule.
+    const enrolFirst = await createToken(tenant.id, await bearer(adminWithoutMfa));
+    expect([enrolFirst.status, errorOf(enrolFirst)]).toEqual([
+      403,
+      { code: "MFA_REQUIRED", details: { reason: "enrolment_required" } },
+    ]);
+    expect(await tokenAudits(memberships[2]?.id ?? "")).toEqual([]);
     expect(await portalTokenKeys()).toEqual(keysBefore);
 
     // A recent TOTP code is not needed: the live-OTA rule asks for MFA enabled, not for a step-up.

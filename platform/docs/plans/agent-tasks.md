@@ -2161,7 +2161,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - `pnpm audit --prod` lists no `zod` advisory for `platform/admin`, and every form answers its field errors as before.
 - **Verify:** `pnpm --filter @velexis/platform-admin test && pnpm --filter @velexis/platform-admin typecheck`
 
-### PBE-071 · Make MFA mandatory for the owners and admins of live OTAs in the platform API
+### PBE-071 · Make MFA mandatory for the owners and admins of live OTAs in the platform API ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M6
 - **Depends on:** PBE-062, and FIX-W43-PLATFORM's PADR-0008 revision of 2026-11-05 (merged with this block)

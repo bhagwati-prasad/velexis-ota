@@ -1,7 +1,9 @@
-// The auth guards of the platform API (PBE-012, platform/docs/architecture.md §3 steps 5, 7 and 8), run in the order of
-// API_GUARDS against handlers bound to real operations of the platform document, with real tokens of TokenService
-// (a fresh key file, a FakeClock), a real request context and a stand-in for the account read. A copy of the
-// document tags `listDomains` with `x-feature: custom_domains`, since no M1 operation carries a switch yet.
+// The auth guards of the platform API (PBE-012, platform/docs/architecture.md §3 steps 5, 5b, 7 and 8), run in the
+// order of API_GUARDS against handlers bound to real operations of the platform document, with real tokens of
+// TokenService (a fresh key file, a FakeClock), a real request context, a stand-in for the account read and one for
+// MfaEnrolmentGuard's membership read (PBE-071), which answers from the memberships below as the repository's query
+// does. A copy of the document tags `listDomains` with `x-feature: custom_domains`, since no M1 operation carries a
+// switch yet.
 // test/integration/common/auth-guards.int.test.ts runs the same rules through the HTTP pipeline and PostgreSQL.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync } from "node:fs";
@@ -38,9 +40,15 @@ import {
 import { accessTokenOf, Feature, OperationPolicies, RequireRecentMfa } from "./decorators";
 import { FeatureGuard } from "./feature.guard";
 import { InternalOnlyGuard } from "./internal-only.guard";
+import {
+  LIVE_STOREFRONT_ENVIRONMENT,
+  MFA_MANDATORY_ROLES,
+  MfaEnrolmentGuard,
+  type MfaEnrolmentLookup,
+} from "./mfa-enrolment.guard";
 import { mayUsePortalToken, PortalAuthGuard } from "./portal-auth.guard";
 import { MFA_STEP_UP_WINDOW_SECONDS, RecentMfaGuard } from "./recent-mfa.guard";
-import { TenantRoleGuard } from "./tenant-role.guard";
+import { MEMBER_VISIBLE_TENANT_STATUSES, TenantRoleGuard, type TenantRole } from "./tenant-role.guard";
 
 const START = "2026-10-15T09:00:00.000Z";
 const NOW = Date.parse(START) / 1000;
@@ -60,6 +68,18 @@ const DISABLED = "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1J";
 const DELETED = "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1K";
 /** An account AccountAuthStates does not find: erased (`deleted_at` set), or never written. */
 const ERASED = "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1M";
+// PBE-071: the members of a live OTA and of a test-only one, all active and verified; MFA only where the name says so.
+const LIVE_OWNER = "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1N";
+const LIVE_ADMIN = "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1P";
+const LIVE_OWNER_WITH_MFA = "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1Q";
+const LIVE_AGENT = "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1R";
+const LIVE_FINANCE = "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1S";
+const LIVE_VIEWER = "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1T";
+const REMOVED_LIVE_ADMIN = "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1V";
+const SUSPENDED_LIVE_OWNER = "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1W";
+const TEST_ONLY_OWNER = "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1X";
+/** An owner of a live OTA that is being deprovisioned (not a status members see) and an admin of a test-only one. */
+const GONE_LIVE_OWNER = "acc_01JA2Z9W5K7Q3M8N4P6R2T0V1Y";
 
 /** The accounts as `platform.accounts` would hold them. */
 const ACCOUNTS: ReadonlyMap<string, AccountAuthState> = new Map([
@@ -72,7 +92,73 @@ const ACCOUNTS: ReadonlyMap<string, AccountAuthState> = new Map([
   [LOCKED, { status: "locked", isPlatformAdmin: false, mfaEnabled: true }],
   [DISABLED, { status: "disabled", isPlatformAdmin: false, mfaEnabled: true }],
   [DELETED, { status: "deleted", isPlatformAdmin: false, mfaEnabled: true }],
+  ...[
+    LIVE_OWNER,
+    LIVE_ADMIN,
+    LIVE_AGENT,
+    LIVE_FINANCE,
+    LIVE_VIEWER,
+    REMOVED_LIVE_ADMIN,
+    SUSPENDED_LIVE_OWNER,
+    TEST_ONLY_OWNER,
+    GONE_LIVE_OWNER,
+  ].map((id): [string, AccountAuthState] => [
+    id,
+    { status: "active", isPlatformAdmin: false, mfaEnabled: false },
+  ]),
+  [LIVE_OWNER_WITH_MFA, { status: "active", isPlatformAdmin: false, mfaEnabled: true }],
 ]);
+
+/** A membership as MfaEnrolmentGuard's query sees it: its role and status, and its OTA's environment and status. */
+interface StandInMembership {
+  readonly role: TenantRole;
+  readonly status: "active" | "suspended" | "removed";
+  readonly storefrontEnvironment: "test" | "live";
+  readonly tenantStatus: string;
+}
+
+const live = (role: TenantRole, status: StandInMembership["status"] = "active"): StandInMembership => ({
+  role,
+  status,
+  storefrontEnvironment: "live",
+  tenantStatus: "active",
+});
+
+/** The memberships of the accounts (PBE-071); every other account has none. */
+const MEMBERSHIPS: ReadonlyMap<string, readonly StandInMembership[]> = new Map([
+  [LIVE_OWNER, [live("owner")]],
+  // An admin of a live OTA who owns a test-only one too: the rule holds on the test OTA's routes as well.
+  [LIVE_ADMIN, [live("admin"), { ...live("owner"), storefrontEnvironment: "test" }]],
+  [LIVE_OWNER_WITH_MFA, [live("owner")]],
+  [LIVE_AGENT, [live("agent")]],
+  [LIVE_FINANCE, [live("finance")]],
+  [LIVE_VIEWER, [live("viewer")]],
+  [REMOVED_LIVE_ADMIN, [live("admin", "removed")]],
+  [SUSPENDED_LIVE_OWNER, [live("owner", "suspended")]],
+  [TEST_ONLY_OWNER, [{ ...live("owner"), storefrontEnvironment: "test" }]],
+  [
+    GONE_LIVE_OWNER,
+    [
+      { ...live("owner"), tenantStatus: "deprovisioning" },
+      { ...live("admin"), storefrontEnvironment: "test" },
+    ],
+  ],
+]);
+
+/**
+ * The stand-in of MfaEnrolmentLookup: what MembershipsRepository.holdsMfaMandatoryRole selects (an active owner or
+ * admin membership of a live OTA in a status members see), over MEMBERSHIPS; test/integration/accounts/
+ * mfa-enrolment.int.test.ts proves the query on PostgreSQL.
+ */
+function holdsMfaMandatoryRole(accountId: string): boolean {
+  return (MEMBERSHIPS.get(accountId) ?? []).some(
+    (membership) =>
+      membership.status === "active" &&
+      (MFA_MANDATORY_ROLES as readonly TenantRole[]).includes(membership.role) &&
+      membership.storefrontEnvironment === LIVE_STOREFRONT_ENVIRONMENT &&
+      (MEMBER_VISIBLE_TENANT_STATUSES as readonly string[]).includes(membership.tenantStatus),
+  );
+}
 
 let withFeature: PlatformOpenApi | undefined;
 
@@ -100,6 +186,27 @@ class Routes {
 
   @OpenApiOperation("getMe")
   me(): void {}
+
+  @OpenApiOperation("updateMe")
+  updateMe(): void {}
+
+  @OpenApiOperation("startMfaSetup")
+  startMfaSetup(): void {}
+
+  @OpenApiOperation("enableMfa")
+  enableMfa(): void {}
+
+  @OpenApiOperation("listTenants")
+  tenants(): void {}
+
+  @OpenApiOperation("listApiKeys")
+  apiKeys(): void {}
+
+  @OpenApiOperation("createApiKey")
+  createApiKey(): void {}
+
+  @OpenApiOperation("createCustomerPortalSession")
+  customerPortal(): void {}
 
   @OpenApiOperation("getTenant")
   tenant(): void {}
@@ -190,6 +297,14 @@ function harness(features: Partial<Record<FeatureName, boolean>> = {}) {
       return Promise.resolve(ACCOUNTS.get(id));
     },
   } as unknown as AccountAuthStates;
+  /** The accounts MfaEnrolmentGuard asked the membership lookup about, in order (PBE-071). */
+  const lookups: string[] = [];
+  const memberships: MfaEnrolmentLookup = {
+    holdsMfaMandatoryRole: (accountId: string) => {
+      lookups.push(accountId);
+      return Promise.resolve(holdsMfaMandatoryRole(accountId));
+    },
+  };
   const cls = new ClsService<RequestContextStore>(new AsyncLocalStorage());
   const context = new RequestContext(cls);
   const policies = new OperationPolicies(documentWithFeature());
@@ -197,6 +312,7 @@ function harness(features: Partial<Record<FeatureName, boolean>> = {}) {
     new InternalOnlyGuard(policies),
     new PortalAuthGuard(policies, tokens, accounts, context),
     new AdminAuthGuard(policies, tokens, accounts, context),
+    new MfaEnrolmentGuard(policies, memberships),
     new FeatureGuard(policies, new FeatureSwitches(config)),
     new RecentMfaGuard(policies, accounts, clock),
   ];
@@ -244,19 +360,20 @@ function harness(features: Partial<Record<FeatureName, boolean>> = {}) {
     });
   }
 
-  return { clock, tokens, reads, bearer, call };
+  return { clock, tokens, reads, lookups, policies, bearer, call };
 }
 
 describe("the guard order", () => {
   // FeatureGuard before RecentMfaGuard since FIX-W38-PLATFORM (lead decision (2i) of 2026-10-31, second batch); the
   // step-up came first before.
-  it("[FIX-W38-PLATFORM AC6] runs RateLimitGuard, the auth guards of the scope, AccountRateLimitGuard, TenantRoleGuard, then FeatureGuard, then RecentMfaGuard (architecture §3)", () => {
+  it("[FIX-W38-PLATFORM AC6] [PBE-071 AC1] runs RateLimitGuard, the auth guards of the scope, AccountRateLimitGuard, MfaEnrolmentGuard, TenantRoleGuard, then FeatureGuard, then RecentMfaGuard (architecture §3)", () => {
     expect(API_GUARDS).toEqual([
       RateLimitGuard,
       InternalOnlyGuard,
       PortalAuthGuard,
       AdminAuthGuard,
       AccountRateLimitGuard,
+      MfaEnrolmentGuard,
       TenantRoleGuard,
       FeatureGuard,
       RecentMfaGuard,
@@ -476,6 +593,137 @@ describe("PortalAuthGuard and the account's state", () => {
     expect(portalOnAdmin.result).toBe("UNAUTHENTICATED");
     // AdminAuthGuard verifies the token's audience first and never reads the account of a portal token.
     expect(h.reads).toEqual([]);
+  });
+});
+
+// PBE-071 (PADR-0008, revision of 2026-11-05, lead decision (5b)): an active owner or admin of a live OTA without MFA
+// answers `403 MFA_REQUIRED` (`details.reason = enrolment_required`) on every `portal` operation, reads included, and
+// on nothing else, until MFA is on. The tokens are verified and stepped up now, with every switch on, so the guards
+// after MfaEnrolmentGuard would let each call through.
+describe("MfaEnrolmentGuard", () => {
+  /** `portal` operations: two reads (one of them a tenant path), a key, the Customer Portal and two step-ups. */
+  const PORTAL_ROUTES = [
+    "tenant",
+    "apiKeys",
+    "createApiKey",
+    "customerPortal",
+    "domains",
+    "disableMfa",
+    "setPayoutAccount",
+  ] as const;
+  /** Every `portal_unverified` operation an enrolment needs: the account, the MFA set-up and enabling, the OTAs. */
+  const ENROLMENT_ROUTES = ["me", "updateMe", "startMfaSetup", "enableMfa", "tenants"] as const;
+  const ALL_SWITCHES = { custom_domains: true, settlements: true, stripe_billing: true } as const;
+
+  const steppedUp = (sub: string): Partial<AccessTokenInput> & Pick<AccessTokenInput, "aud" | "sub"> => ({
+    aud: "portal",
+    sub,
+    amr: ["pwd", "otp"],
+    mfa_at: NOW,
+  });
+
+  it.each([
+    ["an owner", LIVE_OWNER],
+    ["an admin (who owns a test-only OTA too)", LIVE_ADMIN],
+  ])(
+    "[PBE-071 AC1] refuses %s of a live OTA without MFA with 403 MFA_REQUIRED (enrolment_required) on every portal operation, reads included",
+    async (_who, sub) => {
+      const h = harness(ALL_SWITCHES);
+      const headers = await h.bearer(steppedUp(sub));
+
+      for (const route of PORTAL_ROUTES) {
+        const outcome = await h.call(route, { headers });
+        expect([route, outcome.result, outcome.error?.status, outcome.error?.details]).toEqual([
+          route,
+          "MFA_REQUIRED",
+          403,
+          { reason: "enrolment_required" },
+        ]);
+        // The token was verified: the refusal is the enrolment's, not the auth guard's.
+        expect(outcome.actor, route).toEqual({ type: "account", accountId: sub });
+      }
+      // One membership read per request, no cache.
+      expect(h.lookups).toEqual(PORTAL_ROUTES.map(() => sub));
+    },
+  );
+
+  it.each([
+    ["an owner", LIVE_OWNER],
+    ["an admin", LIVE_ADMIN],
+  ])(
+    "[PBE-071 AC1] lets %s of a live OTA without MFA through on the portal_unverified operations of the enrolment",
+    async (_who, sub) => {
+      const h = harness(ALL_SWITCHES);
+      const headers = await h.bearer(steppedUp(sub));
+
+      for (const route of ENROLMENT_ROUTES) {
+        expect([route, (await h.call(route, { headers })).result]).toEqual([route, "passed"]);
+      }
+      // Nothing to read on them: the guard acts on `portal` operations only.
+      expect(h.lookups).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["an owner of a live OTA with MFA", LIVE_OWNER_WITH_MFA],
+    ["a member of a test-only OTA", TEST_ONLY_OWNER],
+    ["an agent of a live OTA", LIVE_AGENT],
+    ["a finance member of a live OTA", LIVE_FINANCE],
+    ["a viewer of a live OTA", LIVE_VIEWER],
+    ["an account whose admin membership of a live OTA was removed", REMOVED_LIVE_ADMIN],
+    ["an account whose owner membership of a live OTA is suspended", SUSPENDED_LIVE_OWNER],
+    ["an owner of a live OTA members no longer see (and an admin of a test-only one)", GONE_LIVE_OWNER],
+    ["an account without memberships", NO_MFA],
+  ])("[PBE-071 AC3] lets through %s on every portal operation", async (_who, sub) => {
+    const h = harness(ALL_SWITCHES);
+    const headers = await h.bearer(steppedUp(sub));
+
+    for (const route of ["tenant", "apiKeys", "createApiKey", "customerPortal", "domains"] as const) {
+      expect([route, (await h.call(route, { headers })).result]).toEqual([route, "passed"]);
+    }
+  });
+
+  it("[PBE-071 AC1] reads the MFA flag from PortalAuthGuard's account read and looks up memberships only for an account without MFA", async () => {
+    const h = harness(ALL_SWITCHES);
+
+    await h.call("tenant", { headers: await h.bearer(steppedUp(LIVE_OWNER_WITH_MFA)) });
+    await h.call("tenant", { headers: await h.bearer(steppedUp(LIVE_AGENT)) });
+
+    // One account read per request (PortalAuthGuard's, PBE-067), and no second one for the enrolment rule.
+    expect(h.reads).toEqual([LIVE_OWNER_WITH_MFA, LIVE_AGENT]);
+    expect(h.lookups).toEqual([LIVE_AGENT]);
+  });
+
+  it("[PBE-071 AC3] leaves public and admin operations alone and lets the auth guards refuse first", async () => {
+    const h = harness(ALL_SWITCHES);
+
+    expect((await h.call("plans")).result).toBe("passed");
+    expect(
+      (await h.call("adminMe", { headers: await h.bearer({ aud: "platform_admin", sub: ADMIN }) })).result,
+    ).toBe("passed");
+    // A portal token on the admin surface stays 401; no token or an unverified one answer as before.
+    expect((await h.call("adminMe", { headers: await h.bearer(steppedUp(LIVE_OWNER)) })).result).toBe(
+      "UNAUTHENTICATED",
+    );
+    expect((await h.call("tenant")).result).toBe("UNAUTHENTICATED");
+    expect(
+      (await h.call("tenant", { headers: await h.bearer({ ...steppedUp(LIVE_OWNER), ev: false }) })).result,
+    ).toBe("EMAIL_NOT_VERIFIED");
+    expect(h.lookups).toEqual([]);
+  });
+
+  it("[PBE-071 AC1] refuses a portal operation that PortalAuthGuard did not cover, never waving it through", async () => {
+    const h = harness();
+    const guard = new MfaEnrolmentGuard(h.policies, {
+      holdsMfaMandatoryRole: () => Promise.resolve(false),
+    });
+    const request = { headers: {} };
+
+    const outcome = await guard
+      .canActivate(new ExecutionContextHost([request, {}, () => undefined], Routes, Routes.prototype.tenant))
+      .catch((error: unknown) => error);
+
+    expect(outcome).toMatchObject({ code: "UNAUTHENTICATED", status: 401 });
   });
 });
 

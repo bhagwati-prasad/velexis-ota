@@ -5,14 +5,17 @@
 // - getMe (`portal_unverified`): the account with its active memberships (OTA id, key, name and status, and the role)
 //   and the six milestone switches (`features`, featuresFor() of PADR-0015), the same `Account` a `PortalSession`
 //   carries. An account that may no longer hold a session (disabled, erased) answers `401 UNAUTHENTICATED`, as a
-//   refresh would.
+//   refresh would. `mfaEnrolmentRequired` (PBE-071, PADR-0008 revision of 2026-11-05) comes from MfaEnrolmentGuard's
+//   rule and lookup (`requiresMfaEnrolment`): true for an active owner or admin of a live OTA with MFA off, whose
+//   `portal` operations the guard refuses until it enrols; the account's memberships are not read again for an
+//   account with MFA.
 // - updateMe (`portal_unverified`): `If-Match` must name the account's `version` (`412 PRECONDITION_FAILED` when
 //   stale). The full name is trimmed and may not be blank, the time zone must be a zone of `reference.time_zones`
 //   (`400 VALIDATION_FAILED` with field errors that never echo the value); the locale is checked by the schema. The
 //   fields that really change are written with `version + 1` and one `account.updated` audit row of their before and
 //   after values; a request that changes nothing writes nothing. The answer is the account as getMe shows it, with
-//   its `ETag`. Architecture §6.3 publishes `account` only when an account is disabled or locked or its MFA or
-//   password changes, so a profile change publishes no invalidation.
+//   its `ETag` (`mfaEnrolmentRequired` read in the same transaction). Architecture §6.3 publishes `account` only when
+//   an account is disabled or locked or its MFA or password changes, so a profile change publishes no invalidation.
 // - changePassword (`portal`): AuthModule owns the credentials, so `PasswordResetService.changePassword` does it, with
 //   the family of the calling access token kept signed in.
 // - listSessions (`portal_unverified`): the active refresh families of the account, portal and admin, newest sign-in
@@ -23,11 +26,17 @@
 //   SessionsService's order: the account's `FOR KEY SHARE`, then the family's first row.
 import { Inject, Injectable } from "@nestjs/common";
 import { AppError, type FieldError } from "@velexis/errors";
+import type { PlatformTransaction } from "../audit/audit.repository";
 import { AuditService } from "../audit/audit.service";
-import { AccountsRepository, type AccountProfileChanges } from "../auth/accounts.repository";
+import {
+  AccountsRepository,
+  type AccountProfileChanges,
+  type PortalAccountRecord,
+} from "../auth/accounts.repository";
 import { PasswordResetService, type ChangePasswordRequest } from "../auth/password-reset.service";
 import { SessionsRepository } from "../auth/sessions.repository";
 import { maySignIn, toAccount, type Account } from "../auth/sessions.service";
+import { MfaEnrolmentLookup, requiresMfaEnrolment } from "../common/auth/mfa-enrolment.guard";
 import { Clock } from "../common/clock";
 import { PLATFORM_DB, type PlatformDb } from "../common/database";
 import { FeatureSwitches } from "../common/features";
@@ -50,6 +59,7 @@ export class AccountsService {
     private readonly audit: AuditService,
     private readonly clock: Clock,
     @Inject(PLATFORM_DB) private readonly db: PlatformDb,
+    private readonly mfaEnrolment: MfaEnrolmentLookup,
   ) {}
 
   /** getMe (see the file header). */
@@ -58,7 +68,7 @@ export class AccountsService {
     if (record === undefined || !maySignIn(record.status)) {
       throw new AppError("UNAUTHENTICATED");
     }
-    return toAccount(record, this.features.features());
+    return toAccount(record, this.features.features(), await this.mfaEnrolmentRequired(record, this.db));
   }
 
   /** updateMe (see the file header): `expectedVersion` is the version `If-Match` names. */
@@ -89,7 +99,7 @@ export class AccountsService {
       if (record === undefined) {
         throw new AppError("UNAUTHENTICATED");
       }
-      return toAccount(record, this.features.features());
+      return toAccount(record, this.features.features(), await this.mfaEnrolmentRequired(record, trx));
     });
   }
 
@@ -130,6 +140,14 @@ export class AccountsService {
         details: { audience: family.audience },
       });
     });
+  }
+
+  /** `Account.mfaEnrolmentRequired` of `record` (MfaEnrolmentGuard's rule), read on `db`. */
+  private mfaEnrolmentRequired(
+    record: Pick<PortalAccountRecord, "id" | "mfa_enabled">,
+    db: PlatformDb | PlatformTransaction,
+  ): Promise<boolean> {
+    return requiresMfaEnrolment(this.mfaEnrolment, { id: record.id, mfaEnabled: record.mfa_enabled }, db);
   }
 
   /**

@@ -214,6 +214,7 @@ describe("valid credentials", () => {
       timeZone: "UTC",
       mfaEnabled: false,
       mfaEnabledAt: null,
+      mfaEnrolmentRequired: false,
       isPlatformAdmin: false,
       createdAt: account.created_at.toISOString(),
       version: account.version,
