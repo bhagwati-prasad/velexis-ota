@@ -2601,7 +2601,8 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - `pnpm audit --prod` lists no `nodemailer` advisory reaching `ota/backend`; the notifications unit and integration tests pass.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- notifications && pnpm --filter @velexis/ota-backend test:int notifications && pnpm audit --prod`
 
-### OBE-094 · Lift multer past its advisory within NestJS 11 and refresh the OTA backend's vulnerable transitive packages
+### OBE-094 · Lift multer past its advisory within NestJS 11 and refresh the OTA backend's vulnerable transitive packages ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M6
 - **Depends on:** OBE-084

@@ -34,7 +34,8 @@
   "pnpm": {
     "onlyBuiltDependencies": [],
     "overrides": {
-      "next>postcss": "8.5.30"
+      "next>postcss": "8.5.30",
+      "@nestjs/platform-express@11>multer": "2.5.0"
     }
   },
   "devDependencies": {

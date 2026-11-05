@@ -12,6 +12,10 @@ audit and the secret scan, and every finding with its severity and status. Every
   three dependencies whose fix is a major upgrade (`nodemailer`, `zod`) or an override (`multer`, which only NestJS 12
   requires in its fixed version): they are **open** (OTA-SR-01 to OTA-SR-03) with tasks OBE-093, OBE-094 and OAD-020,
   so the review is not closed until those are merged.
+- **2026-11-05 (OBE-094):** OTA-SR-02 (`multer`) and OTA-SR-04 (`fast-uri`, `qs`) are closed: a root `pnpm.overrides`
+  entry lifts `multer` to 2.5.0 below `@nestjs/platform-express` 11 (NestJS stays on 11.2.8) and a lockfile refresh
+  moves `fast-uri` to 3.1.9 and `qs` to 6.17.1 inside their dependents' ranges. `pnpm audit --prod` now reports **6
+  high** (no critical), all of them OTA-SR-01 (`nodemailer`) and OTA-SR-03 (`zod`) (§5).
 
 ## 1. Scope
 
@@ -128,6 +132,29 @@ so each is a finding with a task:
 | `fast-uri` 3.1.8 (through `ajv` 8.20.0) | every package with `ajv` | 2 moderate, 2 low | 3.1.9, inside `ajv`'s range | OTA-SR-04 |
 | `qs` 6.16.0 (through `stripe` 18.5.0; `express` already resolves 6.16.1 and later) | both backends | 1 moderate | 6.16.1, inside `stripe`'s range (`^6.11.0`) | OTA-SR-04 |
 
+**2026-11-05 (OBE-094): `multer`, `fast-uri` and `qs` fixed.** `pnpm audit --prod` after the change: **23 advisories:
+0 critical, 6 high, 16 moderate, 1 low**, all of them `nodemailer` (5 high, 16 moderate, 1 low: OTA-SR-01) and `zod` (1
+high: OTA-SR-03); none for `multer`, `fast-uri` or `qs`. The same advisories also reach the platform's copies
+(`nodemailer` in `platform/backend`: PBE-068; `zod` in `platform/admin` and `platform/frontend`: PAD-017, PFE-029), so
+the audit is clean of high advisories only once those land as well. The table's `nodemailer` row counts 15 moderate: the
+audit of 2026-11-04 listed 16, as its total of 19 moderate shows, and so does a run on the lockfile before this change.
+
+- **`multer` 2.5.0** through the root `package.json`'s `pnpm.overrides` entry `"@nestjs/platform-express@11>multer":
+  "2.5.0"`, beside `next>postcss`: every `@nestjs/*` package stays on 11.2.8 ([decisions.md](../../docs/mvp/decisions.md)
+  names NestJS 11). One lockfile entry serves both backends, so the override also closes the platform backend's copy
+  (PBE-062's finding F-3). The selector names the 11.x parent only, so a later major of `@nestjs/platform-express` keeps
+  the `multer` it requires instead of being held at 2.5.0. 2.5.0 is a minor release of `multer` with the same API; the
+  OTA API still parses multipart bodies itself (`common/http/body-parsers.ts`) and mounts no `FileInterceptor`. Remove
+  the entry when the backends move to a NestJS release that requires `multer` 2.5.0 or later (an owner's decision).
+- **`fast-uri` 3.1.9** (the latest 3.x, inside `ajv` 8.20.0's `^3.0.1`) and **`qs` 6.17.1** (the latest 6.x, inside
+  `stripe` 18.5.0's `^6.11.0`) by a lockfile refresh without an override (`pnpm update fast-uri qs -r`, which changes no
+  `package.json`). The refresh also moves the `qs` of `body-parser`, of the backends' own `express` 5.3.0 and of
+  `superagent` (tests) from 6.16.1 to 6.17.1, the version that `@nestjs/platform-express`'s `express` 5.2.1 already
+  used, so the workspace has one `qs`; its changelog from 6.16.1 lists parser and `stringify` fixes and one new
+  `stringify` format, no breaking change. Reachability was low already: neither API parses URL-encoded bodies (the OTA
+  API's parsers are JSON, raw webhook bytes and its own multipart) and Express 5's default `simple` query parser does
+  not use `qs`, so `qs` runs inside the Stripe client's form encoding.
+
 ## 6. Secret scan
 
 No secret was found. Every match is a development value of `.env.example` (`dev_*` database passwords, also in
@@ -147,9 +174,9 @@ no change). A dependency advisory keeps the advisory's severity; its reachabilit
 | ID | Severity | Area | Finding | Status |
 |---|---|---|---|---|
 | OTA-SR-01 | High | Dependencies | `nodemailer` 6.10.1 in the OTA backend: the address parser's quadratic and recursive parsing (DoS), the `raw` option and the OAuth2 token fetch advisories. Reachability: the worker sends to addresses the API validated (one plain address of at most 254 characters), with no `raw`, no OAuth2 and no file or URL content, so the DoS needs an address the validation lets through; still the shipped version is vulnerable. | Open: **OBE-093** |
-| OTA-SR-02 | High | Dependencies | `multer` 2.4.0 through `@nestjs/platform-express` 11.2.8 (DoS by a pending asynchronous `fileFilter`). Reachability: none today, the API parses multipart bodies itself (`common/http/body-parsers.ts`) and never mounts multer. Proposed fix: override `multer` to 2.5.0 below `@nestjs/platform-express` 11.2.8 (NestJS 12 would change a decision of the owner). | Open: **OBE-094** |
+| OTA-SR-02 | High | Dependencies | `multer` 2.4.0 through `@nestjs/platform-express` 11.2.8 (DoS by a pending asynchronous `fileFilter`). Reachability: none today, the API parses multipart bodies itself (`common/http/body-parsers.ts`) and never mounts multer. Proposed fix: override `multer` to 2.5.0 below `@nestjs/platform-express` 11.2.8 (NestJS 12 would change a decision of the owner). | Closed 2026-11-05 by **OBE-094**: `multer` 2.5.0 through the root override `@nestjs/platform-express@11>multer`, NestJS on 11.2.8, both backends (§5) |
 | OTA-SR-03 | High | Dependencies (OTA admin) | `zod` 3.25.76 (memory exhaustion validating oversized constrained collections) in the OTA admin's server actions. | Open: **OAD-020** |
-| OTA-SR-04 | Medium | Dependencies | `fast-uri` 3.1.8 and `qs` 6.16.0 (moderate and low advisories), fixed by a lockfile refresh inside their dependents' ranges. | Open: OBE-094 (step 2) |
+| OTA-SR-04 | Medium | Dependencies | `fast-uri` 3.1.8 and `qs` 6.16.0 (moderate and low advisories), fixed by a lockfile refresh inside their dependents' ranges. | Closed 2026-11-05 by **OBE-094**: `fast-uri` 3.1.9 and `qs` 6.17.1 by a lockfile refresh, no override (§5) |
 | OTA-SR-05 | Low | Contract | The OTA document does not list every answer the API gives: `400 VALIDATION_FAILED` (a path value) or `INVALID_REQUEST` (an edge header beside an API key) on 18 operations (5 of them pending), and the credential refusals (`401`, `403`) of the three Stripe receivers. Clients and the response conformance of the matrix cannot check those answers' shape. | Open: **OBE-095** |
 | OTA-SR-06 | Info | Redaction | The `payment_events` rows built by the bookings, cancellation and refund code carry objects of ids, codes and amounts the code builds itself, not copies of a supplier or gateway payload, so they do not pass the redactor; every copied payload does (§3.4). | Accepted |
 | OTA-SR-07 | Info | Card data | A Stripe card summary (`PaymentCard`: brand, BIN, last 4, expiry month and year) is answered and kept in idempotency copies; it holds no card number (Stripe keeps it) and the document marks it "no sensitive data". | Accepted |
@@ -163,6 +190,7 @@ pnpm --filter @velexis/ota-backend test -- redaction-coverage
 pnpm --filter @velexis/ota-backend exec vitest run --config vitest.int.config.ts test/integration/m6
 bash deploy/caddy/test/caddy-smoke.sh   # alone on the machine: ports 2019, 3000-3002, 3100, 4000, 8080, 8443 free
 pnpm audit --prod
+pnpm why multer -r       # 2.5.0 below @nestjs/platform-express 11 (the root override of §5)
 ```
 
 The matrix, the rate-limit coverage test and the redaction walk follow the document and `RATE_LIMITS` by themselves: a new
