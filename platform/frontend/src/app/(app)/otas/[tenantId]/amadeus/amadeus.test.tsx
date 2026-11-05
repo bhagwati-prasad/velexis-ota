@@ -1396,6 +1396,37 @@ describe("own credentials", () => {
     expect(calls("PUT", credentialsPath("test"))).toHaveLength(1);
   });
 
+  it("[PFE-029 AC1] refuses an office list over the document's 50 with that one message, before checking any office id, without a call", async () => {
+    const offices = Array.from({ length: 50 }, (_, index) => `OSLN${String(index).padStart(5, "0")}`);
+    // 51 ids, one of them not an office id and one twice: neither is looked at, nor the default office.
+    const oversized = await submitOwnCredentials(
+      CREDENTIALS_IDLE,
+      credentialsForm({
+        officeIds: [...offices, "BAD", "OSLN00000"].join("\n"),
+        defaultOfficeId: "PARIS0001",
+      }),
+    );
+    expect(oversized.status).toBe("failed");
+    expect(oversized.fieldErrors).toEqual({ officeIds: PROBLEMS.officeIdsTooMany });
+    // The other fields keep their own checks.
+    const withClientId = await submitOwnCredentials(
+      CREDENTIALS_IDLE,
+      credentialsForm({ officeIds: [...offices, "OSLN00050"].join("\n"), clientId: "" }),
+    );
+    expect(withClientId.fieldErrors).toEqual({
+      clientId: PROBLEMS.clientIdRequired,
+      officeIds: PROBLEMS.officeIdsTooMany,
+    });
+
+    // At the bound every office id is checked as before.
+    const atBound = await submitOwnCredentials(
+      CREDENTIALS_IDLE,
+      credentialsForm({ officeIds: [...offices.slice(1), "BAD"].join("\n"), defaultOfficeId: "OSLN00001" }),
+    );
+    expect(atBound.fieldErrors).toEqual({ officeIds: PROBLEMS.officeIdFormat });
+    expect(calls("PUT", credentialsPath("test"))).toHaveLength(0);
+  });
+
   it("puts the API's field errors at their fields and shows its refusals in the portal's words", async () => {
     const fieldCases: [{ path: string; code: string }, Partial<Record<string, string>>][] = [
       [{ path: "/clientId", code: "pattern" }, { clientId: PROBLEMS.clientIdFormat }],

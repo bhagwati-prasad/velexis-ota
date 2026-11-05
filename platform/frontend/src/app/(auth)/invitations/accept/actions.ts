@@ -84,7 +84,7 @@ export async function acceptInvitation(): Promise<void> {
 }
 
 /** The invited address as the page sends it back: the address of `lookupInvitation`. */
-const INVITED_EMAIL = z.string().trim().min(1).max(254).email();
+const INVITED_EMAIL = z.string().trim().min(1).max(254).check(z.email());
 
 /**
  * Signs the current account out (`signOut`, as `/sign-out` does) and continues to sign-in with the invited address of

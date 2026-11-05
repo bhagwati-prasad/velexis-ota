@@ -52,7 +52,7 @@ const DESCRIPTOR_SUFFIX = z
   .superRefine((value, context) => {
     const problem = descriptorSuffixProblem(value);
     if (problem !== null) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: DESCRIPTOR_STRINGS.problems[problem] });
+      context.addIssue({ code: "custom", message: DESCRIPTOR_STRINGS.problems[problem] });
     }
   });
 

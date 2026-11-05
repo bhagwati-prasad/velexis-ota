@@ -40,6 +40,7 @@ const settings = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/config", () => ({ getConfig: () => settings }));
 
+import { signUp, type SignUpState } from "@/app/(auth)/sign-up/actions";
 import CheckEmailPage from "@/app/(auth)/sign-up/check-email/page";
 import SignUpPage from "@/app/(auth)/sign-up/page";
 import { ResendVerificationForm, SignUpForm } from "@/app/(auth)/sign-up/sign-up-form";
@@ -368,6 +369,41 @@ describe("/sign-up: SignUpForm and the signUp action", () => {
       SIGN_UP_STRINGS.termsRequired,
     ]);
     expect(api.POST).not.toHaveBeenCalled();
+  });
+
+  it("[PFE-029 AC1] counts the full name in UTF-16 units, as its field's maxLength does, and checks the trimmed address", async () => {
+    api.POST.mockResolvedValue({ data: { status: "verification_sent" } });
+    const idle: SignUpState = {
+      status: "idle",
+      fieldErrors: {},
+      values: { fullName: "", email: "", acceptTerms: false },
+    };
+    const submitted = (fullName: string, email = "anna.berg@example.com") =>
+      signUp(idle, formData({ fullName, email, password: LONG_PASSWORD, acceptTerms: "on" }));
+
+    // 101 emoji are 202 UTF-16 units: refused, as before Zod 4 (which counts code points); 100 of them fit.
+    const tooLong = await submitted("\u{1F600}".repeat(101));
+    expect(tooLong.fieldErrors).toEqual({ fullName: SIGN_UP_STRINGS.fullNameTooLong });
+    expect((await submitted("x".repeat(201))).fieldErrors).toEqual({
+      fullName: SIGN_UP_STRINGS.fullNameTooLong,
+    });
+    expect(api.POST).not.toHaveBeenCalled();
+    await expect(submitted("\u{1F600}".repeat(100))).rejects.toThrow("NEXT_REDIRECT /sign-up/check-email");
+    expect(api.POST).toHaveBeenLastCalledWith("/v1/auth/sign-up", {
+      body: expect.objectContaining({ fullName: "\u{1F600}".repeat(100) }) as unknown,
+    });
+
+    // The address rule runs on the trimmed text, and an address the rule refuses makes no call.
+    await expect(submitted("Anna Berg", "\tanna.berg@example.com\n")).rejects.toThrow("NEXT_REDIRECT");
+    expect(api.POST).toHaveBeenLastCalledWith("/v1/auth/sign-up", {
+      body: expect.objectContaining({ email: "anna.berg@example.com" }) as unknown,
+    });
+    for (const email of ["anna..berg@example.com", ".anna@example.com", "anna@example", "ånna@example.com"]) {
+      expect((await submitted("Anna Berg", email)).fieldErrors).toEqual({
+        email: SIGN_UP_STRINGS.emailInvalid,
+      });
+    }
+    expect(api.POST).toHaveBeenCalledTimes(2);
   });
 
   it("maps the API's field errors by JSON pointer and keeps the rate limit above the form", async () => {

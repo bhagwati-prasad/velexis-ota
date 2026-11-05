@@ -30,7 +30,7 @@ export interface ForgotPasswordState {
 }
 
 /** `EmailAddress` of the platform document: trimmed, an address, at most 254 characters. */
-const EMAIL = z.string().trim().min(1).max(254).email();
+const EMAIL = z.string().trim().min(1).max(254).check(z.email());
 
 /** Asks for a reset link for the form field `email`. */
 export async function requestPasswordReset(

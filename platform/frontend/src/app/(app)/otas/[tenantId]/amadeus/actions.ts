@@ -193,7 +193,10 @@ const SETTINGS_FORM = z
     issue: z
       .string()
       .refine((value) => value === "" || value === "true" || value === "false", PROBLEMS.issue),
+    // The document sets no `maxItems` for `automatedProcess`, so neither does the form (Next.js caps the body at 1 MB).
     automatedProcess: z.array(AUTOMATED_PROCESS),
+    // `maxItems: 20` of the document. Zod checks the bound before any row, so an oversized list is refused with this
+    // one message: its rows and the form's rules below (`superRefine`) are not checked then.
     monitoredQueues: z.array(MONITORED_QUEUE).max(MONITORED_QUEUES_MAX, PROBLEMS.tooManyQueues),
   })
   .superRefine((form, context) => {
@@ -201,7 +204,7 @@ const SETTINGS_FORM = z
       DELAYED_AGREEMENTS.includes(form.agreementOption) &&
       !(form.agreementDelay === "" || UP_TO_THREE_DIGITS.test(form.agreementDelay))
     ) {
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ["agreementDelay"], message: PROBLEMS.delay });
+      context.addIssue({ code: "custom", path: ["agreementDelay"], message: PROBLEMS.delay });
     }
     // Each queue at most once (`uniqueItems`): the same office, number and category twice is refused at the later one.
     const seen = new Set<string>();
@@ -216,7 +219,7 @@ const SETTINGS_FORM = z
       const identity = `${queue.officeId}:${Number(queue.queueId)}:${Number(queue.category)}`;
       if (seen.has(identity)) {
         context.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ["monitoredQueues", index, "queueId"],
           message: PROBLEMS.duplicate,
         });
@@ -764,7 +767,9 @@ const OWN_CREDENTIALS_FORM = z
       .string()
       .min(1, OWN_PROBLEMS.clientSecretRequired)
       .refine((value) => codePoints(value) <= CLIENT_SECRET_MAX, OWN_PROBLEMS.clientSecretLength),
-    officeIds: z.array(z.string()),
+    // `maxItems: 50` of the document. Zod checks the bound before any office id, so an oversized list is refused with
+    // this one message: its ids and the office rules below (`superRefine`) are not checked then.
+    officeIds: z.array(z.string()).max(OFFICE_IDS_MAX, OWN_PROBLEMS.officeIdsTooMany),
     defaultOfficeId: z.string(),
     queuingOfficeId: z.string(),
     ownerOfficeId: z.string(),
@@ -772,28 +777,26 @@ const OWN_CREDENTIALS_FORM = z
   .superRefine((form, context) => {
     const { officeIds } = form;
     const officeProblem = (message: string) =>
-      context.addIssue({ code: z.ZodIssueCode.custom, path: ["officeIds"], message });
+      context.addIssue({ code: "custom", path: ["officeIds"], message });
     if (officeIds.length === 0) {
       officeProblem(OWN_PROBLEMS.officeIdsRequired);
     } else if (officeIds.some((officeId) => !OFFICE_ID.test(officeId))) {
       officeProblem(OWN_PROBLEMS.officeIdFormat);
     } else if (new Set(officeIds).size !== officeIds.length) {
       officeProblem(OWN_PROBLEMS.officeIdsDuplicate);
-    } else if (officeIds.length > OFFICE_IDS_MAX) {
-      officeProblem(OWN_PROBLEMS.officeIdsTooMany);
     }
     // The three offices must be among the office ids typed (the API checks it again).
     const valid = new Set(officeIds.filter((officeId) => OFFICE_ID.test(officeId)));
     if (!valid.has(form.defaultOfficeId)) {
       context.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ["defaultOfficeId"],
         message: form.defaultOfficeId === "" ? OWN_PROBLEMS.defaultOfficeRequired : OWN_PROBLEMS.office,
       });
     }
     for (const field of ["queuingOfficeId", "ownerOfficeId"] as const) {
       if (form[field] !== "" && !valid.has(form[field])) {
-        context.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: OWN_PROBLEMS.office });
+        context.addIssue({ code: "custom", path: [field], message: OWN_PROBLEMS.office });
       }
     }
   });

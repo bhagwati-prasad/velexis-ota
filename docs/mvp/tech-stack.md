@@ -40,7 +40,7 @@ Related: [`architecture.md`](architecture.md) (where each piece runs), [`convent
 | OpenAPI lint | `@redocly/cli` | 1.x | Lints the documents. The OTA document was already validated with it. |
 | Typed HTTP client (portal, platform admin) | `openapi-fetch` | 0.13.x | Tiny, typed by the generated platform types. |
 | Validation (API) | `ajv` + `ajv-formats` | 8.x / 3.x | Validates requests (runtime) and responses (tests) straight from the OpenAPI schemas. |
-| Validation (forms) | `zod` | 3.x | Server-action form validation in the Next.js apps only ([ADR-0014](adr/0014-frontend-stack-nextjs-tailwind.md)). |
+| Validation (forms) | `zod` | **4** (4.6.7 in the portal, the platform admin and the OTA admin: PFE-029, PAD-017, OAD-020) | Server-action form validation in the Next.js apps only ([ADR-0014](adr/0014-frontend-stack-nextjs-tailwind.md)). From 4.6.6 a list's `.max()` refuses an oversized list before any item is checked, so every list a server action parses carries the API's own limit; 3.x carried GHSA-mrhx-c7xc-m3w5 (security reviews F-4, OTA-SR-03). Zod 4 counts a string's `.min()` and `.max()` in code points, not UTF-16 units. |
 | Passwords | `argon2` | 0.41+ | Argon2id with OWASP parameters ([ADR-0008](adr/0008-identity-accounts-customers-sessions.md)). |
 | Tokens | `jose` | 5.x | EdDSA JWT signing and verification. Works from CommonJS. |
 | MFA | `otplib` | 12.x | TOTP for portal and platform admin accounts. |

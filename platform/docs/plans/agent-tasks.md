@@ -2131,7 +2131,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - `pnpm audit --audit-level high` lists no advisory of `vitest`, `tinypool`, `happy-dom`, `undici` or `@faker-js/faker`, and every suite passes as before.
 - **Verify:** `pnpm test && pnpm contracts:lint && pnpm audit --audit-level high`
 
-### PFE-029 · Upgrade zod in the portal past its high advisory
+### PFE-029 · Upgrade zod in the portal past its high advisory ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M6
 - **Depends on:** PBE-062

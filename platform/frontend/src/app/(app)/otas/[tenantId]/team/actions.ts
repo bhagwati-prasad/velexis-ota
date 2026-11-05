@@ -266,7 +266,8 @@ const INVITE_FORM = z.object({
     .trim()
     .min(1, TEAM_STRINGS.emailRequired)
     .max(EMAIL_MAX, TEAM_STRINGS.emailInvalid)
-    .email(TEAM_STRINGS.emailInvalid),
+    // The address rule after the trim (`z.email()` on its own would check the untrimmed text first).
+    .check(z.email({ error: TEAM_STRINGS.emailInvalid })),
   role: z
     .string()
     .min(1, TEAM_STRINGS.roleRequired)

@@ -56,18 +56,20 @@ const SIGN_UP_FORM = z.object({
     .string()
     .trim()
     .min(1, SIGN_UP_STRINGS.fullNameRequired)
-    .max(FULL_NAME_MAX, SIGN_UP_STRINGS.fullNameTooLong),
+    // UTF-16 units, as the field's `maxLength` counts them and Zod 3's `.max()` did (Zod 4 counts code points).
+    .refine((value) => value.length <= FULL_NAME_MAX, SIGN_UP_STRINGS.fullNameTooLong),
   email: z
     .string()
     .trim()
     .min(1, SIGN_UP_STRINGS.emailRequired)
     .max(EMAIL_MAX, SIGN_UP_STRINGS.emailInvalid)
-    .email(SIGN_UP_STRINGS.emailInvalid),
+    // The address rule after the trim (`z.email()` on its own would check the untrimmed text first).
+    .check(z.email({ error: SIGN_UP_STRINGS.emailInvalid })),
   password: z
     .string()
     .refine((value) => codePoints(value) >= PASSWORD_MIN, SIGN_UP_STRINGS.passwordTooShort)
     .refine((value) => codePoints(value) <= PASSWORD_MAX, SIGN_UP_STRINGS.passwordTooLong),
-  acceptTerms: z.literal(true, { errorMap: () => ({ message: SIGN_UP_STRINGS.termsRequired }) }),
+  acceptTerms: z.literal(true, { error: SIGN_UP_STRINGS.termsRequired }),
 });
 
 const FIELDS: readonly SignUpField[] = ["fullName", "email", "password", "acceptTerms"];

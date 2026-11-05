@@ -148,7 +148,7 @@ const CREATE_OTA_FORM = z.object({
     .regex(TIME_ZONE, WIZARD_STRINGS.timeZoneUnknown),
   planCode: z.string().min(1, WIZARD_STRINGS.planRequired).regex(PLAN_CODE, WIZARD_STRINGS.planRequired),
   // `BillingInterval`; empty when the form has no such field (before M5), and then not sent.
-  billingInterval: z.enum(["", "month", "year"], { message: WIZARD_STRINGS.intervalInvalid }),
+  billingInterval: z.enum(["", "month", "year"], { error: WIZARD_STRINGS.intervalInvalid }),
 });
 
 /** The portal's message for an API field error of each field (the API's own text is never shown). */

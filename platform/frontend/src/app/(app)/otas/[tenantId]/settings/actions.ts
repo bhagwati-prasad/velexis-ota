@@ -82,6 +82,9 @@ const optional = (max: number, tooLong: string) =>
     .refine((value) => codePoints(value) <= max, tooLong)
     .transform((value) => (value === "" ? null : value));
 
+/** An e-mail address, checked on the trimmed text. */
+const EMAIL_ADDRESS = z.email();
+
 const SETTINGS_FORM = z.object({
   name: z
     .string()
@@ -90,7 +93,7 @@ const SETTINGS_FORM = z.object({
     .refine((value) => codePoints(value) <= NAME_MAX, SETTINGS_STRINGS.nameTooLong),
   legalName: optional(LEGAL_NAME_MAX, SETTINGS_STRINGS.legalNameTooLong),
   supportEmail: optional(EMAIL_MAX, SETTINGS_STRINGS.supportEmailInvalid).refine(
-    (value) => value === null || z.string().email().safeParse(value).success,
+    (value) => value === null || EMAIL_ADDRESS.safeParse(value).success,
     SETTINGS_STRINGS.supportEmailInvalid,
   ),
   countryCode: z

@@ -38,7 +38,7 @@ export interface ResendState {
 }
 
 /** `EmailAddress` of the platform document: trimmed, an address, at most 254 characters. */
-const EMAIL = z.string().trim().min(1).max(254).email();
+const EMAIL = z.string().trim().min(1).max(254).check(z.email());
 
 /**
  * Sends a new verification link. With the form field `email` (a visitor without a session) the link goes to that

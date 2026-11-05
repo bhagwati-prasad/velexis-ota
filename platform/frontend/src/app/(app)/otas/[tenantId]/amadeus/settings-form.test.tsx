@@ -1174,6 +1174,38 @@ describe("the checks of the action", () => {
     }
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("[PFE-029 AC1] refuses a queue list over the document's 20 with that one message, before checking any row, without a call", async () => {
+    // Every row would be refused on its own (an office of 8 characters, numbers out of range) and repeats the first.
+    const badRow = { officeId: "NCE1A095", queueId: "100", category: "255" } as const;
+    const oversized = await saveAmadeusSettings(
+      IDLE,
+      formData({
+        ...TEST_VALUES,
+        issue: "maybe",
+        monitoredQueues: Array.from({ length: MONITORED_QUEUES_MAX + 1 }, () => badRow),
+      }),
+    );
+    // The list's own message and the other fields' own messages: no row of the list was looked at.
+    expect(oversized).toMatchObject({ status: "failed", code: "VALIDATION_FAILED" });
+    expect(oversized.fieldErrors).toEqual({ monitoredQueues: PROBLEMS.tooManyQueues, issue: PROBLEMS.issue });
+
+    // At the bound the rows are checked as before.
+    const atBound = await saveAmadeusSettings(
+      IDLE,
+      formData({
+        ...TEST_VALUES,
+        monitoredQueues: Array.from({ length: MONITORED_QUEUES_MAX }, () => badRow),
+      }),
+    );
+    expect(atBound.fieldErrors).toMatchObject({
+      "monitoredQueues.0.officeId": PROBLEMS.office,
+      "monitoredQueues.19.queueId": PROBLEMS.monitoredQueueId,
+      "monitoredQueues.19.category": PROBLEMS.monitoredCategory,
+    });
+    expect(atBound.fieldErrors["monitoredQueues"]).toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
 
 // ---- The API's answers ---------------------------------------------------------------------------------------------
