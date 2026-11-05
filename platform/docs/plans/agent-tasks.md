@@ -2100,7 +2100,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - `pnpm audit --prod` lists no `nodemailer` advisory for `platform/backend`, and the platform e-mails are sent as before.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int notifications/email-outbox auth/sign-up`
 
-### PBE-069 · Confirm the multer override in the platform backend and keep its API free of multipart routes
+### PBE-069 · Confirm the multer override in the platform backend and keep its API free of multipart routes ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M6
 - **Depends on:** PBE-062, OBE-094
