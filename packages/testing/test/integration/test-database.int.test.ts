@@ -4,6 +4,7 @@
 // .env.example, as set by deploy/scripts/dev-setup.sh and the CI bootstrap. Every database created here is dropped
 // by the test that created it, or by afterAll.
 import { performance } from "node:perf_hooks";
+import { setTimeout as delay } from "node:timers/promises";
 import { sql, tenantTx } from "@velexis/db";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -38,6 +39,14 @@ const CLONE_LIMIT_MS = 1_000;
 // a busy runner.
 const TEMPLATE_TIMEOUT_MS = 120_000;
 
+/**
+ * How long the global setup's test waits for the template's build sessions to leave pg_stat_activity, and how often it
+ * looks (lead decision 7(e) of 2026-11-05, FIX-W44-PLATFORM): `client.end()` returns once the client has sent its
+ * Terminate message, and the server process exits a moment later, so a build session can still be listed just after
+ * the build. They go within milliseconds; one still there after 5 s fails the test.
+ */
+const SESSIONS_END_WAIT = { timeoutMs: 5_000, intervalMs: 50 } as const;
+
 const adminUrl = testDatabaseAdminUrl();
 
 /** Runs `fn` with one connection as `url`, then closes it. */
@@ -64,6 +73,24 @@ async function adminQuery<R extends pg.QueryResultRow>(
 
 async function databaseExists(name: string): Promise<boolean> {
   return (await adminQuery("SELECT 1 FROM pg_database WHERE datname = $1", [name])).length === 1;
+}
+
+/**
+ * The sessions on `database` (pg_stat_activity: role, application and state), read again every
+ * SESSIONS_END_WAIT.intervalMs until none is listed or SESSIONS_END_WAIT.timeoutMs has passed; then what is left.
+ */
+async function sessionsLeftOn(database: string): Promise<unknown[]> {
+  const deadline = performance.now() + SESSIONS_END_WAIT.timeoutMs;
+  for (;;) {
+    const sessions = await adminQuery(
+      "SELECT usename, application_name, state FROM pg_stat_activity WHERE datname = $1",
+      [database],
+    );
+    if (sessions.length === 0 || performance.now() >= deadline) {
+      return sessions;
+    }
+    await delay(SESSIONS_END_WAIT.intervalMs);
+  }
 }
 
 /** The database's ACL as `grantee:privilege` pairs, sorted (`PUBLIC` for the grantee 0). */
@@ -322,8 +349,9 @@ describe("the global setup", () => {
     let leftoverExisted: boolean;
     try {
       existed = await databaseExists(name as string);
-      // A template accepts no session of its own after the build, so it can be cloned at once.
-      sessions = await adminQuery("SELECT 1 FROM pg_stat_activity WHERE datname = $1", [name]);
+      // A template keeps no session of its own after the build, so it can be cloned: once the build's sessions have
+      // exited (a bounded wait, SESSIONS_END_WAIT), none is left; the test asserts that.
+      sessions = await sessionsLeftOn(name as string);
       const clone = await createTestDatabase({ template: name });
       cloneCustomers = await customerIds(clone);
       await clone.drop();

@@ -7,7 +7,8 @@
 // as an owner would (createTenant with a paid plan: the `incomplete` row, the Checkout, the closed gate), shows that
 // their keys stay reserved, and retries them; the other OTAs are written with the builders.
 //
-// The FakeClock only moves forward in this file: each test sets it to its own instants, later than the previous test's.
+// The FakeClock starts at CLOCK_START, a fixed instant at 12:00 UTC, never the machine's time, and only moves forward
+// in this file: each test sets it to its own instants, later than the previous test's.
 // A run handles every due row of the clone, so a test that counts what a run did first runs the schedule once at its
 // own instant ("settle"), which handles what earlier tests left due by then, and only then arranges its own rows.
 // Nothing answers `ota-tenant-ops`: a dispatched suspension stays `running` and its message waits in the queue, where
@@ -30,7 +31,7 @@ import {
   validateJob,
   type InvalidationEvent,
 } from "@velexis/api-types/jobs";
-import { expectResponseToMatch, responseChecker } from "@velexis/testing";
+import { expectResponseToMatch, FakeClock, responseChecker } from "@velexis/testing";
 import { uniqueEmail, waitForMessage } from "@velexis/testing/mailpit";
 import type { Queue } from "bullmq";
 import { Redis } from "ioredis";
@@ -108,6 +109,13 @@ const FIRST_ID = 47_000;
 const FAMILY = testId("asn", FIRST_ID);
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
+/**
+ * The FakeClock's first instant (lead decision 7(d) of 2026-11-05, FIX-W44-PLATFORM): a fixed date at 12:00 UTC, so
+ * that the abandoned-Checkout windows (48 hours from a Checkout; the tests add whole days and a few hours to it) and
+ * any UTC day they reach fall the same way whenever the file runs, whatever the machine's clock or the shared default
+ * of FakeClock say. The manual-trial tests set their own instants (`runDay`, in 2027) after it.
+ */
+const CLOCK_START = "2026-06-15T12:00:00.000Z";
 
 type Row = Record<string, unknown>;
 
@@ -132,7 +140,11 @@ let next = FIRST_ID + 1;
 beforeAll(async () => {
   // Expensive set-up, once per file: the clone, both module graphs, the invalidation subscriber, the platform
   // document of expectResponseToMatch, the job validators a dispatch compiles on its first call and the reference data.
-  t = await createTestApp({ env: STRIPE_ENV, overrides: [{ provide: StripeClient, useValue: stripe }] });
+  t = await createTestApp({
+    env: STRIPE_ENV,
+    clock: new FakeClock(CLOCK_START),
+    overrides: [{ provide: StripeClient, useValue: stripe }],
+  });
   pool = t.app.get<PlatformPool>(PLATFORM_POOL);
   maintenance = t.app.get<Queue>(getQueueToken(PLATFORM_QUEUE.maintenance), { strict: false });
   tenantOps = t.app.get<Queue>(getQueueToken(OTA_TENANT_OPS), { strict: false });

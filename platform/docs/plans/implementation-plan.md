@@ -8,8 +8,8 @@ Related: [`../scope.md`](../scope.md) (features PF-01 … PF-98), [`../architect
 
 | Item | Value |
 |---|---|
-| Agent tasks | 110: 66 backend (`PBE-`), 28 portal (`PFE-`), 16 admin (`PAD-`) |
-| Estimate | 552 agent-hours by the plan-lint sizes (S 2 h, M 4 h, L 8 h, review included); about 138 developer-days without agents (S ½ day, M 1 day, L 2 days) |
+| Agent tasks | 118: 71 backend (`PBE-`), 30 portal (`PFE-`), 17 admin (`PAD-`) |
+| Estimate | 590 agent-hours by the plan-lint sizes (S 2 h, M 4 h, L 8 h, review included); about 147.5 developer-days without agents (S ½ day, M 1 day, L 2 days) |
 | Foundation dependencies | `X-001` … `X-028` ([`foundation-tasks.md`](../../../docs/mvp/plans/foundation-tasks.md)); the platform never re-does them |
 | Validation | `node tools/plan-lint/plan-lint.mjs docs/mvp/plans/foundation-tasks.md platform/docs/plans/agent-tasks.md` (0 errors) |
 | Reference material reused | Baseline DDL [`platform.sql`](../../../docs/velexis-sdk/db/platform.sql) and [`reference.sql`](../../../docs/velexis-sdk/db/reference.sql) as `0001`, the exact `0002` SQL in [`../data-model-migration-0002.md`](../data-model-migration-0002.md) (parts 1–3), the OTA contract's `ConsoleApiKeyScope`, `StaffPermission`, error envelope and `consoleSignIn` grant in [`velexis-ota-booking-api.openapi.yaml`](../../../docs/velexis-sdk/openapi/velexis-ota-booking-api.openapi.yaml) |
@@ -51,8 +51,8 @@ Rules that shape the order of the tasks:
 | M3 Book & pay | Card statement descriptor | 3 | 6 | 1.5 | Checkout, customer auth, Stripe and airline-card payments, orders, e-mails (OF-03 … OF-08) |
 | M4 OTA admin | Console SSO, Amadeus office settings | 5 | 16 | 4 | OTA admin, console, settings (OF-09, OF-10) |
 | M5 Monetisation & self-service | Billing, own Stripe, settlements, own Amadeus, custom domains, go-live | 33 | 168 | 42 | Gateways that follow the account mode and credential source (OF-12), Connect webhooks, live environment |
-| M6 Hardening & launch | Security review, performance, full end-to-end suite, runbooks; switch removal after the launch (PBE-064) | 6 | 30 | 7.5 | PCI controls of the airline-card flow, OTA end-to-end suite; foundation monitoring and restore drill |
-| **Total** | | **110** | **552** | **138** | |
+| M6 Hardening & launch | Security review and its follow-ups (PBE-067 … PBE-071, PFE-029, PFE-030, PAD-017), performance, full end-to-end suite, runbooks; switch removal after the launch (PBE-064) | 14 | 68 | 17 | PCI controls of the airline-card flow, OTA end-to-end suite; foundation monitoring and restore drill |
+| **Total** | | **118** | **590** | **147.5** | |
 
 ```mermaid
 flowchart LR
@@ -66,7 +66,7 @@ flowchart LR
   OF09(["OTA OF-09<br/>OTA admin SSO"]) -. gate PFE-019 .-> M4
   M4 --> M5["M5<br/>33 tasks, behind switches"]
   OF12(["OTA OF-12<br/>own Stripe and Amadeus"]) -. needed to switch on .-> M5
-  M5 --> M6["M6<br/>6 tasks<br/>(PBE-064 after launch)"]
+  M5 --> M6["M6<br/>14 tasks<br/>(PBE-064 after launch)"]
 ```
 
 ## 4. Milestones in detail
@@ -272,6 +272,8 @@ The platform gives every row and column these features read (all created by `000
 **Goal.** The platform is reviewed for security, measured against the VM budget, covered by a nightly end-to-end suite, documented for operations, and launched. The milestone switches are removed after the launch, once all six have been on in production for one release (PBE-064).
 
 **Scope.** E14: PBE-062 (security review, auth matrix, rate limits, secret scan), PBE-063 (performance and memory), PBE-064 (switch removal, gated, after the launch), PBE-065 (launch checklist and runbooks), PFE-028 and PAD-016 (complete end-to-end suites with accessibility and header checks). Foundation tasks X-029 … X-032 (uptime monitoring, on-VM checks, restore drill, managed-services proof) run in the same milestone.
+
+*Note (2026-11-05, FIX-W44-PLATFORM, lead decision 7(f)).* The security review's follow-ups are M6 tasks too, and the milestone's count and hours in §1 and §3 include them (14 tasks, 68 agent-hours, 17 solo days): PBE-067 (the portal tokens of disabled and erased accounts refused at once), PBE-068 (nodemailer), PBE-069 (the multer override, no multipart route in the platform API), PBE-070 (the test and contract tooling), PFE-029 and PAD-017 (zod in the portal and the platform admin), and PBE-071 and PFE-030 (MFA for the owners and admins of live OTAs, the [PADR-0008](../adr/0008-email-verification-and-mfa-policy.md) revision of 2026-11-05).
 
 **Demo.** Walk through `platform/docs/security-review.md` and `platform/docs/performance.md`; show three consecutive green nightly runs of the portal and admin projects; walk through the launch checklist on the VM with the developer.
 

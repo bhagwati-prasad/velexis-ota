@@ -22,8 +22,12 @@
 // 4. Stripe test objects of a journey (FIX-W43-SHARED). `createTestProduct` and `createMonthlyTestPrice` make the
 //    product and monthly price that the portal's Checkout journey links to its plan through the admin API (prices are
 //    made in Stripe first, platform/docs/flows/subscription-billing.md §A), and `archiveStripeTestObjects` archives them
-//    again in its `afterAll` (Stripe deletes no product that has a price: `active=false`). Test keys only; an error
-//    names the request and Stripe's status, never the key or a response body.
+//    again in its `afterAll` (Stripe deletes no product that has a price: `active=false`). What the journey's Checkout
+//    made (lead decision 7(c) of 2026-11-05, FIX-W44-PLATFORM) goes too: `findCheckoutTestObjects` finds the
+//    subscriptions to the journey's own price and the Customer of its owner's OTA, each also by its Velexis metadata,
+//    and `removeCheckoutTestObjects` cancels those subscriptions and deletes those Customers; nothing else in the
+//    account is touched. Test keys only; an error names the request and Stripe's status, never the key, a query or a
+//    response body.
 //
 // This file never imports support/stack.ts (which imports it): the stack passes in what the forwarders need.
 import { spawn, type ChildProcess } from "node:child_process";
@@ -347,18 +351,77 @@ export async function retrievePaymentIntent(
 /** A Stripe test-mode secret or restricted key; any other key is refused before a request. */
 const STRIPE_TEST_KEY = /^(?:sk|rk)_test_[A-Za-z0-9_]+$/;
 
-/** The ids of the two kinds of object a journey makes. */
+/**
+ * The ids of the kinds of object a journey makes: the product and the price itself, the subscription and the Customer
+ * through its Checkout.
+ */
 const STRIPE_IDS = Object.freeze({
   product: /^prod_[A-Za-z0-9]+$/,
   price: /^price_[A-Za-z0-9]+$/,
+  subscription: /^sub_[A-Za-z0-9]+$/,
+  customer: /^cus_[A-Za-z0-9]+$/,
 } as const);
 
 type StripeObjectKind = keyof typeof STRIPE_IDS;
 
+/** How long one request to Stripe's API may take. */
+const STRIPE_REQUEST_TIMEOUT_MS = 15_000;
+
+/** A request of the test-object helpers to Stripe's API. */
+interface StripeRequest {
+  readonly method: "GET" | "POST" | "DELETE";
+  /** The path, without a query: the only part of the request an error names. */
+  readonly path: string;
+  /** The query of a GET. */
+  readonly query?: Readonly<Record<string, string>>;
+  /** The form fields of a POST (form-encoded, as Stripe's API takes them). */
+  readonly form?: Readonly<Record<string, string>>;
+}
+
 /**
- * POSTs `fields` (form-encoded, as Stripe's API takes them) to `path` of Stripe's API with the test-mode `secretKey` and
- * answers the id of the `kind` of object Stripe answered with. A refusal throws with the request and Stripe's status
- * alone, never the key or the body.
+ * Sends `request` to Stripe's API with the test-mode `secretKey` and answers Stripe's JSON object. A refusal throws with
+ * the method, the path and Stripe's status alone, never the key, the query (an e-mail address) or the body.
+ */
+async function requestStripe(
+  secretKey: string,
+  request: StripeRequest,
+  fetchImpl: StripeFetch,
+): Promise<Record<string, unknown>> {
+  if (!STRIPE_TEST_KEY.test(secretKey)) {
+    throw new TypeError(
+      "Stripe test objects are made and removed with a test-mode key (sk_test_…, rk_test_…) only",
+    );
+  }
+  const query = request.query === undefined ? "" : `?${new URLSearchParams(request.query).toString()}`;
+  const response = await fetchImpl(`${STRIPE_API_URL}${request.path}${query}`, {
+    method: request.method,
+    headers:
+      request.form === undefined
+        ? { Authorization: `Bearer ${secretKey}` }
+        : { Authorization: `Bearer ${secretKey}`, "Content-Type": "application/x-www-form-urlencoded" },
+    ...(request.form === undefined ? {} : { body: new URLSearchParams(request.form).toString() }),
+    signal: AbortSignal.timeout(STRIPE_REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(`Stripe answered ${response.status} to ${request.method} ${request.path}`);
+  }
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    // The parser's message quotes the start of the body: never in an error.
+    throw new Error(`Stripe's answer to ${request.method} ${request.path} is not JSON`);
+  }
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    throw new Error(`Stripe's answer to ${request.method} ${request.path} is not an object`);
+  }
+  return body as Record<string, unknown>;
+}
+
+/**
+ * POSTs `fields` to `path` of Stripe's API with the test-mode `secretKey` and answers the id of the `kind` of object
+ * Stripe answered with. A refusal throws with the request and Stripe's status alone, never the key or the body.
  */
 async function postToStripe(
   secretKey: string,
@@ -367,23 +430,7 @@ async function postToStripe(
   kind: StripeObjectKind,
   fetchImpl: StripeFetch,
 ): Promise<string> {
-  if (!STRIPE_TEST_KEY.test(secretKey)) {
-    throw new TypeError("Stripe test objects are made with a test-mode key (sk_test_…, rk_test_…) only");
-  }
-  const response = await fetchImpl(`${STRIPE_API_URL}${path}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${secretKey}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: new URLSearchParams(fields).toString(),
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!response.ok) {
-    await response.body?.cancel();
-    throw new Error(`Stripe answered ${response.status} to POST ${path}`);
-  }
-  const { id } = (await response.json()) as { id?: unknown };
+  const { id } = await requestStripe(secretKey, { method: "POST", path, form: fields }, fetchImpl);
   if (typeof id !== "string" || !STRIPE_IDS[kind].test(id)) {
     throw new Error(`Stripe's answer to POST ${path} names no ${kind}`);
   }
@@ -483,6 +530,196 @@ export async function archiveStripeTestObjects(
   }
   if (failures.length > 0) {
     throw new Error(`Stripe test objects left active:\n  - ${failures.join("\n  - ")}`);
+  }
+}
+
+/**
+ * Whose Checkout `findCheckoutTestObjects` looks for: the journey's own price, and its owner, an account new in the
+ * run, with that owner's OTAs. The platform makes one Stripe Customer per OTA with the owner's e-mail address and
+ * `metadata.velexis_tenant_id`, and the subscription of a Checkout with the same metadata (checkout.service.ts,
+ * `checkoutSessionParams` of stripe-billing.gateway.ts).
+ */
+export interface CheckoutTestScope {
+  /** `price_…` the journey made (`createMonthlyTestPrice`): only subscriptions to it are looked at. */
+  readonly priceId: string;
+  /** The owner's e-mail address (`uniqueEmail`, new in the run): only Customers with exactly it are looked at. */
+  readonly email: string;
+  /** `ten_…` of the owner's OTAs: the `metadata.velexis_tenant_id` of a Customer or subscription must be one of them. */
+  readonly tenantIds: readonly string[];
+}
+
+/** What a journey's Checkout made in Stripe's test account: `removeCheckoutTestObjects` removes it. */
+export interface CheckoutTestObjects {
+  /** `sub_…` not yet ended (`canceled`, `incomplete_expired`), which Stripe can still cancel. */
+  readonly subscriptions: readonly string[];
+  /** `cus_…`. */
+  readonly customers: readonly string[];
+}
+
+/** The id of an OTA, the value of `metadata.velexis_tenant_id`. */
+const TENANT_ID = /^ten_[0-9A-HJKMNP-TV-Z]{26}$/;
+
+/**
+ * The statuses of a subscription that has ended: Stripe cancels it no more. A cancelled subscription answers one of them
+ * (`canceled`; an `incomplete` one, whose first payment never went through, can end as `incomplete_expired`).
+ */
+const ENDED_SUBSCRIPTION_STATUSES: ReadonlySet<string> = new Set(["canceled", "incomplete_expired"]);
+
+/**
+ * How many objects one list request answers at most (Stripe's maximum): a run makes one subscription and one Customer,
+ * so one page is all there is.
+ */
+const STRIPE_LIST_LIMIT = "100";
+
+/** One object of a list Stripe answered, as far as these helpers read it. */
+interface ListedStripeObject {
+  readonly id: string;
+  readonly status?: unknown;
+  readonly email?: unknown;
+  readonly tenantId?: unknown;
+}
+
+/** GETs the list at `path` with `query` and answers its objects whose id is of `kind`. */
+async function listFromStripe(
+  secretKey: string,
+  path: string,
+  query: Readonly<Record<string, string>>,
+  kind: StripeObjectKind,
+  fetchImpl: StripeFetch,
+): Promise<ListedStripeObject[]> {
+  const { data } = await requestStripe(
+    secretKey,
+    { method: "GET", path, query: { ...query, limit: STRIPE_LIST_LIMIT } },
+    fetchImpl,
+  );
+  if (!Array.isArray(data)) {
+    throw new Error(`Stripe's answer to GET ${path} is not a list`);
+  }
+  const listed: ListedStripeObject[] = [];
+  for (const item of data as unknown[]) {
+    if (typeof item !== "object" || item === null) {
+      continue;
+    }
+    const { id, status, email, metadata } = item as Record<string, unknown>;
+    if (typeof id !== "string" || !STRIPE_IDS[kind].test(id)) {
+      continue;
+    }
+    const tenantId =
+      typeof metadata === "object" && metadata !== null
+        ? (metadata as Record<string, unknown>)["velexis_tenant_id"]
+        : undefined;
+    listed.push({ id, status, email, tenantId });
+  }
+  return listed;
+}
+
+/**
+ * The subscriptions and Customers the Checkout of `scope` made in Stripe's test account, and nothing else: the
+ * subscriptions to `scope.priceId` (a price of the journey's own) whose `metadata.velexis_tenant_id` is one of
+ * `scope.tenantIds` and that have not ended, and the Customers with exactly `scope.email` whose
+ * `metadata.velexis_tenant_id` is one of `scope.tenantIds`. Every input is checked before the first request; with no
+ * OTA nothing is looked up (no OTA, no Checkout).
+ */
+export async function findCheckoutTestObjects(
+  secretKey: string,
+  scope: CheckoutTestScope,
+  fetchImpl: StripeFetch = fetch,
+): Promise<CheckoutTestObjects> {
+  if (!STRIPE_TEST_KEY.test(secretKey)) {
+    throw new TypeError(
+      "Stripe test objects are made and removed with a test-mode key (sk_test_…, rk_test_…) only",
+    );
+  }
+  if (!STRIPE_IDS.price.test(scope.priceId)) {
+    throw new TypeError(`not a Stripe price id: ${scope.priceId}`);
+  }
+  if (!/^[^\s@]+@[^\s@]+$/.test(scope.email)) {
+    throw new TypeError("a Checkout's owner is looked up by an e-mail address");
+  }
+  for (const tenantId of scope.tenantIds) {
+    if (!TENANT_ID.test(tenantId)) {
+      throw new TypeError(`not an OTA id: ${tenantId}`);
+    }
+  }
+  if (scope.tenantIds.length === 0) {
+    return { subscriptions: [], customers: [] };
+  }
+  const ofTheOtas = (object: ListedStripeObject): boolean =>
+    typeof object.tenantId === "string" && scope.tenantIds.includes(object.tenantId);
+  // `status=all`: every status (Stripe leaves the canceled ones out otherwise); the ended ones are dropped below.
+  const subscriptions = await listFromStripe(
+    secretKey,
+    "/v1/subscriptions",
+    { price: scope.priceId, status: "all" },
+    "subscription",
+    fetchImpl,
+  );
+  // Stripe's e-mail filter is case-sensitive; the answer is compared again all the same.
+  const customers = await listFromStripe(
+    secretKey,
+    "/v1/customers",
+    { email: scope.email },
+    "customer",
+    fetchImpl,
+  );
+  return {
+    subscriptions: subscriptions
+      .filter(
+        (subscription) =>
+          ofTheOtas(subscription) &&
+          !(typeof subscription.status === "string" && ENDED_SUBSCRIPTION_STATUSES.has(subscription.status)),
+      )
+      .map(({ id }) => id),
+    customers: customers
+      .filter((customer) => customer.email === scope.email && ofTheOtas(customer))
+      .map(({ id }) => id),
+  };
+}
+
+/**
+ * Cancels the subscriptions of `objects` at once (`DELETE /v1/subscriptions/<id>`: no proration, no final invoice), then
+ * deletes the Customers (`DELETE /v1/customers/<id>`, which also cancels any subscription a Checkout still finished in
+ * between). A subscription counts as removed once Stripe answers it ended (ENDED_SUBSCRIPTION_STATUSES), a Customer once
+ * Stripe answers it deleted. Every id is checked before the first request; every object is tried even when one fails,
+ * then one error names each refusal by its request and Stripe's status.
+ */
+export async function removeCheckoutTestObjects(
+  secretKey: string,
+  objects: CheckoutTestObjects,
+  fetchImpl: StripeFetch = fetch,
+): Promise<void> {
+  const requests = [
+    ...objects.subscriptions.map((id) => ({
+      id,
+      kind: "subscription" as const,
+      path: `/v1/subscriptions/${id}`,
+    })),
+    ...objects.customers.map((id) => ({ id, kind: "customer" as const, path: `/v1/customers/${id}` })),
+  ];
+  for (const request of requests) {
+    if (!STRIPE_IDS[request.kind].test(request.id)) {
+      throw new TypeError(`not a Stripe ${request.kind} id: ${request.id}`);
+    }
+  }
+  const failures: string[] = [];
+  for (const request of requests) {
+    try {
+      const answer = await requestStripe(secretKey, { method: "DELETE", path: request.path }, fetchImpl);
+      const removed =
+        request.kind === "subscription"
+          ? answer["id"] === request.id &&
+            typeof answer["status"] === "string" &&
+            ENDED_SUBSCRIPTION_STATUSES.has(answer["status"])
+          : answer["id"] === request.id && answer["deleted"] === true;
+      if (!removed) {
+        throw new Error(`Stripe's answer to DELETE ${request.path} is not that ${request.kind} removed`);
+      }
+    } catch (error) {
+      failures.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  if (failures.length > 0) {
+    throw new Error(`Stripe test objects left behind:\n  - ${failures.join("\n  - ")}`);
   }
 }
 

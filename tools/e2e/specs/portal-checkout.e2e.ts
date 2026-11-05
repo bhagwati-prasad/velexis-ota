@@ -22,8 +22,12 @@
 // public plan `e2epaid_<random>` with `adminCreatePlan` and links it to that product and price with `adminUpdatePlan`
 // (`If-Match`; the API compares the price with the plan at Stripe and finds no difference). The plan has no free trial,
 // so Checkout charges the card at once. The owner is a verified account signed in through the platform API. No
-// velexis_migrator fixture. `afterAll` archives the product and the price in Stripe (`archiveStripeTestObjects`), also
-// after a failed arrangement; the stack's database, with the plan, goes with the stack.
+// velexis_migrator fixture. `afterAll` removes from Stripe's test account what the run made there, also after a failed
+// step or arrangement, and nothing else (lead decision 7(c) of 2026-11-05, FIX-W44-PLATFORM): first what the owner's
+// Checkout made, the subscription to the journey's price (cancelled) and the OTA's Stripe Customer (deleted), found by
+// the price, the owner's e-mail address (new in the run) and the `metadata.velexis_tenant_id` of the owner's OTAs
+// (`findCheckoutTestObjects`, `removeCheckoutTestObjects`), then the price and the product (archived,
+// `archiveStripeTestObjects`). The stack's database, with the plan, goes with the stack.
 //
 // Card data is Stripe's documented test number only (STRIPE_TEST_CARDS of support/stripe.ts), typed into Stripe's own
 // page as an owner would. Every page of the portal the journey visits passes axe once its title is in place; Stripe's
@@ -52,6 +56,8 @@ import {
   archiveStripeTestObjects,
   createMonthlyTestPrice,
   createTestProduct,
+  findCheckoutTestObjects,
+  removeCheckoutTestObjects,
   STRIPE_TEST_CARDS,
   testCardExpiry,
 } from "../support/stripe";
@@ -66,8 +72,12 @@ type Schemas = components["schemas"];
  */
 const ARRANGE_BUDGET_MS = 120_000;
 
-/** The budget of `afterAll`: archiving the price and the product, one call to Stripe's API each (at most 15 s). */
-const CLEAN_UP_BUDGET_MS = 45_000;
+/**
+ * The budget of `afterAll` (a hook): the owner's OTAs from the platform API, then six calls to Stripe's API for a run's
+ * one subscription and one Customer (at most 15 s each): the subscriptions of the price, the owner's Customers,
+ * cancelling the subscription, deleting the Customer, and archiving the price and the product.
+ */
+const CLEAN_UP_BUDGET_MS = 120_000;
 
 /**
  * How long a step waits for Stripe: its hosted pages to load and answer, its webhook to reach the platform, and the
@@ -101,8 +111,74 @@ function stripeSecretKey(): string {
   return key;
 }
 
-/** What the journey made in Stripe's test account, as soon as Stripe answered each: `afterAll` archives it. */
-const madeInStripe: { productId?: string; priceId?: string } = {};
+/**
+ * What the journey made in Stripe's test account, as soon as Stripe answered each, and the owner whose Checkout makes a
+ * subscription and a Customer there once the OTA exists: `afterAll` removes all of it.
+ */
+const madeInStripe: {
+  productId?: string;
+  priceId?: string;
+  checkoutBy?: { readonly account: PortalAccount; readonly accessToken: string };
+} = {};
+
+/**
+ * The ids of the OTAs of the Checkout's owner, an account new in the run (`listTenants`): the OTA the wizard created,
+ * also when a step failed before it knew the id.
+ */
+async function otaIdsOf(owner: {
+  readonly account: PortalAccount;
+  readonly accessToken: string;
+}): Promise<string[]> {
+  const memberships = await callPlatformApi<Schemas["TenantList"]>({
+    operation: "listTenants",
+    method: "GET",
+    path: "/v1/tenants",
+    endUserIp: owner.account.endUserIp,
+    accessToken: owner.accessToken,
+  });
+  return memberships.data.map((membership) => membership.id);
+}
+
+/**
+ * Removes from Stripe's test account what the run made there (see the file header): the Checkout's subscription and
+ * Customer first, then the price and the product. Each part is tried even when the other fails; then one error names
+ * every failure (the helpers name requests and Stripe's statuses only).
+ */
+async function removeFromStripe(): Promise<void> {
+  const { productId, priceId, checkoutBy } = madeInStripe;
+  if (productId === undefined && priceId === undefined) {
+    // No price, so no Checkout either: nothing of the run is in Stripe.
+    return;
+  }
+  const key = stripeSecretKey();
+  const failures: string[] = [];
+  const attempt = async (part: string, work: () => Promise<void>): Promise<void> => {
+    try {
+      await work();
+    } catch (error) {
+      failures.push(`${part}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+  if (priceId !== undefined && checkoutBy !== undefined) {
+    await attempt("the Checkout's subscription and Customer", async () => {
+      const made = await findCheckoutTestObjects(key, {
+        priceId,
+        email: checkoutBy.account.email,
+        tenantIds: await otaIdsOf(checkoutBy),
+      });
+      await removeCheckoutTestObjects(key, made);
+    });
+  }
+  await attempt("the price and the product", () =>
+    archiveStripeTestObjects(key, {
+      prices: priceId === undefined ? [] : [priceId],
+      products: productId === undefined ? [] : [productId],
+    }),
+  );
+  if (failures.length > 0) {
+    throw new Error(`portal-checkout.e2e.ts left Stripe test objects behind:\n${failures.join("\n")}`);
+  }
+}
 
 /** The journey's plan: its code and name, and the Stripe product and monthly price it is linked to. */
 interface PaidPlan {
@@ -249,6 +325,7 @@ test.describe(
 
       owner = await createVerifiedAccount(buildAccount({ fullName: "Chris Checkout" }));
       session = await signInWithApi(owner);
+      madeInStripe.checkoutBy = { account: owner, accessToken: session.accessToken };
       const me = await callPlatformApi<Schemas["Account"]>({
         operation: "getMe",
         method: "GET",
@@ -269,17 +346,11 @@ test.describe(
       page = await context.newPage();
     });
 
-    // Also after a failed arrangement: whatever Stripe made of the product and the price is archived again.
+    // Also after a failed step or arrangement: the Checkout's subscription and Customer, the price and the product.
     test.afterAll(async () => {
       test.setTimeout(CLEAN_UP_BUDGET_MS);
       await context?.close();
-      const { productId, priceId } = madeInStripe;
-      if (productId !== undefined || priceId !== undefined) {
-        await archiveStripeTestObjects(stripeSecretKey(), {
-          prices: priceId === undefined ? [] : [priceId],
-          products: productId === undefined ? [] : [productId],
-        });
-      }
+      await removeFromStripe();
     });
 
     test("the owner chooses the paid plan in the wizard and goes to Stripe Checkout [PFE-027 AC1]", async () => {

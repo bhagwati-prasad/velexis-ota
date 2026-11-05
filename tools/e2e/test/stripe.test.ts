@@ -1,7 +1,8 @@
 // support/stripe.ts (OFE-017): the Stripe CLI forwarders against a stand-in `stripe` (no network, no key), the
 // redaction of their output, the PaymentIntent read against a fake fetch, and the test-card guards; since FIX-W43-SHARED
 // (lead decision 5(l) of 2026-11-05) the billing forwarder's events and the Stripe test objects of PFE-027's Checkout
-// journey, against a fake fetch.
+// journey, against a fake fetch, and since FIX-W44-PLATFORM (lead decision 7(c) of 2026-11-05) the subscription and
+// Customer that journey's Checkout made, found and removed against a fake fetch.
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,10 +16,12 @@ import {
   createMonthlyTestPrice,
   createTestProduct,
   fillCardForm,
+  findCheckoutTestObjects,
   isReadyLine,
   OTA_STRIPE_EVENTS,
   OTA_WEBHOOK_PATH,
   redactStripeOutput,
+  removeCheckoutTestObjects,
   retrievePaymentIntent,
   startStripeForwarder,
   STRIPE_TEST_CARDS,
@@ -410,6 +413,168 @@ describe("the Stripe test objects of a journey (FIX-W43-SHARED)", () => {
     await expect(
       archiveStripeTestObjects(LIVE_KEY, { prices: ["price_1Ok"], products: [] }, untouched.fetchImpl),
     ).rejects.toThrow(/Stripe test objects left active:[\s\S]*test-mode key/);
+    expect(untouched.calls).toEqual([]);
+  });
+
+  // What the journey's Checkout made (lead decision 7(c) of 2026-11-05).
+  const OTA = "ten_01JF44PXATF0RMCHECK00T0001";
+  const OTHER_OTA = "ten_01JF44PXATF0RMS0ME0NE00002";
+  const OWNER = "account+4f0c2b1e-7d3a-4e5f-9a1b-2c3d4e5f6a7b@example.com";
+  const scope = { priceId: "price_1Fix44", email: OWNER, tenantIds: [OTA] } as const;
+  /** A list answer of Stripe's, `{object: "list", data, has_more}`. */
+  const list = (data: unknown[]) => ({ status: 200, body: { object: "list", data, has_more: false } });
+
+  it("[FIX-W44-PLATFORM AC1] finds only the subscription to the journey's price and the Customer of its owner's OTA", async () => {
+    const stripe = fakeStripe((url) =>
+      new URL(url).pathname === "/v1/subscriptions"
+        ? list([
+            { id: "sub_1Own", status: "active", metadata: { velexis_tenant_id: OTA } },
+            { id: "sub_1Pending", status: "incomplete", metadata: { velexis_tenant_id: OTA } },
+            { id: "sub_1Ended", status: "canceled", metadata: { velexis_tenant_id: OTA } },
+            { id: "sub_1Expired", status: "incomplete_expired", metadata: { velexis_tenant_id: OTA } },
+            { id: "sub_1Foreign", status: "active", metadata: { velexis_tenant_id: OTHER_OTA } },
+            { id: "sub_1NoMetadata", status: "active", metadata: {} },
+            { id: "cus_NotASubscription", status: "active", metadata: { velexis_tenant_id: OTA } },
+          ])
+        : list([
+            { id: "cus_Own", email: OWNER, metadata: { velexis_tenant_id: OTA } },
+            { id: "cus_ForeignOta", email: OWNER, metadata: { velexis_tenant_id: OTHER_OTA } },
+            { id: "cus_OtherEmail", email: OWNER.toUpperCase(), metadata: { velexis_tenant_id: OTA } },
+            { id: "cus_NoMetadata", email: OWNER },
+          ]),
+    );
+    await expect(findCheckoutTestObjects(TEST_KEY, scope, stripe.fetchImpl)).resolves.toEqual({
+      subscriptions: ["sub_1Own", "sub_1Pending"],
+      customers: ["cus_Own"],
+    });
+    // Two reads with the test key alone: the subscriptions of the journey's price in every status, and the Customers
+    // with the owner's address.
+    const requests = stripe.calls.map((call) => {
+      const url = new URL(call.url);
+      return [call.init.method, url.origin + url.pathname, Object.fromEntries(url.searchParams)];
+    });
+    expect(requests).toEqual([
+      [
+        "GET",
+        "https://api.stripe.com/v1/subscriptions",
+        { price: "price_1Fix44", status: "all", limit: "100" },
+      ],
+      ["GET", "https://api.stripe.com/v1/customers", { email: OWNER, limit: "100" }],
+    ]);
+    for (const call of stripe.calls) {
+      expect(call.init.headers).toEqual({ Authorization: `Bearer ${TEST_KEY}` });
+      expect(call.init.body).toBeUndefined();
+    }
+  });
+
+  it("[FIX-W44-PLATFORM AC1] refuses a live key, a foreign id or address before any request, and looks up nothing without an OTA", async () => {
+    const untouched = fakeStripe(() => list([]));
+    await expect(findCheckoutTestObjects(LIVE_KEY, scope, untouched.fetchImpl)).rejects.toThrow(
+      /test-mode key/,
+    );
+    await expect(
+      findCheckoutTestObjects(TEST_KEY, { ...scope, priceId: "price_1&status=active" }, untouched.fetchImpl),
+    ).rejects.toThrow(/not a Stripe price id/);
+    await expect(
+      findCheckoutTestObjects(TEST_KEY, { ...scope, email: "owner" }, untouched.fetchImpl),
+    ).rejects.toThrow(/e-mail address/);
+    await expect(
+      findCheckoutTestObjects(TEST_KEY, { ...scope, tenantIds: [OTA, "ten_x' OR '1"] }, untouched.fetchImpl),
+    ).rejects.toThrow(/not an OTA id/);
+    await expect(
+      findCheckoutTestObjects(TEST_KEY, { ...scope, tenantIds: [] }, untouched.fetchImpl),
+    ).resolves.toEqual({ subscriptions: [], customers: [] });
+    expect(untouched.calls).toEqual([]);
+  });
+
+  it("[FIX-W44-PLATFORM AC1] names the read Stripe refused by its path and status, never the key, the address or the body", async () => {
+    const refused = fakeStripe((url) =>
+      new URL(url).pathname === "/v1/customers"
+        ? { status: 401, body: { error: { message: `Invalid API Key provided: ${TEST_KEY} for ${OWNER}` } } }
+        : list([]),
+    );
+    const failure = await findCheckoutTestObjects(TEST_KEY, scope, refused.fetchImpl).catch(String);
+    expect(failure).toBe("Error: Stripe answered 401 to GET /v1/customers");
+    // An answer without a list finds nothing to remove: it fails instead.
+    const notAList = fakeStripe(() => ({ status: 200, body: { object: "subscription", id: "sub_1Own" } }));
+    await expect(findCheckoutTestObjects(TEST_KEY, scope, notAList.fetchImpl)).rejects.toThrow(
+      "Stripe's answer to GET /v1/subscriptions is not a list",
+    );
+    // An answer that is not JSON fails without the parser's quote of the body.
+    const notJson: StripeFetch = () =>
+      Promise.resolve(new Response(`<html>${TEST_KEY} ${OWNER}</html>`, { status: 200 }));
+    const unparsed = await findCheckoutTestObjects(TEST_KEY, scope, notJson).catch(String);
+    expect(unparsed).toBe("Error: Stripe's answer to GET /v1/subscriptions is not JSON");
+  });
+
+  it("[FIX-W44-PLATFORM AC1] cancels the subscriptions, then deletes the Customers", async () => {
+    const stripe = fakeStripe((url) => {
+      const id = url.split("/").at(-1);
+      return {
+        status: 200,
+        body: url.includes("/v1/subscriptions/")
+          ? // An `incomplete` subscription (its first payment never went through) can end as `incomplete_expired`.
+            { id, object: "subscription", status: id === "sub_1Pending" ? "incomplete_expired" : "canceled" }
+          : { id, object: "customer", deleted: true },
+      };
+    });
+    await removeCheckoutTestObjects(
+      TEST_KEY,
+      { subscriptions: ["sub_1Own", "sub_1Pending"], customers: ["cus_Own"] },
+      stripe.fetchImpl,
+    );
+    expect(stripe.calls.map((call) => [call.init.method, call.url])).toEqual([
+      ["DELETE", "https://api.stripe.com/v1/subscriptions/sub_1Own"],
+      ["DELETE", "https://api.stripe.com/v1/subscriptions/sub_1Pending"],
+      ["DELETE", "https://api.stripe.com/v1/customers/cus_Own"],
+    ]);
+    for (const call of stripe.calls) {
+      expect(call.init.headers).toEqual({ Authorization: `Bearer ${TEST_KEY}` });
+      expect(call.init.body).toBeUndefined();
+    }
+  });
+
+  it("[FIX-W44-PLATFORM AC1] tries every object when one is refused or not removed, then names each, never the key or the body", async () => {
+    const stripe = fakeStripe((url, n) => {
+      const id = url.split("/").at(-1);
+      if (n === 1) {
+        return { status: 404, body: { error: { message: `No such subscription; key ${TEST_KEY}` } } };
+      }
+      return n === 2
+        ? { status: 200, body: { id, object: "subscription", status: "active" } }
+        : { status: 200, body: { id, object: "customer", deleted: true } };
+    });
+    const failure = await removeCheckoutTestObjects(
+      TEST_KEY,
+      { subscriptions: ["sub_1Gone", "sub_1Stays"], customers: ["cus_Own"] },
+      stripe.fetchImpl,
+    ).catch(String);
+    expect(stripe.calls).toHaveLength(3);
+    expect(failure).toBe(
+      "Error: Stripe test objects left behind:\n" +
+        "  - Stripe answered 404 to DELETE /v1/subscriptions/sub_1Gone\n" +
+        "  - Stripe's answer to DELETE /v1/subscriptions/sub_1Stays is not that subscription removed",
+    );
+    expect(failure).not.toContain(TEST_KEY);
+    // Every id is checked before the first request, and a live key is refused.
+    const untouched = fakeStripe(() => ({ status: 200, body: {} }));
+    await expect(
+      removeCheckoutTestObjects(
+        TEST_KEY,
+        { subscriptions: ["sub_1Ok"], customers: ["cus_1/../../products"] },
+        untouched.fetchImpl,
+      ),
+    ).rejects.toThrow(/not a Stripe customer id/);
+    await expect(
+      removeCheckoutTestObjects(
+        TEST_KEY,
+        { subscriptions: ["price_1Fix44"], customers: [] },
+        untouched.fetchImpl,
+      ),
+    ).rejects.toThrow(/not a Stripe subscription id/);
+    await expect(
+      removeCheckoutTestObjects(LIVE_KEY, { subscriptions: [], customers: ["cus_Own"] }, untouched.fetchImpl),
+    ).rejects.toThrow(/Stripe test objects left behind:[\s\S]*test-mode key/);
     expect(untouched.calls).toEqual([]);
   });
 });
