@@ -188,8 +188,15 @@ function sentOrigins(formData: FormData): SentOrigins {
   return { origins, rows };
 }
 
-/** The portal's checks of the origins (PADR-0005 item 5): each origin, duplicates, and the count. */
+/**
+ * The portal's checks of the origins (PADR-0005 item 5): the count first, then each origin and duplicates. A list
+ * over the API's `maxItems` of 20 is refused with that one message before any row is checked (FIX-W45-PLATFORM, lead
+ * decision (9c), as every list a portal action parses: README "Zod"), so no row of an oversized list is looked at.
+ */
 function originErrors(sent: SentOrigins, environment: OriginEnvironment): KeyFieldErrors {
+  if (sent.origins.length > MAX_ALLOWED_ORIGINS) {
+    return { allowedOrigins: API_KEYS_STRINGS.originsTooMany };
+  }
   const origins: Record<string, string> = {};
   const seen = new Set<string>();
   sent.origins.forEach((origin, index) => {
@@ -202,10 +209,7 @@ function originErrors(sent: SentOrigins, environment: OriginEnvironment): KeyFie
     }
     seen.add(origin);
   });
-  return {
-    ...(sent.origins.length > MAX_ALLOWED_ORIGINS ? { allowedOrigins: API_KEYS_STRINGS.originsTooMany } : {}),
-    ...(Object.keys(origins).length > 0 ? { origins } : {}),
-  };
+  return Object.keys(origins).length > 0 ? { origins } : {};
 }
 
 function hasErrors(errors: KeyFieldErrors): boolean {

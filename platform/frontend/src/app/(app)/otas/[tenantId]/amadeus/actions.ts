@@ -112,6 +112,11 @@ const UP_TO_THREE_DIGITS = /^[0-9]{1,3}$/;
 const QUEUE_ID_MAX = 99;
 const CATEGORY_MAX = 254;
 const MONITORED_QUEUES_MAX = 20;
+/**
+ * `AmadeusTicketingDefaults.automatedProcess`: at most 31 entries, the `maxItems` of the platform document and of
+ * Amadeus's own Flight Create Orders (`FlightOrder.automatedProcess`; FIX-W45-PLATFORM, lead decision (9b)).
+ */
+const AUTOMATED_PROCESS_MAX = 31;
 /** `AmadeusAutomatedProcessDefault.text`: at most 200 characters (code points, as JSON Schema counts them). */
 const TEXT_MAX = 200;
 /** A connection version as the form carries it (`AmadeusConnection.version`, at least 1). */
@@ -193,8 +198,9 @@ const SETTINGS_FORM = z
     issue: z
       .string()
       .refine((value) => value === "" || value === "true" || value === "false", PROBLEMS.issue),
-    // The document sets no `maxItems` for `automatedProcess`, so neither does the form (Next.js caps the body at 1 MB).
-    automatedProcess: z.array(AUTOMATED_PROCESS),
+    // `maxItems: 31` of the document, Amadeus's own limit. Zod checks the bound before any row, so an oversized list is
+    // refused with this one message: its rows and the form's rules below (`superRefine`) are not checked then.
+    automatedProcess: z.array(AUTOMATED_PROCESS).max(AUTOMATED_PROCESS_MAX, PROBLEMS.tooManyAutomated),
     // `maxItems: 20` of the document. Zod checks the bound before any row, so an oversized list is refused with this
     // one message: its rows and the form's rules below (`superRefine`) are not checked then.
     monitoredQueues: z.array(MONITORED_QUEUE).max(MONITORED_QUEUES_MAX, PROBLEMS.tooManyQueues),
@@ -408,6 +414,9 @@ function apiProblem(
   const field = Object.hasOwn(API_FIELDS, path) ? API_FIELDS[path] : undefined;
   if (field !== undefined) {
     return field;
+  }
+  if (path === "/ticketingDefaults/automatedProcess") {
+    return ["automatedProcess", code === "maxItems" ? PROBLEMS.tooManyAutomated : PROBLEMS.rules];
   }
   if (path === "/monitoredQueues") {
     return [

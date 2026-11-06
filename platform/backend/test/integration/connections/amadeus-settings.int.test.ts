@@ -443,6 +443,29 @@ describe("updateAmadeusConnection", () => {
     await expectNothingWritten(f);
   });
 
+  it("[FIX-W45-PLATFORM AC2] takes 31 automated processes, Amadeus's limit, and refuses 32 well-formed ones at the list with VALIDATION_FAILED", async () => {
+    const f = await fixture();
+    const entry = { code: "IMMEDIATE", queue: { number: "8", category: "0" }, officeId: PARIS };
+    const defaults = (count: number) => ({ automatedProcess: Array.from({ length: count }, () => entry) });
+
+    const refused = await update(f, "owner", `"${f.connection.version}"`, {
+      ticketingDefaults: defaults(32),
+    });
+    expect([refused.status, errorOf(refused).code]).toEqual([400, "VALIDATION_FAILED"]);
+    // Only the count: every entry follows the rules, so no entry has an error of its own.
+    expect(errorOf(refused).fieldErrors?.map((error) => [error.path, error.code])).toEqual([
+      ["/ticketingDefaults/automatedProcess", "maxItems"],
+    ]);
+    expectResponseToMatch("updateAmadeusConnection", refused, { document: "platform" });
+    await expectNothingWritten(f);
+
+    const saved = await update(f, "owner", `"${f.connection.version}"`, { ticketingDefaults: defaults(31) });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    expectResponseToMatch("updateAmadeusConnection", saved, { document: "platform" });
+    expect((saved.body as { ticketingDefaults: unknown }).ticketingDefaults).toEqual(defaults(31));
+    expect((await connectionRow(f.connection.id)).ticketing_defaults).toEqual(defaults(31));
+  });
+
   it("[PBE-040 AC1] answers 412 PRECONDITION_FAILED for a stale If-Match and writes nothing", async () => {
     const f = await fixture();
     for (const ifMatch of [`"${f.connection.version + 1}"`, `"${f.connection.version + 5}"`, '"0"']) {

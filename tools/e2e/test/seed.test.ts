@@ -1,7 +1,9 @@
 // The arrangements of the platform admin's M5 journeys in support/seed.ts (PAD-015) without a stack: `pg` is a fake
 // client that records its queries and answers from a script, and the platform API caller of `moveOtaToNewPlan` is a
 // fake too. The journeys run them against the real database and API (specs/admin-settlements.e2e.ts,
-// admin-live-office.e2e.ts, admin-domains.e2e.ts, admin-amadeus-pool.e2e.ts); these tests pin what they send.
+// admin-live-office.e2e.ts, admin-domains.e2e.ts, admin-amadeus-pool.e2e.ts); these tests pin what they send. So do
+// the tests of the arrangements the specs once wrote themselves (FIX-W45-PLATFORM: admin-step-up.e2e.ts,
+// ota-admin/roles.e2e.ts and ota-admin/live-environment.e2e.ts), with the role each is written as.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiCall } from "../support/fixtures";
 import {
@@ -10,10 +12,14 @@ import {
   applyOwnLiveCredentials,
   holdVelexisLivePool,
   insertDraftSettlement,
+  insertQueuedProvisioningJob,
   moveOtaToNewPlan,
   restoreVelexisLivePool,
+  setTenantBillingNotice,
+  setTenantLive,
   VELEXIS_LIVE_POOL_LOCK,
   type DraftSettlementInput,
+  type QueuedProvisioningJobInput,
 } from "../support/seed";
 import { AMADEUS_STUB_URL } from "../support/stack";
 import type { SignedInOwner } from "../support/tenants";
@@ -414,6 +420,98 @@ describe("ageAdminMfa", () => {
     script.answer = () => ({ rowCount: 0 });
     await expect(ageAdminMfa("nobody@example.com", 30)).rejects.toThrow(
       "nobody@example.com has no open platform admin session with a TOTP verification",
+    );
+  });
+});
+
+describe("insertQueuedProvisioningJob", () => {
+  const input: QueuedProvisioningJobInput = {
+    id: "job_01JC7T1V5X9Z3B7D1F5H9K3N7Q",
+    tenantId: "ten_1",
+    kind: "migrate",
+    attempt: 1,
+    dueInSeconds: 86_400,
+    error: "ATTEMPT_LOST: the attempt's message was lost",
+  };
+
+  it("writes a queued job at its dispatch step with the lost attempt, due after its backoff, as the platform API's own role [FIX-W45-PLATFORM AC4]", async () => {
+    script.answer = () => ({ rowCount: 1 });
+    await insertQueuedProvisioningJob(input);
+    expect(clients).toHaveLength(1);
+    expect(clients[0]?.connectionString).toContain("velexis_platform_app");
+    expect(clients[0]?.ended).toBe(true);
+    const sql = statements();
+    expect(sql).toHaveLength(1);
+    expect(sql[0]).toMatch(
+      /^INSERT INTO platform\.provisioning_jobs \(id, tenant_id, kind, status, step, payload, attempt, scheduled_at, started_at, error\) VALUES \(\$1, \$2, \$3, 'queued', 'dispatch', '\{\}'::jsonb, \$4, now\(\) \+ make_interval\(secs => \$5::int\), now\(\), \$6\)$/,
+    );
+    expect(clients[0]?.queries[0]?.values).toEqual([
+      input.id,
+      "ten_1",
+      "migrate",
+      1,
+      86_400,
+      "ATTEMPT_LOST: the attempt's message was lost",
+    ]);
+  });
+
+  it("refuses an attempt below 1 and a backoff that is not whole seconds, without a connection [FIX-W45-PLATFORM AC4]", async () => {
+    await expect(insertQueuedProvisioningJob({ ...input, attempt: 0 })).rejects.toThrow(
+      "not an attempt number: 0",
+    );
+    await expect(insertQueuedProvisioningJob({ ...input, dueInSeconds: 0.5 })).rejects.toThrow(
+      "not a backoff in whole seconds: 0.5",
+    );
+    expect(clients).toHaveLength(0);
+  });
+});
+
+describe("setTenantLive", () => {
+  it("makes the active test OTA live with the next version, as velexis_migrator [FIX-W45-PLATFORM AC4]", async () => {
+    script.answer = () => ({ rowCount: 1 });
+    await setTenantLive("ten_1");
+    expect(clients).toHaveLength(1);
+    expect(clients[0]?.connectionString).toContain("velexis_migrator");
+    expect(clients[0]?.ended).toBe(true);
+    expect(statements()).toEqual([
+      "UPDATE platform.tenants SET storefront_environment = 'live', live_enabled_at = now(), version = version + 1, " +
+        "updated_at = now() WHERE id = $1 AND status = 'active' AND storefront_environment = 'test'",
+    ]);
+    expect(clients[0]?.queries[0]?.values).toEqual(["ten_1"]);
+  });
+
+  it("fails when no active test OTA was changed [FIX-W45-PLATFORM AC4]", async () => {
+    script.answer = () => ({ rowCount: 0 });
+    await expect(setTenantLive("ten_1")).rejects.toThrow("the OTA ten_1 is not an active test OTA");
+    expect(clients[0]?.ended).toBe(true);
+  });
+});
+
+describe("setTenantBillingNotice", () => {
+  it("sets or clears the active OTA's billing notice with the next version, as velexis_migrator [FIX-W45-PLATFORM AC4]", async () => {
+    script.answer = () => ({ rowCount: 1 });
+    await setTenantBillingNotice("ten_1", "past_due");
+    await setTenantBillingNotice("ten_1", null);
+    expect(clients.map((client) => client.connectionString.includes("velexis_migrator"))).toEqual([
+      true,
+      true,
+    ]);
+    expect(statements()).toEqual([
+      "UPDATE platform.tenants SET billing_notice = $2, version = version + 1, updated_at = now() " +
+        "WHERE id = $1 AND status = 'active'",
+      "UPDATE platform.tenants SET billing_notice = $2, version = version + 1, updated_at = now() " +
+        "WHERE id = $1 AND status = 'active'",
+    ]);
+    expect(clients.map((client) => client.queries[0]?.values)).toEqual([
+      ["ten_1", "past_due"],
+      ["ten_1", null],
+    ]);
+  });
+
+  it("fails when the OTA is not active [FIX-W45-PLATFORM AC4]", async () => {
+    script.answer = () => ({ rowCount: 0 });
+    await expect(setTenantBillingNotice("ten_1", "trial_ending")).rejects.toThrow(
+      "the OTA ten_1 is not an active OTA",
     );
   });
 });

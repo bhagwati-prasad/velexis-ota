@@ -1069,6 +1069,67 @@ describe("/otas/[tenantId]/api-keys: creating a key", () => {
     }
   });
 
+  it("[FIX-W45-PLATFORM AC3] refuses more than 20 origins by their count alone, before any row is checked, without a call", async () => {
+    // Every row would be refused on its own (a wildcard, a path), and the list repeats them.
+    const malformed = Array.from({ length: MAX_ALLOWED_ORIGINS + 1 }, (_, index) =>
+      index % 2 === 0 ? "https://*.acme-travel.example.com" : "https://www.acme-travel.example.com/book",
+    );
+    for (const origin of malformed) {
+      expect(originProblem(origin, "test")).toBeDefined();
+    }
+    const created = await createKey(
+      { status: "idle", fieldErrors: {} },
+      formData({
+        tenantId: TENANT_ID,
+        environment: "test",
+        name: "Website",
+        kind: "publishable",
+        allowedOrigins: malformed,
+      }),
+    );
+    expect(created).toEqual({
+      status: "failed",
+      code: "VALIDATION_FAILED",
+      fieldErrors: { allowedOrigins: API_KEYS_STRINGS.originsTooMany },
+    });
+    const updated = await updateKey(
+      { status: "idle", fieldErrors: {} },
+      formData({
+        tenantId: TENANT_ID,
+        keyId: NEW_KEY_ID,
+        kind: "publishable",
+        environment: "test",
+        name: "Website",
+        allowedOrigins: malformed,
+      }),
+    );
+    expect(updated).toEqual({
+      status: "failed",
+      code: "VALIDATION_FAILED",
+      fieldErrors: { allowedOrigins: API_KEYS_STRINGS.originsTooMany },
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // At the bound the rows are checked as before: each at its row, and no count message.
+    const atBound = await createKey(
+      { status: "idle", fieldErrors: {} },
+      formData({
+        tenantId: TENANT_ID,
+        environment: "test",
+        name: "Website",
+        kind: "publishable",
+        allowedOrigins: malformed.slice(0, MAX_ALLOWED_ORIGINS),
+      }),
+    );
+    expect(atBound.fieldErrors.allowedOrigins).toBeUndefined();
+    expect(atBound.fieldErrors.origins).toMatchObject({
+      "0": API_KEYS_STRINGS.originWildcard,
+      "1": API_KEYS_STRINGS.originInvalid,
+    });
+    expect(Object.keys(atBound.fieldErrors.origins ?? {})).toHaveLength(MAX_ALLOWED_ORIGINS);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("checks the name and the origins before any call, at their rows", async () => {
     await openPage();
     fireEvent.click(inCreate(API_KEYS_STRINGS.kindPublishable));

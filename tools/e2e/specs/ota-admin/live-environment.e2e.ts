@@ -68,7 +68,7 @@ import {
   type OwnedOta,
   type SeededBooking,
 } from "../../support/ota";
-import { buildAccount, stack, withDatabase } from "../../support/seed";
+import { buildAccount, setTenantBillingNotice, setTenantLive, stack } from "../../support/seed";
 import { OTA_ADMIN_URL, PORTAL_URL } from "../../support/stack";
 
 test.describe.configure({ mode: "serial" });
@@ -162,39 +162,22 @@ async function addMember(role: MemberRole, fullName: string): Promise<Member> {
 }
 
 /**
- * Runs `update`, an `UPDATE platform.tenants … WHERE id = $1 …` with `values` as `$2` on, as velexis_migrator, then
- * publishes the platform's `tenant` invalidation of `tenantId`, as the platform does after its commit (the OTA API reads
- * the row again at once instead of after the 60 s of its cache). Throws unless it wrote exactly one row.
+ * Makes the OTA live (`storefront_environment = live`), as the platform's go-live of M5 will (see roles.e2e.ts): its
+ * platform row as velexis_migrator (`setTenantLive` of support/seed.ts), then the platform's `tenant` invalidation, as
+ * the platform publishes after its commit (the OTA API reads the row again at once instead of after its 60 s cache).
  */
-async function updatePlatformTenant(tenantId: string, update: string, values: readonly unknown[] = []) {
-  await withDatabase("migrator", async (client) => {
-    const { rowCount } = await client.query(update, [tenantId, ...values]);
-    if (rowCount !== 1) {
-      throw new Error(`the OTA ${tenantId} is not an active OTA in the state the journey expects`);
-    }
-  });
+async function goLive(tenantId: string): Promise<void> {
+  await setTenantLive(tenantId);
   await publishTenantInvalidation(tenantId);
 }
 
-/** Makes the OTA live (`storefront_environment = live`), as the platform's go-live of M5 will (see roles.e2e.ts). */
-async function goLive(tenantId: string): Promise<void> {
-  await updatePlatformTenant(
-    tenantId,
-    `UPDATE platform.tenants
-        SET storefront_environment = 'live', live_enabled_at = now(), version = version + 1, updated_at = now()
-      WHERE id = $1 AND status = 'active' AND storefront_environment = 'test'`,
-  );
-}
-
-/** Sets the OTA's billing notice (`past_due`, `trial_ending`, `null`) as the platform's billing sync does. */
+/**
+ * Sets the OTA's billing notice (`past_due`, `trial_ending`, `null`) as the platform's billing sync does
+ * (`setTenantBillingNotice` of support/seed.ts, as velexis_migrator), then the platform's `tenant` invalidation.
+ */
 async function setBillingNotice(tenantId: string, notice: "past_due" | "trial_ending" | null): Promise<void> {
-  await updatePlatformTenant(
-    tenantId,
-    `UPDATE platform.tenants
-        SET billing_notice = $2, version = version + 1, updated_at = now()
-      WHERE id = $1 AND status = 'active'`,
-    [notice],
-  );
+  await setTenantBillingNotice(tenantId, notice);
+  await publishTenantInvalidation(tenantId);
 }
 
 /**

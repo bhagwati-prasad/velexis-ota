@@ -10,10 +10,10 @@ Related: [`implementation-plan.md`](implementation-plan.md), [`agent-tasks.md`](
 |---|---|
 | People | One developer, no agents, five working days a week |
 | Effort per task size | S = ½ day, M = 1 day, L = 2 days, including tests, docs and self-review against the definition of done |
-| Platform work | 110 tasks = 138 days (M0 2.5, M1 79, M2 1.5, M3 1.5, M4 4, M5 42, M6 7.5, of which PBE-064's 1 day falls after the launch) |
-| Buffer | 10 days inside platform weeks (Weeks 1, 17, 29, 31) |
+| Platform work | 118 tasks = 147.5 days (M0 2.5, M1 79, M2 1.5, M3 1.5, M4 4, M5 42, M6 17, of which PBE-064's 1 day falls after the launch; M6's 17 days are the first plan's 7.5 and the security review's follow-ups, 9.5 days, in Weeks 30a and 30b since 2026-11-06, §4) |
+| Buffer | 10.5 days inside platform weeks (Weeks 1, 17, 29, 30b, 31) |
 | Planning-review shift | The planning review split PBE-007 into PBE-007 and PBE-066 (2 more days) and resized PBE-035 from S to M (½ day more, taken from Week 12's buffer). Every task from PBE-008 in Week 3 to PAD-010 in Week 16 therefore starts two working days later than its week shows. Week 17's buffer drops from five to three days, and the M1 exit week does not move. |
-| Length | **31 platform weeks**, of which three (Weeks 18–20) are split weeks holding only 7.5 platform days |
+| Length | **33 platform weeks**: Weeks 1–31 and the follow-up Weeks 30a and 30b (added 2026-11-06, §4), of which three (Weeks 18–20) are split weeks holding only 7 platform days |
 | Start | Week 1 starts when the foundation tasks `X-001` to `X-016` are merged (the foundation's own weekly plan schedules them) |
 | Week numbers | Platform-plan weeks. The roadmap maps them to calendar weeks; between Weeks 17 and 21 it places several OTA-only weeks |
 
@@ -53,6 +53,8 @@ Related: [`implementation-plan.md`](implementation-plan.md), [`agent-tasks.md`](
 | 28 | M5 | Settlement UI, go-live | PFE-025, PAD-013, PBE-061, PFE-026 | Overlap with OTA M5 (live environment) |
 | 29 | M5 exit | M5 journeys, buffer | PFE-027, PAD-015 | OTA M5 must be done before switches go on |
 | 30 | M6 | Security review, performance, runbooks | PBE-062, PBE-063, PBE-065, PFE-028 (1/2) | **Overlap:** shared hardening (OTA M6, X-029 … X-032) |
+| 30a | M6 | Security review follow-ups: tokens, dependencies, zod | PBE-067, PBE-068, PBE-069, PFE-029, PAD-017, PBE-071 (1/2) | Shared hardening with OTA M6; PBE-069 needs OBE-094 (the root multer override) |
+| 30b | M6 | Security review follow-ups: MFA for live OTAs, test tooling | PBE-071 (2/2), PFE-030, PBE-070 | Shared hardening with OTA M6 (PBE-070 upgrades the test tooling of both groups) |
 | 31 | M6 exit | E2E suites, launch | PFE-028 (2/2), PAD-016 (PBE-064 runs after the launch) | Shared launch week |
 
 ```mermaid
@@ -70,7 +72,7 @@ timeline
   section Platform-led again
     Weeks 21-29 : M5 billing : domains : Amadeus : payments : settlements : go-live
   section Shared
-    Weeks 30-31 : M6 hardening and launch
+    Weeks 30-31 : M6 hardening (Week 30) : security review follow-ups (Weeks 30a and 30b) : launch (Week 31)
 ```
 
 ## 3. Weeks 1 and 2, day by day
@@ -302,6 +304,22 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 - **Demo:** the security review findings (each with a task id or "none") and the performance table against the VM budget.
 - **Overlap:** shared hardening with OTA M6 and the foundation tasks X-029 … X-032.
 
+*Note (2026-11-06, FIX-W45-PLATFORM, lead decision 9(a)).* The security review of Week 30 found work that the first plan did not hold: eight M6 tasks of 9.5 days in all, PBE-067 … PBE-071, PFE-029, PFE-030 and PAD-017 ([`implementation-plan.md`](implementation-plan.md#m6--hardening--launch), the M6 note of 2026-11-05). They take two weeks inserted after Week 30, numbered 30a and 30b so that Weeks 1–31 keep the numbers the roadmap's calendar and [ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 2 map (Week 31 stays the launch week). The roadmap's calendar ([`../../../docs/mvp/plans/roadmap.md`](../../../docs/mvp/plans/roadmap.md), C71–C76) does not place the two weeks yet: moving its M6 weeks is a re-baseline with a dated reason under ADR-0025 item 6, the owner's to make. The plan therefore holds 118 tasks of 147.5 days (M6 17) in 33 weeks, and the buffer grows by the ½ day left in Week 30b to 10.5 days (§1, §5). The same check corrected §1's split weeks from 7.5 to 7 platform days (Weeks 18–20 hold 1.5, 1.5 and 4). The order follows the findings: the medium token finding first, then the production dependency advisories, then the MFA rule with its portal gate, and the test tooling last, so that every suite already written runs on the new tooling before the launch week.
+
+### Week 30a — M6: security review follow-ups, tokens and dependencies (added 2026-11-06)
+
+- **Tasks:** PBE-067 (1 day), PBE-068 (½ day), PBE-069 (½ day), PFE-029 (1 day), PAD-017 (½ day), PBE-071 (first 1½ days).
+- **Deliverables:** the portal tokens of disabled and deleted accounts refused at once (F-1); nodemailer 10 in the platform backend (F-2); the multer override confirmed and no multipart route in the platform API (F-3); zod 4 in the portal and the platform admin, with every list a server action parses bounded before its items (F-4); the start of the MFA rule for the owners and admins of live OTAs ([PADR-0008](../adr/0008-email-verification-and-mfa-policy.md) revision of 2026-11-05).
+- **Demo:** a disabled owner's unexpired portal token answers `401 UNAUTHENTICATED`; `pnpm audit --prod` lists no high advisory.
+- **Overlap:** shared hardening with OTA M6; PBE-069 needs OBE-094 (the root `multer` override).
+
+### Week 30b — M6: security review follow-ups, MFA for live OTAs and the test tooling (added 2026-11-06)
+
+- **Tasks:** PBE-071 (last ½ day), PFE-030 (2 days), PBE-070 (2 days); ½ day of buffer.
+- **Deliverables:** `403 MFA_REQUIRED` for an owner or admin of a live OTA without MFA on every portal operation but the enrolment ones, and the portal's enrolment page before any other page; the test and contract tooling past its critical and high advisories (F-5), with every suite green on the new versions.
+- **Demo:** an admin of a live OTA without MFA signs in, sees only the enrolment page, enrols and reaches the page asked for; an agent of the same OTA is never asked.
+- **Overlap:** shared hardening with OTA M6 (PBE-070 upgrades the test tooling of both groups).
+
 ### Week 31 — M6 exit: suites, switch removal and launch
 
 - **Tasks:** PFE-028 (last ½ day), PAD-016 (1 day); 3½ days of buffer for launch. PBE-064 (1 day) is not in this week: the switches stay off until their outside approvals, so it runs after the launch, in the first release after all six have been on in production for one release ([ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 4).
@@ -313,7 +331,7 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 
 | Rule | Why |
 |---|---|
-| Buffer is 10 days: ½ day in Week 1, 3 days in Week 17 (after absorbing the two-day shift of Weeks 3–16), 3 days in Week 29, 3½ days in Week 31 | Placed at milestone exits, where integration surprises appear |
+| Buffer is 10.5 days: ½ day in Week 1, 3 days in Week 17 (after absorbing the two-day shift of Weeks 3–16), 3 days in Week 29, ½ day in Week 30b (since 2026-11-06), 3½ days in Week 31 | Placed at milestone exits, where integration surprises appear |
 | A task more than one day late moves the next task of the same epic, never a task of another epic that is on time | Keeps checkpoints demonstrable |
 | When a cross-group gate (OF-11, OF-01, OF-09, OF-12) is not met, do the next task without the gate and return to the gated one; never write a fake of the OTA side outside the test doubles of PADR-0017 | Keeps the platform moving without hiding integration risk |
 | If a week slips by more than two days, re-plan on Friday: move the lowest-value task of the milestone (for example a non-critical admin page) after the exit demo, never a test or a security step | The exit criteria stay honest |

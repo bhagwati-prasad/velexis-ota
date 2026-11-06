@@ -20,6 +20,20 @@
 //   await applyOwnLiveCredentials({ tenantId, … });    // the own-credentials apply: the Velexis live office releasing
 //   await ageAdminMfa(admin.email);                    // the admin's last TOTP code 20 minutes old
 //
+// The arrangements that specs once wrote to the stack's database themselves are helpers here too (FIX-W45-PLATFORM,
+// lead decision (9d) of 2026-11-06, PADR-0017 item 5), each with the role the spec wrote it as, so no spec writes a
+// platform row with a database client of its own any more (a spec may still read stored state to assert it; an OTA's
+// own schema stays with support/ota.ts's `tenantTx` helpers, as above):
+//
+//   await insertQueuedProvisioningJob({ … });          // a job back in the queue after a lost attempt (admin-step-up)
+//   await setTenantLive(tenantId);                     // an OTA live before any go-live (ota-admin/roles, live-environment)
+//   await setTenantBillingNotice(tenantId, "past_due"); // an OTA's billing notice (ota-admin/live-environment)
+//
+// The two OTA rows are written as velexis_migrator, as the OTA journeys' platform rows always are (support/ota.ts
+// `withSuspendedTenant` and OFE-022's fixtures, OBE-083's cross-backend test), so `roles` and `live-environment` keep
+// making their OTA live through the migrator; the caller publishes the platform's `tenant` invalidation
+// (support/ota.ts `publishTenantInvalidation`), which this file cannot import.
+//
 // `moveOtaToNewPlan` goes through the platform admin API (an operation exists), with the `callPlatformApi` the journey
 // hands in: support/fixtures.ts imports this file, so this file never imports it (nor support/ota.ts or
 // support/tenants.ts, which import it too) at run time, only their types.
@@ -575,4 +589,99 @@ export async function ageAdminMfa(email: string, minutes: number = AGED_MFA_MINU
     throw new Error(`${email} has no open platform admin session with a TOTP verification`);
   }
   return changed;
+}
+
+// ---- Arrangements the specs wrote themselves (FIX-W45-PLATFORM, lead decision (9d) of 2026-11-06) -------------------
+
+/** What `insertQueuedProvisioningJob` writes. */
+export interface QueuedProvisioningJobInput {
+  /** `job_` and a ULID, the `ProvisioningJobId` pattern of the platform document. */
+  readonly id: string;
+  readonly tenantId: string;
+  readonly kind: Schemas["ProvisioningJobKind"];
+  /** The attempt that was lost: the job's `attempt` (at least 1). */
+  readonly attempt: number;
+  /** The job's backoff: it is due again this many seconds after the database's now (at least 1). */
+  readonly dueInSeconds: number;
+  /** The error the failure handler recorded (a code and words, never a secret). */
+  readonly error: string;
+}
+
+/**
+ * Writes a provisioning job back in the queue after a lost attempt, as the platform's failure handler leaves one
+ * (PBE-023: `queued` at step `dispatch`, the lost attempt counted with its `started_at`, due again after its backoff),
+ * as the platform API's own role. No operation leaves a job queued for longer than the moment before its dispatch,
+ * and the admin's "Cancel job" is offered on a queued job only (admin-step-up.e2e.ts, PAD-016); the worker's
+ * dispatcher leaves the job alone until it is due.
+ */
+export async function insertQueuedProvisioningJob(input: QueuedProvisioningJobInput): Promise<void> {
+  if (!Number.isSafeInteger(input.attempt) || input.attempt < 1) {
+    throw new TypeError(`not an attempt number: ${String(input.attempt)}`);
+  }
+  if (!Number.isSafeInteger(input.dueInSeconds) || input.dueInSeconds < 1) {
+    throw new TypeError(`not a backoff in whole seconds: ${String(input.dueInSeconds)}`);
+  }
+  await withDatabase("platform", async (client) => {
+    await client.query(
+      `INSERT INTO platform.provisioning_jobs (id, tenant_id, kind, status, step, payload, attempt, scheduled_at,
+                                               started_at, error)
+       VALUES ($1, $2, $3, 'queued', 'dispatch', '{}'::jsonb, $4, now() + make_interval(secs => $5::int), now(), $6)`,
+      [input.id, input.tenantId, input.kind, input.attempt, input.dueInSeconds, input.error],
+    );
+  });
+}
+
+/**
+ * Runs `update`, an `UPDATE platform.tenants … WHERE id = $1 …` with `values` as `$2` on, as velexis_migrator (see the
+ * header), and throws `failure` unless it changed exactly one row.
+ */
+async function updateTenantAsMigrator(
+  tenantId: string,
+  update: string,
+  values: readonly unknown[],
+  failure: string,
+): Promise<void> {
+  const changed = await withDatabase("migrator", async (client) => {
+    const { rowCount } = await client.query(update, [tenantId, ...values]);
+    return rowCount ?? 0;
+  });
+  if (changed !== 1) {
+    throw new Error(failure);
+  }
+}
+
+/**
+ * Makes the active test OTA `tenantId` live (`storefront_environment = live`, `live_enabled_at` now, the next version)
+ * as velexis_migrator, for the OTA admin journeys that need a live OTA before the go-live they do not test (roles.e2e.ts,
+ * live-environment.e2e.ts). Throws unless the OTA was active and in the test environment. The caller publishes the
+ * platform's `tenant` invalidation, so the OTA API reads the row again at once instead of after its 60 s cache.
+ */
+export async function setTenantLive(tenantId: string): Promise<void> {
+  await updateTenantAsMigrator(
+    tenantId,
+    `UPDATE platform.tenants
+        SET storefront_environment = 'live', live_enabled_at = now(), version = version + 1, updated_at = now()
+      WHERE id = $1 AND status = 'active' AND storefront_environment = 'test'`,
+    [],
+    `the OTA ${tenantId} is not an active test OTA`,
+  );
+}
+
+/**
+ * Sets the billing notice of the active OTA `tenantId` (`past_due`, `trial_ending`, or `null` for none) as the
+ * platform's billing sync does, with the next version, as velexis_migrator (live-environment.e2e.ts). Throws unless the
+ * OTA was active. The caller publishes the platform's `tenant` invalidation.
+ */
+export async function setTenantBillingNotice(
+  tenantId: string,
+  notice: Schemas["BillingNotice"],
+): Promise<void> {
+  await updateTenantAsMigrator(
+    tenantId,
+    `UPDATE platform.tenants
+        SET billing_notice = $2, version = version + 1, updated_at = now()
+      WHERE id = $1 AND status = 'active'`,
+    [notice],
+    `the OTA ${tenantId} is not an active OTA`,
+  );
 }

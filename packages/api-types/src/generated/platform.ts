@@ -4217,7 +4217,7 @@ export interface components {
                 /** @description Days before the automatic process, for example `2D`. */
                 delay?: string;
             };
-            /** @description The Amadeus `automatedProcess` entries of new orders. */
+            /** @description The Amadeus `automatedProcess` entries of new orders: at most 31, the limit of Amadeus's own Flight Create Orders API (`FlightOrder.automatedProcess`, `maxItems: 31`), which the OTA document's `automatedProcess` lists keep too. `updateAmadeusConnection` refuses a longer list with `400 VALIDATION_FAILED` at `/ticketingDefaults/automatedProcess` (`maxItems`). */
             automatedProcess?: components["schemas"]["AmadeusAutomatedProcessDefault"][];
             /** @description Whether new orders are issued at once. */
             issue?: boolean;

@@ -121,6 +121,8 @@ Since PBE-040: the `officeId` of each `automatedProcess` entry and of each monit
 
 Since PFE-018: the portal's Amadeus page holds the settings form of each connection for owners and admins (office selects that offer only the connection's `officeIds`, the ticketing defaults, the monitored queues as rows to add and remove, `If-Match` with the reload message on `412`), and shows finance members the same values read-only ([`../../frontend/README.md`](../../frontend/README.md) §2, "How the Amadeus connection settings behave").
 
+Since 2026-11-06 (FIX-W45-PLATFORM, lead decision (9b), [PADR-0016](../adr/0016-contract-rollout-per-milestone-and-route-parity.md) item 1): `ticketing_defaults.automatedProcess` holds at most 31 entries, the limit of `FlightOrder.automatedProcess` in Amadeus's Flight Create Orders. A longer list answers `400 VALIDATION_FAILED` at `/ticketingDefaults/automatedProcess` (`maxItems`); the portal's form refuses it before it checks a row and offers no 32nd row. A row saved before with more entries is read as stored, and its next save must fit.
+
 ## Failure handling
 
 | Failure | Behaviour |

@@ -1553,7 +1553,7 @@ export const AMADEUS_SETTINGS_STRINGS = Object.freeze({
   >,
   automatedTitle: "Automated processes",
   automatedIntro:
-    "The automatic steps Amadeus applies to new orders, each with the queue and office it uses.",
+    "The automatic steps Amadeus applies to new orders, each with the queue and office it uses, at most 31.",
   automatedNone: "No automated process is set.",
   /** The legend of one automated process row: "Automated process 1". */
   automatedRow: (position: number) => `Automated process ${position}`,
@@ -1576,6 +1576,7 @@ export const AMADEUS_SETTINGS_STRINGS = Object.freeze({
   remove: "Remove",
   /** The name of a row's remove button: "Remove automated process 2". */
   removeAutomated: (position: number) => `Remove automated process ${position}`,
+  automatedFull: "An order takes at most 31 automated processes. Remove one to add another.",
   // Monitored queues.
   queuesTitle: "Monitored queues",
   queuesIntro:
@@ -1605,6 +1606,8 @@ export const AMADEUS_SETTINGS_STRINGS = Object.freeze({
     monitoredCategory: "Enter a category from 0 to 254.",
     duplicate: "This queue is already in the list. Remove one of them.",
     tooManyQueues: "Monitor at most 20 queues.",
+    /** Amadeus's own limit of `automatedProcess` (31), the platform document's `maxItems`. */
+    tooManyAutomated: "Set at most 31 automated processes.",
     /** The API refused a value by a rule the portal has no own words for. */
     rules: "Check this value: it does not follow the rules of the setting.",
   }),

@@ -31,10 +31,10 @@ import { cn } from "@/lib/utils";
  * The settings form of one Amadeus connection (README §2 `/otas/[tenantId]/amadeus`; flows/amadeus-connection.md §E;
  * PF-53), for owners and admins: the default, queuing and owner offices (selects that offer only the connection's
  * offices), the ticketing defaults of new flight orders (the ticketing agreement and its delay, whether orders are issued
- * at once, and the automated processes, rows to add and remove) and the monitored queues (rows to add and remove, at
- * most 20). `saveAmadeusSettings` checks the form and calls `updateAmadeusConnection` with the connection's version in
- * `If-Match`; after a save the form shows the settings as the API saved them, and a stale version shows the reload
- * message. While the OTA is not `active` the form is disabled with the reason (PADR-0014 item 5: the API answers
+ * at once, and the automated processes, rows to add and remove, at most 31) and the monitored queues (rows to add and
+ * remove, at most 20). `saveAmadeusSettings` checks the form and calls `updateAmadeusConnection` with the connection's
+ * version in `If-Match`; after a save the form shows the settings as the API saved them, and a stale version shows the
+ * reload message. While the OTA is not `active` the form is disabled with the reason (PADR-0014 item 5: the API answers
  * `TENANT_NOT_ACTIVE` then). The form holds nothing secret.
  */
 
@@ -47,6 +47,9 @@ const STRINGS = AMADEUS_SETTINGS_STRINGS;
 
 /** `AmadeusMonitoredQueue` list of the document: at most 20 queues. */
 export const MONITORED_QUEUES_MAX = 20;
+
+/** `AmadeusTicketingDefaults.automatedProcess` of the document: at most 31 entries, Amadeus's own limit. */
+export const AUTOMATED_PROCESS_MAX = 31;
 
 /** The agreements whose automatic step waits: only they take a delay (the action sends it for them only). */
 const DELAYED_AGREEMENTS: readonly string[] = ["DELAY_TO_QUEUE", "DELAY_TO_CANCEL"];
@@ -323,24 +326,28 @@ export function AmadeusSettingsForm({
   // A new row's office: the default office, or the connection's first.
   const firstOffice = officeOf(connection.defaultOfficeId, officeIds) || (officeIds[0] ?? "");
   const addAutomated = (): void => {
-    setEditor((previous) => ({
-      ...previous,
-      automated: [
-        ...previous.automated,
-        {
-          key: previous.nextKey,
-          values: {
-            code: "IMMEDIATE",
-            queueNumber: "",
-            queueCategory: "",
-            officeId: "",
-            delay: "",
-            text: "",
+    setEditor((previous) =>
+      previous.automated.length >= AUTOMATED_PROCESS_MAX
+        ? previous
+        : {
+            ...previous,
+            automated: [
+              ...previous.automated,
+              {
+                key: previous.nextKey,
+                values: {
+                  code: "IMMEDIATE",
+                  queueNumber: "",
+                  queueCategory: "",
+                  officeId: "",
+                  delay: "",
+                  text: "",
+                },
+              },
+            ],
+            nextKey: previous.nextKey + 1,
           },
-        },
-      ],
-      nextKey: previous.nextKey + 1,
-    }));
+    );
   };
   const addQueue = (): void => {
     setEditor((previous) =>
@@ -368,7 +375,7 @@ export function AmadeusSettingsForm({
     focusAfterRemove.current = "queues";
   };
   // A "Remove" button goes with its row, which would leave the focus nowhere (the page's start for a screen reader):
-  // once the row is gone, the focus moves to the "Add" button of its list (enabled again after a queue at the limit).
+  // once the row is gone, the focus moves to the "Add" button of its list (enabled again after a row at the limit).
   useEffect(() => {
     const list = focusAfterRemove.current;
     if (list !== null) {
@@ -392,6 +399,7 @@ export function AmadeusSettingsForm({
   const { fields } = editor;
   const delayed = DELAYED_AGREEMENTS.includes(fields.agreementOption);
   const queuesFull = editor.queues.length >= MONITORED_QUEUES_MAX;
+  const automatedFull = editor.automated.length >= AUTOMATED_PROCESS_MAX;
 
   /** One of the three office selects; the placeholder only while no office of the connection is chosen. */
   const officeSelect = (
@@ -624,10 +632,21 @@ export function AmadeusSettingsForm({
                 </fieldset>
               );
             })}
-            <div>
-              <Button ref={addAutomatedButton} type="button" variant="outline" onClick={addAutomated}>
-                {STRINGS.addAutomated}
-              </Button>
+            <div className="grid gap-2">
+              <div>
+                <Button
+                  ref={addAutomatedButton}
+                  type="button"
+                  variant="outline"
+                  onClick={addAutomated}
+                  disabled={automatedFull}
+                >
+                  {STRINGS.addAutomated}
+                </Button>
+              </div>
+              {automatedFull ? (
+                <p className="text-sm text-muted-foreground">{STRINGS.automatedFull}</p>
+              ) : null}
             </div>
           </div>
         </fieldset>

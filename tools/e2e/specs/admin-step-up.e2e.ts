@@ -27,20 +27,19 @@
 // the browser (5 to 500 characters after trimming) and call no server action with an empty one: each refusal step
 // counts the server actions the page posts (`Next-Action`) while it submits the empty reason, and expects none.
 //
-// Arrangements in `beforeAll` (PADR-0017 item 5: the public APIs where an operation exists, support/seed.ts and the
-// stack's database for the rest):
+// Arrangements in `beforeAll` (PADR-0017 item 5: the public APIs where an operation exists, support/seed.ts for the
+// rest):
 //   - through the platform API: the three admins (accounts with MFA that `admin:grant` makes platform admins, signed in
 //     through `adminSignIn` and `adminVerifyMfa`); the owner's active OTA (`newOwnerWithActiveOta` with MFA, set up by
 //     the OTA worker, so the journey needs `E2E_WITH_OTA=1` and fails at once without it); its verified payout account
 //     (the owner's `setPayoutAccount`, the admin's `adminReviewPayoutAccount`); a plan with one custom domain as its
 //     plan (`moveOtaToNewPlan`) and a pending custom domain (the owner's `addDomain`); the target account with MFA
 //     whose rights and two-factor authentication the admins change;
-//   - support/seed.ts (`insertDraftSettlement`, `ageAdminMfa`, as the platform API's own role): last month's draft
-//     statement of the OTA with a positive net, and the aged verifications;
-//   - the stack's database, as the platform API's own role: a queued `migrate` job of the OTA due tomorrow, as the
-//     failure handler leaves a job whose attempt was lost (back to `queued` with its backoff). No operation leaves a job
-//     queued for longer than the moment before its dispatch, and "Cancel job" is offered on a queued job only; the
-//     journey's own cancel ends it.
+//   - support/seed.ts (`insertDraftSettlement`, `ageAdminMfa`, `insertQueuedProvisioningJob`, as the platform API's own
+//     role): last month's draft statement of the OTA with a positive net, the aged verifications, and a queued `migrate`
+//     job of the OTA due tomorrow, as the failure handler leaves a job whose attempt was lost (back to `queued` with its
+//     backoff). No operation leaves a job queued for longer than the moment before its dispatch, and "Cancel job" is
+//     offered on a queued job only; the journey's own cancel ends it.
 //
 // The steps are tests in order (`mode: "serial"`) on browser contexts made in `beforeAll`. Every dialog the journey
 // opens passes axe. Tokens, codes and the client secret stay in variables and are never logged.
@@ -66,9 +65,9 @@ import {
   buildAccount,
   grantPlatformAdmin,
   insertDraftSettlement,
+  insertQueuedProvisioningJob,
   moveOtaToNewPlan,
   stack,
-  withDatabase,
   type AdminApiSession,
 } from "../support/seed";
 import { AMADEUS_STUB_URL, PLATFORM_ADMIN_URL } from "../support/stack";
@@ -441,13 +440,13 @@ test.beforeAll(async ({ browser }) => {
   });
 
   // The queued `migrate` job, back in the queue after a lost attempt and due tomorrow (see the file header).
-  await withDatabase("platform", async (client) => {
-    await client.query(
-      `INSERT INTO platform.provisioning_jobs (id, tenant_id, kind, status, step, payload, attempt, scheduled_at,
-                                               started_at, error)
-       VALUES ($1, $2, 'migrate', 'queued', 'dispatch', '{}'::jsonb, 1, now() + interval '1 day', now(), $3)`,
-      [queuedJobId, owned.ota.id, "ATTEMPT_LOST: the attempt's message was lost (PAD-016 journey)"],
-    );
+  await insertQueuedProvisioningJob({
+    id: queuedJobId,
+    tenantId: owned.ota.id,
+    kind: "migrate",
+    attempt: 1,
+    dueInSeconds: 86_400,
+    error: "ATTEMPT_LOST: the attempt's message was lost (PAD-016 journey)",
   });
 
   await waitForTotpStep(Math.max(finance.signInStep, people.signInStep, support.signInStep) + 2);

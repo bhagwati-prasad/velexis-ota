@@ -20,11 +20,12 @@
 //   - two verified accounts with MFA, which the owner invites as `viewer` and `agent` (createInvitation) and which
 //     accept with the token of the invitation e-mail (acceptInvitation);
 //   - then the OTA goes live: no operation makes an OTA live before the platform's go-live of M5, so its platform row
-//     is set `storefront_environment = live` as velexis_migrator (as `withSuspendedTenant` of support/ota.ts writes a
-//     platform row) and the platform's `tenant` invalidation published, as the platform does after its commit. A live
-//     OTA is what gives the switch a meaning (OADR-0011 point 5: `live` for a live OTA and a role other than viewer),
-//     and its console needs accounts with MFA (PADR-0008), which is why both members have it. The booking was made
-//     before, in the test environment, which the console opens first.
+//     is set `storefront_environment = live` as velexis_migrator (`setTenantLive` of support/seed.ts, as
+//     `withSuspendedTenant` of support/ota.ts writes a platform row) and the platform's `tenant` invalidation
+//     published, as the platform does after its commit. A live OTA is what gives the switch a meaning (OADR-0011
+//     point 5: `live` for a live OTA and a role other than viewer), and its console needs accounts with MFA
+//     (PADR-0008), which is why both members have it. The booking was made before, in the test environment, which the
+//     console opens first.
 //
 // Every page the journey visits passes axe once its title is in place, and on every page of the OTA admin JavaScript
 // reads no cookie. The steps are tests in order (`mode: "serial"`), three per member on a browser context of the
@@ -58,7 +59,7 @@ import {
   type OwnedOta,
   type SeededBooking,
 } from "../../support/ota";
-import { buildAccount, stack, withDatabase } from "../../support/seed";
+import { buildAccount, setTenantLive, stack } from "../../support/seed";
 import { OTA_ADMIN_URL, PORTAL_URL } from "../../support/stack";
 
 test.describe.configure({ mode: "serial" });
@@ -133,20 +134,11 @@ async function addMember(role: MemberRole, fullName: string): Promise<Member> {
 
 /**
  * Makes the OTA `tenantId` live (`storefront_environment = live`), as the platform's go-live of M5 will: its platform
- * row as velexis_migrator, then the platform's `tenant` invalidation, so the OTA API reads it at once.
+ * row as velexis_migrator (`setTenantLive` of support/seed.ts), then the platform's `tenant` invalidation, so the OTA
+ * API reads it at once.
  */
 async function goLive(tenantId: string): Promise<void> {
-  await withDatabase("migrator", async (client) => {
-    const { rowCount } = await client.query(
-      `UPDATE platform.tenants
-          SET storefront_environment = 'live', live_enabled_at = now(), version = version + 1, updated_at = now()
-        WHERE id = $1 AND status = 'active' AND storefront_environment = 'test'`,
-      [tenantId],
-    );
-    if (rowCount !== 1) {
-      throw new Error(`the OTA ${tenantId} is not an active test OTA`);
-    }
-  });
+  await setTenantLive(tenantId);
   await publishTenantInvalidation(tenantId);
 }
 

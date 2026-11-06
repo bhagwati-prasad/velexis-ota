@@ -2927,6 +2927,58 @@ describe("the M3 and M4 slice: statement descriptor, console token and Amadeus s
     expect(answered(100)).toEqual(["/monitoredQueues/0/queueId maximum"]);
   });
 
+  it("[FIX-W45-PLATFORM AC2] bounds the automated processes of the ticketing defaults to 31, the limit of Amadeus's Flight Create Orders", () => {
+    // Amadeus's own document (docs/amadeus-api, never edited) sets the limit of `FlightOrder.automatedProcess`, and the
+    // OTA document's `automatedProcess` lists keep it: the platform's defaults hold no more than an order can carry.
+    const amadeus = JSON.parse(
+      readFileSync(
+        join(
+          REPO_ROOT,
+          "docs",
+          "amadeus-api",
+          "FlightCreateOrders_v1_Version_1.16_swagger_specification.json",
+        ),
+        "utf8",
+      ),
+    ) as Json;
+    const flightOrder = objectAt(objectAt(objectAt(amadeus, "definitions"), "FlightOrder"), "properties");
+    expect(objectAt(flightOrder, "automatedProcess")["maxItems"]).toBe(31);
+    const defaults = objectAt(
+      objectAt(objectAt(platform, "components"), "schemas"),
+      "AmadeusTicketingDefaults",
+    );
+    const list = objectAt(objectAt(defaults, "properties"), "automatedProcess");
+    expect([list["type"], list["maxItems"]]).toEqual(["array", 31]);
+    expect(String(list["description"])).toContain("at most 31");
+
+    // A request with 31 well-formed entries passes; 32 of the same entry are refused at the list only (the count), at
+    // no entry.
+    const entry = { code: "IMMEDIATE", queue: { number: "8", category: "0" } };
+    const entries = (count: number) => Array.from({ length: count }, () => entry);
+    const requests = requestBodyChecker(["updateAmadeusConnection"]);
+    const check = (count: number) =>
+      requests
+        .check("updateAmadeusConnection", {
+          status: 200,
+          body: { ticketingDefaults: { automatedProcess: entries(count) } },
+        })
+        .map((problem) => `${problem.path} ${problem.keyword}`);
+    expect(check(31)).toEqual([]);
+    expect(check(32)).toEqual(["/ticketingDefaults/automatedProcess maxItems"]);
+
+    // The answer shares the schema, so the response checks of the integration tests refuse such a stored list too.
+    const [example] = examplesOf(platform, jsonMedia(successOf("updateAmadeusConnection", "200")) ?? {});
+    const answered = (count: number) =>
+      checker
+        .check("updateAmadeusConnection", {
+          status: 200,
+          body: { ...(example as Json), ticketingDefaults: { automatedProcess: entries(count) } },
+        })
+        .map((problem) => `${problem.path} ${problem.keyword}`);
+    expect(answered(31)).toEqual([]);
+    expect(answered(32)).toEqual(["/ticketingDefaults/automatedProcess maxItems"]);
+  });
+
   it("answers no property ending in Secret, Ciphertext or Hash in any response of the slice", () => {
     const leaky = (name: string): boolean => /(secret|ciphertext|hash)$/i.test(name);
     // The walk reaches the connection shapes, so the check cannot pass by not looking.

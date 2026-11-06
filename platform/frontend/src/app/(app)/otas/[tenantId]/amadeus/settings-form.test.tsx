@@ -96,7 +96,11 @@ import {
   type AmadeusSettingsValues,
 } from "@/app/(app)/otas/[tenantId]/amadeus/actions";
 import AmadeusPage from "@/app/(app)/otas/[tenantId]/amadeus/page";
-import { MONITORED_QUEUES_MAX, valuesOf } from "@/app/(app)/otas/[tenantId]/amadeus/settings-form";
+import {
+  AUTOMATED_PROCESS_MAX,
+  MONITORED_QUEUES_MAX,
+  valuesOf,
+} from "@/app/(app)/otas/[tenantId]/amadeus/settings-form";
 import OtaLayout from "@/app/(app)/otas/[tenantId]/layout";
 import { BFF_KEY_HEADER, END_USER_AGENT_HEADER, END_USER_IP_HEADER } from "@/lib/end-user";
 import type { TenantRole } from "@/lib/roles";
@@ -111,6 +115,7 @@ const PROBLEMS = STRINGS.problems;
 type Schemas = components["schemas"];
 type Tenant = Schemas["Tenant"];
 type AmadeusConnection = Schemas["AmadeusConnection"];
+type UpdateAmadeusConnectionRequest = Schemas["UpdateAmadeusConnectionRequest"];
 type Environment = "test" | "live";
 
 const ACCESS_TOKEN = "pfe018-dummy-access-token";
@@ -1048,6 +1053,48 @@ describe("the rows of the lists", () => {
   });
 });
 
+describe("the automated processes at Amadeus's limit", () => {
+  /** The automated processes the connection already has: all but one, so one click reaches the limit. */
+  const stored = AUTOMATED_PROCESS_MAX - 1;
+
+  /** As above: the page opened with its rows is the setup, with the warm-up hook's budget. */
+  beforeEach(async () => {
+    const entry = { code: "IMMEDIATE" as const, queue: { number: "8", category: "0" }, officeId: NICE };
+    routes({
+      [`GET ${AMADEUS_PATH}`]: () =>
+        json(
+          {
+            data: [
+              testConnection({
+                ticketingDefaults: { automatedProcess: Array.from({ length: stored }, () => entry) },
+              }),
+            ],
+          },
+          200,
+        ),
+    });
+    await openAmadeus();
+  }, WARM_UP_TIMEOUT_MS);
+
+  it("[FIX-W45-PLATFORM AC2] adds automated processes up to 31 and then offers no more until one is removed", () => {
+    const add = () => within(form()).getByRole("button", { name: STRINGS.addAutomated });
+    expect(automatedRows()).toHaveLength(stored);
+    expect(add()).toHaveProperty("disabled", false);
+    click(add());
+    expect(automatedRows()).toHaveLength(AUTOMATED_PROCESS_MAX);
+    expect(add()).toHaveProperty("disabled", true);
+    expect(within(form()).getByText(STRINGS.automatedFull)).toBeTruthy();
+    click(add());
+    expect(automatedRows()).toHaveLength(AUTOMATED_PROCESS_MAX);
+
+    click(within(form()).getByRole("button", { name: STRINGS.removeAutomated(1) }));
+    expect(automatedRows()).toHaveLength(AUTOMATED_PROCESS_MAX - 1);
+    expect(add()).toHaveProperty("disabled", false);
+    expect(within(form()).queryByText(STRINGS.automatedFull)).toBeNull();
+    expect(writes()).toEqual([]);
+  });
+});
+
 // ---- The action's checks -----------------------------------------------------------------------------------------------
 
 describe("the checks of the action", () => {
@@ -1206,6 +1253,42 @@ describe("the checks of the action", () => {
     expect(atBound.fieldErrors["monitoredQueues"]).toBeUndefined();
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("[FIX-W45-PLATFORM AC2] refuses 32 well-formed automated processes by their count alone, Amadeus's limit of 31, without a call", async () => {
+    // Every row is the stored one, which the API takes: only the count can refuse the list.
+    const automatedProcess = (count: number) => Array.from({ length: count }, () => AUTOMATED_ROW);
+    const oversized = await saveAmadeusSettings(
+      IDLE,
+      formData({ ...TEST_VALUES, automatedProcess: automatedProcess(AUTOMATED_PROCESS_MAX + 1) }),
+    );
+    expect(oversized).toMatchObject({ status: "failed", code: "VALIDATION_FAILED" });
+    expect(oversized.fieldErrors).toEqual({ automatedProcess: PROBLEMS.tooManyAutomated });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // The bound comes before the rows' own rules: 32 rows that each break one show the count's message only.
+    const oversizedAndBroken = await saveAmadeusSettings(
+      IDLE,
+      formData({
+        ...TEST_VALUES,
+        automatedProcess: Array.from({ length: AUTOMATED_PROCESS_MAX + 1 }, () => ({
+          ...AUTOMATED_ROW,
+          code: "SOMETIMES",
+        })),
+      }),
+    );
+    expect(oversizedAndBroken.fieldErrors).toEqual({ automatedProcess: PROBLEMS.tooManyAutomated });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // 31 are saved, every one sent.
+    routes();
+    const saved = await saveAmadeusSettings(
+      IDLE,
+      formData({ ...TEST_VALUES, automatedProcess: automatedProcess(AUTOMATED_PROCESS_MAX) }),
+    );
+    expect(saved.status).toBe("saved");
+    const body = (await bodyOf(calls("PATCH", TEST_PATH)[0])) as UpdateAmadeusConnectionRequest;
+    expect(body.ticketingDefaults?.automatedProcess).toHaveLength(AUTOMATED_PROCESS_MAX);
+  });
 });
 
 // ---- The API's answers ---------------------------------------------------------------------------------------------
@@ -1243,6 +1326,10 @@ describe("the answers of updateAmadeusConnection", () => {
     for (const [fieldErrors, expected] of [
       [[{ path: "/monitoredQueues", code: "uniqueItems" }], { monitoredQueues: PROBLEMS.duplicate }],
       [[{ path: "/monitoredQueues", code: "maxItems" }], { monitoredQueues: PROBLEMS.tooManyQueues }],
+      [
+        [{ path: "/ticketingDefaults/automatedProcess", code: "maxItems" }],
+        { automatedProcess: PROBLEMS.tooManyAutomated },
+      ],
       [
         [{ path: "/monitoredQueues/0/queueId", code: "maximum" }],
         { "monitoredQueues.0.queueId": PROBLEMS.monitoredQueueId },

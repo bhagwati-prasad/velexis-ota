@@ -39,7 +39,7 @@ Rules that shape the order of the tasks:
 | E11 | Domains and TLS | Sub-domain, `ask` endpoint, custom domains, DNS verification, TLS probe, re-check, admin domains | PBE-027, PBE-049 … PBE-051, PFE-022, PAD-014 |
 | E12 | Platform admin | Admin sign-in, dashboard, tenants, suspend and resume, jobs, queues, accounts, admins, audit | PBE-028 … PBE-032, PAD-002 … PAD-006, PAD-009, PAD-011 |
 | E13 | Go-live | Live preconditions, the environment switch, live keys | PBE-061, PFE-026 |
-| E14 | Quality and launch | End-to-end harness and journeys, cross-backend tests, security review, performance, switch removal, runbooks | PFE-014, PFE-015, PFE-027, PFE-028, PAD-010, PAD-015, PAD-016, PBE-062 … PBE-065 |
+| E14 | Quality and launch | End-to-end harness and journeys, cross-backend tests, security review and its follow-ups, performance, switch removal, runbooks | PFE-014, PFE-015, PFE-027, PFE-028, PAD-010, PAD-015, PAD-016, PBE-062 … PBE-065; the security review's follow-ups PBE-067 … PBE-071, PFE-029, PFE-030, PAD-017 |
 
 ## 3. Milestones at a glance
 
@@ -367,7 +367,7 @@ Every feature of [`../scope.md`](../scope.md) §3, the data-model deltas and the
 | Platform OpenAPI document | M1, M3, M5 | E1 | PBE-005, PBE-006, PBE-007, PBE-066, PBE-037, PBE-041, PBE-042 |
 | Job messages and invalidation events | M1 | E1 | PBE-004 |
 | Milestone switches ([PADR-0015](../adr/0015-milestone-feature-switches.md)) | M1, M6 | E3 | PBE-012, PBE-064 |
-| Security, performance, operations | M6 | E14 | PBE-062, PBE-063, PBE-065, PFE-028, PAD-016 |
+| Security, performance, operations | M6 | E14 | PBE-062, PBE-063, PBE-065, PFE-028, PAD-016; the security review's follow-ups (2026-11-06, FIX-W45-PLATFORM): PBE-067 … PBE-071, PFE-029, PFE-030, PAD-017 |
 
 **Endpoint coverage.** All 150 operations of the three inventory parts appear in [`agent-tasks.md`](agent-tasks.md) in the task that implements them, and each user-facing one also in a portal or admin task. The check is mechanical: every `operationId` in the first column of the inventory tables is found in the plan, and at run time the route parity test with its pending list ([PADR-0016](../adr/0016-contract-rollout-per-milestone-and-route-parity.md)) ends empty at the M5 exit.
 
