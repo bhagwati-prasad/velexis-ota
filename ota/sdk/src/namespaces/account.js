@@ -103,8 +103,9 @@ function createAccountPreferencesApi(core) {
      * @param {AccountPreferencesGetParams} [params]
      * @param {RequestOptions} [options]
      * @returns {Promise<Schemas["CustomerPreferences"]>}
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `TOKEN_EXPIRED`, `INVALID_API_KEY` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `NOT_IMPLEMENTED` (501, deferred), `INTERNAL_ERROR` (500)
      */
@@ -119,10 +120,10 @@ function createAccountPreferencesApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<Schemas["CustomerPreferences"]>}
      * @throws {TypeError} without a valid `ifMatch`, before any request
-     * @throws {ValidationError} `VALIDATION_FAILED` (field codes `unsupported_currency`, `unsupported_locale`, `unknown_airport`, `phone_required`)
+     * @throws {ValidationError} `VALIDATION_FAILED` (field codes `unsupported_currency`, `unsupported_locale`, `unknown_airport`, `phone_required`), `INVALID_REQUEST` (400)
      * @throws {VelexisError} `PRECONDITION_FAILED` (412: stale `ifMatch`; reload and retry)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `TOKEN_EXPIRED`, `INVALID_API_KEY` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `NOT_IMPLEMENTED` (501, deferred), `INTERNAL_ERROR` (500)
      */
@@ -145,9 +146,9 @@ function createAccountSavedTravelersApi(core) {
      * @param {SavedTravelerListParams} [params]
      * @param {RequestOptions} [options]
      * @returns {Promise<Page<Schemas["SavedTraveler"]>>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (bad cursor or limit)
+     * @throws {ValidationError} `VALIDATION_FAILED` (bad cursor or limit), `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `TOKEN_EXPIRED`, `INVALID_API_KEY` (401)
-     * @throws {PermissionError} `FEATURE_DISABLED`, `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `FEATURE_DISABLED`, `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `NOT_IMPLEMENTED` (501, deferred), `INTERNAL_ERROR` (500)
      */
@@ -161,8 +162,8 @@ function createAccountSavedTravelersApi(core) {
      * @param {Schemas["SavedTravelerCreateRequest"]} params
      * @param {RequestOptions} [options]
      * @returns {Promise<Schemas["SavedTraveler"]>}
-     * @throws {ValidationError} `TRAVELER_DATA_INVALID` (422, see `fieldErrors`), `SAVED_TRAVELER_LIMIT_REACHED` (422, at most 20), `VALIDATION_FAILED`
-     * @throws {PermissionError} `FEATURE_DISABLED`, `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID` (403)
+     * @throws {ValidationError} `TRAVELER_DATA_INVALID` (422, see `fieldErrors`), `SAVED_TRAVELER_LIMIT_REACHED` (422, at most 20), `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
+     * @throws {PermissionError} `FEATURE_DISABLED`, `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `TOKEN_EXPIRED`, `INVALID_API_KEY` (401)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
@@ -178,8 +179,9 @@ function createAccountSavedTravelersApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<Schemas["SavedTraveler"]>}
      * @throws {NotFoundError} `NOT_FOUND` (404)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `TOKEN_EXPIRED`, `INVALID_API_KEY` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `NOT_IMPLEMENTED` (501, deferred), `INTERNAL_ERROR` (500)
      */
@@ -194,11 +196,11 @@ function createAccountSavedTravelersApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<Schemas["SavedTraveler"]>}
      * @throws {TypeError} without a valid `ifMatch`, before any request
-     * @throws {ValidationError} `TRAVELER_DATA_INVALID` (422), `VALIDATION_FAILED`
+     * @throws {ValidationError} `TRAVELER_DATA_INVALID` (422), `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {VelexisError} `PRECONDITION_FAILED` (412)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `TOKEN_EXPIRED`, `INVALID_API_KEY` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `NOT_IMPLEMENTED` (501, deferred), `INTERNAL_ERROR` (500)
      */
@@ -213,8 +215,9 @@ function createAccountSavedTravelersApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<void>}
      * @throws {NotFoundError} `NOT_FOUND` (404)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `TOKEN_EXPIRED`, `INVALID_API_KEY` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `NOT_IMPLEMENTED` (501, deferred), `INTERNAL_ERROR` (500)
      */
@@ -237,10 +240,10 @@ function createAccountDataExportsApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<Schemas["AccountDataExport"]>}
      * @throws {RateLimitError} `RATE_LIMITED` (429: one new export per 24 h, `retryAfterSeconds`)
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `TOKEN_EXPIRED`, `INVALID_API_KEY` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {ServerError} `NOT_IMPLEMENTED` (501, deferred), `INTERNAL_ERROR` (500)
      */
     create: (params, options) => core.call(op.account_dataExports_create, params, live(options)),
@@ -253,8 +256,9 @@ function createAccountDataExportsApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<Schemas["AccountDataExport"]>}
      * @throws {NotFoundError} `NOT_FOUND` (404)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `TOKEN_EXPIRED`, `INVALID_API_KEY` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `NOT_IMPLEMENTED` (501, deferred), `INTERNAL_ERROR` (500)
      */
@@ -274,8 +278,9 @@ export function createAccountApi(core) {
      * @param {AccountGetParams} [params]
      * @param {RequestOptions} [options]
      * @returns {Promise<Schemas["Customer"]>}
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `TOKEN_EXPIRED`, `INVALID_API_KEY` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
@@ -291,9 +296,9 @@ export function createAccountApi(core) {
      * @throws {TypeError} without a valid `ifMatch`, before any request
      * @throws {VelexisError} `PRECONDITION_FAILED` (412: stale `ifMatch`; reload and retry)
      * @throws {ConflictError} `EMAIL_ALREADY_REGISTERED` (409)
-     * @throws {ValidationError} `VALIDATION_FAILED`, `CURRENT_PASSWORD_INCORRECT` (422)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `CURRENT_PASSWORD_INCORRECT` (422), `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `TOKEN_EXPIRED`, `INVALID_API_KEY` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
@@ -308,9 +313,9 @@ export function createAccountApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<Schemas["AccountDeletion"]>}
      * @throws {ConflictError} `ACCOUNT_DELETION_BLOCKED` (`details.bookingIds` awaiting payment, ticketing or a refund), `IDEMPOTENCY_KEY_REUSED` (409)
-     * @throws {ValidationError} `CURRENT_PASSWORD_INCORRECT` (422), `VALIDATION_FAILED`
+     * @throws {ValidationError} `CURRENT_PASSWORD_INCORRECT` (422), `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `TOKEN_EXPIRED`, `INVALID_API_KEY` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */

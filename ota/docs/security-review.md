@@ -29,6 +29,13 @@ audit and the secret scan, and every finding with its severity and status. Every
   F-4 is closed), so `pnpm audit --prod` reports no known vulnerabilities: 0 critical, 0 high. No finding of this
   review is open: OTA-SR-01 to OTA-SR-05 are closed and OTA-SR-06 and OTA-SR-07 accepted (§7), which is OBE-084's
   acceptance.
+- **2026-11-06 (FIX-W45-OTA, lead decision (9e)):** every operation's `x-error-codes` lists the generic refusals of the
+  credential, scope, session and permission checks wherever a request to it can meet them (`INVALID_REQUEST`,
+  `VALIDATION_FAILED`, `INVALID_API_KEY`, `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `UNAUTHENTICATED`, `FORBIDDEN`;
+  the OTA document's **Generic refusals**, which also says that the guards' other refusals, such as `HOST_NOT_ALLOWED`
+  on a console operation or a `503 SERVICE_UNAVAILABLE` where no `503` is documented, are not listed by these rules),
+  and the authentication matrix checks that every error code it gets is listed, with two more credentials that meet
+  the caller guard's refusals on every operation (§3.1). No finding: the API's answers did not change.
 
 ## 1. Scope
 
@@ -42,7 +49,7 @@ audit and the secret scan, and every finding with its severity and status. Every
 
 | Area | How | Evidence |
 |---|---|---|
-| Authentication matrix | Every operation of the operations index (`otaOperations`, generated from the document) called with 12 credentials: none, the storefront edge, `pk_`, `sk_` scoped `storefront`, `sk_` scoped `console`, the OTA admin's service key, a wrong-tenant credential, the right one, a `console:automation` key with exactly the operation's `x-permission` and one with every other permission, and the service key with the forwarding headers of `api.ota.example.com` and of a storefront's `/api/*`. The expected answer of each cell is computed from the operation's `x-scope`, `x-edge-only`, `x-permission`, `security` and pending state, not read back from the code. 1,454 requests (135 operations by 10 credentials, and the two permission keys on the 52 guarded console operations). Every answer but a pending operation's `501` is also checked against the document: a status the operation lists and a body of that response's schema (OBE-095). | [`auth-matrix.int.test.ts`](../backend/test/integration/m6/auth-matrix.int.test.ts) |
+| Authentication matrix | Every operation of the operations index (`otaOperations`, generated from the document) called with 14 credentials: none, the storefront edge, `pk_`, `sk_` scoped `storefront`, `sk_` scoped `console`, the OTA admin's service key, a wrong-tenant credential, the right one, a `console:automation` key with exactly the operation's `x-permission` and one with every other permission, the service key with the forwarding headers of `api.ota.example.com` and of a storefront's `/api/*`, and (FIX-W45-OTA) a publishable key from an origin it does not list and the service key without `X-Velexis-End-User-IP`. The expected answer of each cell is computed from the operation's `x-scope`, `x-edge-only`, `x-permission`, `security` and pending state, not read back from the code. 1,724 requests (135 operations by 12 credentials, and the two permission keys on the 52 guarded console operations). Every answer but a pending operation's `501` is also checked against the document: a status the operation lists and a body of that response's schema (OBE-095), and an error code among the operation's `x-error-codes` (FIX-W45-OTA). | [`auth-matrix.int.test.ts`](../backend/test/integration/m6/auth-matrix.int.test.ts) |
 | Rate limits | One test per limit of architecture §8, through the real routes: the limit used up by one end user, the next request `429 RATE_LIMITED` with `Retry-After`, another end user not limited; `console.auth.signIn` per forwarded end-user IP through the service caller (two staff members never share a bucket, the service key without `X-Velexis-End-User-IP` is `400`); the handler-side counters (customer sign-in lockout, airline-card attempts per checkout, the tenant's decline suspension); no counted value in clear in the Redis keys or the log lines. A coverage test fails when a limit of `RATE_LIMITS` has no test. | [`rate-limits.int.test.ts`](../backend/test/integration/m6/rate-limits.int.test.ts); the counting of airline-card declines with the Amadeus stub: [`airline-card-completion.int.test.ts`](../backend/test/integration/payments/airline-card-completion.int.test.ts) (OBE-051) |
 | Response headers | helmet's headers and no `X-Powered-By` on every kind of answer (successes, every guard's refusal, validation, unknown route, `501`, health); `Cache-Control` with `no-store` on every answer with personal data, a session or an error; the document download and the public image with `nosniff`, their own type, CSP and caching. | [`headers.int.test.ts`](../backend/test/integration/m6/headers.int.test.ts) |
 | Redaction coverage | Every schema property marked `x-sensitive`, every property the central list names (`REDACT_PATHS` of `@velexis/logger`) and the document and card numbers of its literal paths, found by walking the whole document (more than a thousand places), with a marker value at its place: absent from log lines (top level and one level down), `supplier_requests`, `staff_actions`, `idempotency_keys` (plain copy; the answer is kept encrypted), `payment_events` and `notifications.payload` (no template variable is sensitive). A test fails when a new writer of one of these tables appears. | [`redaction-coverage.contract.test.ts`](../backend/test/contract/redaction-coverage.contract.test.ts) |
@@ -56,7 +63,8 @@ audit and the secret scan, and every finding with its severity and status. Every
 ### 3.1 Authentication matrix
 
 Every one of the 135 operations answered every credential as its contract metadata says (all 15 tests of OBE-084
-pass, and the 16th of OBE-095 since 2026-11-05):
+pass, the 16th of OBE-095 since 2026-11-05, and since 2026-11-06 the 17th of FIX-W45-OTA and the column tests of its two
+credentials, 19 in all):
 
 - **No credential:** `401 INVALID_API_KEY` on every authenticated route and every pending (`501`) route; the open routes
   (`getPublicAsset`, `downloadFile`, the three Stripe receivers, health) answer without one.
@@ -90,6 +98,17 @@ pass, and the 16th of OBE-095 since 2026-11-05):
   without a `400` (5 of them pending), and the `401 INVALID_API_KEY` and `403` (`ORIGIN_NOT_ALLOWED`,
   `SCOPE_NOT_ALLOWED`) of the three Stripe receivers, 84 cells in all. Against the document before the change the
   strict check fails in 10 of the 16 tests.
+- **Generic refusals (FIX-W45-OTA, 2026-11-06):** every error code an answer carries, a pending operation's `501`
+  aside, is one of its operation's `x-error-codes` (a failure names the operation, the credential and the code; the
+  14 column tests and a 17th test over the whole matrix). Two credentials meet the caller guard on every route, the
+  `501` ones, the public files, the receivers and health included: alpha's publishable key from an origin it does not
+  list (`403 ORIGIN_NOT_ALLOWED`) and the service key without `X-Velexis-End-User-IP` (`400 VALIDATION_FAILED` at
+  `/header/X-Velexis-End-User-IP`). So `INVALID_REQUEST`, `INVALID_API_KEY`, `ORIGIN_NOT_ALLOWED` and
+  `VALIDATION_FAILED` are answered and listed on all 135 operations, and `SCOPE_NOT_ALLOWED` on every operation bound to
+  a handler. Against the document before the change the check found 140 unlisted cells in the first 12 columns (the
+  service key's `SCOPE_NOT_ALLOWED` on 42 `customer` and `both` operations, the edge header's `INVALID_REQUEST` on 71,
+  a wrong customer cookie's `UNAUTHENTICATED` on 20 and beta's publishable key's `ORIGIN_NOT_ALLOWED` on 7), more with
+  the two new credentials.
 
 ### 3.2 Rate limits
 

@@ -142,7 +142,7 @@ export function createBookingsApi(core) {
      * @returns {Promise<Page<BookingSummary>>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
@@ -158,9 +158,9 @@ export function createBookingsApi(core) {
      * @param {GetBookingParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<Booking>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {SupplierError} only with `refresh`: `SUPPLIER_NOT_CONFIGURED` (424), `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504); retry without `refresh`
@@ -180,7 +180,7 @@ export function createBookingsApi(core) {
      * @returns {Promise<BookingLookupResult>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `INVALID_API_KEY` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404: no booking with this reference and last name)
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {RateLimitError} `RATE_LIMITED` (429: 5 failed attempts per 15 min per IP and reference; `retryAfterSeconds`)
@@ -200,7 +200,7 @@ export function createBookingsApi(core) {
      * @throws {TypeError} without a valid `ifMatch`, before any request
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `TRAVELER_DATA_INVALID`, `CONTACT_DATA_INVALID` (422, `fieldErrors`)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {ConflictError} `VERSION_CONFLICT` (409: reload with `get({ refresh: true })` and retry), `BOOKING_NOT_MODIFIABLE`, `BOOKING_ALREADY_CANCELLED` (409)
      * @throws {VelexisError} `PRECONDITION_FAILED` (412, stale `ifMatch`)
@@ -218,8 +218,9 @@ export function createBookingsApi(core) {
      * @param {BookingRefParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<BookingAncillaryOptions>}
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {SupplierError} `SUPPLIER_NOT_CONFIGURED` (424), `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504)
@@ -238,7 +239,7 @@ export function createBookingsApi(core) {
      * @returns {Promise<Payment>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `ANCILLARY_NOT_AVAILABLE`, `UNPROCESSABLE` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {PriceChangedError} `PRICE_CHANGED` (409: the extras' price moved; no payment created)
      * @throws {ConflictError} `BOOKING_NOT_MODIFIABLE`, `BOOKING_ALREADY_CANCELLED`, `IDEMPOTENCY_KEY_REUSED` (409)
@@ -261,7 +262,7 @@ export function createBookingsApi(core) {
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `ANCILLARY_NOT_AVAILABLE` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
      * @throws {PaymentError} `PAYMENT_REQUIRED` (402: not authorised yet), `PAYMENT_DECLINED` (402)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {PriceChangedError} `PRICE_CHANGED` (409: authorisation voided; show the new price and pay again)
      * @throws {ConflictError} `PAYMENT_AMOUNT_MISMATCH`, `VERSION_CONFLICT`, `BOOKING_NOT_MODIFIABLE`, `BOOKING_ALREADY_CANCELLED`, `IDEMPOTENCY_KEY_REUSED` (409)
@@ -279,8 +280,9 @@ export function createBookingsApi(core) {
      * @param {BookingRefParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<CancellationQuote>}
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {ConflictError} `BOOKING_ALREADY_CANCELLED` (409)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
@@ -301,7 +303,7 @@ export function createBookingsApi(core) {
      * @throws {TypeError} without a valid `ifMatch`, before any request
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {ConflictError} `REFUND_AMOUNT_CHANGED` (409, `details.newRefund`: show it and confirm again), `BOOKING_NOT_MODIFIABLE`, `BOOKING_ALREADY_CANCELLED`, `VERSION_CONFLICT`, `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {VelexisError} `PRECONDITION_FAILED` (412)
@@ -318,9 +320,9 @@ export function createBookingsApi(core) {
      * @param {GetBookingFareRulesParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<BookingFareRules>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {SupplierError} `SUPPLIER_NOT_CONFIGURED` (424), `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504)
@@ -334,9 +336,9 @@ export function createBookingsApi(core) {
      * @param {ListBookingDocumentsParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<Page<BookingDocument>>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -350,8 +352,9 @@ export function createBookingsApi(core) {
      * @param {GetDocumentDownloadUrlParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<DocumentDownloadUrl>}
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {ConflictError} `DOCUMENT_NOT_READY` (409, `details.retryAfterSeconds`; retryable)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
@@ -366,9 +369,9 @@ export function createBookingsApi(core) {
      * @param {ListBookingEventsParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<Page<BookingEvent>>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -384,9 +387,9 @@ export function createBookingsApi(core) {
      * @param {GetTicketingStatusParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<BookingTicketingStatus>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {SupplierError} `SUPPLIER_NOT_CONFIGURED` (424), `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504)

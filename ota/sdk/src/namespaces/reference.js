@@ -42,9 +42,9 @@ export function createReferenceApi(core) {
        * @param {LocationSearchParams} params
        * @param {RequestOptions} [options]
        * @returns {Promise<Page<Schemas["Location"]>>}
-       * @throws {ValidationError} `VALIDATION_FAILED` (keyword shorter than 2 characters, bad `countryCode`)
+       * @throws {ValidationError} `VALIDATION_FAILED` (keyword shorter than 2 characters, bad `countryCode`), `INVALID_REQUEST`
        * @throws {AuthenticationError} `INVALID_API_KEY`
-       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`
+       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`
        * @throws {RateLimitError} `RATE_LIMITED`
        * @throws {ServerError} `INTERNAL_ERROR`
        * @throws {ConnectionError} `ABORTED` when `options.signal` cancels a stale request
@@ -61,8 +61,9 @@ export function createReferenceApi(core) {
        * @param {RequestOptions} [options]
        * @returns {Promise<Schemas["Airport"]>}
        * @throws {NotFoundError} `NOT_FOUND` (unknown code)
+       * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST`
        * @throws {AuthenticationError} `INVALID_API_KEY`
-       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`
+       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`
        * @throws {RateLimitError} `RATE_LIMITED`
        * @throws {ServerError} `INTERNAL_ERROR`
        */
@@ -77,9 +78,9 @@ export function createReferenceApi(core) {
        * @param {AirlineListParams} [params]
        * @param {RequestOptions} [options]
        * @returns {Promise<Page<Schemas["Airline"]>>}
-       * @throws {ValidationError} `VALIDATION_FAILED` (more than 100 codes, bad code format)
+       * @throws {ValidationError} `VALIDATION_FAILED` (more than 100 codes, bad code format), `INVALID_REQUEST`
        * @throws {AuthenticationError} `INVALID_API_KEY`
-       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`
+       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`
        * @throws {RateLimitError} `RATE_LIMITED`
        * @throws {ServerError} `INTERNAL_ERROR`
        */
@@ -91,8 +92,9 @@ export function createReferenceApi(core) {
        * @param {RequestOptions} [options]
        * @returns {Promise<Schemas["Airline"]>}
        * @throws {NotFoundError} `NOT_FOUND`
+       * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST`
        * @throws {AuthenticationError} `INVALID_API_KEY`
-       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`
+       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`
        * @throws {RateLimitError} `RATE_LIMITED`
        * @throws {ServerError} `INTERNAL_ERROR`
        */
@@ -107,9 +109,9 @@ export function createReferenceApi(core) {
        * @param {CountryListParams} [params]
        * @param {RequestOptions} [options]
        * @returns {Promise<Page<Schemas["Country"]>>}
-       * @throws {ValidationError} `VALIDATION_FAILED`
+       * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST`
        * @throws {AuthenticationError} `INVALID_API_KEY`
-       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`
+       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`
        * @throws {RateLimitError} `RATE_LIMITED`
        * @throws {ServerError} `INTERNAL_ERROR`
        */
@@ -124,9 +126,9 @@ export function createReferenceApi(core) {
        * @param {CurrencyListParams} [params]
        * @param {RequestOptions} [options]
        * @returns {Promise<Page<Schemas["Currency"]>>}
-       * @throws {ValidationError} `VALIDATION_FAILED`
+       * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST`
        * @throws {AuthenticationError} `INVALID_API_KEY`
-       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`
+       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`
        * @throws {RateLimitError} `RATE_LIMITED`
        * @throws {ServerError} `INTERNAL_ERROR`
        */

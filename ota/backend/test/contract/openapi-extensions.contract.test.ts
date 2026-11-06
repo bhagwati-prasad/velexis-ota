@@ -1832,6 +1832,114 @@ describe("storefront.resolve: only the sub-domain redirects (lead decision (2d) 
   });
 });
 
+describe("the generic refusals of the guards (lead decision (9e) of 2026-11-06)", () => {
+  /** The token schemes a session guard (customer, staff) or the booking access guard reads from a request. */
+  const TOKEN_SCHEMES = ["customerAuth", "customerCookie", "staffAuth", "bookingToken", "bookingCookie"];
+
+  /**
+   * The generic codes a request to `op` can meet, by the rules of info.description's **Generic refusals**, which follow
+   * the guards' code: the caller guard checks a credential on every route (caller-resolver.ts, api-key.verifier.ts,
+   * caller.guard.ts), the scope guard every route bound to an operation, which the health endpoints are not
+   * (scope.guard.ts), the tenant, customer, staff and booking access guards a token where the operation reads one, the
+   * tenant guard also the service key's console calls without a staff token (tenant.guard.ts, tenant-resolver.ts), and
+   * the permission guard a console operation's `x-permission` (permission.guard.ts).
+   */
+  function genericCodesOf(op: Operation): string[] {
+    const codes = ["VALIDATION_FAILED", "INVALID_REQUEST", "INVALID_API_KEY", "ORIGIN_NOT_ALLOWED"];
+    if (!op.path.startsWith("/health/")) {
+      codes.push("SCOPE_NOT_ALLOWED");
+    }
+    const console = op.spec["x-scope"] === "console";
+    if (
+      console ||
+      securityOf(op).some((requirement) => TOKEN_SCHEMES.some((scheme) => scheme in requirement))
+    ) {
+      codes.push("UNAUTHENTICATED");
+    }
+    const permission = op.spec["x-permission"];
+    if (console && typeof permission === "string" && permission !== "none") {
+      codes.push("FORBIDDEN");
+    }
+    return codes;
+  }
+
+  it("[FIX-W45-OTA AC1] lists the generic refusals a request can meet in every operation's x-error-codes", () => {
+    expect(workingOperations.length).toBeGreaterThanOrEqual(135);
+    const missing = workingOperations.flatMap((op) =>
+      genericCodesOf(op)
+        .filter((code) => !((op.spec["x-error-codes"] as string[] | undefined) ?? []).includes(code))
+        .map((code) => `${op.operationId}: ${code}`),
+    );
+    expect(missing).toEqual([]);
+    // The rules tell the operations apart: the health endpoints bind no operation (no scope check), the public
+    // reads take no token, the console operations always read a staff credential.
+    expect(genericCodesOf(operation("healthLive"))).toEqual([
+      "VALIDATION_FAILED",
+      "INVALID_REQUEST",
+      "INVALID_API_KEY",
+      "ORIGIN_NOT_ALLOWED",
+    ]);
+    expect(genericCodesOf(operation("getStorefront"))).not.toContain("UNAUTHENTICATED");
+    expect(genericCodesOf(operation("createFlightSearch"))).toContain("UNAUTHENTICATED");
+    expect(genericCodesOf(operation("consoleSignIn"))).toEqual(
+      expect.arrayContaining(["SCOPE_NOT_ALLOWED", "UNAUTHENTICATED"]),
+    );
+    expect(genericCodesOf(operation("consoleSignIn"))).not.toContain("FORBIDDEN");
+    expect(genericCodesOf(operation("consoleListBookings"))).toContain("FORBIDDEN");
+  });
+
+  it("[FIX-W45-OTA AC1] answers every listed code with a listed status and lists a code for every error status", () => {
+    for (const op of workingOperations) {
+      const codes = (op.spec["x-error-codes"] as ErrorCode[] | undefined) ?? [];
+      const statuses = Object.keys(objectAt(op.spec, "responses"));
+      for (const code of codes) {
+        expect([op.operationId, code, statuses.includes(String(ERROR_CATALOGUE[code].status))]).toEqual([
+          op.operationId,
+          code,
+          true,
+        ]);
+      }
+      for (const status of statuses.filter((value) => Number(value) >= 400)) {
+        expect([
+          op.operationId,
+          status,
+          codes.some((code) => String(ERROR_CATALOGUE[code].status) === status),
+        ]).toEqual([op.operationId, status, true]);
+      }
+      // A pending operation's 501 is the route-parity answer of x-milestone, never one of its responses.
+      expect([op.operationId, codes.includes("NOT_IMPLEMENTED"), statuses.includes("501")]).toEqual([
+        op.operationId,
+        false,
+        false,
+      ]);
+    }
+  });
+
+  it("[FIX-W45-OTA AC1] says in info.description which generic refusals are listed and where", () => {
+    const description = String(objectAt(working, "info")["description"]);
+    // The paragraph itself, up to the next one of the introduction (folded lines are joined by spaces).
+    const start = description.indexOf("**Generic refusals.**");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = description.indexOf("**MVP vendor extensions.**", start);
+    const paragraph = description.slice(start, end === -1 ? undefined : end).replace(/\s+/g, " ");
+    for (const answer of [
+      "`400 INVALID_REQUEST`",
+      "`400 VALIDATION_FAILED`",
+      "`401 INVALID_API_KEY`",
+      "`403 ORIGIN_NOT_ALLOWED`",
+      "`403 SCOPE_NOT_ALLOWED`",
+      "`401 UNAUTHENTICATED`",
+      "`403 FORBIDDEN`",
+      "`501 NOT_IMPLEMENTED`",
+      // The refusals these rules do not list everywhere are named as such, so no reader takes the list as complete.
+      "`403 HOST_NOT_ALLOWED`",
+      "`503 SERVICE_UNAVAILABLE`",
+    ]) {
+      expect([answer, paragraph.includes(answer)]).toEqual([answer, true]);
+    }
+  });
+});
+
 describe("the frozen original", () => {
   it("is unchanged under docs/velexis-sdk: same bytes, no MVP extension [OBE-009 AC2]", () => {
     const sha256 = createHash("sha256").update(readFileSync(FROZEN_DOCUMENT)).digest("hex");

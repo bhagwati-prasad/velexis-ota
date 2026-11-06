@@ -293,8 +293,8 @@ function createConsoleAuthApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleStaffSession>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
-     * @throws {AuthenticationError} `PORTAL_TOKEN_INVALID`, `INVALID_CREDENTIALS`, `STAFF_MFA_REQUIRED`, `INVALID_API_KEY` (401)
-     * @throws {PermissionError} `STAFF_MEMBERSHIP_INACTIVE`, `MFA_REQUIRED`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {AuthenticationError} `PORTAL_TOKEN_INVALID`, `INVALID_CREDENTIALS`, `STAFF_MFA_REQUIRED`, `INVALID_API_KEY`, `UNAUTHENTICATED` (401)
+     * @throws {PermissionError} `STAFF_MEMBERSHIP_INACTIVE`, `MFA_REQUIRED`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {VelexisError} `ACCOUNT_LOCKED` (423)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
@@ -311,9 +311,9 @@ function createConsoleAuthApi(core) {
      * @param {ConsoleRefreshParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleStaffSession>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
-     * @throws {AuthenticationError} `REFRESH_TOKEN_INVALID`, `REFRESH_TOKEN_REUSED`, `INVALID_API_KEY` (401: sign the staff member out)
-     * @throws {PermissionError} `STAFF_MEMBERSHIP_INACTIVE`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
+     * @throws {AuthenticationError} `REFRESH_TOKEN_INVALID`, `REFRESH_TOKEN_REUSED`, `INVALID_API_KEY` (401: sign the staff member out), `UNAUTHENTICATED` (401)
+     * @throws {PermissionError} `STAFF_MEMBERSHIP_INACTIVE`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -328,9 +328,9 @@ function createConsoleAuthApi(core) {
      * @param {ConsoleSignOutParams} [params]
      * @param {RequestOptions} [options]
      * @returns {Promise<void>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY` (401)
-     * @throws {PermissionError} `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -344,8 +344,9 @@ function createConsoleAuthApi(core) {
      * @param {ConsoleMeParams} [params]
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleStaffProfile>}
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401: redirect to sign-in)
-     * @throws {PermissionError} `STAFF_MEMBERSHIP_INACTIVE`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `STAFF_MEMBERSHIP_INACTIVE`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
@@ -370,7 +371,7 @@ function createConsoleBookingsApi(core) {
      * @returns {Promise<ConsoleBookingPage>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
@@ -386,9 +387,9 @@ function createConsoleBookingsApi(core) {
      * @param {ConsoleGetBookingParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleBooking>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {SupplierError} only with `refresh`: `SUPPLIER_NOT_CONFIGURED` (424), `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504); retry without `refresh`
@@ -404,9 +405,9 @@ function createConsoleBookingsApi(core) {
      * @param {ConsoleFindByRecordLocatorParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<PnrLookupResult>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400: malformed record locator), `SUPPLIER_REJECTED` (422)
+     * @throws {ValidationError} `VALIDATION_FAILED` (400: malformed record locator), `SUPPLIER_REJECTED` (422), `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404: no order, `error.supplier` set)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {SupplierError} `SUPPLIER_NOT_CONFIGURED` (424), `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504)
@@ -423,9 +424,9 @@ function createConsoleBookingsApi(core) {
      * @param {ConsoleImportBookingParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleBooking>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `UNPROCESSABLE` (422: several matches, no contact e-mail), `SUPPLIER_REJECTED` (422)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `UNPROCESSABLE` (422: several matches, no contact e-mail), `SUPPLIER_REJECTED` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404: no such order)
      * @throws {ConflictError} `ORDER_ALREADY_IMPORTED` (409, `details.bookingId`), `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
@@ -443,9 +444,9 @@ function createConsoleBookingsApi(core) {
      * @param {ConsoleRetrieveFlightOrderParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleFlightOrderRetrieval>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `SUPPLIER_REJECTED` (422)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `SUPPLIER_REJECTED` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404: booking or Amadeus order)
      * @throws {ConflictError} `BOOKING_NOT_MODIFIABLE` (409: the booking has no Amadeus order)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
@@ -464,9 +465,9 @@ function createConsoleBookingsApi(core) {
      * @param {ConsoleCreateBookingParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleBooking>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `TRAVELER_DATA_INVALID`, `CONTACT_DATA_INVALID`, `UNPROCESSABLE`, `SUPPLIER_REJECTED` (422)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `TRAVELER_DATA_INVALID`, `CONTACT_DATA_INVALID`, `UNPROCESSABLE`, `SUPPLIER_REJECTED` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `OFFICE_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `OFFICE_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404: priced offer or customer)
      * @throws {PriceChangedError} `PRICE_CHANGED` (409)
      * @throws {SoldOutError} `SOLD_OUT` (409)
@@ -491,7 +492,7 @@ function createConsoleBookingsApi(core) {
      * @throws {TypeError} without a valid `ifMatch`, before any request
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `TRAVELER_DATA_INVALID`, `CONTACT_DATA_INVALID`, `SUPPLIER_REJECTED` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `OFFICE_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `OFFICE_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {ConflictError} `VERSION_CONFLICT`, `BOOKING_NOT_MODIFIABLE`, `BOOKING_ALREADY_CANCELLED` (409)
      * @throws {VelexisError} `PRECONDITION_FAILED` (412: stale `ifMatch`, reload)
@@ -511,10 +512,10 @@ function createConsoleBookingsApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleBooking>}
      * @throws {TypeError} without a valid `ifMatch`, before any request
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `SUPPLIER_REJECTED` (422)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `SUPPLIER_REJECTED` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
      * @throws {PaymentError} `PAYMENT_REQUIRED`, `PAYMENT_DECLINED` (402)
-     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {ConflictError} `ALREADY_ISSUED`, `BOOKING_ALREADY_CANCELLED`, `BOOKING_NOT_MODIFIABLE`, `VERSION_CONFLICT`, `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {VelexisError} `PRECONDITION_FAILED` (412)
@@ -534,9 +535,9 @@ function createConsoleBookingsApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleBooking>}
      * @throws {TypeError} without a valid `ifMatch`, before any request
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `UNPROCESSABLE` (422: refund above the captured amount), `SUPPLIER_REJECTED` (422)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `UNPROCESSABLE` (422: refund above the captured amount), `SUPPLIER_REJECTED` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {ConflictError} `BOOKING_ALREADY_CANCELLED`, `BOOKING_NOT_MODIFIABLE`, `VERSION_CONFLICT`, `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {VelexisError} `PRECONDITION_FAILED` (412)
@@ -554,9 +555,9 @@ function createConsoleBookingsApi(core) {
      * @param {ConsoleResyncBookingParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleBookingResyncResult>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `SUPPLIER_REJECTED` (422)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `SUPPLIER_REJECTED` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {ConflictError} `BOOKING_NOT_MODIFIABLE` (409: no Amadeus order)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
@@ -572,9 +573,9 @@ function createConsoleBookingsApi(core) {
      * @param {ConsoleAddBookingNoteParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleBookingNote>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
@@ -601,7 +602,7 @@ function createConsoleQueuesApi(core) {
      * @returns {Promise<ConsoleQueuePage>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400: bad cursor), `SUPPLIER_REJECTED` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `OFFICE_NOT_ALLOWED`, `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE` (403)
+     * @throws {PermissionError} `OFFICE_NOT_ALLOWED`, `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {SupplierError} `SUPPLIER_NOT_CONFIGURED` (424), `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -615,9 +616,9 @@ function createConsoleQueuesApi(core) {
      * @param {ConsoleListQueueSnapshotsParams} [params]
      * @param {RequestOptions} [options]
      * @returns {Promise<Page<QueueSnapshot>>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
@@ -638,9 +639,9 @@ function createConsoleCustomersApi(core) {
      * @param {ConsoleListCustomersParams} [params]
      * @param {RequestOptions} [options]
      * @returns {Promise<Page<ConsoleCustomerSummary>>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
@@ -653,9 +654,9 @@ function createConsoleCustomersApi(core) {
      * @param {ConsoleGetCustomerParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleCustomer>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -680,9 +681,9 @@ function createConsoleSupplierRequestsApi(core) {
      * @param {ConsoleListSupplierRequestsParams} [params]
      * @param {RequestOptions} [options]
      * @returns {Promise<Page<ConsoleSupplierRequest>>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
@@ -713,7 +714,7 @@ function createConsoleAmadeusApi(core) {
      * @returns {Promise<ConsoleAmadeusFlightOffersResult>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `SUPPLIER_REJECTED` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {SupplierError} `SUPPLIER_NOT_CONFIGURED` (424), `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -728,9 +729,9 @@ function createConsoleAmadeusApi(core) {
      * @param {ConsoleAmadeusGetFlightOffersParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleAmadeusFlightOffersResult>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `SUPPLIER_REJECTED` (422)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `SUPPLIER_REJECTED` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {SupplierError} `SUPPLIER_NOT_CONFIGURED` (424), `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -745,9 +746,9 @@ function createConsoleAmadeusApi(core) {
      * @param {ConsoleAmadeusSearchFlightAvailabilitiesParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleAmadeusAvailabilitiesResult>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `SUPPLIER_REJECTED` (422)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `SUPPLIER_REJECTED` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {SupplierError} `SUPPLIER_NOT_CONFIGURED` (424), `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -762,9 +763,9 @@ function createConsoleAmadeusApi(core) {
      * @param {ConsoleAmadeusUpsellAirOffersParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleAmadeusUpsellResult>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `SUPPLIER_REJECTED` (422)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `SUPPLIER_REJECTED` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {SupplierError} `SUPPLIER_NOT_CONFIGURED` (424), `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -781,9 +782,9 @@ function createConsoleAmadeusApi(core) {
      * @param {ConsoleAmadeusQuoteAirOffersParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleAmadeusPricingResult>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `SUPPLIER_REJECTED` (422)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `SUPPLIER_REJECTED` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {SupplierError} `SUPPLIER_NOT_CONFIGURED` (424), `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -799,9 +800,9 @@ function createConsoleAmadeusApi(core) {
      * @param {ConsoleAmadeusCreateFlightOrdersParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleAmadeusFlightOrderResult>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `SUPPLIER_REJECTED` (422)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `SUPPLIER_REJECTED` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `OFFICE_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `OFFICE_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {SoldOutError} `SOLD_OUT` (409)
      * @throws {PriceChangedError} `PRICE_CHANGED` (409)
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED` (409)
@@ -821,9 +822,9 @@ function createConsoleAmadeusApi(core) {
      * @param {ConsoleAmadeusIssueFlightOrderParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleAmadeusFlightOrderResult>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `SUPPLIER_REJECTED` (422)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `SUPPLIER_REJECTED` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {ConflictError} `VERSION_CONFLICT` (409: Amadeus 2552), `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
@@ -840,9 +841,9 @@ function createConsoleAmadeusApi(core) {
      * @param {ConsoleAmadeusGetFlightOrderParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleAmadeusFlightOrderResult>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `SUPPLIER_REJECTED` (422)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `SUPPLIER_REJECTED` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {SupplierError} `SUPPLIER_NOT_CONFIGURED` (424), `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504)
@@ -859,9 +860,9 @@ function createConsoleAmadeusApi(core) {
      * @param {ConsoleAmadeusPatchFlightOrderParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleAmadeusFlightOrderResult>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `SUPPLIER_REJECTED` (422)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `SUPPLIER_REJECTED` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `OFFICE_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `OFFICE_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {ConflictError} `VERSION_CONFLICT` (409: Amadeus 2552)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
@@ -879,9 +880,9 @@ function createConsoleAmadeusApi(core) {
      * @param {ConsoleAmadeusCancelFlightOrderParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleAmadeusCancelResult>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `SUPPLIER_REJECTED` (422)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `SUPPLIER_REJECTED` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404: unknown or already cancelled)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {SupplierError} `SUPPLIER_NOT_CONFIGURED` (424), `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504)
@@ -897,9 +898,9 @@ function createConsoleAmadeusApi(core) {
      * @param {ConsoleAmadeusGetFlightOrderByReferenceParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleAmadeusFlightOrdersByReferenceResult>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `SUPPLIER_REJECTED` (422)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `SUPPLIER_REJECTED` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {SupplierError} `SUPPLIER_NOT_CONFIGURED` (424), `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504)
@@ -915,9 +916,9 @@ function createConsoleAmadeusApi(core) {
      * @param {ConsoleAmadeusGetQueueParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsoleAmadeusQueueResult>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `SUPPLIER_REJECTED` (422)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `SUPPLIER_REJECTED` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `OFFICE_NOT_ALLOWED`, `FORBIDDEN`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED` (403)
+     * @throws {PermissionError} `OFFICE_NOT_ALLOWED`, `FORBIDDEN`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {SupplierError} `SUPPLIER_NOT_CONFIGURED` (424), `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -941,9 +942,9 @@ function createConsoleMarkupRulesApi(core) {
      * @param {ConsoleListMarkupRulesParams} [params]
      * @param {RequestOptions} [options]
      * @returns {Promise<Page<MarkupRule>>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
@@ -957,9 +958,9 @@ function createConsoleMarkupRulesApi(core) {
      * @param {ConsoleCreateMarkupRuleParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<MarkupRule>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -972,9 +973,9 @@ function createConsoleMarkupRulesApi(core) {
      * @param {ConsoleMarkupRuleRefParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<MarkupRule>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -991,9 +992,9 @@ function createConsoleMarkupRulesApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<MarkupRule>}
      * @throws {TypeError} without a valid `ifMatch`, before any request
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {ConflictError} `CONFLICT` (409, `details.reason` `default_rule`)
      * @throws {VelexisError} `PRECONDITION_FAILED` (412: stale `ifMatch`, reload)
@@ -1011,9 +1012,9 @@ function createConsoleMarkupRulesApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<void>}
      * @throws {TypeError} without a valid `ifMatch`, before any request
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {ConflictError} `CONFLICT` (409, `details.reason` `default_rule`)
      * @throws {VelexisError} `PRECONDITION_FAILED` (412)
@@ -1039,9 +1040,9 @@ function createConsoleFeeRulesApi(core) {
      * @param {ConsoleListFeeRulesParams} [params]
      * @param {RequestOptions} [options]
      * @returns {Promise<Page<FeeRule>>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
@@ -1054,9 +1055,9 @@ function createConsoleFeeRulesApi(core) {
      * @param {ConsoleCreateFeeRuleParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<FeeRule>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -1069,9 +1070,9 @@ function createConsoleFeeRulesApi(core) {
      * @param {ConsoleFeeRuleRefParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<FeeRule>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -1086,9 +1087,9 @@ function createConsoleFeeRulesApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<FeeRule>}
      * @throws {TypeError} without a valid `ifMatch`, before any request
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {VelexisError} `PRECONDITION_FAILED` (412: stale `ifMatch`, reload)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
@@ -1104,9 +1105,9 @@ function createConsoleFeeRulesApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<void>}
      * @throws {TypeError} without a valid `ifMatch`, before any request
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {VelexisError} `PRECONDITION_FAILED` (412)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
@@ -1131,9 +1132,9 @@ function createConsoleStorefrontSettingsApi(core) {
      * @param {ConsoleGetStorefrontSettingsParams} [params]
      * @param {RequestOptions} [options]
      * @returns {Promise<StorefrontSettings>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
@@ -1149,9 +1150,9 @@ function createConsoleStorefrontSettingsApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<StorefrontSettingsUpdateResult>}
      * @throws {TypeError} without a valid `ifMatch`, before any request
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `UNPROCESSABLE` (422: `details.reason` and `details.path`)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `UNPROCESSABLE` (422: `details.reason` and `details.path`)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FEATURE_DISABLED` (403: `airlineCard.enabledLive` while the airline card is off), `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FEATURE_DISABLED` (403: `airlineCard.enabledLive` while the airline card is off), `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {VelexisError} `PRECONDITION_FAILED` (412: stale `ifMatch`, reload)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -1176,9 +1177,9 @@ function createConsoleStorefrontPagesApi(core) {
      * @param {ConsoleListStorefrontPagesParams} [params]
      * @param {RequestOptions} [options]
      * @returns {Promise<Page<StorefrontPage>>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
@@ -1192,9 +1193,9 @@ function createConsoleStorefrontPagesApi(core) {
      * @param {ConsoleCreateStorefrontPageParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<StorefrontPage>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `UNPROCESSABLE` (422: `locale_not_supported`, `markdown_not_allowed` with `details.line`, `asset_not_found`, `asset_kind`)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `UNPROCESSABLE` (422: `locale_not_supported`, `markdown_not_allowed` with `details.line`, `asset_not_found`, `asset_kind`)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {ConflictError} `CONFLICT` (409, `details.reason` `page_exists`), `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -1207,9 +1208,9 @@ function createConsoleStorefrontPagesApi(core) {
      * @param {ConsoleStorefrontPageRefParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<StorefrontPage>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -1225,9 +1226,9 @@ function createConsoleStorefrontPagesApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<StorefrontPage>}
      * @throws {TypeError} without a valid `ifMatch`, before any request
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `UNPROCESSABLE` (422: `markdown_not_allowed` with `details.line`, `asset_not_found`, `asset_kind`)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `UNPROCESSABLE` (422: `markdown_not_allowed` with `details.line`, `asset_not_found`, `asset_kind`)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {VelexisError} `PRECONDITION_FAILED` (412: stale `ifMatch`, reload)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
@@ -1243,9 +1244,9 @@ function createConsoleStorefrontPagesApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<void>}
      * @throws {TypeError} without a valid `ifMatch`, before any request
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {ConflictError} `CONFLICT` (409, `details.reason` `page_linked`)
      * @throws {VelexisError} `PRECONDITION_FAILED` (412)
@@ -1270,9 +1271,9 @@ function createConsoleStorefrontAssetsApi(core) {
      * @param {ConsoleListStorefrontAssetsParams} [params]
      * @param {RequestOptions} [options]
      * @returns {Promise<Page<StorefrontAsset>>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
@@ -1293,7 +1294,7 @@ function createConsoleStorefrontAssetsApi(core) {
      * @throws {TypeError} without a `Blob` or `File` as `file` or without `kind`, before any request
      * @throws {ValidationError} `VALIDATION_FAILED` (400: a missing, empty or unknown part), `INVALID_REQUEST` (400: a body that is not well-formed `multipart/form-data`), `ASSET_INVALID` (422: `details.reason` `type`, `size` or `dimensions`)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED`, `CONFLICT` (409, `details.reason` `asset_exists`: the same file is already the asset `details.assetId` of another `details.kind`)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -1307,9 +1308,9 @@ function createConsoleStorefrontAssetsApi(core) {
      * @param {ConsoleDeleteStorefrontAssetParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<void>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {ConflictError} `CONFLICT` (409, `details.reason` `asset_in_use`)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
@@ -1336,9 +1337,9 @@ function createConsoleNotificationTemplatesApi(core) {
      * @param {ConsoleListNotificationTemplatesParams} [params]
      * @param {RequestOptions} [options]
      * @returns {Promise<NotificationTemplateList>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
@@ -1352,9 +1353,9 @@ function createConsoleNotificationTemplatesApi(core) {
      * @param {ConsoleNotificationTemplateRefParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<NotificationTemplate>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
@@ -1371,9 +1372,9 @@ function createConsoleNotificationTemplatesApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<NotificationTemplate>}
      * @throws {TypeError} with a malformed `ifMatch`, before any request
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `TEMPLATE_INVALID` (422: `details.errors[{part, line, message}]`), `UNPROCESSABLE` (422: `locale_not_supported`)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `TEMPLATE_INVALID` (422: `details.errors[{part, line, message}]`), `UNPROCESSABLE` (422: `locale_not_supported`)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {VelexisError} `PRECONDITION_FAILED` (412: `ifMatch` missing for an existing template, stale, or given for none)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -1389,9 +1390,9 @@ function createConsoleNotificationTemplatesApi(core) {
      * @param {ConsolePreviewNotificationTemplateParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<NotificationTemplatePreview>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `TEMPLATE_INVALID` (422: `details.errors`)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `TEMPLATE_INVALID` (422: `details.errors`)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
@@ -1404,9 +1405,9 @@ function createConsoleNotificationTemplatesApi(core) {
      * @param {ConsoleNotificationTemplateRefParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<NotificationTemplate>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
@@ -1451,9 +1452,9 @@ function createConsolePaymentsApi(core) {
      * @param {ConsoleListPaymentsParams} [params]
      * @param {RequestOptions} [options]
      * @returns {Promise<Page<ConsolePayment>>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
@@ -1467,9 +1468,9 @@ function createConsolePaymentsApi(core) {
      * @param {ConsoleGetPaymentParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsolePayment>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404: also a payment of the other environment)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {SupplierError} only with `refresh`: `PAYMENT_PROVIDER_ERROR` (502: Stripe failed or is out of reach; nothing changed)
@@ -1488,10 +1489,10 @@ function createConsolePaymentsApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsolePayment>}
      * @throws {TypeError} without a valid `ifMatch`, before any request
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `UNPROCESSABLE` (422: `currency_mismatch`, `amount_exceeds_authorized`)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `UNPROCESSABLE` (422: `currency_mismatch`, `amount_exceeds_authorized`)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
      * @throws {PaymentError} `PAYMENT_DECLINED` (402: the authorisation expired or was cancelled; nothing captured)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {ConflictError} `CONFLICT` (409, `details.reason` `payment_not_capturable`), `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {VelexisError} `PRECONDITION_FAILED` (412: stale `ifMatch`, reload)
@@ -1511,9 +1512,9 @@ function createConsolePaymentsApi(core) {
      * @param {ConsoleRefundPaymentParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<ConsolePayment>}
-     * @throws {ValidationError} `VALIDATION_FAILED` (400), `UNPROCESSABLE` (422: `currency_mismatch`, `amount_exceeds_captured` with `details.refundable`, `refund_via_airline`)
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `UNPROCESSABLE` (422: `currency_mismatch`, `amount_exceeds_captured` with `details.refundable`, `refund_via_airline`)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ENVIRONMENT_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {NotFoundError} `NOT_FOUND` (404)
      * @throws {ConflictError} `CONFLICT` (409, `details.reason` `payment_not_refundable`), `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {RateLimitError} `RATE_LIMITED` (429)

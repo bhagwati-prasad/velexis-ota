@@ -962,20 +962,41 @@ describe("console payments (api-changes part 2 §3; OADR-0010)", () => {
 
 describe("the health endpoints (api-changes part 2 §5; ADR-0016)", () => {
   it("documents GET /health/live and /health/ready without a credential, as HealthController answers them [OBE-090 AC1]", () => {
-    // A credential sent anyway meets the caller guard (caller-resolver.ts, api-key.verifier.ts): 400 INVALID_REQUEST,
-    // 401 INVALID_API_KEY, 403 ORIGIN_NOT_ALLOWED, or 503 SERVICE_UNAVAILABLE when the key cannot be looked up.
-    const callerGuardErrors: Record<number, Json> = {
-      400: { code: "INVALID_REQUEST", details: { reason: "edge_with_api_key" } },
-      401: { code: "INVALID_API_KEY" },
-      403: { code: "ORIGIN_NOT_ALLOWED" },
-      503: { code: "SERVICE_UNAVAILABLE" },
-    };
+    // A credential sent anyway meets the caller guard (caller-resolver.ts, api-key.verifier.ts, caller.guard.ts): 400
+    // INVALID_REQUEST, 400 VALIDATION_FAILED for the OTA admin's service key without X-Velexis-End-User-IP (listed since
+    // FIX-W45-OTA), 401 INVALID_API_KEY, 403 ORIGIN_NOT_ALLOWED, or 503 SERVICE_UNAVAILABLE when the key cannot be
+    // looked up.
+    const callerGuardErrors: [number, Json][] = [
+      [400, { code: "INVALID_REQUEST", details: { reason: "edge_with_api_key" } }],
+      [
+        400,
+        {
+          code: "VALIDATION_FAILED",
+          fieldErrors: [
+            {
+              path: "/header/X-Velexis-End-User-IP",
+              code: "required",
+              message: "X-Velexis-End-User-IP must be the staff member's IPv4 or IPv6 address",
+            },
+          ],
+        },
+      ],
+      [401, { code: "INVALID_API_KEY" }],
+      [403, { code: "ORIGIN_NOT_ALLOWED" }],
+      [503, { code: "SERVICE_UNAVAILABLE" }],
+    ];
     for (const operationId of HEALTH) {
       const op = operation(operationId);
       expect([operationId, op.spec["security"]]).toEqual([operationId, []]);
       expect([operationId, op.spec["x-error-codes"]]).toEqual([
         operationId,
-        ["INVALID_REQUEST", "INVALID_API_KEY", "ORIGIN_NOT_ALLOWED", "SERVICE_UNAVAILABLE"],
+        [
+          "VALIDATION_FAILED",
+          "INVALID_REQUEST",
+          "INVALID_API_KEY",
+          "ORIGIN_NOT_ALLOWED",
+          "SERVICE_UNAVAILABLE",
+        ],
       ]);
       expect([operationId, objectAt(op.spec, "responses", "200", "headers")]).toEqual([
         operationId,
@@ -985,16 +1006,16 @@ describe("the health endpoints (api-changes part 2 §5; ADR-0016)", () => {
         operationId,
         ["200", "400", "401", "403", "503"],
       ]);
-      for (const [status, error] of Object.entries(callerGuardErrors)) {
+      for (const [status, error] of callerGuardErrors) {
         const body = {
           error: {
             message: "Refused by the caller guard.",
-            status: Number(status),
+            status,
             requestId: "req_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
             ...error,
           },
         };
-        expect([operationId, status, checker.check(operationId, { status: Number(status), body })]).toEqual([
+        expect([operationId, status, checker.check(operationId, { status, body })]).toEqual([
           operationId,
           status,
           [],

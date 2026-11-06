@@ -29,6 +29,9 @@
 //   serviceViaApi   the service key with the X-Forwarded-For and X-Forwarded-Host that Caddy adds on
 //                   api.ota.example.com: never the service caller (`401 INVALID_API_KEY`)
 //   serviceViaEdge  the same through the storefront's /api/* (Caddy's edge headers as well): `400 INVALID_REQUEST`
+//   pkOtherOrigin   alpha's publishable key from an origin it does not list: `403 ORIGIN_NOT_ALLOWED` (FIX-W45-OTA)
+//   serviceNoIp     the OTA admin's service key on a direct loopback connection without X-Velexis-End-User-IP:
+//                   `400 VALIDATION_FAILED` (FIX-W45-OTA)
 //
 // The requests reach no use case: every path parameter is a placeholder no schema takes (`~`) and every body `[]`, so
 // an allowed call ends in the request validation (`400 VALIDATION_FAILED`), or `200` for a read without a path
@@ -40,7 +43,10 @@
 // Every answer but a pending operation's `501` (route parity) is also checked against the document
 // (`expectResponseToMatch`: a status the operation lists and a body of that response's schema). The document lists
 // all of them since OBE-095 closed finding OTA-SR-05: the `400`s of a path value and of the edge header beside an API
-// key, and the credential refusals (`401`, `403`) of the Stripe receivers, were missing before.
+// key, and the credential refusals (`401`, `403`) of the Stripe receivers, were missing before. And every error code an
+// answer carries, that `501` aside, is one of the operation's `x-error-codes` (FIX-W45-OTA, lead decision (9e) of
+// 2026-11-06): the generic refusals of the guards included, which the last four columns meet on every operation (the
+// caller guard checks a credential on every route, the 501 ones, the public files, the receivers and health included).
 //
 // Every request has an end-user IP address of its own (X-Forwarded-For through "Caddy", X-Velexis-End-User-IP for the
 // key servers and the service caller), so no per-IP limit of architecture §8 ever answers 429 here. All requests run in
@@ -102,6 +108,8 @@ const COLUMNS = [
   "permMissing",
   "serviceViaApi",
   "serviceViaEdge",
+  "pkOtherOrigin",
+  "serviceNoIp",
 ] as const;
 type Column = (typeof COLUMNS)[number];
 
@@ -111,12 +119,15 @@ const PERMISSION_COLUMNS: ReadonlySet<Column> = new Set<Column>(["permOnly", "pe
 /** The placeholder of every path parameter: a value no path parameter's schema takes. */
 const PLACEHOLDER = "~";
 
+/** An origin that no publishable key of the matrix lists (the `pkOtherOrigin` column). */
+const OTHER_ORIGIN = "https://elsewhere.example.com";
+
 /** A booking id of the document's shape (`BookingId`) that no booking has, for the operations on one booking. */
 const UNKNOWN_BOOKING_ID = `bkg_${randomBytes(12).toString("hex")}`;
 
 const SETUP_TIMEOUT_MS = Math.max(OPENAPI_SETUP_TIMEOUT_MS, 90_000);
 /**
- * The matrix: about fifteen hundred requests, each answered by a guard or the request validation, a few seconds
+ * The matrix: about seventeen hundred requests, each answered by a guard or the request validation, a few seconds
  * locally; the bound allows for a busy 4-CPU runner and only stops a run that hangs.
  */
 const MATRIX_TIMEOUT_MS = 180_000;
@@ -175,6 +186,9 @@ const isPending = (operation: Operation): boolean => Object.hasOwn(PENDING_OPERA
  */
 const isPendingAnswer = (operation: Operation, res: Response): boolean =>
   isPending(operation) && res.status === 501;
+/** The error codes the document lists for an operation (`x-error-codes`). */
+const errorCodesOf = (operation: Operation): readonly string[] =>
+  (specOf(operation)["x-error-codes"] as string[] | undefined) ?? [];
 /** A console operation whose `x-permission` the permission guard checks (not the four staff-session operations). */
 const isGuardedConsole = (operation: Operation): boolean =>
   operation.scope === "console" && operation.permission !== null && operation.permission !== "none";
@@ -259,6 +273,14 @@ function expectedAnswer(operation: Operation, column: Column): Expected {
   }
   if (column === "serviceViaApi") {
     return expect_(INVALID_API_KEY, "service key through Caddy is an unknown key");
+  }
+  // The caller guard checks a credential on every route before anything else: a publishable key's origin allow-list
+  // (api-key.verifier.ts) and the service caller's end-user address (caller.guard.ts endUserOf).
+  if (column === "pkOtherOrigin") {
+    return expect_(ORIGIN_NOT_ALLOWED, "a publishable key from an origin it does not list");
+  }
+  if (column === "serviceNoIp") {
+    return expect_(VALIDATION, "the service key without X-Velexis-End-User-IP");
   }
   // A pending operation: the caller guard runs, nothing else (the 501 routes skip tenant, scope and validation).
   if (isPending(operation)) {
@@ -364,6 +386,8 @@ function expectedCustomer(operation: Operation, column: Column): Expected {
     case "permMissing":
     case "serviceViaApi":
     case "serviceViaEdge":
+    case "pkOtherOrigin":
+    case "serviceNoIp":
       // Decided before (expectedAnswer) or not a column of a customer operation (columnsOf).
       throw new Error(`${operation.operationId}: no ${column} column on a customer operation`);
   }
@@ -427,6 +451,8 @@ function expectedConsole(operation: Operation, column: Column): Expected {
     case "none":
     case "serviceViaApi":
     case "serviceViaEdge":
+    case "pkOtherOrigin":
+    case "serviceNoIp":
       // Decided before (expectedAnswer).
       throw new Error(`${operation.operationId}: no ${column} column on a console operation`);
   }
@@ -733,6 +759,12 @@ function credentialOf(
           "X-Forwarded-Host": alpha.host,
         },
       };
+    case "pkOtherOrigin":
+      return { headers: pkHeaders(alpha.pk, OTHER_ORIGIN) };
+    case "serviceNoIp": {
+      const { "X-Velexis-End-User-IP": _ip, ...withoutIp } = serviceHeaders();
+      return { headers: withoutIp };
+    }
     case "right":
       if (isOpen(operation)) {
         return { headers: {} };
@@ -942,6 +974,21 @@ function mismatches(selected: readonly Cell[]): string[] {
   return lines;
 }
 
+/**
+ * The cells whose error code the operation's `x-error-codes` does not list, each as `<operationId> [<column>]: <code>`.
+ * Every answer with an error body counts, the guards' generic refusals included, but a pending operation's `501
+ * NOT_IMPLEMENTED`: that one is the route-parity answer of `x-milestone`, not a response of the operation (FIX-W45-OTA).
+ */
+function unlistedCodes(selected: readonly Cell[]): string[] {
+  return selected.flatMap(({ operation, column, res }) => {
+    const code = answerOf(res)[1];
+    if (code === undefined || isPendingAnswer(operation, res) || errorCodesOf(operation).includes(code)) {
+      return [];
+    }
+    return [`${operation.operationId} [${column}]: ${code}`];
+  });
+}
+
 describe("the coverage of the matrix", () => {
   it("[OBE-084 AC1] calls every operation of the operations index with every credential of the matrix", () => {
     expect(otaOperations.length).toBeGreaterThan(0);
@@ -977,6 +1024,8 @@ describe("the authentication matrix", () => {
           expectResponseToMatch(operation.operationId, res);
         }
       }
+      // Every error code it answered is one of the operation's x-error-codes (FIX-W45-OTA).
+      expect(unlistedCodes(selected)).toEqual([]);
     },
   );
 
@@ -1020,6 +1069,50 @@ describe("the authentication matrix", () => {
       expect(checked.filter((cell) => cell.operation === receiver).map((cell) => cell.column)).toEqual(
         columnsOf(receiver),
       );
+    }
+  });
+
+  it("[FIX-W45-OTA AC2] finds every error code the matrix answered in that operation's x-error-codes", () => {
+    // The whole matrix at once: each line names the operation, the column and the code the document does not list.
+    expect(unlistedCodes(cells)).toEqual([]);
+    // Every cell with an error code is checked but a pending operation's 501, and those are exactly the cells the
+    // status check leaves out (the OBE-095 test above): the two checks cover the same cells.
+    const withCode = cells.filter(({ res }) => answerOf(res)[1] !== undefined);
+    const checked = withCode.filter(({ operation, res }) => !isPendingAnswer(operation, res));
+    expect(checked.length).toBeGreaterThan(cells.length / 2);
+    expect(withCode.length - checked.length).toBe(
+      cells.filter(({ operation, res }) => isPendingAnswer(operation, res)).length,
+    );
+    // The generic refusals of the guards are among the codes checked. The caller guard's are met on every operation
+    // (the edge header beside a key, the service key through Caddy, a publishable key from an origin it does not
+    // list, the service key without the end user's address), the scope guard's on every operation bound to a handler
+    // (all but the two health endpoints and the pending operations' 501 routes), the session guards' on operations of
+    // every scope that reads a token.
+    const answering = (code: string): string[] => [
+      ...new Set(
+        checked.filter(({ res }) => answerOf(res)[1] === code).map(({ operation }) => operation.operationId),
+      ),
+    ];
+    const everyOperation = otaOperations.map((operation) => operation.operationId).sort();
+    for (const code of ["INVALID_REQUEST", "INVALID_API_KEY", "ORIGIN_NOT_ALLOWED", "VALIDATION_FAILED"]) {
+      expect([code, answering(code).sort()]).toEqual([code, everyOperation]);
+    }
+    expect(answering("SCOPE_NOT_ALLOWED").sort()).toEqual(
+      otaOperations
+        .filter((operation) => !isHealth(operation) && !isPending(operation))
+        .map((operation) => operation.operationId)
+        .sort(),
+    );
+    for (const code of ["UNAUTHENTICATED", "FORBIDDEN"]) {
+      expect([code, answering(code).length > 0]).toEqual([code, true]);
+    }
+    // The service key without X-Velexis-End-User-IP is refused for that header, by the caller guard.
+    for (const { operation, res } of cells.filter((cell) => cell.column === "serviceNoIp")) {
+      const fieldErrors = (res.body as { error?: { fieldErrors?: { path?: string }[] } }).error?.fieldErrors;
+      expect([operation.operationId, fieldErrors?.map((error) => error.path)]).toEqual([
+        operation.operationId,
+        ["/header/X-Velexis-End-User-IP"],
+      ]);
     }
   });
 

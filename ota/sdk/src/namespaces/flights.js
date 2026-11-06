@@ -84,7 +84,7 @@ export function createFlightsApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<FlightSearch>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `UNPROCESSABLE` (422: past dates, infants > adults, more than 9 seats)
-     * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`
+     * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` (401)
      * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED`
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED`, `CONFLICT` (first attempt still running)
      * @throws {RateLimitError} `RATE_LIMITED`
@@ -100,7 +100,8 @@ export function createFlightsApi(core) {
      * @param {GetFlightSearchParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<FlightSearch>}
-     * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST`
+     * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`
      * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`
      * @throws {NotFoundError} `NOT_FOUND` (unknown, purged, another customer's search, or an availability search id)
      * @throws {RateLimitError} `RATE_LIMITED`
@@ -117,7 +118,7 @@ export function createFlightsApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<FlightResultsPage>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (bad filter, a cursor from other filters)
-     * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`
+     * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`
      * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {ConflictError} `SEARCH_NOT_COMPLETED` (an asynchronous search still pending, or failed)
@@ -134,7 +135,8 @@ export function createFlightsApi(core) {
      * @param {GetFlightOfferParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<FlightOffer>}
-     * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST`
+     * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`
      * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {ExpiredError} `OFFER_EXPIRED` (search again)
@@ -151,7 +153,7 @@ export function createFlightsApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<UpsellResult>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `OFFER_COMBINATION_INVALID` (422)
-     * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`
+     * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` (401)
      * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED`
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {SoldOutError} `SOLD_OUT`
@@ -173,7 +175,7 @@ export function createFlightsApi(core) {
      * @returns {Promise<FlightAvailabilitySearchResult>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `UNPROCESSABLE` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED`
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED`
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED`, `ORIGIN_NOT_ALLOWED` (403)
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED`, `CONFLICT`
      * @throws {RateLimitError} `RATE_LIMITED`
      * @throws {SupplierError} `SUPPLIER_NOT_CONFIGURED` (424), `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504)
@@ -190,7 +192,7 @@ export function createFlightsApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<PricedOffer>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `UNPROCESSABLE`, `TRAVELER_DATA_INVALID`, `OFFER_COMBINATION_INVALID`, `ANCILLARY_NOT_AVAILABLE` (422)
-     * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`
+     * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` (401)
      * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {PriceChangedError} `PRICE_CHANGED` (only with `expectedTotal`)
@@ -209,7 +211,8 @@ export function createFlightsApi(core) {
      * @param {PricedOfferParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<PricedOffer>}
-     * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST`
+     * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`
      * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {ExpiredError} `OFFER_EXPIRED` (price again)
@@ -225,7 +228,8 @@ export function createFlightsApi(core) {
      * @param {PricedOfferParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<AncillaryCatalogue>}
-     * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
+     * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` (401)
      * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED`
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {ExpiredError} `OFFER_EXPIRED`
@@ -241,7 +245,8 @@ export function createFlightsApi(core) {
      * @param {PricedOfferParams} params
      * @param {RequestOptions} [options]
      * @returns {Promise<FareRuleSet>}
-     * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
+     * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` (401)
      * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {ExpiredError} `OFFER_EXPIRED`

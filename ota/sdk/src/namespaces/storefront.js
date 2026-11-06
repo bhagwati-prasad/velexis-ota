@@ -82,8 +82,9 @@ export function createStorefrontApi(core) {
      * @param {StorefrontGetParams} [params] `locale` is a shortcut for `options.locale` (`Accept-Language`)
      * @param {RequestOptions} [options]
      * @returns {Promise<Schemas["StorefrontConfig"]>}
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST`
      * @throws {AuthenticationError} `INVALID_API_KEY`
-     * @throws {PermissionError} `TENANT_SUSPENDED` (render a maintenance page), `ORIGIN_NOT_ALLOWED`, `HOST_NOT_ALLOWED`
+     * @throws {PermissionError} `TENANT_SUSPENDED` (render a maintenance page), `ORIGIN_NOT_ALLOWED`, `HOST_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`
      * @throws {RateLimitError} `RATE_LIMITED`
      * @throws {ServerError} `INTERNAL_ERROR`, `SERVICE_UNAVAILABLE` (503: the platform's rows could not be read; retry)
      */
@@ -97,8 +98,8 @@ export function createStorefrontApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<Schemas["StorefrontHostResolution"]>}
      * @throws {NotFoundError} `NOT_FOUND` (unknown or unverified host, or an OTA the key may not act for)
-     * @throws {ValidationError} `VALIDATION_FAILED` (malformed host)
-     * @throws {PermissionError} `SCOPE_NOT_ALLOWED` (publishable key), `HOST_NOT_ALLOWED`
+     * @throws {ValidationError} `VALIDATION_FAILED` (malformed host), `INVALID_REQUEST`
+     * @throws {PermissionError} `SCOPE_NOT_ALLOWED` (publishable key), `HOST_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED`
      * @throws {AuthenticationError} `INVALID_API_KEY`
      * @throws {RateLimitError} `RATE_LIMITED`
      * @throws {ServerError} `NOT_IMPLEMENTED` (501, deferred), `INTERNAL_ERROR`
@@ -114,9 +115,9 @@ export function createStorefrontApi(core) {
      * @param {StorefrontListPagesParams} [params]
      * @param {RequestOptions} [options]
      * @returns {Promise<Schemas["StorefrontPageList"]>}
-     * @throws {ValidationError} `VALIDATION_FAILED`
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST`
      * @throws {AuthenticationError} `INVALID_API_KEY`
-     * @throws {PermissionError} `TENANT_SUSPENDED`, `ORIGIN_NOT_ALLOWED`, `HOST_NOT_ALLOWED`
+     * @throws {PermissionError} `TENANT_SUSPENDED`, `ORIGIN_NOT_ALLOWED`, `HOST_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`
      * @throws {RateLimitError} `RATE_LIMITED`
      * @throws {ServerError} `INTERNAL_ERROR`
      */
@@ -133,9 +134,9 @@ export function createStorefrontApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<Schemas["StorefrontPageContent"]>}
      * @throws {NotFoundError} `NOT_FOUND` (no published page of the slug in the locale or the default locale)
-     * @throws {ValidationError} `VALIDATION_FAILED`
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST`
      * @throws {AuthenticationError} `INVALID_API_KEY`
-     * @throws {PermissionError} `TENANT_SUSPENDED`, `ORIGIN_NOT_ALLOWED`, `HOST_NOT_ALLOWED`
+     * @throws {PermissionError} `TENANT_SUSPENDED`, `ORIGIN_NOT_ALLOWED`, `HOST_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`
      * @throws {RateLimitError} `RATE_LIMITED`
      * @throws {ServerError} `INTERNAL_ERROR`
      */
