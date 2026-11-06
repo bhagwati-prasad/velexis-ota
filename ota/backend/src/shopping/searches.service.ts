@@ -855,13 +855,16 @@ export class SearchesService {
             id: last.id,
           })
         : null;
+    // Each payload of the page is parsed once here for its codes and its upsell offers (OBE-092).
+    let upsells = false;
     for (const row of rows) {
       const parsed = parseOffer(row.payload);
       if (parsed !== undefined) {
         addOfferCodes(codes, parsed);
+        upsells ||= parsed.upsellFlightOfferIds.length > 0;
       }
     }
-    const offerIds = await this.offerIdsOf(trx, search, rows);
+    const offerIds = upsells ? await this.offerIdsOf(trx, search) : new Map<string, string>();
     const amadeusDictionary = amadeusDictionaries(search.dictionaries);
     const highlights = isRecord(search.highlights) ? (search.highlights as FlightSearchHighlights) : null;
     const now = this.clock.now();
@@ -885,16 +888,8 @@ export class SearchesService {
     };
   }
 
-  /** Amadeus offer id → `off_…` of the search, when a row of the page names upsell offers. */
-  private async offerIdsOf(
-    trx: TenantTransaction,
-    search: SearchRow,
-    rows: readonly ListedOffer[],
-  ): Promise<ReadonlyMap<string, string>> {
-    const needed = rows.some((row) => (parseOffer(row.payload)?.upsellFlightOfferIds.length ?? 0) > 0);
-    if (!needed) {
-      return new Map();
-    }
+  /** Amadeus offer id → `off_…` of the search, for a page whose rows name upsell offers. */
+  private async offerIdsOf(trx: TenantTransaction, search: SearchRow): Promise<ReadonlyMap<string, string>> {
     const summaries = await this.repository.offerSummaries(trx, search.id);
     return new Map(summaries.map((summary) => [summary.amadeusOfferId, summary.id]));
   }

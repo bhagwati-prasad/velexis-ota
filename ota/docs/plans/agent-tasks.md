@@ -2744,7 +2744,8 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - Each runbook names the signals (logs, `/health/ready`, console views), the commands and the escalation; the developer walks through the checklist and records the date.
 - **Verify:** `test -f ota/docs/runbooks/launch-checklist.md && test -f ota/docs/runbooks/supplier-timeout-and-reconciliation.md`
 
-### OBE-092 · Cut the API's CPU per search so answers of 250 offers meet the search budget
+### OBE-092 · Cut the API's CPU per search so answers of 250 offers meet the search budget ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M6
 - **Depends on:** OBE-028

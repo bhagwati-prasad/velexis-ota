@@ -1,6 +1,6 @@
 // Unit tests of the result filters, facets, best score, highlights and cursors (OBE-021; facets.ts).
-import { describe, expect, it } from "vitest";
-import { Money } from "../pricing/pricing.types";
+import { beforeAll, describe, expect, it } from "vitest";
+import { Money, type MoneyValue } from "../pricing/pricing.types";
 import {
   bestScores,
   computeFacets,
@@ -17,6 +17,9 @@ import {
   tagsOf,
   type FacetOptions,
   type FacetRow,
+  type Facets,
+  type FilterExclusion,
+  type FilterGroup,
   type ResultFilters,
 } from "./facets";
 
@@ -322,5 +325,328 @@ describe("cursors", () => {
     expect(resultFingerprint(SEARCH, a, "price")).not.toBe(
       resultFingerprint(SEARCH, parseResultFilters({ carriers: ["AF"] }), "price"),
     );
+  });
+});
+
+// ---- OBE-092: one parse and one filter check per row ------------------------------------------------------------------
+
+/** A deterministic pseudo-random sequence (a linear congruential generator), so the rows are the same on every run. */
+function sequence(seed: number): () => number {
+  let state = seed;
+  return () => {
+    state = (state * 1_103_515_245 + 12_345) % 2_147_483_648;
+    return state / 2_147_483_648;
+  };
+}
+
+/** `count` rows of a round trip with repeated prices, durations and carriers, as the offers of one search. */
+function generatedRows(count: number): FacetRow[] {
+  const next = sequence(92);
+  const pick = <T>(values: readonly T[]): T => values[Math.floor(next() * values.length)] as T;
+  return Array.from({ length: count }, (_, index) => {
+    const durations = [pick([95, 120, 185, 240, 330]), pick([100, 125, 190, 250, 400])];
+    return row(`off_${String(index).padStart(4, "0")}`, {
+      sellingTotal: pick(["89.90", "120.00", "120.0", "154.35", "199.99", "260.10", "310.00", "455.45"]),
+      maxStops: pick([0, 0, 1, 2, 3]),
+      marketingCarriers: pick([["AF"], ["KL"], ["AF", "KL"], ["LH"], ["AF", "LH"]]),
+      departureMinutes: [pick([300, 420, 700, 900, 1250]), pick([30, 480, 760, 1100, 1300])],
+      arrivalMinutes: [pick([400, 560, 800, 1000, 1380]), pick([90, 600, 860, 1200, 1430])],
+      durationMinutes: durations,
+      totalDurationMinutes: (durations[0] ?? 0) + (durations[1] ?? 0),
+      mainCabin: pick(["ECONOMY", "ECONOMY", "PREMIUM_ECONOMY", "BUSINESS", null]),
+      minCheckedBags: pick([0, 1, 2, 4, null]),
+      refundable: pick([true, false, null]),
+      changeable: pick([true, false, null]),
+      brandedFares: pick([[], ["LIGHT"], ["LIGHT", "FLEX"], ["FLEX"]]),
+    });
+  });
+}
+
+/** The facets of `rows` counted one group at a time with `matchesFilters`, every amount parsed where it is compared. */
+function referenceFacets(rows: readonly FacetRow[], filters: ResultFilters) {
+  const within = (exclusion: Parameters<typeof matchesFilters>[2]): FacetRow[] =>
+    rows.filter((candidate) => matchesFilters(candidate, filters, exclusion));
+  const bucket = (
+    value: string,
+    groupRows: readonly FacetRow[],
+    predicate: (candidate: FacetRow) => boolean,
+  ) => {
+    const matching = groupRows.filter(predicate);
+    const min = matching.reduce<MoneyValue | null>((lowest, candidate) => {
+      const selling = new Money(candidate.sellingTotal);
+      return lowest === null || selling.lt(lowest) ? selling : lowest;
+    }, null);
+    return { value, count: matching.length, minPrice: min === null ? null : OPTIONS.money(min.toString()) };
+  };
+  const priceRows = within({ group: "price" }).map((candidate) => new Money(candidate.sellingTotal));
+  const lowest = priceRows.reduce<MoneyValue | null>(
+    (low, value) => (low === null || value.lt(low) ? value : low),
+    null,
+  );
+  const highest = priceRows.reduce<MoneyValue | null>(
+    (high, value) => (high === null || value.gt(high) ? value : high),
+    null,
+  );
+  const carriers = [...new Set(rows.flatMap((candidate) => candidate.marketingCarriers))].sort();
+  const brands = [...new Set(rows.flatMap((candidate) => candidate.brandedFares))].sort();
+  const bands = [
+    [0, 359],
+    [360, 719],
+    [720, 1079],
+    [1080, 1439],
+  ] as const;
+  const times = (kind: "departure" | "arrival") =>
+    [0, 1].flatMap((index) =>
+      bands.map(([from, to]) => {
+        const groupRows = within(
+          kind === "departure" ? { departureItinerary: index } : { arrivalItinerary: index },
+        );
+        const minutesOf = (candidate: FacetRow): number | undefined =>
+          (kind === "departure" ? candidate.departureMinutes : candidate.arrivalMinutes)[index];
+        const { count, minPrice } = bucket("", groupRows, (candidate) => {
+          const minutes = minutesOf(candidate);
+          return minutes !== undefined && minutes >= from && minutes <= to;
+        });
+        return { itineraryIndex: index, count, minPrice };
+      }),
+    );
+  const durationRows = within({ group: "durations" });
+  return {
+    total: within(null).length,
+    price: {
+      min: lowest === null ? null : OPTIONS.money(lowest.toString()),
+      max: highest === null ? null : OPTIONS.money(highest.toString()),
+    },
+    stops: [...new Set(rows.map((candidate) => Math.min(candidate.maxStops, 2)))]
+      .sort((a, b) => a - b)
+      .map((stops) =>
+        bucket(
+          String(stops),
+          within({ group: "stops" }),
+          (candidate) => Math.min(candidate.maxStops, 2) === stops,
+        ),
+      ),
+    carriers: carriers.map((code) =>
+      bucket(code, within({ group: "carriers" }), (candidate) => candidate.marketingCarriers.includes(code)),
+    ),
+    cabins: ["ECONOMY", "PREMIUM_ECONOMY", "BUSINESS", "FIRST"]
+      .filter((cabin) => rows.some((candidate) => candidate.mainCabin === cabin))
+      .map((cabin) =>
+        bucket(cabin, within({ group: "cabins" }), (candidate) => candidate.mainCabin === cabin),
+      ),
+    brandedFares: brands.map((code) =>
+      bucket(code, within({ group: "brandedFares" }), (candidate) => candidate.brandedFares.includes(code)),
+    ),
+    includedCheckedBags: [
+      ...new Set(
+        rows.flatMap((candidate) =>
+          candidate.minCheckedBags === null ? [] : [Math.min(candidate.minCheckedBags, 3)],
+        ),
+      ),
+    ]
+      .sort((a, b) => a - b)
+      .map((bags) =>
+        bucket(
+          String(bags),
+          within({ group: "includedCheckedBags" }),
+          (candidate) => candidate.minCheckedBags !== null && Math.min(candidate.minCheckedBags, 3) === bags,
+        ),
+      ),
+    refundable: (["true", "false", "unknown"] as const)
+      .filter((state) => rows.some((candidate) => String(candidate.refundable ?? "unknown") === state))
+      .map((state) =>
+        bucket(
+          state,
+          within({ group: "refundable" }),
+          (candidate) => String(candidate.refundable ?? "unknown") === state,
+        ),
+      ),
+    departureTimes: times("departure"),
+    arrivalTimes: times("arrival"),
+    durations: [0, 1].flatMap((index) => {
+      const values = durationRows.flatMap((candidate) => candidate.durationMinutes[index] ?? []);
+      return values.length === 0
+        ? []
+        : [{ itineraryIndex: index, minMinutes: Math.min(...values), maxMinutes: Math.max(...values) }];
+    }),
+  };
+}
+
+describe("facets, highlights and scores of a search's offers [OBE-092]", () => {
+  // The generated rows and the references (a check per row and group) are built once: a few ms.
+  let rows: FacetRow[];
+  beforeAll(() => {
+    rows = generatedRows(250);
+  });
+
+  it("[OBE-092 AC2] counts every bucket as matchesFilters does with the group's own filter left out", () => {
+    const filterSets: ResultFilters[] = [
+      {},
+      parseResultFilters({
+        stops: [0, 1],
+        carriers: ["AF", "KL"],
+        minPrice: "100",
+        maxPrice: "400.00",
+        departureWindow: ["0:06:00-17:59", "1:12:00-23:59", "1:00:00-05:59"],
+        arrivalWindow: ["0:06:00-23:59"],
+        maxDurationMinutes: 300,
+        cabins: ["ECONOMY", "PREMIUM_ECONOMY"],
+        minIncludedCheckedBags: 0,
+        refundable: true,
+        brandedFares: ["LIGHT"],
+      }),
+      parseResultFilters({ carriers: ["LH"], refundable: false, changeable: true }),
+    ];
+    for (const filters of filterSets) {
+      const facets = computeFacets(rows, filters, OPTIONS);
+      const expected = referenceFacets(rows, filters);
+      const shape = (buckets: readonly { value: string; count: number; minPrice?: unknown }[] | undefined) =>
+        (buckets ?? []).map(({ value, count, minPrice }) => ({ value, count, minPrice }));
+      const bands = (buckets: Facets["departureTimes"]) =>
+        (buckets ?? []).map(({ itineraryIndex, count, minPrice }) => ({ itineraryIndex, count, minPrice }));
+
+      expect(facets.total).toBe(expected.total);
+      expect(facets.price).toEqual(expected.price);
+      expect(shape(facets.stops)).toEqual(expected.stops);
+      expect(shape(facets.carriers)).toEqual(expected.carriers);
+      expect(shape(facets.cabins)).toEqual(expected.cabins);
+      expect(shape(facets.brandedFares)).toEqual(expected.brandedFares);
+      expect(shape(facets.includedCheckedBags)).toEqual(expected.includedCheckedBags);
+      expect(shape(facets.refundable)).toEqual(expected.refundable);
+      expect(bands(facets.departureTimes)).toEqual(expected.departureTimes);
+      expect(bands(facets.arrivalTimes)).toEqual(expected.arrivalTimes);
+      expect(facets.durations).toEqual(expected.durations);
+    }
+  });
+
+  it("[OBE-092 AC2] leaves out exactly the excluded group's filter, or the windows of one itinerary", () => {
+    // The reference of an exclusion is the same filters without it: a check per row that never skips one.
+    const filterSets: ResultFilters[] = [
+      parseResultFilters({
+        stops: [0, 1],
+        carriers: ["AF", "KL"],
+        minPrice: "100",
+        maxPrice: "400.00",
+        departureWindow: ["0:06:00-17:59", "1:12:00-23:59", "1:00:00-05:59"],
+        arrivalWindow: ["0:06:00-23:59", "1:08:00-21:59"],
+        maxDurationMinutes: 300,
+        cabins: ["ECONOMY", "PREMIUM_ECONOMY"],
+        minIncludedCheckedBags: 1,
+        refundable: true,
+        changeable: false,
+        brandedFares: ["LIGHT"],
+      }),
+      parseResultFilters({
+        stops: [2],
+        minPrice: "150",
+        departureWindow: ["1:18:00-05:59"],
+        changeable: true,
+      }),
+    ];
+    const groupFilters: Record<FilterGroup, ReadonlyArray<keyof ResultFilters>> = {
+      price: ["minPrice", "maxPrice"],
+      stops: ["stops"],
+      carriers: ["carriers"],
+      cabins: ["cabins"],
+      brandedFares: ["brandedFares"],
+      includedCheckedBags: ["minIncludedCheckedBags"],
+      refundable: ["refundable"],
+      changeable: ["changeable"],
+      durations: ["maxDurationMinutes"],
+    };
+    let changed = 0;
+    for (const filters of filterSets) {
+      const without = (keys: ReadonlyArray<keyof ResultFilters>): ResultFilters =>
+        Object.fromEntries(
+          Object.entries(filters).filter(([key]) => !keys.includes(key as keyof ResultFilters)),
+        );
+      const cases: Array<[FilterExclusion, ResultFilters]> = [
+        ...(Object.keys(groupFilters) as FilterGroup[]).map((group): [FilterExclusion, ResultFilters] => [
+          { group },
+          without(groupFilters[group]),
+        ]),
+        ...[0, 1, 2].flatMap((index): Array<[FilterExclusion, ResultFilters]> => [
+          [
+            { departureItinerary: index },
+            {
+              ...filters,
+              departureWindows: filters.departureWindows?.filter((window) => window.itineraryIndex !== index),
+            },
+          ],
+          [
+            { arrivalItinerary: index },
+            {
+              ...filters,
+              arrivalWindows: filters.arrivalWindows?.filter((window) => window.itineraryIndex !== index),
+            },
+          ],
+        ]),
+      ];
+      for (const candidate of rows) {
+        const matches = matchesFilters(candidate, filters);
+        for (const [exclusion, reference] of cases) {
+          const excluded = matchesFilters(candidate, filters, exclusion);
+          expect(excluded).toBe(matchesFilters(candidate, reference));
+          changed += excluded !== matches ? 1 : 0;
+        }
+      }
+    }
+    // Not vacuous: some rows match only once one check is left out.
+    expect(changed).toBeGreaterThan(20);
+  });
+
+  it("[OBE-092 AC2] picks the highlights a stable sort by each key, then price, then id picks", () => {
+    const scores = bestScores(rows);
+    // Reversed, so that the first of equal rows in the input is not the lowest id.
+    const scored = [...rows]
+      .reverse()
+      .map((candidate) => ({ ...candidate, bestScore: scores.get(candidate.id) ?? "1" }));
+    const money = (amount: string) => ({ amount, currency: "EUR" });
+    const first = (key: (candidate: (typeof scored)[number]) => string | number) =>
+      [...scored].sort(
+        (a, b) =>
+          new Money(key(a)).comparedTo(key(b)) ||
+          new Money(a.sellingTotal).comparedTo(b.sellingTotal) ||
+          (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      )[0];
+    const highlight = (candidate: (typeof scored)[number] | undefined) =>
+      candidate === undefined
+        ? null
+        : {
+            offerId: candidate.id,
+            price: money(candidate.sellingTotal),
+            durationMinutes: candidate.totalDurationMinutes,
+          };
+
+    expect(highlightsOf(scored, money)).toEqual({
+      cheapest: highlight(first((candidate) => candidate.sellingTotal)),
+      fastest: highlight(first((candidate) => candidate.totalDurationMinutes)),
+      best: highlight(first((candidate) => candidate.bestScore)),
+    });
+  });
+
+  it("[OBE-092 AC2] scores every offer by the formula, prices and durations repeating or not", () => {
+    const prices = rows.map((candidate) => new Money(candidate.sellingTotal));
+    const durations = rows.map((candidate) => new Money(candidate.totalDurationMinutes));
+    const span = (values: MoneyValue[]) => {
+      const sorted = [...values].sort((a, b) => a.comparedTo(b));
+      return { min: sorted[0] ?? new Money(0), max: sorted.at(-1) ?? new Money(0) };
+    };
+    const price = span(prices);
+    const duration = span(durations);
+    const normalised = (value: MoneyValue, range: { min: MoneyValue; max: MoneyValue }) =>
+      range.max.eq(range.min) ? new Money(0) : value.minus(range.min).div(range.max.minus(range.min));
+    const expected = Object.fromEntries(
+      rows.map((candidate, index) => [
+        candidate.id,
+        normalised(prices[index] ?? new Money(0), price)
+          .times("0.6")
+          .plus(normalised(durations[index] ?? new Money(0), duration).times("0.3"))
+          .plus(new Money(Math.min(candidate.maxStops, 2)).div(2).times("0.1"))
+          .toFixed(4),
+      ]),
+    );
+
+    expect(Object.fromEntries(bestScores(rows))).toEqual(expected);
   });
 });

@@ -22,6 +22,10 @@
 // - `computeFacets`: disjunctive faceting: each group counts the offers that match every active filter except its own,
 //   and the time bands of itinerary i ignore only the windows of itinerary i. Buckets list every value present in the
 //   search, so a ticked value whose count fell to 0 stays visible.
+//
+// They run on every search (at insert, over up to 250 offers) and every results page, so each offer's selling total is
+// read into `Money` once per call and its filters are checked once (`failedChecks`), whatever the number of groups and
+// buckets (OBE-092, ota/docs/performance.md §4). The answers are those of a check per group and a parse per comparison.
 import { createHash } from "node:crypto";
 import type { components } from "@velexis/api-types";
 import { Money, type MoneyValue } from "../pricing/pricing.types";
@@ -189,30 +193,114 @@ export function windowsByItinerary(windows: readonly TimeWindow[]): Map<number, 
   return grouped;
 }
 
-function matchesWindows(
-  minutes: readonly number[],
-  windows: readonly TimeWindow[] | undefined,
-  skipItinerary: number | undefined,
-): boolean {
-  if (windows === undefined || windows.length === 0) {
-    return true;
-  }
-  for (const [index, list] of windowsByItinerary(windows)) {
-    if (index === skipItinerary) {
-      continue;
-    }
-    const value = minutes[index];
-    if (value === undefined || !list.some((window) => inWindow(value, window))) {
-      return false;
-    }
-  }
-  return true;
-}
-
 function matchesStops(maxStops: number, stops: readonly number[]): boolean {
   return stops.some((value) =>
     value >= MAX_STOPS_BUCKET ? maxStops >= MAX_STOPS_BUCKET : maxStops === value,
   );
+}
+
+/**
+ * A check a row can fail: a filter group, or the departure or arrival windows of one itinerary (`departure:1`). Each
+ * `FilterExclusion` leaves out exactly one of them (`exclusionKey`).
+ */
+type CheckKey = FilterGroup | `departure:${number}` | `arrival:${number}`;
+
+function exclusionKey(exclusion: FilterExclusion): CheckKey | null {
+  if (exclusion === null) {
+    return null;
+  }
+  if ("group" in exclusion) {
+    return exclusion.group;
+  }
+  return "departureItinerary" in exclusion
+    ? `departure:${exclusion.departureItinerary}`
+    : `arrival:${exclusion.arrivalItinerary}`;
+}
+
+/** The filters prepared once for many rows: the price bounds in `Money`, the windows grouped by itinerary. */
+interface PreparedFilters {
+  readonly filters: ResultFilters;
+  readonly minPrice: MoneyValue | undefined;
+  readonly maxPrice: MoneyValue | undefined;
+  readonly departureWindows: ReadonlyMap<number, readonly TimeWindow[]>;
+  readonly arrivalWindows: ReadonlyMap<number, readonly TimeWindow[]>;
+}
+
+function prepareFilters(filters: ResultFilters): PreparedFilters {
+  const grouped = (windows: readonly TimeWindow[] | undefined): ReadonlyMap<number, readonly TimeWindow[]> =>
+    windows === undefined || windows.length === 0 ? new Map() : windowsByItinerary(windows);
+  return {
+    filters,
+    minPrice: filters.minPrice === undefined ? undefined : new Money(filters.minPrice),
+    maxPrice: filters.maxPrice === undefined ? undefined : new Money(filters.maxPrice),
+    departureWindows: grouped(filters.departureWindows),
+    arrivalWindows: grouped(filters.arrivalWindows),
+  };
+}
+
+/** The checks of the windows of each itinerary that `minutes` fails (a missing itinerary fails its windows). */
+function failedWindows(
+  failed: CheckKey[],
+  kind: "departure" | "arrival",
+  minutes: readonly number[],
+  windows: ReadonlyMap<number, readonly TimeWindow[]>,
+): void {
+  for (const [index, list] of windows) {
+    const value = minutes[index];
+    if (value === undefined || !list.some((window) => inWindow(value, window))) {
+      failed.push(`${kind}:${index}`);
+    }
+  }
+}
+
+/** Every active check `row` fails, each once (`selling` is its selling total in `Money`). */
+function failedChecks(row: FacetRow, selling: MoneyValue, prepared: PreparedFilters): CheckKey[] {
+  const { filters } = prepared;
+  const failed: CheckKey[] = [];
+  if (filters.stops !== undefined && !matchesStops(row.maxStops, filters.stops)) {
+    failed.push("stops");
+  }
+  const carriers = filters.carriers;
+  if (carriers !== undefined && !row.marketingCarriers.every((carrier) => carriers.includes(carrier))) {
+    failed.push("carriers");
+  }
+  if (
+    (prepared.minPrice !== undefined && !selling.gte(prepared.minPrice)) ||
+    (prepared.maxPrice !== undefined && !selling.lte(prepared.maxPrice))
+  ) {
+    failed.push("price");
+  }
+  failedWindows(failed, "departure", row.departureMinutes, prepared.departureWindows);
+  failedWindows(failed, "arrival", row.arrivalMinutes, prepared.arrivalWindows);
+  const limit = filters.maxDurationMinutes;
+  if (limit !== undefined && !row.durationMinutes.every((value) => value <= limit)) {
+    failed.push("durations");
+  }
+  if (filters.cabins !== undefined && !(row.mainCabin !== null && filters.cabins.includes(row.mainCabin))) {
+    failed.push("cabins");
+  }
+  if (
+    filters.minIncludedCheckedBags !== undefined &&
+    !(row.minCheckedBags !== null && row.minCheckedBags >= filters.minIncludedCheckedBags)
+  ) {
+    failed.push("includedCheckedBags");
+  }
+  if (filters.refundable !== undefined && row.refundable !== filters.refundable) {
+    failed.push("refundable");
+  }
+  if (filters.changeable !== undefined && row.changeable !== filters.changeable) {
+    failed.push("changeable");
+  }
+  const codes = filters.brandedFares;
+  if (codes !== undefined && !row.brandedFares.some((code) => codes.includes(code))) {
+    failed.push("brandedFares");
+  }
+  return failed;
+}
+
+/** Whether a row that fails `failed` matches once the check `excluded` is left out. */
+function passesExcept(failed: readonly CheckKey[], excluded: CheckKey | null): boolean {
+  return failed.length === 0 || (failed.length === 1 && failed[0] === excluded);
 }
 
 /** True when `row` matches every active filter, except the one `exclusion` names. */
@@ -221,62 +309,23 @@ export function matchesFilters(
   filters: ResultFilters,
   exclusion: FilterExclusion = null,
 ): boolean {
-  const skip = (group: FilterGroup): boolean =>
-    exclusion !== null && "group" in exclusion && exclusion.group === group;
-  const selling = new Money(row.sellingTotal);
-  const checks: Array<() => boolean> = [
-    () => skip("stops") || filters.stops === undefined || matchesStops(row.maxStops, filters.stops),
-    () => {
-      const carriers = filters.carriers;
-      return (
-        skip("carriers") ||
-        carriers === undefined ||
-        row.marketingCarriers.every((carrier) => carriers.includes(carrier))
-      );
-    },
-    () => skip("price") || filters.minPrice === undefined || selling.gte(filters.minPrice),
-    () => skip("price") || filters.maxPrice === undefined || selling.lte(filters.maxPrice),
-    () =>
-      matchesWindows(
-        row.departureMinutes,
-        filters.departureWindows,
-        exclusion !== null && "departureItinerary" in exclusion ? exclusion.departureItinerary : undefined,
-      ),
-    () =>
-      matchesWindows(
-        row.arrivalMinutes,
-        filters.arrivalWindows,
-        exclusion !== null && "arrivalItinerary" in exclusion ? exclusion.arrivalItinerary : undefined,
-      ),
-    () => {
-      const limit = filters.maxDurationMinutes;
-      return skip("durations") || limit === undefined || row.durationMinutes.every((value) => value <= limit);
-    },
-    () =>
-      skip("cabins") ||
-      filters.cabins === undefined ||
-      (row.mainCabin !== null && filters.cabins.includes(row.mainCabin)),
-    () =>
-      skip("includedCheckedBags") ||
-      filters.minIncludedCheckedBags === undefined ||
-      (row.minCheckedBags !== null && row.minCheckedBags >= filters.minIncludedCheckedBags),
-    () => skip("refundable") || filters.refundable === undefined || row.refundable === filters.refundable,
-    () => skip("changeable") || filters.changeable === undefined || row.changeable === filters.changeable,
-    () => {
-      const codes = filters.brandedFares;
-      return (
-        skip("brandedFares") || codes === undefined || row.brandedFares.some((code) => codes.includes(code))
-      );
-    },
-  ];
-  return checks.every((check) => check());
+  return passesExcept(
+    failedChecks(row, new Money(row.sellingTotal), prepareFilters(filters)),
+    exclusionKey(exclusion),
+  );
 }
 
 // ---- Score and highlights ------------------------------------------------------------------------------------------
 
-/** (value − min) / (max − min) over the search, 0 when every offer has the same value. */
-function normalised(value: MoneyValue, min: MoneyValue, max: MoneyValue): MoneyValue {
-  return max.eq(min) ? new Money(0) : value.minus(min).div(max.minus(min));
+const ZERO = new Money(0);
+const WEIGHT = Object.freeze({
+  price: new Money(SCORE_WEIGHTS.price),
+  duration: new Money(SCORE_WEIGHTS.duration),
+});
+
+/** (value − min) / span over the search (span = max − min), 0 when every offer has the same value. */
+function normalised(value: MoneyValue, min: MoneyValue, span: MoneyValue): MoneyValue {
+  return span.isZero() ? ZERO : value.minus(min).div(span);
 }
 
 function minMax(values: readonly MoneyValue[]): { min: MoneyValue; max: MoneyValue } {
@@ -287,6 +336,20 @@ function minMax(values: readonly MoneyValue[]): { min: MoneyValue; max: MoneyVal
     max = value.gt(max) ? value : max;
   }
   return { min, max };
+}
+
+/** The stops part of the best score, 0.1 × (stops capped at two) / 2, computed once per stop count. */
+function stopsScorer(): (maxStops: number) => MoneyValue {
+  const known = new Map<number, MoneyValue>();
+  return (maxStops) => {
+    const stops = Math.min(maxStops, MAX_STOPS_BUCKET);
+    let part = known.get(stops);
+    if (part === undefined) {
+      part = new Money(stops).div(MAX_STOPS_BUCKET).times(SCORE_WEIGHTS.stops);
+      known.set(stops, part);
+    }
+    return part;
+  };
 }
 
 /**
@@ -300,28 +363,59 @@ export function bestScores(
   const durations = rows.map((row) => new Money(row.totalDurationMinutes));
   const price = minMax(prices);
   const duration = minMax(durations);
+  const priceSpan = price.max.minus(price.min);
+  const durationSpan = duration.max.minus(duration.min);
+  const stopsPart = stopsScorer();
+  // The offers of a search repeat few prices and durations: each weighted part is computed once per value.
+  const priceParts = new Map<string, MoneyValue>();
+  const durationParts = new Map<number, MoneyValue>();
   const scores = new Map<string, string>();
   rows.forEach((row, index) => {
-    const stops = new Money(Math.min(row.maxStops, MAX_STOPS_BUCKET)).div(MAX_STOPS_BUCKET);
-    const score = normalised(prices[index] ?? price.min, price.min, price.max)
-      .times(SCORE_WEIGHTS.price)
-      .plus(
-        normalised(durations[index] ?? duration.min, duration.min, duration.max).times(
-          SCORE_WEIGHTS.duration,
-        ),
-      )
-      .plus(stops.times(SCORE_WEIGHTS.stops));
+    let pricePart = priceParts.get(row.sellingTotal);
+    if (pricePart === undefined) {
+      pricePart = normalised(prices[index] ?? price.min, price.min, priceSpan).times(WEIGHT.price);
+      priceParts.set(row.sellingTotal, pricePart);
+    }
+    let durationPart = durationParts.get(row.totalDurationMinutes);
+    if (durationPart === undefined) {
+      durationPart = normalised(durations[index] ?? duration.min, duration.min, durationSpan).times(
+        WEIGHT.duration,
+      );
+      durationParts.set(row.totalDurationMinutes, durationPart);
+    }
+    const score = pricePart.plus(durationPart).plus(stopsPart(row.maxStops));
     scores.set(row.id, score.toFixed(SCORE_DECIMALS));
   });
   return scores;
 }
 
-/** Orders by the given keys, then by selling total, then by id (FlightOfferSort: "ties by price, then offer id"). */
-function compareBy(primary: (row: ScoredRow) => MoneyValue): (a: ScoredRow, b: ScoredRow) => number {
-  return (a, b) =>
-    primary(a).comparedTo(primary(b)) ||
-    new Money(a.sellingTotal).comparedTo(b.sellingTotal) ||
-    (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+const byId = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
+/** A row with its sort keys read into `Money` once. */
+interface RankedRow {
+  readonly row: ScoredRow;
+  readonly selling: MoneyValue;
+  readonly duration: MoneyValue;
+  readonly score: MoneyValue;
+}
+
+/**
+ * The first row in the order of `primary`, then selling total, then id (FlightOfferSort: "ties by price, then offer
+ * id"): the row a stable sort in that order puts first.
+ */
+function firstBy(rows: readonly RankedRow[], primary: (row: RankedRow) => MoneyValue): RankedRow | undefined {
+  let first = rows[0];
+  for (const row of rows) {
+    if (
+      first !== undefined &&
+      (primary(row).comparedTo(primary(first)) ||
+        row.selling.comparedTo(first.selling) ||
+        byId(row.row.id, first.row.id)) < 0
+    ) {
+      first = row;
+    }
+  }
+  return first;
 }
 
 /** The cheapest, fastest and best offer of `rows` (all null for none). */
@@ -329,16 +423,22 @@ export function highlightsOf(
   rows: readonly ScoredRow[],
   money: (amount: string) => MoneyAmount,
 ): FlightSearchHighlights {
-  const pick = (compare: (a: ScoredRow, b: ScoredRow) => number): FlightSearchHighlight | null => {
-    const [first] = [...rows].sort(compare);
+  const ranked: RankedRow[] = rows.map((row) => ({
+    row,
+    selling: new Money(row.sellingTotal),
+    duration: new Money(row.totalDurationMinutes),
+    score: new Money(row.bestScore),
+  }));
+  const pick = (primary: (row: RankedRow) => MoneyValue): FlightSearchHighlight | null => {
+    const first = firstBy(ranked, primary)?.row;
     return first === undefined
       ? null
       : { offerId: first.id, price: money(first.sellingTotal), durationMinutes: first.totalDurationMinutes };
   };
   return {
-    cheapest: pick(compareBy((row) => new Money(row.sellingTotal))),
-    fastest: pick(compareBy((row) => new Money(row.totalDurationMinutes))),
-    best: pick(compareBy((row) => new Money(row.bestScore))),
+    cheapest: pick((row) => row.selling),
+    fastest: pick((row) => row.duration),
+    best: pick((row) => row.score),
   };
 }
 
@@ -365,20 +465,26 @@ export interface FacetOptions {
   readonly brandedFareLabel: (code: string) => string | null;
 }
 
+/** A row with its selling total read into `Money` once, and the checks it fails under the request's filters. */
+interface PricedRow {
+  readonly row: FacetRow;
+  readonly selling: MoneyValue;
+  readonly failed: readonly CheckKey[];
+}
+
 /** Count and lowest selling total of the rows matching `predicate`. */
 function bucketOf(
   value: string,
   label: string | null,
-  rows: readonly FacetRow[],
+  rows: readonly PricedRow[],
   predicate: (row: FacetRow) => boolean,
   options: FacetOptions,
 ): FacetBucket {
   let count = 0;
   let min: MoneyValue | null = null;
-  for (const row of rows) {
+  for (const { row, selling } of rows) {
     if (predicate(row)) {
       count += 1;
-      const selling = new Money(row.sellingTotal);
       min = min === null || selling.lt(min) ? selling : min;
     }
   }
@@ -403,11 +509,20 @@ export function computeFacets(
   filters: ResultFilters,
   options: FacetOptions,
 ): Facets {
-  const except = (exclusion: FilterExclusion): FacetRow[] =>
-    rows.filter((row) => matchesFilters(row, filters, exclusion));
+  // Each row's selling total is read and its filters are checked once; a group's rows are then those that fail no
+  // check but the one the group leaves out.
+  const prepared = rows.length === 0 ? undefined : prepareFilters(filters);
+  const priced: PricedRow[] = rows.map((row) => {
+    const selling = new Money(row.sellingTotal);
+    return { row, selling, failed: prepared === undefined ? [] : failedChecks(row, selling, prepared) };
+  });
+  const except = (exclusion: FilterExclusion): PricedRow[] => {
+    const excluded = exclusionKey(exclusion);
+    return priced.filter(({ failed }) => passesExcept(failed, excluded));
+  };
   const matching = except(null);
 
-  const priceRows = except({ group: "price" }).map((row) => new Money(row.sellingTotal));
+  const priceRows = except({ group: "price" }).map(({ selling }) => selling);
   const priceRange = minMax(priceRows);
 
   const stopsRows = except({ group: "stops" });
@@ -512,7 +627,7 @@ export function computeFacets(
 
   const durationRows = except({ group: "durations" });
   const durations: FacetDurationRange[] = itineraries.flatMap((index) => {
-    const values = durationRows.flatMap((row) => {
+    const values = durationRows.flatMap(({ row }) => {
       const value = row.durationMinutes[index];
       return value === undefined ? [] : [value];
     });

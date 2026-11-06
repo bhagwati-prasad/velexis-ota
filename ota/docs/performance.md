@@ -3,6 +3,7 @@
 This page records measured figures of the OTA backend and the decisions taken from them. Each run names its date, the code it ran, the machine and how busy that machine was.
 
 - OBE-028 started the page with the M2 search load test and the decision on the Amadeus buckets.
+- OBE-092 cut the API's CPU per search of 250 offers (§4).
 - OBE-088 adds the M6 measurements against the VM's memory budget ([architecture §3](../../docs/mvp/architecture.md#3-hosts-ports-and-the-vm)).
 
 Related:
@@ -91,7 +92,7 @@ The options of each run are added to `--visitors 10 --searches 200` unless they 
    - 460 ms with 50 offers (B);
    - 945–972 ms with 250 offers (C, H).
 
-   A single visitor with 250 offers stays at 214 ms (D). So the time is CPU, not waiting: a 250-offer search costs the API about 150 ms of CPU, and ten of them queue on the one event loop (event-loop delay p99 73–75 ms in C and H). Amadeus answers up to 250 offers, and the API asks for 250 unless a storefront sets a lower `maxResults`. With real answers of that size, 10 simultaneous searches therefore miss the budget. **Follow-up task OBE-092** in the plan (§4) covers it.
+   A single visitor with 250 offers stays at 214 ms (D). So the time is CPU, not waiting: a 250-offer search costs the API about 150 ms of CPU, and ten of them queue on the one event loop (event-loop delay p99 73–75 ms in C and H). Amadeus answers up to 250 offers, and the API asks for 250 unless a storefront sets a lower `maxResults`. With real answers of that size, 10 simultaneous searches therefore miss the budget. **Follow-up task OBE-092** in the plan (§5) covers it; §4 has its runs.
 
    This is where the CPU goes. The API was profiled with the inspector during 60 journeys of 2 visitors with 250 offers, 10.1 s of busy CPU in all. The shares overlap, because `decimal.js` runs inside the pricing engine and the facets.
 
@@ -148,9 +149,113 @@ The data did not show a reason to change them.
 
 A refused visitor waits the full second of `Retry-After`, even though the tenant bucket has a token again within 200 ms. `Retry-After` is in whole seconds, at least 1 (`retryAfterSeconds` of the rate limiter), so this is not a bucket constant. It stays as it is.
 
-## 4. Follow-ups
+## 4. Search CPU with answers of 250 offers (OBE-092, 6 November 2026)
+
+OBE-092 cut the API's CPU per search without changing what any operation answers or what it stores in the offer tables. Offers stay in PostgreSQL only ([OADR-0002](adr/0002-offer-and-priced-offer-caching.md)), and every stored `supplier_requests` body still goes through the redactor and is cut to 64 KB ([OADR-0001](adr/0001-amadeus-client-design.md) point 9).
+
+### Set-up
+
+| Item | Value |
+|---|---|
+| Code | **Before:** the API built from `37d2b533aa63`, the integration branch head this task started from. **After:** the same build with this task's three source files (`supplier-requests.repository.ts`, `facets.ts`, `searches.service.ts`). The two builds were swapped between runs of the same `search-load.mjs`, so the script prints `37d2b533aa63+changes` for both; the tables name the build that ran. |
+| Machine | 4 vCPUs (Intel Xeon @ 2.10 GHz), 15.7 GiB RAM, Linux 6.18 x64, Node 22.22.0, PostgreSQL 16.15, Redis 7.0.15 (a private instance). The machine is shared with other agents' builds and end-to-end runs: the paired runs below held the machine-wide end-to-end lock and started only once the 1-minute load average was below 1.0. |
+| API, Amadeus, tenants, visitors | As in §2. |
+| CPU time | For the paired runs, a copy of the script (not committed) also recorded the API process's CPU time (`process.cpuUsage()`, user and system) from the start to the end of the measured phase. The API itself ran unchanged. |
+
+### Step 1: where the CPU went before
+
+The API of `37d2b533aa63` was profiled with the inspector (sampling every 0.25 ms) during the measured phase of `--visitors 10 --searches 200 --offers 250`: 21.9 s of busy CPU over 192 searches, 192 results pages and 190 prices. The shares overlap: `decimal.js` runs inside the facets and the pricing engine.
+
+| Share | Where | §2 (OBE-028) |
+|---|---|---|
+| 20.7 % | The `supplier_requests` copy of the search answer: the redactor 10.4 %, the contact masking 8.0 %, the JSON text and the cut the rest. | 23 % |
+| 11.0 % | The database driver: Kysely 6.6 %, `pg` 4.4 %, over the 30 or so queries of a journey and the 250-row insert (compiling and serialising that insert alone takes about 2 ms). | 18 % |
+| 13.0 % | Facets 6.8 % (at insert and on every results page), highlights 4.4 %, the best score 1.8 %. | 14 % |
+| 11.6 % | `decimal.js`, 80 % of it called from `facets.ts` (a new `Money` per row, per filter group and per comparison of a sort), the rest from the pricing engine. | 13 % |
+| 8.9 % | Garbage collection. | 8 % |
+| 3.4 % | The pricing engine. | 4 % |
+| 2.7 % | Logging. | – |
+| 2.3 % | Offer parsing. | 5 % |
+| 2.2 % | New ids. | 2.5 % |
+| 1.7 % | Parsing the Amadeus answer. | 2 % |
+
+This confirms the shares of §2. A micro-benchmark of the same functions on one 250-offer answer (315 KB of JSON, the load test's), one core, gave:
+
+| Function, per search | Before | After |
+|---|---|---|
+| `supplierRequestBody` of the answer | 18.6 ms | 4.7 ms |
+| `computeFacets` at insert (no filter) | 2.7 ms | 0.5 ms |
+| `computeFacets` of a results page with filters | 3.7 ms | 0.5 ms |
+| `highlightsOf` | 3.4 ms | 0.2 ms |
+| `bestScores` | 2.1 ms | 0.7 ms |
+
+Each function answers exactly what it answered before: the benchmark compared the stored body (but for the `bytes` of a truncated one, Step 2), the scores, both facets and the highlights of the two builds, and the unit tests compare them with the whole-body redaction, `matchesFilters` and the formulas.
+
+### Step 2: what changed
+
+- **The stored copy of a large body is built from its first part.** `supplierRequestBody` copies, in the order of the body's JSON text, a little more than the row keeps (72 KB: `firstPartOf`), runs the redactor and the contact masking on that copy only, and stores the first part of its JSON text as the preview. Both steps decide each value by the keys above it alone, so that text is the start of what the whole body would give: the preview is the same, and everything stored went through the redactor. When the redaction leaves the first part at 64 KB or less, the copy is taken again twice as long, up to the whole body. A body of at most 72 KB, or one JSON cannot write as it is (a cycle), is redacted whole as before.
+  - The redactor now walks about 74 KB of a 315 KB answer instead of all of it.
+  - The masking writes into the redactor's fresh copy instead of copying it again, skips the address expression in texts without an `@`, and caches normalised keys (those of up to 64 characters, 4096 at most). It writes the same text as the copying masking, a `Date` of the body included.
+  - `bytes` of a truncated body is now the size of the body's JSON text as the client hands it over, not of its redacted copy, which is no longer built whole. It was always informative only; the preview, `truncated` and the 64 KB bound are unchanged.
+- **Facets, highlights and the best score read each selling total once.** `computeFacets` parses each row's selling total once and checks its filters once, then counts each group from the checks the row failed, instead of a `matchesFilters` call (with its own `Money`) per row and group and a new `Money` per row and bucket. `highlightsOf` picks the first row by one scan over keys read once, instead of three sorts that built two `Money` values per comparison. `bestScores` computes each weighted part once per price and per duration, with the same operations.
+- **A results page parses each offer once** for its codes and its upsell offers, instead of twice.
+
+What is left is outside these files: the driver and Kysely for the 250-row insert, garbage collection, the pricing engine, new ids and logging.
+
+### Step 3: the runs
+
+Every run has `--visitors 10 --searches 200 --offers 250` (the Verify command) unless the row says otherwise, and 0 unexpected answers. K1 to K8, Y1, Y2, D1 and D2 held the end-to-end lock and started at a 1-minute load average below 1.0. K0 is the first run of this task. U1 and U2 ran without the lock while another agent's builds were starting. R1 is the second-agent review's run of the Verify command (the after build with the review's changes, which leave the answers and the work per search as they were): it held the lock and started at a 1-minute load average of 1.37, after a busier quarter of an hour (5-minute average 5.0). Y1 and Y2 ran the after build with `--max-semi-space-size=32` added to the API's start command (copy of the script only). D1 and D2 are one visitor, `--visitors 1 --searches 50 --offers 250`, as run D of §2.
+
+| Run | Build | Started (UTC) | Load avg start → end | Journeys completed / refused | search p50 / p95 | **search p95 −delay** | search p95 −Amadeus | listResults p95 | price p95 −delay | API CPU (s) | CPU per journey (ms) | Event-loop delay p99 / max |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| K0 | before | 07:02:50 | 0.24 → 0.74 | 177 / 23 | 504 / 1 006 | **706** | 678 | 120 | 227 | – | – | 42 / 93 |
+| K1 | before | 07:57:42 | 1.24 → 0.88 | 182 / 18 | 547 / 1 159 | **859** | 814 | 136 | 233 | 26.5 | 146 | 46 / 157 |
+| K2 | after | 07:58:30 | 0.88 → 1.15 | 176 / 24 | 424 / 804 | **504** | 464 | 98 | 209 | 21.4 | 122 | 26 / 50 |
+| K3 | before | 07:59:25 | 0.97 → 1.19 | 180 / 20 | 649 / 1 069 | **769** | 722 | 133 | 222 | 25.4 | 141 | 47 / 130 |
+| K4 | after | 08:00:26 | 0.93 → 1.51 | 178 / 22 | 435 / 819 | **519** | 486 | 104 | 266 | 21.5 | 121 | 26 / 49 |
+| K5 | before | 08:01:41 | 0.92 → 1.08 | 189 / 11 | 669 / 1 170 | **870** | 758 | 134 | 230 | 25.2 | 133 | 49 / 111 |
+| K6 | after | 08:02:40 | 0.92 → 1.19 | 181 / 19 | 428 / 733 | **433** | 404 | 92 | 175 | 21.1 | 117 | 25 / 81 |
+| K7 | after | 08:05:46 | 0.30 → 1.08 | 179 / 21 | 435 / 919 | **619** | 613 | 95 | 291 | 21.8 | 122 | 27 / 62 |
+| K8 | after | 08:07:22 | 0.83 → 1.26 | 185 / 15 | 423 / 826 | **526** | 505 | 89 | 196 | 22.3 | 121 | 26 / 83 |
+| U1 | after | 07:29:11 | 3.05 → 1.77 | 179 / 21 | 423 / 831 | **531** | 493 | 92 | 199 | – | – | 26 / 51 |
+| U2 | after | 07:29:57 | 1.77 → 1.30 | 182 / 18 | 420 / 756 | **456** | 428 | 92 | 169 | – | – | 25 / 46 |
+| Y1 | after, `--max-semi-space-size=32` | 08:06:37 | 0.99 → 0.83 | 179 / 21 | 431 / 809 | **509** | 471 | 90 | 174 | 20.3 | 113 | 25 / 70 |
+| Y2 | after, `--max-semi-space-size=32` | 08:08:23 | 0.98 → 0.87 | 186 / 14 | 408 / 736 | **436** | 403 | 80 | 175 | 19.3 | 104 | 23 / 48 |
+| D1 | before, one visitor | 08:10:16 | 0.47 → 0.60 | 50 / 0 | 421 / 454 | **154** | 147 | 27 | 58 | 8.9 | 178 | 31 / 55 |
+| D2 | after, one visitor | 08:11:05 | 0.60 → 0.64 | 50 / 0 | 391 / 417 | **117** | 111 | 23 | 50 | 7.0 | 140 | 18 / 41 |
+| R1 | after, with the review's changes | 11:23:00 | 1.37 → 1.41 | 180 / 20 | 431 / 811 | **511** | 458 | 87 | 196 | – | – | 26 / 60 |
+
+The API's RSS was 252–258 MiB after start and at most 296 MiB in every run but Y1 and Y2, which started at 293–300 MiB and peaked at 330–337 MiB. The offer insert kept its time (p50 21–22 ms alone, D1 and D2). The profile of the after build (inspector, the same options, 17.3 s of busy CPU) is the second column below:
+
+| Where | Before: busy CPU, share | After: busy CPU, share |
+|---|---|---|
+| The `supplier_requests` copy | 4.54 s, 20.7 % | 1.29 s, 7.5 % (the redactor 0.73 s; the JSON text of the whole body for `bytes` 0.45 s) |
+| Facets, highlights, best score | 2.84 s, 13.0 % | 0.60 s, 3.5 % |
+| `decimal.js` | 2.53 s, 11.6 % | 0.83 s, 4.8 % (now mostly the pricing engine) |
+| The driver: Kysely and `pg` (every query and the 250-row insert) | 2.42 s, 11.0 % | 2.69 s, 15.6 % |
+| Garbage collection | 1.95 s, 8.9 % | 1.63 s, 9.4 % |
+| The pricing engine | 0.75 s, 3.4 % | 0.83 s, 4.8 % |
+| Logging | 0.60 s, 2.7 % | 0.65 s, 3.8 % |
+| Offer parsing | 0.50 s, 2.3 % | 0.46 s, 2.7 % |
+| New ids | 0.47 s, 2.2 % | 0.48 s, 2.8 % |
+| Parsing the Amadeus answer | 0.37 s, 1.7 % | 0.33 s, 1.9 % |
+
+### What the runs show
+
+1. **A search costs the API about 30 ms less.** Alone (D1 → D2), the `flights.search` time without the Amadeus call fell from 114 to 84 ms at p50 (147 to 111 ms at p95), and the API's CPU per journey from 178 to 140 ms. At 10 visitors the API's CPU per completed journey fell from 133–146 ms to 117–122 ms (means 140 and 120 ms, −14 %; the API's CPU per run −16 %), and the event-loop delay p99 from 42–49 ms to 25–27 ms.
+2. **The p95 at 10 visitors fell by about 300 ms but is not reliably below the budget.** Without the stub delay it was 706–870 ms before (K0, K1, K3, K5) and 433–619 ms after (K2, K4, K6–K8, U1, U2; median 519 ms). Two of these seven runs were within the 500 ms budget, so the Verify command exits 1 in most runs. The review's run R1 gave 511 ms. As in §2 item 1, the bursts after a `429` set the p95: ten searches then share the event loop.
+3. **Why not below 500 ms.** What is left of a search's CPU is spread over code these three files do not hold, with no share above 16 % (the table above): the driver for the 30 or so queries of a journey and the 250-row insert, garbage collection, the pricing engine, logging, new ids and the parsing of the answer. Removing the last part of the stored copy (the JSON text of the whole body that gives `bytes`, 2.6 %) would not change that.
+4. **A larger young generation helps.** With `--max-semi-space-size=32` (Y1, Y2) the API spent 7–14 % less CPU per journey than K7 and K8 next to them (113 against 122 ms and 104 against 121 ms; garbage collection is 9 % of the CPU), and the p95 was 509 and 436 ms. The RSS grew by about 40 MiB, to a peak of 337 MiB of the unit's `MemoryMax` of 768 MiB.
+
+**Decision needed (OBE-092 records it; the owner decides).** To meet the 500 ms p95 at 10 visitors with 250-offer answers reliably, in this order:
+
+- **(a)** Start the OTA API with `--max-semi-space-size=32` (`deploy/systemd/velexis-ota-api.service`, and `search-load.mjs`, which starts the API as the VM does), then run the Verify command again. It changes no behaviour and costs about 40 MiB; OBE-088 checks it against the VM's memory budget.
+- **(b)** If (a) is not enough: a lower default `maxResults` (for example 150). The API's time grows with the offers of an answer (§2 item 2), but a storefront then shows fewer offers.
+- **(c)** Otherwise a second API process behind Caddy (twice the API's memory) or a worker thread for pricing, facets and the insert of a search.
+
+## 5. Follow-ups
 
 | Task | What |
 |---|---|
-| OBE-092 (M6) | Added by OBE-028. Cut the API's CPU per search so that answers of 250 offers meet the 500 ms p95 at 10 concurrent visitors. The largest shares are the `supplier_requests` copy of the whole answer, facets, `decimal.js` and the driver (§2 item 2). If it cannot be met, this page records the decision needed: a lower default `maxResults`, a worker thread or a second API process. |
+| OBE-092 (M6) | Added by OBE-028. Cut the API's CPU per search so that answers of 250 offers meet the 500 ms p95 at 10 concurrent visitors. The largest shares are the `supplier_requests` copy of the whole answer, facets, `decimal.js` and the driver (§2 item 2). If it cannot be met, this page records the decision needed: a lower default `maxResults`, a worker thread or a second API process. **Done (§4):** about 30 ms of CPU less per search; the p95 is 433–619 ms, so §4 records the decision needed (a larger young generation first). |
 | OBE-088 (M6) | Mixed traffic on five tenants for 30 minutes with the worker running; the API's and the worker's RSS against `MemoryMax`, PostgreSQL connections, Redis memory, queue latency; the table growth of §2 item 4 against the VM's disk. |
