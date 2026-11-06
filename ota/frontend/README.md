@@ -60,7 +60,7 @@ ota/frontend/
     lib/client.js             the single SDK client (cookie mode); drops the cached configuration on 403 TENANT_SUSPENDED
     lib/config.js             storefront.get with the 5-minute sessionStorage cache
     lib/config-cache.js       the cache's sessionStorage key and clearCachedConfig (shared by config.js and client.js)
-    lib/dom.js                $, $$, clone(templateId), fill(el, data) via textContent and allowlisted attributes, on()
+    lib/dom.js                $, $$, checkedInput(selector, root), clone(templateId), fill(el, data) via textContent and allowlisted attributes, on()
     lib/format.js             money, dates, durations with Intl
     lib/forms.js              serialisation, fieldErrors → fields, error summary, submit state
     lib/errors.js             VelexisError → page state (PRICE_CHANGED, SOLD_OUT, *_EXPIRED, …)

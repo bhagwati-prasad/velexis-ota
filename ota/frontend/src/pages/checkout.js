@@ -50,7 +50,7 @@ import {
   stepToShow,
 } from "../components/stepper.js";
 import { mount as mountTravellers, travellerTitle } from "../components/traveller-form.js";
-import { clone, fill } from "../lib/dom.js";
+import { checkedInput, clone, fill } from "../lib/dom.js";
 import { isAborted, pageStateFor } from "../lib/errors.js";
 import { formatMoney, formatTimestamp } from "../lib/format.js";
 import { withSubmitState } from "../lib/forms.js";
@@ -595,9 +595,7 @@ export function start(context, env = {}) {
     const methods = paymentMethods(config?.payment).filter(
       (method) => method !== "airline_card" || !airlineCardRefused,
     );
-    const previous = /** @type {HTMLInputElement | null} */ (
-      el.paymentMethodList.querySelector("input[data-payment-method]:checked")
-    )?.value;
+    const previous = checkedInput("input[data-payment-method]", el.paymentMethodList)?.value;
     const selected = methods.find((method) => method === previous) ?? methods[0];
     const brands = list(config?.payment?.pspCardBrands)
       .map((brand) => (typeof brand?.label === "string" ? brand.label : null))
@@ -662,9 +660,7 @@ export function start(context, env = {}) {
 
   /** The line under the total: the card fee that may follow, or the airline card's price notice. */
   const renderPaymentNote = () => {
-    const method = /** @type {HTMLInputElement | null} */ (
-      el.paymentMethodList.querySelector("input[data-payment-method]:checked")
-    )?.value;
+    const method = checkedInput("input[data-payment-method]", el.paymentMethodList)?.value;
     el.paymentTotalNote.textContent =
       method === "airline_card" ? t("checkout.airlineCardTotal") : t("checkout.cardFeeNote");
   };
@@ -1108,9 +1104,7 @@ export function start(context, env = {}) {
       el.paymentState.replaceChildren();
       el.paymentChange.hidden = true;
       const method = /** @type {PaymentMethod | undefined} */ (
-        /** @type {HTMLInputElement | null} */ (
-          el.paymentMethodList.querySelector("input[data-payment-method]:checked")
-        )?.value
+        checkedInput("input[data-payment-method]", el.paymentMethodList)?.value
       );
       if (method !== "card" && method !== "airline_card") {
         return;

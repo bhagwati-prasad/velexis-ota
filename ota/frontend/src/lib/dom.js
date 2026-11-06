@@ -66,6 +66,20 @@ export const $ = (selector, root = document) => root.querySelector(selector);
 export const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 
 /**
+ * The first checked input among the inputs matching `selector` inside `root` (default: the document), or `null`: in a
+ * browser, the input that `${selector}:checked` selects. It reads each input's `checked` property, because the DOM of
+ * the unit tests (happy-dom 21) caches a `:checked` query and can go on answering the radio that was checked before
+ * the group changed (PBE-070).
+ * @param {string} selector
+ * @param {ParentNode} [root]
+ * @returns {HTMLInputElement | null}
+ */
+export function checkedInput(selector, root = document) {
+  const inputs = /** @type {HTMLInputElement[]} */ ($$(selector, root));
+  return inputs.find((input) => input.checked) ?? null;
+}
+
+/**
  * A deep copy of the single root element of `<template id="templateId">`. Throws when there is no such template or
  * when it does not hold exactly one element (a template is one repeated item).
  * @param {string} templateId

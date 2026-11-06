@@ -9,7 +9,10 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["test/unit/**/*.test.js", "test/contract/**/*.test.js"],
+    // Vitest 4's restoreMocks restores vi.spyOn spies only; mockReset also clears every vi.fn() and resets its
+    // implementation before each test, as restoreMocks did under Vitest 3 (PBE-070).
     restoreMocks: true,
+    mockReset: true,
     unstubGlobals: true,
   },
 });

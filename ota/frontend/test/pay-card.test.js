@@ -272,6 +272,9 @@ function fakeStripe({ order = [], brand = "visa", ready = true, ...overrides } =
               const frame = target.ownerDocument.createElement("iframe");
               frame.setAttribute("name", "__privateStripeFrameFake");
               frame.setAttribute("title", "Secure payment input frame");
+              // An empty document of its own: happy-dom 21 refuses to load a page into an iframe without srcdoc and
+              // prints the refusal for every mount (PBE-070).
+              frame.setAttribute("srcdoc", "");
               target.append(frame);
               if (ready) {
                 queueMicrotask(() => handlers["ready"]?.({ elementType: "payment" }));

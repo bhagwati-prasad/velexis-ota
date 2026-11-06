@@ -22,10 +22,11 @@ const USAGE = "usage: node scripts/contracts-lint.mjs [--config <redocly.yaml>]"
 const IGNORE_FILE = ".redocly.lint-ignore.yaml";
 
 /**
- * Redocly CLI 1.x calls the network on its own: usage telemetry (sent even when `telemetry: off` cannot take effect,
- * as on a config error) and an npm registry check for a newer version. Both are switched off for every run, so a
- * lint never leaves the machine and tests stay offline (AGENTS.md §7). The variables are added to the inherited
- * environment with env(1), because only @velexis/config touches process.env (conventions §1).
+ * Redocly CLI (2.x reads the same two variables as 1.x) calls the network on its own: usage telemetry (sent even when
+ * `telemetry: off` cannot take effect, as on a config error) and an npm registry check for a newer version. Both are
+ * switched off for every run, so a lint never leaves the machine and tests stay offline (AGENTS.md §7). The variables
+ * are added to the inherited environment with env(1), because only @velexis/config touches process.env (conventions
+ * §1).
  */
 const ENV_COMMAND = "/usr/bin/env";
 const REDOCLY_ENV = ["REDOCLY_TELEMETRY=off", "REDOCLY_SUPPRESS_UPDATE_NOTICE=true"];

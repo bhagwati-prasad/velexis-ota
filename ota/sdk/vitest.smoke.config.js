@@ -15,7 +15,10 @@ export default defineConfig({
     include: ["test/smoke/**/*.smoke.test.js"],
     globalSetup: ["test/smoke/smoke-env.js"],
     fileParallelism: false,
+    // Vitest 4's restoreMocks restores vi.spyOn spies only; mockReset also clears every vi.fn() and resets its
+    // implementation before each test, as restoreMocks did under Vitest 3 (PBE-070).
     restoreMocks: true,
+    mockReset: true,
     unstubGlobals: true,
   },
 });

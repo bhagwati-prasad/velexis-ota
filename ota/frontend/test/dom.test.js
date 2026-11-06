@@ -1,8 +1,8 @@
 // lib/dom.js (ota/frontend/README.md §5.2): `<template>` clones filled with textContent and allowlisted attributes by
-// `data-field`, so API data never becomes markup or script; `$`, `$$` and `on()` with delegation.
+// `data-field`, so API data never becomes markup or script; `$`, `$$`, `checkedInput` and `on()` with delegation.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { $, $$, clone, fill, on } from "../src/lib/dom.js";
+import { $, $$, checkedInput, clone, fill, on } from "../src/lib/dom.js";
 
 /** Puts the test templates (and an element that is not one) into the page. */
 function renderTemplates() {
@@ -33,6 +33,27 @@ describe("$ and $$", () => {
     expect($$(".item", list).map((item) => item.textContent)).toEqual(["1", "2"]);
     expect($(".missing")).toBeNull();
     expect($$(".missing")).toEqual([]);
+  });
+});
+
+describe("checkedInput", () => {
+  it("[PBE-070] answers the input checked now, also once the group was read before it changed", () => {
+    document.body.innerHTML = `<form>
+      <input type="radio" name="fare" value="light" checked />
+      <input type="radio" name="fare" value="flex" />
+      <input type="checkbox" name="extra" value="bag" />
+    </form>`;
+    const form = /** @type {Element} */ ($("form"));
+    const [, flex] = /** @type {HTMLInputElement[]} */ ($$('input[name="fare"]', form));
+
+    // Read first, as a page does while it renders, then change the group as the traveller does.
+    expect(checkedInput('input[name="fare"]', form)?.value).toBe("light");
+    expect($('input[name="fare"]:checked', form)).not.toBeNull();
+    /** @type {HTMLInputElement} */ (flex).checked = true;
+
+    expect(checkedInput('input[name="fare"]', form)?.value).toBe("flex");
+    expect(checkedInput('input[name="extra"]', form)).toBeNull();
+    expect(checkedInput('input[name="missing"]')).toBeNull();
   });
 });
 

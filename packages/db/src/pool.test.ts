@@ -1,13 +1,15 @@
 import pg from "pg";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import { createPool, POOL_DEFAULTS, type PoolLogger } from "./pool.js";
 import { PG_TYPE_OID } from "./type-parsers.js";
 
 // Never connected to: the pools below only check their configuration.
 const UNREACHABLE_URL = "postgres://velexis_ota_app:not-a-real-password@127.0.0.1:1/velexis";
 
-function silentLogger(): PoolLogger & { error: ReturnType<typeof vi.fn> } {
-  return { error: vi.fn() };
+// Typed with the logger's method: under Vitest 4, `ReturnType<typeof vi.fn>` is the mock of a function or a
+// constructor, which TypeScript does not let a logger call (PBE-070).
+function silentLogger(): PoolLogger & { error: Mock<PoolLogger["error"]> } {
+  return { error: vi.fn<PoolLogger["error"]>() };
 }
 
 describe("createPool", () => {

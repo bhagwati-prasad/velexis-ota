@@ -6,10 +6,11 @@ import { defineConfig } from "vitest/config";
 // .env.example, CI services). The files run in parallel, so the two test-database files and the two mailpit files
 // prove isolation between files running at the same time: each waits up to 60 s for its partner.
 //
-// Four forks, and always four (minForks = maxForks): each file runs in a fresh fork, and when a file ends Tinypool starts
-// a new fork only while there are fewer forks than minForks or than queued files, busy forks included. With minForks 2,
-// the fast files (redis, amadeus) could end while two files waited for their queued partners: two busy forks, two
-// queued files, so no new fork until the waiting files gave up after 60 s (X-027).
+// Four forks: each file runs in a fresh fork. Vitest 4 runs its own pool (no Tinypool, and `maxWorkers` replaces
+// `poolOptions`, PBE-070), which starts the next queued file whenever fewer than `maxWorkers` files run, so a file that
+// waits for its partner never keeps the partner queued. Under Vitest 3, Tinypool also needed `minForks: 4`: with fewer,
+// the fast files (redis, amadeus) could end while two files waited for their queued partners, and no new fork started
+// until the waiting files gave up after 60 s (X-027).
 export default defineConfig({
   test: {
     name: "@velexis/testing (integration)",
@@ -18,6 +19,6 @@ export default defineConfig({
     globalSetup: ["./src/vitest-global-setup.ts"],
     fileParallelism: true,
     pool: "forks",
-    poolOptions: { forks: { minForks: 4, maxForks: 4 } },
+    maxWorkers: 4,
   },
 });

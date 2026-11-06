@@ -78,7 +78,12 @@ function runLint(args: readonly string[] = []): Promise<LintRun> {
   });
 }
 
-function problemsIn(output: string): Problem[] {
+/**
+ * The problems Redocly printed in a run. Redocly CLI 2 prints them on stdout and its progress on stderr (1.x printed
+ * both on stderr, PBE-070), so both streams are read: a problem counts wherever it is printed.
+ */
+function problemsIn(run: LintRun): Problem[] {
+  const output = `${run.stdout}\n${run.stderr}`;
   return [...output.matchAll(PROBLEM_LINE)].map(([, severity = "", rule = "", message = ""]) => ({
     severity,
     rule,
@@ -234,7 +239,7 @@ describe("contracts:lint", () => {
     expect(run.code).toBe(0);
     expect(run.stdout).toContain(`contracts:lint: linting "ota": ../../${OTA_PATH}`);
     expect(run.stdout).toMatch(/^contracts:lint: no errors in ota\b/m);
-    const problems = problemsIn(run.stderr);
+    const problems = problemsIn(run);
     expect(problems.filter((problem) => problem.severity === "error")).toEqual([]);
     expect(problems.filter((problem) => problem.message.includes("`x-"))).toEqual([]);
   });
@@ -260,7 +265,7 @@ describe("contracts:lint", () => {
     const run = ran("duplicated-operation-id");
 
     expect(run.code).toBe(1);
-    const errors = problemsIn(run.stderr).filter((problem) => problem.severity === "error");
+    const errors = problemsIn(run).filter((problem) => problem.severity === "error");
     expect(errors.map((problem) => problem.rule)).toEqual(["operation-operationId-unique"]);
     expect(run.stderr).toMatch(/^contracts:lint: failed: Redocly reported errors in ota\b/m);
   });
@@ -279,7 +284,7 @@ describe("contracts:lint", () => {
 
     expect(run.code).toBe(1);
     expect(run.stderr).toContain(PLATFORM_PATH);
-    const errors = problemsIn(run.stderr).filter((problem) => problem.severity === "error");
+    const errors = problemsIn(run).filter((problem) => problem.severity === "error");
     expect(errors.map((problem) => problem.rule)).toEqual(["operation-operationId-unique"]);
   });
 

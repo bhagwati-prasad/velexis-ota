@@ -69,7 +69,7 @@ REDOCLY_TELEMETRY=off REDOCLY_SUPPRESS_UPDATE_NOTICE=true \
 2. Every document that exists is linted, in one Redocly CLI run, with the rules of `redocly.yaml` and the `stylish` output (one line per problem: `line:column severity rule message`).
 3. The **platform** document does not exist until the platform plan creates it in M1 (PBE-005). Until then the script prints `contracts:lint: skipped "platform": … does not exist yet; the platform plan creates it in M1 (ADR-0006).` and goes on. Once the file exists it is linted with no change here. Any other missing document (the OTA one) fails the run.
 4. It exits 1 on any lint **error**, on a `redocly.yaml` that Redocly rejects (`--lint-config error`, so a misspelt rule name fails instead of being ignored), and when a `.redocly.lint-ignore.yaml` sits next to the config. Warnings are printed and do not fail the run.
-5. Redocly CLI 1.x would otherwise send usage telemetry and check the npm registry for a newer version. The script sets `REDOCLY_TELEMETRY=off` and `REDOCLY_SUPPRESS_UPDATE_NOTICE=true` for the Redocly process, and `redocly.yaml` also says `telemetry: off`, so a lint never calls the network.
+5. Redocly CLI (2.x, as 1.x before it) would otherwise send usage telemetry and check the npm registry for a newer version. The script sets `REDOCLY_TELEMETRY=off` and `REDOCLY_SUPPRESS_UPDATE_NOTICE=true` for the Redocly process, and `redocly.yaml` also says `telemetry: off`, so a lint never calls the network.
 
 `--config` lints another copy of the repository layout (`<root>/packages/api-types/redocly.yaml` with the documents at their repository paths); the tests use it to lint broken copies without touching the real documents.
 

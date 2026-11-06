@@ -11,7 +11,7 @@
 // Prices and differences are the API's own amounts, formatted with lib/format.js; nothing is added or subtracted here
 // (README §7). A feature's status is always written out ("Included", "For a fee", …), never shown by colour alone.
 
-import { clone, fill } from "../lib/dom.js";
+import { checkedInput, clone, fill } from "../lib/dom.js";
 import { formatMoney } from "../lib/format.js";
 import { t } from "../lib/i18n.js";
 
@@ -249,8 +249,7 @@ export function mount(root, { locale, onChange } = {}) {
     if (families.length === 1) {
       return families[0]?.offerId ?? null;
     }
-    const checked = /** @type {HTMLInputElement | null} */ (root.querySelector('input[name="fare"]:checked'));
-    return checked?.value ?? null;
+    return checkedInput('input[name="fare"]', root)?.value ?? null;
   };
 
   /**

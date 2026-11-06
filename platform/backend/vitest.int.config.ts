@@ -16,7 +16,10 @@ export default defineConfig({
     globalSetup: ["@velexis/testing/vitest-global-setup"],
     // The health tests bind the default ports 3100 and 3101 of the units: files never run concurrently.
     fileParallelism: false,
+    // Vitest 4's restoreMocks restores vi.spyOn spies only; mockReset also clears every vi.fn() and resets its
+    // implementation before each test, as restoreMocks did under Vitest 3 (PBE-070).
     restoreMocks: true,
+    mockReset: true,
     unstubEnvs: true,
     unstubGlobals: true,
   },

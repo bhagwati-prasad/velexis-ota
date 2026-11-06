@@ -2118,7 +2118,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend why multer && pnpm audit --prod`
 - **Note (2026-11-05, lead decision (5c), FIX-W43-PLATFORM):** NestJS stays on 11 (`docs/mvp/decisions.md`, components 1 and 4). OBE-094's root `pnpm.overrides` entry lifts `multer` to 2.5.0 for both backends, so this task no longer moves NestJS: its title was "Move the platform backend to a NestJS release without the multer advisory", its step 1 upgraded the four `@nestjs/*` packages to an 11.x patch that requires `multer` 2.5.0 or stopped for a NestJS 12 decision, and its Files were the platform backend's `package.json`, the guard test and `docs/mvp/tech-stack.md`. Step 1 now confirms the override after OBE-094 merges; step 2, the multipart-route guard test, stays as it was; step 3 closes the finding. Depends on gains OBE-094.
 
-### PBE-070 · Upgrade the test and contract tooling past the audit's critical and high advisories
+### PBE-070 · Upgrade the test and contract tooling past the audit's critical and high advisories ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M6
 - **Depends on:** PBE-062

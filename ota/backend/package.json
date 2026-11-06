@@ -75,6 +75,6 @@
     "supertest": "7.3.1",
     "swagger2openapi": "7.0.8",
     "typescript": "5.6.3",
-    "vitest": "3.2.7"
+    "vitest": "4.1.12"
   }
 }

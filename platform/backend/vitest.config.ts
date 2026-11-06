@@ -66,7 +66,10 @@ export default defineConfig({
     name: "@velexis/platform-backend",
     include: ["src/**/*.test.ts", "test/contract/**/*.test.ts"],
     environment: "node",
+    // Vitest 4's restoreMocks restores vi.spyOn spies only; mockReset also clears every vi.fn() and resets its
+    // implementation before each test, as restoreMocks did under Vitest 3 (PBE-070).
     restoreMocks: true,
+    mockReset: true,
     unstubEnvs: true,
     unstubGlobals: true,
   },

@@ -6,7 +6,7 @@
 // test/integration/tenancy/custom-domains.int.test.ts.
 import type { ConfigService } from "@nestjs/config";
 import type { PinoLogger } from "nestjs-pino";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import type { SharedConfig } from "../config";
 import {
   TLS_STATUSES,
@@ -45,8 +45,10 @@ const TOKEN = "tOk3n_-abcdefghijklmnopqrstuvwxyzABCDEFGHIJ";
 const ON_CUSTOM: StorefrontOrigins = { subdomain: SUBDOMAIN, primary: CUSTOM };
 const ON_SUBDOMAIN: StorefrontOrigins = { subdomain: SUBDOMAIN, primary: SUBDOMAIN };
 
-function recordingLogger(): Pick<PinoLogger, "warn"> & { readonly warn: ReturnType<typeof vi.fn> } {
-  return { warn: vi.fn() };
+// Typed with the logger's method: under Vitest 4, `ReturnType<typeof vi.fn>` is the mock of a function or a
+// constructor, which TypeScript does not let a logger call (PBE-070).
+function recordingLogger(): Pick<PinoLogger, "warn"> & { readonly warn: Mock<PinoLogger["warn"]> } {
+  return { warn: vi.fn<PinoLogger["warn"]>() };
 }
 
 function readerAnswering(answer: () => Promise<PlatformStorefrontDomain[]>): PrimaryHostReader & {

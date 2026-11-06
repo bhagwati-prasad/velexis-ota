@@ -20,7 +20,10 @@ export default defineConfig({
     // Each file starts an OTA worker and the platform's worker graph: one file at a time keeps them from competing
     // for the CPU and from sharing a Redis database index.
     fileParallelism: false,
+    // Vitest 4's restoreMocks restores vi.spyOn spies only; mockReset also clears every vi.fn() and resets its
+    // implementation before each test, as restoreMocks did under Vitest 3 (PBE-070).
     restoreMocks: true,
+    mockReset: true,
     unstubEnvs: true,
     unstubGlobals: true,
   },

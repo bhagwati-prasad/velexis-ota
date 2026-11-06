@@ -18,9 +18,9 @@
   "devDependencies": {
     "@tailwindcss/vite": "4.1.18",
     "eslint": "9.39.5",
-    "happy-dom": "17.6.3",
+    "happy-dom": "21.0.4",
     "tailwindcss": "4.1.18",
     "vite": "6.4.5",
-    "vitest": "3.2.7"
+    "vitest": "4.1.12"
   }
 }
