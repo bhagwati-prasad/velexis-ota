@@ -2649,7 +2649,8 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - `pnpm audit --prod` lists no `zod` advisory reaching `ota/admin`; the OTA admin's unit tests pass.
 - **Verify:** `pnpm --filter @velexis/ota-admin test && pnpm audit --prod`
 
-### OFE-023 · Publish the storefront script inventory for the daily integrity check
+### OFE-023 · Publish the storefront script inventory for the daily integrity check ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M6
 - **Depends on:** OFE-014

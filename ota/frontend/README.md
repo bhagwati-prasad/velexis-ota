@@ -12,7 +12,7 @@ Related: [`docs/pages.md`](docs/pages.md), [`docs/pages-account.md`](docs/pages-
 | Runtime | Evergreen browsers (ES2022). **No server process**: Caddy serves `dist/` from `/srv/velexis/current/storefront` |
 | Technology | HTML pages + **Tailwind CSS 4** (`@tailwindcss/vite`) + vanilla ES modules + `@velexis/ota-sdk`; **Vite 6** multi-page build and dev server; no framework, no state library, no jQuery |
 | API access | `createVelexisClient({ baseUrl: "/api", session: "cookie" })` only. Never `fetch` the API directly. |
-| Third-party code | Stripe.js on one page (`/checkout/pay-card.html`); nothing else anywhere |
+| Third-party code | Stripe.js on one page (`/checkout/pay-card.html`); nothing else anywhere (the build fails on any other, §10) |
 | Tenancy | One build for every OTA; the tenant is the host; branding and settings come from `storefront.get` at runtime |
 | UI language | English in the MVP; money and dates through `Intl` |
 | Targets | WCAG 2.2 AA; per-page JS ≤ 60 KB gzip (§9) |
@@ -80,6 +80,7 @@ ota/frontend/
     styles/fonts.css          @font-face for the bundled fonts
   test/                       Vitest + happy-dom unit tests; test/helpers/ (scratch builds, HTTP requests)
   scripts/check-budgets.mjs   gzip size budgets for dist/ (§9)
+  scripts/payment-page-inventory.mjs  dist/payment-page-inventory.json: every page's scripts, hashes and headers (§10)
   scripts/vite-plugins.js     page inputs, partials, Caddy-like dev/preview routing, /api proxy, preview headers
   docs/                       page inventory, build-your-own guide
 ```
@@ -228,14 +229,53 @@ Images carry width and height, results render 20 at a time, and search shows a s
 - **Tokens in URLs**: verification and reset tokens are read once and removed from the address bar with `history.replaceState`; the referrer policy is `strict-origin-when-cross-origin`, and `strict-origin` (a `<meta name="referrer">` first in the head) on `account/verify.html` and `account/reset-password.html`, so the requests made before the page module removes the token (its script, preloads and stylesheet) send only the origin as `Referer` and the token never reaches an access log ([`docs/pages-account.md`](docs/pages-account.md) §5).
 - **Stripe** ([flow](../docs/flows/checkout-stripe.md)): Stripe.js is a static `<script>` tag from `https://js.stripe.com` in `checkout/pay-card.html` only, never bundled or self-hosted; the Payment Element keeps card data inside Stripe's iframes; `stripeAccount` is set in Connect mode; the Appearance API takes the OTA colours.
 - **Airline card** ([OADR-0017](../docs/adr/0017-airline-card-form-isolation.md)): its own page and entry bundle (a build of its own, so it shares no chunk with any other page), no third-party script, card inputs without `name` attributes (a submit without JavaScript sends nothing), values only in the inputs until the single `checkout.completeWithAirlineCard` call, inputs cleared on success, error and `pagehide`, never stored, logged or put in a URL; the SDK never retries the call. The page alone gets the stricter CSP (no Stripe host; `worker-src 'none'` as everywhere), `Cross-Origin-Opener-Policy: same-origin` and `Cache-Control: no-store` (the Caddyfile's `@pay_airline` block for `/checkout/pay-airline.html` and `/checkout/pay-airline`, asserted by `deploy/caddy/test/caddy-smoke.sh`); no other page sends COOP `same-origin` (the storefront headers also remove the one the API's helmet adds to the proxied `/api/*` answers), so a window opened from any other page (Stripe.js on the card page included) gets no handle on it. It reads nothing from `sessionStorage` or `localStorage`: ids from its URL, the rest from the API. Residual risk: a script on any page of this origin could still draw a look-alike card form, so the whole origin is in the PCI script inventory (OADR-0017 point 8).
-- **Script inventory** (ADR-0011 §C, PCI DSS 6.4.3, checked daily from M6). `dist/payment-page-inventory.json` (OFE-023) lists **every** built page with its scripts, hashes and headers, because every script on the origin matters to the card page; the payment pages are:
+- **Script inventory** (ADR-0011 §C, PCI DSS 6.4.3 and 11.6.1, [OADR-0017](../docs/adr/0017-airline-card-form-isolation.md) point 8, OFE-023): after `vite build`, `scripts/payment-page-inventory.mjs` writes `dist/payment-page-inventory.json`, the file below. It lists **every** built page, not only the two payment pages, because any script on the storefront origin could draw a look-alike card form or reach the card page. Its place and readers:
+  - The release carries `dist/` as `storefront/` (`deploy/scripts/pack-release.sh` copies it whole; the file is in the release's `SHA256SUMS` like every other), so it is `storefront/payment-page-inventory.json` of the release and `/srv/velexis/current/storefront/payment-page-inventory.json` on the VM.
+  - The on-VM health check reads it there once a day (X-030, `deploy/scripts/healthcheck.sh`, [ADR-0011](../../docs/mvp/adr/0011-payments-stripe-and-airline-card.md) §C): it fetches both payment pages of the demo storefront, compares each page's ordered `<script src>` list, the SHA-256 of every first-party script and every header of each path with this file, and alerts on any difference. Extending it to every page listed is a request to its owner, recorded in the [OTA ADR index](../docs/adr/README.md#requests-from-the-storefront-sdk-and-ota-admin-adrs-to-other-parts).
+  - The PCI evidence pack's script inventory is made from it (OBE-085, `ota/docs/pci/script-inventory.md`).
+  - Caddy also serves it at `/payment-page-inventory.json`; it holds nothing a visitor cannot read from the pages and their headers.
+- **What the build refuses** (the "authorised" of 6.4.3; the reviewed lists are `PAGE_PURPOSES` and `THIRD_PARTY_SCRIPTS` of the script). The build fails, writes no inventory and removes a stale one when a page loads a third-party script, module preload, stylesheet or chunk import that `THIRD_PARTY_SCRIPTS` does not list for it (its only entry is Stripe.js on `/checkout/pay-card.html`), or lacks one it lists (a chunk import is an `import` or `from` of a URL of another origin in any chunk the page runs, whatever its file name ends with; a URL that a script builds at run time cannot be read from the build, and the CSP's `script-src` refuses it); when a page has an inline script, a `<script>` or `<link>` inside an HTML comment (X-030's check reads every such tag of the served page, comments included, so the inventory would never match it) or references a file that is not in the build; and when the build has a page that `PAGE_PURPOSES` does not list, or lacks one it lists. A new page therefore joins the origin only after its scripts are reviewed and its purpose is written there and in the table below (`test/payment-page-inventory.test.js` checks that the table lists every page, with the purpose of `PAGE_PURPOSES` and its own bundle).
+- **Format** (version 1; a reader refuses a `format` or `version` it does not know). Hashes are lowercase hex SHA-256 of the files as Caddy stores them, so a check fetches without `Accept-Encoding` (Caddy compresses only when asked). The headers are the Caddyfile's: the copies `vite preview` sends (`STOREFRONT_HEADERS`, `PAY_AIRLINE_HEADERS`) plus HSTS and the file server's `no-cache`, which the test compares path by path with `deploy/caddy/Caddyfile`, so a header changed there alone fails the storefront's tests. Examples: `jq -r '.pages[] | select(.payment) | .paths[]'` (the payment pages' paths) and `jq -r '.pages[] | select(.payment) | .firstPartyScripts[] | "\(.sha256)  \(.src)"'`.
 
-| Page | Scripts | Purpose |
+| Field | Value |
+|---|---|
+| `format`, `version`, `description` | `"velexis-storefront-payment-page-inventory"`, `1`, one sentence |
+| `pages[]` | every HTML page of the build, sorted by `file` |
+| `pages[].file` | the page's file in `dist/` (and in the release's `storefront/`), such as `checkout/pay-card.html` |
+| `pages[].path`, `pages[].paths` | the page's address (§4: `/`, `/account/`, `/checkout/pay-card.html`, …) and every path its headers are checked at, `path` first; the airline-card page also has `/checkout/pay-airline`, the second path of the Caddyfile's `@pay_airline` matcher |
+| `pages[].payment` | `true` on `/checkout/pay-card.html` and `/checkout/pay-airline.html`, `false` on every other page |
+| `pages[].purpose` | why the page exists (the table below) |
+| `pages[].sha256` | the HTML file |
+| `pages[].scripts[]` | the page's `<script src>` elements in document order: `src` as written in the page, `firstParty`, `sha256` (`null` for a third-party script, whose body its provider changes), `purpose`, and `justification` on a third-party script |
+| `pages[].modulePreloads[]` | the page's `<link rel="modulepreload">` in document order: `href`, `sha256` |
+| `pages[].firstPartyScripts[]` | every first-party script the page can run, sorted by `src`: its scripts, its module preloads and every chunk they import, statically or dynamically (the files `scripts/check-budgets.mjs` counts), each with `sha256` |
+| `pages[].stylesheets[]` | the page's stylesheets: `href`, `sha256` |
+| `pages[].headers` | header name → the exact value Caddy sends on every path of `paths`, or `null` where the answer must not carry the header: `Strict-Transport-Security`, `Content-Security-Policy` (the airline-card page's own), `Referrer-Policy`, `X-Content-Type-Options`, `Permissions-Policy`, `Cross-Origin-Opener-Policy` (`same-origin` on the airline-card page, `null` everywhere else), `Server` (`null`) and `Cache-Control` (`no-store` on the airline-card page, `no-cache` everywhere else) |
+
+**The scripts and their purpose.** Every first-party script is built from this repository: a page's `<script type="module">` is its entry bundle `/assets/<entry>-<hash>.js` (the page module `src/pages/<entry>.js`, named after the page's path, with the SDK and the `lib/` and `components/` code it imports), and the chunks several pages share (Vite names them after their first module, such as `boot`, `format` or `forms`) are module preloads of the pages that import them, hashed in `firstPartyScripts`. The only third-party script is **Stripe.js** (`https://js.stripe.com/v3/`, card page only): it mounts Stripe's Payment Element, whose iframes on Stripe's origin collect the card, and runs 3-D Secure. Justification: card payments through Stripe need it (method (a), ADR-0011 §A); Stripe serves it only from `js.stripe.com` and does not allow bundling or self-hosting it, so it is listed by URL and not hashed, and the check compares its URL, its place before the page's bundle, the card page's HTML and the CSP that limits it (scripts and frames from Stripe's hosts, `connect-src` `api.stripe.com`); card data never reaches the page's own code. It never runs on the airline-card page (OADR-0017 points 1 and 2).
+
+| Page | Purpose | Scripts, in order |
 |---|---|---|
-| `/checkout/pay-card.html` | `/assets/checkout-pay-card-<hash>.js` (and the shared chunks it imports, preloaded) | Page code + SDK |
-| | `https://js.stripe.com/…` (Stripe.js) | Payment Element, 3-D Secure |
-| `/checkout/pay-airline.html` | `/assets/checkout-pay-airline-<hash>.js` | Page code + SDK; nothing else |
-| Every other page | its own `/assets/<entry>-<hash>.js` | First-party page code + SDK; no third-party script (a test fails on one) |
+| `/checkout/pay-card.html` (**payment page**) | Card payment: Stripe's Payment Element, the card-fee review and Pay | Stripe.js (third-party), then `checkout-pay-card-<hash>.js` (with the shared chunks it preloads) |
+| `/checkout/pay-airline.html` (**payment page**; also `/checkout/pay-airline`) | Airline-card payment: the card form, the airline's fee review and Pay; no third-party script (OADR-0017) | `checkout-pay-airline-<hash>.js` only: one file that imports nothing (built on its own, §12) |
+| `/` | Home: the search form | `index-<hash>.js` |
+| `/search.html` | Search results with filters, sort and load more | `search-<hash>.js` |
+| `/offer.html` | Offer details and branded fares | `offer-<hash>.js` |
+| `/price.html` | Confirmed price, breakdown, extras available and fare rules; starts the checkout | `price-<hash>.js` |
+| `/checkout.html` | Checkout data: travellers, contacts, extras and special requests, payment method and terms | `checkout-<hash>.js` |
+| `/checkout/complete.html` | Completes the checkout after Stripe (the 3-D Secure return URL); no Stripe.js | `checkout-complete-<hash>.js` |
+| `/confirmation.html` | Booking confirmation and ticketing status | `confirmation-<hash>.js` |
+| `/bookings.html` | My bookings of a signed-in customer | `bookings-<hash>.js` |
+| `/booking.html` | Booking detail: trip, tickets, documents, contact change, cancellation, history | `booking-<hash>.js` |
+| `/lookup.html` | Guest booking lookup by reference and last name | `lookup-<hash>.js` |
+| `/account/` | Account: profile, password change, sign out everywhere, account deletion | `account-index-<hash>.js` |
+| `/account/sign-in.html` | Customer authentication: sign in | `account-sign-in-<hash>.js` |
+| `/account/sign-up.html` | Customer authentication: sign up | `account-sign-up-<hash>.js` |
+| `/account/verify.html` | Customer authentication: verifies the e-mail address with the e-mailed token | `account-verify-<hash>.js` |
+| `/account/forgot-password.html` | Customer authentication: asks for a password reset link | `account-forgot-password-<hash>.js` |
+| `/account/reset-password.html` | Customer authentication: sets a new password with the e-mailed token | `account-reset-password-<hash>.js` |
+| `/p.html` | The OTA's content pages (`/p/<slug>`) | `p-<hash>.js` |
+| `/404.html` | Not found page (Caddy's `handle_errors 404`) | `404-<hash>.js` |
 
 ## 11. Local development
 
@@ -283,11 +323,11 @@ The variables are listed in [`.env.example`](.env.example) (`STOREFRONT_DEV_PORT
 
 ## 12. Build and deploy
 
-- `pnpm --filter @velexis/ota-frontend build` writes `dist/`: the HTML files at their paths, hashed JS and CSS in `dist/assets/`, fonts, `404.html`. Markdown notes in `public/` (such as `public/fonts/README.md`) are left out. Then `scripts/check-budgets.mjs` runs.
-- Every `*.html` file of the package is a page and a build input (`partials/`, `public/`, `src/`, `test/` and `docs/` excepted); its entry bundle is named after its path (`checkout/pay-card.html` → `assets/checkout-pay-card-<hash>.js`).
+- `pnpm --filter @velexis/ota-frontend build` writes `dist/`: the HTML files at their paths, hashed JS and CSS in `dist/assets/`, fonts, `404.html`. Markdown notes in `public/` (such as `public/fonts/README.md`) are left out. Then `scripts/payment-page-inventory.mjs` writes `dist/payment-page-inventory.json` (it fails the build on a page or a third-party script nobody reviewed, §10) and `scripts/check-budgets.mjs` runs.
+- Every `*.html` file of the package is a page and a build input (`partials/`, `public/`, `src/`, `test/` and `docs/` excepted); its entry bundle is named after its path (`checkout/pay-card.html` → `assets/checkout-pay-card-<hash>.js`). A new page also needs its line in `PAGE_PURPOSES` of `scripts/payment-page-inventory.mjs` and in the page table of §10, or the build fails.
 - The airline-card page (`ISOLATED_PAGES` of `vite.config.js`) is left out of that build: once the other pages are written, a second build with that page as its only input writes its single bundle (`inlineDynamicImports`) and its own stylesheet into the same `dist/`, so its HTML references nothing but its own files and no other page loads a chunk it shares ([OADR-0017](../docs/adr/0017-airline-card-form-isolation.md) points 1 and 2).
 - The same `dist/` serves every OTA. There are no build-time variables and no per-tenant builds ([OADR-0015](../docs/adr/0015-storefront-build-urls-and-hosting.md)).
-- The release artefact carries `dist/` to `/srv/velexis/current/storefront` ([ADR-0023](../../docs/mvp/adr/0023-release-artefact-and-deploy-user.md)); Caddy caches `/assets/*` for a year and revalidates HTML. Source maps are kept as CI artefacts, not deployed.
+- The release artefact carries `dist/` to `/srv/velexis/current/storefront` ([ADR-0023](../../docs/mvp/adr/0023-release-artefact-and-deploy-user.md)), the inventory included (`storefront/payment-page-inventory.json` of the release, §10); Caddy caches `/assets/*` for a year and revalidates HTML. Source maps are kept as CI artefacts, not deployed.
 
 ## 13. Testing
 
@@ -298,6 +338,7 @@ The variables are listed in [`.env.example`](.env.example) (`STOREFRONT_DEV_PORT
 | Lint | `test/lint.test.js` | `el.innerHTML = data` and the other HTML sinks fail lint in every storefront file, tests included |
 | Configuration | `test/csp.test.js` | The preview CSP equals the CSP in `deploy/caddy/Caddyfile`, so E2E runs see production headers; the build (made with the real `vite.config.js` in a scratch folder) has no inline script or style and no development value; the preview answers a storefront sub-domain by name and refuses other host names (OFE-022) |
 | Build tools | `test/budgets.test.js`, `test/vite-plugins.test.js` | The budget script on fixture folders (a breach exits 1 and names the file); page inputs, partials, and the dev and preview servers against a fake OTA API (proxy headers, 400, 404 and 503 answers) |
+| Script inventory | `test/payment-page-inventory.test.js` (OFE-023) | On a production build: every built page listed with its paths, purpose and HTML hash; exactly two scripts on the card page (Stripe.js with its justification, then its bundle) and one on the airline-card page; no third-party script on any other page; every first-party script a page can run hashed (the files `check-budgets.mjs` counts); the headers of every path equal to the Caddyfile's; the command line writes `dist/payment-page-inventory.json`. On fixture folders: a third-party script, module preload, stylesheet or import (whatever its URL ends with), an inline script, a missing file, a page that is not in `PAGE_PURPOSES` or a listed page that is missing each fail it, and no inventory is left behind; a comment that a browser ends early (`<!-->`) hides no script, and a `<script>` or `<link>` inside a comment fails. The page table of §10 lists every page with its purpose and its bundle |
 | End to end | `tools/e2e/specs/storefront/*.e2e.ts` (Playwright + `@axe-core/playwright`) | Against `vite preview` (production build) proxied to the local OTA backend, the Amadeus stub, Mailpit, Stripe test mode |
 
 Journeys (one per main flow, [ADR-0015](../../docs/mvp/adr/0015-testing-strategy.md)):

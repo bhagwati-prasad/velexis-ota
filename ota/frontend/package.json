@@ -7,7 +7,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && node scripts/check-budgets.mjs",
+    "build": "vite build && node scripts/payment-page-inventory.mjs && node scripts/check-budgets.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "lint": "eslint ."
