@@ -951,7 +951,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 - **Verify:** `curl -fsS "https://${REAL_PLATFORM_API_HOST:?}/health/live" && curl -fsS "https://${REAL_OTA_API_HOST:?}/health/live"` (human step: run by the developer with the real host names)
 
 ### X-030 · Add the on-VM health check timer
-- **Status:** todo
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the VM check, human step)
 - **Component:** foundation
 - **Milestone:** M6
 - **Depends on:** X-024, X-021

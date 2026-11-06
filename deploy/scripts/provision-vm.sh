@@ -624,6 +624,7 @@ step_scripts() {
   install -m 0755 -o root -g root "$DEPLOY_DIR/scripts/restore.sh" /usr/local/sbin/velexis-restore
   install -m 0755 -o root -g root "$DEPLOY_DIR/scripts/alert.sh" /usr/local/sbin/velexis-alert
   install -m 0755 -o root -g root "$DEPLOY_DIR/scripts/run-as.sh" /usr/local/sbin/velexis-run
+  install -m 0755 -o root -g root "$DEPLOY_DIR/scripts/healthcheck.sh" /usr/local/sbin/velexis-healthcheck
   install -m 0644 -o root -g root "$DEPLOY_DIR"/systemd/*.service "$DEPLOY_DIR"/systemd/*.timer /etc/systemd/system/
   install -d -m 0755 /etc/systemd/system/caddy.service.d
   local dropin_changed=0
@@ -636,6 +637,9 @@ step_scripts() {
   if [ "$dropin_changed" = 1 ] && is_active caddy; then systemctl restart caddy; fi
   # App units are enabled by velexis-deploy when a release contains the app. Backups start now.
   systemctl enable --now velexis-backup.timer
+  # The on-VM health check (X-030), every 5 minutes. Until alert.env has the SMTP settings its alerts cannot be sent
+  # and each run retries them; until the first backup and the certificates exist it reports them as failing.
+  systemctl enable --now velexis-healthcheck.timer
 }
 
 # ---- caddyconf: Caddyfile, validated with the real environment ----------------------------------------------

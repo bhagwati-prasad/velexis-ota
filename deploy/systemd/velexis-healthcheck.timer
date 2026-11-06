@@ -1,0 +1,12 @@
+# velexis-healthcheck.timer — runs velexis-healthcheck.service every 5 minutes (ADR-0016, task X-030), so a unit that
+# stops is alerted within 10 minutes. Enabled by provision-vm.sh (step scripts); deploy.sh re-installs it.
+[Unit]
+Description=Velexis on-VM health check every 5 minutes
+
+[Timer]
+OnCalendar=*:0/5
+AccuracySec=15s
+Unit=velexis-healthcheck.service
+
+[Install]
+WantedBy=timers.target

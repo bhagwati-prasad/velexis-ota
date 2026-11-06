@@ -117,6 +117,7 @@ flowchart TB
 | `velexis-ota-admin` | Next.js standalone | 3002 | 512 MB | 7 |
 | `postgresql`, `redis-server`, `caddy` | vendor packages | 5432, 6379, 80/443; Caddy's admin API only on the unix socket `/run/caddy/admin.sock` (no TCP port) | — | not restarted by deploys |
 | `velexis-backup.timer` | `/usr/local/sbin/velexis-backup` | — | — | nightly 02:30 UTC |
+| `velexis-healthcheck.timer` | `/usr/local/sbin/velexis-healthcheck` (the on-VM health check, [§13](#13-monitoring-and-uptime)) | — | — | every 5 minutes; not restarted by deploys |
 
 Workers restart first so new consumers run before new producers ([ADR-0009](adr/0009-background-jobs-bullmq.md)). Every app unit has `Restart=always` with `RestartMode=direct` and a start limit of 10 starts in 5 minutes, sandboxing (`ProtectSystem=strict`, `PrivateTmp`, `ProtectProc=invisible`, no capabilities, a system-call filter; exposure 2.0 or lower in `systemd-analyze security`), `MemoryMax`, `LimitCORE=0` and `OnFailure=velexis-alert@%n.service`, which mails once when the start limit gives up ([`deploy/systemd/`](../../deploy/systemd/); proven under systemd by `deploy/systemd/test/units-smoke.sh`).
 
@@ -133,13 +134,14 @@ Workers restart first so new consumers run before new producers ([ADR-0009](adr/
 | `/etc/velexis/keys/platform/`, `/etc/velexis/keys/ota/` | the zone's user (`velexis-platform`, `velexis-ota`), 0500 folder, 0400 per file | Master key and pepper (identical copies in both), the zone's JWT key, the document URL key (OTA only) |
 | `/etc/velexis/backup/` | root, 0700 | age recipients, rclone config |
 | `/var/lib/velexis/` | root, 0711 | Deploy history, reference data checksum, tenant fan-out reports (`migrate-<sha>.json`, root 0600) |
+| `/var/lib/velexis/healthcheck/` | root, 0700 (`StateDirectory=` of `velexis-healthcheck.service`) | One state file per health check (`<check>.state`: `ok` or `fail`, since when, the first problem), `payment-pages.day` (the UTC day of the last payment page check) and the run lock ([§13](#13-monitoring-and-uptime)) |
 | `/var/lib/velexis/storage/` | `velexis-ota`, 0700 | Documents and exports ([ADR-0017](adr/0017-email-documents-storage.md)) |
 | `/var/lib/velexis/system/<sha>/` | root, 0755 | Root-owned snapshot of a release's units, Caddyfile and maintenance page, re-installed on rollback ([§8](#8-release-artefact-deploy-and-rollback)) |
 | `/var/lib/velexis-migrate/` | systemd (`StateDirectory=` of the transient migration unit; a link into `/var/lib/private/`, root 0700) | The tenant fan-out report while the migration runs; `velexis-deploy` moves it to `/var/lib/velexis/` and `/var/log/velexis/` |
 | `/var/cache/velexis/<app>/` | the app's user (systemd `CacheDirectory`) | Next.js runtime cache |
 | `/var/backups/velexis/` | root, 0700 | Encrypted backups before upload (two days) |
 | `/var/log/velexis/` | `root:adm` 0750 | Deploy log, `provision.log` (the runs of `provision-vm.sh`), migration reports, restore-drill logs |
-| `/usr/local/sbin/velexis-{deploy,backup,restore,alert,run}` | root, 0755 | Root-owned copies of `deploy/scripts/*.sh`; `velexis-run <zone> <command>` (`run-as.sh`) runs one-off CLI commands as the zone's user, with the env files, folder and sandbox of the zone's installed unit; the exit code is the command's |
+| `/usr/local/sbin/velexis-{deploy,backup,restore,alert,run,healthcheck}` | root, 0755 | Root-owned copies of `deploy/scripts/*.sh`; `velexis-run <zone> <command>` (`run-as.sh`) runs one-off CLI commands as the zone's user, with the env files, folder and sandbox of the zone's installed unit; the exit code is the command's |
 
 ## 5. PostgreSQL and Redis
 
@@ -375,11 +377,60 @@ Everyday commands: `journalctl -u velexis-ota-api -f -o cat | jq`, `journalctl -
 |---|---|---|
 | Public liveness: `https://api.platform.example.com/health/live`, `https://api.ota.example.com/health/live`, the portal, one demo storefront | External uptime monitor (any free HTTP checker), every minute | E-mail and push to the developer |
 | A unit enters `failed`: with `RestartMode=direct`, only when its start limit (10 starts in 5 minutes) gives up; single crashes restart silently and stay in the journal | systemd `OnFailure=velexis-alert@%n.service` → `velexis-alert` (proven by `deploy/systemd/test/units-smoke.sh`) | One e-mail with the unit's status and last 40 log lines |
-| Every unit's `/health/ready`, disk > 80 %, Redis memory > 70 % of `maxmemory`, last backup > 26 h, failed BullMQ jobs in the last hour, TLS expiry < 14 days for the named hosts, and daily the integrity of both payment pages (script contents and per-path headers against the inventory) | `velexis-healthcheck.timer` every 5 minutes (task X-030, M6) | E-mail |
+| Every enabled unit's `/health/ready`, more than 20 failed BullMQ jobs in the last hour and a job waiting more than 10 minutes (the OTA worker's queues), disk > 80 %, Redis memory > 70 % of `maxmemory`, last backup > 26 h, TLS expiry < 14 days for the five named hosts, and daily the integrity of both payment pages (the HTML, its scripts in order, every first-party script's and stylesheet's SHA-256 and every header per path, against the release's inventory) | `velexis-healthcheck.timer` every 5 minutes (`velexis-healthcheck`, task X-030, below) | One e-mail when a check fails, one when it recovers |
 | Security log review: failed and accepted SSH logins, sudo use, auditd hits on keys and units, AIDE changes, WAF blocks, airline-card route error spikes, a failed log shipment | `velexis-log-review.timer` daily (task X-038, M6) | E-mail (critical events at once) |
 | Errors in code (optional) | Sentry when `SENTRY_DSN` is set, with the same redaction | Sentry |
 
 Business visibility (provisioning jobs, failed jobs, per-tenant counts, `supplier_requests` errors) comes from the platform admin and OTA admin, not from a metrics store ([ADR-0016](adr/0016-observability.md)).
+
+### The on-VM health check
+
+[`deploy/scripts/healthcheck.sh`](../../deploy/scripts/healthcheck.sh), root-owned as `/usr/local/sbin/velexis-healthcheck`, runs every 5 minutes from `velexis-healthcheck.timer` (`OnCalendar=*:0/5`) as the oneshot `velexis-healthcheck.service`. It is the "On-VM check" of [ADR-0016](adr/0016-observability.md); the external uptime monitor (X-029) covers a VM that is down altogether. Each check keeps its own state:
+
+| Check (state file) | Fails when | Notes |
+|---|---|---|
+| `ready-<unit>` | `GET http://127.0.0.1:<port>/health/ready` does not answer `200` within 5 s | Only units that `systemctl is-enabled` reports `enabled` (ports of [§4](#4-process-layout-ports-users-and-permissions)); masked units (a restore drill, [§11](#11-restore-and-the-restore-drill)), disabled and missing ones are skipped. While `velexis-deploy` holds its lock (`/run/velexis-deploy.lock`) no unit is checked, so a deploy's restarts raise no alert; the lock is read from `/proc/locks`, never taken, so a deploy is never refused because of the health check. The alert quotes the answer's `status` and `checks`. |
+| `failed-jobs-<unit>` | more than 20 jobs failed in the last hour, over all the worker's queues (`failedLastHour`) | From the worker's readiness answer: the OTA worker lists `queues` (OBE-025); the platform worker does not, so it has no job checks. An answer without `queues` (Redis did not answer the queue report within 1 s) is unknown: skipped, never counted as a recovery. The alert names each queue with failures. |
+| `queue-age-<unit>` | a queue's oldest waiting job has waited more than 10 minutes (`oldestWaitingSeconds`) | The threshold of [OADR-0014](../../ota/docs/adr/0014-per-tenant-workers-and-schedulers.md) point 8; the worker keeps answering `200` however old a job is. |
+| `disk-root`, `disk-var-lib-postgresql` | `df -P` shows more than 80 % used on `/` or `/var/lib/postgresql` | Each file system once: `/var/lib/postgresql` on the root file system is checked as `/`. |
+| `redis-memory` | `used_memory` is more than 70 % of `maxmemory` (or `maxmemory` is 0, or Redis does not answer within 10 s) | `redis-cli INFO memory` on 127.0.0.1:6379 with `REDIS_PASSWORD` of `.provision-secrets` in `REDISCLI_AUTH`, never on a command line. |
+| `backup-age` | the marker `BACKUP_MARKER_FILE` of `backup.env` (`/var/lib/velexis/backup-last-success`) is missing or older than 26 hours | `backup.sh` writes it after an upload that `rclone check` confirmed ([§10](#10-backups)). |
+| `tls-<host>` | the certificate this VM's Caddy serves for the host expires within 14 days, or none can be read | `openssl s_client -connect 127.0.0.1:443 -servername <host>` for `PLATFORM_BASE_DOMAIN`, `admin.` and `api.` of it, `admin.` and `api.` of `STOREFRONT_BASE_DOMAIN` (read from `caddy.env` without sourcing it). |
+| `payment-inventory`, `payment-page-<page>` | once a UTC day (the first run after midnight, or `--payment-pages`): a payment page differs from `storefront/payment-page-inventory.json` of the current release | Below. |
+
+**Alerts only on changes.** A check that fails (or fails on its first run) sends one e-mail, `[velexis][<host label>] health check failed: <check>: <first problem>`, with every problem in the body; the same check failing again sends nothing, whatever its numbers; the first passing run after a failure sends one `health check recovered: <check>`. A skipped check keeps its state. The e-mails go through `velexis-alert message` with the SMTP settings of `alert.env`, which only `velexis-alert` reads. When `velexis-alert` cannot send, the state stays as it was, so the next run sends the alert again, and the run exits 1, which starts `velexis-alert@velexis-healthcheck.service` (`OnFailure=`) as for every unit. Any other run exits 0: a failing check is the e-mail's business, not the unit's. Messages hold names, numbers, paths and the storefront's public headers, never a secret. Until `alert.env` has real SMTP settings and the first backup and certificates exist (provisioning, [§3](#3-provisioning-a-new-vm)), the runs report those checks as failing and retry their alerts; that is expected.
+
+**The payment page check** (ADR-0011 §C, PCI DSS 6.4.3 and 11.6.1, [ADR-0027](adr/0027-pci-scope-and-vm-controls.md)). The release carries the storefront build's inventory as `storefront/payment-page-inventory.json` (OFE-023; `deploy/scripts/pack-release.sh` copies `ota/frontend/dist/` whole, so the file is in the release's `SHA256SUMS`; format version 1 of [`ota/frontend/README.md`](../../ota/frontend/README.md) §10). Once a day the check reads `/srv/velexis/current/storefront/payment-page-inventory.json` and fetches `/checkout/pay-card.html` and `/checkout/pay-airline.html` of the demo storefront from this VM's Caddy (`https://<host>` resolved to 127.0.0.1:443, with the certificate checked), without `Accept-Encoding`, as the inventory hashes the stored files. Per page it compares, naming the page, the path and the item in the alert:
+
+- the ordered `<script src>` list (an extra, missing or reordered script; Stripe.js on the card page by its URL), the module preloads, and that the page has no inline script;
+- the SHA-256 of the HTML on every path of the page (the airline-card page also on `/checkout/pay-airline`);
+- every header of the inventory on every path: its exact value, or its absence where the inventory has `null` (`Server`, and `Cross-Origin-Opener-Policy` everywhere but the airline-card page), so a CSP changed on one path alone is found;
+- then the SHA-256 of every first-party script the page can run (its scripts, preloads and the chunks they import) and of its stylesheets, so a script whose body changed under the same hashed name is found.
+
+It fetches only the paths the inventory lists, never a URL found in a page, and once the storefront gives no answer it asks nothing more in that run (each page then alerts that it could not be fetched), so a Caddy that hangs cannot hold the run past the unit's 4 minutes. While `velexis-deploy` holds its lock the check waits for the first run after the deploy, which switches `current` and may reload Caddy. A release without the inventory skips the check with a warning in the journal (until the next day); an inventory of another `format` or `version` fails `payment-inventory`. An alert from this check means the card pages or their headers differ from what was built and reviewed: treat it as a possible compromise of the payment pages ([§16](#16-incident-quick-reference)).
+
+**Settings**: `/etc/velexis/healthcheck.env` (root 0600, optional; [`deploy/env/healthcheck.env.example`](../../deploy/env/healthcheck.env.example), only comments, so `provision-vm.sh` writes it with the options commented and `velexis-deploy` requires nothing of it), read without sourcing it:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `HEALTHCHECK_STOREFRONT_HOST` | `demo.<STOREFRONT_BASE_DOMAIN>` | The storefront whose payment pages are fetched: a host Caddy has a certificate for (an OTA that is provisioning, active or suspended, or a verified custom domain). |
+| `HEALTHCHECK_PAGES` | `payment` | `payment`: the two payment pages; `all`: every page of the inventory (the request of [OADR-0017](../../ota/docs/adr/0017-airline-card-form-isolation.md) point 8). |
+
+The thresholds are those of ADR-0016 and are not settings.
+
+**Commands on the VM:**
+
+| Command | What it does |
+|---|---|
+| `sudo /usr/local/sbin/velexis-healthcheck --status` | The last state of every check, since when, and its first problem; the day of the last payment page check. Checks nothing, sends nothing. |
+| `sudo /usr/local/sbin/velexis-healthcheck --payment-pages` | One run now, with the payment page check even if it ran today (after a deploy, or to confirm a fix). |
+| `systemctl list-timers velexis-healthcheck.timer`, `journalctl -u velexis-healthcheck -n 50` | When it runs next, and what the last runs found (one `ok`, `FAIL` or `skip` line per check). |
+
+**Installing.** `provision-vm.sh` (step `scripts`) installs the script and both units and enables the timer; every deploy re-installs the script, and the units come with the release's snapshot ([§8](#8-release-artefact-deploy-and-rollback)). On a VM provisioned before X-030, enable it once after deploying a release that has it: `sudo bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps scripts`. The unit runs as root without any capability, on a read-only file system except its state folder, with the sandbox of `velexis-alert@` (`systemd-analyze security` rates it 1.7, like `velexis-alert@`).
+
+**Testing.** [`deploy/scripts/test/healthcheck.test.sh`](../../deploy/scripts/test/healthcheck.test.sh) runs `healthcheck.sh` unchanged, without root or systemd (about 50 s; bash, curl, jq, openssl and Node 18 or newer for its fake endpoints). With `VELEXIS_ROOT` it moves `/etc/velexis`, `/srv/velexis`, `/var/lib/velexis` and `/run` under a temporary folder and takes stand-ins for `systemctl is-enabled` and `velexis-alert`, a random `127.x.y.z` for the health ports, a fake storefront and a TLS server with a certificate per host made by `openssl`; `df` and `redis-cli` are stand-ins on `PATH`. It covers a clean pass, a failing disk check with its recovery and the de-duplication, a script body changed under the same name, an extra script and a CSP changed on `/checkout/pay-airline.html` only (each one alert naming the page and the item, then one recovery), a storefront that gives no answer, the unit, queue, Redis (one that never answers included), backup and TLS checks, a running deploy (no unit check, the payment pages wait), an alert that cannot be sent, a missing or unknown inventory and `HEALTHCHECK_PAGES=all`, and that no secret reaches an output. `systemd-analyze verify deploy/systemd/velexis-healthcheck.service deploy/systemd/velexis-healthcheck.timer` reports only the missing `/usr/local/sbin/velexis-healthcheck` off the VM.
+
+**On the VM (human step of X-030).** After the first deploy with the timer enabled, run `sudo velexis-healthcheck --status` (every check `ok`), then `sudo systemctl stop velexis-platform-worker`: within 10 minutes one `health check failed: velexis-platform-worker readiness` e-mail arrives, and no second one while it stays stopped; `sudo systemctl start velexis-platform-worker`: the next run sends one `health check recovered` e-mail. Record both e-mails' times and the `--status` output (it holds no secret) in the PR.
 
 ## 14. Capacity limits of one VM
 
@@ -415,5 +466,7 @@ The code reaches every service through configuration only ([`decisions.md`](deci
 | APIs answer 503 | `/health/ready` on 3100 and 4000, `systemctl status postgresql redis-server` | Restart the failed service; check disk space |
 | New storefront host gets no certificate | `journalctl -u caddy --grep ask`, `curl '127.0.0.1:3100/internal/tls/ask?domain=<host>'` | Platform API up? Tenant active? Domain verified? |
 | Backup alert | `journalctl -u velexis-backup -n 50` | Fix credentials or space, `systemctl start velexis-backup` |
+| `health check failed: …` e-mail | `sudo velexis-healthcheck --status`, `journalctl -u velexis-healthcheck -n 50`, then the row of that check here | Fix the cause; the next run (within 5 minutes) sends the recovery. `health check failed: velexis-healthcheck.service` means the alerts themselves could not be sent: check `alert.env` and the SMTP provider |
+| `health check failed: payment page …` e-mail | The alert's lines (page, path, script or header); `sha256sum` of the named file under `/srv/velexis/current/storefront/` against `payment-page-inventory.json`; `diff` of `/etc/caddy/Caddyfile` with the release's snapshot in `/var/lib/velexis/system/<sha>/`; `aide --check` | Treat it as a possible compromise of the card pages: if nobody changed the release or the Caddyfile, follow the incident response plan and consider `AIRLINE_CARD_ENABLED=false` until it is understood; re-deploy the release (or roll back) and run `sudo velexis-healthcheck --payment-pages` |
 | Disk above 80 % | `df -h`, `du -sh /var/lib/postgresql /var/backups/velexis /srv/velexis/releases`, `journalctl --disk-usage` | Prune local backups and old releases, resize the disk |
 | Suspected compromise | `aide --check`, `ausearch -k velexis-keys`, `last`, `journalctl -u ssh`, the off-VM security logs | Rotate secrets ([§7](#7-secrets-and-the-master-key); master key: [`runbooks/master-key-rotation.md`](runbooks/master-key-rotation.md)), rebuild the VM from scripts and backups, follow the incident response plan (M6) |

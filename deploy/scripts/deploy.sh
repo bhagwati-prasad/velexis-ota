@@ -12,7 +12,9 @@
 #   verify the upload (SHA256SUMS lists exactly its files, all intact; RELEASE.json; Node major) -> check that
 #   /etc/velexis/*.env have every variable of the release's env templates -> snapshot the units, Caddyfile and
 #   maintenance page root-owned under /var/lib/velexis/system/<sha>/ -> from the snapshot, validate a changed
-#   Caddyfile and install the units, then install the root-owned scripts -> move to releases/<sha> (root:velexis,
+#   Caddyfile and install the units, then install the root-owned scripts (velexis-deploy, -backup, -restore, -alert,
+#   -run and -healthcheck; the health check skips its unit checks while this script holds its lock) -> move to
+#   releases/<sha> (root:velexis,
 #   read-only) -> migrations (platform, reference, tenant fan-out; expand-phase files) -> reference data, both as
 #   transient units with a dynamic user (run_transient), and between them the fan-out report published as the OTA
 #   zone (velexis-run ota ... tenants:report-migrations) -> switch the `current` symlink -> restart workers, APIs,
@@ -395,6 +397,10 @@ if [ ! -d "$REL" ]; then
   install_if_changed "$SRC/deploy/scripts/alert.sh" "$SBIN/velexis-alert" 0755 || true
   if [ -f "$SRC/deploy/scripts/run-as.sh" ]; then
     install_if_changed "$SRC/deploy/scripts/run-as.sh" "$SBIN/velexis-run" 0755 || true
+  fi
+  # The on-VM health check (X-030). Its units come with the snapshot above; provision-vm.sh enables the timer.
+  if [ -f "$SRC/deploy/scripts/healthcheck.sh" ]; then
+    install_if_changed "$SRC/deploy/scripts/healthcheck.sh" "$SBIN/velexis-healthcheck" 0755 || true
   fi
 
   mv -T "$SRC" "$REL"
