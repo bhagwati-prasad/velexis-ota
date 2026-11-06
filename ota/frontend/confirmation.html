@@ -40,7 +40,8 @@
           aria-labelledby="status-heading"
           data-status-panel
         >
-          <h2 id="status-heading" class="sr-only">Status</h2>
+          <!-- font-semibold like every heading: hidden text still loads its face (the font budget, README §9). -->
+          <h2 id="status-heading" class="sr-only font-semibold">Status</h2>
           <p class="text-lg" data-status-text></p>
           <p class="mt-3 flex items-center gap-3 text-sm text-muted" data-status-progress hidden>
             <span

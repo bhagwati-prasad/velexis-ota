@@ -2763,6 +2763,7 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 - **Verify:** `pnpm --filter @velexis/ota-backend test supplier-requests facets && node ota/backend/test/load/search-load.mjs --visitors 10 --searches 200 --offers 250`
 
 ### OFE-024 · Run the accessibility and performance pass on the storefront
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the manual NVDA and VoiceOver pass through search and checkout, recorded with its date, human step)
 - **Component:** ota-frontend
 - **Milestone:** M6
 - **Depends on:** OFE-019, OFE-020
@@ -2836,6 +2837,36 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 - **Acceptance:**
   - Three consecutive green nightly runs of the three OTA projects are linked in `tools/e2e/README.md`.
 - **Verify:** `E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront --project=ota-admin`
+
+### OFE-027 · Keep the results page from shifting on phones
+- **Component:** ota-frontend
+- **Milestone:** M6
+- **Depends on:** OFE-024
+- **Size:** M
+- **Read first:** ota/docs/storefront-accessibility.md §3 (OFE-024's Lighthouse figures and the layout-shift culprits of the results page, its method in §3.1); ota/frontend/README.md §8 and §9; ota/frontend/docs/pages.md §4 (results)
+- **Files:** `ota/frontend/search.html`, `ota/frontend/src/components/filters.js`, `ota/frontend/src/pages/search.js`, `ota/frontend/test/filters.test.js`, `ota/frontend/test/search-page.test.js`, `ota/docs/storefront-accessibility.md`
+- **Steps:**
+  1. On narrow screens, where the filters come before the results in one column, keep their growth from moving the results when the facets arrive: the filters behind a disclosure ("Filters (n)") above the results, closed by default, or their space reserved before the facets arrive. Keep the desktop sidebar, every filter's label and keyboard path, the price filter's number inputs (2.5.7) and the polite announcement of the result count.
+  2. Measure the results page again with Lighthouse mobile, three runs (the method of `storefront-accessibility.md` §3.1, the same search), and record the figures with their date and commit in §3.
+- **Acceptance:**
+  - Lighthouse mobile CLS of the results page is at most 0.1 in each of three runs, LCP and INP still within target; the figures are in `storefront-accessibility.md` §3.
+  - `search.e2e.ts`, `keyboard-checkout.e2e.ts` and `a11y-pages.e2e.ts` pass, unchanged or with their selectors only adapted.
+- **Verify:** `pnpm --filter @velexis/ota-frontend build && pnpm --filter @velexis/ota-frontend test && E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront specs/storefront/search.e2e.ts specs/storefront/keyboard-checkout.e2e.ts specs/storefront/a11y-pages.e2e.ts`
+
+### OFE-028 · Show the test banner without moving the page
+- **Component:** ota-frontend
+- **Milestone:** M6
+- **Depends on:** OFE-024
+- **Size:** S
+- **Read first:** ota/docs/storefront-accessibility.md §3 (OFE-024's Lighthouse figures: the banner's shift on home and results); ota/frontend/README.md §9; ota/docs/adr/0012-storefront-settings-assets-and-pages.md (point 8, the test banner); ota/frontend/src/components/test-banner.js
+- **Files:** `ota/frontend/partials/test-banner.html`, `ota/frontend/src/components/test-banner.js`, `ota/frontend/src/boot.js`, `ota/frontend/src/styles/main.css`, `ota/frontend/test/boot.test.js`, `ota/docs/storefront-accessibility.md`
+- **Steps:**
+  1. Show the "Test mode" banner of a test storefront without moving what is already painted: its space kept from the first paint until `storefront.get` answers, or a place where showing it moves nothing and that obscures no content and no focused element (2.4.11). A live storefront still shows no banner and keeps no space for it (OFE-021); an unknown environment is still shown as test.
+  2. Measure the home and results pages again with Lighthouse mobile on a test storefront, three runs each (the method of `storefront-accessibility.md` §3.1), and record the figures in §3.
+- **Acceptance:**
+  - Lighthouse mobile CLS of the home page on a test storefront is at most 0.1 in each of three runs; the figures are in `storefront-accessibility.md` §3.
+  - `boot.test.js` still proves the banner and `noindex` per environment, and the banner is announced once (its `role="note"` kept).
+- **Verify:** `pnpm --filter @velexis/ota-frontend build && pnpm --filter @velexis/ota-frontend exec vitest run test/boot.test.js && E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront specs/storefront/a11y-pages.e2e.ts`
 
 ## Cross-group dependencies at a glance
 

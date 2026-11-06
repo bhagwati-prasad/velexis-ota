@@ -79,7 +79,7 @@ ota/frontend/
     styles/main.css           @import "tailwindcss"; @theme tokens; a few component classes
     styles/fonts.css          @font-face for the bundled fonts
   test/                       Vitest + happy-dom unit tests; test/helpers/ (scratch builds, HTTP requests)
-  scripts/check-budgets.mjs   gzip size budgets for dist/ (§9)
+  scripts/check-budgets.mjs   size budgets for dist/ (§9): gzip of HTML, JS and CSS, and the fonts per page
   scripts/payment-page-inventory.mjs  dist/payment-page-inventory.json: every page's scripts, hashes and headers (§10)
   scripts/vite-plugins.js     page inputs, partials, Caddy-like dev/preview routing, /api proxy, preview headers
   docs/                       page inventory, build-your-own guide
@@ -205,7 +205,7 @@ Branding comes from `storefront.get` (`branding.colors`, fonts, corner radius, l
 | Authentication | Paste and password managers allowed, no CAPTCHA puzzles (3.3.8); traveller data is offered for the contact step instead of retyping (3.3.7) |
 | Help | The support link sits in the same place on every page (3.2.6) |
 | Colour | Contrast checked at runtime on OTA colours (§6); status never shown by colour alone |
-| Checks | axe in every Playwright journey (no serious or critical violation), a keyboard-only checkout journey, a manual screen-reader pass (NVDA, VoiceOver) before M6 |
+| Checks | axe in every Playwright journey (no serious or critical violation), and on every page in every main state, error states included (`a11y-pages.e2e.ts`, OFE-024); a keyboard-only checkout journey; a manual screen-reader pass (NVDA, VoiceOver) before M6, its script and record in [`storefront-accessibility.md`](../docs/storefront-accessibility.md) §5 |
 
 ## 9. Performance budgets
 
@@ -214,9 +214,9 @@ Branding comes from `storefront.get` (`branding.colors`, fonts, corner radius, l
 | JavaScript per page, gzip (own code + SDK, Stripe.js excluded): the page's scripts, module preloads and every chunk they import, statically or dynamically | ≤ 60 KB; airline-card page ≤ 30 KB | `scripts/check-budgets.mjs` after every `build` (CI included); it prints a table and exits 1 on a breach |
 | CSS, gzip (all pages share one file; the airline-card page has its own copy, §12) | ≤ 20 KB | same |
 | HTML per page | ≤ 20 KB | same |
-| Fonts per page | ≤ 2 families, woff2, ≤ 120 KB | same |
+| Fonts per page: the woff2 files as served, for the worst body and heading families an OTA can choose among those the page declares, with the faces the page's weights use, and any preloaded font (OFE-024) | ≤ 2 families, woff2, ≤ 120 KB | same (a FONT row per page) |
 | API calls before first meaningful paint | 0 on cached pages, 1 (`storefront.get`) otherwise | Review |
-| LCP / CLS / INP on home and results (Lighthouse mobile profile) | ≤ 2.5 s / ≤ 0.1 / ≤ 200 ms | Manual Lighthouse run before M6 launch |
+| LCP / CLS / INP on home and results (Lighthouse mobile profile) | ≤ 2.5 s / ≤ 0.1 / ≤ 200 ms | Manual Lighthouse run before M6 launch; the figures of 2026-11-06 (LCP and INP met, CLS not: follow-up tasks OFE-027 and OFE-028) in [`storefront-accessibility.md`](../docs/storefront-accessibility.md) §3 |
 
 Images carry width and height, results render 20 at a time, and search shows a skeleton at once because Amadeus can take seconds.
 
@@ -337,7 +337,7 @@ The variables are listed in [`.env.example`](.env.example) (`STOREFRONT_DEV_PORT
 | Boot | `test/boot.test.js`, `test/primary-host.test.js` (happy-dom browser page) | The real pages with their partials expanded by the build's include plugin, against a fake SDK: the full-page states of `storefront.get` (`TENANT_SUSPENDED`, `HOST_NOT_ALLOWED`, `503` and Retry, `429` with `Retry-After`), theme, header, footer, test banner, currency and session; every page includes the partials boot needs. Live versus test (no banner and no `noindex` in live, a page's own robots meta kept, an unknown environment shown as test) and the primary-host rule (only sign-in and sign-up, only from the sub-domain, only to the primary custom domain that `primaryUrl` and `domains` both name, path and query kept, nothing in the address choosing the target, no session asked before, left with `location.replace`) |
 | Lint | `test/lint.test.js` | `el.innerHTML = data` and the other HTML sinks fail lint in every storefront file, tests included |
 | Configuration | `test/csp.test.js` | The preview CSP equals the CSP in `deploy/caddy/Caddyfile`, so E2E runs see production headers; the build (made with the real `vite.config.js` in a scratch folder) has no inline script or style and no development value; the preview answers a storefront sub-domain by name and refuses other host names (OFE-022) |
-| Build tools | `test/budgets.test.js`, `test/vite-plugins.test.js` | The budget script on fixture folders (a breach exits 1 and names the file); page inputs, partials, and the dev and preview servers against a fake OTA API (proxy headers, 400, 404 and 503 answers) |
+| Build tools | `test/budgets.test.js`, `test/vite-plugins.test.js` | The budget script on fixture folders (a breach exits 1 and names the file; the font budget's worst pair of families, heading weights, a third family, non-woff2 faces and preloads, OFE-024); page inputs, partials, and the dev and preview servers against a fake OTA API (proxy headers, 400, 404 and 503 answers) |
 | Script inventory | `test/payment-page-inventory.test.js` (OFE-023) | On a production build: every built page listed with its paths, purpose and HTML hash; exactly two scripts on the card page (Stripe.js with its justification, then its bundle) and one on the airline-card page; no third-party script on any other page; every first-party script a page can run hashed (the files `check-budgets.mjs` counts); the headers of every path equal to the Caddyfile's; the command line writes `dist/payment-page-inventory.json`. On fixture folders: a third-party script, module preload, stylesheet or import (whatever its URL ends with), an inline script, a missing file, a page that is not in `PAGE_PURPOSES` or a listed page that is missing each fail it, and no inventory is left behind; a comment that a browser ends early (`<!-->`) hides no script, and a `<script>` or `<link>` inside a comment fails. The page table of §10 lists every page with its purpose and its bundle |
 | End to end | `tools/e2e/specs/storefront/*.e2e.ts` (Playwright + `@axe-core/playwright`) | Against `vite preview` (production build) proxied to the local OTA backend, the Amadeus stub, Mailpit, Stripe test mode |
 
@@ -349,6 +349,7 @@ Journeys (one per main flow, [ADR-0015](../../docs/mvp/adr/0015-testing-strategy
 4. **M3** sign-up → verify through the Mailpit link → sign-in → my bookings tabs → change contacts → cancel with refund preview; guest lookup; session refresh after access-token expiry (`account-bookings.e2e.ts`, OFE-019: the bookings made through the API with the airline card, so no Stripe is needed; [`tools/e2e/README.md`](../../tools/e2e/README.md#tests-of-ofe-019)).
 5. **M3** keyboard-only checkout: search, filters, fare, checkout and the airline-card form with the keyboard alone, every focus stop visible and uncovered, the error summaries focused (`keyboard-checkout.e2e.ts`, OFE-019).
 6. **M5** live mode and custom domains: an OTA that went live through the platform API (goLive) with a verified primary custom domain; on its sub-domain and its custom domain the same OTA without the test banner, a search on its live Amadeus connection, sign-in and sign-up on the sub-domain sent to the same page on the primary host before any session, and the e-mail's links on the primary host (`live-and-domains.e2e.ts`, OFE-022: in the `storefront` project; [`tools/e2e/README.md`](../../tools/e2e/README.md#tests-of-ofe-022)).
+7. **M6** the accessibility pass: axe on every page of the build in every main state, the shared states of `storefront.get` on each page included (`a11y-pages.e2e.ts`, OFE-024: in the `storefront` project; [`storefront-accessibility.md`](../docs/storefront-accessibility.md) §1).
 
 Assertions in every journey: no CSP violation (a `securitypolicyviolation` listener fails the test), `document.cookie` contains only `__Host-vx_csrf` (in the storefront-stripe journeys also, from `/checkout/pay-card.html` on, the two first-party cookies of Stripe.js, `__stripe_mid` and `__stripe_sid`, which feed Stripe Radar's fraud signals and hold no session or credential: [OADR-0006](../docs/adr/0006-storefront-cookie-sessions-and-csrf.md) point 10, 2026-10-28; never another name), no request to a third-party host except Stripe on the card page and none at all on the airline-card page, and axe reports no serious or critical violation.
 
