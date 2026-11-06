@@ -2053,8 +2053,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - No serious accessibility violation on any portal route.
 - **Verify:** `pnpm test:e2e -- --project=portal`
 
-### PAD-016 · Complete the admin end-to-end suite with accessibility and header checks
-- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the three specs in the nightly e2e run on GitHub)
+### PAD-016 · Complete the admin end-to-end suite with accessibility and header checks ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-admin
 - **Milestone:** M6
 - **Depends on:** PAD-015
