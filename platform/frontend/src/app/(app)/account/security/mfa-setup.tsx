@@ -1,7 +1,7 @@
 "use client";
 
 import type { PlatformErrorCode } from "@velexis/errors";
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 
 import {
   beginMfaSetup,
@@ -22,7 +22,7 @@ import { SecretRevealPanel } from "@/components/secret-reveal-panel";
 import { useStepUpAction } from "@/components/step-up-dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { SECURITY_STRINGS } from "@/lib/strings";
+import { MFA_ENROLMENT_STRINGS, SECURITY_STRINGS } from "@/lib/strings";
 
 /**
  * The two-factor section of `/account/security` (README §2 and §5; PF-04; PADR-0008):
@@ -33,6 +33,10 @@ import { SECURITY_STRINGS } from "@/lib/strings";
  * - **On:** "Replace the recovery codes" and "Turn off two-factor authentication", each after a `ConfirmDialog` and
  *   through `useStepUpAction`: without a TOTP step-up in the last 15 minutes the API asks for one, `StepUpDialog` takes
  *   the code, and the same action runs again [PF-04 AC3]. A platform admin cannot turn MFA off and is told so.
+ *
+ * `MfaEnrolment` (below) is the same set-up for the MFA enrolment page `/mfa-enrolment` (PFE-030), with the page's own
+ * actions and "Continue" to the page the account asked for once MFA is on, instead of the controls of an account that
+ * has MFA.
  *
  * The secret, the QR code and the recovery codes live in React state only, for as long as they are needed: never in
  * storage, cookies, the URL or the history, and the page's own markup never holds them, so a reload shows none of them.
@@ -361,6 +365,142 @@ export function MfaSetup({ mfaEnabled, mfaEnabledAt, isPlatformAdmin, timeZone }
       )}
       {disable.stepUpDialog}
       {replace.stepUpDialog}
+    </div>
+  );
+}
+
+export interface MfaEnrolmentProps {
+  /** Starts the set-up (`startMfaSetup`): the enrolment page's `beginEnrolment`. */
+  readonly begin: (previous: MfaSetupState, formData: FormData) => Promise<MfaSetupState>;
+  /**
+   * Confirms it with the typed code (`enableMfa`): the enrolment page's `confirmEnrolment`, which renders no page
+   * again, so the recovery codes stay on screen until the person continues.
+   */
+  readonly confirm: (previous: MfaEnableState, formData: FormData) => Promise<MfaEnableState>;
+  /** Where "Continue" goes once MFA is on: the page's `next` as `safeNextPath()` kept it, or `/dashboard`. */
+  readonly continueTo: string;
+}
+
+/**
+ * The set-up of `/mfa-enrolment` (PFE-030; PF-04 AC1 and AC4): the same steps as the security page's set-up (QR code
+ * and base32 secret, the confirming code, the ten recovery codes shown once in `SecretRevealPanel`), and nothing more
+ * reaches the browser: the secret, the QR code's geometry and the codes come only in the actions' answers and live in
+ * React state. Once MFA is on (or was turned on elsewhere, `MFA_ALREADY_ENABLED`), "Continue" leaves for `continueTo`
+ * with a full page load, so the signed-in layout reads the account afresh.
+ */
+export function MfaEnrolment({ begin, confirm, continueTo }: MfaEnrolmentProps) {
+  const [setupState, start, starting] = useActionState(begin, IDLE_SETUP);
+  const [enableState, submitCode, confirming] = useActionState(confirm, IDLE_ENABLE);
+
+  const [setup, setSetup] = useState<PendingMfaSetup | undefined>(undefined);
+  const [codes, setCodes] = useState<readonly string[] | undefined>(undefined);
+  const [enabled, setEnabled] = useState(false);
+  const [latest, setLatest] = useState<"setup" | "enable" | undefined>(undefined);
+
+  // Each answer updates the set-up once, in the render that shows it.
+  const [seenSetup, setSeenSetup] = useState(setupState);
+  if (seenSetup !== setupState) {
+    setSeenSetup(setupState);
+    setLatest("setup");
+    if (setupState.setup !== undefined) {
+      setSetup(setupState.setup);
+    } else if (setupState.code === "MFA_ALREADY_ENABLED") {
+      setEnabled(true);
+    }
+  }
+  const [seenEnable, setSeenEnable] = useState(enableState);
+  if (seenEnable !== enableState) {
+    setSeenEnable(enableState);
+    setLatest("enable");
+    if (enableState.status === "enabled" || enableState.code === "MFA_ALREADY_ENABLED") {
+      setEnabled(true);
+      setSetup(undefined);
+      setCodes(enableState.recoveryCodes);
+    } else if (enableState.status === "expired") {
+      setSetup(undefined);
+    }
+  }
+
+  // The new state takes the focus once MFA is on, so a screen reader reads it and the codes come next.
+  const enabledHeading = useRef<HTMLHeadingElement | null>(null);
+  useEffect(() => {
+    if (enabled) {
+      enabledHeading.current?.focus();
+    }
+  }, [enabled]);
+
+  if (enabled) {
+    // Turned on here: no message once the codes are stored, or, when the answer had no codes of the document's shape,
+    // an alert that says to replace them on the security page. Turned on elsewhere (`MFA_ALREADY_ENABLED`): a status.
+    const enabledHere = latest === "enable" && enableState.status === "enabled";
+    const codesMissing = enabledHere && enableState.recoveryCodes === undefined;
+    const message =
+      codes !== undefined
+        ? undefined
+        : enabledHere
+          ? enableState.message
+          : MFA_ENROLMENT_STRINGS.alreadyEnabled;
+    return (
+      <div className="grid gap-6" data-mfa="on">
+        <div className="grid gap-2">
+          <h3 ref={enabledHeading} tabIndex={-1} className="font-semibold focus:outline-none">
+            {MFA_ENROLMENT_STRINGS.enabledTitle}
+          </h3>
+          <p className="text-sm">{MFA_ENROLMENT_STRINGS.enabledIntro}</p>
+        </div>
+        {codes === undefined ? null : (
+          <SecretRevealPanel
+            title={SECURITY_STRINGS.recoveryCodesTitle}
+            secrets={codes.map((value, index) => ({
+              label: SECURITY_STRINGS.recoveryCodeLabel(index + 1),
+              value,
+            }))}
+            onDismiss={() => setCodes(undefined)}
+          >
+            <p className="text-sm">{SECURITY_STRINGS.recoveryCodesIntro}</p>
+          </SecretRevealPanel>
+        )}
+        <Notice message={message} code={codesMissing ? enableState.code : undefined} problem={codesMissing} />
+        <div>
+          {/* A full page load: the signed-in layout reads `getMe` again, now without the enrolment. */}
+          <Button asChild size="lg">
+            <a href={continueTo}>{MFA_ENROLMENT_STRINGS.continue}</a>
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // A refused code shows in the set-up form itself; an expired set-up and a refused start show above.
+  const notice =
+    latest === "setup" && setupState.status === "failed"
+      ? { message: setupState.message, code: setupState.code }
+      : latest === "enable" && enableState.status === "expired"
+        ? { message: enableState.message, code: enableState.code }
+        : undefined;
+
+  return (
+    <div className="grid gap-6" data-mfa="off">
+      {notice === undefined ? null : <Notice message={notice.message} code={notice.code} problem />}
+      {setup === undefined ? (
+        <form action={start}>
+          <Button type="submit" size="lg" disabled={starting}>
+            {starting
+              ? SECURITY_STRINGS.mfaStarting
+              : latest === "enable" && enableState.status === "expired"
+                ? SECURITY_STRINGS.mfaStartAgain
+                : SECURITY_STRINGS.mfaStart}
+          </Button>
+        </form>
+      ) : (
+        <PendingSetup
+          setup={setup}
+          state={latest === "enable" ? enableState : IDLE_ENABLE}
+          confirm={submitCode}
+          confirming={confirming}
+          onCancel={() => setSetup(undefined)}
+        />
+      )}
     </div>
   );
 }

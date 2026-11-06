@@ -1,7 +1,8 @@
 // Portal middleware (README §6 and §7): runs before every page, server action and route handler except the health
 // routes and static files. It refreshes an expired access token before anything renders, moves the single-use token
 // of an e-mail link (`/reset-password?token=…`, `/invitations/accept?token=…`) into its cookie, sends people without
-// a session away from the signed-in area, and sets the per-request nonce-based Content-Security-Policy.
+// a session away from the signed-in area, sets the per-request nonce-based Content-Security-Policy, and hands the
+// signed-in area the page each request is for (`REQUESTED_PAGE_HEADER`, the MFA enrolment gate's `next`, PFE-030).
 import "server-only";
 
 import { NextResponse, type NextRequest } from "next/server";
@@ -9,11 +10,13 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createPlatformApi, requestIdOf } from "@/lib/api";
 import { getConfig, type PortalConfig } from "@/lib/config";
 import { NONCE_HEADER, contentSecurityPolicy, createNonce, isHandOffPath } from "@/lib/csp";
+import { MFA_ENROLMENT_PATH } from "@/lib/errors";
 import {
   ACCESS_TOKEN_COOKIE,
   INVITATION_COOKIE,
   PASSWORD_RESET_COOKIE,
   REFRESH_TOKEN_COOKIE,
+  REQUESTED_PAGE_HEADER,
   accessTokenClaims,
   clearedCookie,
   clearedSessionCookies,
@@ -45,6 +48,28 @@ export const VERIFY_PENDING_PATH = "/verify-pending";
 
 export function isAppRoute(pathname: string): boolean {
   return APP_ROUTE_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+}
+
+/**
+ * Pages outside the signed-in area whose server actions call `portal` operations, which the API's MFA enrolment gate
+ * refuses: the invitation acceptance (`acceptInvitation`). The gate's `next` is their path alone, never their query, so
+ * an account that meets the gate while it accepts an invitation comes back to it once enrolled (the invitation cookie
+ * lasts 15 minutes) instead of landing on the dashboard.
+ */
+const PATH_ONLY_REQUESTED_PAGES: ReadonlySet<string> = new Set(["/invitations/accept"]);
+
+/**
+ * The page a request is for, as `REQUESTED_PAGE_HEADER` hands it on (PFE-030): the path and query of a request for the
+ * signed-in area or the MFA enrolment page (`MFA_ENROLMENT_PATH`, outside the `(app)` group) when `safeNextPath()`
+ * accepts them, and the path alone of `PATH_ONLY_REQUESTED_PAGES`; `undefined` for every other request, so the query
+ * of a page outside them (the single-use code of Stripe Connect's callback, for one) is never copied anywhere.
+ */
+export function requestedPageOf(request: NextRequest): string | undefined {
+  const { pathname, search } = request.nextUrl;
+  if (isAppRoute(pathname) || pathname === MFA_ENROLMENT_PATH) {
+    return safeNextPath(`${pathname}${search}`);
+  }
+  return PATH_ONLY_REQUESTED_PAGES.has(pathname) ? pathname : undefined;
 }
 
 /**
@@ -264,6 +289,13 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
     // Next.js reads the policy from the request headers and puts its nonce on the scripts it renders.
     forwarded.set(NONCE_HEADER, nonce);
     forwarded.set("content-security-policy", csp);
+    // The page the request is for, for the MFA enrolment gate's `next` (PFE-030); never a value the browser sent.
+    const requestedPage = requestedPageOf(request);
+    if (requestedPage === undefined) {
+      forwarded.delete(REQUESTED_PAGE_HEADER);
+    } else {
+      forwarded.set(REQUESTED_PAGE_HEADER, requestedPage);
+    }
     response = NextResponse.next({ request: { headers: forwarded } });
   }
   writeCookies(response.cookies, session.writes);

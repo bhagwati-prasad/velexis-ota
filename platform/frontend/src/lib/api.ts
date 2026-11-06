@@ -12,7 +12,8 @@ import createClient, {
 
 import { getConfig } from "@/lib/config";
 import { endUserHeaders, type IncomingHeaders } from "@/lib/end-user";
-import { ACCESS_TOKEN_COOKIE } from "@/lib/session";
+import { leaveForMfaEnrolment } from "@/lib/errors";
+import { ACCESS_TOKEN_COOKIE, REQUESTED_PAGE_HEADER, safeNextPath } from "@/lib/session";
 
 /**
  * The platform API client of the portal (README §5, ADR-0014, PADR-0009 item 12): `openapi-fetch` typed by
@@ -22,7 +23,8 @@ import { ACCESS_TOKEN_COOKIE } from "@/lib/session";
  * headers of PADR-0019 (`lib/end-user.ts`). Every call uses `cache: "no-store"`, so nothing of a person's data
  * lands in the Next.js data cache, and never follows a redirect, so the bearer token only ever goes to
  * `PLATFORM_API_URL`. A call answers `{ data }` or `{ error }`; it never throws for an API error or an
- * unreachable API.
+ * unreachable API. The one exception is `platformApi()`'s answer to the API's MFA enrolment gate, which sends the
+ * browser to `/mfa-enrolment` (`redirect()`, PFE-030).
  */
 
 /** One failed field of a request, as the error envelope carries it (`path` is a JSON pointer into the body). */
@@ -234,17 +236,50 @@ export function createPlatformApi(options: PlatformApiOptions): PlatformApi {
 }
 
 /**
+ * `api` whose refused calls first pass `leaveForMfaEnrolment` (`lib/errors.ts`, PFE-030): the API's MFA enrolment gate
+ * (`403 MFA_REQUIRED`, `details.reason = enrolment_required`, PBE-071) sends the browser to `/mfa-enrolment` and then
+ * back to `requestedPage`; every other answer comes back as it is.
+ */
+function leavingForMfaEnrolment(api: PlatformApi, requestedPage: string | undefined): PlatformApi {
+  const gate =
+    (method: (url: string, init?: Record<string, unknown>) => Promise<ApiResult<unknown>>) =>
+    async (url: string, init?: Record<string, unknown>) => {
+      const result = await method(url, init);
+      if (result.error !== undefined) {
+        leaveForMfaEnrolment(result.error, requestedPage);
+      }
+      return result;
+    };
+  const methods = api as unknown as Record<
+    keyof PlatformApi,
+    (url: string, init?: Record<string, unknown>) => Promise<ApiResult<unknown>>
+  >;
+  return {
+    GET: gate(methods.GET) as ApiMethod<"get">,
+    POST: gate(methods.POST) as ApiMethod<"post">,
+    PUT: gate(methods.PUT) as ApiMethod<"put">,
+    PATCH: gate(methods.PATCH) as ApiMethod<"patch">,
+    DELETE: gate(methods.DELETE) as ApiMethod<"delete">,
+  };
+}
+
+/**
  * The platform API for the request being rendered: base URL and key from the configuration, the access token
  * from `__Host-vxp_at`, the end-user headers from the request. For server components, server actions and route
  * handlers; `middleware.ts` has already refreshed an expired access token.
+ *
+ * A call the API refuses with its MFA enrolment gate does not come back: the request leaves for `/mfa-enrolment` with
+ * the page it was for as `next` (`REQUESTED_PAGE_HEADER`, set by the middleware), as the `(app)` layout sends an
+ * account whose `getMe` says `mfaEnrolmentRequired` (README §5). Every other answer, refusals included, is returned.
  */
 export async function platformApi(): Promise<PlatformApi> {
   const config = getConfig();
   const [cookieStore, requestHeaders] = await Promise.all([cookies(), headers()]);
-  return createPlatformApi({
+  const api = createPlatformApi({
     baseUrl: config.PLATFORM_API_URL,
     bffKey: config.PLATFORM_BFF_KEY,
     requestHeaders,
     accessToken: cookieStore.get(ACCESS_TOKEN_COOKIE)?.value,
   });
+  return leavingForMfaEnrolment(api, safeNextPath(requestHeaders.get(REQUESTED_PAGE_HEADER)));
 }

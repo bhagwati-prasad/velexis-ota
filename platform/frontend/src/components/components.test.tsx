@@ -56,7 +56,12 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { ApiError } from "@/lib/api";
 import type { AccountMembership, MilestoneFeatures, TenantRole } from "@/lib/roles";
-import { ACCESS_TOKEN_COOKIE, REFRESH_TOKEN_COOKIE, type PortalSession } from "@/lib/session";
+import {
+  ACCESS_TOKEN_COOKIE,
+  REFRESH_TOKEN_COOKIE,
+  REQUESTED_PAGE_HEADER,
+  type PortalSession,
+} from "@/lib/session";
 import { ERROR_MESSAGES, SECRET_STRINGS, STEP_UP_STRINGS } from "@/lib/strings";
 
 // ---- Builders ------------------------------------------------------------------------------------------------
@@ -305,6 +310,54 @@ describe("(app) layout and AppShell (the signed-in shell)", () => {
     expect(screen.queryByText("Page body")).toBeNull();
     expect(screen.queryByRole("navigation")).toBeNull();
   });
+
+  it("[PFE-030 AC1] sends an account that must enrol in MFA to /mfa-enrolment with the page it asked for, before any page renders", async () => {
+    const owner = account({ mfaEnabled: false, mfaEnabledAt: null, mfaEnrolmentRequired: true });
+    const requestedPage = `/otas/${TENANT_ID}/team?tab=invitations`;
+    nextHeaders.headers.mockResolvedValue(new Headers({ [REQUESTED_PAGE_HEADER]: requestedPage }));
+    api.GET.mockResolvedValue({ data: owner });
+
+    await expect(SignedInLayout({ children: <p>Page body</p> })).rejects.toThrow(
+      `NEXT_REDIRECT /mfa-enrolment?${new URLSearchParams({ next: requestedPage }).toString()}`,
+    );
+    expect(api.GET).toHaveBeenCalledTimes(1);
+
+    // A page `safeNextPath()` refuses (a forged or protocol-relative value) leaves `next` out: the enrolment then
+    // continues to the dashboard.
+    for (const forged of ["//evil.example/x", "https://evil.example/x"]) {
+      nextHeaders.headers.mockResolvedValue(new Headers({ [REQUESTED_PAGE_HEADER]: forged }));
+      await expect(SignedInLayout({ children: null })).rejects.toThrow(/^NEXT_REDIRECT \/mfa-enrolment$/);
+    }
+    nextHeaders.headers.mockResolvedValue(new Headers());
+    await expect(SignedInLayout({ children: null })).rejects.toThrow(/^NEXT_REDIRECT \/mfa-enrolment$/);
+
+    // An unverified address comes first: the enrolment can wait for the verification.
+    api.GET.mockResolvedValue({ data: { ...owner, emailVerified: false } });
+    await expect(SignedInLayout({ children: null })).rejects.toThrow("NEXT_REDIRECT /verify-pending");
+  });
+
+  it.each<[string, Partial<Account>]>([
+    ["an owner with MFA", { mfaEnabled: true }],
+    ["an owner of a test-only OTA without MFA", { mfaEnabled: false, mfaEnabledAt: null }],
+    [
+      "an agent of a live OTA without MFA",
+      { mfaEnabled: false, mfaEnabledAt: null, memberships: [membership({ role: "agent" })] },
+    ],
+    ["an account of no OTA", { mfaEnabled: false, mfaEnabledAt: null, memberships: [] }],
+  ])(
+    "[PFE-030 AC2] renders the shell and the page for %s, whom the API does not ask to enrol",
+    async (_case, overrides) => {
+      navigation.pathname = `/otas/${TENANT_ID}`;
+      api.GET.mockResolvedValue({ data: account({ ...overrides, mfaEnrolmentRequired: false }) });
+
+      render(await SignedInLayout({ children: <p>Page body</p> }));
+
+      expect(screen.getByRole("main").textContent).toBe("Page body");
+      expect(navigation.redirect).not.toHaveBeenCalled();
+      // The layout reads the requested page only for an account that must enrol.
+      expect(nextHeaders.headers).not.toHaveBeenCalled();
+    },
+  );
 });
 
 // ---- Step-up --------------------------------------------------------------------------------------------------

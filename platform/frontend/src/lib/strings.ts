@@ -371,6 +371,29 @@ export const MFA_STRINGS = Object.freeze({
   rateLimitedFor: (seconds: number) => `Too many codes were tried. Try again in ${waitTime(seconds)}.`,
 });
 
+/**
+ * `/mfa-enrolment`: the two-factor set-up an owner or admin of a live OTA completes before any other portal page
+ * (PF-04 AC4; PADR-0008, revision of 2026-11-05). The set-up itself uses `SECURITY_STRINGS`, as on the security page.
+ */
+export const MFA_ENROLMENT_STRINGS = Object.freeze({
+  title: "Set up two-factor authentication",
+  intro:
+    "You are an owner or an admin of an OTA that is live: it takes real bookings and real payments. Velexis therefore asks for two-factor authentication on your account before you continue.",
+  why: "With it, a stolen password alone can no longer change your OTA's payments, team, API keys or settings. Each sign-in and each sensitive action then asks for a code from an authenticator app on your phone.",
+  steps: "Set it up now: it takes about two minutes. Afterwards the portal opens the page you asked for.",
+  setupTitle: "Your authenticator app",
+  enabledTitle: "Two-factor authentication is on",
+  enabledIntro:
+    "Store your recovery codes, then continue. From now on, signing in asks for a code from your authenticator app.",
+  alreadyEnabled: "Two-factor authentication is already on for your account. You can continue.",
+  codesUnavailable:
+    "Your recovery codes could not be shown. Continue, then replace them on your Security page, so you can still sign in if you lose your phone.",
+  continue: "Continue",
+  unavailableTitle: "Your account could not be loaded",
+  notYou: "Not your account, or not now?",
+  signOut: "Sign out",
+});
+
 /** `/forgot-password` and `/reset-password` (PF-05). */
 export const PASSWORD_RESET_STRINGS = Object.freeze({
   forgotTitle: "Reset your password",

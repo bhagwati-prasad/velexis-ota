@@ -16,8 +16,10 @@
 //   `handOff`; the middleware sets the same policy for this path, and Next.js keeps the middleware's), and its script
 //   carries the request's nonce (`x-nonce`, set by the middleware).
 // - Refusals go back with `303`: `TENANT_NOT_ACTIVE` to the OTA dashboard with an explanation (and the billing link
-//   for a billing suspension), `MFA_REQUIRED` to `/account/security` with a message, an ended session to sign-in and
-//   then the console picker, `NOT_FOUND` to the picker, anything else to the OTA dashboard with the portal's message.
+//   for a billing suspension), the API's MFA enrolment gate (`MFA_REQUIRED` with `details.reason =
+//   enrolment_required`, PFE-030) to `/mfa-enrolment` and then the console picker, any other `MFA_REQUIRED` to
+//   `/account/security` with a message, an ended session to sign-in and then the console picker, `NOT_FOUND` to the
+//   picker, anything else to the OTA dashboard with the portal's message.
 // - `GET` (a typed URL, or the return from sign-in) mints nothing: it answers `303` to the console picker.
 import type { PlatformErrorCode } from "@velexis/errors";
 import { NextResponse, type NextRequest } from "next/server";
@@ -31,6 +33,7 @@ import {
 import { createPlatformApi, type ApiError } from "@/lib/api";
 import { getConfig } from "@/lib/config";
 import { NONCE_HEADER, contentSecurityPolicy, createNonce, isNonce } from "@/lib/csp";
+import { isMfaEnrolmentRequired, mfaEnrolmentPath } from "@/lib/errors";
 import { sessionTokens } from "@/lib/session";
 import { CONSOLE_STRINGS } from "@/lib/strings";
 import { isTenantId } from "@/lib/tenant";
@@ -99,6 +102,10 @@ const NOT_A_MEMBER: ReadonlySet<PlatformErrorCode> = new Set<PlatformErrorCode>(
 function refusedLaunchPath(error: ApiError, tenantId: string): string {
   if (error.code === "TENANT_NOT_ACTIVE") {
     return consoleProblemPath(tenantId, notActiveFailure(error.details));
+  }
+  if (isMfaEnrolmentRequired(error)) {
+    // An owner or admin of a live OTA without MFA enrols first, then comes back to the picker of this OTA.
+    return mfaEnrolmentPath(consolePickerPath(tenantId));
   }
   if (error.code === "MFA_REQUIRED") {
     return consoleProblemPath(tenantId, { problem: "mfa_required" });

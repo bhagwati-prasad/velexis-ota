@@ -14,7 +14,8 @@
 //   `connectStripe` set (an OTA id, not a secret; 1 hour), cleared by every answer here. Without it, the dashboard.
 // - A signed-in user is required: without a session the API is not called, and the browser goes to sign-in and then to
 //   the payments page with "your session ended" (the middleware has renewed an access token that was only expired).
-//   An unverified account goes to `/verify-pending`.
+//   An unverified account goes to `/verify-pending`, and an owner or admin of a live OTA without MFA (the API's MFA
+//   enrolment gate, PFE-030) to `/mfa-enrolment` and then to the payments page with "nothing changed, try again".
 // - A query that is not one Stripe sends (no state of the document's pattern, neither a code nor an error, or both)
 //   makes no call and reads as an expired connection ("try again").
 // - Every answer is `Cache-Control: no-store`. `HEAD` answers `405` without a call, so a link checker or a prefetch can
@@ -26,6 +27,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { paymentsPath, type StripeConnectOutcome } from "@/app/(app)/otas/[tenantId]/payments/stripe-connect";
 import { createPlatformApi, type ApiError } from "@/lib/api";
 import { getConfig } from "@/lib/config";
+import { isMfaEnrolmentRequired, mfaEnrolmentPath } from "@/lib/errors";
 import { STRIPE_CONNECT_COOKIE, clearedCookie, sessionTokens, writeCookies } from "@/lib/session";
 import { isTenantId } from "@/lib/tenant";
 
@@ -158,6 +160,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     }
     if (code === "EMAIL_NOT_VERIFIED") {
       return seeOther("/verify-pending", portalUrl);
+    }
+    if (isMfaEnrolmentRequired(result.error)) {
+      return seeOther(mfaEnrolmentPath(returnPath(tenantId, refusedOutcome(result.error))), portalUrl);
     }
     return seeOther(returnPath(tenantId, refusedOutcome(result.error)), portalUrl);
   }

@@ -536,6 +536,17 @@ describe("POST /otas/{tenantId}/console/launch: refusals", () => {
     await expectSeeOther(response, `/account/security?console=mfa_required&tenant=${TENANT_ID}`);
   });
 
+  it("[PFE-030 AC1] the API's MFA enrolment gate leads to the enrolment page, then back to the console picker of the OTA", async () => {
+    fetchMock.mockResolvedValue(apiError("MFA_REQUIRED", 403, { reason: "enrolment_required" }));
+
+    const response = await POST(launchRequest(), context());
+
+    await expectSeeOther(
+      response,
+      `/mfa-enrolment?${new URLSearchParams({ next: `/console?tenant=${TENANT_ID}` }).toString()}`,
+    );
+  });
+
   it.each([
     [
       "suspended for billing",

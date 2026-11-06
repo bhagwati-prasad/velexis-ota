@@ -659,6 +659,53 @@ describe("invitation links (PFE-012)", () => {
   });
 });
 
+describe("requested page (PFE-030)", () => {
+  const verified = (): Record<string, string> => ({
+    "__Host-vxp_at": accessToken({ expiresInSeconds: 600 }),
+  });
+
+  it("[PFE-030 AC1] hands a page of the signed-in area and the enrolment page their own path and query", async () => {
+    const ota = await middleware(request("/otas/ten_1/api-keys?tab=live", { cookies: verified() }));
+    const enrolment = await middleware(
+      request(`/mfa-enrolment?next=${encodeURIComponent("/otas/ten_1")}`, { cookies: verified() }),
+    );
+
+    expect(isPassedThrough(ota)).toBe(true);
+    expect(forwardedHeader(ota, "x-velexis-requested-page")).toBe("/otas/ten_1/api-keys?tab=live");
+    expect(forwardedHeader(enrolment, "x-velexis-requested-page")).toBe(
+      "/mfa-enrolment?next=%2Fotas%2Ften_1",
+    );
+  });
+
+  it("[PFE-030 AC1] hands the invitation acceptance its path alone, never its query", async () => {
+    const accept = await middleware(
+      request("/invitations/accept?error=INVITATION_INVALID", {
+        cookies: verified(),
+        headers: { "X-Velexis-Requested-Page": "https://evil.example/x" },
+      }),
+    );
+
+    expect(isPassedThrough(accept)).toBe(true);
+    expect(forwardedHeader(accept, "x-velexis-requested-page")).toBe("/invitations/accept");
+  });
+
+  it("never passes on a value the browser sent, nor the query of a page outside the gated ones", async () => {
+    const forged = { "X-Velexis-Requested-Page": "https://evil.example/x" };
+    const publicPage = await middleware(request("/pricing", { headers: forged }));
+    const callback = await middleware(
+      request("/connect/stripe/callback?code=ac_dummy&state=Xq7Lm2Np9Rt4Vw8Yb3Dc6Fg1", {
+        cookies: verified(),
+        headers: forged,
+      }),
+    );
+    const dashboard = await middleware(request("/dashboard", { cookies: verified(), headers: forged }));
+
+    expect(forwardedHeader(publicPage, "x-velexis-requested-page")).toBeNull();
+    expect(forwardedHeader(callback, "x-velexis-requested-page")).toBeNull();
+    expect(forwardedHeader(dashboard, "x-velexis-requested-page")).toBe("/dashboard");
+  });
+});
+
 describe("request id", () => {
   it("keeps a valid X-Request-Id and creates one when there is none", async () => {
     const kept = await middleware(request("/", { headers: { "X-Request-Id": "req_from_caddy_0001" } }));

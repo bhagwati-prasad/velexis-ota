@@ -334,6 +334,15 @@ describe("GET /connect/stripe/callback: the session", () => {
     await expectSeeOther(await GET(callbackRequest({ code: CODE, state: STATE })), "/verify-pending");
   });
 
+  it("[PFE-030 AC1] the API's MFA enrolment gate leads to the enrolment page, then to the payments page to try again", async () => {
+    fetchMock.mockResolvedValue(apiError("MFA_REQUIRED", 403, { reason: "enrolment_required" }));
+
+    await expectSeeOther(
+      await GET(callbackRequest({ code: CODE, state: STATE })),
+      `/mfa-enrolment?${new URLSearchParams({ next: `${PAYMENTS}?stripeConnect=unavailable` }).toString()}`,
+    );
+  });
+
   it("the middleware passes the callback on to the handler with the session, and the answer is a redirect", async () => {
     const passed = await middleware(callbackRequest({ code: CODE, state: STATE }));
 

@@ -2182,7 +2182,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - Agents, finance members and viewers of live OTAs, members of test-only OTAs and accounts with MFA keep their answers; the auth matrix's new column passes and every other cell is unchanged; the rest of `test:int` and both backends' `test:xb` pass.
 - **Verify:** `pnpm contracts:lint && pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend exec vitest run --config vitest.int.config.ts test/integration/accounts/mfa-enrolment.int.test.ts test/integration/security/auth-matrix.int.test.ts`
 
-### PFE-030 · Send the owners and admins of live OTAs to MFA enrolment before any other portal page
+### PFE-030 · Send the owners and admins of live OTAs to MFA enrolment before any other portal page ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M6
 - **Depends on:** PBE-062, PBE-071 (the API's rule and `Account.mfaEnrolmentRequired`, which the gate reads), and FIX-W43-PLATFORM's PADR-0008 revision of 2026-11-05 (merged with this block)

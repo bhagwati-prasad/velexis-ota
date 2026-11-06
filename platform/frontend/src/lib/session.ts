@@ -240,6 +240,15 @@ export function isAccessTokenFresh(
 
 // ---- Return path --------------------------------------------------------------------------------------------
 
+/**
+ * The request header in which `middleware.ts` hands what it lets through (pages, layouts, server actions, route
+ * handlers) the page the request is for: its path and query when `safeNextPath()` accepts them (the signed-in area and
+ * `/mfa-enrolment`; the invitation acceptance by its path alone), nothing otherwise (`requestedPageOf`).
+ * Next.js never tells a layout which page it wraps; the MFA enrolment gate (PFE-030) needs it for its `next`. The
+ * middleware sets or deletes it on every request it passes on, so a value the browser sent never reaches a page.
+ */
+export const REQUESTED_PAGE_HEADER = "x-velexis-requested-page";
+
 const NEXT_PATH_MAX_LENGTH = 2048;
 const NEXT_PATH_BASE = "https://portal.invalid";
 // eslint-disable-next-line no-control-regex -- control characters are exactly what is refused here
