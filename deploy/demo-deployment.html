@@ -1,0 +1,3987 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <!-- Nothing on this page loads from the network, and nothing typed into it is ever sent anywhere. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'"
+    />
+    <meta name="referrer" content="no-referrer" />
+    <title>Velexis demo deployment</title>
+    <style>
+      :root {
+        --bg: #f7f7f5;
+        --panel: #ffffff;
+        --fg: #1c1e22;
+        --muted: #5a606a;
+        --line: #d9dce1;
+        --code-bg: #f1f2f4;
+        --code-fg: #1c1e22;
+        --accent: #1d5bb8;
+        --accent-fg: #ffffff;
+        --accent-soft: #e8f0fc;
+        --ok-bg: #e7f4eb;
+        --ok-line: #2c7a4b;
+        --warn-bg: #fff5dc;
+        --warn-line: #a86b12;
+        --bad-bg: #fdeaea;
+        --bad-line: #b83232;
+        --mark: #fff1a8;
+        --radius: 8px;
+        --mono:
+          ui-monospace, "SFMono-Regular", "Cascadia Mono", Menlo, Consolas, "Liberation Mono", monospace;
+        --sans:
+          system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans",
+          "Liberation Sans", sans-serif;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #15171b;
+          --panel: #1d2026;
+          --fg: #e6e8eb;
+          --muted: #a3a9b3;
+          --line: #353a43;
+          --code-bg: #111317;
+          --code-fg: #e6e8eb;
+          --accent: #7aaaf5;
+          --accent-fg: #0f1a2c;
+          --accent-soft: #1b2a42;
+          --ok-bg: #16291e;
+          --ok-line: #5cc488;
+          --warn-bg: #2d2412;
+          --warn-line: #e0a84a;
+          --bad-bg: #321a1a;
+          --bad-line: #f07b7b;
+          --mark: #5b4f12;
+        }
+      }
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      html {
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
+        scroll-padding-top: 16px;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font: 16px/1.6 var(--sans);
+        overflow-wrap: break-word;
+      }
+      a {
+        color: var(--accent);
+      }
+      a:focus-visible,
+      button:focus-visible,
+      input:focus-visible,
+      textarea:focus-visible,
+      summary:focus-visible {
+        outline: 3px solid var(--accent);
+        outline-offset: 2px;
+      }
+      header.top {
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+      }
+      header.top .inner,
+      .layout {
+        max-width: 1220px;
+        margin: 0 auto;
+        padding: 0 16px;
+      }
+      header.top .inner {
+        padding-top: 28px;
+        padding-bottom: 22px;
+      }
+      h1 {
+        font-size: 2rem;
+        line-height: 1.2;
+        margin: 0 0 8px;
+      }
+      h2 {
+        font-size: 1.5rem;
+        line-height: 1.25;
+        margin: 48px 0 12px;
+        padding-top: 8px;
+        border-top: 1px solid var(--line);
+      }
+      h3 {
+        font-size: 1.15rem;
+        margin: 28px 0 8px;
+      }
+      h4 {
+        font-size: 1rem;
+        margin: 20px 0 6px;
+      }
+      p,
+      ul,
+      ol {
+        margin: 8px 0;
+      }
+      li + li {
+        margin-top: 4px;
+      }
+      .lead {
+        font-size: 1.08rem;
+        color: var(--muted);
+        margin: 0;
+        max-width: 60rem;
+      }
+      .meta {
+        font-size: 0.9rem;
+        color: var(--muted);
+        margin-top: 10px;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 24px;
+      }
+      main {
+        min-width: 0;
+        padding-bottom: 80px;
+        max-width: 860px;
+      }
+      nav.toc {
+        min-width: 0;
+        margin-top: 20px;
+        font-size: 0.95rem;
+      }
+      nav.toc details {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 8px 14px;
+      }
+      nav.toc summary {
+        cursor: pointer;
+        font-weight: 600;
+        padding: 4px 0;
+      }
+      nav.toc ol {
+        list-style: none;
+        padding: 0;
+        margin: 6px 0 4px;
+      }
+      nav.toc li {
+        margin: 0;
+      }
+      nav.toc a {
+        display: block;
+        padding: 3px 6px;
+        border-radius: 5px;
+        text-decoration: none;
+        color: var(--fg);
+      }
+      nav.toc a:hover {
+        background: var(--accent-soft);
+      }
+      nav.toc a.current {
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-weight: 600;
+      }
+      nav.toc .sub a {
+        padding-left: 18px;
+        font-size: 0.9rem;
+        color: var(--muted);
+      }
+      @media (min-width: 1100px) {
+        .layout {
+          grid-template-columns: 250px minmax(0, 1fr);
+          gap: 40px;
+        }
+        nav.toc {
+          position: sticky;
+          top: 16px;
+          align-self: start;
+          max-height: calc(100vh - 32px);
+          overflow-y: auto;
+        }
+      }
+      code {
+        font-family: var(--mono);
+        font-size: 0.9em;
+        background: var(--code-bg);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0 4px;
+        overflow-wrap: anywhere;
+      }
+      .cmd {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--code-bg);
+        margin: 10px 0;
+        min-width: 0;
+      }
+      .cmd-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 4px 6px 4px 12px;
+        border-bottom: 1px solid var(--line);
+        font-size: 0.8rem;
+        color: var(--muted);
+      }
+      .cmd pre {
+        margin: 0;
+        padding: 12px 14px;
+        overflow-x: auto;
+        font: 13.5px/1.5 var(--mono);
+        color: var(--code-fg);
+        white-space: pre;
+        -webkit-overflow-scrolling: touch;
+      }
+      .cmd pre code {
+        background: none;
+        border: 0;
+        padding: 0;
+        font-size: inherit;
+        overflow-wrap: normal;
+      }
+      .cmd.tall pre {
+        max-height: 420px;
+        overflow-y: auto;
+      }
+      button,
+      .button {
+        font: inherit;
+        font-size: 0.9rem;
+        cursor: pointer;
+        border-radius: 6px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--fg);
+        padding: 4px 12px;
+        min-height: 32px;
+      }
+      button:hover {
+        border-color: var(--accent);
+      }
+      button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--accent-fg);
+        font-weight: 600;
+        padding: 8px 16px;
+        min-height: 40px;
+      }
+      button:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+      .note,
+      .see,
+      .fails,
+      .warn,
+      .ok {
+        border-left: 4px solid var(--line);
+        background: var(--panel);
+        border-radius: 0 var(--radius) var(--radius) 0;
+        padding: 8px 14px;
+        margin: 10px 0;
+      }
+      .see {
+        border-left-color: var(--ok-line);
+        background: var(--ok-bg);
+      }
+      .fails {
+        border-left-color: var(--bad-line);
+        background: var(--bad-bg);
+      }
+      .warn {
+        border-left-color: var(--warn-line);
+        background: var(--warn-bg);
+      }
+      .ok {
+        border-left-color: var(--ok-line);
+        background: var(--ok-bg);
+      }
+      .note {
+        border-left-color: var(--accent);
+        background: var(--accent-soft);
+      }
+      .see > :first-child,
+      .fails > :first-child,
+      .note > :first-child,
+      .warn > :first-child,
+      .ok > :first-child {
+        margin-top: 0;
+      }
+      .see > :last-child,
+      .fails > :last-child,
+      .note > :last-child,
+      .warn > :last-child,
+      .ok > :last-child {
+        margin-bottom: 0;
+      }
+      .table-wrap {
+        overflow-x: auto;
+        margin: 10px 0;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--panel);
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        font-size: 0.93rem;
+      }
+      th,
+      td {
+        text-align: left;
+        vertical-align: top;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--line);
+      }
+      tr:last-child td {
+        border-bottom: 0;
+      }
+      th {
+        background: var(--code-bg);
+        font-weight: 600;
+      }
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+        gap: 12px;
+        margin: 14px 0;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 12px 14px;
+      }
+      .card h3 {
+        margin-top: 0;
+        font-size: 1.05rem;
+      }
+      .badge {
+        display: inline-block;
+        font-size: 0.75rem;
+        font-weight: 600;
+        border-radius: 999px;
+        padding: 1px 9px;
+        border: 1px solid var(--line);
+        background: var(--code-bg);
+        color: var(--muted);
+        vertical-align: middle;
+      }
+      .badge.rec {
+        border-color: var(--ok-line);
+        color: var(--ok-line);
+        background: var(--ok-bg);
+      }
+      .badge.no {
+        border-color: var(--bad-line);
+        color: var(--bad-line);
+        background: var(--bad-bg);
+      }
+      .step-time {
+        font-size: 0.85rem;
+        color: var(--muted);
+        font-weight: normal;
+      }
+      kbd {
+        font-family: var(--mono);
+        font-size: 0.85em;
+        border: 1px solid var(--line);
+        border-bottom-width: 2px;
+        border-radius: 4px;
+        padding: 0 4px;
+        background: var(--panel);
+      }
+      .ui {
+        font-weight: 600;
+      }
+      .fill {
+        background: var(--mark);
+        border-radius: 3px;
+      }
+      /* Mode-specific instructions: the choice of Part C hides the other way's steps. */
+      body.mode-local .only-browser,
+      body.mode-browser .only-local {
+        display: none;
+      }
+      .mode-box {
+        border: 1px dashed var(--accent);
+        border-radius: var(--radius);
+        padding: 4px 14px 10px;
+        margin: 12px 0;
+      }
+      .mode-box > .mode-label {
+        display: block;
+        margin: 6px 0 2px;
+        font-size: 0.8rem;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        color: var(--accent);
+      }
+      /* The form */
+      form.config {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 4px 16px 16px;
+        margin: 14px 0;
+      }
+      fieldset {
+        border: 0;
+        padding: 0;
+        margin: 18px 0 0;
+        min-width: 0;
+      }
+      legend,
+      .field > label {
+        font-weight: 600;
+        padding: 0;
+      }
+      .field {
+        margin: 18px 0 0;
+      }
+      .hint {
+        font-size: 0.9rem;
+        color: var(--muted);
+        margin: 2px 0 6px;
+      }
+      input[type="text"],
+      textarea {
+        width: 100%;
+        font: 15px/1.4 var(--mono);
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--bg);
+        color: var(--fg);
+      }
+      input[readonly] {
+        color: var(--muted);
+      }
+      input[aria-invalid="true"],
+      textarea[aria-invalid="true"] {
+        border-color: var(--bad-line);
+        box-shadow: 0 0 0 1px var(--bad-line);
+      }
+      .error {
+        color: var(--bad-line);
+        font-size: 0.9rem;
+        margin: 4px 0 0;
+        min-height: 0;
+      }
+      .error:empty {
+        display: none;
+      }
+      .choice {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 10px 12px;
+        margin: 8px 0;
+        cursor: pointer;
+      }
+      .choice input {
+        margin-top: 6px;
+        width: 18px;
+        height: 18px;
+        flex: none;
+      }
+      .choice:has(input:checked) {
+        border-color: var(--accent);
+        background: var(--accent-soft);
+      }
+      .secret-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 4px;
+        margin: 8px 0;
+      }
+      .secret-row label {
+        font-size: 0.9rem;
+        font-weight: 600;
+      }
+      details.optional {
+        margin: 18px 0 0;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 6px 12px;
+      }
+      details.optional > summary {
+        cursor: pointer;
+        font-weight: 600;
+      }
+      .output {
+        margin: 18px 0;
+      }
+      .output[hidden] {
+        display: none;
+      }
+      .status {
+        font-weight: 600;
+        margin: 12px 0;
+      }
+      .files {
+        list-style: none;
+        padding: 0;
+      }
+      .files li {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--panel);
+        padding: 10px 12px;
+        margin: 8px 0;
+      }
+      .files .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .way {
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--panel);
+        padding: 4px 14px 12px;
+        margin: 14px 0;
+      }
+      .way h4 {
+        margin-top: 12px;
+      }
+      footer {
+        color: var(--muted);
+        font-size: 0.9rem;
+        border-top: 1px solid var(--line);
+        margin-top: 48px;
+        padding-top: 12px;
+      }
+      @media print {
+        nav.toc,
+        .cmd-bar button {
+          display: none;
+        }
+        .layout {
+          display: block;
+        }
+      }
+    </style>
+  </head>
+  <body class="mode-local">
+    <header class="top">
+      <div class="inner">
+        <h1>Velexis demo deployment</h1>
+        <p class="lead">
+          Step-by-step instructions to run every Velexis app (portal, platform admin, OTA admin, storefront
+          and their back ends) as a demo: in GitHub Codespaces, or on your own Ubuntu computer. Every command
+          is in its own box with a <span class="ui">Copy</span> button. You do not need to be an engineer:
+          copy, paste, and compare with <em>What you should see</em>.
+        </p>
+        <p class="meta">
+          Written for the branch <code>claude/intelligent-bardeen-90hhu7</code> (commit 6dd1aa5), checked on 7
+          November 2026. This page works offline: it loads nothing from the internet and sends nothing you
+          type anywhere.
+        </p>
+      </div>
+    </header>
+
+    <div class="layout">
+      <nav class="toc" aria-label="Contents">
+        <details open>
+          <summary>Contents</summary>
+          <ol>
+            <li><a href="#overview">What you get</a></li>
+            <li><a href="#paths">Choose where to run it</a></li>
+            <li><a href="#words">Words used on this page</a></li>
+            <li><a href="#part-a">Part A. Create the codespace</a></li>
+            <li><a href="#part-b">Part B. Install the tools</a></li>
+            <li><a href="#part-c">Part C. Your settings and files</a></li>
+            <li><a href="#part-d">Part D. One-time setup</a></li>
+            <li><a href="#part-e">Part E. Start everything</a></li>
+            <li><a href="#part-f">Part F. Use the demo</a></li>
+            <li><a href="#part-g">Part G. Next day, restart, delete</a></li>
+            <li><a href="#part-h">Part H. Troubleshooting</a></li>
+            <li><a href="#own-computer">Your own Ubuntu computer or VM</a></li>
+            <li><a href="#render-vercel">Render and Vercel (free tiers)</a></li>
+            <li><a href="#reference">Reference</a></li>
+            <li class="sub"><a href="#ref-apps">Apps and ports</a></li>
+            <li class="sub"><a href="#ref-files">Generated files</a></li>
+            <li class="sub"><a href="#ref-logs">Logs</a></li>
+          </ol>
+        </details>
+      </nav>
+
+      <main>
+        <section id="overview">
+          <h2>What you get</h2>
+          <p>
+            At the end you have the whole Velexis product running as a demo, with fake data and no real money:
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>App</th>
+                  <th>What it is</th>
+                  <th>Who uses it</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Platform admin</strong></td>
+                  <td>The back office of Velexis itself: OTAs, accounts, Amadeus accounts, audit.</td>
+                  <td>Velexis staff</td>
+                </tr>
+                <tr>
+                  <td><strong>Portal</strong></td>
+                  <td>
+                    Where a travel agency signs up, creates its OTA (online travel agency) and opens its
+                    console.
+                  </td>
+                  <td>OTA owners</td>
+                </tr>
+                <tr>
+                  <td><strong>OTA admin</strong></td>
+                  <td>The console of one OTA: bookings, customers, settings of its storefront.</td>
+                  <td>OTA staff</td>
+                </tr>
+                <tr>
+                  <td><strong>Storefront</strong></td>
+                  <td>The public flight shop of one OTA: search, choose, pay, get tickets.</td>
+                  <td>Travellers</td>
+                </tr>
+                <tr>
+                  <td><strong>Mailpit</strong></td>
+                  <td>
+                    A fake mailbox that catches every e-mail the demo sends, so nothing reaches a real person.
+                  </td>
+                  <td>You, to read the e-mails</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            Behind them run two APIs, two background workers, a database (PostgreSQL), a fast store for queues
+            (Redis) and the <strong>Amadeus stub</strong>, a fake airline booking system: flights are made up
+            and nothing is booked for real. Payments use the test card <code>4111 1111 1111 1111</code>.
+          </p>
+          <p>
+            <strong>Time:</strong> about one hour the first time, most of it waiting.
+            <strong>Cost:</strong> nothing within GitHub's free monthly Codespaces quota (Part A says how much
+            that is).
+          </p>
+        </section>
+
+        <section id="paths">
+          <h2>Choose where to run it</h2>
+          <div class="cards">
+            <div class="card">
+              <h3>GitHub Codespaces <span class="badge rec">recommended</span></h3>
+              <p>
+                A computer in the cloud that GitHub runs for you, with an editor in your browser. Free within
+                a monthly quota. Follow <a href="#part-a">Parts A to G</a>.
+              </p>
+            </div>
+            <div class="card">
+              <h3>Your own Ubuntu 24.04 computer or VM</h3>
+              <p>
+                Any Ubuntu 24.04 machine with at least 8 GB of memory. The same steps with small changes:
+                <a href="#own-computer">read this section</a>.
+              </p>
+            </div>
+            <div class="card">
+              <h3>Render or Vercel free tiers <span class="badge no">not possible today</span></h3>
+              <p>
+                The free tiers are too small and too separated for this product as it is built today.
+                <a href="#render-vercel">Why, and what it would take</a>.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section id="words">
+          <h2>Words used on this page</h2>
+          <ul>
+            <li>
+              <strong>Terminal</strong>: the window where you type commands. In a codespace it is the panel at
+              the bottom of the editor. Paste with <kbd>Ctrl</kbd>+<kbd>V</kbd> (on a Mac
+              <kbd>Cmd</kbd>+<kbd>V</kbd>), then press <kbd>Enter</kbd>.
+            </li>
+            <li>
+              <strong>Port</strong>: a numbered door of a computer. Each app listens on its own port, for
+              example the portal on 3000.
+            </li>
+            <li>
+              <strong>Forwarding a port</strong>: connecting a port of the codespace to your browser, so you
+              can open the app.
+            </li>
+            <li>
+              <strong>Seed</strong>: filling the database with demo data (a demo admin account, a demo OTA).
+            </li>
+            <li>
+              <strong>Authenticator code</strong> (TOTP): the 6-digit code that changes every 30 seconds,
+              which the admin sign-in asks for. Part F shows how to get it without a phone.
+            </li>
+            <li>
+              <strong>Config files</strong> (<code>.env.local</code>): small text files with the settings of
+              each app. Part C makes them for you.
+            </li>
+          </ul>
+        </section>
+
+        <section id="part-a">
+          <h2>Part A. Create the codespace <span class="step-time">about 5 minutes</span></h2>
+          <ol>
+            <li>
+              Sign in to GitHub and open
+              <a href="https://github.com/bhagwati-prasad/velexis-ota"
+                >github.com/bhagwati-prasad/velexis-ota</a
+              >.
+            </li>
+            <li>
+              Click the green <span class="ui">&lt;&gt; Code</span> button, then the
+              <span class="ui">Codespaces</span> tab.
+            </li>
+            <li>
+              Click the <span class="ui">…</span> (three dots) next to the <span class="ui">+</span>, then
+              <span class="ui">New with options…</span>.
+            </li>
+            <li>
+              Choose:
+              <ul>
+                <li>
+                  <strong>Branch</strong>: <code>claude/intelligent-bardeen-90hhu7</code> (the current code is
+                  on this branch, not on <code>main</code>).
+                </li>
+                <li><strong>Dev container configuration</strong>: leave the default.</li>
+                <li><strong>Region</strong>: the one closest to you.</li>
+                <li><strong>Machine type</strong>: <strong>4-core</strong> (see below why).</li>
+              </ul>
+            </li>
+            <li>Click <span class="ui">Create codespace</span>.</li>
+          </ol>
+          <div class="see">
+            <p>
+              <strong>What you should see:</strong> after 1 to 3 minutes, an editor (VS Code) opens in your
+              browser. On the left is the list of files (the <em>Explorer</em>); at the bottom is a terminal
+              ending with something like
+              <code>/workspaces/velexis-ota (claude/intelligent-bardeen-90hhu7) $</code>.
+            </p>
+          </div>
+          <div class="fails">
+            <p>
+              <strong>If it fails:</strong> no terminal at the bottom? Open the menu (☰, top left) and choose
+              <span class="ui">Terminal</span> &gt; <span class="ui">New Terminal</span>. No
+              <span class="ui">Codespaces</span> tab? Codespaces may be turned off for your account or
+              organisation; try with your personal account.
+            </p>
+          </div>
+          <h3>Why 4-core, and what it costs</h3>
+          <ul>
+            <li>
+              Building all the apps once (Part D) needs memory and processor time. The demo itself runs on
+              about 1.25 GB of memory, but the build is slow on 2 cores. A 2-core machine also works: Part D
+              shows the slower build command for it.
+            </li>
+            <li>
+              Free quota for a personal account on GitHub Free: <strong>120 core-hours</strong> and
+              <strong>15 GB of storage</strong> a month (GitHub Pro: 180 core-hours and 20 GB). A 4-core
+              machine uses 4 core-hours per hour, so it runs about
+              <strong>30 hours a month for free</strong> (a 2-core machine about 60 hours). Storage counts
+              even while the codespace is stopped.
+            </li>
+            <li>
+              A codespace <strong>stops by itself after 30 minutes</strong> without activity (you can set up
+              to 240 minutes at
+              <a href="https://github.com/settings/codespaces">github.com/settings/codespaces</a>). Stopped
+              codespaces are deleted automatically after 30 days by default.
+            </li>
+            <li>
+              <strong>Stop or delete the codespace when you are done</strong> (<a href="#part-g">Part G</a>).
+              See your usage at <a href="https://github.com/settings/billing">github.com/settings/billing</a>.
+            </li>
+          </ul>
+          <p class="hint">
+            Quota figures: GitHub's Codespaces billing rules as known on 6 November 2026 (medium confidence:
+            check the billing page above for your own numbers).
+          </p>
+        </section>
+
+        <section id="part-b">
+          <h2>
+            Part B. Install the tools <span class="step-time">5 to 10 minutes, once per codespace</span>
+          </h2>
+          <p>Run each box in the codespace terminal, one after the other. Wait for each to finish.</p>
+
+          <h3>B1. Node.js 22 and pnpm</h3>
+          <p>Node.js runs the apps; pnpm installs their building blocks.</p>
+          <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+nvm install 22
+nvm alias default 22
+nvm use 22
+export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+echo 'export COREPACK_ENABLE_DOWNLOAD_PROMPT=0' &gt;&gt; ~/.bashrc
+corepack enable
+hash -r
+node -v
+pnpm -v</code></pre>
+          <div class="see">
+            <p>
+              <strong>What you should see:</strong> the last two lines print <code>v22.</code> followed by
+              numbers (for example <code>v22.23.4</code>) and <code>9.15.9</code>.
+            </p>
+          </div>
+          <div class="fails">
+            <p>
+              <strong>If it fails:</strong> <code>nvm: command not found</code>: open a new terminal (☰ &gt;
+              Terminal &gt; New Terminal) and run the box again. <code>pnpm -v</code> shows another number:
+              run <code>corepack prepare pnpm@9.15.9 --activate</code>, then <code>pnpm -v</code> again.
+            </p>
+          </div>
+
+          <h3>B2. PostgreSQL 16 and Redis 7.4</h3>
+          <p>
+            The database and the queue store, from their makers' package sources. These are the same commands
+            the project's own checks run on a clean Ubuntu 24.04 machine
+            (<code>.github/workflows/ci.yml</code>, job
+            <code>dev-setup</code>).
+          </p>
+          <pre class="cmd" data-where="cs"><code>. /etc/os-release
+{ sudo grep -rlE 'apt\.postgresql\.org|packages\.redis\.io' /etc/apt/sources.list.d/ || true; } | xargs -r sudo rm -f
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor --yes -o /etc/apt/keyrings/pgdg.gpg
+echo "deb [signed-by=/etc/apt/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+  | sudo tee /etc/apt/sources.list.d/pgdg.list
+curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor --yes -o /etc/apt/keyrings/redis.gpg
+echo "deb [signed-by=/etc/apt/keyrings/redis.gpg] https://packages.redis.io/deb ${VERSION_CODENAME} main" \
+  | sudo tee /etc/apt/sources.list.d/redis.list
+printf 'Package: redis redis-server redis-tools\nPin: version %s\nPin-Priority: 1001\n' '6:7.4*' \
+  | sudo tee /etc/apt/preferences.d/velexis-redis
+sudo apt-get update -y
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+  postgresql-16 postgresql-client-16 redis-server redis-tools</code></pre>
+          <p>Then check:</p>
+          <pre class="cmd" data-where="cs"><code>psql --version
+redis-server --version
+pg_lsclusters</code></pre>
+          <div class="see">
+            <p>
+              <strong>What you should see:</strong> <code>psql (PostgreSQL) 16.</code>…,
+              <code>Redis server v=7.4.</code>…, and a line starting with <code>16 main 5432</code>. It may
+              say <code>down</code>: that is fine, Part D starts it.
+            </p>
+          </div>
+          <div class="fails">
+            <p>
+              <strong>If it fails:</strong> <code>apt-get update</code> complains about a key or a list that
+              is not PostgreSQL or Redis (for example <code>NO_PUBKEY</code> for Yarn): see
+              <a href="#trouble-apt">Part H</a>, then run the box again.
+            </p>
+          </div>
+
+          <h3>B3. Mailpit (the fake mailbox)</h3>
+          <p>
+            Optional but recommended: without it the demo works, but you cannot read its e-mails (for example
+            a password reset). The second line checks that the download is exactly the expected file.
+          </p>
+          <pre
+            class="cmd"
+            data-where="cs"
+          ><code>curl -fsSL -o /tmp/mailpit.tar.gz https://github.com/axllent/mailpit/releases/download/v1.29.7/mailpit-linux-amd64.tar.gz
+echo "2ca8202f34b0ce35cf2144671ea6a0e43470c4a3621873e107dad440fd39f2b2  /tmp/mailpit.tar.gz" | sha256sum -c -
+sudo tar -xzf /tmp/mailpit.tar.gz -C /usr/local/bin mailpit
+mailpit version</code></pre>
+          <div class="see">
+            <p>
+              <strong>What you should see:</strong> <code>/tmp/mailpit.tar.gz: OK</code> and
+              <code>mailpit v1.29.7</code>. A line about checking for the latest release can be ignored.
+            </p>
+          </div>
+          <div class="fails">
+            <p>
+              <strong>If it fails:</strong> <code>FAILED</code> after <code>sha256sum</code> means the
+              download is not the expected file: do not install it, run the box again later. You can skip
+              Mailpit: the start script then says it is not installed and carries on.
+            </p>
+          </div>
+        </section>
+
+        <section id="part-c">
+          <h2>Part C. Your settings and files <span class="step-time">about 5 minutes</span></h2>
+          <p>
+            Fill in this form. It makes the config files and the start and stop scripts, ready for your
+            codespace. Then put them in place in one of three ways (the first is the easiest).
+          </p>
+          <div class="ok">
+            <p>
+              <strong>Nothing you type here leaves this page.</strong> The files are made inside your browser;
+              the page has no connection to the internet (its security policy forbids it). Random secrets are
+              made with your browser's secure random generator.
+            </p>
+          </div>
+
+          <form class="config" id="config-form" novalidate autocomplete="off">
+            <fieldset>
+              <legend>1. How will you open the apps?</legend>
+              <label class="choice">
+                <input type="radio" name="mode" value="local" checked />
+                <span>
+                  <strong>On my computer, through localhost</strong>
+                  <span class="badge rec">most reliable</span><br />
+                  With VS Code Desktop (free) or the GitHub command-line tool on your computer. The apps open
+                  at
+                  <code>http://localhost:3000</code> and so on, in Chrome, Edge or Firefox (not Safari).
+                </span>
+              </label>
+              <label class="choice">
+                <input type="radio" name="mode" value="browser" />
+                <span>
+                  <strong>In the browser, through the codespace links</strong>
+                  <span class="badge">no install</span><br />
+                  Nothing to install: the apps open at addresses like
+                  <code>https://&lt;codespace&gt;-3000.app.github.dev</code>. A small helper program
+                  (included) works around how GitHub forwards these links. You make five ports Public.
+                </span>
+              </label>
+            </fieldset>
+
+            <div class="field">
+              <label for="f-where">2. Your codespace name and forwarding domain</label>
+              <p class="hint">
+                Run <code>echo "$CODESPACE_NAME $GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN"</code> in the
+                codespace terminal and paste what it prints (two words), <strong>or</strong> paste any address
+                of a forwarded port, such as <code>https://name-3000.app.github.dev</code>.
+                <span class="only-local">Optional for this way: it only fills in a command of Part E.</span>
+                <span class="only-browser">Needed for this way.</span>
+              </p>
+              <input
+                type="text"
+                id="f-where"
+                spellcheck="false"
+                placeholder="fluffy-space-giggle-x5g7w9rj app.github.dev"
+              />
+              <p class="hint" id="where-parsed"></p>
+              <p class="error" id="err-where"></p>
+            </div>
+
+            <div class="field">
+              <label for="f-otakey">3. The OTA key the storefront shows</label>
+              <p class="hint">
+                Leave <code>demo</code> for now (the demo OTA of the seed). In Part F you create your own OTA
+                and switch the storefront to its key with one command. A key is 3 to 30 lower-case letters or
+                digits, starting with a letter.
+              </p>
+              <input type="text" id="f-otakey" value="demo" spellcheck="false" />
+              <p class="error" id="err-otakey"></p>
+            </div>
+
+            <details class="optional">
+              <summary>4. Optional: Stripe test keys (leave empty for the demo)</summary>
+              <p class="hint">
+                Leave these empty. Then the storefront offers only <em>Card, charged by the airline</em>,
+                which works with the fake airline system and the test card <code>4111 1111 1111 1111</code>.
+                Fill them in only if you have your own Stripe account and want Stripe card payments too; that
+                also needs the Stripe command-line tool (see
+                <a href="#stripe-optional">Part F, optional Stripe</a>). Test keys only: live keys are
+                refused.
+              </p>
+              <div class="field">
+                <label for="f-stripe-secret"
+                  >Stripe secret test key (<code>sk_test_…</code> or <code>rk_test_…</code>)</label
+                >
+                <input type="text" id="f-stripe-secret" spellcheck="false" />
+                <p class="error" id="err-stripe-secret"></p>
+              </div>
+              <div class="field">
+                <label for="f-stripe-publishable">Stripe publishable test key (<code>pk_test_…</code>)</label>
+                <input type="text" id="f-stripe-publishable" spellcheck="false" />
+                <p class="error" id="err-stripe-publishable"></p>
+              </div>
+              <div class="field">
+                <label for="f-stripe-webhook">Webhook signing secret (<code>whsec_…</code>, optional)</label>
+                <p class="hint">
+                  What <code>stripe listen</code> prints; you can add it later and make the files again.
+                </p>
+                <input type="text" id="f-stripe-webhook" spellcheck="false" />
+                <p class="error" id="err-stripe-webhook"></p>
+              </div>
+            </details>
+
+            <fieldset>
+              <legend>5. Secrets made for you</legend>
+              <p class="hint">
+                Random values that let the apps trust each other. They are new each time this page is opened:
+                if you reload the page or press <span class="ui">Make new secrets</span>, put
+                <strong>all</strong> the files in place again, not just one.
+              </p>
+              <div class="secret-row">
+                <label for="s-bff">PLATFORM_BFF_KEY (portal and platform admin to the platform API)</label>
+                <input type="text" id="s-bff" readonly />
+              </div>
+              <div class="secret-row">
+                <label for="s-edge">VELEXIS_EDGE_SECRET (storefront to the OTA API)</label>
+                <input type="text" id="s-edge" readonly />
+              </div>
+              <div class="secret-row">
+                <label for="s-service">OTA_ADMIN_SERVICE_KEY (OTA admin to the OTA API)</label>
+                <input type="text" id="s-service" readonly />
+              </div>
+              <p><button type="button" id="regenerate">Make new secrets</button></p>
+              <p class="error" id="err-secrets"></p>
+            </fieldset>
+
+            <p class="status" id="form-status" role="status" aria-live="polite"></p>
+          </form>
+
+          <div class="output" id="output" hidden>
+            <h3>Put the files in place</h3>
+            <p>
+              Your files are ready for: <strong id="out-mode"></strong>. Choose <strong>one</strong> of these
+              three ways.
+            </p>
+
+            <div class="way" id="way-paste">
+              <h4>Way 1 (easiest): copy and paste one block</h4>
+              <p>
+                Click <span class="ui">Copy</span>, click into the codespace terminal, paste, press
+                <kbd>Enter</kbd>. The block writes every file and creates the folders first. If the terminal
+                asks whether to paste several lines, choose <span class="ui">Paste</span>.
+              </p>
+              <pre class="cmd tall" data-where="cs" id="paste-block"><code></code></pre>
+              <div class="see">
+                <p>
+                  <strong>What you should see:</strong> the line <code>Velexis demo: … files written</code> at
+                  the end.
+                </p>
+              </div>
+            </div>
+
+            <div class="way" id="way-zip">
+              <h4>Way 2: one ZIP file</h4>
+              <ol>
+                <li>
+                  <button type="button" id="download-zip">Download velexis-demo-config.zip</button>
+                </li>
+                <li>
+                  Drag the file from your Downloads folder onto the empty space at the bottom of the
+                  codespace's Explorer (the file list on the left), so that it lands next to
+                  <code>package.json</code>.
+                </li>
+                <li>Run:</li>
+              </ol>
+              <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+unzip -o velexis-demo-config.zip &amp;&amp; chmod +x .local/demo/*.sh
+rm velexis-demo-config.zip</code></pre>
+              <div class="see">
+                <p>
+                  <strong>What you should see:</strong> one <code>inflating:</code> line per file. The last
+                  line deletes the ZIP, because it holds your secrets.
+                </p>
+              </div>
+            </div>
+
+            <div class="way" id="way-files">
+              <h4>Way 3: one file at a time</h4>
+              <p>
+                Browsers remove a leading dot from downloaded names, so the files download with plain names
+                (for example <code>root.env.local</code>). Download each, drag them all onto the Explorer as
+                in Way 2, then run the box below, which moves each one to its place.
+              </p>
+              <ul class="files" id="file-list"></ul>
+              <pre class="cmd" data-where="cs" id="mv-block"><code></code></pre>
+              <p class="hint">
+                If your browser added <code>.txt</code> or <code>(1)</code> to a name, rename it in the
+                Explorer first (right-click &gt; <span class="ui">Rename</span>).
+              </p>
+            </div>
+
+            <h4>Check</h4>
+            <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+ls -l .env.local ota/backend/.env.local platform/frontend/.env.local platform/admin/.env.local ota/admin/.env.local ota/frontend/.env.local
+ls -l .local/demo/</code></pre>
+            <div class="see">
+              <p>
+                <strong>What you should see:</strong> six <code>.env.local</code> files, and in
+                <code>.local/demo/</code> the files <code>start.sh</code> and <code>stop.sh</code
+                ><span class="only-browser"> and <code>origin-fix-proxy.mjs</code></span
+                >. If you change the form later, put the files in place again and restart (<a href="#part-g"
+                  >Part G</a
+                >).
+              </p>
+            </div>
+          </div>
+          <p class="hint" id="output-wait">
+            The three ways to put the files in place appear here once the form is complete.
+          </p>
+        </section>
+
+        <section id="part-d">
+          <h2>Part D. One-time setup <span class="step-time">10 to 20 minutes</span></h2>
+          <p>Run these in the codespace terminal, one box at a time, in this order.</p>
+
+          <h3>D1. Install the building blocks</h3>
+          <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+pnpm install --frozen-lockfile</code></pre>
+          <div class="see">
+            <p>
+              <strong>What you should see:</strong> after 1 to 3 minutes, <code>Done in</code> and a time.
+            </p>
+          </div>
+          <div class="fails">
+            <p>
+              <strong>If it fails:</strong> <code>pnpm: command not found</code> or a Node version warning: go
+              back to <a href="#part-b">B1</a>.
+            </p>
+          </div>
+
+          <h3>D2. Set up the database and Redis</h3>
+          <pre class="cmd" data-where="cs"><code>bash deploy/scripts/dev-setup.sh</code></pre>
+          <div class="see">
+            <p>
+              <strong>What you should see:</strong> a summary box in which every line says
+              <code>ok</code> (five database roles and <code>password required ok REDIS_URL</code>), then
+              <em>Next steps</em>.
+            </p>
+          </div>
+          <div class="fails">
+            <p>
+              <strong>If it fails:</strong> <code>psql not found</code>: go back to <a href="#part-b">B2</a>.
+              Redis did not start: see <a href="#trouble-redis">Part H</a>.
+            </p>
+          </div>
+
+          <h3>D3. Make the keys</h3>
+          <p>The encryption and signing keys of the demo, made inside the codespace (they never leave it).</p>
+          <pre class="cmd" data-where="cs"><code>pnpm dev:keys</code></pre>
+          <div class="see">
+            <p>
+              <strong>What you should see:</strong> five lines starting with <code>created</code> (for example
+              <code>created .local/keys/master-v1.key</code>) and one with <code>ready</code>.
+            </p>
+          </div>
+
+          <h3>D4. Build every app</h3>
+          <pre class="cmd" data-where="cs"><code>pnpm build</code></pre>
+          <p class="hint">On a 2-core machine use this instead, so the build does not run out of memory:</p>
+          <pre class="cmd" data-where="cs"><code>pnpm build --concurrency=2</code></pre>
+          <div class="see">
+            <p>
+              <strong>What you should see:</strong> after 3 to 10 minutes, <code>Tasks:</code> with a number
+              of <code>successful</code> and the same number in <code>total</code>.
+            </p>
+          </div>
+          <div class="fails">
+            <p>
+              <strong>If it fails:</strong> <code>Killed</code> or <code>heap out of memory</code>: see
+              <a href="#trouble-memory">Part H</a>.
+            </p>
+          </div>
+
+          <h3>D5. Create the tables and load the reference data</h3>
+          <p>Airports, airlines, countries, currencies and time zones.</p>
+          <pre class="cmd" data-where="cs"><code>pnpm db:migrate
+pnpm db:seed:reference</code></pre>
+          <div class="see">
+            <p>
+              <strong>What you should see:</strong> both finish within a minute, without <code>ERROR</code>.
+            </p>
+          </div>
+
+          <h3>D6. Start the fake airline system, then fill in the demo data</h3>
+          <p>
+            The seeds need PostgreSQL, Redis and the Amadeus stub. The first line starts just those. The seeds
+            print the demo admin's password and keys <strong>only once</strong>, so their output is also saved
+            into <code>.local/</code> (a folder git ignores), readable only by you.
+          </p>
+          <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+bash .local/demo/start.sh stub
+( umask 077; (cd platform/backend &amp;&amp; node --enable-source-maps dist/cli.js dev:seed) 2&gt;&amp;1 | tee .local/platform-seed.txt )
+( umask 077; (cd ota/backend &amp;&amp; node --enable-source-maps dist/cli.js dev:seed) 2&gt;&amp;1 | tee .local/ota-seed.txt )</code></pre>
+          <div class="see">
+            <p><strong>What you should see</strong>, and what to keep:</p>
+            <ul>
+              <li>
+                From the platform seed:
+                <code>Platform admin admin@example.com (…): created, with MFA. Shown once, never again:</code
+                >, then <code>Password:</code> (24 characters) and <code>TOTP set-up URI:</code> (starts with
+                <code>otpauth://totp/</code>; the part after <code>secret=</code> up to the next
+                <code>&amp;</code> is the secret for the 6-digit codes). <strong>Keep both</strong>: you sign
+                in with them in Part F.
+              </li>
+              <li>
+                From the OTA seed: the demo OTA <code>demo</code>, and three lines
+                <code>Publishable test key</code>, <code>Secret test key</code> and
+                <code>Console automation test key</code>. You do not need them for this guide; they are for
+                trying the developer SDK.
+              </li>
+              <li>
+                Both are saved: <code>cat .local/platform-seed.txt</code> shows them again. Do not share these
+                files.
+              </li>
+            </ul>
+          </div>
+          <div class="fails">
+            <p>
+              <strong>If it fails:</strong> <code>exists already; nothing changed</code> means the seed ran
+              before: the password is in <code>.local/platform-seed.txt</code> from that first run. Lost it?
+              See <a href="#trouble-password">Part H</a>. A <code>ConfigError</code>: see
+              <a href="#trouble-config">Part H</a>.
+            </p>
+          </div>
+        </section>
+
+        <section id="part-e">
+          <h2>Part E. Start everything <span class="step-time">2 minutes</span></h2>
+          <h3>E1. Start</h3>
+          <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+bash .local/demo/start.sh</code></pre>
+          <div class="see">
+            <p>
+              <strong>What you should see:</strong> one <code>starting</code> and one <code>ready</code> line
+              per app, then a box <em>The Velexis demo runs</em> with the addresses. It is safe to run it
+              again at any time: it starts only what is missing, so it is also the way to check that
+              everything still runs.
+            </p>
+          </div>
+          <div class="fails">
+            <p>
+              <strong>If it fails:</strong> it stops at the app that did not start and shows the end of its
+              log. Look the message up in <a href="#part-h">Part H</a>.
+            </p>
+          </div>
+
+          <h3>E2. Connect your browser</h3>
+          <p class="mode-note"></p>
+          <div class="mode-box only-local">
+            <span class="mode-label">Your choice: on my computer, through localhost</span>
+            <p>Use <strong>one</strong> of these two:</p>
+            <h4>With VS Code Desktop</h4>
+            <ol>
+              <li>
+                Install VS Code from <a href="https://code.visualstudio.com/">code.visualstudio.com</a> and
+                open it once.
+              </li>
+              <li>
+                Back in the codespace in your browser, press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>
+                (Mac: <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>), type
+                <code>Open in VS Code Desktop</code> and choose
+                <span class="ui">Codespaces: Open in VS Code Desktop</span>. Allow the browser to open VS
+                Code, and install the <span class="ui">GitHub Codespaces</span> extension if VS Code asks.
+              </li>
+              <li>
+                In VS Code Desktop, open the <span class="ui">PORTS</span> tab (next to
+                <span class="ui">TERMINAL</span> at the bottom). VS Code forwards the running apps by itself.
+                Check the <span class="ui">Forwarded Address</span> column: port 3000 must show
+                <code>localhost:3000</code>, 3001 <code>localhost:3001</code>, 3002
+                <code>localhost:3002</code>, 4173 <code>localhost:4173</code> and 8025
+                <code>localhost:8025</code>. A missing one: click <span class="ui">Forward a Port</span> and
+                type its number.
+              </li>
+            </ol>
+            <div class="warn">
+              <p>
+                <strong>The numbers must match exactly.</strong> If a port shows another local number (for
+                example <code>localhost:3003</code>, because something on your computer already uses 3000),
+                the apps will refuse the sign-in. Close that program, or right-click the row &gt;
+                <span class="ui">Change Local Address Port</span> and type the same number as the port.
+              </p>
+            </div>
+            <h4>Or with the GitHub command-line tool (gh)</h4>
+            <ol>
+              <li>
+                Install it on your computer from <a href="https://cli.github.com/">cli.github.com</a>, open a
+                terminal on your computer and sign in:
+                <pre class="cmd" data-where="pc"><code>gh auth login</code></pre>
+              </li>
+              <li>
+                Connect the five ports (keep this terminal window open while you use the demo;
+                <kbd>Ctrl</kbd>+<kbd>C</kbd> disconnects):
+                <pre
+                  class="cmd"
+                  data-where="pc"
+                ><code>gh codespace ports forward 3000:3000 3001:3001 3002:3002 4173:4173 8025:8025 -c <span class="fill" data-fill="csname">&lt;your codespace name&gt;</span></code></pre>
+                <p class="hint">
+                  Your codespace name is filled in from Part C. Without it, remove <code>-c</code> and the
+                  name: gh then asks you to pick the codespace. If gh says it needs the
+                  <code>codespace</code> permission, run
+                  <code>gh auth refresh -h github.com -s codespace</code> and try again.
+                </p>
+              </li>
+            </ol>
+            <div class="see">
+              <p>
+                <strong>What you should see:</strong>
+                <a href="http://localhost:3001">http://localhost:3001</a> opens the platform admin's sign-in
+                page on your computer. Use Chrome, Edge or Firefox: Safari refuses the secure cookies of the
+                apps on <code>localhost</code>.
+              </p>
+            </div>
+            <p class="hint">
+              Do not use the <code>…app.github.dev</code> links in this way: the files you made are for
+              localhost.
+            </p>
+          </div>
+          <div class="mode-box only-browser">
+            <span class="mode-label">Your choice: in the browser, through the codespace links</span>
+            <p>
+              Make five ports <strong>Public</strong>, so the apps can send you from one to another. Public
+              means that anyone who knows the address can open it; the addresses are long and random, and they
+              stop working when the codespace stops.
+            </p>
+            <ol>
+              <li>
+                In the codespace, open the <span class="ui">PORTS</span> tab (next to
+                <span class="ui">TERMINAL</span> at the bottom).
+              </li>
+              <li>
+                For each of <strong>3000, 3001, 3002, 4173 and 8025</strong>: right-click the row &gt;
+                <span class="ui">Port Visibility</span> &gt; <span class="ui">Public</span>.
+              </li>
+            </ol>
+            <p>Or run this in the codespace terminal, which does the same:</p>
+            <pre
+              class="cmd"
+              data-where="cs"
+            ><code>gh codespace ports visibility 3000:public 3001:public 3002:public 4173:public 8025:public -c "$CODESPACE_NAME"</code></pre>
+            <p class="hint">
+              If this command answers with a permission error, use the clicks above. Mailpit (8025) shows
+              every e-mail of the demo, including password-reset links: you can leave it Private (it then asks
+              you to sign in to GitHub once) or make it Private again when you are done.
+            </p>
+            <div class="see">
+              <p>
+                <strong>What you should see:</strong> the <span class="ui">Visibility</span> column says
+                <code>Public</code> for the five ports. Open the platform admin at
+                <a class="fill" data-fill-href="platform-admin" data-fill="platform-admin-url" href="#part-c"
+                  >https://&lt;codespace&gt;-3001.app.github.dev</a
+                >.
+              </p>
+            </div>
+            <p class="hint">
+              Always use the addresses ending in <code>-3000</code>, <code>-3001</code>, <code>-3002</code>,
+              <code>-4173</code> and <code>-8025</code>. The ports 13000 to 13002 are internal: opened
+              directly, their sign-in forms fail.
+            </p>
+          </div>
+
+          <h3>E3. Your addresses</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>App</th>
+                  <th>Address</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Platform admin (open first)</td>
+                  <td>
+                    <a
+                      class="fill"
+                      data-fill="platform-admin-url"
+                      data-fill-href="platform-admin"
+                      href="http://localhost:3001"
+                      >http://localhost:3001</a
+                    >
+                  </td>
+                </tr>
+                <tr>
+                  <td>Portal</td>
+                  <td>
+                    <a
+                      class="fill"
+                      data-fill="portal-url"
+                      data-fill-href="portal"
+                      href="http://localhost:3000"
+                      >http://localhost:3000</a
+                    >
+                  </td>
+                </tr>
+                <tr>
+                  <td>OTA admin (open it from the portal)</td>
+                  <td>
+                    <a
+                      class="fill"
+                      data-fill="ota-admin-url"
+                      data-fill-href="ota-admin"
+                      href="http://localhost:3002"
+                      >http://localhost:3002</a
+                    >
+                  </td>
+                </tr>
+                <tr>
+                  <td>Storefront</td>
+                  <td>
+                    <a
+                      class="fill"
+                      data-fill="storefront-url"
+                      data-fill-href="storefront"
+                      href="http://localhost:4173"
+                      >http://localhost:4173</a
+                    >
+                  </td>
+                </tr>
+                <tr>
+                  <td>Mailpit</td>
+                  <td>
+                    <a
+                      class="fill"
+                      data-fill="mailpit-url"
+                      data-fill-href="mailpit"
+                      href="http://localhost:8025"
+                      >http://localhost:8025</a
+                    >
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="part-f">
+          <h2>Part F. Use the demo <span class="step-time">about 15 minutes</span></h2>
+          <p>
+            A complete tour: an admin creates an OTA, switches on a payment method, and a traveller books a
+            flight.
+          </p>
+
+          <h3>F1. Get a 6-digit sign-in code</h3>
+          <p>
+            The demo admin needs a code that changes every 30 seconds. This command reads the secret from the
+            saved seed output and prints the current code:
+          </p>
+          <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+(cd platform/backend &amp;&amp; node -e "const s = /secret=([A-Z2-7]+)/i.exec(require('fs').readFileSync('../../.local/platform-seed.txt', 'utf8'))[1]; console.log(require('otplib').authenticator.generate(s))")</code></pre>
+          <div class="see">
+            <p>
+              <strong>What you should see:</strong> six digits, for example <code>492817</code>. Type it
+              within 30 seconds. Each code works only once: for the next sign-in, wait until the next
+              30-second window and run the command again.
+            </p>
+          </div>
+          <p>
+            <strong>Or use an authenticator app</strong> on your phone (Google Authenticator, Microsoft
+            Authenticator, 1Password, …): add an account with <span class="ui">Enter a setup key</span>, name
+            it Velexis demo, and type the secret: the letters and digits after <code>secret=</code> in the
+            <code>TOTP set-up URI</code> line, up to the next <code>&amp;</code>. Show the line again with
+            <code>grep TOTP .local/platform-seed.txt</code>.
+          </p>
+
+          <h3>F2. Sign in to the platform admin</h3>
+          <ol>
+            <li>
+              Open the platform admin:
+              <a
+                class="fill"
+                data-fill="platform-admin-url"
+                data-fill-href="platform-admin"
+                href="http://localhost:3001"
+                >http://localhost:3001</a
+              >.
+            </li>
+            <li>
+              E-mail <code>admin@example.com</code>, the <code>Password</code> from the seed output, then
+              <span class="ui">Sign in</span>.
+            </li>
+            <li>Type the 6-digit code (F1) and continue.</li>
+          </ol>
+          <div class="see">
+            <p>
+              <strong>What you should see:</strong> the platform admin's <em>Dashboard</em>. Its menu has
+              <span class="ui">Tenants</span> (the OTAs; the seed's <em>Demo Travel</em> is there),
+              <span class="ui">Accounts</span>, the Amadeus pages and the <span class="ui">Audit log</span>.
+            </p>
+          </div>
+
+          <h3>F3. Sign in to the portal and create an OTA</h3>
+          <ol>
+            <li>
+              Open the portal:
+              <a class="fill" data-fill="portal-url" data-fill-href="portal" href="http://localhost:3000"
+                >http://localhost:3000</a
+              >. Sign in with the <strong>same</strong> e-mail and password, and a <strong>new</strong> code
+              (wait for the next 30 seconds, then run F1 again).
+            </li>
+            <li>Click <span class="ui">Create an OTA</span>.</li>
+            <li>
+              Fill in: <span class="ui">OTA name</span> <code>My OTA</code>; <span class="ui">OTA key</span>
+              <code>myota</code> (3 to 30 lower-case letters or digits, starting with a letter, no hyphen; it
+              cannot be changed later); <span class="ui">Country</span> any;
+              <span class="ui">Default currency</span> <code>Euro (EUR)</code>;
+              <span class="ui">Time zone</span> any. Click <span class="ui">Continue</span>.
+            </li>
+            <li>
+              Keep the early access plan, <span class="ui">Continue</span>, check the summary and click
+              <span class="ui">Create OTA</span>.
+            </li>
+          </ol>
+          <div class="see">
+            <p>
+              <strong>What you should see:</strong> the page <em>OTA set-up</em> ticks its steps off, usually
+              within a minute, then says <em>Your OTA is ready</em>. Click
+              <span class="ui">Go to the OTA dashboard</span>: it has an
+              <span class="ui">Open console</span> button.
+            </p>
+          </div>
+          <div class="note">
+            <p>
+              Links to addresses ending in <code>.ota.example.com</code> (such as
+              <span class="ui">Open your storefront</span>) lead nowhere in the demo: that domain is a
+              placeholder. Open the storefront at its address of <a href="#part-e">E3</a> instead.
+            </p>
+          </div>
+          <div class="fails">
+            <p>
+              <strong>If it fails:</strong> the set-up does not move: the workers may not run; run
+              <code>bash .local/demo/start.sh</code> in the codespace and reload the page. A key that is
+              <em>taken</em> or <em>reserved</em>: choose another one, and use it instead of
+              <code>myota</code>
+              below.
+            </p>
+          </div>
+
+          <h3>F4. Open the OTA admin</h3>
+          <p>Click <span class="ui">Open console</span>.</p>
+          <div class="see">
+            <p>
+              <strong>What you should see:</strong> the OTA admin opens on its <em>Bookings</em> page (empty
+              for now), at <span class="fill" data-fill="ota-admin-url">http://localhost:3002</span>.
+            </p>
+          </div>
+          <div class="fails">
+            <p>
+              <strong>If it fails:</strong> <em>This sign-in did not come from the portal</em>: see
+              <a href="#trouble-sso">Part H</a>.
+            </p>
+          </div>
+
+          <h3>F5. Switch on the airline card</h3>
+          <ol>
+            <li>
+              In the OTA admin's menu, open <span class="ui">Settings</span> &gt;
+              <span class="ui">Storefront</span>.
+            </li>
+            <li>Open the tab <span class="ui">Payments</span>.</li>
+            <li>
+              In the section <span class="ui">Airline card</span>, tick
+              <span class="ui">Offer the airline card in the test environment</span> and click
+              <span class="ui">Save airline card</span>.
+            </li>
+          </ol>
+          <div class="see">
+            <p><strong>What you should see:</strong> <em>Saved</em>.</p>
+          </div>
+
+          <h3>F6. Point the storefront at your OTA</h3>
+          <p>
+            One storefront process shows one OTA. Type your OTA's key here (if it is not <code>myota</code>)
+            and copy the box into the codespace terminal: it changes one line of
+            <code>ota/frontend/.env.local</code>
+            and restarts only the storefront.
+          </p>
+          <div class="field">
+            <label for="f-newkey">Your OTA's key</label>
+            <input type="text" id="f-newkey" value="myota" spellcheck="false" />
+            <p class="error" id="err-newkey"></p>
+          </div>
+          <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+sed -i 's/^STOREFRONT_DEV_HOST=.*/STOREFRONT_DEV_HOST=<span class="fill" data-fill="newkey">myota</span>.ota.example.com/' ota/frontend/.env.local
+bash .local/demo/stop.sh storefront
+bash .local/demo/start.sh</code></pre>
+          <div class="see">
+            <p>
+              <strong>What you should see:</strong> <code>storefront: stopped</code>, then
+              <code>storefront: ready</code> and the table, where the storefront line ends with
+              <code
+                >(shows the OTA of <span class="fill" data-fill="newkey">myota</span>.ota.example.com)</code
+              >.
+            </p>
+          </div>
+
+          <h3>F7. Book a flight on the storefront</h3>
+          <ol>
+            <li>
+              Open the storefront:
+              <a
+                class="fill"
+                data-fill="storefront-url"
+                data-fill-href="storefront"
+                href="http://localhost:4173"
+                >http://localhost:4173</a
+              >. A banner says it is in test mode.
+            </li>
+            <li>
+              Choose <span class="ui">One way</span>. <span class="ui">From</span>: type
+              <code>Madrid</code> and pick it from the list. <span class="ui">To</span>: <code>Paris</code>.
+              <span class="ui">Departure</span>: any date a few weeks ahead. Click
+              <span class="ui">Search flights</span>. (The fake airline answers any route with the same
+              made-up flights.)
+            </li>
+            <li>
+              Click <span class="ui">Select this flight</span> on a result, then
+              <span class="ui">Continue with this fare</span>, then
+              <span class="ui">Continue to checkout</span>.
+            </li>
+            <li>
+              Traveller: any first and last name, a date of birth such as <code>1985-04-12</code>, a gender;
+              <span class="ui">Continue</span>. Contact: your e-mail address (it goes to Mailpit, nowhere
+              else), country calling code <code>34</code>, mobile <code>600000000</code>;
+              <span class="ui">Continue</span>. Extras: <span class="ui">Continue</span>.
+            </li>
+            <li>
+              Payment: choose <span class="ui">Card, charged by the airline</span>, tick
+              <span class="ui">I accept the terms and conditions</span>, click
+              <span class="ui">Continue to payment</span>.
+            </li>
+            <li>
+              On <em>Pay with your card</em>: name on the card any, card number
+              <code>4111 1111 1111 1111</code>, month <code>11</code>, a year in the future, security code
+              <code>853</code>. Click the <span class="ui">Pay €…</span> button.
+            </li>
+          </ol>
+          <div class="see">
+            <p>
+              <strong>What you should see:</strong> the confirmation with a booking and its e-tickets (numbers
+              starting with <code>000-</code>).
+            </p>
+          </div>
+          <div class="fails">
+            <p>
+              <strong>If it fails:</strong> no <em>Card, charged by the airline</em> at the payment step: see
+              <a href="#trouble-payment">Part H</a>. The card <code>4000 0000 0000 0002</code> is the fake
+              airline's <em>declined</em> card, for trying a refusal.
+            </p>
+          </div>
+
+          <h3>F8. See the booking and the e-mails</h3>
+          <ul>
+            <li>
+              In the OTA admin (<span class="fill" data-fill="ota-admin-url">http://localhost:3002</span>),
+              open <span class="ui">Bookings</span>: the new booking is there.
+            </li>
+            <li>
+              Open Mailpit (<a
+                class="fill"
+                data-fill="mailpit-url"
+                data-fill-href="mailpit"
+                href="http://localhost:8025"
+                >http://localhost:8025</a
+              >): the e-mails of the demo, for example the booking confirmation.
+            </li>
+          </ul>
+
+          <h3 id="stripe-optional">Optional: Stripe card payments</h3>
+          <p>
+            Only if you filled in Stripe test keys in Part C. Stripe tells the OTA backend about payments
+            through "webhooks", which need the Stripe command-line tool running in a second terminal of the
+            codespace:
+          </p>
+          <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+curl -fsSL -o /tmp/stripe.tgz https://github.com/stripe/stripe-cli/releases/download/v1.53.1/stripe_1.53.1_linux_x86_64.tar.gz
+echo "032fe0b849a9d6a222488bc846445bafeae993af1026b78a8121d02321ca1fd1  /tmp/stripe.tgz" | sha256sum -c -
+sudo tar -xzf /tmp/stripe.tgz -C /usr/local/bin stripe
+read -rsp "Stripe secret test key: " STRIPE_API_KEY &amp;&amp; export STRIPE_API_KEY &amp;&amp; echo
+bash tools/dev/stripe-listen.sh --only ota</code></pre>
+          <p>
+            Paste your <code>sk_test_…</code> key when asked (it is not shown). The tool prints a line
+            <code>STRIPE_WEBHOOK_SECRET_VELEXIS_TEST=whsec_…</code>: put that <code>whsec_…</code> value into
+            the form (Part C, field 4), put the files in place again and restart (<a href="#part-g">Part G</a
+            >), with the Stripe tool still running. Then the storefront also offers Stripe's card form; use
+            Stripe's test card <code>4242 4242 4242 4242</code>.
+          </p>
+        </section>
+
+        <section id="part-g">
+          <h2>Part G. Next day, restart, delete</h2>
+          <h3>After a stop, or the next day</h3>
+          <p>
+            When a codespace stops, every app stops. Open it again from
+            <a href="https://github.com/codespaces">github.com/codespaces</a> and run:
+          </p>
+          <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+bash .local/demo/start.sh</code></pre>
+          <p>
+            It starts PostgreSQL and Redis again (through <code>deploy/scripts/dev-setup.sh</code>), then
+            every app. Your data (accounts, OTAs, bookings) is still there.
+            <span class="only-browser"
+              >Check in the <span class="ui">PORTS</span> tab that the five ports are still Public.</span
+            ><span class="only-local">Connect your browser again as in <a href="#part-e">E2</a>.</span>
+          </p>
+          <h3>After you change the form</h3>
+          <p>Put all the files in place again (Part C), then restart everything:</p>
+          <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+bash .local/demo/stop.sh
+bash .local/demo/start.sh</code></pre>
+          <h3>What a rebuild loses</h3>
+          <p>
+            Everything in <code>/workspaces</code> stays when the codespace stops or is rebuilt: the code,
+            your config files, the keys, the build and the saved seed output. A <em>rebuild</em> (the command
+            <span class="ui">Codespaces: Rebuild Container</span>, or a change of machine image) also wipes
+            what is outside it: Node.js 22, PostgreSQL, Redis, Mailpit
+            <strong>and the database with all its data</strong>. After a rebuild: do Part B again, then Part D
+            from <a href="#part-d">D2</a> (skip D1, D3 and D4), and Part E. The seed then makes a new admin
+            password.
+          </p>
+          <h3>Stop or delete the codespace</h3>
+          <ul>
+            <li>
+              <strong>Stop</strong> (keeps everything, stops using core-hours): at
+              <a href="https://github.com/codespaces">github.com/codespaces</a>, click
+              <span class="ui">…</span> next to the codespace &gt; <span class="ui">Stop codespace</span>. Or
+              in the codespace: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> &gt;
+              <span class="ui">Codespaces: Stop Current Codespace</span>.
+            </li>
+            <li>
+              <strong>Delete</strong> (removes everything, frees the storage): same menu &gt;
+              <span class="ui">Delete</span>.
+            </li>
+            <li>
+              To stop only the apps and keep the codespace running: <code>bash .local/demo/stop.sh</code>.
+            </li>
+          </ul>
+        </section>
+
+        <section id="part-h">
+          <h2>Part H. Troubleshooting</h2>
+          <p>
+            Find the message you see. The logs of every app are in <code>.local/demo/logs/</code> (<a
+              href="#ref-logs"
+              >how to read them</a
+            >).
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>What you see</th>
+                  <th>What it means</th>
+                  <th>What to do</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr id="trouble-config">
+                  <td>
+                    In a log:
+                    <code
+                      >"type":"ConfigError","message":"Invalid configuration (1 problem):\n -
+                      JWT_PRIVATE_KEY_FILE is required but missing"</code
+                    >
+                    (or another name)
+                  </td>
+                  <td>
+                    An app found a setting missing or wrong. The message names the setting, never its value;
+                    the app stops.
+                  </td>
+                  <td>
+                    A key file: run <code>pnpm dev:keys</code>. Anything else: make the files again in Part C,
+                    put <strong>all</strong> of them in place, then <code>bash .local/demo/stop.sh</code> and
+                    <code>bash .local/demo/start.sh</code>.
+                  </td>
+                </tr>
+                <tr>
+                  <td>
+                    <code>port 3000 is already used by a program that this script did not start</code>, or
+                    <code>EADDRINUSE</code> in a log
+                  </td>
+                  <td>Another program (or an old copy of an app) holds the port.</td>
+                  <td>
+                    Run <code>bash .local/demo/stop.sh</code>, then <code>bash .local/demo/start.sh</code>.
+                    Still there? See which program it is with <code>ss -ltnp | grep ':3000 '</code> (with the
+                    port number of the message) and close it, or stop and start the codespace.
+                  </td>
+                </tr>
+                <tr>
+                  <td>
+                    A sign-in or any form answers with an error page; the app's log says
+                    <code>Invalid Server Actions request</code>
+                  </td>
+                  <td>The address in the browser does not match the files of Part C.</td>
+                  <td>
+                    <span class="only-local"
+                      >Open the apps at <code>http://localhost:…</code> (not the
+                      <code>app.github.dev</code> links), with the same port numbers (<a href="#part-e">E2</a
+                      >).</span
+                    ><span class="only-browser"
+                      >Use the addresses ending in <code>-3000</code>, <code>-3001</code>,
+                      <code>-3002</code> (never <code>-13000</code>…); check that
+                      <code>start.sh</code> printed <code>portal-proxy: ready</code>; check that the codespace
+                      name in Part C is this codespace's.</span
+                    >
+                  </td>
+                </tr>
+                <tr id="trouble-sso">
+                  <td>
+                    <code>403</code> <em>This sign-in did not come from the portal</em> after
+                    <span class="ui">Open console</span>
+                  </td>
+                  <td>The OTA admin only accepts the hand-off from the portal's exact address.</td>
+                  <td>
+                    Open the portal at exactly the address of the table in <a href="#part-e">E3</a> (not
+                    <code>127.0.0.1</code>, no other port), sign in again and click
+                    <span class="ui">Open console</span>
+                    again.
+                    <span class="only-browser"
+                      >Check that <code>start.sh</code> printed <code>ota-admin-proxy: ready</code> (it
+                      handles this case) and that port 3000 is Public.</span
+                    >
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>Blocked request. This host (…) is not allowed.</code> on the storefront</td>
+                  <td>The storefront's files are for the other way of opening the apps.</td>
+                  <td>
+                    Make the files again in Part C with the right choice in field 1, put them in place, then
+                    <code>bash .local/demo/stop.sh storefront</code> and
+                    <code>bash .local/demo/start.sh</code>.
+                  </td>
+                </tr>
+                <tr>
+                  <td>
+                    A key file <code>… is readable by others</code>, a permission error on
+                    <code>.local/keys</code>, or a file like <code>master-v1 (1).key</code>
+                  </td>
+                  <td>The key files must be readable by you only, and have their exact names.</td>
+                  <td>
+                    Delete any copy with <code>(1)</code> in its name from <code>.local/keys/</code>, then run
+                    <code>pnpm dev:keys</code> (it keeps the keys and fixes their permissions).
+                  </td>
+                </tr>
+                <tr id="trouble-memory">
+                  <td>
+                    <code>Killed</code>, <code>exit code 137</code> or
+                    <code>JavaScript heap out of memory</code>
+                  </td>
+                  <td>The machine ran out of memory, most often during <code>pnpm build</code>.</td>
+                  <td>
+                    Run <code>bash .local/demo/stop.sh</code>, then <code>pnpm build --concurrency=2</code>.
+                    Check the memory with <code>free -h</code>. Or change the machine type to 4-core (at
+                    <a href="https://github.com/codespaces">github.com/codespaces</a>:
+                    <span class="ui">…</span> &gt; <span class="ui">Change machine type</span>).
+                  </td>
+                </tr>
+                <tr id="trouble-apt">
+                  <td>
+                    <code>sudo apt-get update</code> fails with <code>NO_PUBKEY</code>,
+                    <code>EXPKEYSIG</code> or <code>is not signed</code> for a source that is not PostgreSQL
+                    or Redis (for example Yarn)
+                  </td>
+                  <td>
+                    A package source of the codespace image has an expired key. It has nothing to do with
+                    Velexis.
+                  </td>
+                  <td>
+                    List the sources with <code>ls /etc/apt/sources.list.d/</code>, remove the one named in
+                    the error, for example <code>sudo rm /etc/apt/sources.list.d/yarn.list</code>, and run the
+                    box again.
+                  </td>
+                </tr>
+                <tr id="trouble-redis">
+                  <td><code>Redis did not become ready</code> from <code>dev-setup.sh</code></td>
+                  <td>Redis is installed but could not be started as a service.</td>
+                  <td>
+                    Start it by hand, then run the script again:
+                    <code>sudo redis-server /etc/redis/redis.conf --daemonize yes</code> and
+                    <code>bash deploy/scripts/dev-setup.sh</code>.
+                  </td>
+                </tr>
+                <tr id="trouble-password">
+                  <td>You lost the admin password or the sign-in secret</td>
+                  <td>The seed prints them only once.</td>
+                  <td>
+                    First look in <code>.local/platform-seed.txt</code>. Lost the secret only: run
+                    <code
+                      >(cd platform/backend &amp;&amp; node --enable-source-maps dist/cli.js admin:reset-mfa
+                      admin@example.com)</code
+                    >, sign in to the portal with the password, and set up two-factor sign-in again where the
+                    portal asks (it shows a key to type into an authenticator app). Lost the password: on the
+                    portal's sign-in page click <span class="ui">Forgot your password?</span>, enter
+                    <code>admin@example.com</code>, and open the e-mail in Mailpit (port 8025) to choose a new
+                    one.
+                  </td>
+                </tr>
+                <tr>
+                  <td>The 6-digit code is refused</td>
+                  <td>Each code works once and only for 30 seconds.</td>
+                  <td>Wait for the next 30-second window and make a new code (F1).</td>
+                </tr>
+                <tr id="trouble-payment">
+                  <td>No <em>Card, charged by the airline</em> at the storefront's payment step</td>
+                  <td>The storefront shows an OTA where the airline card is off.</td>
+                  <td>
+                    Do <a href="#part-f">F5</a> in the OTA admin of the OTA the storefront shows, and check
+                    that F6 used that OTA's key. The seed's <code>demo</code> OTA has no owner, so its console
+                    cannot be opened: use your own OTA.
+                  </td>
+                </tr>
+                <tr>
+                  <td>You are signed out again and again, or the sign-in does not stick</td>
+                  <td>The browser refuses the apps' secure cookies.</td>
+                  <td>
+                    Use Chrome, Edge or Firefox (not Safari), and the exact addresses of
+                    <a href="#part-e">E3</a> (<code>localhost</code>, not <code>127.0.0.1</code>).
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>502</code> or a GitHub error page for a codespace link</td>
+                  <td>Nothing answers on that port.</td>
+                  <td>
+                    Run <code>bash .local/demo/start.sh</code>: it starts what is missing. Then look at the
+                    app's log.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="own-computer">
+          <h2>Your own Ubuntu 24.04 computer or VM</h2>
+          <p>
+            The same steps work on any Ubuntu 24.04 computer or virtual machine with at least 8 GB of memory
+            (the build needs it), without Docker. Use the way
+            <strong>On my computer, through localhost</strong> in Part C.
+          </p>
+          <div class="warn">
+            <p>
+              Only on a machine for development or demos. Never on a Velexis production server: the scripts
+              refuse to run where <code>/etc/velexis</code> exists.
+            </p>
+          </div>
+          <ol>
+            <li>
+              Install the basics, Node's version manager and the code:
+              <pre class="cmd" data-where="vm"><code>sudo apt-get update
+sudo apt-get install -y curl git unzip gnupg ca-certificates
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+. ~/.nvm/nvm.sh
+git clone --branch claude/intelligent-bardeen-90hhu7 https://github.com/bhagwati-prasad/velexis-ota.git
+cd velexis-ota</code></pre>
+            </li>
+            <li>
+              Do <a href="#part-b">Part B</a>, but skip its first line (<code>cd /workspaces/velexis-ota</code
+              >): you are already in the <code>velexis-ota</code> folder. On an ARM computer, download
+              <code>mailpit-linux-arm64.tar.gz</code> instead in B3, with the checksum
+              <code>e782d4d0ab97f03abaab65cb297c5b8a5acc82ad9932bf08a3b9cf69950b862a</code>.
+            </li>
+            <li>
+              Do <a href="#part-c">Part C</a> with the first way; leave field 2 empty. Paste the block in the
+              <code>velexis-ota</code> folder.
+            </li>
+            <li>
+              Do <a href="#part-d">Part D</a> and <a href="#part-e">E1</a>, each time without the line
+              <code>cd /workspaces/velexis-ota</code>. <code>dev-setup.sh</code> asks for your password
+              (sudo).
+            </li>
+            <li>
+              Skip E2. Open the addresses of E3 in Chrome, Edge or Firefox on this computer, then do Part F.
+            </li>
+            <li>
+              After a restart of the computer:
+              <code>cd velexis-ota &amp;&amp; bash .local/demo/start.sh</code>.
+            </li>
+          </ol>
+          <h3>A VM in the cloud, reached over SSH</h3>
+          <p>
+            Keep the apps private on the VM and connect your own computer's ports to it through SSH. On your
+            computer, with your VM's user and address:
+          </p>
+          <pre
+            class="cmd"
+            data-where="pc"
+          ><code>ssh -N -L 3000:127.0.0.1:3000 -L 3001:127.0.0.1:3001 -L 3002:127.0.0.1:3002 -L 4173:127.0.0.1:4173 -L 8025:127.0.0.1:8025 <span class="fill">you@your-vm-address</span></code></pre>
+          <p>
+            Keep it running (<kbd>Ctrl</kbd>+<kbd>C</kbd> disconnects) and open
+            <a href="http://localhost:3001">http://localhost:3001</a> on your computer. Never open these ports
+            in the VM's firewall.
+          </p>
+        </section>
+
+        <section id="render-vercel">
+          <h2>Render and Vercel (free tiers)</h2>
+          <p>
+            Short answer:
+            <strong>the full Velexis stack cannot run on the free tiers of Render or Vercel today.</strong>
+            This is not a missing step in this guide: the free tiers are too small, and Velexis is built for
+            one machine where its parts talk to each other privately. Here is why, in plain words.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>What Velexis needs</th>
+                  <th>Render free tier</th>
+                  <th>Vercel Hobby (free)</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>
+                    <strong>Memory</strong>: about 1.25 GB when idle, 1.6 to 2 GB in use (measured on this
+                    code on 6 November 2026)
+                  </td>
+                  <td>512 MB per free web service</td>
+                  <td>No long-running servers, only short functions</td>
+                </tr>
+                <tr>
+                  <td>
+                    <strong>Two background workers</strong>, always on (set-up of new OTAs, e-mails, tickets)
+                  </td>
+                  <td>No free background workers</td>
+                  <td>None</td>
+                </tr>
+                <tr>
+                  <td><strong>Always awake</strong></td>
+                  <td>Free services sleep after 15 minutes without visitors and lose their files</td>
+                  <td>Functions start and stop on demand</td>
+                </tr>
+                <tr>
+                  <td>
+                    <strong>Parts that talk privately on one machine</strong>: by design every app listens
+                    only on its own machine (<code>127.0.0.1</code>;
+                    <code>docs/mvp/adr/0007-single-vm-without-docker.md</code>)
+                  </td>
+                  <td>Each service is a separate machine and must listen publicly on its own port</td>
+                  <td>Same problem</td>
+                </tr>
+                <tr>
+                  <td>
+                    <strong>The OTA admin and the fake airline system right next to the OTA backend</strong>
+                    (they accept each other only on the same machine)
+                  </td>
+                  <td>Would all have to share one container</td>
+                  <td>The OTA admin cannot run there</td>
+                </tr>
+                <tr>
+                  <td>
+                    <strong>A PostgreSQL database with four separate roles</strong>, created by an
+                    administrator account (<code>deploy/postgres/bootstrap.sql</code>)
+                  </td>
+                  <td>
+                    Free database expires after 30 days, and the set-up script needs changes without an
+                    administrator account
+                  </td>
+                  <td>No database</td>
+                </tr>
+                <tr>
+                  <td><strong>Sending e-mail</strong></td>
+                  <td>Free services block the e-mail ports 25, 465 and 587 (since 26 September 2025)</td>
+                  <td>Not applicable</td>
+                </tr>
+                <tr>
+                  <td><strong>Use</strong></td>
+                  <td>Not applicable</td>
+                  <td>The Hobby plan is for non-commercial, personal use only</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            <strong>Vercel could host at most two of the apps</strong> (the portal and the platform admin),
+            and only if the platform API were reachable on a public HTTPS address somewhere else, which it is
+            not by design. The OTA admin cannot run there, and the storefront would need extra request rules
+            that nobody has tested.
+          </p>
+          <h3>What it would take</h3>
+          <ul>
+            <li>
+              <strong>Code and file changes</strong> in the repository: a configurable listening address for
+              the APIs and workers (or a proxy inside the container), a Dockerfile, a Caddyfile for the demo,
+              a variant of <code>deploy/postgres/bootstrap.sql</code> for a managed database without an
+              administrator account, and the Next.js setting <code>serverActions.allowedOrigins</code> for
+              hosts that rewrite addresses. Some of these touch the "single VM without Docker" decision
+              (ADR-0007), so the owner decides first.
+            </li>
+            <li>
+              <strong>A paid instance with at least 2 GB of memory</strong> to run everything in one container
+              (on Render: Standard, 2 GB, about $25 a month; Pro, 4 GB, about $85 a month is safer).
+            </li>
+          </ul>
+          <p>
+            If you want this, ask for these changes as tasks: each is a normal change to the repository, with
+            its own review. Until then, use <a href="#part-a">GitHub Codespaces</a> or
+            <a href="#own-computer">an Ubuntu machine</a>: any Ubuntu 24.04 VM with 8 GB of memory works with
+            the section above.
+          </p>
+          <p class="hint">
+            Sources and confidence: the memory figures, the private-listening design and the database set-up
+            come from this repository and a full run of the stack on 6 November 2026 (high confidence). The
+            Render and Vercel limits and prices come from their public pages as summarised by web search on 6
+            November 2026, because their sites could not be opened directly (medium confidence: plans change,
+            check
+            <a href="https://render.com/pricing">render.com/pricing</a> and
+            <a href="https://vercel.com/pricing">vercel.com/pricing</a>).
+          </p>
+        </section>
+
+        <section id="reference">
+          <h2>Reference</h2>
+          <h3 id="ref-apps">Apps and ports</h3>
+          <p>
+            Only the first five are for your browser. The rest listen inside the codespace only
+            (<code>127.0.0.1</code>).
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>App</th>
+                  <th>Port</th>
+                  <th>Path to open</th>
+                  <th>What it is</th>
+                  <th>Name in the scripts</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Portal</td>
+                  <td>3000</td>
+                  <td><code>/sign-in</code></td>
+                  <td>For OTA owners: create OTAs, open their console</td>
+                  <td><code>portal</code></td>
+                </tr>
+                <tr>
+                  <td>Platform admin</td>
+                  <td>3001</td>
+                  <td><code>/sign-in</code></td>
+                  <td>For Velexis staff</td>
+                  <td><code>platform-admin</code></td>
+                </tr>
+                <tr>
+                  <td>OTA admin</td>
+                  <td>3002</td>
+                  <td><code>/bookings</code>, reached through <span class="ui">Open console</span></td>
+                  <td>The console of one OTA</td>
+                  <td><code>ota-admin</code></td>
+                </tr>
+                <tr>
+                  <td>Storefront</td>
+                  <td>4173</td>
+                  <td><code>/</code></td>
+                  <td>The flight shop of the OTA in <code>STOREFRONT_DEV_HOST</code></td>
+                  <td><code>storefront</code></td>
+                </tr>
+                <tr>
+                  <td>Mailpit</td>
+                  <td>8025 (mail in on 1025)</td>
+                  <td><code>/</code></td>
+                  <td>Catches every e-mail</td>
+                  <td><code>mailpit</code></td>
+                </tr>
+                <tr>
+                  <td>Platform API</td>
+                  <td>3100</td>
+                  <td><code>/health/ready</code></td>
+                  <td>The back end of the portal and the platform admin</td>
+                  <td><code>platform-api</code></td>
+                </tr>
+                <tr>
+                  <td>Platform worker</td>
+                  <td>3101 (health only)</td>
+                  <td><code>/health/ready</code></td>
+                  <td>Background jobs of the platform (e-mails, OTA set-up steps)</td>
+                  <td><code>platform-worker</code></td>
+                </tr>
+                <tr>
+                  <td>OTA API</td>
+                  <td>4000</td>
+                  <td><code>/health/ready</code></td>
+                  <td>The back end of the OTA admin and the storefront</td>
+                  <td><code>ota-api</code></td>
+                </tr>
+                <tr>
+                  <td>OTA worker</td>
+                  <td>4001 (health only)</td>
+                  <td><code>/health/ready</code></td>
+                  <td>Background jobs of the OTAs (set-up, tickets, e-mails)</td>
+                  <td><code>ota-worker</code></td>
+                </tr>
+                <tr>
+                  <td>Amadeus stub</td>
+                  <td>4900</td>
+                  <td>none</td>
+                  <td>The fake airline booking system</td>
+                  <td><code>amadeus-stub</code></td>
+                </tr>
+                <tr>
+                  <td>PostgreSQL, Redis</td>
+                  <td>5432, 6379</td>
+                  <td>none</td>
+                  <td>Database and queues; started by <code>deploy/scripts/dev-setup.sh</code></td>
+                  <td>(not stopped by <code>stop.sh</code>)</td>
+                </tr>
+                <tr class="only-browser">
+                  <td>Next.js apps behind the proxies</td>
+                  <td>13000, 13001, 13002</td>
+                  <td>none (never open them)</td>
+                  <td>
+                    In the codespace-links way, the portal, platform admin and OTA admin run here, and
+                    <code>origin-fix-proxy.mjs</code> answers on 3000, 3001 and 3002
+                  </td>
+                  <td>
+                    <code>portal-proxy</code>, <code>platform-admin-proxy</code>, <code>ota-admin-proxy</code>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3 id="ref-files">Generated files</h3>
+          <p>
+            Each <code>.env.local</code> is a copy of the matching <code>.env.example</code> of the repository
+            with only the demo values changed; every changed line has a <code># demo:</code> comment above it.
+            All of them are ignored by git. <code>APP_ENV</code> is <code>test</code> everywhere: the value
+            the project's end-to-end tests run the built apps with, and never <code>production</code> (which
+            refuses the fake airline system and the seeds). <code>development</code> would only add a browser
+            permission that <code>next dev</code> needs and the built apps do not.
+          </p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>File</th>
+                  <th>Read by</th>
+                  <th>Demo values</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>.env.local</code></td>
+                  <td>
+                    Platform API and worker, OTA API and worker (below their own file), seeds, migrations
+                  </td>
+                  <td>
+                    <code>APP_ENV</code>, <code>LOG_LEVEL=info</code>, the three <code>PUBLIC_*_URL</code>,
+                    the three secrets, Stripe test keys (empty unless given)
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>ota/backend/.env.local</code></td>
+                  <td>OTA API and worker, OTA seed</td>
+                  <td>
+                    <code>APP_ENV</code>, <code>LOG_LEVEL</code>, <code>PUBLIC_OTA_ADMIN_URL</code> (links in
+                    staff e-mails), <code>VELEXIS_EDGE_SECRET</code>, <code>OTA_ADMIN_SERVICE_KEY</code>,
+                    Stripe test keys; <code>AIRLINE_CARD_ENABLED=true</code> as in the example
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>platform/frontend/.env.local</code></td>
+                  <td>Portal (complete: the Next.js apps never read the root file)</td>
+                  <td>
+                    <code>APP_ENV</code>, <code>LOG_LEVEL</code>, <code>PORT</code>,
+                    <code>PLATFORM_BFF_KEY</code>, <code>PUBLIC_PORTAL_URL</code>,
+                    <code>PUBLIC_OTA_ADMIN_URL</code>
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>platform/admin/.env.local</code></td>
+                  <td>Platform admin (complete)</td>
+                  <td>
+                    <code>APP_ENV</code>, <code>LOG_LEVEL</code>, <code>PORT</code>,
+                    <code>PLATFORM_BFF_KEY</code>, <code>PUBLIC_PLATFORM_ADMIN_URL</code>,
+                    <code>PUBLIC_PORTAL_URL</code>
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>ota/admin/.env.local</code></td>
+                  <td>OTA admin (complete)</td>
+                  <td>
+                    <code>APP_ENV</code>, <code>LOG_LEVEL</code>, <code>PORT</code>,
+                    <code>PUBLIC_OTA_ADMIN_URL</code>, <code>PUBLIC_PORTAL_URL</code>,
+                    <code>OTA_ADMIN_SERVICE_KEY</code>
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>ota/frontend/.env.local</code></td>
+                  <td>Storefront preview (after the root file)</td>
+                  <td>
+                    <code>VELEXIS_EDGE_SECRET</code>,
+                    <code>STOREFRONT_DEV_HOST=&lt;key&gt;.ota.example.com</code>; in the codespace-links way
+                    also <code>STOREFRONT_BASE_DOMAIN=&lt;forwarding domain&gt;</code> (only here, never in
+                    the root file)
+                  </td>
+                </tr>
+                <tr>
+                  <td><code>.local/demo/start.sh</code>, <code>.local/demo/stop.sh</code></td>
+                  <td>You</td>
+                  <td>Start and stop every app in the background; logs in <code>.local/demo/logs/</code></td>
+                </tr>
+                <tr class="only-browser">
+                  <td><code>.local/demo/origin-fix-proxy.mjs</code></td>
+                  <td><code>start.sh</code></td>
+                  <td>
+                    The small helper on 3000 to 3002 for the codespace links (its comments say what it
+                    changes)
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            <code>platform/backend/.env.local</code> is not needed: the root <code>.env.local</code> already
+            holds the platform backend's database role and key.
+          </p>
+
+          <h3 id="ref-logs">Logs</h3>
+          <p>
+            Every app writes to <code>.local/demo/logs/&lt;name&gt;.log</code> (the names of the table above).
+          </p>
+          <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+ls .local/demo/logs/
+tail -n 50 .local/demo/logs/ota-api.log
+tail -f .local/demo/logs/portal.log</code></pre>
+          <p>
+            <code>tail -f</code> follows a log live; <kbd>Ctrl</kbd>+<kbd>C</kbd> stops following (the app
+            keeps running). The back ends write one JSON line per event; the word <code>"level":50</code> or
+            <code>"level":60</code> marks an error.
+          </p>
+        </section>
+
+        <footer>
+          <p>
+            This page lives in the repository as <code>deploy/demo-deployment.html</code>. It covers a demo
+            only: production runs on one VM as described in <code>docs/mvp/deployment-single-vm.md</code>.
+          </p>
+        </footer>
+      </main>
+    </div>
+
+    <!-- prettier-ignore -->
+    <script type="text/plain" id="src-env-root">
+# =====================================================================================================
+# Velexis: shared LOCAL DEVELOPMENT defaults. Dummy values only — never put a real secret here (ADR-0010).
+#
+# How it is used (docs/mvp/local-development.md):
+#   cp .env.example .env.local            # shared values for every app, read by @velexis/config
+#   <app>/.env.local                      # optional per-app overrides (PORT, DATABASE_URL role, ...)
+# Precedence: real environment > <app>/.env.local > root .env.local. On the VM the values come from
+# /etc/velexis/<app>.env instead (deploy/env/*.env.example). Every new variable is added here, to its
+# deploy/env template and to the configuration matrix in docs/mvp/architecture.md §6, in the same PR.
+# =====================================================================================================
+
+# ---- Runtime ---------------------------------------------------------------------------------------
+APP_ENV=development
+LOG_LEVEL=debug
+# PORT and HEALTH_PORT differ per process; each app's config has its local default (architecture.md §3):
+#   portal 3000, platform admin 3001, OTA admin 3002, platform API 3100 (worker health 3101),
+#   OTA API 4000 (worker health 4001), storefront Vite dev server 5173, Amadeus stub 4900.
+# PORT=3100
+# HEALTH_PORT=3101
+# APIs: the proxies whose X-Forwarded-For is believed (Caddy and the Vite dev proxy run on loopback).
+TRUST_PROXY=loopback
+
+# ---- PostgreSQL 16 (local, created by deploy/scripts/dev-setup.sh) ----------------------------------
+# Each backend connects with its own role (ADR-0004). Set the right one in the app's .env.local:
+#   platform/backend/.env.local: DATABASE_URL=postgres://velexis_platform_app:dev_platform@127.0.0.1:5432/velexis
+#   ota/backend/.env.local:      DATABASE_URL=postgres://velexis_ota_app:dev_ota@127.0.0.1:5432/velexis
+DATABASE_URL=postgres://velexis_platform_app:dev_platform@127.0.0.1:5432/velexis
+# DDL only: `pnpm db:migrate`, `pnpm db:migrate:tenants` and deploys. Never given to a running app.
+DATABASE_MIGRATOR_URL=postgres://velexis_migrator:dev_migrator@127.0.0.1:5432/velexis
+# OTA worker only: tenant provisioning as velexis_provisioner (tenant schemas only, nothing on platform; ADR-0004).
+DATABASE_PROVISIONER_URL=postgres://velexis_provisioner:dev_provisioner@127.0.0.1:5432/velexis
+# Integration tests create one database per test file from a migrated template (@velexis/testing). The role
+# velexis_test_admin (LOGIN CREATEDB, member of velexis_migrator) exists only locally and in CI (ADR-0022).
+TEST_DATABASE_ADMIN_URL=postgres://velexis_test_admin:dev_test_admin@127.0.0.1:5432/postgres
+
+# ---- Redis 7.4 (local password set by deploy/scripts/dev-setup.sh with CONFIG SET requirepass) ---------
+REDIS_URL=redis://:dev_redis@127.0.0.1:6379/0
+
+# ---- Key files (generated by `pnpm dev:keys` into the ignored .local/keys/ folder) ---------------------
+# tools/dev/dev-keys.mjs creates the five files of ADR-0010 (mode 0600, folder 0700) and .local/storage/.
+# The paths are relative to the repository root, where .local/ is; a tool running elsewhere needs
+# absolute paths.
+MASTER_KEY_DIR=.local/keys
+MASTER_KEY_CURRENT=local:v1
+API_KEY_PEPPER_FILE=.local/keys/api-key-pepper
+# Separate Ed25519 key per backend; set the OTA one in ota/backend/.env.local.
+JWT_PRIVATE_KEY_FILE=.local/keys/platform-jwt-ed25519.pem
+#   ota/backend/.env.local: JWT_PRIVATE_KEY_FILE=.local/keys/ota-jwt-ed25519.pem
+# OTA backend only (signed document URLs, ADR-0010).
+DOCUMENT_URL_KEY_FILE=.local/keys/document-url.key
+
+# ---- E-mail: Mailpit (SMTP 1025, UI and API 8025) ----------------------------------------------------
+SMTP_URL=smtp://127.0.0.1:1025
+MAIL_FROM="Velexis (dev) <no-reply@mail.ota.example.com>"
+MAILPIT_API_URL=http://127.0.0.1:8025
+# Platform backend: the recipient of ops.alert e-mails (pool low, live office request, failures; PADR-0013). OTA backend
+# (API and worker): the last recipient of an OTA's staff alerts, after its ops_alert_email and its owners.
+OPS_ALERT_EMAIL=ops@example.com
+
+# ---- Public URLs (placeholder hosts of decisions.md §4; local ports of architecture.md §3) ------------
+PUBLIC_PORTAL_URL=http://localhost:3000
+PUBLIC_PLATFORM_ADMIN_URL=http://localhost:3001
+PUBLIC_OTA_ADMIN_URL=http://localhost:3002
+# OTA backend: the absolute URLs of key callers (assets, files). Platform backend: the webhook URL of an OTA's own
+# Stripe keys, <PUBLIC_OTA_API_URL>/webhooks/stripe/c/<ppc_id> (M5). Both backends: no credentials, query or fragment,
+# and https with APP_ENV=production.
+PUBLIC_OTA_API_URL=http://localhost:4000
+STOREFRONT_BASE_DOMAIN=ota.example.com
+# Platform backend: the VM's public addresses for the A/AAAA records of a custom domain at a zone apex (PADR-0004).
+# STOREFRONT_IPV4 is required while FEATURE_CUSTOM_DOMAINS is on; STOREFRONT_IPV6 is optional (no AAAA without it).
+STOREFRONT_IPV4=203.0.113.10
+STOREFRONT_IPV6=2001:db8::10
+# Platform worker: the public DNS resolvers that verify custom domains (PADR-0004 item 3), never the local resolver;
+# IP addresses with an optional port, at most 4.
+DNS_RESOLVERS=1.1.1.1,8.8.8.8
+
+# ---- Internal service URLs (server side only) ----------------------------------------------------------
+PLATFORM_API_URL=http://127.0.0.1:3100
+OTA_API_URL=http://127.0.0.1:4000
+
+# ---- First-party credentials (dummy development values) ----------------------------------------------
+# OTA admin server -> OTA API service credential (ADR-0008).
+OTA_ADMIN_SERVICE_KEY=sk_dev_ota_admin_service_key_change_me
+# Storefront edge credential: the Vite dev server (5173) adds it on /api like Caddy does (ADR-0018).
+VELEXIS_EDGE_SECRET=dev_edge_secret_change_me
+# Portal and platform admin servers -> platform API: authenticates the forwarded end-user IP and user agent
+# (PADR-0019). One value for the platform API, the portal and the platform admin.
+PLATFORM_BFF_KEY=dev_bff_key_change_me_0123456789abcdef
+
+# ---- Storage (ADR-0017) ------------------------------------------------------------------------------
+STORAGE_DRIVER=local
+# Created by `pnpm dev:keys`; relative to the repository root like the key files.
+STORAGE_DIR=.local/storage
+
+# ---- Amadeus: the local stub (tools/amadeus-stub, `pnpm stub:amadeus`) ---------------------------------
+# Shared Amadeus credentials are NOT environment variables; they live encrypted in platform.amadeus_accounts.
+# The OTA backend calls the flight operations; the platform worker only requests tokens to verify credentials.
+AMADEUS_BASE_URL_TEST=http://127.0.0.1:4900
+AMADEUS_BASE_URL_LIVE=http://127.0.0.1:4900
+# The stub's own port (tools/amadeus-stub/README.md), default 4900; change the two URLs above with it.
+# STUB_PORT=4900
+# Recording fixtures from the real Amadeus test environment (`pnpm --filter @velexis/amadeus-stub record`, X-034):
+# your own test credentials, set only in your git-ignored .env.local or shell, never here; never used in CI.
+# AMADEUS_RECORD_CLIENT_ID=
+# AMADEUS_RECORD_CLIENT_SECRET=
+# AMADEUS_RECORD_BASE_URL=https://test.travel.api.amadeus.com
+
+# ---- Stripe (test mode only; `stripe listen` prints the webhook secrets) ------------------------------
+# Platform backend (billing, M5). Optional while FEATURE_STRIPE_BILLING, FEATURE_OWN_STRIPE and FEATURE_SETTLEMENTS
+# are off; the switch on requires them (FEATURE_STRIPE_BILLING: the key and the billing secret; FEATURE_OWN_STRIPE:
+# the key and the two Connect values; FEATURE_SETTLEMENTS: the key). Outside APP_ENV=production only test-mode keys
+# (sk_test_, rk_test_) are accepted.
+STRIPE_SECRET_KEY=sk_test_replace_me
+STRIPE_BILLING_WEBHOOK_SECRET=whsec_replace_me
+STRIPE_CONNECT_CLIENT_ID=ca_replace_me
+# /webhooks/stripe/connect-accounts on the platform API (account.updated, account.application.deauthorized; M5)
+STRIPE_CONNECT_WEBHOOK_SECRET=whsec_replace_me
+# OTA backend (customer payments on the Velexis account, M3). Live keys are never used locally.
+STRIPE_SECRET_KEY_TEST=sk_test_replace_me
+STRIPE_PUBLISHABLE_KEY_TEST=pk_test_replace_me
+STRIPE_SECRET_KEY_LIVE=
+STRIPE_PUBLISHABLE_KEY_LIVE=
+STRIPE_WEBHOOK_SECRET_VELEXIS_TEST=whsec_replace_me
+STRIPE_WEBHOOK_SECRET_VELEXIS_LIVE=
+STRIPE_WEBHOOK_SECRET_CONNECT_TEST=whsec_replace_me
+STRIPE_WEBHOOK_SECRET_CONNECT_LIVE=
+
+# ---- Feature switches (no default except false; conventions §8) --------------------------------------
+# OTA backend: the airline-card payment method (ADR-0011).
+AIRLINE_CARD_ENABLED=false
+# Platform backend (API and worker): the milestone switches of PADR-0015, all off until M5. Turn one on in
+# platform/backend/.env.local to work on its feature; the portal and the admin read them from GET /v1/me.
+FEATURE_STRIPE_BILLING=false
+FEATURE_OWN_STRIPE=false
+FEATURE_SETTLEMENTS=false
+FEATURE_OWN_AMADEUS=false
+FEATURE_CUSTOM_DOMAINS=false
+FEATURE_LIVE_SWITCH=false
+# Platform backend: OTAs that are not failed one account may own (PF-10 AC4).
+MAX_TENANTS_PER_ACCOUNT=3
+
+# ---- Optional error tracking (off when empty; ADR-0016) -----------------------------------------------
+SENTRY_DSN=
+</script>
+    <!-- prettier-ignore -->
+    <script type="text/plain" id="src-env-platform-frontend">
+# Portal (@velexis/platform-frontend) - example environment.
+# Dummy values only. Copy to .env.local for development. On the VM: /etc/velexis/platform-frontend.env
+# (template deploy/env/platform-frontend.env.example).
+# Read only in server code through @velexis/config. No NEXT_PUBLIC_ variable may hold a key or token.
+
+APP_ENV=development
+LOG_LEVEL=debug
+# Next.js standalone server binding (127.0.0.1 only; Caddy is the public entry)
+PORT=3000
+HOSTNAME=127.0.0.1
+
+# Platform API, called from server code only
+PLATFORM_API_URL=http://127.0.0.1:3100
+# First-party key shared with the platform API (PADR-0019): lets lib/api.ts forward the visitor's IP and
+# user agent in X-Velexis-End-User-IP / X-Velexis-End-User-Agent. Same value as platform/backend/.env.local.
+PLATFORM_BFF_KEY=dev_bff_key_change_me_0123456789abcdef
+
+# Public URLs (placeholders of docs/mvp/decisions.md section 4; https in production)
+PUBLIC_PORTAL_URL=http://localhost:3000
+PUBLIC_OTA_ADMIN_URL=http://localhost:3002
+STOREFRONT_BASE_DOMAIN=ota.example.com
+
+# Error tracking is off when empty
+SENTRY_DSN=
+</script>
+    <!-- prettier-ignore -->
+    <script type="text/plain" id="src-env-platform-admin">
+# Platform admin (@velexis/platform-admin) - example environment.
+# Dummy values only. Copy to .env.local for development. On the VM: /etc/velexis/platform-admin.env.
+# Read only in server code through @velexis/config. No NEXT_PUBLIC_ variable may hold a key or token.
+
+APP_ENV=development
+LOG_LEVEL=debug
+# Next.js standalone server binding (127.0.0.1 only; Caddy is the public entry)
+PORT=3001
+HOSTNAME=127.0.0.1
+
+# Platform API, called from server code only (admin surface /v1/admin)
+PLATFORM_API_URL=http://127.0.0.1:3100
+# First-party key shared with the platform API and the portal (PADR-0019), sent as X-Velexis-Bff-Key on every call:
+# lets lib/api.ts forward the admin's IP and user agent in X-Velexis-End-User-IP / X-Velexis-End-User-Agent.
+# Required; at least 32 characters of [A-Za-z0-9_-]. Same value as the root and platform/backend .env.local.
+PLATFORM_BFF_KEY=dev_bff_key_change_me_0123456789abcdef
+
+# Public URLs (placeholders of docs/mvp/decisions.md section 4; https in production)
+PUBLIC_PLATFORM_ADMIN_URL=http://localhost:3001
+# Admins enable MFA in the portal before their first admin sign-in
+PUBLIC_PORTAL_URL=http://localhost:3000
+
+# Error tracking is off when empty
+SENTRY_DSN=
+</script>
+    <!-- prettier-ignore -->
+    <script type="text/plain" id="src-env-ota-backend">
+# OTA backend (@velexis/ota-backend) - example environment.
+# Dummy values only - never put a real secret, key or card number here (ADR-0010).
+# Copy to ota/backend/.env.local for development (precedence: real environment > ota/backend/.env.local > root .env.local).
+# On the VM the real values live in /etc/velexis/ota-backend.env (API and worker) and /etc/velexis/ota-worker.env
+# (worker only: DATABASE_PROVISIONER_URL), root:root 0600 (ADR-0026). src/config.ts validates each process's own
+# variables (the API never reads the worker's); see ota/backend/README.md section 3 and the configuration matrix in
+# docs/mvp/architecture.md section 6.
+
+# --- Process ----------------------------------------------------------------------------------------
+APP_ENV=development
+LOG_LEVEL=debug
+# API port (API process). The worker uses HEALTH_PORT only.
+PORT=4000
+HEALTH_PORT=4001
+# API only: Express trust proxy. Client IPs come from Caddy (or the Vite dev proxy) on loopback. Presets (loopback,
+# linklocal, uniquelocal), addresses or CIDR ranges, comma-separated; never true, * or a hop count.
+TRUST_PROXY=loopback
+
+# --- PostgreSQL and Redis ---------------------------------------------------------------------------
+# Role velexis_ota_app: DML on tenant schemas, SELECT on reference and on selected platform tables (ADR-0004).
+DATABASE_URL=postgres://velexis_ota_app:dev_ota@127.0.0.1:5432/velexis
+# Worker only: tenant provisioning as velexis_provisioner (tenant schemas only, nothing on platform or reference;
+# ADR-0004). Never used to serve requests. The migrator DSN (DATABASE_MIGRATOR_URL) is for `pnpm db:migrate` and
+# deploys only and stays in the root .env.local.
+DATABASE_PROVISIONER_URL=postgres://velexis_provisioner:dev_provisioner@127.0.0.1:5432/velexis
+REDIS_URL=redis://:dev_redis@127.0.0.1:6379/0
+
+# --- Key files (created by `pnpm dev:keys` in .local/keys/) -------------------------------------------
+MASTER_KEY_DIR=.local/keys
+MASTER_KEY_CURRENT=local:v1
+# Same pepper file as the platform backend (API key hashes are created there, verified here by the API).
+# Checked at start-up: mode 0400 or 0600, at least 32 bytes after base64 decoding (PADR-0005).
+API_KEY_PEPPER_FILE=.local/keys/api-key-pepper
+# The OTA backend has its own Ed25519 signing key (customer and staff tokens).
+JWT_PRIVATE_KEY_FILE=.local/keys/ota-jwt-ed25519.pem
+DOCUMENT_URL_KEY_FILE=.local/keys/document-url.key
+
+# --- E-mail (Mailpit in development: SMTP 1025, UI 8025) ---------------------------------------------
+# Worker only: the worker sends every OTA e-mail (OBE-030); the API only queues them.
+SMTP_URL=smtp://127.0.0.1:1025
+# The display name is replaced by the OTA brand; Reply-To is the OTA's support e-mail (ADR-0017).
+MAIL_FROM="Velexis OTA (dev) <no-reply@mail.ota.example.com>"
+# API and worker (optional, one plain address): Velexis ops, the last recipient of the OTA's staff alerts after its
+# ops_alert_email and its owners, and of the ops alerts (airline-card abuse, refused Amadeus credentials).
+OPS_ALERT_EMAIL=ops@example.com
+
+# --- Public URLs and hosts (placeholders of docs/mvp/decisions.md section 4) -------------------------
+# API: an http(s) base URL, for absolute links given to API key callers; never with credentials, a query or a fragment,
+# and https with APP_ENV=production (http is for development and tests; FIX-W40-OTA).
+PUBLIC_OTA_API_URL=http://localhost:4000
+# Worker: the links of staff alert e-mails.
+PUBLIC_OTA_ADMIN_URL=http://localhost:3002
+# A lower-case host name; <key>.<STOREFRONT_BASE_DOMAIN> is a tenant's storefront sub-domain (API: host resolution;
+# worker: the links of e-mails).
+STOREFRONT_BASE_DOMAIN=ota.example.com
+
+# --- First-party credentials (ADR-0008, ADR-0018); same values in the OTA admin, Caddy and Vite proxy ---
+# API: X-Velexis-Edge must equal it (constant-time compare, OADR-0009); at least 24 characters of [A-Za-z0-9_-].
+VELEXIS_EDGE_SECRET=dev_edge_secret_change_me
+OTA_ADMIN_SERVICE_KEY=sk_dev_ota_admin_service_key_change_me
+
+# --- Stripe, Velexis account (test mode only locally; `stripe listen` prints the webhook secret) --------
+STRIPE_SECRET_KEY_TEST=sk_test_replace_me
+STRIPE_PUBLISHABLE_KEY_TEST=pk_test_replace_me
+STRIPE_WEBHOOK_SECRET_VELEXIS_TEST=whsec_replace_me
+# Live keys are never used locally.
+STRIPE_SECRET_KEY_LIVE=
+STRIPE_PUBLISHABLE_KEY_LIVE=
+STRIPE_WEBHOOK_SECRET_VELEXIS_LIVE=
+# Connect endpoint (M5)
+STRIPE_WEBHOOK_SECRET_CONNECT_TEST=whsec_replace_me
+STRIPE_WEBHOOK_SECRET_CONNECT_LIVE=
+
+# --- Amadeus: the local stub (tools/amadeus-stub, `pnpm stub:amadeus`) ---------------------------------
+# Credentials are NOT here: the Velexis test account lives encrypted in platform.amadeus_accounts
+# (the platform's dev:seed creates one with dummy credentials that the stub accepts).
+AMADEUS_BASE_URL_TEST=http://127.0.0.1:4900
+AMADEUS_BASE_URL_LIVE=http://127.0.0.1:4900
+
+# --- Feature switches (no default except false; conventions section 8) -------------------------------
+# Airline-card payment method (ADR-0011). true only in development and CI until the M6 security review.
+AIRLINE_CARD_ENABLED=true
+
+# --- Storage (ADR-0017) ----------------------------------------------------------------------------
+STORAGE_DRIVER=local
+STORAGE_DIR=.local/storage
+
+# --- Tests ------------------------------------------------------------------------------------------
+TEST_DATABASE_ADMIN_URL=postgres://velexis_test_admin:dev_test_admin@127.0.0.1:5432/postgres
+MAILPIT_API_URL=http://127.0.0.1:8025
+
+# --- Optional error tracking (off when empty; ADR-0016) -----------------------------------------------
+SENTRY_DSN=
+</script>
+    <!-- prettier-ignore -->
+    <script type="text/plain" id="src-env-ota-admin">
+# =====================================================================================================
+# ota/admin — OTA admin (Next.js 15, port 3002): LOCAL DEVELOPMENT values. Dummy values only.
+#
+# Copy to ota/admin/.env.local only to override the shared root .env.local (see the root .env.example).
+# Precedence (@velexis/config): real environment > ota/admin/.env.local > root .env.local.
+# On the VM the values come from /etc/velexis/ota-admin.env (deploy/env/ota-admin.env.example).
+# No NEXT_PUBLIC_ variable exists in this app: nothing here may reach the browser (ADR-0014).
+# =====================================================================================================
+
+APP_ENV=development
+LOG_LEVEL=debug
+# `pnpm --filter @velexis/ota-admin dev` binds 127.0.0.1:3002; on the VM the unit sets PORT.
+PORT=3002
+
+# Public URLs (placeholder hosts of docs/mvp/decisions.md §4 in production; local ports here).
+PUBLIC_OTA_ADMIN_URL=http://localhost:3002
+# The portal: SSO hand-off Origin check, "back to the portal" redirects and portal links.
+PUBLIC_PORTAL_URL=http://localhost:3000
+
+# OTA API on a direct loopback connection: the OTA backend accepts the service key only on loopback and only
+# without X-Forwarded-For / X-Forwarded-Host, i.e. never through Caddy (OADR-0009 rule 1.2, OADR-0011).
+# src/config.ts refuses any URL that is not http: on 127.0.0.1, [::1] or localhost.
+OTA_API_URL=http://127.0.0.1:4000
+
+# First-party service credential (SDK secretKey). Must equal OTA_ADMIN_SERVICE_KEY of the OTA backend.
+# Development value only; production reads it from /etc/velexis/ota-admin.env. Format: sk_ + at least 16 of
+# [A-Za-z0-9_] (src/config.ts).
+OTA_ADMIN_SERVICE_KEY=sk_dev_ota_admin_service_key_change_me
+
+# Optional error tracking; off when empty (ADR-0016).
+SENTRY_DSN=
+</script>
+    <!-- prettier-ignore -->
+    <script type="text/plain" id="src-env-ota-frontend">
+# =====================================================================================================
+# ota/frontend — hosted storefront: LOCAL DEVELOPMENT ONLY. Dummy values only.
+#
+# The storefront has NO runtime environment in production: it is static, and everything tenant-specific
+# comes from storefront.get (docs/mvp/architecture.md §6). These variables are read only by vite.config.js
+# (Node) for the dev server (5173) and `vite preview` (4173). Nothing here is prefixed VITE_, so nothing
+# reaches the browser bundle.
+#
+# Load order in vite.config.js: root .env.local (shared values, see the root .env.example), then
+# ota/frontend/.env.local (copy this file there to override); the real environment wins over both.
+# The dev server and `vite preview` refuse to start when OTA_API_URL, VELEXIS_EDGE_SECRET or a host
+# (STOREFRONT_DEV_HOST, or STOREFRONT_BASE_DOMAIN for demo.<base>) is missing or invalid;
+# `vite build` needs none of them. Never commit .env.local.
+# =====================================================================================================
+
+# OTA API that the dev proxy forwards /api/* to (path prefix /api stripped, like Caddy).
+OTA_API_URL=http://127.0.0.1:4000
+
+# Edge credential the proxy adds as X-Velexis-Edge, like Caddy does in production (ADR-0018).
+# Must equal VELEXIS_EDGE_SECRET of the OTA backend. Development value only.
+VELEXIS_EDGE_SECRET=dev_edge_secret_change_me
+
+# Base domain of storefront hosts; used to build the default dev host demo.<base>.
+STOREFRONT_BASE_DOMAIN=ota.example.com
+
+# Storefront host the proxy sends as X-Velexis-Host (and as Origin, for the CSRF check).
+# demo.ota.example.com is the tenant created by `pnpm --filter @velexis/ota-backend dev:seed`.
+# Change it to try another seeded tenant.
+STOREFRONT_DEV_HOST=demo.ota.example.com
+
+# Dev server and preview ports (defaults shown).
+STOREFRONT_DEV_PORT=5173
+STOREFRONT_PREVIEW_PORT=4173
+</script>
+    <!-- prettier-ignore -->
+    <script type="text/plain" id="tpl-start">
+# shellcheck shell=bash
+# Run it with bash. It has no interpreter line on purpose, so that the copy-paste block of the page is safe to paste.
+# =====================================================================================================
+# Velexis demo: start the whole stack in the background. Generated by deploy/demo-deployment.html (@@DATE@@).
+# The apps are opened @@MODE_TEXT@@.
+#
+#   bash .local/demo/start.sh         start everything that is not running yet, then print the addresses
+#   bash .local/demo/start.sh stub    start only PostgreSQL, Redis and the Amadeus stub (for the seeds)
+#
+# Running it again starts nothing twice: it only starts what is missing. It works from any folder.
+# Logs: .local/demo/logs/<name>.log   Process ids: .local/demo/pids/<name>.pid   Stop: bash .local/demo/stop.sh
+# Demo only (APP_ENV=test, the Amadeus stub, development keys): never run it where real data lives.
+# =====================================================================================================
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly REPO
+readonly LOGS="$REPO/.local/demo/logs"
+readonly PIDS="$REPO/.local/demo/pids"
+# How long one app may take to pass its health check, in seconds.
+readonly WAIT_SECONDS=180
+
+# ---- Values from the form ----------------------------------------------------------------------------
+# MODE "local": the browser on your own computer opens http://localhost:<port> (VS Code Desktop or gh).
+# MODE "browser": the codespace links; the Next.js apps run on 13000-13002 behind origin-fix-proxy.mjs.
+readonly MODE='@@MODE@@'
+readonly PORTAL_PORT=@@PORTAL_PORT@@
+readonly PLATFORM_ADMIN_PORT=@@PLATFORM_ADMIN_PORT@@
+readonly OTA_ADMIN_PORT=@@OTA_ADMIN_PORT@@
+readonly PORTAL_HOST='@@PORTAL_HOST@@'
+readonly PLATFORM_ADMIN_HOST='@@PLATFORM_ADMIN_HOST@@'
+readonly OTA_ADMIN_HOST='@@OTA_ADMIN_HOST@@'
+readonly PORTAL_URL='@@PORTAL_URL@@'
+readonly PLATFORM_ADMIN_URL='@@PLATFORM_ADMIN_URL@@'
+readonly OTA_ADMIN_URL='@@OTA_ADMIN_URL@@'
+readonly STOREFRONT_URL='@@STOREFRONT_URL@@'
+readonly MAILPIT_URL='@@MAILPIT_URL@@'
+
+say() { printf '%s\n' "$*"; }
+fail() {
+  printf '\nERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+ONLY_STUB=false
+case "${1:-}" in
+  "") ;;
+  stub) ONLY_STUB=true ;;
+  -h | --help)
+    say "Usage: bash .local/demo/start.sh [stub]"
+    exit 0
+    ;;
+  *) fail "unknown argument: $1 (usage: bash .local/demo/start.sh [stub])" ;;
+esac
+readonly ONLY_STUB
+
+# The start time of process <pid> (field 22 of /proc/<pid>/stat); fails for no process or a zombie. A pid that
+# the system has given to another program since has another start time, so an old pid file never matches it.
+start_time() {
+  local stat rest
+  local -a fields
+  [[ "$1" =~ ^[0-9]+$ ]] || return 1
+  stat="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1
+  rest="${stat##*) }"
+  read -r -a fields <<<"$rest"
+  case "${fields[0]:-}" in
+    Z | X | "") return 1 ;;
+  esac
+  printf '%s\n' "${fields[19]}"
+}
+
+# Succeeds while the process that this script started for <name> still runs.
+running() {
+  local file="$PIDS/$1.pid" pid="" started="" now
+  [ -f "$file" ] || return 1
+  read -r pid started <"$file" || true
+  now="$(start_time "$pid")" || return 1
+  [ "$now" = "$started" ]
+}
+
+# Succeeds when something accepts connections on 127.0.0.1:<port>.
+port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+
+show_log() {
+  if [ -f "$LOGS/$1.log" ]; then
+    printf '\n---- last lines of .local/demo/logs/%s.log ----\n' "$1" >&2
+    tail -n 25 "$LOGS/$1.log" >&2
+    printf -- '---- end of the log ----\n' >&2
+  fi
+}
+
+# launch <name> <folder below the repository> <env file to load first, or -> <command...>
+# Starts the command in its own session (Ctrl-C in this terminal does not reach it), detached, with its
+# output appended to the log, and records its pid and start time.
+launch() {
+  local name="$1" dir="$REPO/$2" envfile="$3" pid started
+  shift 3
+  (
+    cd "$dir"
+    if [ "$envfile" != - ]; then
+      set -a
+      # shellcheck source=/dev/null
+      . "./$envfile"
+      set +a
+    fi
+    exec setsid nohup "$@" >>"$LOGS/$name.log" 2>&1 </dev/null
+  ) &
+  pid=$!
+  started="$(start_time "$pid")" || started=unknown
+  printf '%s %s\n' "$pid" "$started" >"$PIDS/$name.pid"
+}
+
+# wait_ready <name> <url> <HTTP status to wait for, or any>
+wait_ready() {
+  local name="$1" url="$2" want="$3" code waited=0
+  while :; do
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$url" 2>/dev/null || true)"
+    if [ "$code" = "$want" ] || { [ "$want" = any ] && [ -n "$code" ] && [ "$code" != 000 ]; }; then
+      return 0
+    fi
+    if ! running "$name"; then
+      show_log "$name"
+      fail "$name stopped while it was starting (its last log lines are above)."
+    fi
+    if [ "$waited" -ge "$WAIT_SECONDS" ]; then
+      show_log "$name"
+      fail "$name did not answer on $url within $WAIT_SECONDS s (its last log lines are above)."
+    fi
+    sleep 2
+    waited=$((waited + 2))
+  done
+}
+
+# start_app <name> <port> <ready url> <status or any> <folder> <env file or -> <command...>
+start_app() {
+  local name="$1" port="$2" url="$3" want="$4"
+  shift 4
+  if running "$name"; then
+    wait_ready "$name" "$url" "$want"
+    say "  $name: already running"
+    return 0
+  fi
+  if port_busy "$port"; then
+    fail "port $port is already used by a program that this script did not start, so $name cannot start." \
+      "Run: bash .local/demo/stop.sh   and then this script again. To see which program it is: ss -ltnp | grep ':$port '"
+  fi
+  say "  $name: starting on port $port (log: .local/demo/logs/$name.log)"
+  launch "$name" "$@"
+  wait_ready "$name" "$url" "$want"
+  say "  $name: ready"
+}
+
+start_mailpit() {
+  if running mailpit; then
+    say "  mailpit: already running"
+  elif port_busy 1025 || port_busy 8025; then
+    say "  mailpit: something already listens on port 1025 or 8025, so that one is used"
+  elif ! command -v mailpit >/dev/null 2>&1; then
+    say "  mailpit: not installed (Part B), so e-mails are not caught; everything else works"
+  else
+    say "  mailpit: starting on ports 1025 and 8025 (log: .local/demo/logs/mailpit.log)"
+    launch mailpit . - mailpit --smtp 127.0.0.1:1025 --listen 127.0.0.1:8025
+    wait_ready mailpit "http://127.0.0.1:8025/" 200
+    say "  mailpit: ready"
+  fi
+}
+
+ensure_node22() {
+  local nvm_sh="${NVM_DIR:-$HOME/.nvm}/nvm.sh"
+  if node --version 2>/dev/null | grep -q '^v22\.'; then
+    return 0
+  fi
+  if [ -s "$nvm_sh" ]; then
+    set +euo pipefail
+    # shellcheck source=/dev/null
+    . "$nvm_sh"
+    nvm use 22 >/dev/null 2>&1
+    set -euo pipefail
+  fi
+  node --version 2>/dev/null | grep -q '^v22\.' \
+    || fail "Node.js 22 is needed (Part B): run   nvm install 22 && nvm alias default 22   then open a new terminal."
+}
+
+need() { # <file below the repository> <what to do when it is missing>
+  [ -e "$REPO/$1" ] || fail "$1 is missing. $2"
+}
+
+# ---- Checks ------------------------------------------------------------------------------------------
+for tool in curl setsid; do
+  command -v "$tool" >/dev/null 2>&1 || fail "$tool is missing: run   sudo apt-get install -y curl util-linux"
+done
+ensure_node22
+umask 077
+mkdir -p "$LOGS" "$PIDS"
+
+need .env.local "Put the config files in place first (Part C)."
+need .local/keys/master-v1.key "Run: pnpm dev:keys (Part D)."
+need tools/amadeus-stub/dist/cli.js "Run: pnpm build (Part D)."
+if [ "$ONLY_STUB" = false ]; then
+  for file in ota/backend/.env.local platform/frontend/.env.local platform/admin/.env.local ota/admin/.env.local \
+    ota/frontend/.env.local; do
+    need "$file" "Put the config files in place first (Part C)."
+  done
+  for file in platform/backend/dist/main.js ota/backend/dist/main.js platform/frontend/.next/BUILD_ID \
+    platform/admin/.next/BUILD_ID ota/admin/.next/BUILD_ID ota/frontend/dist/index.html; do
+    need "$file" "Run: pnpm build (Part D)."
+  done
+  if [ "$MODE" = browser ]; then
+    need .local/demo/origin-fix-proxy.mjs "Put the config files in place again (Part C)."
+  fi
+fi
+
+# ---- PostgreSQL and Redis ------------------------------------------------------------------------------
+say "Velexis demo: starting (the first start takes 1 to 2 minutes)"
+say "  PostgreSQL and Redis: deploy/scripts/dev-setup.sh (log: .local/demo/logs/dev-setup.log)"
+if ! bash "$REPO/deploy/scripts/dev-setup.sh" >>"$LOGS/dev-setup.log" 2>&1; then
+  show_log dev-setup
+  fail "deploy/scripts/dev-setup.sh failed (its last log lines are above)."
+fi
+say "  PostgreSQL and Redis: ready"
+
+start_app amadeus-stub 4900 "http://127.0.0.1:4900/" any tools/amadeus-stub - node --enable-source-maps dist/cli.js
+if [ "$ONLY_STUB" = true ]; then
+  say ""
+  say "PostgreSQL, Redis and the Amadeus stub run. Now run the two seeds of Part D."
+  exit 0
+fi
+
+# ---- Mail, back ends, front ends -------------------------------------------------------------------------
+start_mailpit
+start_app platform-api 3100 "http://127.0.0.1:3100/health/ready" 200 \
+  platform/backend - node --enable-source-maps dist/main.js
+start_app platform-worker 3101 "http://127.0.0.1:3101/health/ready" 200 \
+  platform/backend - node --enable-source-maps dist/worker.js
+start_app ota-api 4000 "http://127.0.0.1:4000/health/ready" 200 \
+  ota/backend - node --enable-source-maps dist/main.js
+start_app ota-worker 4001 "http://127.0.0.1:4001/health/ready" 200 \
+  ota/backend - node --enable-source-maps dist/worker.js
+# The Next.js apps read only their own .env.local (never the root one), so it is loaded into the environment.
+start_app portal "$PORTAL_PORT" "http://127.0.0.1:$PORTAL_PORT/health/ready" 200 platform/frontend .env.local \
+  node node_modules/next/dist/bin/next start --port "$PORTAL_PORT" --hostname 127.0.0.1
+start_app platform-admin "$PLATFORM_ADMIN_PORT" "http://127.0.0.1:$PLATFORM_ADMIN_PORT/health/ready" 200 \
+  platform/admin .env.local \
+  node node_modules/next/dist/bin/next start --port "$PLATFORM_ADMIN_PORT" --hostname 127.0.0.1
+start_app ota-admin "$OTA_ADMIN_PORT" "http://127.0.0.1:$OTA_ADMIN_PORT/health/ready" 200 ota/admin .env.local \
+  node node_modules/next/dist/bin/next start --port "$OTA_ADMIN_PORT" --hostname 127.0.0.1
+if [ "$MODE" = browser ]; then
+  start_app portal-proxy 3000 "http://127.0.0.1:3000/health/ready" 200 \
+    . - node .local/demo/origin-fix-proxy.mjs 3000 "$PORTAL_PORT" "$PORTAL_HOST"
+  start_app platform-admin-proxy 3001 "http://127.0.0.1:3001/health/ready" 200 \
+    . - node .local/demo/origin-fix-proxy.mjs 3001 "$PLATFORM_ADMIN_PORT" "$PLATFORM_ADMIN_HOST"
+  start_app ota-admin-proxy 3002 "http://127.0.0.1:3002/health/ready" 200 \
+    . - node .local/demo/origin-fix-proxy.mjs 3002 "$OTA_ADMIN_PORT" "$OTA_ADMIN_HOST" "$PORTAL_HOST"
+fi
+start_app storefront 4173 "http://127.0.0.1:4173/" 200 \
+  ota/frontend - node node_modules/vite/bin/vite.js preview --host 127.0.0.1
+
+# ---- Addresses -----------------------------------------------------------------------------------------------
+storefront_host="$(sed -n 's/^STOREFRONT_DEV_HOST=//p' "$REPO/ota/frontend/.env.local" | tail -n 1)"
+say ""
+say "=============================================================================================="
+say "The Velexis demo runs. Open these addresses in Chrome, Edge or Firefox:"
+printf '  %-16s %s\n' "Platform admin" "$PLATFORM_ADMIN_URL" "Portal" "$PORTAL_URL" \
+  "OTA admin" "$OTA_ADMIN_URL  (open it with \"Open console\" in the portal)" \
+  "Storefront" "$STOREFRONT_URL  (shows the OTA of $storefront_host)" \
+  "Mailpit" "$MAILPIT_URL  (every e-mail the demo sends)"
+say ""
+say "Open first: the platform admin. Sign in as admin@example.com with the password that the platform seed"
+say "printed (saved in .local/platform-seed.txt) and a 6-digit code (Part F of the guide)."
+if [ "$MODE" = browser ]; then
+  say "The ports 3000, 3001, 3002, 4173 and 8025 must be Public in the PORTS panel (Part E of the guide)."
+else
+  say "These addresses work on your own computer while VS Code Desktop or 'gh codespace ports forward'"
+  say "connects the ports (Part E of the guide). On your own Ubuntu computer they work as they are."
+fi
+say "Logs: .local/demo/logs/   Stop everything: bash .local/demo/stop.sh"
+say "=============================================================================================="
+</script>
+    <!-- prettier-ignore -->
+    <script type="text/plain" id="tpl-stop">
+# shellcheck shell=bash
+# Run it with bash. It has no interpreter line on purpose, so that the copy-paste block of the page is safe to paste.
+# =====================================================================================================
+# Velexis demo: stop what .local/demo/start.sh started. Generated by deploy/demo-deployment.html (@@DATE@@).
+#
+#   bash .local/demo/stop.sh               stop every app that start.sh started
+#   bash .local/demo/stop.sh storefront    stop only the named apps (the names of .local/demo/pids/*.pid)
+#
+# PostgreSQL and Redis keep running: they stop when the codespace or the computer stops. Safe to run twice.
+# =====================================================================================================
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+readonly REPO
+readonly PIDS="$REPO/.local/demo/pids"
+# The front ends first, then what they call.
+readonly NAMES=(storefront ota-admin-proxy platform-admin-proxy portal-proxy ota-admin platform-admin portal
+  ota-worker ota-api platform-worker platform-api amadeus-stub mailpit)
+
+say() { printf '%s\n' "$*"; }
+fail() {
+  printf '\nERROR: %s\n' "$*" >&2
+  exit 1
+}
+
+# The start time of process <pid> (field 22 of /proc/<pid>/stat); fails for no process or a zombie.
+start_time() {
+  local stat rest
+  local -a fields
+  [[ "$1" =~ ^[0-9]+$ ]] || return 1
+  stat="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1
+  rest="${stat##*) }"
+  read -r -a fields <<<"$rest"
+  case "${fields[0]:-}" in
+    Z | X | "") return 1 ;;
+  esac
+  printf '%s\n' "${fields[19]}"
+}
+
+alive() { # <pid> <start time>
+  local now
+  now="$(start_time "$1")" || return 1
+  [ "$now" = "$2" ]
+}
+
+stop_one() {
+  local name="$1" file="$PIDS/$1.pid" pid="" started=""
+  if [ ! -f "$file" ]; then
+    say "  $name: not running"
+    return 0
+  fi
+  read -r pid started <"$file" || true
+  if ! alive "$pid" "$started"; then
+    rm -f "$file"
+    say "  $name: not running"
+    return 0
+  fi
+  # start.sh started it as the leader of its own process group: stop the whole group.
+  kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+  for _ in $(seq 1 30); do
+    alive "$pid" "$started" || break
+    sleep 0.5
+  done
+  if alive "$pid" "$started"; then
+    kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+  fi
+  rm -f "$file"
+  say "  $name: stopped"
+}
+
+if [ "$#" -eq 0 ]; then
+  set -- "${NAMES[@]}"
+else
+  for name in "$@"; do
+    case " ${NAMES[*]} " in
+      *" $name "*) ;;
+      *) fail "unknown name: $name (the names are: ${NAMES[*]})" ;;
+    esac
+  done
+fi
+
+say "Velexis demo: stopping"
+for name in "$@"; do
+  stop_one "$name"
+done
+say "Done. Start again with: bash .local/demo/start.sh"
+</script>
+    <!-- prettier-ignore -->
+    <script type="text/plain" id="tpl-proxy">
+// Velexis demo only: the origin-fix proxy for GitHub Codespaces web port forwarding (Node 22, no dependencies).
+// Generated by deploy/demo-deployment.html (@@DATE@@). .local/demo/start.sh starts one in front of each Next.js app.
+//
+// Usage: node origin-fix-proxy.mjs <listenPort> <targetPort> <publicHost> [<portalPublicHost>]
+//   publicHost = <codespace>-<listenPort>.<forwarding domain>, the address the browser shows for this port.
+//
+// Why: the Codespaces forwarder rewrites Origin to localhost but sends X-Forwarded-Host with the public host, so
+// Next.js refuses every server action ("Invalid Server Actions request"). In front of each app, this proxy:
+//   1. sets X-Forwarded-Host to the public host and X-Forwarded-Proto to https;
+//   2. rewrites Origin to https://<publicHost> only when it is localhost, 127.0.0.1 or [::1];
+//   3. drops X-Forwarded-For, so the apps forward 127.0.0.1 as the visitor's address.
+//
+// DEMO-ONLY CONTINGENCY (the OTA admin's proxy, started with <portalPublicHost>): "Open console" in the portal posts
+// a form from the portal's port to POST /sso of the OTA admin, which accepts only Origin = PUBLIC_PORTAL_URL. If the
+// tunnel also rewrites that cross-port Origin to localhost, the hand-off fails with 403 "This sign-in did not come
+// from the portal". So a localhost Origin on POST /sso is mapped to https://<portalPublicHost>. This WEAKENS a
+// defence-in-depth check (the login-CSRF Origin check of /sso): the OTA admin can then no longer tell the portal's
+// hand-off from a form of another page whose Origin the tunnel also rewrote. Never use this file outside a demo.
+import http from "node:http";
+
+const [listenPort, targetPort, publicHost, portalHost] = process.argv.slice(2);
+if (listenPort === undefined || targetPort === undefined || publicHost === undefined) {
+  console.error("usage: node origin-fix-proxy.mjs <listenPort> <targetPort> <publicHost> [<portalPublicHost>]");
+  process.exit(2);
+}
+const LOCAL = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
+
+/** The Origin the app gets: the browser's, unless the forwarder made it a localhost one. */
+function originFor(req) {
+  const origin = req.headers.origin;
+  if (typeof origin !== "string" || LOCAL.test(origin) === false) {
+    return origin;
+  }
+  const path = (req.url ?? "").split("?")[0];
+  if (portalHost !== undefined && portalHost !== "" && req.method === "POST" && path === "/sso") {
+    return `https://${portalHost}`; // the demo-only contingency described above
+  }
+  return `https://${publicHost}`;
+}
+
+http
+  .createServer((req, res) => {
+    const headers = { ...req.headers };
+    const origin = originFor(req);
+    if (origin !== undefined) {
+      headers.origin = origin;
+    }
+    headers["x-forwarded-host"] = publicHost;
+    headers["x-forwarded-proto"] = "https";
+    delete headers["x-forwarded-for"];
+    const upstream = http.request(
+      { host: "127.0.0.1", port: Number(targetPort), method: req.method, path: req.url, headers },
+      (up) => {
+        res.writeHead(up.statusCode ?? 502, up.headers);
+        up.pipe(res);
+      },
+    );
+    upstream.on("error", () => {
+      if (res.headersSent === false) {
+        res.writeHead(502, { "content-type": "text/plain" });
+      }
+      res.end("upstream not reachable");
+    });
+    req.pipe(upstream);
+  })
+  .listen(Number(listenPort), "127.0.0.1", () =>
+    console.log(`origin-fix-proxy http://127.0.0.1:${listenPort} -> 127.0.0.1:${targetPort} as https://${publicHost}`),
+  );
+</script>
+
+    <script>
+      (() => {
+        "use strict";
+
+        const $ = (id) => document.getElementById(id);
+        const TODAY = new Date().toISOString().slice(0, 10);
+
+        const MODES = Object.freeze({
+          local: {
+            label: "On my computer, through localhost",
+            scriptText:
+              "on your own computer through http://localhost (VS Code Desktop or gh codespace ports forward)",
+          },
+          browser: {
+            label: "In the browser, through the codespace links",
+            scriptText:
+              "in the browser through the codespace links, with origin-fix-proxy.mjs in front of the Next.js apps",
+          },
+        });
+
+        // ---- Embedded sources: the repository's .env.example files and the script templates -----------------
+        /** The text of an embedded block, without the line break that follows its start tag. */
+        function embedded(id) {
+          const text = $(id).textContent;
+          return text.startsWith("\n") ? text.slice(1) : text;
+        }
+
+        // ---- Copy buttons ----------------------------------------------------------------------------------
+        const WHERE = Object.freeze({
+          cs: "In the codespace terminal",
+          pc: "In a terminal on your own computer",
+          vm: "In a terminal on your Ubuntu computer",
+        });
+
+        function copyWithSelection(text) {
+          const area = document.createElement("textarea");
+          area.value = text;
+          area.setAttribute("readonly", "");
+          area.style.position = "fixed";
+          area.style.top = "0";
+          area.style.opacity = "0";
+          document.body.append(area);
+          area.select();
+          let copied = false;
+          try {
+            copied = document.execCommand("copy");
+          } catch {
+            copied = false;
+          }
+          area.remove();
+          return copied;
+        }
+
+        async function copyText(text) {
+          try {
+            if (navigator.clipboard && window.isSecureContext) {
+              await navigator.clipboard.writeText(text);
+              return true;
+            }
+          } catch {
+            // Fall back to a selection below.
+          }
+          return copyWithSelection(text);
+        }
+
+        function selectContents(element) {
+          const range = document.createRange();
+          range.selectNodeContents(element);
+          const selection = window.getSelection();
+          selection.removeAllRanges();
+          selection.addRange(range);
+        }
+
+        function decorate(pre) {
+          const box = document.createElement("div");
+          box.className = pre.classList.contains("tall") ? "cmd tall" : "cmd";
+          const bar = document.createElement("div");
+          bar.className = "cmd-bar";
+          const label = document.createElement("span");
+          label.textContent = WHERE[pre.dataset.where] ?? "Command";
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = "Copy";
+          button.setAttribute("aria-label", `Copy the commands (${label.textContent.toLowerCase()})`);
+          button.addEventListener("click", async () => {
+            const copied = await copyText(pre.textContent);
+            button.textContent = copied ? "Copied" : "Select and copy by hand";
+            if (copied === false) {
+              selectContents(pre);
+            }
+            window.setTimeout(() => {
+              button.textContent = "Copy";
+            }, 2500);
+          });
+          bar.append(label, button);
+          pre.classList.remove("cmd", "tall");
+          pre.replaceWith(box);
+          box.append(bar, pre);
+        }
+
+        // ---- Secrets -----------------------------------------------------------------------------------------
+        function randomHex(bytes) {
+          const values = new Uint8Array(bytes);
+          crypto.getRandomValues(values);
+          return Array.from(values, (value) => value.toString(16).padStart(2, "0")).join("");
+        }
+
+        let secrets = null;
+        function makeSecrets() {
+          if (typeof crypto === "undefined" || typeof crypto.getRandomValues !== "function") {
+            $("err-secrets").textContent =
+              "This browser has no secure random generator. Open the page in a current Chrome, Edge or Firefox.";
+            return;
+          }
+          // 48 hex characters each: PLATFORM_BFF_KEY needs 32+ of [A-Za-z0-9_-], VELEXIS_EDGE_SECRET 24+ of the same,
+          // OTA_ADMIN_SERVICE_KEY sk_ and 16+ of [A-Za-z0-9_] (the backends' and apps' config rules).
+          secrets = { bff: randomHex(24), edge: randomHex(24), service: `sk_svc_${randomHex(24)}` };
+          $("s-bff").value = secrets.bff;
+          $("s-edge").value = secrets.edge;
+          $("s-service").value = secrets.service;
+        }
+
+        // ---- Validation --------------------------------------------------------------------------------------
+        const OTA_KEY = /^[a-z][a-z0-9]{2,29}$/;
+        const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+        const CODESPACE_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+        const STRIPE_SECRET = /^(?:sk|rk)_test_[A-Za-z0-9_]+$/;
+        const STRIPE_PUBLISHABLE = /^pk_test_[A-Za-z0-9_]+$/;
+        const STRIPE_WEBHOOK = /^whsec_[A-Za-z0-9+/=_-]{8,}$/;
+
+        function isDomain(domain) {
+          const labels = domain.split(".");
+          return (
+            domain.length <= 253 &&
+            labels.length >= 2 &&
+            labels.every((label) => DNS_LABEL.test(label)) &&
+            /[a-z]/.test(labels[labels.length - 1])
+          );
+        }
+
+        /** The codespace name and forwarding domain from `echo` output or from a forwarded address. */
+        function parseWhere(raw) {
+          const text = raw.trim().replace(/^["']+|["']+$/g, "");
+          if (text === "") {
+            return { empty: true };
+          }
+          let name;
+          let domain;
+          const address = /^https?:\/\/([a-z0-9-]+)-(\d{2,5})\.([a-z0-9.-]+)(?::\d+)?(?:[/?#].*)?$/i.exec(
+            text,
+          );
+          if (address) {
+            name = address[1];
+            domain = address[3];
+          } else if (/^https?:/i.test(text)) {
+            return {
+              error:
+                "This address does not look like a forwarded port (https://<name>-<port>.<domain>). Paste one from the PORTS tab, or the two words of the echo command.",
+            };
+          } else {
+            const words = text.split(/\s+/);
+            if (words.length !== 2) {
+              return {
+                error:
+                  "Paste the two words that the echo command prints (the codespace name, a space, the domain), or one forwarded address.",
+              };
+            }
+            [name, domain] = words;
+          }
+          name = name.toLowerCase();
+          domain = domain.toLowerCase().replace(/\.$/, "");
+          if (CODESPACE_NAME.test(name) === false || name.length > 57) {
+            return {
+              error: `"${name}" is not a codespace name: lower-case letters, digits and single hyphens only.`,
+            };
+          }
+          if (isDomain(domain) === false) {
+            return { error: `"${domain}" is not a domain name such as app.github.dev.` };
+          }
+          return { name, domain };
+        }
+
+        function setError(id, message, input) {
+          $(id).textContent = message;
+          if (input) {
+            input.setAttribute("aria-invalid", message === "" ? "false" : "true");
+          }
+          return message === "";
+        }
+
+        function readForm() {
+          const mode = document.querySelector('input[name="mode"]:checked').value;
+          const whereInput = $("f-where");
+          const keyInput = $("f-otakey");
+          const secretInput = $("f-stripe-secret");
+          const publishableInput = $("f-stripe-publishable");
+          const webhookInput = $("f-stripe-webhook");
+          let ok = true;
+
+          const where = parseWhere(whereInput.value);
+          let whereMessage = "";
+          if (where.error) {
+            whereMessage = where.error;
+          } else if (where.empty && mode === "browser") {
+            whereMessage =
+              "Needed for the codespace links: paste the output of the echo command, or a forwarded address.";
+          }
+          ok = setError("err-where", whereMessage, whereInput) && ok;
+          $("where-parsed").textContent =
+            where.name && whereMessage === ""
+              ? `Codespace ${where.name}, domain ${where.domain}: the portal's codespace link is https://${where.name}-3000.${where.domain}`
+              : "";
+
+          const otaKey = keyInput.value.trim();
+          ok =
+            setError(
+              "err-otakey",
+              OTA_KEY.test(otaKey)
+                ? ""
+                : "3 to 30 lower-case letters (a-z) or digits, starting with a letter; no hyphen, no space.",
+              keyInput,
+            ) && ok;
+
+          const stripeSecret = secretInput.value.trim();
+          const stripePublishable = publishableInput.value.trim();
+          const stripeWebhook = webhookInput.value.trim();
+          let secretMessage = "";
+          let publishableMessage = "";
+          let webhookMessage = "";
+          if (/_live_/.test(stripeSecret)) {
+            secretMessage = "This is a live key. The demo only takes test keys (sk_test_… or rk_test_…).";
+          } else if (stripeSecret !== "" && STRIPE_SECRET.test(stripeSecret) === false) {
+            secretMessage =
+              "A Stripe secret test key starts with sk_test_ or rk_test_, then letters, digits or _.";
+          } else if (stripeSecret === "" && stripePublishable !== "") {
+            secretMessage = "Give the secret test key too, or leave both keys empty.";
+          }
+          if (/_live_/.test(stripePublishable)) {
+            publishableMessage = "This is a live key. The demo only takes a test key (pk_test_…).";
+          } else if (stripePublishable !== "" && STRIPE_PUBLISHABLE.test(stripePublishable) === false) {
+            publishableMessage =
+              "A Stripe publishable test key starts with pk_test_, then letters, digits or _.";
+          } else if (stripePublishable === "" && stripeSecret !== "") {
+            publishableMessage = "Give the publishable test key too, or leave both keys empty.";
+          }
+          if (stripeWebhook !== "" && STRIPE_WEBHOOK.test(stripeWebhook) === false) {
+            webhookMessage = "A webhook signing secret starts with whsec_ (as stripe listen prints it).";
+          } else if (stripeWebhook !== "" && stripeSecret === "") {
+            webhookMessage = "Only with the two Stripe keys above; otherwise leave it empty.";
+          }
+          ok = setError("err-stripe-secret", secretMessage, secretInput) && ok;
+          ok = setError("err-stripe-publishable", publishableMessage, publishableInput) && ok;
+          ok = setError("err-stripe-webhook", webhookMessage, webhookInput) && ok;
+          if (stripeSecret !== "" || stripePublishable !== "" || stripeWebhook !== "") {
+            secretInput.closest("details").open = true;
+          }
+          ok = secrets !== null && ok;
+
+          return {
+            ok,
+            mode,
+            name: where.name ?? "",
+            domain: where.domain ?? "",
+            otaKey,
+            stripe: { secret: stripeSecret, publishable: stripePublishable, webhook: stripeWebhook },
+          };
+        }
+
+        // ---- Addresses -------------------------------------------------------------------------------------------
+        const PUBLIC_PORTS = Object.freeze({
+          portal: 3000,
+          platformAdmin: 3001,
+          otaAdmin: 3002,
+          storefront: 4173,
+          mailpit: 8025,
+        });
+
+        function addresses(state) {
+          const result = {};
+          for (const [app, port] of Object.entries(PUBLIC_PORTS)) {
+            if (state.mode === "local") {
+              result[app] = `http://localhost:${port}`;
+            } else if (state.name !== "") {
+              result[app] = `https://${state.name}-${port}.${state.domain}`;
+            } else {
+              result[app] = `https://<codespace>-${port}.app.github.dev`;
+            }
+          }
+          return result;
+        }
+
+        // ---- Generation ------------------------------------------------------------------------------------------
+        const MARK = "# demo: set for the demo deployment (deploy/demo-deployment.html)";
+
+        /** `text` with `NAME=value` on the first line that sets NAME (comments are not settings), else appended. */
+        function setVar(text, name, value) {
+          const lines = text.split("\n");
+          const line = `${name}=${value}`;
+          const index = lines.findIndex((candidate) => candidate.startsWith(`${name}=`));
+          if (index === -1) {
+            const end = lines[lines.length - 1] === "" ? lines.length - 1 : lines.length;
+            lines.splice(end, 0, MARK, line);
+          } else if (lines[index] !== line) {
+            lines.splice(index, 1, MARK, line);
+          }
+          return lines.join("\n");
+        }
+
+        function envFile(sourceId, sourcePath, changes, state) {
+          let text = embedded(sourceId);
+          for (const [name, value] of changes) {
+            text = setVar(text, name, value);
+          }
+          const header = [
+            `# Velexis demo deployment: made by deploy/demo-deployment.html on ${TODAY} for "${MODES[state.mode].label}".`,
+            `# A copy of ${sourcePath} with only the demo values changed: each one has a "# demo:" line above it.`,
+            "# It holds secrets: git ignores it; never commit or share it. Make it again with the page to change it.",
+            "",
+          ].join("\n");
+          return `${header}${text.endsWith("\n") ? text : `${text}\n`}`;
+        }
+
+        function fillTemplate(id, values) {
+          return embedded(id).replace(/@@([A-Z_]+)@@/g, (match, key) => {
+            if (Object.prototype.hasOwnProperty.call(values, key) === false) {
+              throw new Error(`template ${id}: no value for ${key}`);
+            }
+            return String(values[key]);
+          });
+        }
+
+        /** Every generated file, with where it goes, its download name and its mode. */
+        function generate(state) {
+          const urls = addresses(state);
+          const browser = state.mode === "browser";
+          const host = (port) => (browser ? `${state.name}-${port}.${state.domain}` : "");
+          const appPorts = browser
+            ? { portal: 13000, platformAdmin: 13001, otaAdmin: 13002 }
+            : { portal: 3000, platformAdmin: 3001, otaAdmin: 3002 };
+          const stripe = [
+            ["STRIPE_SECRET_KEY_TEST", state.stripe.secret],
+            ["STRIPE_PUBLISHABLE_KEY_TEST", state.stripe.publishable],
+            ...(state.stripe.webhook === ""
+              ? []
+              : [["STRIPE_WEBHOOK_SECRET_VELEXIS_TEST", state.stripe.webhook]]),
+          ];
+          const common = [
+            ["APP_ENV", "test"],
+            ["LOG_LEVEL", "info"],
+          ];
+
+          const files = [
+            {
+              path: ".env.local",
+              download: "root.env.local",
+              what: "shared settings of the back ends, the seeds and the migrations",
+              mode: 0o600,
+              content: envFile(
+                "src-env-root",
+                ".env.example",
+                [
+                  ...common,
+                  ["PUBLIC_PORTAL_URL", urls.portal],
+                  ["PUBLIC_PLATFORM_ADMIN_URL", urls.platformAdmin],
+                  ["PUBLIC_OTA_ADMIN_URL", urls.otaAdmin],
+                  ["OTA_ADMIN_SERVICE_KEY", secrets.service],
+                  ["VELEXIS_EDGE_SECRET", secrets.edge],
+                  ["PLATFORM_BFF_KEY", secrets.bff],
+                  ...stripe,
+                ],
+                state,
+              ),
+            },
+            {
+              path: "ota/backend/.env.local",
+              download: "ota-backend.env.local",
+              what: "the OTA API and the OTA worker",
+              mode: 0o600,
+              content: envFile(
+                "src-env-ota-backend",
+                "ota/backend/.env.example",
+                [
+                  ...common,
+                  ["PUBLIC_OTA_ADMIN_URL", urls.otaAdmin],
+                  ["VELEXIS_EDGE_SECRET", secrets.edge],
+                  ["OTA_ADMIN_SERVICE_KEY", secrets.service],
+                  ...stripe,
+                ],
+                state,
+              ),
+            },
+            {
+              path: "platform/frontend/.env.local",
+              download: "platform-frontend.env.local",
+              what: "the portal",
+              mode: 0o600,
+              content: envFile(
+                "src-env-platform-frontend",
+                "platform/frontend/.env.example",
+                [
+                  ...common,
+                  ["PORT", String(appPorts.portal)],
+                  ["PLATFORM_BFF_KEY", secrets.bff],
+                  ["PUBLIC_PORTAL_URL", urls.portal],
+                  ["PUBLIC_OTA_ADMIN_URL", urls.otaAdmin],
+                ],
+                state,
+              ),
+            },
+            {
+              path: "platform/admin/.env.local",
+              download: "platform-admin.env.local",
+              what: "the platform admin",
+              mode: 0o600,
+              content: envFile(
+                "src-env-platform-admin",
+                "platform/admin/.env.example",
+                [
+                  ...common,
+                  ["PORT", String(appPorts.platformAdmin)],
+                  ["PLATFORM_BFF_KEY", secrets.bff],
+                  ["PUBLIC_PLATFORM_ADMIN_URL", urls.platformAdmin],
+                  ["PUBLIC_PORTAL_URL", urls.portal],
+                ],
+                state,
+              ),
+            },
+            {
+              path: "ota/admin/.env.local",
+              download: "ota-admin.env.local",
+              what: "the OTA admin",
+              mode: 0o600,
+              content: envFile(
+                "src-env-ota-admin",
+                "ota/admin/.env.example",
+                [
+                  ...common,
+                  ["PORT", String(appPorts.otaAdmin)],
+                  ["PUBLIC_OTA_ADMIN_URL", urls.otaAdmin],
+                  ["PUBLIC_PORTAL_URL", urls.portal],
+                  ["OTA_ADMIN_SERVICE_KEY", secrets.service],
+                ],
+                state,
+              ),
+            },
+            {
+              path: "ota/frontend/.env.local",
+              download: "ota-frontend.env.local",
+              what: "the storefront",
+              mode: 0o600,
+              content: envFile(
+                "src-env-ota-frontend",
+                "ota/frontend/.env.example",
+                [
+                  ["VELEXIS_EDGE_SECRET", secrets.edge],
+                  ...(browser ? [["STOREFRONT_BASE_DOMAIN", state.domain]] : []),
+                  ["STOREFRONT_DEV_HOST", `${state.otaKey}.ota.example.com`],
+                ],
+                state,
+              ),
+            },
+            {
+              path: ".local/demo/start.sh",
+              download: "start.sh",
+              what: "starts every app",
+              mode: 0o700,
+              content: fillTemplate("tpl-start", {
+                DATE: TODAY,
+                MODE_TEXT: MODES[state.mode].scriptText,
+                MODE: state.mode,
+                PORTAL_PORT: appPorts.portal,
+                PLATFORM_ADMIN_PORT: appPorts.platformAdmin,
+                OTA_ADMIN_PORT: appPorts.otaAdmin,
+                PORTAL_HOST: host(3000),
+                PLATFORM_ADMIN_HOST: host(3001),
+                OTA_ADMIN_HOST: host(3002),
+                PORTAL_URL: urls.portal,
+                PLATFORM_ADMIN_URL: urls.platformAdmin,
+                OTA_ADMIN_URL: urls.otaAdmin,
+                STOREFRONT_URL: urls.storefront,
+                MAILPIT_URL: urls.mailpit,
+              }),
+            },
+            {
+              path: ".local/demo/stop.sh",
+              download: "stop.sh",
+              what: "stops every app",
+              mode: 0o700,
+              content: fillTemplate("tpl-stop", { DATE: TODAY }),
+            },
+          ];
+          if (browser) {
+            files.push({
+              path: ".local/demo/origin-fix-proxy.mjs",
+              download: "origin-fix-proxy.mjs",
+              what: "the helper in front of the Next.js apps for the codespace links",
+              mode: 0o600,
+              content: fillTemplate("tpl-proxy", { DATE: TODAY }),
+            });
+          }
+          for (const file of files) {
+            checkContent(file);
+          }
+          return files;
+        }
+
+        /**
+         * Guards for the copy-paste block: no line ends a heredoc early, no placeholder is left, and no "!" could
+         * trigger the shell's history expansion when the block is pasted (only "!" before a space, "=", "(" or a
+         * closing quote, or "$!", are inert).
+         */
+        function checkContent(file) {
+          if (/^VELEXIS_EOF$/m.test(file.content)) {
+            throw new Error(`${file.path}: holds the heredoc delimiter`);
+          }
+          if (/@@[A-Z_]+@@/.test(file.content)) {
+            throw new Error(`${file.path}: a placeholder is left`);
+          }
+          if (/(^|[^$])![^\s=("]/m.test(file.content)) {
+            throw new Error(`${file.path}: holds a "!" that a pasted shell would expand`);
+          }
+        }
+
+        function pasteBlock(files, state) {
+          const envPaths = files.filter((file) => file.path.endsWith(".env.local")).map((file) => file.path);
+          const lines = [
+            "[ -d /workspaces/velexis-ota ] && cd /workspaces/velexis-ota",
+            "if [ -f pnpm-workspace.yaml ] && [ -d ota/frontend ]; then",
+            "mkdir -p ota/backend platform/frontend platform/admin ota/admin ota/frontend .local/demo",
+          ];
+          for (const file of files) {
+            lines.push(`cat > ${file.path} <<'VELEXIS_EOF'`, file.content.replace(/\n$/, ""), "VELEXIS_EOF");
+          }
+          lines.push(
+            `chmod 600 ${envPaths.join(" ")}${state.mode === "browser" ? " .local/demo/origin-fix-proxy.mjs" : ""}`,
+            "chmod 700 .local/demo/start.sh .local/demo/stop.sh",
+            `echo "Velexis demo: ${files.length} files written for: ${MODES[state.mode].label}. Next: Part D."`,
+            "else",
+            'echo "This is not the velexis-ota folder. Run  cd /workspaces/velexis-ota  (or cd into the folder you cloned) and paste again."',
+            "fi",
+          );
+          return `${lines.join("\n")}\n`;
+        }
+
+        function moveBlock(files, state) {
+          const lines = ["cd /workspaces/velexis-ota", "mkdir -p .local/demo"];
+          const scripts = [];
+          for (const file of files) {
+            if (file.path.startsWith(".local/demo/")) {
+              scripts.push(file.download);
+            } else {
+              lines.push(`mv ${file.download} ${file.path}`);
+            }
+          }
+          lines.push(`mv ${scripts.join(" ")} .local/demo/`);
+          const envPaths = files.filter((file) => file.path.endsWith(".env.local")).map((file) => file.path);
+          lines.push(
+            `chmod 600 ${envPaths.join(" ")}${state.mode === "browser" ? " .local/demo/origin-fix-proxy.mjs" : ""}`,
+            "chmod 700 .local/demo/start.sh .local/demo/stop.sh",
+          );
+          return lines.join("\n");
+        }
+
+        // ---- ZIP (stored, no compression) with CRC-32 ------------------------------------------------------------
+        const CRC_TABLE = (() => {
+          const table = new Uint32Array(256);
+          for (let n = 0; n < 256; n += 1) {
+            let c = n;
+            for (let k = 0; k < 8; k += 1) {
+              c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+            }
+            table[n] = c >>> 0;
+          }
+          return table;
+        })();
+
+        function crc32(bytes) {
+          let crc = 0xffffffff;
+          for (const byte of bytes) {
+            crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+          }
+          return (crc ^ 0xffffffff) >>> 0;
+        }
+
+        function zipBlob(files) {
+          const encoder = new TextEncoder();
+          const now = new Date();
+          const dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | Math.floor(now.getSeconds() / 2);
+          const dosDate = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+          const parts = [];
+          const central = [];
+          let offset = 0;
+          for (const file of files) {
+            const name = encoder.encode(file.path);
+            const data = encoder.encode(file.content);
+            const crc = crc32(data);
+            const local = new DataView(new ArrayBuffer(30));
+            local.setUint32(0, 0x04034b50, true); // local file header
+            local.setUint16(4, 20, true); // version needed: 2.0
+            local.setUint16(6, 0x0800, true); // names are UTF-8
+            local.setUint16(8, 0, true); // stored
+            local.setUint16(10, dosTime, true);
+            local.setUint16(12, dosDate, true);
+            local.setUint32(14, crc, true);
+            local.setUint32(18, data.length, true);
+            local.setUint32(22, data.length, true);
+            local.setUint16(26, name.length, true);
+            local.setUint16(28, 0, true);
+            parts.push(local.buffer, name, data);
+
+            const entry = new DataView(new ArrayBuffer(46));
+            entry.setUint32(0, 0x02014b50, true); // central directory header
+            entry.setUint16(4, 0x0314, true); // made by Unix, 2.0: unzip restores the file mode below
+            entry.setUint16(6, 20, true);
+            entry.setUint16(8, 0x0800, true);
+            entry.setUint16(10, 0, true);
+            entry.setUint16(12, dosTime, true);
+            entry.setUint16(14, dosDate, true);
+            entry.setUint32(16, crc, true);
+            entry.setUint32(20, data.length, true);
+            entry.setUint32(24, data.length, true);
+            entry.setUint16(28, name.length, true);
+            entry.setUint16(30, 0, true);
+            entry.setUint16(32, 0, true);
+            entry.setUint16(34, 0, true);
+            entry.setUint16(36, 0, true);
+            entry.setUint32(38, ((0o100000 | file.mode) << 16) >>> 0, true); // regular file and its mode
+            entry.setUint32(42, offset, true);
+            central.push(entry.buffer, name);
+            offset += 30 + name.length + data.length;
+          }
+          const centralSize = central.reduce((size, part) => size + part.byteLength, 0);
+          const end = new DataView(new ArrayBuffer(22));
+          end.setUint32(0, 0x06054b50, true); // end of central directory
+          end.setUint16(4, 0, true);
+          end.setUint16(6, 0, true);
+          end.setUint16(8, files.length, true);
+          end.setUint16(10, files.length, true);
+          end.setUint32(12, centralSize, true);
+          end.setUint32(16, offset, true);
+          end.setUint16(20, 0, true);
+          return new Blob([...parts, ...central, end.buffer], { type: "application/zip" });
+        }
+
+        function download(name, blob) {
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = name;
+          link.rel = "noopener";
+          document.body.append(link);
+          link.click();
+          link.remove();
+          window.setTimeout(() => URL.revokeObjectURL(url), 30000);
+        }
+
+        // ---- Page updates -----------------------------------------------------------------------------------------
+        let currentFiles = [];
+
+        function fillPage(state) {
+          const urls = addresses(state);
+          const values = {
+            csname: state.name === "" ? "<your codespace name>" : state.name,
+            "portal-url": urls.portal,
+            "platform-admin-url": urls.platformAdmin,
+            "ota-admin-url": urls.otaAdmin,
+            "storefront-url": urls.storefront,
+            "mailpit-url": urls.mailpit,
+          };
+          const hrefs = {
+            portal: urls.portal,
+            "platform-admin": urls.platformAdmin,
+            "ota-admin": urls.otaAdmin,
+            storefront: urls.storefront,
+            mailpit: urls.mailpit,
+          };
+          for (const element of document.querySelectorAll("[data-fill]")) {
+            const value = values[element.dataset.fill];
+            if (value !== undefined) {
+              element.textContent = value;
+            }
+          }
+          const usable = state.mode === "local" || state.name !== "";
+          for (const element of document.querySelectorAll("[data-fill-href]")) {
+            element.href = usable ? hrefs[element.dataset.fillHref] : "#part-c";
+          }
+          for (const note of document.querySelectorAll(".mode-note")) {
+            note.textContent = `These steps follow your choice in Part C: "${MODES[state.mode].label}". Change it there to see the other way.`;
+          }
+          document.body.classList.toggle("mode-local", state.mode === "local");
+          document.body.classList.toggle("mode-browser", state.mode === "browser");
+        }
+
+        function renderFiles(files, state) {
+          currentFiles = files;
+          $("out-mode").textContent = MODES[state.mode].label;
+          $("paste-block").querySelector("code").textContent = pasteBlock(files, state);
+          $("mv-block").querySelector("code").textContent = moveBlock(files, state);
+          const list = $("file-list");
+          list.replaceChildren();
+          for (const file of files) {
+            const item = document.createElement("li");
+            const row = document.createElement("div");
+            row.className = "row";
+            const text = document.createElement("span");
+            const name = document.createElement("strong");
+            name.textContent = file.download;
+            const target = document.createElement("code");
+            target.textContent = file.path;
+            text.append(name, " goes to ", target, `: ${file.what}.`);
+            const button = document.createElement("button");
+            button.type = "button";
+            button.textContent = "Download";
+            button.setAttribute("aria-label", `Download ${file.download}`);
+            button.addEventListener("click", () => {
+              download(file.download, new Blob([file.content], { type: "application/octet-stream" }));
+            });
+            row.append(text, button);
+            item.append(row);
+            list.append(item);
+          }
+        }
+
+        function update() {
+          const state = readForm();
+          fillPage(state);
+          const status = $("form-status");
+          if (state.ok === false) {
+            $("output").hidden = true;
+            $("output-wait").hidden = false;
+            status.textContent =
+              "Fix the fields marked in red above; the files appear below once everything is right.";
+            return;
+          }
+          try {
+            renderFiles(generate(state), state);
+          } catch (error) {
+            $("output").hidden = true;
+            status.textContent = `The files could not be made (${error.message}). Please report this.`;
+            return;
+          }
+          $("output").hidden = false;
+          $("output-wait").hidden = true;
+          status.textContent = `Your ${currentFiles.length} files are ready for "${MODES[state.mode].label}": choose one of the three ways below.`;
+        }
+
+        function updateNewKey() {
+          const input = $("f-newkey");
+          const key = input.value.trim();
+          const valid = OTA_KEY.test(key);
+          setError(
+            "err-newkey",
+            valid
+              ? ""
+              : "3 to 30 lower-case letters (a-z) or digits, starting with a letter; no hyphen, no space.",
+            input,
+          );
+          if (valid) {
+            for (const element of document.querySelectorAll('[data-fill="newkey"]')) {
+              element.textContent = key;
+            }
+          }
+        }
+
+        function highlightContents() {
+          const links = Array.from(document.querySelectorAll("nav.toc a[href^='#']"));
+          const targets = links.map((link) => document.getElementById(link.getAttribute("href").slice(1)));
+          let ticking = false;
+          const mark = () => {
+            ticking = false;
+            let current = null;
+            targets.forEach((target, index) => {
+              if (target && target.getBoundingClientRect().top < 140) {
+                current = links[index];
+              }
+            });
+            for (const link of links) {
+              link.classList.toggle("current", link === current);
+            }
+          };
+          window.addEventListener(
+            "scroll",
+            () => {
+              if (ticking === false) {
+                ticking = true;
+                window.requestAnimationFrame(mark);
+              }
+            },
+            { passive: true },
+          );
+          mark();
+        }
+
+        // ---- Start -------------------------------------------------------------------------------------------------
+        for (const pre of document.querySelectorAll("pre.cmd")) {
+          decorate(pre);
+        }
+        if (window.matchMedia("(max-width: 1099px)").matches) {
+          document.querySelector("nav.toc details").open = false;
+        }
+        makeSecrets();
+        $("config-form").addEventListener("input", update);
+        $("config-form").addEventListener("change", update);
+        $("config-form").addEventListener("submit", (event) => event.preventDefault());
+        $("regenerate").addEventListener("click", () => {
+          makeSecrets();
+          update();
+        });
+        $("download-zip").addEventListener("click", () => {
+          if (currentFiles.length > 0) {
+            download("velexis-demo-config.zip", zipBlob(currentFiles));
+          }
+        });
+        $("f-newkey").addEventListener("input", updateNewKey);
+        highlightContents();
+        update();
+        updateNewKey();
+      })();
+    </script>
+  </body>
+</html>

@@ -2,6 +2,8 @@
 
 This folder holds everything that runs Velexis on its single VM without Docker: the Caddy configuration, the systemd unit templates, the provisioning, deploy, backup and restore scripts, the PostgreSQL, Redis, journald and logrotate settings, and one environment template per app. It implements [ADR-0007](../docs/mvp/adr/0007-single-vm-without-docker.md) and [ADR-0018](../docs/mvp/adr/0018-hosted-storefront-custom-domains.md). The files are **templates**: the foundation tasks X-019 to X-024, X-030, X-031, X-033 and X-037 to X-039 in [`docs/mvp/plans/foundation-tasks.md`](../docs/mvp/plans/foundation-tasks.md) finalise and test them.
 
+For a **demo** (GitHub Codespaces or your own Ubuntu computer; no VM, no domain, fake data), open [`demo-deployment.html`](demo-deployment.html) in a browser instead: it is a copy-paste guide for non-engineers that also writes every config file the demo needs, and explains why the free tiers of Render and Vercel cannot run the stack yet.
+
 Read first: [`docs/mvp/deployment-single-vm.md`](../docs/mvp/deployment-single-vm.md) (the operations guide). Related: [`docs/mvp/architecture.md`](../docs/mvp/architecture.md) §3 (hosts and ports), [`docs/mvp/decisions.md`](../docs/mvp/decisions.md) §4 (placeholder hosts), [ADR-0023](../docs/mvp/adr/0023-release-artefact-and-deploy-user.md) (release layout and the deploy user), [ADR-0026](../docs/mvp/adr/0026-system-users-per-trust-zone.md) (users per trust zone), [ADR-0027](../docs/mvp/adr/0027-pci-scope-and-vm-controls.md) (PCI scope and controls).
 
 ## How the files map to the VM
