@@ -2683,6 +2683,7 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 - **Verify:** `test -f ota/docs/pci/data-flow.md && test -f ota/docs/pci/responsibility-matrix.md && test -f ota/docs/pci/incident-response.md`
 
 ### OBE-086 · Gate live airline-card payments on the review and the penetration test
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the penetration test and ASV scan, human step; the developer's sign-off of every precondition of `ota/docs/runbooks/airline-card-go-live.md` §2 in its §5 (AC1), human step)
 - **Component:** ota-backend
 - **Milestone:** M6
 - **Depends on:** OBE-084, OBE-085, X-030

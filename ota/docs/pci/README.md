@@ -2,17 +2,18 @@
 
 Velexis receives, processes and transmits card data on behalf of OTAs when a traveller pays with the airline card (method (b) of [`decisions.md`](../../../docs/mvp/decisions.md) §2): the card goes from the hosted storefront through the OTA API to Amadeus, and the airline charges it. That makes Velexis a **service provider under PCI DSS v4.0.1**, which completes the **SAQ D for Service Providers** while it stays under the level-1 threshold ([ADR-0011](../../../docs/mvp/adr/0011-payments-stripe-and-airline-card.md) §C). This folder is the evidence for that self-assessment: the "Documentation" row of ADR-0011 §C and the rows of [ADR-0027](../../../docs/mvp/adr/0027-pci-scope-and-vm-controls.md) that name OBE-085 (5.2.3, the calendar of 11.3 and 11.4, and 12). It does not replace the SAQ or the Attestation of Compliance; it is what they are filled in from.
 
-**Live airline-card payments are off.** `AIRLINE_CARD_ENABLED` stays `false` in production ([`ota-backend.env.example:76`](../../../deploy/env/ota-backend.env.example#L76) `AIRLINE_CARD_ENABLED=false`) until every open item of [`data-flow.md`](data-flow.md) §5 is done and OBE-086's go-live checklist is checked (ADR-0027 item 2).
+**Live airline-card payments are off.** `AIRLINE_CARD_ENABLED` stays `false` in production ([`ota-backend.env.example:79`](../../../deploy/env/ota-backend.env.example#L79) `AIRLINE_CARD_ENABLED=false`) until every open item of [`data-flow.md`](data-flow.md) §5 is done and every precondition of OBE-086's go-live runbook [`airline-card-go-live.md`](../runbooks/airline-card-go-live.md#2-preconditions) is signed off (ADR-0027 item 2); the runbook also says how the switch is turned on and off.
 
 ## 1. The documents
 
 | Document | What it holds | PCI DSS |
 |---|---|---|
-| This README | Scope, the calendar of scans, tests and reviews, the records of scans, tests and incidents, how the references are checked, the review record, the malware evaluation, open questions | 5.2.3, 11.3, 11.4, 12.4.2, 12.5.2 |
+| This README | Scope, the calendar of scans, tests and reviews, the records of scans, tests and incidents, how the references are checked, the review record, the malware evaluation, open questions, the first penetration test and ASV scan before live (§9) | 5.2.3, 11.3, 11.4, 12.4.2, 12.5.2, A1.1.4 |
 | [`data-flow.md`](data-flow.md) | The card from the page through Caddy, the OTA API and the Amadeus client to the airline (Mermaid diagram), what exists where, and every control of ADR-0011 §C mapped to code, tests and VM settings and checks | 1.2.4, 3, 4, 6.4, 10, 12.5.1 |
 | [`script-inventory.md`](script-inventory.md) | Every storefront page and its scripts, Stripe.js with its justification, how each script is authorised and checked daily, and the residual risk of the shared origin | 6.4.3, 11.6.1 |
 | [`incident-response.md`](incident-response.md) | Roles, detection, containment, the Stripe, Amadeus and OTA notifications, recovery and testing | 12.10 |
 | [`responsibility-matrix.md`](responsibility-matrix.md) | Velexis versus the OTA for every requirement of the SAQ D, and the third-party service providers | 12.8, 12.9, A1 |
+| [`../runbooks/airline-card-go-live.md`](../runbooks/airline-card-go-live.md) (OBE-086, outside this folder) | The go-live checklist: every precondition with its evidence and the developer's sign-off, then how `AIRLINE_CARD_ENABLED` is turned on and off | 11.3, 11.4, 12.10.3, A1.1.4 |
 
 ## 2. Scope
 
@@ -56,7 +57,7 @@ The recurring work that keeps the controls true. "Before live" items must be don
 
 ## 4. Scan, test and incident records
 
-No scan or penetration test has run yet: the first external ASV scan and the penetration test are OBE-086's step 1 (a human step). Record each run here, with its report kept outside the repository.
+No scan or penetration test has run yet: the first external ASV scan and the penetration test are OBE-086's step 1 (a human step), commissioned and recorded as [§9](#9-before-live-the-penetration-test-and-the-asv-scan) says. Record every later run here, with its report kept outside the repository.
 
 | Date | Kind | Scope | By | Result | Findings and their tasks |
 |---|---|---|---|---|---|
@@ -156,6 +157,39 @@ Questions for the lead and the developer found while writing the pack; each need
 1. **Password length (8.3.6).** **Met** (the owner's decision (13g) of 2026-11-10, FIX-W47-PLATFORM; [ADR-0008](../../../docs/mvp/adr/0008-identity-accounts-customers-sessions.md) revision of 2026-11-10). PCI DSS 8.3.6 asks for 12 characters with letters and digits wherever a password is a factor of an account it covers: platform admins and the owners and admins of OTAs (an active `owner` or `admin` membership of any OTA, test or live) now need at least 12 characters with at least one letter and one digit ([`password-policy.ts:36`](../../../platform/backend/src/auth/password-policy.ts#L36) `PRIVILEGED_MIN_PASSWORD_LENGTH = 12`, the account's rule read by [`accounts.repository.ts:572`](../../../platform/backend/src/auth/accounts.repository.ts#L572) `async passwordRuleOf(` and applied by [`password-reset.service.ts:227`](../../../platform/backend/src/auth/password-reset.service.ts#L227) `this.passwords.check(newPassword, "/newPassword", rule)`), applied when such an account next sets a password (a change or a reset); every other account keeps 10 characters ([`password-policy.ts:30`](../../../platform/backend/src/auth/password-policy.ts#L30) `MIN_PASSWORD_LENGTH = 10`). An existing shorter password keeps working until that change, as the decision says; the portal and the platform admin name the rule where these accounts choose a password.
 2. **Covert malware channels (11.5.1.1).** PCI DSS asks service providers to detect, alert on and address covert malware communication channels (for example DNS tunnelling or unexpected outbound connections). ADR-0027 has no control for it: the firewall allows all outgoing traffic. A control (an egress allow-list, or outbound connection logging in X-038's review) needs a task. **Decided (2026-11-10, lead decision (13h)):** task X-041 ([`foundation-tasks.md`](../../../docs/mvp/plans/foundation-tasks.md#x-041--allow-only-the-outbound-connections-the-vm-needs-and-log-the-refused-ones)): `ufw default deny outgoing` (or nftables) with an allow-list of the hosts the VM needs (DNS, NTP, Stripe, Amadeus, the mail relay, the backup bucket, Let's Encrypt, the Ubuntu mirrors, GitHub where the deploy needs it), every refused attempt logged and reviewed in X-038's daily review. Open until X-041 is done; it is a control to have before live airline-card payments ([`responsibility-matrix.md`](responsibility-matrix.md) row 11).
 3. **Scope confirmation every six months (12.5.2.1).** ADR-0027 row 12 says "yearly scope confirmation"; for a service provider PCI DSS asks for every six months. The calendar above uses six months, which includes the yearly one; the ADR's wording should follow. **Decided (2026-11-10, lead decision (13i)):** a dated note of [ADR-0027](../../../docs/mvp/adr/0027-pci-scope-and-vm-controls.md) on row 12 says it: at least every six months and after a significant change, as §2 and the calendar of §3 already do.
-4. **A second person for incident containment (12.10.3).** One person cannot be available at all times ([`incident-response.md`](incident-response.md) §1).
+4. **A second person for incident containment (12.10.3).** One person cannot be available at all times ([`incident-response.md`](incident-response.md) §1). **Decided (2026-11-10, lead decision (12e)):** live airline-card payments stay off while the only developer is away, and the rule is revisited when a second person joins, as [`incident-response.md`](incident-response.md) §1 says; the go-live runbook makes it precondition P24 and turns the switch off before every absence ([`airline-card-go-live.md`](../runbooks/airline-card-go-live.md#4-turning-it-off) §4).
 5. **The daily AIDE run (11.5.2).** AIDE runs through the `dailyaidecheck.timer` that the Ubuntu package `aide-common` installs and enables. **Done (2026-11-10, lead decision (13j)):** `check-vm.sh` reports `PASS` or `FAIL` for the timer, active and enabled, beside the AIDE database ([`check-vm.sh:189`](../../../deploy/scripts/check-vm.sh#L189) `the AIDE database exists`, [`:191`](../../../deploy/scripts/check-vm.sh#L191) `unit_state dailyaidecheck.timer`), `provision-vm.sh` enables it on every run of `harden` ([`provision-vm.sh:325`](../../../deploy/scripts/provision-vm.sh#L325) `systemctl enable --now dailyaidecheck.timer`), and `check-vm.test.sh` covers the timer running, stopped, not enabled and missing. AIDE's findings still alert nobody until X-038's review exists (§7).
 6. **Documents outside the repository.** The information security policy, acceptable use, targeted risk analyses, the awareness programme, screening, the agreements with the providers and the OTAs, and the AOCs are not in this repository ([`responsibility-matrix.md`](responsibility-matrix.md) §2, row 12); they must exist before the SAQ D is signed.
+
+## 9. Before live: the penetration test and the ASV scan
+
+OBE-086's step 1, a human step: before `AIRLINE_CARD_ENABLED=true` in production, Velexis commissions an external vulnerability scan by an approved scanning vendor (ASV, 11.3.2) and a penetration test (11.4.1 to 11.4.4, and A1.1.4), fixes or plans every finding, and records here when they ran, what they covered and what they found. They are preconditions P5 and P6 of the [go-live runbook](../runbooks/airline-card-go-live.md#2-preconditions). The reports stay outside the repository, as they describe weaknesses; the rows below are the summary that an OTA may receive on request (12.9.2, 11.4.7). Later runs follow the [calendar](#3-calendar) and go into [§4](#4-scan-test-and-incident-records).
+
+**Commissioning.**
+
+- The ASV is one that the PCI Security Standards Council lists. The tester is qualified and organisationally independent of the developer (11.4.1): an outside firm, since the developer wrote and runs everything tested.
+- When the test is booked, confirm with the assessor that Appendix A1 applies to Velexis as a multi-tenant service provider, so that the separation between OTAs is tested now and every six months (A1.1.4; lead decision (12f) of 2026-11-10). Record the answer in the separation row below.
+- Agree the rules of engagement in writing: the hosts and addresses below, the time windows, the developer as the contact during the test, test OTAs and accounts of the tester's own for every role (never an OTA's or a traveller's data), no load that would take the shared VM down, and no real card number anywhere (Amadeus's test cards on the test environment only).
+- While the switch is off in production, the airline-card completion answers `403 FEATURE_DISABLED` and the card page shows no form (`storefront.get` does not offer the method). The tester gets both working on a throwaway VM provisioned by the same scripts with the same release ([`deployment-single-vm.md`](../../../docs/mvp/deployment-single-vm.md#3-provisioning-a-new-vm) §3), `AIRLINE_CARD_ENABLED=true` and the Amadeus test endpoint; record the release (commit) tested on each VM.
+
+**Scope.** The CDE is the whole VM and the systems that can change it (§2).
+
+| Part | What is tested | PCI DSS |
+|---|---|---|
+| External ASV scan | Every public IPv4 and IPv6 address of the VM and every public host on it: `platform.example.com`, `admin.platform.example.com`, `api.platform.example.com`, `admin.ota.example.com`, `api.ota.example.com`, the storefronts `<key>.ota.example.com` (the demo storefront and those of the OTAs that will take airline-card payments) and those OTAs' custom domains | 11.3.2 |
+| External penetration test, network and application layer | The same hosts from the internet: Caddy, TLS and the WAF (X-039); the whole storefront origin, every page of the [script inventory](script-inventory.md) (a look-alike card form, the isolation of the card page: COOP, `frame-ancestors`, `worker-src`; OADR-0017 Follow-ups); the airline-card completion `POST /v1/checkouts/{checkoutId}/airline-card-completion` (edge only, its limits, no card value echoed or kept); the OTA API, the portal, the platform admin and the OTA admin with sign-in, MFA, sessions, the portal-to-admin hand-off and the API keys | 11.4.1, 11.4.3 |
+| Internal penetration test | From inside the VM as an unprivileged app user (a compromise of one trust zone assumed): the loopback services (PostgreSQL, Redis, Caddy's admin socket), another zone's keys, env files and processes ([ADR-0026](../../../docs/mvp/adr/0026-system-users-per-trust-zone.md)), escalation to root, and the deploy path | 11.4.1, 11.4.2 |
+| Separation between OTAs | With two OTAs of the tester: whether one OTA's staff, API keys, storefront, customers or custom domain reach another OTA's data, settings, documents, stored files or rate limits, and whether an OTA reaches Velexis's own systems (A1.1.1 to A1.1.3); the result also answers the OTAs' 11.4.7 requests | A1.1.4 |
+| Retest | Every finding fixed, tested again by the tester | 11.4.4 |
+
+**Passed** means: the ASV's report says the scan passes (any dispute accepted by the ASV); the penetration test leaves no exploitable vulnerability of high or critical risk open (ranked as 6.3.1 says), the retest confirms the fixes, and every other finding has a task in the plans with its date, or an accepted risk with its reason and the developer's date.
+
+**Records** (the first runs; "Pending" until they ran):
+
+| Date | Part | Scope | By (ASV or tester) | Release (commit) | Result | Report kept at | Findings and their tasks |
+|---|---|---|---|---|---|---|---|
+| — | External ASV scan | — | — | — | Pending (human step) | — | — |
+| — | External penetration test | — | — | — | Pending (human step) | — | — |
+| — | Internal penetration test | — | — | — | Pending (human step) | — | — |
+| — | Separation between OTAs (Appendix A1 confirmed with the assessor: —) | — | — | — | Pending (human step) | — | — |
+| — | Retest of the fixes | — | — | — | Pending (human step) | — | — |
