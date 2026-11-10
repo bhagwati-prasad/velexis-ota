@@ -1024,7 +1024,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 - **Verify:** `node tools/ci/check-no-hardcoded-hosts.mjs`
 
 ### X-037 · Require a second factor for administrative SSH
-- **Status:** todo
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the VM check, human step: on the throwaway VM an admin login with a plain ed25519 key refused and with the FIDO2 key (or key and TOTP) accepted, and the Deploy workflow still deploying (AC1))
 - **Component:** foundation
 - **Milestone:** M6
 - **Depends on:** X-020

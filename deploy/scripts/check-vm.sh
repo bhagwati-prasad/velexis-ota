@@ -12,15 +12,22 @@
 # file, a key file or .provision-secrets: env files are compared with their templates by variable name only, key
 # copies with cmp, the Redis password reaches redis-cli through its environment, and caddy's messages are shown only
 # with every value of caddy.env replaced by <redacted> (bash's own errors about a malformed caddy.env line are dropped).
+# Of an admin's TOTP secret file it reads only the owner, the mode and the line " TOTP_AUTH", never the secret.
 #
 # Groups and their items (docs/mvp/deployment-single-vm.md §2 to §7):
 #   system    Ubuntu 24.04; time zone UTC; no swap (swapon --show is empty, no swap line in /etc/fstab); no core
 #             dumps (kernel.core_pattern |/bin/false, fs.suid_dumpable 0, apport.service masked); unattended
 #             upgrades on; an AIDE database exists
-#   services  postgresql, redis-server, caddy and velexis-backup.timer active and enabled, the cluster
-#             postgresql@16-main active; fail2ban, auditd and chrony active and enabled; Node.js 22
+#   services  postgresql, redis-server, caddy, velexis-backup.timer and velexis-healthcheck.timer active and enabled,
+#             the cluster postgresql@16-main active; fail2ban, auditd and chrony active and enabled; Node.js 22
 #   firewall  ufw active, incoming denied by default, and only 22, 80 and 443 allowed (each of them allowed)
-#   ssh       sshd -T: no password and no keyboard-interactive authentication, no root login, public keys allowed
+#   ssh       sshd -T: no password and no keyboard-interactive authentication, no root login, public keys allowed,
+#             AllowUsers set. Every AllowUsers user but DEPLOY_USER is an admin, and sshd -T -C user=<admin> shows a
+#             second factor (task X-037): a FIDO2 key (publickey with sk-ssh-ed25519@openssh.com only, verify-required)
+#             with only such keys in ~/.ssh/authorized_keys, or the key and a TOTP code (publickey,keyboard-interactive:
+#             pam, pam_google_authenticator in /etc/pam.d/sshd without nullok and without the password, the admin's
+#             ~/.google_authenticator 0400 or 0600). sshd -T -C user=<deploy> shows public key only, no TTY, no
+#             forwarding. Both read keys only from .ssh/authorized_keys.
 #   database  PostgreSQL 16 with conf.d/velexis.conf in effect, listening on loopback only; the database belongs to
 #             velexis_migrator; the four roles exist (login, not superuser); velexis_ota_app's search_path is pg_catalog
 #   redis     Redis 7.4 on loopback only; clients without the password refused; maxmemory 512mb with
@@ -34,13 +41,14 @@
 #             identical master-key and pepper copies and no zone-only key in the other zone, env files and
 #             .provision-secrets root:root 0600, /srv/velexis with incoming, releases (root:velexis, read-only),
 #             current and maintenance, /var/lib/velexis and its storage, the backup and log folders, the root-owned
-#             scripts, the sudoers rule
+#             scripts (velexis-deploy, -backup, -restore, -alert, -run and -healthcheck), the sudoers rule
 #   envfiles  every /etc/velexis/<app>.env has every variable of its deploy/env/<app>.env.example template (an empty
 #             value is fine; missing ones are listed by name); caddy.env and ota-backend.env hold the same edge
 #             secret, ota-backend.env and ota-admin.env the same service key (compared, never printed)
 #
 # Options: --only <group,...>; --templates <folder> (the env templates; default: env/ of this script's deploy/ folder).
-# Environment: DEPLOY_USER (deploy), DB_NAME (velexis), PG_MAJOR (16), the same values as for provision-vm.sh.
+# Environment: DEPLOY_USER (deploy), DB_NAME (velexis), PG_MAJOR (16), the same values as for provision-vm.sh. The
+# admin users need no setting: they are the users of sshd's AllowUsers other than DEPLOY_USER.
 # Tests only: VELEXIS_ROOT=<absolute folder> reads every file under that folder instead of / (the switch of
 # provision-vm.sh); deploy/scripts/test/check-vm.test.sh also puts fake system tools first on PATH.
 # =====================================================================================================
@@ -70,7 +78,9 @@ CADDYFILE="$R/etc/caddy/Caddyfile"
 ZONE_USERS=(velexis-platform velexis-ota velexis-portal velexis-platform-admin velexis-ota-admin)
 RELEASE_GROUP=velexis
 ROLES=(velexis_migrator velexis_ota_app velexis_platform_app velexis_provisioner)
-ROOT_SCRIPTS=(velexis-deploy velexis-backup velexis-restore velexis-alert velexis-run)
+ROOT_SCRIPTS=(velexis-deploy velexis-backup velexis-restore velexis-alert velexis-run velexis-healthcheck)
+SSHD_CONFIG="$R/etc/ssh/sshd_config"
+PAM_SSHD="$R/etc/pam.d/sshd"
 
 usage() { sed -n '2,/^# =====/p' "$0"; exit "$1"; }
 while [ $# -gt 0 ]; do
@@ -182,7 +192,7 @@ group_system() {
 group_services() {
   local u s v
   if ! have systemctl; then fail "systemctl is installed"; return; fi
-  for u in postgresql redis-server caddy velexis-backup.timer fail2ban auditd chrony; do
+  for u in postgresql redis-server caddy velexis-backup.timer velexis-healthcheck.timer fail2ban auditd chrony; do
     s="$(unit_state "$u")"
     if [ "$s" = "active enabled" ]; then pass "$u is active and enabled"; else fail "$u is active and enabled (found: $s)"; fi
   done
@@ -237,16 +247,115 @@ group_firewall() {
 }
 
 # ---- ssh --------------------------------------------------------------------------------------------------
+sshd_t() { sshd -T -f "$SSHD_CONFIG" "$@" 2>&1; } # the effective settings; with -C user=<u>, those of u's logins
+setting() { # sshd -T output, keyword -> the value of its first line
+  printf '%s\n' "$1" | awk -v k="$2" '$1 == k && !done { sub(/^[^ ]+ /, ""); print; done = 1 }'
+}
+# A FIDO2 key line of authorized_keys: the option verify-required, then an sk-ssh-ed25519 key (its blob names the type).
+SK_LINE="^[[:space:]]*([^[:space:]#]+,)?verify-required(,[^[:space:]]+)?[[:space:]]+sk-ssh-ed25519@openssh\\.com[[:space:]]+AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29t[A-Za-z0-9+/]*=*([[:space:]]|\$)"
+
+keys_file_only() { # user sshd-output: sshd reads that user's keys from .ssh/authorized_keys only (what check-vm.sh reads)
+  local got
+  got="$(setting "$2" authorizedkeysfile)"
+  if [ "$got" = .ssh/authorized_keys ]; then pass "sshd -T -C user=$1: keys only from .ssh/authorized_keys"; else fail "sshd -T -C user=$1: keys only from .ssh/authorized_keys (found: ${got:-unset})"; fi
+}
+
+ssh_admin() { # admin user -> its second factor as sshd -T -C shows it, and the keys, secret and PAM file it relies on
+  local u="$1" out am alg opts kbd pw pam home keys n f got
+  if ! out="$(sshd_t -C "user=$u")"; then fail "sshd -T -C user=$u runs ($(first_line "$out"))"; return; fi
+  am="$(setting "$out" authenticationmethods)"
+  alg="$(setting "$out" pubkeyacceptedalgorithms)"
+  opts="$(setting "$out" pubkeyauthoptions)"
+  kbd="$(setting "$out" kbdinteractiveauthentication)"
+  pw="$(setting "$out" passwordauthentication)"
+  pam="$(setting "$out" usepam)"
+  if ! home="$(getent passwd "$u" | cut -d: -f6)" || [ -z "$home" ]; then fail "admin user $u exists"; return; fi
+  if [ "$am" = publickey ] && [ "$alg" = sk-ssh-ed25519@openssh.com ] && [[ " $opts " == *" verify-required "* ]] &&
+    [ "$pw" = no ] && [ "$kbd" = no ]; then
+    pass "sshd -T -C user=$u: second factor FIDO2 (publickey with sk-ssh-ed25519@openssh.com only, pubkeyauthoptions $opts)"
+    keys_file_only "$u" "$out"
+    keys="$(grep -cvE '^[[:space:]]*(#|$)' "$home/.ssh/authorized_keys" 2>/dev/null)"
+    n="$(grep -cE "$SK_LINE" "$home/.ssh/authorized_keys" 2>/dev/null)"
+    if [ "${n:-0}" -gt 0 ] && [ "$n" = "${keys:-0}" ]; then
+      pass "every key of $u is a FIDO2 key (sk-ssh-ed25519) with verify-required ($n)"
+    elif [ "${n:-0}" = 0 ]; then
+      fail "$u has a FIDO2 key (sk-ssh-ed25519) with verify-required in $home/.ssh/authorized_keys"
+    else
+      fail "$((keys - n)) of $keys keys of $u are not FIDO2 keys with verify-required: sshd refuses them; remove them (docs/mvp/runbooks/ssh-access.md §4)"
+    fi
+  elif [ "$am" = publickey,keyboard-interactive:pam ] && [ "$kbd" = yes ] && [ "$pam" = yes ] && [ "$pw" = no ]; then
+    pass "sshd -T -C user=$u: second factor TOTP (authenticationmethods publickey,keyboard-interactive:pam)"
+    keys_file_only "$u" "$out"
+    f="$home/.google_authenticator"
+    got="$(stat -c '%U %a' "$f" 2>/dev/null)"
+    if [ -f "$f" ] && [ ! -L "$f" ] && { [ "$got" = "$u 400" ] || [ "$got" = "$u 600" ]; } && grep -qx '" TOTP_AUTH' "$f"; then
+      pass "$f is a time-based TOTP secret file, $got"
+    else
+      fail "$f is a time-based TOTP secret file of $u, 0400 or 0600 (found: ${got:-no file})"
+    fi
+    # The auth lines of /etc/pam.d/sshd: the TOTP module, never nullok (a login without a code), never the password.
+    got="$(awk '/^[[:space:]]*#/ { next }
+      /pam_google_authenticator/ { if (/nullok/) bad = bad ", nullok"; else if ($1 == "auth" && ($2 == "required" || $2 == "requisite")) ok = 1 }
+      /^[[:space:]]*@include[[:space:]]+common-auth[[:space:]]*$/ { bad = bad ", @include common-auth" }
+      END { if (!ok) bad = bad ", no required pam_google_authenticator line"; print substr(bad, 3) }' "$PAM_SSHD" 2>/dev/null || echo "no file")"
+    if [ -z "$got" ]; then
+      pass "$(show "$PAM_SSHD") asks for the TOTP code (pam_google_authenticator, no nullok, no password)"
+    else
+      fail "$(show "$PAM_SSHD") asks for the TOTP code only (found: $got)"
+    fi
+  else
+    fail "sshd -T -C user=$u: a second factor, FIDO2 or TOTP (found: authenticationmethods ${am:-unset}, pubkeyauthoptions ${opts:-unset}, kbdinteractiveauthentication ${kbd:-unset}; docs/mvp/runbooks/ssh-access.md)"
+  fi
+}
+
+ssh_deploy() { # the deploy user: public key only, no TTY, no forwarding (a system account, PCI 8.6)
+  local u="$DEPLOY_USER" out am pw kbd kv got bad=""
+  if ! out="$(sshd_t -C "user=$u")"; then fail "sshd -T -C user=$u runs ($(first_line "$out"))"; return; fi
+  am="$(setting "$out" authenticationmethods)"
+  pw="$(setting "$out" passwordauthentication)"
+  kbd="$(setting "$out" kbdinteractiveauthentication)"
+  if [ "$am" = publickey ] && [ "$pw" = no ] && [ "$kbd" = no ]; then
+    pass "sshd -T -C user=$u: public key only (authenticationmethods publickey)"
+  else
+    fail "sshd -T -C user=$u: public key only (found: authenticationmethods ${am:-unset}, passwordauthentication ${pw:-unset}, kbdinteractiveauthentication ${kbd:-unset})"
+  fi
+  for kv in "permittty no" "disableforwarding yes" "allowtcpforwarding no" "allowagentforwarding no" \
+    "allowstreamlocalforwarding no" "x11forwarding no" "permittunnel no"; do
+    got="$(setting "$out" "${kv%% *}")"
+    [ "$got" = "${kv#* }" ] || bad="$bad ${kv%% *} ${got:-unset},"
+  done
+  if [ -z "$bad" ]; then pass "sshd -T -C user=$u: no TTY and no forwarding (permittty no, disableforwarding yes)"; else fail "sshd -T -C user=$u: no TTY and no forwarding (found:${bad%,})"; fi
+  keys_file_only "$u" "$out"
+}
+
 group_ssh() {
-  local out key want got
+  local out key want got users u admins=""
   if ! have sshd; then fail "sshd is installed"; return; fi
-  if ! out="$(sshd -T 2>&1)"; then fail "sshd -T runs ($(first_line "$out"))"; return; fi
+  if ! out="$(sshd_t)"; then fail "sshd -T runs ($(first_line "$out"))"; return; fi
   for key in passwordauthentication:no kbdinteractiveauthentication:no permitrootlogin:no pubkeyauthentication:yes; do
     want="${key#*:}"
     key="${key%%:*}"
-    got="$(printf '%s\n' "$out" | awk -v k="$key" '$1 == k { print $2; exit }')"
+    got="$(setting "$out" "$key")"
     if [ "$got" = "$want" ]; then pass "sshd -T: $key $want"; else fail "sshd -T: $key $want (found: ${got:-unset})"; fi
   done
+  # Every user AllowUsers lets in, but the deploy user, is a person who administers the VM: each needs a second factor.
+  users="$(printf '%s\n' "$out" | awk '$1 == "allowusers" { print $2 }' | paste -sd' ' -)"
+  if [ -z "$users" ]; then fail "sshd -T: AllowUsers limits SSH logins (found: none, every account may log in)"; return; fi
+  pass "sshd -T: AllowUsers $users"
+  for u in $users; do
+    u="${u%%@*}"
+    case "$u" in
+      "$DEPLOY_USER") continue ;;
+      '' | *[!a-z0-9_-]*) fail "AllowUsers entry $u is a plain user name (its second factor cannot be checked)"; continue ;;
+    esac
+    case " $admins " in *" $u "*) ;; *) admins="$admins $u" ;; esac
+  done
+  if [ -z "$admins" ]; then fail "sshd -T: AllowUsers lets an admin user in besides $DEPLOY_USER"; fi
+  for u in $admins; do ssh_admin "$u"; done
+  case " $users " in
+    *" $DEPLOY_USER "* | *" $DEPLOY_USER@"*) ssh_deploy ;;
+    *) fail "sshd -T: AllowUsers lets $DEPLOY_USER in (the Deploy workflow logs in as $DEPLOY_USER)" ;;
+  esac
 }
 
 # ---- database ---------------------------------------------------------------------------------------------

@@ -15,8 +15,19 @@
 #   sudo bash /tmp/velexis-deploy/scripts/provision-vm.sh --steps scripts,caddyconf  # re-run selected steps only
 #   sudo bash /tmp/velexis-deploy/scripts/check-vm.sh                               # one PASS or FAIL per item
 #   sudo NEW_MASTER_KEY=v2 bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps keys  # add a master key
+#   sudo ADMIN_USER=ubuntu ADMIN_MFA=fido2 bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps ssh
+#                                                         # the SSH second factor, once it is enrolled (task X-037)
 #
-# Steps: packages harden users node postgres redis caddy keys database envfiles scripts caddyconf summary
+# Steps: packages harden users node postgres redis caddy keys database envfiles scripts caddyconf summary, and by name
+# only: ssh, the SSH part of harden alone (harden runs it too).
+#
+# SSH second factor (ADR-0027 rows 8.4.2 and 8.6, docs/mvp/runbooks/ssh-access.md): the step ssh writes
+# /etc/ssh/sshd_config.d/01-velexis-mfa.conf with one Match block for ADMIN_USER and one for DEPLOY_USER. ADMIN_MFA=fido2
+# (the default) accepts only FIDO2 keys (sk-ssh-ed25519) with user verification (verify-required: PIN and touch);
+# ADMIN_MFA=totp asks for the key and then a TOTP code (libpam-google-authenticator). The deploy user gets public key
+# only, no TTY and no forwarding. The file is written only while ADMIN_USER has that factor enrolled, and only after
+# sshd -t and sshd -T -C accept a copy of the whole configuration with it; otherwise sshd stays as it is and the
+# enrolment steps are printed. sshd is then reloaded, which keeps every open session.
 #
 # Master keys (ADR-0010): the first run creates master-v1.key (KEK local:v1). NEW_MASTER_KEY=v<N> with the step keys
 # adds master-v<N>.key for a KEK rotation (docs/mvp/runbooks/master-key-rotation.md): 32 random bytes, generated
@@ -34,14 +45,16 @@
 # one folder per backend zone; env files are root:root 0600 and read by systemd only.
 #
 # Tests only: VELEXIS_ROOT=<absolute folder> moves every Velexis path (/etc/velexis, /srv/velexis, /var/lib/velexis,
-# /var/log/velexis, /var/backups/velexis, /usr/local/sbin and the deploy sudoers file) under that folder, and allows
-# only the steps users, keys and envfiles (deploy/systemd/test/units-smoke.sh, deploy/scripts/test/check-vm.test.sh).
+# /var/log/velexis, /var/backups/velexis, /usr/local/sbin and the deploy sudoers file) and /etc/ssh and /etc/pam.d/sshd
+# under that folder, and allows only the steps users, keys, envfiles and ssh (deploy/systemd/test/units-smoke.sh,
+# deploy/scripts/test/check-vm.test.sh, which also puts fake sshd and systemctl first on PATH for the step ssh).
 # The system users are real.
 # =====================================================================================================
 set -euo pipefail
 
 # ---- Placeholders: override through the environment ---------------------------------------------------
 : "${ADMIN_USER:=ubuntu}"                 # existing sudo user of the cloud image with your SSH key; keeps SSH access
+: "${ADMIN_MFA:=fido2}"                   # the admin's SSH second factor: fido2 (security key) or totp (key and code)
 : "${DEPLOY_USER:=deploy}"                # GitHub Actions uploads releases and runs velexis-deploy as this user
 : "${DEPLOY_SSH_PUBKEY_FILE:=}"           # public half of the GitHub Actions deploy key (required on first run)
 : "${SSH_ALLOW_FROM:=any}"                # CIDR for SSH; "any" because GitHub-hosted runners have changing IPs
@@ -63,6 +76,12 @@ BACKUPS="$VELEXIS_ROOT/var/backups/velexis"
 SBIN="$VELEXIS_ROOT/usr/local/sbin"
 SUDOERS_DIR="$VELEXIS_ROOT/etc/sudoers.d"
 SECRETS_FILE="$ETC/.provision-secrets"   # generated passwords, root 0600, reused on every run
+SSHD_CONFIG="$VELEXIS_ROOT/etc/ssh/sshd_config"
+SSHD_DROPINS="$VELEXIS_ROOT/etc/ssh/sshd_config.d"
+SSHD_MFA="$SSHD_DROPINS/01-velexis-mfa.conf"   # the admin's second factor and the deploy user's limits (X-037)
+PAM_SSHD="$VELEXIS_ROOT/etc/pam.d/sshd"
+SSH_TMP=""                               # the private folder of the step ssh, removed when it ends (and on exit)
+MFA_PENDING=""                           # why the step ssh did not apply the second factor; repeated by the summary
 LOG_FILE=""                              # $LOGS/provision.log once the folder exists
 # The generated values: names in .provision-secrets and @@NAME@@ placeholders in deploy/env and deploy/redis.
 SECRET_NAMES="MIGRATOR_DB_PASSWORD PROVISIONER_DB_PASSWORD PLATFORM_DB_PASSWORD OTA_DB_PASSWORD REDIS_PASSWORD EDGE_SECRET OTA_ADMIN_SERVICE_KEY PLATFORM_BFF_KEY"
@@ -73,6 +92,7 @@ OTA_USER=velexis-ota                       # velexis-ota-api, velexis-ota-worker
 ZONE_USERS="$PLATFORM_USER $OTA_USER velexis-portal velexis-platform-admin velexis-ota-admin"
 RELEASE_GROUP=velexis                      # its only members are the zone users; it only grants reading releases
 ALL_STEPS="packages harden users node postgres redis caddy keys database envfiles scripts caddyconf summary"
+NAMED_STEPS="ssh"                          # run only when named (--steps ssh); harden runs the SSH part itself
 STEPS="$ALL_STEPS"
 
 to_log() { [ -z "$LOG_FILE" ] || printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$LOG_FILE"; }
@@ -104,12 +124,18 @@ while [ $# -gt 0 ]; do
   esac
 done
 for step in $STEPS; do
-  case " $ALL_STEPS " in *" $step "*) ;; *) die "unknown step: $step (steps: $ALL_STEPS)" ;; esac
+  case " $ALL_STEPS $NAMED_STEPS " in *" $step "*) ;; *) die "unknown step: $step (steps: $ALL_STEPS $NAMED_STEPS)" ;; esac
 done
 if [ -n "$NEW_MASTER_KEY" ]; then
   [[ "$NEW_MASTER_KEY" =~ ^v[1-9][0-9]{0,8}$ ]] || die "NEW_MASTER_KEY must be v<N> (N >= 1, no leading zeros), for example v2"
   case " $STEPS " in *" keys "*) ;; *) die "NEW_MASTER_KEY needs the step keys (--steps keys)" ;; esac
 fi
+case "$ADMIN_MFA" in fido2 | totp) ;; *) die "ADMIN_MFA must be fido2 or totp (docs/mvp/runbooks/ssh-access.md)" ;; esac
+# Plain user names only: they become sshd Match patterns and AllowUsers entries.
+for u in "$ADMIN_USER" "$DEPLOY_USER"; do
+  [[ "$u" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "ADMIN_USER and DEPLOY_USER must be plain user names (found: $u)"
+done
+[ "$ADMIN_USER" != "$DEPLOY_USER" ] || die "ADMIN_USER and DEPLOY_USER must be different users"
 
 [ "$(id -u)" -eq 0 ] || die "run as root"
 if [ -n "$VELEXIS_ROOT" ]; then
@@ -117,8 +143,8 @@ if [ -n "$VELEXIS_ROOT" ]; then
   [ -d "$VELEXIS_ROOT" ] || die "VELEXIS_ROOT $VELEXIS_ROOT is not a folder"
   for step in $STEPS; do
     case "$step" in
-      users | keys | envfiles) ;;
-      *) die "with VELEXIS_ROOT only the steps users, keys and envfiles run, not $step" ;;
+      users | keys | envfiles | ssh) ;;
+      *) die "with VELEXIS_ROOT only the steps users, keys, envfiles and ssh run, not $step" ;;
     esac
   done
 fi
@@ -134,7 +160,11 @@ install -d -m 0750 -o root -g adm "$LOGS"
 [ -e "$LOGS/provision.log" ] || install -m 0640 -o root -g adm /dev/null "$LOGS/provision.log"
 LOG_FILE="$LOGS/provision.log"
 to_log "provision-vm.sh started by ${SUDO_USER:-root}: steps $STEPS, deploy folder $DEPLOY_DIR"
-on_exit() { local rc=$?; [ "$rc" -eq 0 ] || to_log "provision-vm.sh stopped with exit code $rc"; }
+on_exit() {
+  local rc=$?
+  [ -z "$SSH_TMP" ] || rm -rf "$SSH_TMP"
+  [ "$rc" -eq 0 ] || to_log "provision-vm.sh stopped with exit code $rc"
+}
 trap on_exit EXIT
 
 # ---- packages: base tools and vendor apt repositories ------------------------------------------------
@@ -142,8 +172,9 @@ step_packages() {
   log "Base packages and vendor repositories"
   apt-get update -y
   DEBIAN_FRONTEND=noninteractive apt-get upgrade "${APT_OPTS[@]}"
+  # libpam-google-authenticator: the TOTP second factor of ADMIN_MFA=totp (its PAM module stays unused with fido2).
   apt_install ca-certificates curl gnupg lsb-release jq rsync zstd openssl age rclone \
-    ufw fail2ban unattended-upgrades auditd aide aide-common acl logrotate chrony iproute2
+    ufw fail2ban unattended-upgrades auditd aide aide-common acl logrotate chrony iproute2 libpam-google-authenticator
   install -d -m 0755 /etc/apt/keyrings
 
   # Node.js (NodeSource)
@@ -218,25 +249,8 @@ EOF
   echo 'w /sys/kernel/mm/transparent_hugepage/enabled - - - - never' > /etc/tmpfiles.d/velexis-thp.conf
   systemd-tmpfiles --create /etc/tmpfiles.d/velexis-thp.conf || true
 
-  # SSH: keys only, no root, only the admin and deploy users. sshd keeps the FIRST value it reads for a keyword, and
-  # reads sshd_config.d/*.conf in name order before sshd_config: 00- sorts before cloud-init's 50-cloud-init.conf,
-  # which sets PasswordAuthentication yes on some providers' images.
-  rm -f /etc/ssh/sshd_config.d/90-velexis.conf   # the name of earlier versions, which a cloud-init file overrode
-  cat > /etc/ssh/sshd_config.d/00-velexis.conf <<EOF
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-PermitRootLogin no
-PubkeyAuthentication yes
-AllowUsers ${ADMIN_USER} ${DEPLOY_USER}
-MaxAuthTries 3
-LoginGraceTime 30
-X11Forwarding no
-AllowAgentForwarding no
-ClientAliveInterval 300
-ClientAliveCountMax 2
-EOF
-  sshd -t
-  systemctl reload ssh || systemctl reload sshd || true
+  # SSH: keys only, no root, only the admin and deploy users, and the admin's second factor (the step ssh below).
+  step_ssh
 
   # Firewall: 22, 80, 443 (TCP) and 443/udp (HTTP/3). Everything else closed.
   ufw default deny incoming
@@ -300,6 +314,325 @@ EOF
     systemctl restart systemd-journald
   fi
   install -m 0644 -o root -g root "$DEPLOY_DIR/logrotate/velexis" /etc/logrotate.d/velexis
+}
+
+# ---- ssh: sshd drop-ins and the admin's second factor (inside harden; --steps ssh runs it alone) -----------------
+# sshd keeps the FIRST value it reads for a keyword, and reads sshd_config.d/*.conf in name order before the rest of
+# sshd_config: 00- sorts before cloud-init's 50-cloud-init.conf, which sets PasswordAuthentication yes on some
+# providers' images. A Match block ends with its file, and a Match value wins over the global one; among Match
+# blocks that apply, the first wins again, so 01-velexis-mfa.conf comes before any other file's Match block.
+ssh_base_conf() { # -> 00-velexis.conf (X-020): keys only, no root, only the admin and deploy users
+  cat <<EOF
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+PubkeyAuthentication yes
+AllowUsers ${ADMIN_USER} ${DEPLOY_USER}
+MaxAuthTries 3
+LoginGraceTime 30
+X11Forwarding no
+AllowAgentForwarding no
+ClientAliveInterval 300
+ClientAliveCountMax 2
+EOF
+}
+
+ssh_mfa_conf() { # -> 01-velexis-mfa.conf (X-037, ADR-0027 rows 8.4.2 and 8.6) for ADMIN_MFA
+  cat <<EOF
+# Velexis (deploy/scripts/provision-vm.sh, task X-037): how ${ADMIN_USER} and ${DEPLOY_USER} log in. ADMIN_MFA=${ADMIN_MFA}.
+# Written only while ${ADMIN_USER} has that second factor enrolled: docs/mvp/runbooks/ssh-access.md.
+EOF
+  if [ "$ADMIN_MFA" = totp ]; then
+    cat <<EOF
+UsePAM yes
+
+# The key, then a TOTP code through PAM (pam_google_authenticator in /etc/pam.d/sshd); never a password.
+Match User ${ADMIN_USER}
+  AuthenticationMethods publickey,keyboard-interactive:pam
+  KbdInteractiveAuthentication yes
+EOF
+  else
+    cat <<EOF
+
+# Only FIDO2 keys (sk-ssh-ed25519), each signature with a touch and user verification (the key's PIN).
+Match User ${ADMIN_USER}
+  AuthenticationMethods publickey
+  PubkeyAcceptedAlgorithms sk-ssh-ed25519@openssh.com
+  PubkeyAuthOptions touch-required verify-required
+  KbdInteractiveAuthentication no
+EOF
+  fi
+  cat <<EOF
+  PasswordAuthentication no
+  AuthorizedKeysFile .ssh/authorized_keys
+
+# A system account used only by the Deploy workflow (rsync and one sudo command): public key only, no TTY, no forwarding.
+Match User ${DEPLOY_USER}
+  AuthenticationMethods publickey
+  PasswordAuthentication no
+  KbdInteractiveAuthentication no
+  AuthorizedKeysFile .ssh/authorized_keys
+  PermitTTY no
+  DisableForwarding yes
+  AllowTcpForwarding no
+  AllowAgentForwarding no
+  AllowStreamLocalForwarding no
+  X11Forwarding no
+  PermitTunnel no
+  PermitUserRC no
+EOF
+}
+
+# The base64 start of every sk-ssh-ed25519 public key (the key type inside the key blob).
+SK_ED25519_B64='AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29t'
+fido2_key_count() { # authorized_keys -> how many lines are sk-ssh-ed25519 keys with the option verify-required
+  # Options are read up to the first blank, so an option with a quoted blank hides its key: refused, never accepted.
+  grep -cE "^[[:space:]]*([^[:space:]#]+,)?verify-required(,[^[:space:]]+)?[[:space:]]+sk-ssh-ed25519@openssh\.com[[:space:]]+${SK_ED25519_B64}[A-Za-z0-9+/]*=*([[:space:]]|\$)" \
+    "$1" 2>/dev/null || true
+}
+
+totp_secret_ok() { # home -> 0 when ~/.google_authenticator is a time-based secret only the admin reads; else MFA_REASON
+  local f="$1/.google_authenticator" first="" got
+  if [ ! -f "$f" ] || [ -L "$f" ]; then MFA_REASON="$f does not exist"; return 1; fi
+  got="$(stat -c '%U %a' "$f")"
+  case "$got" in
+    "$ADMIN_USER 400" | "$ADMIN_USER 600") ;;
+    *) MFA_REASON="$f must belong to $ADMIN_USER with mode 0400 or 0600 (found: $got)"; return 1 ;;
+  esac
+  # The secret is read into memory only to recognise it, and never printed.
+  IFS= read -r first <"$f" || true
+  if [[ ! "$first" =~ ^[A-Z2-7]{16,}$ ]]; then first=""; MFA_REASON="$f has no TOTP secret on its first line"; return 1; fi
+  first=""
+  grep -qx '" TOTP_AUTH' "$f" || { MFA_REASON="$f is not time-based (create it with google-authenticator -t)"; return 1; }
+}
+
+pam_totp_module() { # -> 0 when pam_google_authenticator.so is installed (package libpam-google-authenticator)
+  local m
+  for m in "$VELEXIS_ROOT"/usr/lib/*/security/pam_google_authenticator.so "$VELEXIS_ROOT"/lib/*/security/pam_google_authenticator.so; do
+    [ -e "$m" ] && return 0
+  done
+  return 1
+}
+
+mfa_enrolled() { # admin home -> 0 when the factor of ADMIN_MFA is enrolled; else MFA_REASON says why
+  local n
+  if [ "$ADMIN_MFA" = fido2 ]; then
+    n="$(fido2_key_count "$1/.ssh/authorized_keys")"
+    [ "${n:-0}" -gt 0 ] && return 0
+    MFA_REASON="$1/.ssh/authorized_keys holds no FIDO2 key with user verification (a line 'verify-required sk-ssh-ed25519@openssh.com AAAA...')"
+    return 1
+  fi
+  if ! pam_totp_module; then
+    MFA_REASON="the PAM module pam_google_authenticator.so is not installed (apt-get install libpam-google-authenticator; the step packages installs it)"
+    return 1
+  fi
+  totp_secret_ok "$1"
+}
+
+PAM_TOTP_LINE='auth required pam_google_authenticator.so'
+pam_totp_conf() { # -> /etc/pam.d/sshd with '@include common-auth' (the password) replaced by the TOTP module
+  local have=0
+  ! grep -qxF "$PAM_TOTP_LINE" "$PAM_SSHD" || have=1
+  awk -v want="$PAM_TOTP_LINE" -v have="$have" '
+    /^[[:space:]]*@include[[:space:]]+common-auth[[:space:]]*$/ {
+      if (!have) {
+        print "# Velexis (deploy/scripts/provision-vm.sh, X-037): after the key, the admin types a TOTP code, never a password."
+        print want
+        have = 1
+      }
+      print "#" $0
+      next
+    }
+    { print }
+    END { if (!have) exit 3 }' "$PAM_SSHD"
+}
+
+mfa_files() { # folder -> writes 01-velexis-mfa.conf there, and for totp pam.d-sshd; else MFA_REASON says why
+  ssh_mfa_conf >"$1/01-velexis-mfa.conf"
+  [ "$ADMIN_MFA" = totp ] || return 0
+  if [ ! -f "$PAM_SSHD" ]; then MFA_REASON="$PAM_SSHD is missing"; return 1; fi
+  if ! pam_totp_conf >"$1/pam.d-sshd"; then
+    MFA_REASON="$PAM_SSHD has no '@include common-auth' line to replace with the TOTP module (docs/mvp/runbooks/ssh-access.md)"
+    return 1
+  fi
+  # nullok, or a second module line, would let a login without a code through.
+  if awk -v want="$PAM_TOTP_LINE" '/^[[:space:]]*#/ { next } /pam_google_authenticator/ && $0 != want { bad = 1 } END { exit !bad }' \
+    "$1/pam.d-sshd"; then
+    MFA_REASON="$PAM_SSHD has another pam_google_authenticator line (nullok would let a login without a code through): remove it"
+    return 1
+  fi
+}
+
+ssh_mirror() { # folder -> a copy of the whole sshd configuration with the candidate files, for sshd -t and sshd -T
+  local dir="$1" text f
+  install -d -m 0700 "$dir/sshd_config.d"
+  text="$(cat "$SSHD_CONFIG"; printf x)"
+  text="${text%x}"
+  text="${text//"$SSHD_DROPINS/"/"$dir/sshd_config.d/"}"   # the Include line; HostKey and the rest stay as they are
+  printf '%s' "$text" >"$dir/sshd_config"
+  for f in "$SSHD_DROPINS"/*.conf; do
+    if [ -f "$f" ] && [ "$(basename "$f")" != 90-velexis.conf ]; then cp "$f" "$dir/sshd_config.d/"; fi
+  done
+  cp "$SSH_TMP"/new/*.conf "$dir/sshd_config.d/"
+}
+
+expect_sshd() { # config user "keyword value"... -> 0 when sshd -T -C user=<user> shows each value; else MFA_REASON
+  local cfg="$1" user="$2" out kv got
+  shift 2
+  if ! out="$(sshd -T -f "$cfg" -C "user=$user" 2>&1)"; then
+    MFA_REASON="sshd -T -C user=$user fails: $(printf '%s\n' "$out" | head -n 1)"
+    return 1
+  fi
+  for kv in "$@"; do
+    got="$(printf '%s\n' "$out" | awk -v k="${kv%% *}" '$1 == k && !done { sub(/^[^ ]+ /, ""); print; done = 1 }')"
+    if [ "$got" != "${kv#* }" ]; then
+      MFA_REASON="for $user, sshd -T shows ${kv%% *} ${got:-(unset)}, not ${kv#* } (another file in $SSHD_DROPINS wins?)"
+      return 1
+    fi
+  done
+  if ! printf '%s\n' "$out" | grep -qx "allowusers $user"; then
+    MFA_REASON="sshd -T does not allow $user (AllowUsers)"
+    return 1
+  fi
+}
+
+mfa_effective_ok() { # mirror config -> 0 when sshd -T shows the second factor and the deploy limits; else MFA_REASON
+  local cfg="$1"
+  if [ "$ADMIN_MFA" = totp ]; then
+    expect_sshd "$cfg" "$ADMIN_USER" "authenticationmethods publickey,keyboard-interactive:pam" \
+      "kbdinteractiveauthentication yes" "usepam yes" "passwordauthentication no" \
+      "authorizedkeysfile .ssh/authorized_keys" || return 1
+  else
+    expect_sshd "$cfg" "$ADMIN_USER" "authenticationmethods publickey" \
+      "pubkeyacceptedalgorithms sk-ssh-ed25519@openssh.com" "pubkeyauthoptions touch-required verify-required" \
+      "kbdinteractiveauthentication no" "passwordauthentication no" "authorizedkeysfile .ssh/authorized_keys" || return 1
+  fi
+  expect_sshd "$cfg" "$DEPLOY_USER" "authenticationmethods publickey" "passwordauthentication no" \
+    "kbdinteractiveauthentication no" "authorizedkeysfile .ssh/authorized_keys" "permittty no" "disableforwarding yes"
+}
+
+mfa_enrolment_steps() { # admin home -> how to enrol the factor of ADMIN_MFA (stdout)
+  local again="sudo ADMIN_USER=$ADMIN_USER ADMIN_MFA=$ADMIN_MFA bash $DEPLOY_DIR/scripts/provision-vm.sh --steps ssh"
+  if [ "$ADMIN_MFA" = fido2 ]; then
+    cat <<EOF
+To enrol a FIDO2 key for $ADMIN_USER (docs/mvp/runbooks/ssh-access.md §2):
+  1. On your computer, with the security key plugged in and its FIDO2 PIN set:
+       ssh-keygen -t ed25519-sk -O verify-required -O resident -O application=ssh:velexis -f ~/.ssh/id_velexis_sk
+  2. Append the line of ~/.ssh/id_velexis_sk.pub to $1/.ssh/authorized_keys, with the option in front:
+       verify-required sk-ssh-ed25519@openssh.com AAAA... <comment>
+     Enrol the backup key the same way.
+  3. Log in with each key from a second terminal (PIN, then a touch), keeping this session open:
+       ssh -o IdentitiesOnly=yes -i ~/.ssh/id_velexis_sk $ADMIN_USER@<vm>
+  4. Run: $again
+EOF
+  else
+    cat <<EOF
+To enrol a TOTP secret for $ADMIN_USER (docs/mvp/runbooks/ssh-access.md §3):
+  1. Logged in as $ADMIN_USER on the VM, run google-authenticator -t -d -f -r 3 -R 30 -w 3 -i Velexis, scan the QR code
+     into your authenticator app, type one code to confirm it, and keep the emergency scratch codes in the offline
+     password manager. The file ~/.google_authenticator must stay 0400 (or 0600) and $ADMIN_USER's.
+  2. Run: $again
+EOF
+  fi
+}
+
+ssh_files_differ() { # candidate installed-file -> 0 when the installed file is missing or differs (content, root 0644)
+  [ -f "$2" ] && cmp -s "$1" "$2" && [ "$(stat -c '%U:%G %a' "$2")" = "root:root 644" ] && return 1
+  return 0
+}
+
+ssh_restore() { # puts back the files saved in $SSH_TMP/old (and removes the new ones that had no old version)
+  local name
+  for name in 00-velexis.conf 01-velexis-mfa.conf 90-velexis.conf; do
+    if [ -f "$SSH_TMP/old/$name" ]; then cp -p "$SSH_TMP/old/$name" "$SSHD_DROPINS/$name"
+    elif [ -f "$SSH_TMP/added/$name" ]; then rm -f "$SSHD_DROPINS/$name"
+    fi
+  done
+  [ ! -f "$SSH_TMP/old/pam.d-sshd" ] || cp -p "$SSH_TMP/old/pam.d-sshd" "$PAM_SSHD"
+}
+
+step_ssh() {
+  log "SSH: sshd settings and the second factor of $ADMIN_USER (ADMIN_MFA=$ADMIN_MFA)"
+  admin_keeps_access
+  [ -f "$SSHD_CONFIG" ] || die "$SSHD_CONFIG is missing (package openssh-server)"
+  local home name out changed="" pam_changed=0 mfa_new=0
+  MFA_PENDING=""
+  home="$(getent passwd "$ADMIN_USER" | cut -d: -f6)"
+  [ -z "$SSH_TMP" ] || rm -rf "$SSH_TMP"
+  SSH_TMP="$(mktemp -d)"   # root 0700: the candidate files, saved copies and a copy of the whole configuration
+  install -d -m 0700 "$SSH_TMP/new" "$SSH_TMP/old" "$SSH_TMP/added"
+  ssh_base_conf >"$SSH_TMP/new/00-velexis.conf"
+  MFA_REASON=""
+  if mfa_enrolled "$home" && mfa_files "$SSH_TMP/new"; then
+    mfa_new=1
+  else
+    rm -f "$SSH_TMP/new/01-velexis-mfa.conf" "$SSH_TMP/new/pam.d-sshd"
+    MFA_PENDING="$MFA_REASON"
+  fi
+
+  for name in 00-velexis.conf 01-velexis-mfa.conf; do
+    [ -f "$SSH_TMP/new/$name" ] || continue
+    if ssh_files_differ "$SSH_TMP/new/$name" "$SSHD_DROPINS/$name"; then changed="$changed $name"; fi
+  done
+  # The name of earlier versions of 00-velexis.conf, which a cloud-init file overrode.
+  [ ! -e "$SSHD_DROPINS/90-velexis.conf" ] || changed="$changed 90-velexis.conf"
+  if [ -f "$SSH_TMP/new/pam.d-sshd" ] && ! cmp -s "$SSH_TMP/new/pam.d-sshd" "$PAM_SSHD"; then pam_changed=1; fi
+
+  if [ -n "$changed" ] || [ "$pam_changed" = 1 ]; then
+    # sshd -t needs its privilege separation folder, which ssh.service creates only while it runs (socket activation).
+    [ -n "$VELEXIS_ROOT" ] || [ -d /run/sshd ] || install -d -m 0755 -o root -g root /run/sshd
+    # Nothing is written before sshd accepts a copy of the whole configuration with the new files, and (with the second
+    # factor) shows it for the admin and the deploy limits for deploy: an error here leaves sshd exactly as it was.
+    ssh_mirror "$SSH_TMP/check"
+    if ! out="$(sshd -t -f "$SSH_TMP/check/sshd_config" 2>&1)"; then
+      die "sshd -t refuses the new SSH settings, so nothing changed: $(printf '%s\n' "$out" | head -n 1)"
+    fi
+    if [ "$mfa_new" = 1 ] && ! mfa_effective_ok "$SSH_TMP/check/sshd_config"; then
+      die "the new SSH settings would not be in force: $MFA_REASON. Nothing changed."
+    fi
+    for name in $changed; do
+      if [ -f "$SSHD_DROPINS/$name" ]; then cp -p "$SSHD_DROPINS/$name" "$SSH_TMP/old/$name"; else : >"$SSH_TMP/added/$name"; fi
+    done
+    if [ "$pam_changed" = 1 ]; then
+      cp -p "$PAM_SSHD" "$SSH_TMP/old/pam.d-sshd"
+      install -m 0644 -o root -g root "$SSH_TMP/new/pam.d-sshd" "$PAM_SSHD" || { ssh_restore; die "could not write $PAM_SSHD"; }
+    fi
+    for name in $changed; do
+      if [ "$name" = 90-velexis.conf ]; then rm -f "$SSHD_DROPINS/$name"; continue; fi
+      install -D -m 0644 -o root -g root "$SSH_TMP/new/$name" "$SSHD_DROPINS/$name" \
+        || { ssh_restore; die "could not write $SSHD_DROPINS/$name"; }
+    done
+    if ! out="$(sshd -t -f "$SSHD_CONFIG" 2>&1)"; then
+      ssh_restore
+      die "sshd -t refuses $SSHD_CONFIG with the new files; the previous files are back: $(printf '%s\n' "$out" | head -n 1)"
+    fi
+    [ "$pam_changed" = 0 ] || changed="$changed $PAM_SSHD"
+    log "SSH settings changed:$changed"
+    # A reload makes the listening sshd re-execute with the new settings; open sessions are separate processes and stay.
+    if is_active ssh; then
+      systemctl reload ssh || warn "systemctl reload ssh failed: the running sshd keeps its old settings until it restarts"
+    else
+      log "ssh.service is not running; ssh.socket starts it with the new settings"
+    fi
+    case " $changed " in
+      *" 01-velexis-mfa.conf "* | *" $PAM_SSHD "*)
+        log "The second factor of $ADMIN_USER is on (ADMIN_MFA=$ADMIN_MFA). Keep this session open and log in from a second terminal now; if that fails, undo it from this session (docs/mvp/runbooks/ssh-access.md §5)."
+        ;;
+    esac
+  else
+    log "The SSH settings are up to date; sshd was not reloaded"
+  fi
+
+  if [ -n "$MFA_PENDING" ]; then
+    if [ -e "$SSHD_MFA" ]; then
+      warn "ADMIN_MFA=$ADMIN_MFA is not applied: $MFA_PENDING. $SSHD_MFA stays as it is, with the second factor it already holds."
+    else
+      warn "the SSH second factor of $ADMIN_USER is not applied: $MFA_PENDING. $SSHD_MFA is not written, so sshd's settings for $ADMIN_USER and $DEPLOY_USER stay as they are; check-vm.sh reports FAIL until it is."
+    fi
+    mfa_enrolment_steps "$home"
+  fi
+  rm -rf "$SSH_TMP"
+  SSH_TMP=""
 }
 
 # ---- users and directories (deployment-single-vm.md §4, ADR-0026) ---------------------------------------
@@ -675,6 +1008,20 @@ step_summary() {
 
 ================================================================================================
 Velexis VM provisioned. Check it: sudo bash $DEPLOY_DIR/scripts/check-vm.sh (only PASS lines expected).
+EOF
+  if [ -n "$MFA_PENDING" ] && [ -e "$SSHD_MFA" ]; then
+    cat <<EOF
+ADMIN_MFA=$ADMIN_MFA is NOT applied: $MFA_PENDING.
+  The second factor already in $SSHD_MFA stays in force; pass the same ADMIN_MFA as before, or enrol this one
+  and run --steps ssh (docs/mvp/runbooks/ssh-access.md).
+EOF
+  elif [ -n "$MFA_PENDING" ]; then
+    cat <<EOF
+The SSH second factor of $ADMIN_USER is NOT applied yet: $MFA_PENDING.
+  Enrol it and run --steps ssh (docs/mvp/runbooks/ssh-access.md); until then check-vm.sh reports FAIL for it.
+EOF
+  fi
+  cat <<EOF
 Next steps (docs/mvp/deployment-single-vm.md §3):
   1. Fill the CHANGE_ME values in /etc/velexis/*.env (SMTP, Stripe when needed, real host names).
   2. Put the age PUBLIC keys in /etc/velexis/backup/data-recipients.txt and config-recipients.txt,

@@ -148,7 +148,7 @@ Commands on the VM:
 | Check | Command |
 |---|---|
 | Shell scripts | `shellcheck -S style deploy/scripts/*.sh deploy/scripts/test/*.sh deploy/systemd/test/*.sh deploy/caddy/test/*.sh` |
-| `check-vm.sh` and the env file checks of `provision-vm.sh` | `sudo bash deploy/scripts/test/check-vm.test.sh` (root, Ubuntu 24.04, no services: `provision-vm.sh --steps users,keys,envfiles` under a temporary `VELEXIS_ROOT`, then `check-vm.sh` with fake system tools; never on a provisioned VM) |
+| `check-vm.sh`, the env file checks and the SSH second factor of `provision-vm.sh` | `sudo bash deploy/scripts/test/check-vm.test.sh` (root, Ubuntu 24.04, no services: `provision-vm.sh --steps users,keys,envfiles` and `--steps ssh` under a temporary `VELEXIS_ROOT`, then `check-vm.sh` with fake system tools; a real `sshd` also validates the SSH drop-ins when one works, `/usr/sbin/sshd` or `CHECKVM_SSHD=<command>`; never on a provisioned VM) |
 | Users, keys and env files | `sudo env SMOKE_NODE="$(command -v node)" bash deploy/systemd/test/units-smoke.sh` runs `provision-vm.sh --steps users,keys,envfiles` under a temporary `VELEXIS_ROOT` and checks the user boundary on the host even without systemd (steps 1 to 3; it then stops with a `FAIL` where systemd is not PID 1) |
 | Caddyfile | `VELEXIS_EDGE_SECRET=x caddy validate --config deploy/caddy/Caddyfile --adapter caddyfile` |
 | Caddyfile end to end | `bash deploy/caddy/test/caddy-smoke.sh` (Caddy 2.8.4 and Node 22, no root; [`caddy/test/README.md`](caddy/test/README.md)) |
