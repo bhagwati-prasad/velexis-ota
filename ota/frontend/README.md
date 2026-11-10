@@ -368,4 +368,4 @@ Assertions in every journey: no CSP violation (a `securitypolicyviolation` liste
 
 ## 14. Build your own frontend
 
-OTAs may build and host their own storefront in any framework (Next.js, React, Angular, Vue or plain HTML) with the SDK in token mode, on their own domain, against `api.ota.example.com` ([`decisions.md`](../../docs/mvp/decisions.md) §2). The outline of that guide, including what differs from the hosted storefront (no airline card, keys, token storage, CORS origins), is in [`docs/build-your-own-frontend.md`](docs/build-your-own-frontend.md). The hosted storefront's source is the reference implementation.
+OTAs may build and host their own storefront in any framework (Next.js, React, Angular, Vue or plain HTML) with the SDK in token mode, on their own domain, against `api.ota.example.com` ([`decisions.md`](../../docs/mvp/decisions.md) §2). The guide, including what differs from the hosted storefront (no airline card, keys, token storage, CORS origins), is in [`docs/build-your-own-frontend.md`](docs/build-your-own-frontend.md). The hosted storefront's source is the reference implementation.
