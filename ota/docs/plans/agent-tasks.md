@@ -2763,7 +2763,8 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - Every stored `supplier_requests` body is still redacted and cut to 64 KB (the repository's redaction tests pass unchanged), and the search and price integration tests pass unchanged.
 - **Verify:** `pnpm --filter @velexis/ota-backend test supplier-requests facets && node ota/backend/test/load/search-load.mjs --visitors 10 --searches 200 --offers 250`
 
-### OBE-096 · Meet the search budget at 10 visitors with fewer offers per search by default
+### OBE-096 · Meet the search budget at 10 visitors with fewer offers per search by default ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M6
 - **Depends on:** OBE-092

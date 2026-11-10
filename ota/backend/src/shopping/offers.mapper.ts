@@ -1288,7 +1288,10 @@ export function toFlightOffer(row: StoredOffer, context: OfferMappingContext): F
 
 /** The storefront's search defaults (`storefront_settings.search_defaults`), as far as they are well-formed. */
 export interface SearchDefaults {
-  /** The storefront limit of `max` / `maxFlightOffers` (1–250); 250 when not set. */
+  /**
+   * The storefront limit of `max` / `maxFlightOffers` (1–250): the offers a search asks Amadeus for when it names
+   * fewer or none; DEFAULT_OFFERS_PER_SEARCH when `search_defaults` sets no valid `maxResults`.
+   */
   readonly maxResults: number;
   /** `nonStop` of a SIMPLE search that does not send it. */
   readonly nonStop?: boolean | undefined;
@@ -1298,12 +1301,25 @@ export interface SearchDefaults {
   readonly sources?: readonly OfferSource[] | undefined;
 }
 
-/** The most offers a search stores (OADR-0002 point 1, `maxFlightOffers` ≤ 250). */
+/**
+ * The most offers a search stores (OADR-0002 point 1, `maxFlightOffers` ≤ 250), and the largest storefront limit a
+ * storefront's `search_defaults` can set.
+ */
 export const MAX_OFFERS_PER_SEARCH = 250;
 
 /**
+ * The storefront limit of a storefront whose `search_defaults` sets no valid `maxResults` (1–250), so the offers its
+ * searches ask Amadeus for: lead decision (13d) of 2026-11-10 (OBE-096), the largest number of offers per answer that
+ * met the 500 ms p95 of `flights.search` at 10 concurrent visitors in three runs of three (ota/docs/performance.md
+ * §5). The API's CPU per search grows with the offers of an answer; a storefront that sets its own `maxResults` keeps
+ * it, up to MAX_OFFERS_PER_SEARCH.
+ */
+export const DEFAULT_OFFERS_PER_SEARCH = 175;
+
+/**
  * `search_defaults` read leniently: `{ maxResults, nonStop, cabin, sources }` (the column's "max results, nonStop,
- * cabin, sources"); a key with a value of the wrong type is ignored.
+ * cabin, sources"); a key with a value of the wrong type is ignored, and a `maxResults` that is not a whole number
+ * from 1 to 250 gives DEFAULT_OFFERS_PER_SEARCH.
  */
 export function parseSearchDefaults(value: unknown): SearchDefaults {
   const raw = isRecord(value) ? value : {};
@@ -1313,7 +1329,8 @@ export function parseSearchDefaults(value: unknown): SearchDefaults {
     oneOf(source, OFFER_SOURCES),
   );
   return {
-    maxResults: max !== undefined && max >= 1 && max <= MAX_OFFERS_PER_SEARCH ? max : MAX_OFFERS_PER_SEARCH,
+    maxResults:
+      max !== undefined && max >= 1 && max <= MAX_OFFERS_PER_SEARCH ? max : DEFAULT_OFFERS_PER_SEARCH,
     nonStop: flag(raw["nonStop"]),
     cabin: oneOf(cabin, TRAVEL_CLASSES) ? cabin : undefined,
     sources: Array.isArray(raw["sources"]) && sources.length > 0 ? sources : undefined,

@@ -319,12 +319,13 @@ describe("flights.search", () => {
       departureDate: "2027-01-15",
       adults: "1",
       currencyCode: "EUR",
-      max: "250",
+      max: "175",
     });
-    // One Amadeus call, the GET of SIMPLE mode, with the default currency and the storefront's limit.
+    // One Amadeus call, the GET of SIMPLE mode, with the default currency and the storefront's limit: 175 offers for a
+    // storefront that sets no maxResults of its own (DEFAULT_OFFERS_PER_SEARCH, OBE-096).
     const calls = getFlightOffersCalls();
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.query).toMatchObject({ currencyCode: "EUR", max: "250", originLocationCode: "MAD" });
+    expect(calls[0]?.query).toMatchObject({ currencyCode: "EUR", max: "175", originLocationCode: "MAD" });
 
     // Sorted by price, every total is net + 10 %, inside `amadeus` too.
     const offers = offersOf(res.body);
@@ -429,13 +430,82 @@ describe("flights.search", () => {
     expect(body.criteria.amadeusBody).toMatchObject({
       currencyCode: "EUR",
       searchCriteria: {
-        maxFlightOffers: 250,
+        maxFlightOffers: 175,
         additionalInformation: { brandedFares: true, chargeableCheckedBags: true, fareRules: true },
       },
     });
     expect(offersOf(res.body)).toHaveLength(2);
     expect(body.page).toMatchObject({ limit: 2, nextCursor: expect.any(String) });
     expect(stub.requests().filter((entry) => entry.operation === "searchFlightOffers")).toHaveLength(1);
+  });
+
+  it("keeps a storefront's own maxResults of search_defaults, up to 250, and bounds max and maxFlightOffers by it [OBE-096 AC2]", async () => {
+    // Beta's settings row with a limit of its own, read from the jsonb column as a search reads it. Afterwards `{}`
+    // again, the provisioned value (the default of 175 offers), and none of these searches: the other tests expect
+    // beta's seeded settings and no searches of beta.
+    const setSearchDefaults = (value: Readonly<Record<string, unknown>>) =>
+      tenantTx(tenantDb, "tenant_beta", (trx) =>
+        trx
+          .updateTable("storefront_settings")
+          .set({ search_defaults: JSON.stringify(value) })
+          .execute(),
+      );
+    const advanced = (maxFlightOffers?: number) => ({
+      mode: "advanced",
+      query: {
+        originDestinations: [
+          {
+            id: "1",
+            originLocationCode: "MAD",
+            destinationLocationCode: "PAR",
+            departureDateTimeRange: { date: "2027-01-15" },
+          },
+        ],
+        travelers: [{ id: "1", travelerType: "ADULT" }],
+        sources: ["GDS"],
+        ...(maxFlightOffers === undefined ? {} : { searchCriteria: { maxFlightOffers } }),
+      },
+      resultOptions: { limit: 1 },
+    });
+    const criteriaOf = (res: request.Response) => {
+      expect(res.status).toBe(201);
+      expectResponseToMatch("createFlightSearch", res);
+      return (
+        res.body as {
+          criteria: {
+            amadeusQuery: Record<string, string> | null;
+            amadeusBody: { searchCriteria?: { maxFlightOffers?: number } } | null;
+          };
+        }
+      ).criteria;
+    };
+
+    try {
+      // A storefront that sets 250 still asks Amadeus for 250, the most a search stores.
+      await setSearchDefaults({ maxResults: 250 });
+      expect(criteriaOf(await search(betaSk, SIMPLE)).amadeusQuery).toMatchObject({ max: "250" });
+      expect(criteriaOf(await search(betaSk, advanced())).amadeusBody?.searchCriteria?.maxFlightOffers).toBe(
+        250,
+      );
+      expect(criteriaOf(await search(betaSk, { ...SIMPLE, max: 120 })).amadeusQuery).toMatchObject({
+        max: "120",
+      });
+      // A lower limit of its own bounds what a search asks for in both modes.
+      await setSearchDefaults({ maxResults: 40 });
+      expect(criteriaOf(await search(betaSk, { ...SIMPLE, max: 250 })).amadeusQuery).toMatchObject({
+        max: "40",
+      });
+      expect(
+        criteriaOf(await search(betaSk, advanced(100))).amadeusBody?.searchCriteria?.maxFlightOffers,
+      ).toBe(40);
+    } finally {
+      await setSearchDefaults({});
+      await tenantTx(tenantDb, "tenant_beta", (trx) => trx.deleteFrom("flight_searches").execute());
+    }
+    // What reached Amadeus: the GET queries of SIMPLE mode (the stub records no bodies; `amadeusBody` above is the
+    // POST body the API sent).
+    expect(getFlightOffersCalls().map((entry) => entry.query["max"])).toEqual(["250", "120", "40"]);
+    expect(stub.requests().filter((entry) => entry.operation === "searchFlightOffers")).toHaveLength(2);
   });
 
   it("answers 201 with zero offers for the destination ZZZ [OBE-021 AC2]", async () => {

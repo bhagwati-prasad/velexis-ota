@@ -7,9 +7,11 @@ import {
   buildAmadeusSearch,
   codesOf,
   criteriaRequestOf,
+  DEFAULT_OFFERS_PER_SEARCH,
   distribute,
   isoDuration,
   localDateTime,
+  MAX_OFFERS_PER_SEARCH,
   netTotalOf,
   offerColumns,
   parseIsoDuration,
@@ -26,6 +28,7 @@ import {
   type LocationInfo,
   type OfferMappingContext,
   type ParsedOffer,
+  type SearchDefaults,
   type StoredOffer,
 } from "./offers.mapper";
 
@@ -661,7 +664,7 @@ describe("buildAmadeusSearch", () => {
         children: 1,
         includedAirlineCodes: "AF,KL",
         currencyCode: "EUR",
-        max: 250,
+        max: DEFAULT_OFFERS_PER_SEARCH,
       },
     });
     const defaults = parseSearchDefaults({ maxResults: 50, nonStop: true, cabin: "BUSINESS" });
@@ -732,7 +735,7 @@ describe("buildAmadeusSearch", () => {
         currencyCode: "EUR",
         sources: ["GDS"],
         searchCriteria: {
-          maxFlightOffers: 250,
+          maxFlightOffers: DEFAULT_OFFERS_PER_SEARCH,
           additionalInformation: { brandedFares: true, chargeableCheckedBags: true, fareRules: false },
         },
       },
@@ -803,19 +806,83 @@ describe("buildAmadeusSearch", () => {
 
   it("reads search_defaults leniently", () => {
     expect(parseSearchDefaults(null)).toEqual({
-      maxResults: 250,
+      maxResults: DEFAULT_OFFERS_PER_SEARCH,
       nonStop: undefined,
       cabin: undefined,
       sources: undefined,
     });
     expect(parseSearchDefaults({ maxResults: 0, nonStop: "yes", cabin: "LUXURY", sources: ["XYZ"] })).toEqual(
       {
-        maxResults: 250,
+        maxResults: DEFAULT_OFFERS_PER_SEARCH,
         nonStop: undefined,
         cabin: undefined,
         sources: undefined,
       },
     );
+  });
+
+  it("asks for 175 offers by default and keeps a storefront's own maxResults of 1 to 250 [OBE-096 AC2]", () => {
+    // Lead decision (13d) of 2026-11-10: the default is the largest number of offers measured within the search
+    // budget (ota/docs/performance.md §5); what a search stores stays bounded by 250 (OADR-0002 point 1).
+    expect(DEFAULT_OFFERS_PER_SEARCH).toBe(175);
+    expect(MAX_OFFERS_PER_SEARCH).toBe(250);
+    for (const unset of [null, undefined, {}, { maxResults: null }, { nonStop: true }]) {
+      expect(parseSearchDefaults(unset).maxResults).toBe(175);
+    }
+    for (const invalid of [0, -1, 251, 1000, 1.5, 174.5, "250", "100", true, Number.NaN]) {
+      expect(parseSearchDefaults({ maxResults: invalid }).maxResults).toBe(175);
+    }
+    for (const own of [1, 20, 150, 174, 175, 176, 200, 249, 250]) {
+      expect(parseSearchDefaults({ maxResults: own }).maxResults).toBe(own);
+    }
+    expect(parseSearchDefaults({ maxResults: 250, nonStop: true, cabin: "BUSINESS" })).toEqual({
+      maxResults: 250,
+      nonStop: true,
+      cabin: "BUSINESS",
+      sources: undefined,
+    });
+  });
+
+  it("bounds a search's max and maxFlightOffers by the storefront's limit, the default or its own [OBE-096 AC2]", () => {
+    const { max: _max, ...withoutMax } = SIMPLE;
+    const simpleMax = (request: FlightSearchCreateRequest, defaults: SearchDefaults) =>
+      (buildAmadeusSearch(request, "EUR", defaults, "customer") as { query?: { max?: number } }).query?.max;
+    const advancedMax = (asked: number | undefined, defaults: SearchDefaults) => {
+      const criteria = { additionalInformation: { fareRules: false } };
+      const request: FlightSearchCreateRequest = {
+        mode: "advanced",
+        query: {
+          ...ADVANCED.query,
+          searchCriteria: asked === undefined ? criteria : { ...criteria, maxFlightOffers: asked },
+        },
+      };
+      const built = buildAmadeusSearch(request, "EUR", defaults, "console") as {
+        body?: { searchCriteria?: { maxFlightOffers?: number } };
+      };
+      return built.body?.searchCriteria?.maxFlightOffers;
+    };
+    const byDefault = parseSearchDefaults({});
+    const own250 = parseSearchDefaults({ maxResults: 250 });
+    const own40 = parseSearchDefaults({ maxResults: 40 });
+
+    // No storefront limit of its own: 175, and a search may ask for fewer, never for more.
+    expect(simpleMax(withoutMax, byDefault)).toBe(175);
+    expect(simpleMax({ ...SIMPLE, max: 250 }, byDefault)).toBe(175);
+    expect(simpleMax({ ...SIMPLE, max: 60 }, byDefault)).toBe(60);
+    expect(advancedMax(undefined, byDefault)).toBe(175);
+    expect(advancedMax(250, byDefault)).toBe(175);
+    expect(advancedMax(60, byDefault)).toBe(60);
+    // A storefront that sets 250 keeps it: 250 by default and at most.
+    expect(simpleMax(withoutMax, own250)).toBe(250);
+    expect(simpleMax({ ...SIMPLE, max: 300 }, own250)).toBe(250);
+    expect(simpleMax({ ...SIMPLE, max: 200 }, own250)).toBe(200);
+    expect(advancedMax(undefined, own250)).toBe(250);
+    expect(advancedMax(400, own250)).toBe(250);
+    // A lower limit of its own bounds both modes as before.
+    expect(simpleMax(withoutMax, own40)).toBe(40);
+    expect(simpleMax({ ...SIMPLE, max: 150 }, own40)).toBe(40);
+    expect(advancedMax(undefined, own40)).toBe(40);
+    expect(advancedMax(150, own40)).toBe(40);
   });
 
   it("describes the trip and the criteria of both modes", () => {
@@ -847,7 +914,7 @@ describe("buildAmadeusSearch", () => {
     expect(searchCriteriaOf(SIMPLE, built)).toMatchObject({
       mode: "simple",
       amadeusOperationId: "getFlightOffers",
-      amadeusQuery: { adults: "2", max: "250", includedAirlineCodes: "AF,KL" },
+      amadeusQuery: { adults: "2", max: String(DEFAULT_OFFERS_PER_SEARCH), includedAirlineCodes: "AF,KL" },
       amadeusBody: null,
     });
   });

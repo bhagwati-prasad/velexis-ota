@@ -20,14 +20,17 @@
 //      --stub-delay-ms (300 ms) and moves every last ticketing day 60 days ahead, as the M2 integration tests do, so no
 //      run depends on the fixture's calendar date. The stub answers every search with the 5 offers of its fixture;
 //      --offers n makes the proxy answer with n (the stub's repeated, each with its own id), since Amadeus answers up
-//      to 250 and the API asks for 250;
+//      to 250. As Amadeus does, the proxy never answers more offers than the search asked for: `max` of a GET search,
+//      `searchCriteria.maxFlightOffers` of a POST search, 250 when it names none. The API asks for the storefront's
+//      `maxResults`, 175 by default since OBE-096 (ota/docs/performance.md §5), so `--offers 250` gives answers of 175
+//      offers at a storefront without its own `maxResults`, which is every tenant of the run;
 //   3. the built API (`ota/backend/dist/main.js`) in a child process on a free port, started as the VM starts it
 //      (APP_ENV and NODE_ENV production, `--enable-source-maps`, `--max-old-space-size=640 --max-semi-space-size=32`,
 //      the NODE_OPTIONS of deploy/systemd/velexis-ota-api.service; --app-env test turns on the development checks such
 //      as the search_path leak guard), with random key files, edge secret and service key of its own, Redis database
 //      --redis-db, and a preload (written into the run's temporary folder) that measures without changing anything:
-//      the INSERT and UPDATE statements of the shopping tables, the waits for a connection of the API's pool, the RSS
-//      and the event-loop delay;
+//      the INSERT and UPDATE statements of the shopping tables, the waits for a connection of the API's pool, the RSS,
+//      the event-loop delay and the API process's CPU time;
 //   4. --warmup journeys per visitor at the measured concurrency and at every tenant (not counted, so the API's pool
 //      has its connections and the code is compiled; then a pause for the buckets to refill), then --visitors concurrent visitors run
 //      --searches journeys in all. A journey is one storefront visitor with an address of their own (X-Forwarded-For in 198.18.0.0/15, the
@@ -40,15 +43,16 @@
 //      refused counts as refused, which is the buckets doing their job, not an error;
 //   5. the report: latency per operation (2xx answers), `flights.search` without the stub delay and without the whole
 //      Amadeus call (the search row's `duration_ms`), the 429 answers, the Amadeus calls per second the proxy let
-//      through, the statement times, rows and table sizes, the API's RSS, pool waits and event-loop delay, and the run
-//      (date, commit, CPUs, load average before and after). --json <file> writes the same figures as JSON.
+//      through and the offers the searches asked for and got, the statement times, rows and table sizes, the API's
+//      CPU time per completed journey, RSS, pool waits and event-loop delay, and the run (date, commit, CPUs, load
+//      average before and after). --json <file> writes the same figures as JSON.
 // Everything is removed at the end, also after Ctrl-C or a SIGTERM (to the process group or to this process alone):
 // both processes, the database, the Redis database's keys and the temporary folder.
 //
 // Exit codes: 0 every answer was expected (2xx, or a 429 of the Amadeus buckets) and the p95 of `flights.search`
-// without the stub delay is within --p95-budget-ms; 1 an unexpected answer, the budget missed, or the run could not be
-// set up; 2 a usage error; 130 interrupted. Nothing it prints or writes carries a key, a password, a token or a
-// connection string.
+// without the stub delay is within --p95-budget-ms; 1 an unexpected answer (a search answer of the proxy with more
+// offers than asked for counts as one), the budget missed, or the run could not be set up; 2 a usage error; 130
+// interrupted. Nothing it prints or writes carries a key, a password, a token or a connection string.
 import { execFileSync, fork, spawn } from "node:child_process";
 import { generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
 import {
@@ -123,6 +127,11 @@ const REQUEST_TIMEOUT_MS = 60_000;
 const MAX_RETRY_AFTER_SECONDS = 30;
 /** How far ahead the proxy moves the offers' last ticketing day, as the M2 integration tests do. */
 const LAST_TICKETING_DAYS = 60;
+/**
+ * The most offers Amadeus answers to one search, and what it answers when the search names no `max` or
+ * `maxFlightOffers` (Flight Offers Search: "Max 250", default 250). --offers has the same bound.
+ */
+const AMADEUS_MAX_OFFERS = 250;
 /** The tenant tables whose statements the preload times and whose rows and sizes the report shows. */
 const MEASURED_TABLES = Object.freeze([
   "flight_searches",
@@ -160,7 +169,8 @@ const USAGE = `Usage: node ota/backend/test/load/search-load.mjs [options]
   --searches <n>       journeys in all, each one search, one results page and one price (default 200)
   --tenants <n>        tenants, 2 to 8; visitor i shops at tenant i mod n (default 2)
   --stub-delay-ms <n>  how long the stub holds every answer (default 300)
-  --offers <n>         offers in each search answer, 1 to 250; 0 keeps the stub's 5 (default 0)
+  --offers <n>         offers in each search answer, 1 to 250, never more than the search asked
+                       for (its max or maxFlightOffers); 0 keeps the stub's 5 (default 0)
   --think-ms <n>       pause of a visitor between two calls (default 0)
   --max-retries <n>    retries of a 429 after its Retry-After, as the SDK (default 2)
   --warmup <n>         warm-up journeys per visitor, not counted (default 1)
@@ -206,7 +216,7 @@ const INTEGER_OPTIONS = Object.freeze([
   ["searches", 200, 1, 100_000],
   ["tenants", 2, 2, TENANT_KEYS.length],
   ["stub-delay-ms", 300, 0, 30_000],
-  ["offers", 0, 0, 250],
+  ["offers", 0, 0, AMADEUS_MAX_OFFERS],
   ["think-ms", 0, 0, 600_000],
   ["max-retries", 2, 0, 10],
   ["warmup", 1, 0, 100],
@@ -413,42 +423,52 @@ function amadeusOperationOf(method, url) {
   return "other";
 }
 
-/** `max` (GET) or `searchCriteria.maxFlightOffers` (POST) of a search request, when it has one. */
+/**
+ * How many offers a search request asks for, as Amadeus reads it: `max` of a GET search (`/v2/shopping/flight-offers`
+ * query) or `searchCriteria.maxFlightOffers` of a POST search (body), each at most 250; 250 when the request names
+ * none. A value that is not a whole number from 1 counts as none (Amadeus would refuse it; the API never sends one).
+ */
 function maxOffersOf(url, body) {
+  const bounded = (value) =>
+    Number.isSafeInteger(value) && value >= 1 ? Math.min(value, AMADEUS_MAX_OFFERS) : AMADEUS_MAX_OFFERS;
   const max = new URL(url, "http://stub").searchParams.get("max");
   if (max !== null) {
-    return Number(max);
+    return bounded(/^\d+$/.test(max) ? Number(max) : Number.NaN);
   }
   try {
-    const value = JSON.parse(body.toString("utf8"))?.searchCriteria?.maxFlightOffers;
-    return typeof value === "number" ? value : undefined;
+    return bounded(JSON.parse(body.toString("utf8"))?.searchCriteria?.maxFlightOffers);
   } catch {
-    return undefined;
+    return AMADEUS_MAX_OFFERS;
   }
 }
 
 /**
- * A search answer of the stub with `offers` offers (the stub's repeated, each with its own id; 0 keeps them) and every
- * last ticketing day set to `lastTicketingDate`. Anything that is not a list of offers is returned as it is.
+ * A search answer of the stub with `offers` offers (the stub's repeated, each with its own id; 0 keeps the stub's) but
+ * never more than `max`, what the search asked for (maxOffersOf), as Amadeus answers; every last ticketing day is set
+ * to `lastTicketingDate`. Returns the payload and its number of offers; anything that is not a list of offers is
+ * returned as it is, with `offers: undefined`.
  */
 function reshapeSearchAnswer(payload, { offers, max, lastTicketingDate }) {
   let answer;
   try {
     answer = JSON.parse(payload.toString("utf8"));
   } catch {
-    return payload;
+    return { payload, offers: undefined };
   }
   const source = Array.isArray(answer?.data) ? answer.data : [];
   if (source.length === 0) {
-    return payload;
+    return { payload, offers: undefined };
   }
-  const count = offers === 0 ? source.length : Math.min(offers, max ?? offers);
+  const count = Math.min(offers === 0 ? source.length : offers, max);
   const data = Array.from({ length: count }, (_, index) => ({
     ...source[index % source.length],
     id: offers === 0 ? source[index].id : String(index + 1),
     lastTicketingDate,
   }));
-  return Buffer.from(JSON.stringify({ ...answer, meta: { ...answer.meta, count: data.length }, data }));
+  return {
+    payload: Buffer.from(JSON.stringify({ ...answer, meta: { ...answer.meta, count: data.length }, data })),
+    offers: count,
+  };
 }
 
 /** The response headers of the stub to send on: without the ones that describe the old body or connection. */
@@ -462,9 +482,17 @@ function relayedHeaders(headers, length) {
   return { ...kept, "content-length": String(length) };
 }
 
-/** The Amadeus counters of the proxy: calls, statuses and the stub's own time per operation, calls per second. */
+/**
+ * The Amadeus counters of the proxy: calls, statuses and the stub's own time per operation, calls per second, and the
+ * offers each search answer asked for and got.
+ */
 function newAmadeusCounters() {
-  return { startedAt: Date.now(), operations: new Map(), perSecond: new Map() };
+  return {
+    startedAt: Date.now(),
+    operations: new Map(),
+    perSecond: new Map(),
+    searchOffers: { asked: [], answered: [], moreThanAsked: 0 },
+  };
 }
 
 function summarizeAmadeus(counters) {
@@ -479,12 +507,18 @@ function summarizeAmadeus(counters) {
   }
   const windows = [...counters.perSecond.values()];
   const shopping = windows.reduce((total, count) => total + count, 0);
+  const { asked, answered, moreThanAsked } = counters.searchOffers;
   return {
     seconds: round1(seconds),
     operations,
     shoppingCallsPerSecond: {
       mean: round1(shopping / seconds),
       peak: windows.length === 0 ? 0 : Math.max(...windows),
+    },
+    searchOffers: {
+      asked: rounded(summarize(asked)),
+      answered: rounded(summarize(answered)),
+      moreThanAsked,
     },
   };
 }
@@ -529,14 +563,23 @@ async function serveAmadeus(options) {
           answer.on("end", () => {
             const operation = amadeusOperationOf(req.method ?? "GET", req.url ?? "/");
             const status = answer.statusCode ?? 502;
-            const payload =
-              operation === "search" && status === 200
-                ? reshapeSearchAnswer(Buffer.concat(parts), {
-                    offers: options.offers,
-                    max: maxOffersOf(req.url ?? "/", body),
-                    lastTicketingDate,
-                  })
-                : Buffer.concat(parts);
+            let payload = Buffer.concat(parts);
+            if (operation === "search" && status === 200) {
+              const max = maxOffersOf(req.url ?? "/", body);
+              const reshaped = reshapeSearchAnswer(payload, {
+                offers: options.offers,
+                max,
+                lastTicketingDate,
+              });
+              payload = reshaped.payload;
+              if (reshaped.offers !== undefined) {
+                counters.searchOffers.asked.push(max);
+                counters.searchOffers.answered.push(reshaped.offers);
+                if (reshaped.offers > max) {
+                  counters.searchOffers.moreThanAsked += 1;
+                }
+              }
+            }
             record(operation, status, performance.now() - received);
             setTimeout(() => {
               res.writeHead(status, relayedHeaders(answer.headers, payload.length));
@@ -628,8 +671,9 @@ async function startAmadeus(options, runDir) {
  * The preload of the API process (`node --require`). It wraps `pg.Client#query` and `pg.Pool#connect` of the `pg` the
  * API uses (`__PG__`) to time, never to change: the INSERT and UPDATE statements of the measured tables (`__TABLES__`)
  * from sending to answer, with their row counts, and the wait for a connection of the API's pool. It samples the RSS
- * and the event-loop delay, and answers the load test's `stats` and `reset` messages on the IPC channel. Durations,
- * counts and sizes only: never a statement's parameters, a row or a connection string.
+ * and the event-loop delay, reads the process's CPU time since the last `reset` (`process.cpuUsage`, user and system),
+ * and answers the load test's `stats` and `reset` messages on the IPC channel. Durations, counts and sizes only: never
+ * a statement's parameters, a row or a connection string.
  */
 const PRELOAD_SOURCE = `"use strict";
 // Written by ota/backend/test/load/search-load.mjs into the run's temporary folder and preloaded into the API process
@@ -643,6 +687,7 @@ let statements = new Map();
 let poolWaits = [];
 let maxWaiting = 0;
 let peakRss = process.memoryUsage.rss();
+let cpuSince = process.cpuUsage();
 const loopDelay = monitorEventLoopDelay({ resolution: 10 });
 loopDelay.enable();
 setInterval(() => {
@@ -691,8 +736,10 @@ pg.Pool.prototype.connect = function measuredConnect(callback) {
 
 function snapshot() {
   const memory = process.memoryUsage();
+  const cpu = process.cpuUsage(cpuSince);
   peakRss = Math.max(peakRss, memory.rss);
   return {
+    cpuMs: { user: cpu.user / 1000, system: cpu.system / 1000 },
     statements: Object.fromEntries(statements),
     poolWaitsMs: poolWaits,
     maxWaiting,
@@ -719,6 +766,7 @@ if (typeof process.send === "function") {
       poolWaits = [];
       maxWaiting = 0;
       peakRss = process.memoryUsage.rss();
+      cpuSince = process.cpuUsage();
       loopDelay.reset();
       process.send({ id: message.id, body: null });
     } else if (message.type === "stats") {
@@ -1267,7 +1315,12 @@ function figuresOf({ options, tenants, phaseMs, context, visits, amadeus, apiSta
           `${r.operation} ${r.status === 0 ? r.code : r.status} ${r.status === 0 ? "" : (r.code ?? "")}`.trim(),
         ),
     ),
+    ...(amadeus.searchOffers.moreThanAsked > 0
+      ? [`${amadeus.searchOffers.moreThanAsked} search answers of the proxy with more offers than asked for`]
+      : []),
   ];
+  const completedJourneys = count("completed");
+  const cpuMs = apiEnd.cpuMs.user + apiEnd.cpuMs.system;
   const statements = {};
   for (const [key, entry] of Object.entries(apiEnd.statements)) {
     const rows = entry.rows.filter((value) => typeof value === "number");
@@ -1305,8 +1358,8 @@ function figuresOf({ options, tenants, phaseMs, context, visits, amadeus, apiSta
     },
     phase: {
       seconds: round1(phaseMs / 1000),
-      journeys: { completed: count("completed"), refused: count("refused"), failed: count("failed") },
-      journeysPerSecond: round1(count("completed") / (phaseMs / 1000)),
+      journeys: { completed: completedJourneys, refused: count("refused"), failed: count("failed") },
+      journeysPerSecond: round1(completedJourneys / (phaseMs / 1000)),
       inFlightRequests: { mean: round1(context.busyMs / phaseMs), max: context.maxInFlight },
     },
     latencyMs: latency,
@@ -1314,6 +1367,12 @@ function figuresOf({ options, tenants, phaseMs, context, visits, amadeus, apiSta
     amadeus,
     statementsMs: statements,
     api: {
+      // The API process's CPU time over the measured phase (user and system), and per completed journey: the
+      // refused journeys' attempts are in the total too, as in the runs of ota/docs/performance.md §4.
+      cpuSeconds: round1(cpuMs / 1000),
+      cpuUserSeconds: round1(apiEnd.cpuMs.user / 1000),
+      cpuSystemSeconds: round1(apiEnd.cpuMs.system / 1000),
+      cpuMsPerCompletedJourney: completedJourneys === 0 ? undefined : round1(cpuMs / completedJourneys),
       rssAfterStartMiB: mib(apiStart.rssBytes),
       rssPeakMiB: mib(Math.max(apiEnd.peakRssBytes, apiEnd.maxRssBytes)),
       rssEndMiB: mib(apiEnd.rssBytes),
@@ -1355,7 +1414,8 @@ function report(run, figures) {
   );
   add(
     `  load      ${load.visitors} visitors, ${load.journeys} journeys on ${load.tenants.length} tenants, stub delay ` +
-      `${load.stubDelayMs} ms, ${load.offersPerSearch} offers per search, think time ${load.thinkMs} ms, ` +
+      `${load.stubDelayMs} ms, ${load.offersPerSearch} offers per search answer (at most what the search asks ` +
+      `for), think time ${load.thinkMs} ms, ` +
       `APP_ENV ${load.appEnv}\n`,
   );
   add(
@@ -1386,13 +1446,21 @@ function report(run, figures) {
   }
   const rate = figures.amadeus.shoppingCallsPerSecond;
   add(`  search and price: ${rate.mean} calls/s on average, ${rate.peak} in the busiest second\n`);
+  const { asked, answered, moreThanAsked } = figures.amadeus.searchOffers;
+  const p50AndMax = (s) => (s.count === 0 ? "-" : `p50 ${s.p50}, max ${s.max}`);
+  add(
+    `  search answers with offers: ${answered.count}; offers asked for (max, maxFlightOffers) ${p50AndMax(asked)}; ` +
+      `offers answered ${p50AndMax(answered)}; answers with more than asked for: ${moreThanAsked}\n`,
+  );
   add(`\nStatements of the API (pg client, ms)${" ".repeat(width - 35)}${SUMMARY_HEADER}  rows\n`);
   for (const [key, summary] of Object.entries(figures.statementsMs).sort(([a], [b]) => a.localeCompare(b))) {
     add(`${summaryLine(key, summary, width).trimEnd()}${pad(summary.meanRows, 6)}\n`);
   }
   const api = figures.api;
   add(
-    `\nAPI process: RSS ${api.rssAfterStartMiB} MiB after start, ${api.rssPeakMiB} MiB peak, ${api.rssEndMiB} MiB at ` +
+    `\nAPI process: CPU ${api.cpuSeconds} s over the phase (user ${api.cpuUserSeconds} s, system ` +
+      `${api.cpuSystemSeconds} s), ${api.cpuMsPerCompletedJourney ?? "-"} ms per completed journey; ` +
+      `RSS ${api.rssAfterStartMiB} MiB after start, ${api.rssPeakMiB} MiB peak, ${api.rssEndMiB} MiB at ` +
       `the end (heap used ${api.heapUsedEndMiB} MiB); pool wait p95 ${api.poolWaitMs.p95 ?? "-"} ms, max ` +
       `${api.poolWaitMs.max ?? "-"} ms, at most ${api.poolMaxWaiting} waiting; event-loop delay p50 ` +
       `${api.eventLoopDelayMs.p50} ms, p99 ${api.eventLoopDelayMs.p99} ms, max ${api.eventLoopDelayMs.max} ms\n`,

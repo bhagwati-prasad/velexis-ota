@@ -4,7 +4,8 @@ This page records measured figures of the OTA backend and the decisions taken fr
 
 - OBE-028 started the page with the M2 search load test and the decision on the Amadeus buckets.
 - OBE-092 cut the API's CPU per search of 250 offers (§4).
-- FIX-W46-SHARED gave the API a larger young generation, decision (a) of §4, and measured it (§4, Step 4); OBE-096 takes the next step.
+- FIX-W46-SHARED gave the API a larger young generation, decision (a) of §4, and measured it (§4, Step 4).
+- OBE-096 took decision (b) of §4: a storefront without its own `maxResults` asks Amadeus for 175 offers per search, the largest number measured within the search budget (§5).
 - OBE-088 adds the M6 measurements against the VM's memory budget ([architecture §3](../../docs/mvp/architecture.md#3-hosts-ports-and-the-vm)).
 
 Related:
@@ -93,7 +94,7 @@ The options of each run are added to `--visitors 10 --searches 200` unless they 
    - 460 ms with 50 offers (B);
    - 945–972 ms with 250 offers (C, H).
 
-   A single visitor with 250 offers stays at 214 ms (D). So the time is CPU, not waiting: a 250-offer search costs the API about 150 ms of CPU, and ten of them queue on the one event loop (event-loop delay p99 73–75 ms in C and H). Amadeus answers up to 250 offers, and the API asks for 250 unless a storefront sets a lower `maxResults`. With real answers of that size, 10 simultaneous searches therefore miss the budget. **Follow-up task OBE-092** in the plan (§5) covers it; §4 has its runs.
+   A single visitor with 250 offers stays at 214 ms (D). So the time is CPU, not waiting: a 250-offer search costs the API about 150 ms of CPU, and ten of them queue on the one event loop (event-loop delay p99 73–75 ms in C and H). Amadeus answers up to 250 offers, and the API asked for 250 unless a storefront set a lower `maxResults` (175 by default since OBE-096, §5). With real answers of that size, 10 simultaneous searches therefore miss the budget. **Follow-up task OBE-092** in the plan (§6) covers it; §4 has its runs.
 
    This is where the CPU goes. The API was profiled with the inspector during 60 journeys of 2 visitors with 250 offers, 10.1 s of busy CPU in all. The shares overlap, because `decimal.js` runs inside the pricing engine and the facets.
 
@@ -256,6 +257,8 @@ The API's RSS was 252–258 MiB after start and at most 296 MiB in every run but
 
 *2026-11-06 (lead decision (11h)).* The owner took (a): the OTA API starts with `--max-semi-space-size=32` since FIX-W46-SHARED (Step 4). It is not enough on its own, so (b) is next: OBE-096.
 
+*2026-11-10 (lead decision (13d)).* (b): the default number of offers per search is the largest measured number that meets the 500 ms p95 in three runs of three, and a storefront can still set up to 250. OBE-096 measured it: 175 (§5). (c) is not needed for the budget on a quiet machine; §5 item 3 says when to come back to it.
+
 ### Step 4: a larger young generation (FIX-W46-SHARED, 10 November 2026)
 
 Lead decision (11h) of 2026-11-06 carried out (a): `deploy/systemd/velexis-ota-api.service` starts the API with `NODE_OPTIONS=--max-old-space-size=640 --max-semi-space-size=32` (32 MiB per semi-space instead of V8's default of 16 MiB for this heap; the old generation keeps its 640 MiB, and V8's heap limit grows from 688 to 736 MiB, under the unit's `MemoryMax` of 768 MiB), and `search-load.mjs` starts it the same way. The runs below compare the two start commands on the same build.
@@ -284,10 +287,134 @@ Every run had 0 unexpected answers. The offer insert kept its time (p50 25–29 
 3. **The 500 ms p95 is still not met reliably.** Without the stub delay the p95 was 475, 507 and 535 ms after (one run of three within the budget) and 517, 507 and 499 ms before (also one of three); the medians are equal (507 ms). The p95 comes from the bursts after a `429` (§2 item 1, Step 3 item 2): ten searches then share the event loop, and a run that refuses fewer journeys (S6: 11) has more of them. A young generation of 32 MiB per semi-space takes about 10 ms of CPU off a journey, which the bursts do not show.
 4. **Kept.** The flag changes no behaviour and costs 45 MiB, and the CPU it saves is real, so the unit keeps it. The next step of the decision above, (b) a lower default `maxResults`, is task **OBE-096**; (c) stays the fallback.
 
-## 5. Follow-ups
+## 5. Fewer offers per search by default (OBE-096, 10 November 2026)
+
+Lead decision (13d) of 2026-11-10, which the owner approved, took the place of the owner's pick in OBE-096's step 3: a storefront without a `maxResults` of its own asks Amadeus for the largest number of offers per search that the runs below measured within the 500 ms p95 of `flights.search` without the stub delay, at 10 visitors, in three runs of three. A storefront can still set up to 250 in its search defaults, and 250 stays the bound of what a search stores ([OADR-0002](adr/0002-offer-and-priced-offer-caching.md) point 1).
+
+### Set-up
+
+| Item | Value |
+|---|---|
+| Code | **Step 2:** the API built from `f8c3c8bb45ef`, the integration branch head this task started from. That API asks Amadeus for 250 offers per search. The runs used this task's `search-load.mjs`, so the script prints `f8c3c8bb45ef+changes`. **Step 4:** the same build with this task's `offers.mapper.ts`, which asks for 175. |
+| Machine | 4 vCPUs (`nproc` 4; Intel Xeon @ 2.10 GHz), 15.7 GiB RAM, Linux 6.18.44 x64, Node 22.23.4, PostgreSQL 16.15, Redis 7.0.15 (a private instance on its own port). The machine is shared with other agents' builds and test suites. |
+| The lock and the load | Every run held the machine-wide end-to-end lock. The Q and V runs started only once the 1-minute load average was below 1.0, as OBE-092's paired runs did; they waited for that without holding the lock. The R runs ran back to back while another agent's integration suite ran on the same machine (1-minute load average 1.3 to 2.7). |
+| API, Amadeus, tenants, visitors | As in §2, with `--visitors 10 --searches 200` and `--offers` 250, 200, 175, 150, 125 or 100. The proxy answers no more offers than a search asks for (Step 1). In Step 2 the API asked for 250, so every answer had the `--offers` offers. |
+| CPU time | The script's preload now reads the API process's CPU time over the measured phase (`process.cpuUsage()`, user and system). Steps 3 and 4 of §4 took it from a copy of the script that was not committed. "CPU per journey" divides it by the completed journeys, as there. |
+
+### Step 1: the proxy answers no more offers than asked for
+
+Before this task, `search-load.mjs` already cut a stretched answer to the search's `max` or `maxFlightOffers`. It did not cut the stub's own 5 offers (`--offers 0`), and it read a missing or malformed value as no limit.
+
+- **The bound.** The proxy now answers a search with at most the offers it asked for, as Amadeus does: `max` of a GET search, `searchCriteria.maxFlightOffers` of a POST search. When the search names neither, or a value Amadeus would refuse, the bound is 250, Amadeus's most and its default.
+- **The report.** It gives the offers the searches asked for and the offers the proxy answered (p50 and maximum). An answer with more offers than asked for counts as an unexpected answer, so the run exits 1.
+- **The runs.** In every run below that count was 0. Every answer had the smaller of `--offers` and what the search asked for.
+
+### Step 2: the runs
+
+Every run has `--visitors 10 --searches 200` and 0 unexpected answers. A run's name is its round and its offers per answer. "−delay" subtracts the 300 ms stub delay; "−Amadeus" subtracts the search row's `duration_ms`.
+
+| Run | Offers per answer | Started (UTC) | Load avg start → end | Journeys completed / refused | search p50 / p95 | **search p95 −delay** | search p95 −Amadeus | listResults p95 | price p95 −delay | API CPU (s) | CPU per journey (ms) | RSS after start / peak (MiB) | Event-loop delay p99 / max |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Q1-250 | 250 | 20:18:30 | 0.99 → 1.43 | 180 / 20 | 430 / 805 | **505** | 440 | 81 | 165 | 20.8 | 115 | 296 / 333 | 25 / 63 |
+| Q2-250 | 250 | 20:27:51 | 0.93 → 1.49 | 185 / 15 | 435 / 818 | **518** | 483 | 90 | 177 | 21.1 | 114 | 305 / 342 | 26 / 94 |
+| Q3-250 | 250 | 20:34:32 | 0.98 → 0.86 | 179 / 21 | 431 / 788 | **488** | 456 | 88 | 179 | 20.0 | 112 | 295 / 335 | 26 / 46 |
+| Q1-200 | 200 | 20:19:47 | 0.93 → 1.00 | 186 / 14 | 403 / 814 | **514** | 463 | 75 | 162 | 19.0 | 102 | 308 / 342 | 21 / 63 |
+| Q2-200 | 200 | 20:26:59 | 0.85 → 1.01 | 187 / 13 | 418 / 808 | **508** | 471 | 81 | 176 | 19.9 | 106 | 308 / 342 | 24 / 53 |
+| Q3-200 | 200 | 20:36:04 | 0.88 → 0.67 | 179 / 21 | 403 / 777 | **477** | 441 | 85 | 186 | 19.0 | 106 | 307 / 344 | 22 / 44 |
+| Q1-175 | 175 | 20:20:38 | 0.92 → 0.72 | 185 / 15 | 409 / 764 | **464** | 451 | 89 | 180 | 19.1 | 103 | 297 / 329 | 20 / 59 |
+| Q2-175 | 175 | 20:26:13 | 0.97 → 0.85 | 184 / 16 | 394 / 753 | **453** | 423 | 81 | 211 | 18.8 | 102 | 296 / 329 | 20 / 71 |
+| Q3-175 | 175 | 20:29:04 | 0.98 → 1.32 | 187 / 13 | 399 / 757 | **457** | 411 | 76 | 174 | 18.2 | 97 | 306 / 339 | 20 / 56 |
+| Q1-150 | 150 | 20:21:25 | 0.72 → 0.52 | 183 / 17 | 393 / 748 | **448** | 425 | 84 | 196 | 17.2 | 94 | 307 / 340 | 19 / 40 |
+| Q2-150 | 150 | 20:25:26 | 0.95 → 0.97 | 188 / 12 | 392 / 713 | **413** | 394 | 79 | 166 | 18.4 | 98 | 299 / 331 | 18 / 60 |
+| Q3-150 | 150 | 20:36:51 | 0.67 → 1.05 | 183 / 17 | 401 / 765 | **465** | 443 | 93 | 183 | 18.2 | 99 | 305 / 339 | 19 / 52 |
+| Q1-125 | 125 | 20:22:11 | 0.52 → 0.85 | 186 / 14 | 387 / 655 | **355** | 347 | 75 | 149 | 16.0 | 86 | 309 / 336 | 16 / 43 |
+| Q2-125 | 125 | 20:24:30 | 0.65 → 1.13 | 178 / 22 | 394 / 669 | **369** | 356 | 84 | 182 | 16.3 | 92 | 309 / 336 | 17 / 34 |
+| Q3-125 | 125 | 20:33:46 | 0.98 → 0.98 | 183 / 17 | 393 / 698 | **398** | 369 | 90 | 231 | 16.9 | 93 | 298 / 329 | 18 / 35 |
+| Q1-100 | 100 | 20:22:58 | 0.86 → 0.85 | 179 / 21 | 385 / 629 | **329** | 309 | 82 | 180 | 15.2 | 85 | 297 / 324 | 15 / 32 |
+| Q2-100 | 100 | 20:23:44 | 0.85 → 0.65 | 186 / 14 | 381 / 684 | **384** | 366 | 83 | 165 | 15.9 | 86 | 295 / 322 | 16 / 37 |
+| Q3-100 | 100 | 20:35:18 | 0.86 → 0.87 | 181 / 19 | 388 / 737 | **437** | 411 | 91 | 206 | 16.6 | 92 | 297 / 323 | 17 / 45 |
+| R1-250 | 250 | 20:01:14 | 1.30 → 1.76 | 180 / 20 | 427 / 904 | **604** | 535 | 90 | 162 | 19.3 | 107 | 301 / 337 | 27 / 58 |
+| R2-250 | 250 | 20:06:43 | 2.37 → 2.60 | 181 / 19 | 428 / 821 | **521** | 487 | 101 | 181 | 18.8 | 104 | 298 / 336 | 26 / 68 |
+| R3-250 | 250 | 20:09:03 | 1.67 → 2.27 | 177 / 23 | 442 / 968 | **668** | 635 | 100 | 218 | 22.0 | 124 | 300 / 346 | 28 / 93 |
+| R1-200 | 200 | 20:02:00 | 1.76 → 2.41 | 180 / 20 | 423 / 880 | **580** | 564 | 85 | 183 | 19.3 | 107 | 303 / 340 | 24 / 59 |
+| R2-200 | 200 | 20:05:55 | 2.31 → 2.32 | 180 / 20 | 430 / 904 | **604** | 561 | 96 | 188 | 18.4 | 102 | 301 / 332 | 24 / 86 |
+| R3-200 | 200 | 20:07:29 | 2.60 → 2.27 | 177 / 23 | 428 / 878 | **578** | 552 | 91 | 185 | 19.2 | 108 | 302 / 335 | 24 / 81 |
+| R1-150 | 150 | 20:02:47 | 2.41 → 2.67 | 182 / 18 | 410 / 730 | **430** | 409 | 73 | 193 | 17.8 | 98 | 300 / 332 | 19 / 54 |
+| R2-150 | 150 | 20:05:10 | 1.96 → 2.31 | 174 / 26 | 409 / 827 | **527** | 474 | 77 | 202 | 17.2 | 99 | 300 / 329 | 20 / 91 |
+| R3-150 | 150 | 20:09:51 | 2.27 → 2.45 | 175 / 25 | 409 / 733 | **433** | 409 | 77 | 182 | 17.8 | 102 | 298 / 331 | 20 / 36 |
+| R1-100 | 100 | 20:03:35 | 2.67 → 2.45 | 186 / 14 | 396 / 723 | **423** | 400 | 84 | 196 | 15.6 | 84 | 298 / 326 | 18 / 46 |
+| R2-100 | 100 | 20:04:23 | 2.58 → 1.96 | 184 / 16 | 384 / 668 | **368** | 355 | 79 | 165 | 15.2 | 82 | 301 / 330 | 17 / 31 |
+| R3-100 | 100 | 20:08:16 | 2.27 → 1.73 | 185 / 15 | 388 / 650 | **350** | 325 | 73 | 168 | 16.7 | 90 | 300 / 333 | 17 / 36 |
+
+**Per number of offers.** The Q runs, with the R runs in brackets:
+
+| Offers per answer | search p95 −delay | Runs within 500 ms | CPU per journey (ms) | RSS peak (MiB) | Offer insert p50 (ms) |
+|---|---|---|---|---|---|
+| 250 | 488–518 (521–668) | 1 of 3 (0 of 3) | 112–115 | 333–342 | 26–28 |
+| 200 | 477–514 (578–604) | 1 of 3 (0 of 3) | 102–106 | 342–344 | 20–21 |
+| **175** | **453–464** | **3 of 3** | 97–103 | 329–339 | 17–19 |
+| 150 | 413–465 (430–527) | 3 of 3 (2 of 3) | 94–99 | 331–340 | 15–17 |
+| 125 | 355–398 | 3 of 3 | 86–93 | 329–336 | 13–14 |
+| 100 | 329–437 (350–423) | 3 of 3 (3 of 3) | 85–92 | 322–324 | 11–12 |
+
+The RSS after start was 295–309 MiB in every run.
+
+### What the runs show
+
+1. **175 offers is the largest number within the budget in three runs of three.** On the quiet machine (Q runs):
+   - 175 offers per answer gave 453–464 ms;
+   - 200 gave 477–514 ms, one run of three within the budget;
+   - 250 gave 488–518 ms, one run of three within, as in Step 4 of §4.
+
+   Every number from 175 down met the budget in its three runs.
+2. **The API's CPU per journey falls with the offers.** It falls by about 0.17 ms per offer: from 112–115 ms at 250 offers to 85–92 ms at 100. The offer insert falls from 26–28 ms to 11–12 ms at p50. What is left at 100 offers is the results page, the price and the parts of the search that do not grow with the answer. The RSS hardly changes: its peak was 322–344 MiB, against the unit's `MemoryMax` of 768 MiB.
+3. **A busy machine takes the margin away.** The R runs shared the 4 vCPUs with another agent's integration suite (load average 1.3–2.7):
+   - only 100 offers met the budget in three runs of three;
+   - 150 missed it once (527 ms);
+   - 200 and 250 missed it in every run.
+
+   As in §2 item 1, the bursts after a `429` set the p95: ten searches then share the event loop, and a busy machine gives that event loop less CPU. On the VM the API shares its vCPUs with the worker, PostgreSQL, Redis and Caddy. OBE-088 measures that mixed traffic. If it shows the same, the owner can lower the default (`DEFAULT_OFFERS_PER_SEARCH`, one constant), or take decision (c) of §4: a worker thread for the pricing, facets and insert of a search, or a second API process behind Caddy.
+
+### Step 4: the default of 175 offers
+
+**What changed.** `parseSearchDefaults` ([`offers.mapper.ts`](../backend/src/shopping/offers.mapper.ts)) answers `DEFAULT_OFFERS_PER_SEARCH`, 175, when `storefront_settings.search_defaults` has no valid `maxResults`. A valid one, a whole number from 1 to 250, is kept.
+
+- **The cap.** A search's `max` (SIMPLE) and `maxFlightOffers` (ADVANCED) are capped by that limit as before, and `MAX_OFFERS_PER_SEARCH` (250) stays the bound of what a search stores.
+- **The hosted storefront.** It sends no `max`, so it now gets up to 175 offers per search, nine results pages of 20.
+- **The console.** Its searches read the same settings row, so a console-scope search of an OTA without its own `maxResults` asks for at most 175 offers too, also when it sends a larger `max` or `maxFlightOffers`. The OTA admin's shopping page asks for 50.
+- **More offers.** An OTA that wants more sets `maxResults`, up to 250, in `storefront_settings.search_defaults`. No console screen or operation writes that column yet.
+- **The contract.** The OpenAPI document did not change: it says that the storefront limit caps `max` and `maxFlightOffers`. It still names 250 as their default when a search omits them, the value the storefront limit then caps to 175.
+
+**The Verify command.** The task's Verify command ran three times with the default of 175 (V runs), each under the lock and started at a load average below 1.0. The Verify command is the unit tests of `offers.mapper` and `search-load.mjs --visitors 10 --searches 200 --offers 250`. The API asked for 175 offers and the proxy answered 175.
+
+| Run | Offers per answer | Started (UTC) | Load avg start → end | Journeys completed / refused | search p50 / p95 | **search p95 −delay** | search p95 −Amadeus | listResults p95 | price p95 −delay | API CPU (s) | CPU per journey (ms) | RSS after start / peak (MiB) | Event-loop delay p99 / max |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| V1 | 175 | 20:38:23 | 0.84 → 0.98 | 186 / 14 | 405 / 770 | **470** | 433 | 69 | 178 | 18.6 | 100 | 299 / 332 | 21 / 50 |
+| V2 | 175 | 20:39:13 | 0.98 → 0.88 | 186 / 14 | 406 / 740 | **440** | 413 | 83 | 163 | 18.4 | 99 | 297 / 328 | 20 / 42 |
+| V3 | 175 | 20:40:08 | 0.89 → 0.81 | 177 / 23 | 409 / 744 | **444** | 418 | 83 | 188 | 18.9 | 107 | 299 / 331 | 21 / 44 |
+
+The p95 without the stub delay was 470, 440 and 444 ms: within the budget in three runs of three. The Verify command exited 0 each time, with the 51 unit tests its filter `offers.mapper` selects (`offers.mapper.test.ts` and `priced-offers.mapper.test.ts`) passing. Every search asked for 175 offers and got 175, and no answer had more than asked for. The CPU per journey (99–107 ms), the RSS and the offer insert (p50 18–19 ms) are those of the Q runs of 175.
+
+**The review's re-runs.** The second-agent review ran the Verify command six more times on the committed task (`aa0ca4c387ad`; the script prints `+changes` for the review's test edit, which leaves the API as it was), each under the lock:
+
+- RV1 to RV3 started at a 1-minute load average below 1.0, as the V runs, but after a busy quarter of an hour (5-minute load average 2.3–2.8);
+- RW1 to RW3 started once the 1-minute load average was below 1.0 and the 5-minute below 1.5.
+
+| Run | Offers per answer | Started (UTC) | Load avg start → end | Journeys completed / refused | search p50 / p95 | **search p95 −delay** | search p95 −Amadeus | listResults p95 | price p95 −delay | API CPU (s) | CPU per journey (ms) | RSS after start / peak (MiB) | Event-loop delay p99 / max |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| RV1 | 175 | 22:35:16 | 0.95 → 0.96 | 183 / 17 | 391 / 826 | **526** | 482 | 87 | 168 | 17.4 | 95 | 307 / 339 | 19 / 52 |
+| RV2 | 175 | 22:36:04 | 0.96 → 1.14 | 183 / 17 | 392 / 765 | **465** | 410 | 76 | 155 | 17.3 | 95 | 305 / 337 | 19 / 43 |
+| RV3 | 175 | 22:37:03 | 0.97 → 1.12 | 187 / 13 | 405 / 799 | **499** | 473 | 74 | 158 | 17.1 | 92 | 297 / 328 | 18 / 61 |
+| RW1 | 175 | 22:39:37 | 0.18 → 0.77 | 192 / 8 | 397 / 765 | **465** | 450 | 88 | 145 | 18.2 | 95 | 299 / 333 | 19 / 51 |
+| RW2 | 175 | 22:40:26 | 0.79 → 1.16 | 185 / 15 | 406 / 756 | **456** | 410 | 81 | 185 | 17.7 | 96 | 297 / 330 | 20 / 52 |
+| RW3 | 175 | 22:41:30 | 1.05 → 0.88 | 188 / 12 | 394 / 713 | **413** | 374 | 76 | 180 | 17.7 | 94 | 308 / 339 | 20 / 55 |
+
+RV1 missed the budget at 526 ms, and RV3 met it by 1 ms. The other runs were within it, RW1 to RW3 in three runs of three. So 175 offers met the budget in 8 of the 9 Verify runs, with a margin from 87 ms (RW3) down to 1 ms (RV3). RV1 spent no more CPU per journey than the others (95 ms) and its p90 was 269 ms: as in item 3 above, its p95 came from the bursts after a `429`, which a machine that has just been busy serves more slowly.
+
+## 6. Follow-ups
 
 | Task | What |
 |---|---|
 | OBE-092 (M6) | Added by OBE-028. Cut the API's CPU per search so that answers of 250 offers meet the 500 ms p95 at 10 concurrent visitors. The largest shares are the `supplier_requests` copy of the whole answer, facets, `decimal.js` and the driver (§2 item 2). If it cannot be met, this page records the decision needed: a lower default `maxResults`, a worker thread or a second API process. **Done (§4):** about 30 ms of CPU less per search; the p95 is 433–619 ms, so §4 records the decision needed (a larger young generation first). |
-| OBE-096 (M6) | Added by FIX-W46-SHARED (Step 4): `--max-semi-space-size=32` takes about 9 % of the API's CPU per journey off but leaves the p95 at 475–535 ms. Measure the search budget with fewer offers per answer and, once the owner picks the default number of offers a storefront asks for, set it; if no default the owner accepts meets the budget, record the decision for a worker thread or a second API process. |
+| OBE-096 (M6) | Added by FIX-W46-SHARED (Step 4): `--max-semi-space-size=32` takes about 9 % of the API's CPU per journey off but leaves the p95 at 475–535 ms. Measure the search budget with fewer offers per answer and, once the owner picks the default number of offers a storefront asks for, set it; if no default the owner accepts meets the budget, record the decision for a worker thread or a second API process. **Done (§5):** lead decision (13d) of 2026-11-10 set the rule, and the runs set the default: a storefront without its own `maxResults` asks for 175 offers per search, and the Verify command met the budget in three runs of three (440–470 ms). The review's six re-runs met it five times (413–499 ms) and missed it once at 526 ms, after a busy quarter of an hour. A storefront can still set up to 250. On a busy machine the margin is gone (§5 item 3); OBE-088 measures the VM's mixed traffic. |
 | OBE-088 (M6) | Mixed traffic on five tenants for 30 minutes with the worker running; the API's and the worker's RSS against `MemoryMax`, PostgreSQL connections, Redis memory, queue latency; the table growth of §2 item 4 against the VM's disk. |
