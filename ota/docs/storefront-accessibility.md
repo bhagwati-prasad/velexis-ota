@@ -6,7 +6,7 @@ The pass of task OFE-024 over the hosted storefront ([`ota/frontend`](../fronten
 |---|---|---|
 | Automated pass: axe (WCAG 2.2 A and AA) on every page and state | No serious or critical violation on any of the 20 pages: 120 checks of the shared states and 76 of the pages' own states (2026-11-06) | Done; runs in every `storefront` run |
 | Manual screen-reader pass (NVDA, VoiceOver) through search and checkout | Script below; not yet run | **Pending: human step** (no Windows or macOS machine here) |
-| Lighthouse mobile, home and results | LCP and INP within target on both; CLS above 0.1 on both (2026-11-06). After OFE-027 (2026-11-10) the results page's own shifts are 0.025 of its 0.152 (0.749 before); the rest, 0.127, was the header growing and the test banner appearing when the configuration arrives, on every page (§3.4). Home on a test storefront: CLS 0.04 in each of three runs since OFE-028, which moved the banner and keeps the header's two rows on a phone from the first paint (2026-11-10, §3.5) | Home done (OFE-028); results: OFE-027 (its part done, the figure to be measured again with OFE-028 merged) and OFE-029 in the plan (§3.3) |
+| Lighthouse mobile, home and results | LCP and INP within target on both; CLS above 0.1 on both (2026-11-06). After OFE-027 (2026-11-10) the results page's own shifts are 0.025 of its 0.152 (0.749 before); the rest, 0.127, was the header growing and the test banner appearing when the configuration arrives, on every page (§3.4). Home on a test storefront: CLS 0.04 in each of three runs since OFE-028, which moved the banner and keeps the header's two rows on a phone from the first paint (2026-11-10, §3.5) | Done: with OFE-027 and OFE-028 merged, home 0.040 and results 0.027 in each of three runs, LCP and INP within target (2026-11-10, §3.6); OFE-029 in the plan (§3.3) |
 | Font budget: at most 2 families and 120 KB per page | In `scripts/check-budgets.mjs` (every build); every page within it after one fix (§4) | Done |
 
 ## 1. Automated pass (axe)
@@ -97,9 +97,9 @@ The CLS target is not met, so it has follow-up tasks in [`plans/agent-tasks.md`]
 
 | Task | What it changes | Acceptance |
 |---|---|---|
-| [OFE-027](plans/agent-tasks.md#ofe-027--keep-the-results-page-from-shifting-on-phones) · Keep the results page from shifting on phones | On narrow screens the filters behind a disclosure above the results, or their space reserved before the facets arrive; the desktop sidebar, every filter's label and keyboard path kept | CLS of the results page ≤ 0.1 in three runs; `search.e2e.ts`, `keyboard-checkout.e2e.ts` and `a11y-pages.e2e.ts` pass |
+| [OFE-027](plans/agent-tasks.md#ofe-027--keep-the-results-page-from-shifting-on-phones) · Keep the results page from shifting on phones | On narrow screens the filters behind a disclosure above the results, or their space reserved before the facets arrive; the desktop sidebar, every filter's label and keyboard path kept | CLS of the results page ≤ 0.1 in three runs; `search.e2e.ts`, `keyboard-checkout.e2e.ts` and `a11y-pages.e2e.ts` pass. **Met on 2026-11-10 with OFE-028 merged: 0.027 in each run (§3.6)** |
 | [OFE-028](plans/agent-tasks.md#ofe-028--show-the-test-banner-without-moving-the-page) · Show the test banner without moving the page | The banner's space kept from the first paint, or a place where showing it moves nothing and obscures nothing (2.4.11); a live storefront still without banner (OFE-021) | CLS of the home page on a test storefront ≤ 0.1 in three runs; `boot.test.js` still proves banner and `noindex` per environment. **Met on 2026-11-10: 0.04 in each run (§3.5)** |
-| [OFE-029](plans/agent-tasks.md#ofe-029--keep-the-header-from-growing-when-the-configuration-arrives) · Keep the header from growing when the configuration arrives (found by OFE-027, §3.4) | The header's final shape from the first paint on a phone, where the OTA's name now pushes the navigation onto a second row | CLS of the home and results pages on a test storefront ≤ 0.1 in three runs, with OFE-027 and OFE-028 |
+| [OFE-029](plans/agent-tasks.md#ofe-029--keep-the-header-from-growing-when-the-configuration-arrives) · Keep the header from growing when the configuration arrives (found by OFE-027, §3.4) | The header's final shape from the first paint on a phone, where the OTA's name now pushes the navigation onto a second row | CLS of the home and results pages on a test storefront ≤ 0.1 in three runs, with OFE-027 and OFE-028. The figures are met since OFE-028's header change (home 0.040, results 0.027, §3.6) |
 
 ### 3.4 The results page after OFE-027 (2026-11-10)
 
@@ -126,7 +126,7 @@ LCP and INP stay within target (the results timespan has one interaction more, t
 | The footer leaving the screen, the summary's first line | 0.046 | The footer sat at the bottom of the short page until the skeleton came; the empty summary had no height | `main` at least one screen high; the summary keeps its line from the first paint | gone |
 | `main` moved down by the header and the banner | 0.127 | When storefront.get answers, the header grows from 52 to 88 px (the OTA's name, "Demo Travel" instead of "Flights", no longer fits beside the navigation, which wraps to a second row) and the test banner (38 px) appears above it | None (shared partials and `boot()`): OFE-029 and OFE-028 | 0.127 |
 
-**Result.** The results page's CLS fell from 0.749 to 0.152 in each of three runs; of the 0.152, 0.127 is the header and banner shift of every page and 0.025 the results page's own. The target of 0.1 is therefore not met yet: OFE-027's acceptance waits for OFE-028 and OFE-029, measured again with the script. A scratch build without the banner (its partial taken out of `dist/`, not a product state) shows the split: results 0.148 (0.121 the header alone, 0.027 the page's own), home 0.161 (0.121 the header, 0.040 the text under the form); the header's growth is about the whole shift that §3.2 put on the banner, and a live storefront with a name as long has it too.
+**Result.** The results page's CLS fell from 0.749 to 0.152 in each of three runs; of the 0.152, 0.127 is the header and banner shift of every page and 0.025 the results page's own. The target of 0.1 is therefore not met yet: OFE-027's acceptance waits for OFE-028 and OFE-029, measured again with the script (met once OFE-028 was merged: 0.027 in each run, §3.6). A scratch build without the banner (its partial taken out of `dist/`, not a product state) shows the split: results 0.148 (0.121 the header alone, 0.027 the page's own), home 0.161 (0.121 the header, 0.040 the text under the form); the header's growth is about the whole shift that §3.2 put on the banner, and a live storefront with a name as long has it too.
 
 **Review check (2026-11-10, the same build and stack).** The script repeated these figures (results 0.152 and home 0.166 in each of three runs, LCP medians 2.00 s and 1.60 s, INP medians 75 ms and 34 ms; load average about 4). A `PerformanceObserver` trace at 412 × 823 px (its sums equal Lighthouse's CLS) with CSS injected into the page, not a product state, splits the 0.127 frame: without the banner 0.121 (the navigation moves from y 16 to 56 when it wraps); with the header in its final shape from the first paint (the navigation on its own row under the name) and the banner still shown 0.046, so the results page would measure 0.072 and the home page 0.085; with both, 0.027 and 0.040. The header (OFE-029) is therefore what keeps both pages above the target; the banner (OFE-028) adds 0.046.
 
@@ -178,6 +178,23 @@ A live storefront in the same check: no banner, no space after the page, home 0.
 **Still moving, not the banner** (a question to the lead, not yet a task in the plan): the search form's enhancement on home and results (0.04 on Lighthouse's phone; on a 360 px phone the trip type radios also wrap onto a second row when "Multi-city" appears, 0.122 with storefront.get held); the footer of a page shorter than the window growing as it fills (0.016); on a window 640 px or wider, an OTA name long enough to push the navigation onto a second row; and the currency selector of an OTA with two or more currencies, a taller control that can make the navigation row grow.
 
 The journeys pass with the banner at the bottom (2026-11-10, the same build and machine): `a11y-pages.e2e.ts` (36 tests: no serious or critical axe violation on any page or state), every spec of the `storefront` project (91 tests, `search.e2e.ts` and `keyboard-checkout.e2e.ts` among them), and the two other journeys that look for the banner, `ota-admin/settings-effects.e2e.ts` (5) and `admin-suspension-storefront.e2e.ts` (7).
+
+### 3.6 Home and results with OFE-027 and OFE-028 merged (2026-11-10)
+
+Measured with the script (§3.1: `node ota/frontend/scripts/lighthouse.mjs --runs 3`, Lighthouse 13.5.0, headless Chromium 153.0.8010.12) by wave 46's integrator on the branch with both tasks merged (d084f1b), against the e2e harness's stack under its lock (the demo OTA's test storefront, EUR; a scratch spec, not committed, held the stack while the script ran); the agents' Linux machine, 4 CPUs, load average 0.75 at the start.
+
+| Page | Run | Performance score | FCP | LCP (≤ 2.5 s) | CLS (≤ 0.1) | TBT | INP (≤ 200 ms) |
+|---|---|---|---|---|---|---|---|
+| Home | 1 | 0.99 | 1.58 s | 1.75 s | 0.040 | 6 ms | 28 ms |
+| Home | 2 | 0.99 | 1.56 s | 1.58 s | 0.040 | 0 ms | 24 ms |
+| Home | 3 | 0.99 | 1.66 s | 1.66 s | 0.040 | 0 ms | 30 ms |
+| **Home, median** | | 0.99 | 1.58 s | **1.66 s** | **0.040** | 0 ms | **28 ms** |
+| Results | 1 | 0.98 | 1.72 s | 1.95 s | 0.027 | 10 ms | 52 ms |
+| Results | 2 | 0.99 | 1.72 s | 1.92 s | 0.027 | 0 ms | 57 ms |
+| Results | 3 | 0.98 | 1.77 s | 2.03 s | 0.027 | 17 ms | 48 ms |
+| **Results, median** | | 0.98 | 1.72 s | **1.95 s** | **0.027** | 10 ms | **52 ms** |
+
+Bytes transferred: home 122.1 KB, results 159.8 to 165.5 KB; fonts 48.7 KB on both. The one shift left on each page: home 0.040 (`main > p.mt-8`, the text under the search form, §3.5), results 0.027 (`main > div.mt-6`, the heading's third line, §3.4). The 0.127 of the header and the banner is gone from both pages, as §3.4's trace predicted for the header in its final shape (OFE-028's two rows on a phone) with the banner at the bottom: **every target is met on both pages in each of three runs.** OFE-027's acceptance is met. OFE-029's acceptance figures are met too, by OFE-028's header change; whether that closes OFE-029 (its step 1 also asks for room for the currency selector and the account menu) is the lead's decision.
 
 ## 4. Font budget
 

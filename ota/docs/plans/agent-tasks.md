@@ -2857,8 +2857,8 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - Three consecutive green nightly runs of the three OTA projects are linked in `tools/e2e/README.md`.
 - **Verify:** `E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront --project=ota-admin`
 
-### OFE-027 · Keep the results page from shifting on phones
-- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: Lighthouse mobile CLS of the results page ≤ 0.1 in three runs, 0.152 now, of which 0.127 is the header and test-banner shift of every page that OFE-028 and OFE-029 remove: measured again with `pnpm --filter @velexis/ota-frontend lighthouse` once they are merged)
+### OFE-027 · Keep the results page from shifting on phones ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M6
 - **Depends on:** OFE-024
