@@ -1,7 +1,7 @@
 // The projects of playwright.config.ts (PFE-014, OFE-008, OFE-017, OAD-016, OAD-017, PFE-027): which exist with and
 // without E2E_WITH_OTA=1 and E2E_STRIPE=1, and which tests each selects. `playwright test --list` shows the same against
-// the specs themselves.
-import { readFileSync } from "node:fs";
+// the specs themselves. OFE-026: what CI keeps of a failed test, and that the OTA projects quarantine nothing.
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { type PlaywrightTestConfig, type Project } from "@playwright/test";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -202,8 +202,8 @@ describe("projectsFor", () => {
 });
 
 describe("the configuration's projects from the environment", () => {
-  /** The project names of playwright.config.ts loaded afresh with `env`. */
-  const loadWith = async (env: Record<string, string>): Promise<(string | undefined)[]> => {
+  /** playwright.config.ts loaded afresh with `env`. */
+  const loadConfig = async (env: Record<string, string>): Promise<PlaywrightTestConfig> => {
     vi.resetModules();
     for (const [name, value] of Object.entries(env)) {
       vi.stubEnv(name, value);
@@ -214,19 +214,25 @@ describe("the configuration's projects from the environment", () => {
       readonly default: PlaywrightTestConfig;
     };
     vi.unstubAllEnvs();
-    return names(config.projects ?? []);
+    return config;
   };
+  /** The project names of playwright.config.ts loaded afresh with `env`. */
+  const loadWith = async (env: Record<string, string>): Promise<(string | undefined)[]> =>
+    names((await loadConfig(env)).projects ?? []);
 
   let withStripe: (string | undefined)[] = [];
   let withoutStripe: (string | undefined)[] = [];
   let stripeWithoutOta: (string | undefined)[] = [];
+  /** The configuration as the e2e workflow's steps load it: CI set, the OTA stack and the Stripe projects. */
+  let inCi: PlaywrightTestConfig = {};
 
-  // Loading the configuration three times compiles it and its support files afresh each time (a second or so idle):
+  // Loading the configuration four times compiles it and its support files afresh each time (a second or so idle):
   // here, once, with this budget, not inside the tests' 5 s.
   beforeAll(async () => {
     withStripe = await loadWith({ E2E_WITH_OTA: "1", E2E_STRIPE: "1" });
     withoutStripe = await loadWith({ E2E_WITH_OTA: "1", E2E_STRIPE: "0" });
     stripeWithoutOta = await loadWith({ E2E_WITH_OTA: "0", E2E_STRIPE: "1" });
+    inCi = await loadConfig({ CI: "true", E2E_WITH_OTA: "1", E2E_STRIPE: "1" });
   }, 30_000);
   afterAll(() => {
     vi.unstubAllEnvs();
@@ -243,5 +249,100 @@ describe("the configuration's projects from the environment", () => {
     expect(withStripe).toContain("ota-admin");
     expect(withoutStripe).toContain("ota-admin");
     expect(stripeWithoutOta).not.toContain("ota-admin");
+  });
+
+  it("[OFE-026 AC1] keeps in CI the trace and screenshot of every failed test, its HTML report, and annotates each failure", () => {
+    // What the workflow's upload on failure takes: test-results/ (traces, screenshots, the stack's logs) and
+    // playwright-report/ (the HTML report); the `github` reporter names each failed test and its project on the
+    // run's page.
+    expect(inCi.outputDir).toBe("test-results");
+    expect(inCi.use).toMatchObject({ trace: "retain-on-failure", screenshot: "only-on-failure" });
+    expect(inCi.reporter).toEqual([
+      ["list"],
+      ["github"],
+      ["html", { open: "never", outputFolder: "playwright-report" }],
+    ]);
+    // A failure is never retried away, and a `.only` left in a spec fails the run instead of narrowing it.
+    expect(inCi.retries).toBe(0);
+    expect(inCi.forbidOnly).toBe(true);
+    expect(inCi.workers).toBe(2);
+    expect(names(inCi.projects ?? [])).toEqual(withStripe);
+  });
+});
+
+describe("the OTA projects quarantine nothing (OFE-026)", () => {
+  const SPECS = join(REPO_ROOT, "tools/e2e/specs");
+  /** Every file under the folders of the OTA projects' specs, relative to specs/. */
+  const files = ["storefront", "ota-admin"].flatMap((folder) =>
+    readdirSync(join(SPECS, folder), { recursive: true, encoding: "utf8" })
+      .filter((file) => statSync(join(SPECS, folder, file)).isFile())
+      .map((file) => `${folder}/${file}`),
+  );
+
+  it("[OFE-026 AC1] runs every OTA spec in its project, leaving out only the tests tagged for another project", () => {
+    const projects = projectsFor({ withOta: true, withStripe: true });
+    // Each file of the two folders is a spec its project's testMatch selects: none is parked under another name.
+    expect(files.length).toBeGreaterThanOrEqual(16);
+    for (const file of files) {
+      expect(file, file).toMatch(/\.e2e\.ts$/);
+    }
+    expect(byName(projects, "storefront")?.testMatch).toEqual(["specs/storefront/**/*.e2e.ts"]);
+    expect(byName(projects, "ota-admin")?.testMatch).toEqual(["specs/ota-admin/**/*.e2e.ts"]);
+    // No retries, ignored files or extra filters in any of the three projects: storefront and ota-admin leave out only
+    // `@stripe` (storefront-stripe's), and storefront-stripe takes only `@stripe`.
+    for (const name of ["storefront", "ota-admin", "storefront-stripe"]) {
+      const project = byName(projects, name);
+      expect(project, name).toBeDefined();
+      expect(Object.keys(project ?? {}).sort(), name).toEqual(
+        name === "storefront-stripe"
+          ? ["grep", "name", "testMatch", "use"]
+          : ["grepInvert", "name", "testMatch", "use"],
+      );
+      expect([...patterns(project?.grep), ...patterns(project?.grepInvert)].map(String), name).toEqual([
+        String(new RegExp(`${PROJECT_TAGS.stripe}(?![\\w-])`)),
+      ]);
+    }
+  });
+
+  it("[OFE-026 AC1] skips, defers, focuses, slows or retries no journey of the OTA projects", () => {
+    // The specs, and the support files they import, whose fixtures and helpers could skip a test as well.
+    const SUPPORT = join(REPO_ROOT, "tools/e2e/support");
+    const support = readdirSync(SUPPORT).filter((file) => file.endsWith(".ts"));
+    expect(support).toContain("fixtures.ts");
+    const sources = [
+      ...files.map((file) => ({
+        path: `specs/${file}`,
+        spec: true,
+        source: readFileSync(join(SPECS, file), "utf8"),
+      })),
+      ...support.map((file) => ({
+        path: `support/${file}`,
+        spec: false,
+        source: readFileSync(join(SUPPORT, file), "utf8"),
+      })),
+    ];
+    for (const { path, spec, source } of sources) {
+      // test.skip / describe.skip / testInfo.skip, test.fixme, .only and test.slow, in any form.
+      expect(source, path).not.toMatch(/\.(skip|fixme|only|slow)\s*\(/);
+      // The same as an annotation of a test or group: `{ annotation: { type: "skip" } }` skips it too.
+      expect(source, path).not.toMatch(/\btype:\s*["'`](skip|fixme|fail|slow)["'`]/);
+      if (spec) {
+        // Retries of a file or group (`test.describe.configure({ retries: 2 })`) would retry a failure away.
+        expect(source, path).not.toMatch(/\bretries\s*:/);
+      }
+    }
+    // The one expected failure is the storefront guards' own proof that they fail a test (OFE-008 AC2), whose
+    // unexpected pass would fail the run: no journey is marked as failing to keep the run green (test.fail,
+    // testInfo.fail or test.info().fail).
+    const expectedFailures = sources.flatMap(({ path, source }) =>
+      (source.match(/\.fail\s*\(/g) ?? []).map(() => path),
+    );
+    expect(expectedFailures).toEqual(["specs/storefront/search.e2e.ts"]);
+    const search = readFileSync(join(SPECS, "storefront/search.e2e.ts"), "utf8");
+    const start = search.indexOf(
+      'test("the inline script fails the test through the guards alone [OFE-008 AC2]"',
+    );
+    expect(start).toBeGreaterThan(-1);
+    expect(search.slice(start, search.indexOf("\n  test(", start))).toMatch(/\btest\.fail\(\);/);
   });
 });

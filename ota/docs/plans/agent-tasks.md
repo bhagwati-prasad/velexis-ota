@@ -2847,6 +2847,7 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 - **Verify:** `pnpm --filter @velexis/ota-sdk build && cd ota/sdk && npm pack --dry-run`
 
 ### OFE-026 · Make the storefront and OTA admin suites nightly and stable
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: three consecutive green nightly runs of storefront, storefront-stripe and ota-admin; storefront-stripe needs the Stripe test secrets)
 - **Component:** ota-frontend
 - **Milestone:** M6
 - **Depends on:** OFE-024, OAD-019, OFE-022

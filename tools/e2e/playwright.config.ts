@@ -4,7 +4,9 @@
 // the end. Projects select their spec files by name; a spec shared by several projects (specs/smoke.e2e.ts) pins each
 // test to its project with a tag, and a portal journey over Stripe's network (specs/portal-checkout.e2e.ts, PFE-027)
 // carries `@stripe`, which only the nightly `portal-stripe` selects. The OTA plan's projects: `storefront` (OFE-008),
-// the nightly `storefront-stripe` (OFE-017) and `ota-admin` (OAD-016), each only with E2E_WITH_OTA=1.
+// `storefront-stripe` (OFE-017; nightly and in the on-demand run before each deploy, OFE-026) and `ota-admin`
+// (OAD-016), each only with E2E_WITH_OTA=1. Nothing is quarantined (OFE-026): no retries, and no project leaves out a
+// test but by the tags that pick its project; a flaky journey is fixed, never skipped.
 import { defineConfig, devices, type Project } from "@playwright/test";
 import { loadDevEnvFiles } from "@velexis/config";
 import { PROJECT_TAGS } from "./support/fixtures";
@@ -89,12 +91,13 @@ export function projectsFor(options: ProjectOptions): Project[] {
   }
 
   if (options.withOta && options.withStripe) {
-    // Nightly only (OFE-017): the storefront's journeys tagged `@stripe`, with Stripe.js, the Payment Element and
-    // 3-D Secure in Stripe's test mode over the network, and the Stripe CLI forwarder of the stack (support/stripe.ts)
-    // that the OTA's test keys turn on. Without both E2E_WITH_OTA=1 and E2E_STRIPE=1 the project does not exist, so
-    // `--project=storefront-stripe` fails instead of running without Stripe. The OTA admin's payments journey (OAD-017:
-    // a payment of the storefront captured and refunded in the console, the refund completed by Stripe's webhook)
-    // needs the same stack, so it runs here too; it opens the OTA admin by its whole address.
+    // Nightly and in the on-demand run before each deploy (OFE-017, OFE-026; never on a pull request): the storefront's
+    // journeys tagged `@stripe`, with Stripe.js, the Payment Element and 3-D Secure in Stripe's test mode over the
+    // network, and the Stripe CLI forwarder of the stack (support/stripe.ts) that the OTA's test keys turn on. Without
+    // both E2E_WITH_OTA=1 and E2E_STRIPE=1 the project does not exist, so `--project=storefront-stripe` fails instead
+    // of running without Stripe. The OTA admin's payments journey (OAD-017: a payment of the storefront captured and
+    // refunded in the console, the refund completed by Stripe's webhook) needs the same stack, so it runs here too; it
+    // opens the OTA admin by its whole address.
     projects.push({
       name: "storefront-stripe",
       testMatch: ["specs/storefront/**/*.e2e.ts", "specs/ota-admin/payments.e2e.ts"],
@@ -114,12 +117,17 @@ export default defineConfig({
   // beforeAll). No test depends on another file or on the order of files: each creates its own accounts and data.
   fullyParallel: false,
   forbidOnly: CI,
-  // A failure is a finding, not something to retry away (AGENTS.md §7).
+  // A failure is a finding, not something to retry away (AGENTS.md §7), and nothing is quarantined (OFE-026).
   retries: 0,
   // Locally Playwright's default (half the CPU cores); two in CI (a GitHub-hosted runner has 2 or 4 cores), next to
   // the processes of the stack (eleven with E2E_WITH_OTA=1).
   ...(CI ? { workers: 2 } : {}),
-  reporter: CI ? [["list"], ["html", { open: "never", outputFolder: "playwright-report" }]] : [["list"]],
+  // In CI also `github` (OFE-026): each failed test becomes an annotation on the run's page with its project, file and
+  // line, next to the run's counts, so a nightly failure names its journey without opening the log; the HTML report
+  // goes into the artefact uploaded on failure (e2e.yml).
+  reporter: CI
+    ? [["list"], ["github"], ["html", { open: "never", outputFolder: "playwright-report" }]]
+    : [["list"]],
   use: {
     trace: "retain-on-failure",
     screenshot: "only-on-failure",

@@ -1,4 +1,5 @@
-// The e2e workflow as PFE-014 step 5 and PADR-0017 describe it. actionlint checks that the file is a valid workflow
+// The e2e workflow as PFE-014 step 5 and PADR-0017 describe it, with the OTA projects nightly and before each deploy
+// and the summary of their launch gate (OFE-026). actionlint checks that the file is a valid workflow
 // (tools/e2e/README.md); these tests check what it does.
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -9,6 +10,7 @@ import { parse } from "yaml";
 import { REPO_ROOT } from "../support/stack";
 
 interface Step {
+  readonly id?: string;
   readonly name?: string;
   readonly uses?: string;
   readonly run?: string;
@@ -156,16 +158,19 @@ describe(".github/workflows/e2e.yml", () => {
     expect(job?.env["E2E_STRIPE_BILLING"]).toBeUndefined();
   });
 
-  it("runs storefront-stripe only at night, with the Stripe test keys and the Stripe CLI whose checksum it checked [OFE-017 AC1]", () => {
+  it("runs storefront-stripe nightly and on demand, never on a pull request, with the Stripe test keys and the Stripe CLI whose checksum it checked [OFE-017 AC1] [OFE-026 AC1]", () => {
     const index = steps.findIndex((step) => /--project=storefront-stripe/.test(step.run ?? ""));
     const step = steps[index];
     // OAD-017's payments journey runs in this project too (lead decision (2e) of 2026-10-31, FIX-W37-OTA): the name says so.
     expect(step?.name).toBe(
-      "[OFE-017 AC1] [OFE-017 AC2] [OAD-017] Stripe storefront and OTA admin payment journeys (nightly, project storefront-stripe)",
+      "[OFE-017 AC1] [OFE-017 AC2] [OAD-017] Stripe storefront and OTA admin payment journeys (nightly and on demand, project storefront-stripe)",
     );
-    // Nightly, and only when the three secrets exist: the platform's two (E2E_STRIPE=1 needs them) and the
-    // publishable key of the same test account.
-    expect(step?.if).toBe("github.event_name == 'schedule' && env.STOREFRONT_STRIPE_CONFIGURED == 'true'");
+    // Nightly and on demand (the run before each deploy, OFE-026; until then nightly only), never on a pull request,
+    // and only when the three secrets exist: the platform's two (E2E_STRIPE=1 needs them) and the publishable key of
+    // the same test account.
+    expect(step?.if).toBe(
+      "github.event_name != 'pull_request' && env.STOREFRONT_STRIPE_CONFIGURED == 'true'",
+    );
     expect(job?.env["STOREFRONT_STRIPE_CONFIGURED"]).toBe(
       "${{ secrets.E2E_STRIPE_SECRET_KEY != '' && secrets.E2E_STRIPE_BILLING_WEBHOOK_SECRET != '' && " +
         "secrets.E2E_STRIPE_PUBLISHABLE_KEY != '' }}",
@@ -197,7 +202,8 @@ describe(".github/workflows/e2e.yml", () => {
     expect(index).toBeGreaterThan(
       steps.findIndex((other) => /--project=portal-stripe/.test(other.run ?? "")),
     );
-    expect(runs.filter((run) => /storefront-stripe/.test(run))).toHaveLength(1);
+    // (Its project argument: the launch gate's summary, OFE-026, names the project in its table.)
+    expect(runs.filter((run) => /--project=storefront-stripe/.test(run))).toHaveLength(1);
     expect(index).toBeLessThan(
       steps.findIndex((other) => other.uses?.startsWith("actions/upload-artifact@")),
     );
@@ -247,6 +253,194 @@ describe(".github/workflows/e2e.yml", () => {
       .split("\n")
       .filter(Boolean);
     expect(paths).toEqual(["tools/e2e/test-results/", "tools/e2e/playwright-report/"]);
+  });
+});
+
+describe("the OTA projects nightly and before each deploy (OFE-026)", () => {
+  const projects = steps.findIndex((step) => step.id === "projects");
+  const storefrontStripe = steps.findIndex((step) => step.id === "storefront-stripe");
+  const upload = steps.findIndex((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  const summary = steps.findIndex((step) => step.name?.startsWith("[OFE-026 AC1] "));
+  /** The steps that run Playwright. */
+  const playwrightSteps = steps.filter((step) => /pnpm test:e2e/.test(step.run ?? ""));
+
+  it("[OFE-026 AC1] runs storefront and ota-admin on every run and storefront-stripe nightly and on demand, before the upload of their traces", () => {
+    // Nightly and on demand: the schedule, and the manual run of Actions > E2E > Run workflow before each deploy.
+    expect(workflow.on.schedule).toHaveLength(1);
+    expect(workflow.on).toHaveProperty("workflow_dispatch");
+    // storefront and ota-admin: the step of the four projects, on every run of the job (no condition of its own).
+    expect(steps[projects]?.run).toBe(PROJECTS_RUN);
+    expect(steps[projects]?.if).toBeUndefined();
+    // storefront-stripe: every run but a pull request's, when the Stripe test secrets exist.
+    expect(steps[storefrontStripe]?.run?.trim()).toMatch(/ --project=storefront-stripe$/);
+    expect(steps[storefrontStripe]?.if).toBe(
+      "github.event_name != 'pull_request' && env.STOREFRONT_STRIPE_CONFIGURED == 'true'",
+    );
+    // A failed step's traces, screenshots, report and stack logs are uploaded after both, and nothing runs a Playwright
+    // step after the upload.
+    expect(upload).toBeGreaterThan(Math.max(projects, storefrontStripe));
+    expect(steps[upload]?.if).toBe("failure()");
+    expect(steps.slice(upload).filter((step) => /pnpm test:e2e/.test(step.run ?? ""))).toEqual([]);
+  });
+
+  it("[OFE-026 AC1] quarantines nothing: no Playwright run retries, filters, tolerates a failure or passes without tests", () => {
+    expect(playwrightSteps.length).toBe(3);
+    for (const step of playwrightSteps) {
+      const run = step.run ?? "";
+      expect(run, step.name).not.toMatch(
+        /--retries|--grep|--last-failed|--only-changed|--pass-with-no-tests|--max-failures/,
+      );
+      expect(run, step.name).not.toMatch(/\|\|\s*true|;\s*true\s*$/m);
+      expect(step, step.name).not.toHaveProperty("continue-on-error");
+    }
+    expect(job).not.toHaveProperty("continue-on-error");
+  });
+
+  describe("the summary of the launch gate", () => {
+    const script = steps[summary]?.run ?? "";
+    interface Outcome {
+      readonly summary: string;
+      readonly stdout: string;
+    }
+    /** The summary and the annotations the step writes for an event and the outcomes of the two steps. */
+    const CASES = {
+      nightlyGreen: {
+        EVENT: "schedule",
+        PROJECTS_OUTCOME: "success",
+        STOREFRONT_STRIPE_OUTCOME: "success",
+        STOREFRONT_STRIPE_CONFIGURED: "true",
+      },
+      nightlyNoSecrets: {
+        EVENT: "schedule",
+        PROJECTS_OUTCOME: "success",
+        STOREFRONT_STRIPE_OUTCOME: "skipped",
+        STOREFRONT_STRIPE_CONFIGURED: "false",
+      },
+      nightlyStripeFailed: {
+        EVENT: "schedule",
+        PROJECTS_OUTCOME: "success",
+        STOREFRONT_STRIPE_OUTCOME: "failure",
+        STOREFRONT_STRIPE_CONFIGURED: "true",
+      },
+      nightlyProjectsFailed: {
+        EVENT: "schedule",
+        PROJECTS_OUTCOME: "failure",
+        STOREFRONT_STRIPE_OUTCOME: "skipped",
+        STOREFRONT_STRIPE_CONFIGURED: "true",
+      },
+      // Not reachable while storefront-stripe runs only after the step of the four projects passed; the gate must not
+      // depend on that.
+      nightlyProjectsFailedStripePassed: {
+        EVENT: "schedule",
+        PROJECTS_OUTCOME: "failure",
+        STOREFRONT_STRIPE_OUTCOME: "success",
+        STOREFRONT_STRIPE_CONFIGURED: "true",
+      },
+      // The job's timeout (or a newer run of the same ref) cancelled storefront-stripe while it ran.
+      nightlyStripeCancelled: {
+        EVENT: "schedule",
+        PROJECTS_OUTCOME: "success",
+        STOREFRONT_STRIPE_OUTCOME: "cancelled",
+        STOREFRONT_STRIPE_CONFIGURED: "true",
+      },
+      beforeDeploy: {
+        EVENT: "workflow_dispatch",
+        PROJECTS_OUTCOME: "success",
+        STOREFRONT_STRIPE_OUTCOME: "success",
+        STOREFRONT_STRIPE_CONFIGURED: "true",
+      },
+      pullRequest: {
+        EVENT: "pull_request",
+        PROJECTS_OUTCOME: "success",
+        STOREFRONT_STRIPE_OUTCOME: "skipped",
+        STOREFRONT_STRIPE_CONFIGURED: "false",
+      },
+    } as const;
+    const outcomes = new Map<keyof typeof CASES, Outcome>();
+    const dir = mkdtempSync(join(tmpdir(), "ofe-026-summary-"));
+    afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+    // Each case runs the step's script in bash with the options GitHub's `run` uses (`bash --noprofile --norc -eo
+    // pipefail`) and a summary file of its own: a few milliseconds idle, more on a loaded runner. They run here, once,
+    // with this budget; the tests read what they wrote.
+    beforeAll(() => {
+      for (const [name, env] of Object.entries(CASES) as [keyof typeof CASES, Record<string, string>][]) {
+        const file = join(dir, `${name}.md`);
+        writeFileSync(file, "");
+        const stdout = execFileSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], {
+          env: { PATH: process.env["PATH"] ?? "", GITHUB_STEP_SUMMARY: file, ...env },
+          encoding: "utf8",
+        });
+        outcomes.set(name, { summary: readFileSync(file, "utf8"), stdout });
+      }
+    }, 30_000);
+
+    it("[OFE-026 AC1] runs after every other step, whatever happened before, and reads the outcomes of the two steps", () => {
+      expect(summary).toBe(steps.length - 1);
+      expect(steps[summary]?.if).toBe("always()");
+      expect(steps[summary]?.env).toEqual({
+        EVENT: "${{ github.event_name }}",
+        PROJECTS_OUTCOME: "${{ steps.projects.outcome }}",
+        STOREFRONT_STRIPE_OUTCOME: "${{ steps.storefront-stripe.outcome }}",
+      });
+    });
+
+    it("[OFE-026 AC1] counts a nightly run for the gate only when storefront, ota-admin and storefront-stripe all passed", () => {
+      const green = outcomes.get("nightlyGreen");
+      expect(green?.summary).toContain("| storefront | passed |");
+      expect(green?.summary).toContain("| ota-admin | passed |");
+      expect(green?.summary).toContain("| storefront-stripe | passed |");
+      expect(green?.summary).toContain("Counts for the launch gate: yes.");
+      expect(green?.stdout).toBe("");
+      for (const name of [
+        "nightlyNoSecrets",
+        "nightlyStripeFailed",
+        "nightlyProjectsFailed",
+        "nightlyProjectsFailedStripePassed",
+        "nightlyStripeCancelled",
+        "beforeDeploy",
+        "pullRequest",
+      ] as const) {
+        expect(outcomes.get(name)?.summary, name).toContain(
+          "Counts for the launch gate: no: a nightly run counts only when all three projects ran and passed.",
+        );
+        expect(outcomes.get(name)?.summary, name).not.toContain("Counts for the launch gate: yes.");
+      }
+      expect(outcomes.get("nightlyStripeFailed")?.summary).toContain("| storefront-stripe | failed |");
+      // A failed step of the four projects says so for both OTA projects, since a failed portal test fails it too.
+      const projectsFailed =
+        "the step of the four projects failed: its annotations name each failed test and its project";
+      expect(outcomes.get("nightlyProjectsFailed")?.summary).toContain(`| storefront | ${projectsFailed} |`);
+      expect(outcomes.get("nightlyProjectsFailed")?.summary).toContain(`| ota-admin | ${projectsFailed} |`);
+      expect(outcomes.get("nightlyProjectsFailed")?.summary).toContain(
+        "| storefront-stripe | not run: an earlier step failed or the run was cancelled |",
+      );
+      expect(outcomes.get("nightlyProjectsFailedStripePassed")?.summary).toContain(
+        `| storefront | ${projectsFailed} |`,
+      );
+      expect(outcomes.get("nightlyStripeCancelled")?.summary).toContain(
+        "| storefront-stripe | cancelled: the run was cancelled or timed out |",
+      );
+      // The run before a deploy shows the same table, and is no nightly run.
+      expect(outcomes.get("beforeDeploy")?.summary).toContain("| storefront-stripe | passed |");
+    });
+
+    it("[OFE-026 AC1] warns on the run's page when storefront-stripe could not run for want of the Stripe test secrets", () => {
+      const missing = outcomes.get("nightlyNoSecrets");
+      expect(missing?.summary).toContain("| storefront | passed |");
+      expect(missing?.summary).toContain(
+        "| storefront-stripe | not run: the repository has no Stripe test secrets |",
+      );
+      expect(missing?.stdout).toMatch(
+        /^::warning title=storefront-stripe did not run::.*E2E_STRIPE_PUBLISHABLE_KEY/m,
+      );
+      // A pull request never runs it: no warning there, and no secret's value anywhere (the step names them only).
+      expect(outcomes.get("pullRequest")?.summary).toContain(
+        "| storefront-stripe | not run: never on a pull request |",
+      );
+      expect(outcomes.get("pullRequest")?.stdout).toBe("");
+      expect(steps[summary]?.run).not.toContain("secrets.");
+    });
   });
 });
 
