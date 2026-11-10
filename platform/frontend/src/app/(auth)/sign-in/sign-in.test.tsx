@@ -799,6 +799,35 @@ describe("/reset-password: the page and the confirmPasswordReset action", () => 
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("[FIX-W47-PLATFORM AC2] names both password rules in the hint and shows privileged_rule at the field, keeping the token", async () => {
+    const store = cookieStore({ [PASSWORD_RESET_COOKIE]: RESET_TOKEN });
+    answer({
+      "/v1/auth/password-reset/confirm": () =>
+        apiError("PASSWORD_TOO_WEAK", 422, {
+          fieldErrors: [{ path: "/newPassword", code: "privileged_rule" }],
+        }),
+    });
+    render(await ResetPasswordPage());
+    // The link does not say whose account it is: the hint names the 10-character rule and the 12-character one.
+    expect(descriptionsOf(input(PASSWORD_RESET_STRINGS.newPasswordLabel))).toEqual([
+      PASSWORD_RESET_STRINGS.newPasswordHint,
+    ]);
+    expect(PASSWORD_RESET_STRINGS.newPasswordHint).toMatch(
+      /^At least 10 characters; at least 12, with a letter/,
+    );
+    type(PASSWORD_RESET_STRINGS.newPasswordLabel, "Fjord-Lan4!");
+    submit(PASSWORD_RESET_STRINGS.resetSubmit);
+
+    const password = input(PASSWORD_RESET_STRINGS.newPasswordLabel);
+    await waitFor(() => expect(descriptionsOf(password)).toContain(SIGN_UP_STRINGS.passwordPrivilegedRule));
+    expect(SIGN_UP_STRINGS.passwordPrivilegedRule).toMatch(
+      /^Use at least 12 characters, with at least one letter/,
+    );
+    expect(password.getAttribute("aria-invalid")).toBe("true");
+    expect(password.value).toBe("");
+    expect(store.set).not.toHaveBeenCalled();
+  });
+
   it("offers a new link when the token is used or expired, and deletes its cookie", async () => {
     const store = cookieStore({ [PASSWORD_RESET_COOKIE]: RESET_TOKEN });
     answer({ "/v1/auth/password-reset/confirm": () => apiError("PASSWORD_RESET_TOKEN_INVALID", 400) });

@@ -26,7 +26,8 @@ import { ERROR_MESSAGES, SIGN_UP_STRINGS } from "@/lib/strings";
  *   cookies of this browser are deleted, and the person signs in again on `/sign-in?reset=1`.
  * - An unknown, used or expired token (`PASSWORD_RESET_TOKEN_INVALID`): the cookie is deleted and the page offers a
  *   new link.
- * - `PASSWORD_TOO_WEAK`: the message at the field; the token stays usable.
+ * - `PASSWORD_TOO_WEAK`: the message at the field, `privileged_rule` included (a platform admin or an owner or admin of an
+ *   OTA needs 12 characters with a letter and a digit; ADR-0008, revision of 2026-11-10); the token stays usable.
  * The password is never returned, logged or kept.
  */
 
@@ -42,7 +43,10 @@ export interface ResetPasswordState {
   readonly message?: string;
 }
 
-/** The password rules of PF-01 AC2 the portal can check itself; the breached list is the API's. */
+/**
+ * The password rules of PF-01 AC2 the portal can check itself; the breached list is the API's, and so is the privileged
+ * rule, because the page does not know whose link it is.
+ */
 const PASSWORD_MIN = 10;
 const PASSWORD_MAX = 256;
 
@@ -60,6 +64,9 @@ const NEW_PASSWORD = z
 function passwordMessage(code: string | undefined, envelope: PlatformErrorCode): string {
   if (code === "too_short" || code === "minLength") {
     return SIGN_UP_STRINGS.passwordTooShort;
+  }
+  if (code === "privileged_rule") {
+    return SIGN_UP_STRINGS.passwordPrivilegedRule;
   }
   if (code === "breached") {
     return SIGN_UP_STRINGS.passwordBreached;

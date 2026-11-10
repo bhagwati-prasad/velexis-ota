@@ -15,8 +15,22 @@ import { SECURITY_STRINGS } from "@/lib/strings";
 /**
  * The password form of `/account/security` (README §2): the current password and a new one, sent to
  * `changeAccountPassword`. The fields are uncontrolled and the form is a plain action form, so React empties them
- * after every answer: a password is never kept in the page, in the action's state or anywhere else.
+ * after every answer: a password is never kept in the page, in the action's state or anywhere else. The new
+ * password's hint names the rule of the account (`rule`): 12 characters with a letter and a digit for a platform admin
+ * or an owner or admin of an OTA, 10 characters for every other account, both when the page could not read the account
+ * (ADR-0008, revision of 2026-11-10). The API applies the rule either way.
  */
+
+/** The password rule of the account (password-policy.ts of the platform backend). */
+export type PasswordRule = "standard" | "privileged";
+
+/** The hint of the new password for each rule; `undefined` names both. */
+function hintOf(rule: PasswordRule | undefined): string {
+  if (rule === "privileged") {
+    return SECURITY_STRINGS.newPasswordHintPrivileged;
+  }
+  return rule === "standard" ? SECURITY_STRINGS.newPasswordHint : SECURITY_STRINGS.newPasswordHintEither;
+}
 
 const IDLE: PasswordState = Object.freeze({ status: "idle", fieldErrors: Object.freeze({}) });
 
@@ -36,7 +50,7 @@ function summaryOf(state: PasswordState): FormErrorItem[] {
   return items;
 }
 
-export function PasswordForm() {
+export function PasswordForm({ rule }: { readonly rule?: PasswordRule | undefined }) {
   const [state, dispatch, pending] = useActionState(changeAccountPassword, IDLE);
   // A new array per answer, so the summary takes the focus again after each refused change.
   const summary = useMemo(() => summaryOf(state), [state]);
@@ -60,11 +74,11 @@ export function PasswordForm() {
         label={SECURITY_STRINGS.newPasswordLabel}
         name="newPassword"
         type="password"
-        description={SECURITY_STRINGS.newPasswordHint}
+        description={hintOf(rule)}
         error={state.fieldErrors.newPassword}
         autoComplete="new-password"
         required
-        minLength={10}
+        minLength={rule === "privileged" ? 12 : 10}
       />
       <div>
         <Button type="submit" disabled={pending}>

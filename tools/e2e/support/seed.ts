@@ -131,12 +131,18 @@ export async function grantPlatformAdmin(email: string): Promise<void> {
 export interface AccountInput {
   /** `<label>+<uuid>@example.com`, its own Mailpit inbox. */
   readonly email: string;
-  /** 10+ characters, random, so never on a breached-password list. */
+  /**
+   * 25 characters, random, so never on a breached-password list, with a letter and a digit (`newPassword`): it meets
+   * the privileged rule of platform admins and the owners and admins of OTAs too (ADR-0008, revision of 2026-11-10).
+   */
   readonly password: string;
   readonly fullName: string;
 }
 
-/** A random password the platform's rules accept: 24 characters of letters, digits, `-` and `_`, plus `!`. */
+/**
+ * A random password both of the platform's rules accept: `E2e-` (a letter and a digit, as the privileged rule of
+ * platform admins and the owners and admins of OTAs asks), 20 characters of letters, digits, `-` and `_`, and `!`.
+ */
 export function newPassword(): string {
   return `E2e-${randomBytes(15).toString("base64url")}!`;
 }

@@ -39,7 +39,9 @@ function noticeOf(params: Record<string, string | string[] | undefined>): Notice
  * `/sign-in` (README §2, PF-80): e-mail and password, the first of the two steps of every admin sign-in. `next` is
  * the path to return to after the second step; only a relative path on the admin is kept (`safeNextPath`), so
  * `next=https://evil.example/x` or `next=//evil.example` lead to the dashboard like no `next` at all. The page always
- * shows the form, also with a session: every sign-in asks for the TOTP or recovery code again.
+ * shows the form, also with a session: every sign-in asks for the TOTP or recovery code again. Below the portal's reset
+ * link it names the password rule of platform admins (12 characters with a letter and a digit, ADR-0008 revision of
+ * 2026-11-10), which the portal applies where an admin chooses a password.
  */
 export default async function SignInPage({ searchParams }: { searchParams: SearchParams }) {
   const params = await searchParams;
@@ -81,6 +83,7 @@ export default async function SignInPage({ searchParams }: { searchParams: Searc
           {SIGN_IN_STRINGS.forgotPassword}
         </a>
       </p>
+      <p className="text-sm text-muted-foreground">{SIGN_IN_STRINGS.passwordRule}</p>
     </main>
   );
 }

@@ -549,6 +549,15 @@ describe("/sign-in page", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("[FIX-W47-PLATFORM AC2] names the password rule of platform admins below the portal's reset link", async () => {
+    await renderSignInPage();
+
+    const rule = screen.getByText(SIGN_IN_STRINGS.passwordRule);
+    expect(rule.textContent).toMatch(/at least 12 characters, with at least one letter and one digit/);
+    expect(rule.textContent).toMatch(/in the portal/);
+    expect(screen.getByRole("main").lastElementChild).toBe(rule);
+  });
+
   it("carries only a relative next path into the form", async () => {
     await renderSignInPage({ next: "/tenants/ten_1?tab=audit" });
     expect(document.querySelector<HTMLInputElement>('input[name="next"]')?.value).toBe(

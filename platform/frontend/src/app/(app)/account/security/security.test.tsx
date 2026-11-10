@@ -1353,6 +1353,72 @@ describe("/account/security password and page", () => {
     ).rejects.toThrow("NEXT_REDIRECT /verify-pending");
   });
 
+  it("[FIX-W47-PLATFORM AC2] names the account's password rule at the new password: 12 characters with a letter and a digit for platform admins, owners and admins", async () => {
+    /** The hint and the `minlength` of the new password, as rendered for `me`. */
+    async function ruleShownFor(me: () => Response): Promise<readonly [string[], string | null]> {
+      cleanup();
+      routes({ "GET /v1/me": me });
+      await openSecurity();
+      const field = screen.getByLabelText(SECURITY_STRINGS.newPasswordLabel);
+      return [descriptionsOf(field), field.getAttribute("minlength")];
+    }
+    const member = (role: Schemas["TenantRole"]): Schemas["AccountMembership"] => ({
+      membershipId: "stf_01JA2ZA1C5E9G3J7K2M6P0R4T8",
+      tenantId: "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+      tenantKey: "acme",
+      tenantName: "Acme Travel",
+      tenantStatus: "active",
+      role,
+    });
+    const privileged = [[SECURITY_STRINGS.newPasswordHintPrivileged], "12"] as const;
+    const standard = [[SECURITY_STRINGS.newPasswordHint], "10"] as const;
+
+    expect(await ruleShownFor(() => json(account(), 200))).toEqual(standard);
+    expect(await ruleShownFor(() => json(account({ ...MFA_ON, isPlatformAdmin: true }), 200))).toEqual(
+      privileged,
+    );
+    expect(await ruleShownFor(() => json(account({ memberships: [member("owner")] }), 200))).toEqual(
+      privileged,
+    );
+    expect(
+      await ruleShownFor(() => json(account({ memberships: [member("viewer"), member("admin")] }), 200)),
+    ).toEqual(privileged);
+    for (const role of ["agent", "finance", "viewer"] as const) {
+      expect(await ruleShownFor(() => json(account({ memberships: [member(role)] }), 200))).toEqual(standard);
+    }
+    // The account could not be read: the hint names both rules.
+    expect(await ruleShownFor(() => apiError("RATE_LIMITED", 429))).toEqual([
+      [SECURITY_STRINGS.newPasswordHintEither],
+      "10",
+    ]);
+    expect(SECURITY_STRINGS.newPasswordHintPrivileged).toMatch(
+      /^At least 12 characters, with at least one letter and one digit/,
+    );
+
+    // The API's refusal of the privileged rule shows at the field, in the portal's words.
+    cleanup();
+    routes({
+      "GET /v1/me": () => json(account({ memberships: [member("owner")] }), 200),
+      "POST /v1/me/password": () =>
+        apiError("PASSWORD_TOO_WEAK", 422, {
+          fieldErrors: [{ path: "/newPassword", code: "privileged_rule" }],
+        }),
+    });
+    await openSecurity();
+    type(SECURITY_STRINGS.currentPasswordLabel, CURRENT_PASSWORD);
+    type(SECURITY_STRINGS.newPasswordLabel, "Fjord-Lan4!");
+    submit(SECURITY_STRINGS.passwordSubmit);
+    await waitFor(
+      () =>
+        expect(descriptionsOf(screen.getByLabelText(SECURITY_STRINGS.newPasswordLabel))).toEqual([
+          SECURITY_STRINGS.newPasswordHintPrivileged,
+          SIGN_UP_STRINGS.passwordPrivilegedRule,
+        ]),
+      ACTION_WAIT,
+    );
+    expect(valueOf(SECURITY_STRINGS.newPasswordLabel)).toBe("");
+  });
+
   it("reads the account, its OTAs and the sessions once each, with one h1 and the sections in order", async () => {
     await openSecurity();
 

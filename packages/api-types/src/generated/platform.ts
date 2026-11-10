@@ -15,7 +15,7 @@ export interface paths {
          * Create a portal account
          * @description Creates an account in `pending_verification` and e-mails a verification link that works once within 24 hours. The answer is the same `202` whether or not the address is registered: an existing address gets an "account exists" e-mail with sign-in and reset links instead, so the response reveals nothing (PADR-0008 item 1).
          *
-         *     **Rules.** The e-mail address is trimmed and compared lower-cased. The password needs at least 10 characters and must not be in the breached-password list (`422 PASSWORD_TOO_WEAK`); it is stored as an Argon2id hash. `acceptTerms` must be `true`, and `termsVersion` names the terms the person accepted (kept with the time of acceptance). 5 sign-ups per end-user IP per hour.
+         *     **Rules.** The e-mail address is trimmed and compared lower-cased. The password needs at least 10 characters and must not be in the breached-password list (`422 PASSWORD_TOO_WEAK`, field code `too_short` or `breached`); it is stored as an Argon2id hash. A new account holds no role yet, so the privileged rule of `changePassword` and `confirmPasswordReset` (12 characters with a letter and a digit for platform admins and for owners and admins of OTAs) applies from its first password change after it gets one. `acceptTerms` must be `true`, and `termsVersion` names the terms the person accepted (kept with the time of acceptance). 5 sign-ups per end-user IP per hour.
          */
         post: operations["signUp"];
         delete?: never;
@@ -197,7 +197,9 @@ export interface paths {
         put?: never;
         /**
          * Set a new password with a reset token
-         * @description Checks the reset token (unused, unexpired), applies the password rules, stores the new Argon2id hash and uses the token up. Every session of the account is revoked, `staffdeny:acct:<accountId>` is written, the account is e-mailed, an `account` invalidation is published and an audit row is written.
+         * @description Checks the reset token (unused, unexpired), applies the password rules of the account, stores the new Argon2id hash and uses the token up. Every session of the account is revoked, `staffdeny:acct:<accountId>` is written, the account is e-mailed, an `account` invalidation is published and an audit row is written.
+         *
+         *     **Password rules** (ADR-0008, revision of 2026-11-10: PCI DSS 8.3.6 and the owner's decision). A platform admin, and an account with an active `owner` or `admin` membership of an OTA that members may see (test or live), needs at least 12 characters with at least one letter and one digit (field code `privileged_rule`); every other account at least 10 characters (`too_short`); no password may be in the breached-password list (`breached`). The `422 PASSWORD_TOO_WEAK` message names the rule of the account; the token stays usable after it. The rule is read when the new password is checked, so an existing password keeps working until the account sets a new one.
          */
         post: operations["confirmPasswordReset"];
         delete?: never;
@@ -261,7 +263,9 @@ export interface paths {
         put?: never;
         /**
          * Change the password
-         * @description Checks the current password (`422 CURRENT_PASSWORD_INCORRECT`) and the password rules for the new one (`422 PASSWORD_TOO_WEAK`). Revokes every other session of the account and writes `staffdeny:acct:<accountId>`, so OTA admin sessions end too; the current session stays signed in. E-mails the account and writes an audit row.
+         * @description Checks the current password (`422 CURRENT_PASSWORD_INCORRECT`) and the password rules of the account for the new one (`422 PASSWORD_TOO_WEAK`, whose message names the rule). Revokes every other session of the account and writes `staffdeny:acct:<accountId>`, so OTA admin sessions end too; the current session stays signed in. E-mails the account and writes an audit row.
+         *
+         *     **Password rules** (ADR-0008, revision of 2026-11-10: PCI DSS 8.3.6 and the owner's decision). A platform admin, and an account with an active `owner` or `admin` membership of an OTA that members may see (test or live), needs at least 12 characters with at least one letter and one digit (field code `privileged_rule`); every other account at least 10 characters (`too_short`); no password may be in the breached-password list (`breached`). The rule is read when the new password is checked, so an existing password keeps working until the account sets a new one.
          */
         post: operations["changePassword"];
         delete?: never;
@@ -3376,7 +3380,7 @@ export interface components {
          * @example anna.berg@example.com
          */
         EmailAddress: string;
-        /** @description A password. The schema only bounds its length; the rules (at least 10 characters, not breached) are checked by the service and answer `422 PASSWORD_TOO_WEAK`. Never logged, never echoed in an error. */
+        /** @description A password. The schema only bounds its length; the rules are checked by the service when a password is chosen and answer `422 PASSWORD_TOO_WEAK`: at least 10 characters, or at least 12 with at least one letter and one digit for a platform admin or an owner or admin of an OTA (ADR-0008, revision of 2026-11-10), and not breached. A password in use is never checked again, so it keeps working until the account chooses another. Never logged, never echoed in an error. */
         Password: string;
         /** @description An opaque single-use or refresh token as Velexis issued it; never logged. */
         OpaqueToken: string;
@@ -5924,7 +5928,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description The password breaks the password rules. Possible codes: PASSWORD_TOO_WEAK. */
+        /** @description The password breaks the password rules of a new account: at least 10 characters (field code `too_short`) and never a password of the breached-password list (`breached`); `signUp`'s field error is at `/password` and never quotes the password. Possible codes: PASSWORD_TOO_WEAK. */
         PasswordTooWeak: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -6705,7 +6709,16 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            422: components["responses"]["PasswordTooWeak"];
+            /** @description The new password breaks the password rules of the account, which the message names: at least 10 characters (field code `too_short`), or for a platform admin or an owner or admin of an OTA at least 12 with at least one letter and one digit (`privileged_rule`, ADR-0008 revision of 2026-11-10), and never a password of the breached-password list (`breached`). One field error at `/newPassword`, which never quotes the password; the token stays usable. Possible codes: PASSWORD_TOO_WEAK. */
+            422: {
+                headers: {
+                    "X-Request-Id": components["headers"]["X-Request-Id"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];
         };
@@ -6862,7 +6875,7 @@ export interface operations {
             400: components["responses"]["ValidationFailed"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["PortalForbidden"];
-            /** @description The current password is wrong, or the new one breaks the password rules. Possible codes: CURRENT_PASSWORD_INCORRECT, PASSWORD_TOO_WEAK. */
+            /** @description The current password is wrong, or the new one breaks the password rules of the account (the message names them: 10 characters, or 12 with a letter and a digit for a platform admin or an owner or admin of an OTA). Possible codes: CURRENT_PASSWORD_INCORRECT, PASSWORD_TOO_WEAK. */
             422: {
                 headers: {
                     "X-Request-Id": components["headers"]["X-Request-Id"];

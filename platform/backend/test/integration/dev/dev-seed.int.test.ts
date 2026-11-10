@@ -293,6 +293,9 @@ describe("dev:seed", () => {
     const printed = printedSecrets(first);
     expect(printed.otpauthUrl).toMatch(/^otpauth:\/\/totp\/Velexis:admin%40example\.com\?secret=[A-Z2-7]+&/);
     expect(printed.password).toMatch(/^[A-Za-z0-9_-]{24}$/);
+    // A platform admin's password meets the privileged rule: a letter and a digit (FIX-W47-PLATFORM AC2).
+    expect(printed.password).toMatch(/[A-Za-z]/);
+    expect(printed.password).toMatch(/[0-9]/);
 
     const admin = await adminAccount();
     expect(admin).toMatchObject({

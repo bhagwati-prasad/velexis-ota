@@ -34,13 +34,18 @@
 // field, which PADR-0007 point 4 makes its carrier (the navigation to the OTA admin's `/sso` is cancelled in this
 // browser context, so the browser stays on the page and the token is never redeemed); and a full API key (`pk_`/`sk_`
 // of test or live and 40 characters) is only in the server action answer that shows it once, never in any other answer.
-// Every page, RSC payload and script is read: the journey reads a page's answers before it leaves the page (the browser
-// drops them then), and a GET that the browser dropped before its end (an RSC prefetch the next navigation cancelled)
-// is fetched again with the same request headers from the same browser context (so with its cookies), and that answer
-// is checked as well. A server action that ends with `redirect()` answers `303` without a `Location` and with the RSC
-// payload of the page it leads to, which is read like any answer; only a redirect the browser follows has no body. A
-// server action's answer cannot be asked for again, and the browser does not always keep its streamed body for the
-// journey: one it no longer holds is named in the last step's annotation, and any other unread answer fails that step.
+// Every page, RSC payload, script and server action answer is read: the journey reads a page's answers before it leaves
+// the page (the browser drops them then), and a GET that the browser dropped before its end (an RSC prefetch the next
+// navigation cancelled) is fetched again with the same request headers from the same browser context (so with its
+// cookies), and that answer is checked as well. A server action's answer cannot be asked for again, and the browser
+// does not always keep its streamed body, so every server action is intercepted (lead decision (13b) of 2026-11-10,
+// FIX-W47-PLATFORM): each browser context routes its `POST`s that carry the `Next-Action` header (`context.route`),
+// sends them itself (`route.fetch()`, the context's cookies included, no redirect followed), records the answer's
+// headers and whole body, and hands that very answer to the page (`route.fulfill({ response })`). A server action that
+// ends with `redirect()` answers `303` without a `Location` and with the RSC payload of the page it leads to, which is
+// read like any answer; only a redirect the browser follows has no body. Any answer the journey could not read, a server
+// action's included, is named in the last step's annotation and fails that step. (Routing turns the browser's HTTP
+// cache off for the context, so the static scripts are fetched, and checked, on every page.)
 //
 // Arranged in `beforeAll` through the platform API (PADR-0017 item 5): the owner's active OTA (`newOwnerWithActiveOta`
 // with MFA, set up by the OTA worker, so the journey needs `E2E_WITH_OTA=1` and fails at once without it); an admin, a
@@ -55,7 +60,7 @@ import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import type { APIResponse, BrowserContext, Page, Response } from "@playwright/test";
+import type { APIResponse, BrowserContext, Page, Request, Response, Route } from "@playwright/test";
 import type { components } from "@velexis/api-types/platform";
 import {
   addSessionCookies,
@@ -363,9 +368,15 @@ interface AnswerBody {
   readonly body: string;
 }
 
+/** A server action's request: a `POST` with the `Next-Action` header (the headers the page sent need no wait). */
+function isServerAction(request: Request): boolean {
+  return request.method() === "POST" && request.headers()["next-action"] !== undefined;
+}
+
 /**
  * Watches every answer of the portal in browser contexts: the problems of its headers and cookies (checked by the last
- * step), each nonce its own, the cookies each answer set, the values of the token cookies, and the text bodies.
+ * step), each nonce its own, the cookies each answer set, the values of the token cookies, and the text bodies. Server
+ * actions are routed through the journey (`intercept`), which reads each answer whole before the page gets it.
  */
 class PortalAnswers {
   readonly problems: string[] = [];
@@ -385,12 +396,26 @@ class PortalAnswers {
     return this.count;
   }
 
-  watch(target: BrowserContext): void {
+  /** Watches the answers of `target`, and routes its server actions through `intercept`. */
+  async watch(target: BrowserContext): Promise<void> {
+    const portalPort = new URL(PORTAL_URL).port;
     target.on("response", (response) => {
-      if (new URL(response.url()).port === new URL(PORTAL_URL).port) {
+      if (new URL(response.url()).port === portalPort && !isServerAction(response.request())) {
         this.pending.push(this.take(response, target));
       }
     });
+    await target.route(
+      (url) => url.port === portalPort,
+      async (route) => {
+        if (!isServerAction(route.request())) {
+          await route.fallback();
+          return;
+        }
+        const intercepted = this.intercept(route);
+        this.pending.push(intercepted);
+        await intercepted;
+      },
+    );
   }
 
   /** Remembers token values the journey put into a context itself (`addSessionCookies`). */
@@ -460,6 +485,30 @@ class PortalAnswers {
     return await within(answer.text());
   }
 
+  /**
+   * A server action of the page: sent by the journey (`route.fetch()`, from the context, so with its cookies, and
+   * without following a redirect), its headers checked and its whole body kept, then that answer handed to the page
+   * (`route.fulfill({ response })`). An answer that could not be fetched or read is unread, which fails the last step;
+   * the page then gets a failed request.
+   */
+  private async intercept(route: Route): Promise<void> {
+    const request = route.request();
+    const { pathname } = new URL(request.url());
+    const answer = await within(route.fetch({ maxRedirects: 0, timeout: READ_BUDGET_MS }));
+    const body = answer === undefined ? undefined : await within(answer.text());
+    if (answer === undefined || body === undefined) {
+      this.unreadBodies.push(`POST ${pathname} (server action)`);
+      await route.abort("failed").catch(() => undefined);
+      return;
+    }
+    this.check(answer.url(), answer.headersArray());
+    if (TEXT_BODY.test(answer.headers()["content-type"] ?? "")) {
+      this.bodies.push({ pathname, method: "POST", serverAction: true, body });
+    }
+    // The page may have gone meanwhile (a navigation of the journey): the answer was read either way.
+    await route.fulfill({ response: answer }).catch(() => undefined);
+  }
+
   private async take(response: Response, target: BrowserContext): Promise<void> {
     const { pathname } = new URL(response.url());
     // The body is asked for at once: the browser drops a page's answers when it leaves the page.
@@ -479,15 +528,13 @@ class PortalAnswers {
       return;
     }
     const request = response.request();
-    // The headers the page sent (`headers()` needs no wait): a server action's fetch carries `Next-Action`.
-    const serverAction = request.headers()["next-action"] !== undefined;
     const body =
       (await text) ?? (request.method() === "GET" ? await this.again(target, response) : undefined);
     if (body === undefined) {
-      this.unreadBodies.push(`${request.method()} ${pathname}${serverAction ? " (server action)" : ""}`);
+      this.unreadBodies.push(`${request.method()} ${pathname}`);
       return;
     }
-    this.bodies.push({ pathname, method: request.method(), serverAction, body });
+    this.bodies.push({ pathname, method: request.method(), serverAction: false, body });
   }
 
   /** Waits until every answer seen so far is checked. */
@@ -656,7 +703,7 @@ test.beforeAll(async ({ browser }) => {
   });
 
   context = await newAccountContext(browser, owned.owner.account, PORTAL_URL);
-  answers.watch(context);
+  await answers.watch(context);
   page = await context.newPage();
   await waitForTotpStep(lastCodeStep + 2);
 });
@@ -813,7 +860,7 @@ test("the e-mail links answer with no-referrer: the verification link, and the r
   const verification = await waitForLink({ to: visitor.email, path: "/verify-email", origin: PORTAL_URL });
   const visitorContext = await newAccountContext(browser, visitor, PORTAL_URL);
   try {
-    answers.watch(visitorContext);
+    await answers.watch(visitorContext);
     const visitorPage = await visitorContext.newPage();
     const verifyAnswer = visitorPage.waitForResponse(
       (response) => new URL(response.url()).pathname === "/verify-email",
@@ -970,7 +1017,7 @@ test("the admin of the live OTA without MFA gets the enrolment page, with the po
 }) => {
   const adminContext = await newAccountContext(browser, admin, PORTAL_URL);
   try {
-    answers.watch(adminContext);
+    await answers.watch(adminContext);
     const session = await signInWithApi(admin);
     answers.remember(session.accessToken, session.refreshToken);
     await addSessionCookies(adminContext, "portal", session);
@@ -1030,9 +1077,11 @@ test("every answer carried the portal's headers and cookie attributes, every rou
   expect(answers.problems).toEqual([]);
 
   // Booleans and paths only, so a failure never prints a token. Every page, RSC payload and script the browser received
-  // was read (a GET it dropped was read again), and every other answer but a server action's, which cannot be asked
-  // for again; a server action's answer the browser no longer held is named in the annotation.
-  expect(answers.unreadBodies.filter((answer) => !answer.endsWith(" (server action)"))).toEqual([]);
+  // was read (a GET it dropped was read again), and every server action's answer, which the journey sent itself.
+  expect(answers.unreadBodies).toEqual([]);
+  // The journey's server actions: the reset request, the password and code steps of the sign-in, and the two that
+  // showed keys.
+  expect(bodies.filter((answer) => answer.serverAction).length).toBeGreaterThanOrEqual(5);
   expect(answers.secrets.size).toBeGreaterThanOrEqual(4);
   const secrets = [...answers.secrets];
   // The shape catches the journey's own access tokens (the `at` cookie values it saw set), so it would catch one in an
@@ -1058,9 +1107,8 @@ test("every answer carried the portal's headers and cookie attributes, every rou
   expect((handOff.match(PORTAL_TOKEN) ?? []).length).toBe(1);
   expect((handOff.match(PORTAL_TOKEN_FIELD) ?? []).length).toBe(1);
 
-  // A full API key only in the server action answer that showed it once, never in another answer: no page, RSC payload
-  // or script holds one. (The browser does not always keep a server action's streamed answer for the journey to read,
-  // so the answer that showed a key may be among the unread ones of the annotation.)
+  // A full API key only in the server action answer that showed it once, never in another answer: no page, RSC payload,
+  // script or other server action answer holds one, and no answer holds a key the pages did not show.
   const keyAnswers = bodies.flatMap((answer) =>
     [...new Set(answer.body.match(FULL_API_KEY) ?? [])].map((key) => ({ key, answer })),
   );
@@ -1074,9 +1122,11 @@ test("every answer carried the portal's headers and cookie attributes, every rou
     answersPerKey.set(key, (answersPerKey.get(key) ?? 0) + 1);
   }
   expect([...answersPerKey.values()].every((count) => count === 1)).toBe(true);
-  // The keys the pages showed are the pattern's, so a key held anywhere would have been found.
+  // The keys the pages showed are the pattern's, so a key held anywhere would have been found; each was in exactly one
+  // answer (the server action's that showed it), and those are all the keys any answer held.
   const oneKey = new RegExp(`^${FULL_API_KEY.source}$`);
   expect(keysShown).toHaveLength(3);
-  expect(keysShown.every((key) => oneKey.test(key) && (answersPerKey.get(key) ?? 0) <= 1)).toBe(true);
+  expect(keysShown.every((key) => oneKey.test(key) && answersPerKey.get(key) === 1)).toBe(true);
+  expect(answersPerKey.size).toBe(keysShown.length);
   expect(answers.answers).toBeGreaterThan(Object.keys(ROUTES).length);
 });

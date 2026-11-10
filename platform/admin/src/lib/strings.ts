@@ -59,7 +59,8 @@ export const ERROR_MESSAGES: Readonly<Record<PlatformErrorCode, string>> = Objec
   KEYS_ALREADY_REVEALED:
     "The initial keys of this OTA were already shown, or the time to show them has passed.",
   PRECONDITION_FAILED: "Someone else changed this in the meantime. Reload the page and try again.",
-  PASSWORD_TOO_WEAK: "This password is too weak.",
+  PASSWORD_TOO_WEAK:
+    "Choose a stronger password: platform admins need at least 12 characters, with at least one letter and one digit, and not a common or previously leaked password.",
   CURRENT_PASSWORD_INCORRECT: "The current password is not correct.",
   PLAN_NOT_AVAILABLE: "This plan is not available with the chosen billing interval.",
   PLAN_LIMIT_REACHED: "The plan's limit is reached for this OTA.",
@@ -122,6 +123,12 @@ export const SIGN_IN_STRINGS = Object.freeze({
   /** The link next to the `MFA_REQUIRED` message, to the portal's security page. */
   enableMfa: "Turn on two-factor authentication in the portal",
   forgotPassword: "Forgot your password? Reset it in the portal.",
+  /**
+   * The password rule of platform admins (ADR-0008, revision of 2026-11-10; PCI DSS 8.3.6), which the portal applies
+   * where they choose a password: its security page and its reset link. The admin has no password form of its own.
+   */
+  passwordRule:
+    "Platform admins choose their password in the portal, on its security page or with a reset link: at least 12 characters, with at least one letter and one digit.",
   signedOut: "You are signed out.",
 });
 

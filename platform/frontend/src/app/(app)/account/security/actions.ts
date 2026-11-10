@@ -88,7 +88,11 @@ export interface PasswordState {
   readonly message?: string;
 }
 
-/** The password rules of PF-01 AC2 the portal can check itself; the breached list is the API's. */
+/**
+ * The password rules of PF-01 AC2 the portal can check itself; the breached list is the API's, and so is the privileged
+ * rule of platform admins and the owners and admins of OTAs (12 characters with a letter and a digit; ADR-0008,
+ * revision of 2026-11-10), which the API answers with `privileged_rule`.
+ */
 const PASSWORD_MIN = 10;
 const PASSWORD_MAX = 256;
 
@@ -107,6 +111,9 @@ const PASSWORD_FORM = z.object({
 function newPasswordMessage(code: string | undefined): string {
   if (code === "too_short" || code === "minLength") {
     return SIGN_UP_STRINGS.passwordTooShort;
+  }
+  if (code === "privileged_rule") {
+    return SIGN_UP_STRINGS.passwordPrivilegedRule;
   }
   if (code === "breached") {
     return SIGN_UP_STRINGS.passwordBreached;

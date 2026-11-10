@@ -66,7 +66,7 @@ export const ERROR_MESSAGES: Readonly<Record<PlatformErrorCode, string>> = Objec
     "The initial keys were already shown, or the 24 hours to show them have passed. Create new keys on the API keys page.",
   PRECONDITION_FAILED: "Someone else changed this in the meantime. Reload the page and try again.",
   PASSWORD_TOO_WEAK:
-    "Choose a stronger password: at least 10 characters, and not a common or previously leaked password.",
+    "Choose a stronger password: at least 10 characters (at least 12, with a letter and a digit, for platform admins and for owners and admins of an OTA), and not a common or previously leaked password.",
   CURRENT_PASSWORD_INCORRECT: "Your current password is not correct.",
   PLAN_NOT_AVAILABLE: "This plan is not available with the chosen billing interval.",
   PLAN_LIMIT_REACHED: "Your plan's limit is reached. Upgrade the plan or remove something first.",
@@ -259,6 +259,12 @@ export const SIGN_UP_STRINGS = Object.freeze({
   emailRequired: "Enter your e-mail address.",
   emailInvalid: "Enter a valid e-mail address, like name@example.com.",
   passwordTooShort: "Use at least 10 characters.",
+  /**
+   * The API's `privileged_rule` (ADR-0008, revision of 2026-11-10; PCI DSS 8.3.6): the reset and change forms show it
+   * at their new-password field, as they show the two messages around it.
+   */
+  passwordPrivilegedRule:
+    "Use at least 12 characters, with at least one letter and one digit: platform admins and the owners and admins of an OTA need them.",
   passwordTooLong: "Use at most 256 characters.",
   passwordBreached: "This password is too common or has appeared in a data breach. Choose another one.",
   termsRequired: "Accept the terms of service and the privacy notice to create an account.",
@@ -410,7 +416,9 @@ export const PASSWORD_RESET_STRINGS = Object.freeze({
   resetIntro:
     "Choose a new password for your Velexis account. Saving it signs out every session of your account, on every device.",
   newPasswordLabel: "New password",
-  newPasswordHint: "At least 10 characters. Avoid common passwords and passwords you use elsewhere.",
+  /** The link does not say whose account it is, so the hint names both rules (ADR-0008, revision of 2026-11-10). */
+  newPasswordHint:
+    "At least 10 characters; at least 12, with a letter and a digit, if you are a platform admin or an owner or admin of an OTA. Avoid common passwords and passwords you use elsewhere.",
   resetSubmit: "Save the new password",
   resetSubmitting: "Saving…",
   linkMissingTitle: "Open the link from your e-mail",
@@ -2676,6 +2684,12 @@ export const SECURITY_STRINGS = Object.freeze({
   currentPasswordIncorrect: "Your current password is not correct.",
   newPasswordLabel: "New password",
   newPasswordHint: "At least 10 characters. Avoid common passwords and passwords you use elsewhere.",
+  /** The hint of a platform admin or an owner or admin of an OTA (ADR-0008, revision of 2026-11-10; PCI DSS 8.3.6). */
+  newPasswordHintPrivileged:
+    "At least 12 characters, with at least one letter and one digit: platform admins and the owners and admins of an OTA need them. Avoid common passwords and passwords you use elsewhere.",
+  /** The hint when the account could not be read: both rules. */
+  newPasswordHintEither:
+    "At least 10 characters; at least 12, with a letter and a digit, if you are a platform admin or an owner or admin of an OTA. Avoid common passwords and passwords you use elsewhere.",
   passwordSubmit: "Change password",
   passwordSubmitting: "Changing…",
   passwordChanged:

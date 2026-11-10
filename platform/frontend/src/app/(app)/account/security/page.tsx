@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { MfaSetup } from "@/app/(app)/account/security/mfa-setup";
-import { PasswordForm } from "@/app/(app)/account/security/password-form";
+import { PasswordForm, type PasswordRule } from "@/app/(app)/account/security/password-form";
 import { SessionsTable, SignOutEverywhere } from "@/app/(app)/account/security/sessions-table";
 import {
   CONSOLE_QUERY,
@@ -40,6 +40,27 @@ function mustKeepMfa(tenants: readonly components["schemas"]["TenantSummary"][] 
   return (tenants ?? []).some(
     (tenant) => MFA_MANDATORY_ROLES.has(tenant.role) && tenant.storefrontEnvironment === "live",
   );
+}
+
+/** The roles whose accounts have the privileged password rule, in any OTA (ADR-0008, revision of 2026-11-10). */
+const PRIVILEGED_PASSWORD_ROLES: ReadonlySet<components["schemas"]["TenantRole"]> = new Set([
+  "owner",
+  "admin",
+]);
+
+/**
+ * The password rule of the account, from `getMe`: `privileged` for a platform admin or an owner or admin of an OTA
+ * (`memberships` holds the active memberships of OTAs that members may see, the rows the API's rule reads), else
+ * `standard`; `undefined` when the account could not be read, so the form names both rules.
+ */
+function passwordRuleOf(account: components["schemas"]["Account"] | undefined): PasswordRule | undefined {
+  if (account === undefined) {
+    return undefined;
+  }
+  return account.isPlatformAdmin ||
+    account.memberships.some((membership) => PRIVILEGED_PASSWORD_ROLES.has(membership.role))
+    ? "privileged"
+    : "standard";
 }
 
 /** A section of the page with its heading and intro. */
@@ -80,9 +101,10 @@ function Unavailable({ title, error }: { readonly title: string; readonly error:
 /**
  * `/account/security` (README §2 Signed in; PF-04, PF-06): the password, two-factor authentication and the sessions
  * of the signed-in account. The page reads `getMe` (whether MFA is on, since when, a platform admin, the time zone of
- * the dates), `listTenants` (whether the account is an owner or admin of a live OTA, who must keep MFA on) and
- * `listSessions` side by side. It never holds a secret: the TOTP secret, its QR code and the recovery
- * codes exist only in the answers of the actions, rendered by the client components, so a reload shows none of them.
+ * the dates, and from its admin flag and memberships the password rule the new password's hint names), `listTenants`
+ * (whether the account is an owner or admin of a live OTA, who must keep MFA on) and `listSessions` side by side. It
+ * never holds a secret: the TOTP secret, its QR code and the recovery codes exist only in the answers of the actions,
+ * rendered by the client components, so a reload shows none of them.
  * An ended session goes to sign-in and back here; a call that fails otherwise shows the portal's message in place of
  * its section, and the rest of the page stays. "Open console" of a live OTA refused for an account without MFA
  * (`MFA_REQUIRED`, PFE-017) comes here with `?console=mfa_required&tenant=<id>`: the page says why and links back to
@@ -125,7 +147,7 @@ export default async function SecurityPage({
         title={SECURITY_STRINGS.passwordTitle}
         intro={SECURITY_STRINGS.passwordIntro}
       >
-        <PasswordForm />
+        <PasswordForm rule={passwordRuleOf(me.data)} />
       </Section>
 
       <Section id="security-mfa" title={SECURITY_STRINGS.mfaTitle}>

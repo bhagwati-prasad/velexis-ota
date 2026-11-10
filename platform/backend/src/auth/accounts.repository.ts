@@ -10,7 +10,8 @@
 // the account is not locked out, so concurrent attempts cannot slip past a lockout. These bookkeeping columns are not
 // part of the `Account` the API shows, so they leave `version` (the `ETag` of the profile) alone. `findPortalAccount`
 // reads the account as `PortalSession.account` shows it, with its active memberships (`tenant_memberships` and
-// `tenants`, read only, as MembershipsRepository reads `accounts` next to a membership). The MFA settings (PBE-015)
+// `tenants`, read only, as MembershipsRepository reads `accounts` next to a membership), and `passwordRuleOf` reads
+// the same rows for the password rule of a reset or change (FIX-W47-PLATFORM). The MFA settings (PBE-015)
 // are read and changed here for AccountsModule's MfaService: `enableMfa` and `disableMfa` change what the `Account`
 // shows, so they add one to `version`, as `grantPlatformAdmin` (the admin bootstrap, PBE-028) does.
 //
@@ -25,6 +26,7 @@ import { sql, type PlatformDatabase, type Selectable } from "@velexis/db";
 import type { PlatformTransaction } from "../audit/audit.repository";
 import { MEMBER_VISIBLE_TENANT_STATUSES } from "../common/auth/tenant-role.guard";
 import type { PlatformDb } from "../common/database";
+import { PRIVILEGED_PASSWORD_ROLES, type PasswordRule } from "./password-policy";
 
 /** A `platform.accounts` row as the API reads it. */
 export type AccountRecord = Selectable<PlatformDatabase["platform.accounts"]>;
@@ -559,6 +561,38 @@ export class AccountsRepository {
       .select(CREDENTIALS_COLUMNS)
       .where("id", "=", accountId)
       .executeTakeFirst();
+  }
+
+  /**
+   * The password rule of account `accountId` (password-policy.ts, ADR-0008 revision of 2026-11-10): `privileged` for a
+   * platform admin or an account with an **active** `owner` or `admin` membership of an OTA that members may see, in
+   * either storefront environment (the rows `listActiveMemberships` reads); `standard` otherwise, also for an unknown
+   * account. One read on `db` (the account's primary key and the partial index of active memberships by account).
+   */
+  async passwordRuleOf(db: PlatformTransaction | PlatformDb, accountId: string): Promise<PasswordRule> {
+    const row = await db
+      .selectFrom("platform.accounts as a")
+      .select((eb) => [
+        "a.is_platform_admin",
+        eb
+          .exists(
+            eb
+              .selectFrom("platform.tenant_memberships as m")
+              .innerJoin("platform.tenants as t", "t.id", "m.tenant_id")
+              .select("m.id")
+              .whereRef("m.account_id", "=", "a.id")
+              .where("m.status", "=", "active")
+              .where("m.role", "in", PRIVILEGED_PASSWORD_ROLES)
+              .where("t.status", "in", MEMBER_VISIBLE_TENANT_STATUSES)
+              .where("t.deleted_at", "is", null),
+          )
+          .as("holds_privileged_role"),
+      ])
+      .where("a.id", "=", accountId)
+      .executeTakeFirst();
+    return row !== undefined && (row.is_platform_admin || row.holds_privileged_role)
+      ? "privileged"
+      : "standard";
   }
 
   /**

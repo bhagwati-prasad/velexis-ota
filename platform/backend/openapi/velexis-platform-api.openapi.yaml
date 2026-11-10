@@ -180,7 +180,10 @@ paths:
 
 
         **Rules.** The e-mail address is trimmed and compared lower-cased. The password needs at least 10 characters
-        and must not be in the breached-password list (`422 PASSWORD_TOO_WEAK`); it is stored as an Argon2id hash.
+        and must not be in the breached-password list (`422 PASSWORD_TOO_WEAK`, field code `too_short` or `breached`);
+        it is stored as an Argon2id hash. A new account holds no role yet, so the privileged rule of `changePassword`
+        and `confirmPasswordReset` (12 characters with a letter and a digit for platform admins and for owners and
+        admins of OTAs) applies from its first password change after it gets one.
         `acceptTerms` must be `true`, and `termsVersion` names the terms the person accepted (kept with the time of
         acceptance). 5 sign-ups per end-user IP per hour.
       tags:
@@ -703,9 +706,17 @@ paths:
       operationId: confirmPasswordReset
       summary: Set a new password with a reset token
       description: >-
-        Checks the reset token (unused, unexpired), applies the password rules, stores the new Argon2id hash and uses
-        the token up. Every session of the account is revoked, `staffdeny:acct:<accountId>` is written, the account is
-        e-mailed, an `account` invalidation is published and an audit row is written.
+        Checks the reset token (unused, unexpired), applies the password rules of the account, stores the new Argon2id
+        hash and uses the token up. Every session of the account is revoked, `staffdeny:acct:<accountId>` is written,
+        the account is e-mailed, an `account` invalidation is published and an audit row is written.
+
+
+        **Password rules** (ADR-0008, revision of 2026-11-10: PCI DSS 8.3.6 and the owner's decision). A platform admin,
+        and an account with an active `owner` or `admin` membership of an OTA that members may see (test or live), needs
+        at least 12 characters with at least one letter and one digit (field code `privileged_rule`); every other
+        account at least 10 characters (`too_short`); no password may be in the breached-password list (`breached`).
+        The `422 PASSWORD_TOO_WEAK` message names the rule of the account; the token stays usable after it. The rule is
+        read when the new password is checked, so an existing password keeps working until the account sets a new one.
       tags:
         - Auth
       security: []
@@ -719,6 +730,8 @@ paths:
       x-platform-tables:
         - account_tokens
         - accounts
+        - tenant_memberships
+        - tenants
         - account_sessions
         - email_outbox
         - platform_audit_log
@@ -754,7 +767,24 @@ paths:
                 PASSWORD_RESET_TOKEN_INVALID:
                   $ref: '#/components/examples/PASSWORD_RESET_TOKEN_INVALID'
         '422':
-          $ref: '#/components/responses/PasswordTooWeak'
+          description: >-
+            The new password breaks the password rules of the account, which the message names: at least 10 characters
+            (field code `too_short`), or for a platform admin or an owner or admin of an OTA at least 12 with at least
+            one letter and one digit (`privileged_rule`, ADR-0008 revision of 2026-11-10), and never a password of the
+            breached-password list (`breached`). One field error at `/newPassword`, which never quotes the password; the
+            token stays usable. Possible codes: PASSWORD_TOO_WEAK.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                PASSWORD_TOO_WEAK:
+                  $ref: '#/components/examples/PASSWORD_TOO_WEAK'
+                PasswordTooWeakPrivileged:
+                  $ref: '#/components/examples/PasswordTooWeakPrivileged'
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -957,9 +987,18 @@ paths:
       operationId: changePassword
       summary: Change the password
       description: >-
-        Checks the current password (`422 CURRENT_PASSWORD_INCORRECT`) and the password rules for the new one (`422
-        PASSWORD_TOO_WEAK`). Revokes every other session of the account and writes `staffdeny:acct:<accountId>`, so OTA
-        admin sessions end too; the current session stays signed in. E-mails the account and writes an audit row.
+        Checks the current password (`422 CURRENT_PASSWORD_INCORRECT`) and the password rules of the account for the
+        new one (`422 PASSWORD_TOO_WEAK`, whose message names the rule). Revokes every other session of the account and
+        writes `staffdeny:acct:<accountId>`, so OTA admin sessions end too; the current session stays signed in.
+        E-mails the account and writes an audit row.
+
+
+        **Password rules** (ADR-0008, revision of 2026-11-10: PCI DSS 8.3.6 and the owner's decision). A platform admin,
+        and an account with an active `owner` or `admin` membership of an OTA that members may see (test or live), needs
+        at least 12 characters with at least one letter and one digit (field code `privileged_rule`); every other
+        account at least 10 characters (`too_short`); no password may be in the breached-password list (`breached`).
+        The rule is read when the new password is checked, so an existing password keeps working until the account
+        sets a new one.
       tags:
         - Account
       security:
@@ -977,6 +1016,8 @@ paths:
         - INTERNAL_ERROR
       x-platform-tables:
         - accounts
+        - tenant_memberships
+        - tenants
         - account_sessions
         - email_outbox
         - platform_audit_log
@@ -1003,8 +1044,9 @@ paths:
           $ref: '#/components/responses/PortalForbidden'
         '422':
           description: >-
-            The current password is wrong, or the new one breaks the password rules. Possible codes:
-            CURRENT_PASSWORD_INCORRECT, PASSWORD_TOO_WEAK.
+            The current password is wrong, or the new one breaks the password rules of the account (the message names
+            them: 10 characters, or 12 with a letter and a digit for a platform admin or an owner or admin of an OTA).
+            Possible codes: CURRENT_PASSWORD_INCORRECT, PASSWORD_TOO_WEAK.
           headers:
             X-Request-Id:
               $ref: '#/components/headers/X-Request-Id'
@@ -1017,6 +1059,8 @@ paths:
                   $ref: '#/components/examples/CURRENT_PASSWORD_INCORRECT'
                 PASSWORD_TOO_WEAK:
                   $ref: '#/components/examples/PASSWORD_TOO_WEAK'
+                PasswordTooWeakPrivileged:
+                  $ref: '#/components/examples/PasswordTooWeakPrivileged'
         '429':
           $ref: '#/components/responses/RateLimited'
         '500':
@@ -13522,7 +13566,10 @@ components:
             NOT_FOUND:
               $ref: '#/components/examples/NOT_FOUND'
     PasswordTooWeak:
-      description: 'The password breaks the password rules. Possible codes: PASSWORD_TOO_WEAK.'
+      description: >-
+        The password breaks the password rules of a new account: at least 10 characters (field code `too_short`) and
+        never a password of the breached-password list (`breached`); `signUp`'s field error is at `/password` and never
+        quotes the password. Possible codes: PASSWORD_TOO_WEAK.
       headers:
         X-Request-Id:
           $ref: '#/components/headers/X-Request-Id'
@@ -14718,6 +14765,26 @@ components:
           message: The password needs at least 10 characters and must not be a common or breached password.
           status: 422
           requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+    PasswordTooWeakPrivileged:
+      summary: PASSWORD_TOO_WEAK (privileged_rule)
+      description: >-
+        A platform admin, or an owner or admin of an OTA, chose a new password without 12 characters, a letter and a
+        digit (ADR-0008, revision of 2026-11-10: PCI DSS 8.3.6); `changePassword` and `confirmPasswordReset` answer it
+        at `/newPassword`.
+      value:
+        error:
+          code: PASSWORD_TOO_WEAK
+          message: >-
+            The password needs at least 12 characters with at least one letter and one digit, and must not be a common
+            or breached password: the rule for platform admins and for owners and admins of an OTA.
+          status: 422
+          requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+          fieldErrors:
+            - path: /newPassword
+              code: privileged_rule
+              message: >-
+                Use at least 12 characters, with at least one letter and one digit: the rule for platform admins and
+                for owners and admins of an OTA.
     CURRENT_PASSWORD_INCORRECT:
       summary: CURRENT_PASSWORD_INCORRECT
       value:
@@ -14930,8 +14997,11 @@ components:
     Password:
       type: string
       description: >-
-        A password. The schema only bounds its length; the rules (at least 10 characters, not breached) are checked by
-        the service and answer `422 PASSWORD_TOO_WEAK`. Never logged, never echoed in an error.
+        A password. The schema only bounds its length; the rules are checked by the service when a password is chosen
+        and answer `422 PASSWORD_TOO_WEAK`: at least 10 characters, or at least 12 with at least one letter and one
+        digit for a platform admin or an owner or admin of an OTA (ADR-0008, revision of 2026-11-10), and not
+        breached. A password in use is never checked again, so it keeps working until the account chooses another.
+        Never logged, never echoed in an error.
       minLength: 1
       maxLength: 256
       writeOnly: true
@@ -21023,7 +21093,10 @@ x-error-catalogue:
     description: Someone else changed this in the meantime; reload and try again.
   PASSWORD_TOO_WEAK:
     status: 422
-    description: The password needs at least 10 characters and must not be a common or breached password.
+    description: >-
+      The password breaks the password rules of the account, which the message names: at least 10 characters, or 12
+      with at least one letter and one digit for a platform admin or an owner or admin of an OTA, and not a common or
+      breached password.
   CURRENT_PASSWORD_INCORRECT:
     status: 422
     description: The current password is wrong.
