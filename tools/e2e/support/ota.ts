@@ -30,6 +30,13 @@
 //   await serveStorefrontOf(context, owned.storefrontHost);  // the preview's pages show the journey's own OTA
 //   await forgetStorefrontCopies(page);                      // the tab's own 5-minute copies of the storefront
 //
+// FIX-W46-OTA (lead decision (11l) of 2026-11-06) adds the arrangements two journeys once wrote themselves:
+//
+//   const staff = await signInStaffWithApi(owned);           // the owner's staff session through public APIs only:
+//                                                            // createApiKey, createConsoleToken, console.auth.signIn
+//   await staff.call("consoleCreateStorefrontPage", "POST", "/v1/console/settings/pages", page, 201);
+//   await moveBookingIntoLive(owned.schema, booking);        // no API moves a booking into the live environment
+//
 // The storefront's live-mode and custom-domain journey of OFE-022 adds (the very end):
 //
 //   const owned = await newOwnerWithActiveOta("Lena Live", "live", { mfa: true });  // an owner with MFA
@@ -73,11 +80,14 @@ import {
 } from "@velexis/crypto";
 import Redis from "ioredis";
 import { expectNoSeriousA11yViolations } from "./a11y";
+import type { components as PlatformComponents } from "@velexis/api-types/platform";
 import {
   callPlatformApi,
   createVerifiedAccount,
   enableMfa,
   signInWithApi,
+  uniqueTestIp,
+  type ApiCall,
   type PortalAccount,
   type SessionTokens,
 } from "./fixtures";
@@ -758,6 +768,58 @@ export async function moveBookingIntoThePast(bookingId: string, daysAgo = 30): P
   });
 }
 
+/** Runs `fn` in one `tenantTx` on `schema` (`withTenantTx`: the stack's database as velexis_ota_app; a fake in tests). */
+export type TenantTxRunner = <T>(
+  schema: string,
+  fn: (trx: Transaction<TenantDatabase>) => Promise<T>,
+) => Promise<T>;
+
+/**
+ * Moves the test booking `booking` of the OTA of `schema` into the live environment: the booking, its payments (at
+ * least the one its checkout started) and the checkout it came from, in one `tenantTx` as velexis_ota_app, so it is
+ * the live environment's booking for the console, which reads the rows of one environment only (OBE-081). For an OTA
+ * that has gone live: the stack has no live Amadeus account (dev:seed seeds the test account and its test offices
+ * only), so no live storefront search can reach Amadeus, and no operation moves a booking between environments
+ * (live-environment.e2e.ts). Throws, and changes nothing, when the booking is not a test booking or has no test
+ * payment or no test checkout to move with it.
+ */
+export async function moveBookingIntoLive(
+  schema: string,
+  booking: Pick<SeededBooking, "bookingId" | "paymentId" | "checkoutId">,
+  run: TenantTxRunner = withTenantTx,
+): Promise<void> {
+  await run(schema, async (trx) => {
+    const moved = await trx
+      .updateTable("bookings")
+      .set({ environment: "live", updated_at: sql<Date>`now()` })
+      .where("id", "=", booking.bookingId)
+      .where("environment", "=", "test")
+      .executeTakeFirst();
+    if (moved.numUpdatedRows !== 1n) {
+      throw new Error(`the OTA has no test booking ${booking.bookingId}`);
+    }
+    // The booking's payment and its checkout move with it, or the arrangement fails here (and the transaction rolls
+    // back) instead of leaving a live booking with a test payment for a later step to trip over.
+    const payments = await trx
+      .updateTable("payments")
+      .set({ environment: "live" })
+      .where((eb) => eb.or([eb("booking_id", "=", booking.bookingId), eb("id", "=", booking.paymentId)]))
+      .where("environment", "=", "test")
+      .executeTakeFirst();
+    const checkout = await trx
+      .updateTable("checkouts")
+      .set({ environment: "live" })
+      .where("id", "=", booking.checkoutId)
+      .where("environment", "=", "test")
+      .executeTakeFirst();
+    if (payments.numUpdatedRows < 1n || checkout.numUpdatedRows !== 1n) {
+      throw new Error(
+        `the test booking ${booking.bookingId} has no test payment or no test checkout to move`,
+      );
+    }
+  });
+}
+
 /** One part of a JWT (base64url JSON) read as an object; `undefined` when it is not one. */
 function jwtPart(part: string | undefined): Record<string, unknown> | undefined {
   if (part === undefined || !/^[A-Za-z0-9_-]+$/.test(part)) {
@@ -1130,6 +1192,144 @@ export class EdgeApi {
     }
     return answer;
   }
+}
+
+/** What `ConsoleApi` needs besides the key and the end-user IP; the defaults are the stack's. */
+export interface ConsoleApiOptions {
+  /** The OTA API (default OTA_API_URL). */
+  readonly baseUrl?: string;
+  readonly fetch?: FetchLike;
+}
+
+/**
+ * The OTA API as a custom console's server calls it (the OTA document's **Keys**): an OTA's secret key in `X-Api-Key`,
+ * the end user's address and agent (`X-Velexis-End-User-IP`, so per-IP limits count this journey alone), and once
+ * `signIn` has a staff session, its access token as the bearer, whose role decides (OADR-0011 point 4). A new
+ * `Idempotency-Key` on every POST. The key, the tokens and the answers stay in this process; a refusal names the
+ * operation, status and code only.
+ */
+export class ConsoleApi {
+  private readonly baseUrl: string;
+  private readonly fetchImpl: FetchLike;
+  private accessToken: string | undefined;
+
+  constructor(
+    private readonly apiKey: string,
+    private readonly endUserIp: string,
+    options: ConsoleApiOptions = {},
+  ) {
+    this.baseUrl = options.baseUrl ?? OTA_API_URL;
+    this.fetchImpl = options.fetch ?? ((input, init) => fetch(input, init));
+  }
+
+  /** console.auth.signIn with a portal token (createConsoleToken's); later calls carry the session's access token. */
+  async signIn(portalToken: string): Promise<void> {
+    const answer = (await this.call("consoleSignIn", "POST", "/v1/console/auth/sign-in", {
+      grantType: "portal_token",
+      portalToken,
+    })) as { session?: { accessToken?: unknown } } | undefined;
+    const token = answer?.session?.accessToken;
+    if (typeof token !== "string" || token === "") {
+      throw new Error("console.auth.signIn answered without a session");
+    }
+    this.accessToken = token;
+  }
+
+  /**
+   * Calls `method path` of the OTA API (`/v1/console/…`) with `body`, and returns the JSON answer; a status other than
+   * `expected` throws a StorefrontApiError (operation, status and error code only).
+   */
+  async call(
+    operation: string,
+    method: ApiMethod | "DELETE",
+    path: string,
+    body?: unknown,
+    expected = 200,
+  ): Promise<unknown> {
+    const headers: Record<string, string> = {
+      accept: "application/json",
+      "x-api-key": this.apiKey,
+      "x-velexis-end-user-ip": this.endUserIp,
+      "x-velexis-end-user-agent": "velexis-e2e",
+    };
+    if (this.accessToken !== undefined) {
+      headers["authorization"] = `Bearer ${this.accessToken}`;
+    }
+    if (body !== undefined) {
+      headers["content-type"] = "application/json";
+    }
+    if (method === "POST") {
+      headers["idempotency-key"] = randomUUID();
+    }
+    const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+      method,
+      headers,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const text = await response.text();
+    let answer: unknown;
+    try {
+      answer = text === "" ? undefined : JSON.parse(text);
+    } catch {
+      answer = undefined;
+    }
+    if (response.status !== expected) {
+      throw new StorefrontApiError(operation, response.status, errorCodeOf(answer));
+    }
+    return answer;
+  }
+}
+
+/** What `signInStaffWithApi` needs besides the OTA; the defaults are the stack's. */
+export interface StaffSignInOptions extends ConsoleApiOptions {
+  /** The platform API caller (default callPlatformApi). */
+  readonly platform?: <T>(call: ApiCall) => Promise<T>;
+  /** The console server's end-user IP (default: a new one, so per-IP limits count this journey alone). */
+  readonly endUserIp?: string;
+}
+
+/** The secret key `signInStaffWithApi` creates: scoped `console` (console calls with a staff token only). */
+export const STAFF_CONSOLE_KEY = Object.freeze({
+  name: "E2E console server",
+  kind: "secret",
+  environment: "test",
+  scopes: ["console"],
+} as const);
+
+/**
+ * The owner of `owned` signed in to the OTA's console through public APIs only (PADR-0017 item 5), as a custom console
+ * signs its staff in: the owner creates a test secret key scoped `console` (createApiKey) and a one-time portal token
+ * (createConsoleToken), and the key signs the owner in with it (console.auth.signIn). Resolves with the console client,
+ * whose calls carry the owner's staff session (every permission of the owner's role).
+ */
+export async function signInStaffWithApi(
+  owned: Pick<OwnedOta, "owner" | "ota">,
+  options: StaffSignInOptions = {},
+): Promise<ConsoleApi> {
+  const platform = options.platform ?? callPlatformApi;
+  const tenantPath = `/v1/tenants/${encodeURIComponent(owned.ota.id)}`;
+  const created = await platform<PlatformComponents["schemas"]["ApiKeyCreated"]>({
+    operation: "createApiKey",
+    method: "POST",
+    path: `${tenantPath}/api-keys`,
+    endUserIp: owned.owner.account.endUserIp,
+    accessToken: owned.owner.accessToken,
+    body: STAFF_CONSOLE_KEY,
+  });
+  const token = await platform<PlatformComponents["schemas"]["ConsoleToken"]>({
+    operation: "createConsoleToken",
+    method: "POST",
+    path: `${tenantPath}/console-token`,
+    endUserIp: owned.owner.account.endUserIp,
+    accessToken: owned.owner.accessToken,
+  });
+  const client = new ConsoleApi(created.key, options.endUserIp ?? uniqueTestIp(), {
+    ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
+    ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+  });
+  await client.signIn(token.portalToken);
+  return client;
 }
 
 /** An Amadeus order made in the stub outside Velexis, as an agent books one in a GDS terminal. */

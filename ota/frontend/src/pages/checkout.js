@@ -8,7 +8,9 @@
 //    address selects): requirements, travellers, contacts, extras, totals, `version`, `expiresAt`, progress. A
 //    completed checkout goes to its confirmation, an expired one says so with a link to price the flight again.
 // 2. Travellers (components/traveller-form.js): `checkout.setTravelers({ checkoutId, ifMatch, travelers })` with the
-//    fields of `requirements.travelers`.
+//    fields of `requirements.travelers`. The API saves partial travellers (a required field left out is `200` with the
+//    field in `progress.missing`, the operation's **Partial travellers**), so the step moves on only when
+//    `progress.missing` names none of its fields; otherwise it stays on its form with those fields marked.
 // 3. Contacts (components/contact-form.js): `checkout.setContacts({ checkoutId, ifMatch, contacts })`, pre-filled
 //    from the first adult traveller and, for customers, the account.
 // 4. Extras (components/ancillary-picker.js): `flights.getAncillaries({ pricedOfferId: basePricedOfferId })`, then
@@ -792,17 +794,41 @@ export function start(context, env = {}) {
   };
 
   /**
+   * Says that a change was applied on a version from another tab (in the notice of the step shown).
+   * @param {boolean} reapplied
+   */
+  const noteReapplied = (reapplied) => {
+    if (reapplied) {
+      renderState(el.notice, { name: "stale", scope: "inline", message: t("checkout.reapplied") });
+      live.announce(t("checkout.reapplied"));
+    }
+  };
+
+  /**
    * Moves on after a saved step; when the change was applied on a version from another tab, the next step says so.
    * @param {CheckoutStep} step the saved step
    * @param {boolean} reapplied
    */
   const advance = (step, reapplied) => {
     goTo(nextStep(step));
-    if (reapplied) {
-      renderState(el.notice, { name: "stale", scope: "inline", message: t("checkout.reapplied") });
-      live.announce(t("checkout.reapplied"));
-    }
+    noteReapplied(reapplied);
   };
+
+  /**
+   * What the checkout on the screen still misses in the fields of `step` (`progress.missing`), with the travellers'
+   * pointers turned into the form's order.
+   * @param {CheckoutStep} step
+   * @returns {FieldError[]}
+   */
+  const missingOfStep = (step) =>
+    errorsOfStep(
+      remapTravellerPointers(
+        list(checkout?.progress?.missing),
+        list(checkout?.travelers).map((traveller) => traveller.travelerId),
+        list(checkout?.requirements?.travelers).map((requirement) => requirement.travelerId),
+      ),
+      step,
+    );
 
   /**
    * Shows a failure of a step (after its own cases): field errors on its form, the checkout's end (expired,
@@ -913,6 +939,15 @@ export function start(context, env = {}) {
       // The contact step takes the first adult's name, unless the traveller has typed there already.
       if (list(checkout?.contacts).length === 0 && !contactsTyped) {
         renderContacts();
+      }
+      // Saved, but the API takes partial travellers: while `progress.missing` names a field of this step, the step
+      // stays on its form with those fields marked, and the contacts wait.
+      const missing = missingOfStep("travellers");
+      if (missing.length > 0) {
+        noteReapplied(result.reapplied);
+        summaries.travellers.show(missing);
+        live.announce(t("checkout.travellersIncomplete"));
+        return;
       }
       live.announce(t("checkout.travellersSaved"));
       advance("travellers", result.reapplied);

@@ -962,6 +962,67 @@ describe("checkout page: steps and data", () => {
     expect(shownStep()).toEqual(["travellers"]);
   });
 
+  it("[FIX-W46-OTA AC3] a 200 of setTravelers that still misses traveller fields keeps the step on its form with them marked", async () => {
+    let answers = 0;
+    const fake = fakeApi({
+      // The API saves partial travellers (setCheckoutTravelers' **Partial travellers**): the first answer still misses
+      // the adult's name (`/travelers/1` in the checkout, whose travellers come infant first) and the contacts, the
+      // second misses the contacts only.
+      setTravelers: async () => {
+        answers += 1;
+        fake.api.current = {
+          ...fake.api.current,
+          version: fake.api.current.version + 1,
+          travelers: [traveller("2", "HELD_INFANT"), traveller("1", "ADULT")],
+          progress: {
+            ...INCOMPLETE,
+            travelersComplete: answers > 1,
+            missing: [
+              ...(answers > 1
+                ? []
+                : [
+                    {
+                      path: "/travelers/1/name",
+                      code: "REQUIRED",
+                      message: "Enter the first and last name.",
+                    },
+                  ]),
+              { path: "/contacts", code: "PRIMARY_CONTACT_REQUIRED", message: "Add a primary contact." },
+            ],
+          },
+        };
+        return fake.api.current;
+      },
+    });
+    const { client } = await openCheckout({ fake });
+    fillTravellers();
+    await submit("travellers");
+
+    expect(client.checkout.setTravelers).toHaveBeenCalledTimes(1);
+    expect(shownStep()).toEqual(["travellers"]);
+    expect(location.search).toBe(`?id=${CHECKOUT_ID}&step=travellers`);
+    // The adult is the form's first traveller: its name is marked; the contacts' entry waits for its own step.
+    expect(field("travelers.0.name.firstName").getAttribute("aria-invalid")).toBe("true");
+    expect(field("travelers.1.name.firstName").hasAttribute("aria-invalid")).toBe(false);
+    const summary = /** @type {HTMLElement} */ (stepForm("travellers").querySelector("[data-error-summary]"));
+    expect(document.activeElement).toBe(summary);
+    expect(texts("[data-step-form=travellers] [data-error-summary] li")).toEqual(["Fill in this field"]);
+    expect(stepForm("contacts").querySelector("[aria-invalid='true']")).toBeNull();
+    // The live region writes its message shortly after it empties (ANNOUNCED_MS).
+    await vi.waitFor(
+      () => expect(text($("[data-live-region]"))).toBe("Travellers saved. Some details are still missing"),
+      { timeout: ANNOUNCED_MS * 5 },
+    );
+
+    // The traveller fills in what the form shows empty again; once nothing of this step is missing, Continue moves on
+    // to the contacts.
+    fillTravellers();
+    await submit("travellers");
+    expect(client.checkout.setTravelers).toHaveBeenCalledTimes(2);
+    expect(shownStep()).toEqual(["contacts"]);
+    expect(location.search).toBe(`?id=${CHECKOUT_ID}&step=contacts`);
+  });
+
   it("[OFE-011 AC2] contact errors of whole parts mark their field (the phone of /contacts/0/phones)", async () => {
     const fake = fakeApi({
       setContacts: async () =>

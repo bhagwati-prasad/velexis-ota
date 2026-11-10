@@ -320,23 +320,38 @@ async function withoutBrowserChecks(form: Locator): Promise<void> {
 }
 
 /**
+ * The booking page's wait after a `429` of its fare rules: the `Retry-After`, at most 10 s, before it asks once more
+ * (`RULES_RETRY_MAX_SECONDS` of ota/frontend/src/pages/booking.js, FIX-W46-OTA).
+ */
+const FARE_RULES_RETRY_MAX_MS = 10_000;
+
+/**
  * Opens the "Changes and refunds" disclosure of the price or booking page and waits for what its first opening loads,
  * so that axe judges the loaded disclosure: the airline's rule categories or full rules, its "no detailed rules", or a
- * state (a booking synced less than a minute ago has no rules to show until then: `429`, "could not be loaded right
- * now" with Try again, customer-bookings.service.ts).
+ * state (a booking synced less than a minute ago has no rules to show until then: `429`, which the booking page asks
+ * again once after its `Retry-After`, at most 10 s, then "could not be loaded right now" with Try again,
+ * customer-bookings.service.ts). With `skipRetryWait` (the booking page, whose context's clock the caller installed
+ * before the page loaded) the page's clock jumps over that wait instead of the test waiting it out.
  */
-async function openFareRules(page: Page): Promise<void> {
+async function openFareRules(page: Page, { skipRetryWait = false } = {}): Promise<void> {
   const rules = page.locator("details[data-fare-rules]");
   await rules.locator("summary").first().click();
   await expect(rules).toHaveAttribute("open", "");
-  await expect(
-    rules
-      .locator(
-        "[data-rules-categories] > li, [data-rules-notes], [data-rules-unavailable], [data-rules-state] [data-state]",
-      )
-      .filter({ visible: true })
-      .first(),
-  ).toBeVisible();
+  const settled = rules
+    .locator(
+      "[data-rules-categories] > li, [data-rules-notes], [data-rules-unavailable], [data-rules-state] [data-state]",
+    )
+    .filter({ visible: true })
+    .first();
+  if (skipRetryWait) {
+    // Each pass moves the page's clock past the longest wait, which fires the retry once the 429 has scheduled it.
+    await expect(async () => {
+      await page.clock.fastForward(FARE_RULES_RETRY_MAX_MS);
+      await expect(settled).toBeVisible({ timeout: 500 });
+    }).toPass({ timeout: 10_000 });
+  } else {
+    await expect(settled).toBeVisible();
+  }
   await expect(rules.locator("[data-rules-loading]")).toBeHidden();
 }
 
@@ -942,6 +957,8 @@ test.describe("the account and bookings pages in their states", () => {
       await browsing.guards.checkA11y(page());
     }
 
+    // The page's clock, so that the fare rules' wait after a 429 can be jumped over (openFareRules); it keeps time.
+    await page().clock.install();
     await page().goto(`/booking.html?id=${bookingId}`);
     await expect(page().getByRole("heading", { level: 1, name: /^Booking VX/ })).toBeVisible();
     await browsing.guards.checkA11y(page());
@@ -960,7 +977,7 @@ test.describe("the account and bookings pages in their states", () => {
     await page().keyboard.press("Escape");
     await expect(cancel).toBeHidden();
 
-    await openFareRules(page());
+    await openFareRules(page(), { skipRetryWait: true });
     await browsing.guards.checkA11y(page());
 
     await page().goto(`/booking.html?id=${unknownId("bkg")}`);

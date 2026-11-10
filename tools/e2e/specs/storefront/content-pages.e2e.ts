@@ -1,25 +1,36 @@
 // The content pages of the hosted storefront (OFE-020; ota/frontend/docs/pages-account.md §7, OADR-0015 point 4,
 // OADR-0012 point 5), in the `storefront` project: the production build in `vite preview`, whose Caddy-like routing
-// serves `/p/<slug>` with p.html (as `rewrite /p/* /p.html` does in deploy/caddy/Caddyfile), proxied to the OTA API for
-// the demo OTA, under the storefront guards (CSP, first-party requests only, cookies, axe).
+// serves `/p/<slug>` with p.html (as `rewrite /p/* /p.html` does in deploy/caddy/Caddyfile), under the storefront
+// guards (CSP, first-party requests only, cookies, axe).
 //
-//   a published page and a draft of the demo OTA → /p/<slug> shows the page's title and blocks, built in the browser
-//   from storefront.getPage → the footer lists the page (storefront.listPages, showInFooter) and marks it as the
+//   a published page and a draft of the journey's OTA → /p/<slug> shows the page's title and blocks, built in the
+//   browser from storefront.getPage → the footer lists the page (storefront.listPages, showInFooter) and marks it as the
 //   current page → the draft's address shows the not-found content with noindex
 //
-// The OTA admin's page editor is OAD-015's; this journey writes the two rows of `storefront_pages` straight into the
-// demo OTA's schema through `tenantTx` (support/ota.ts `withTenantTx`, as velexis_ota_app), with slugs of its own, drops
-// the API's pages cache of the demo OTA (`t:<tenantId>:test:pages:<locale>`, as a console page change does) and
-// removes both rows again at the end, so the other journeys' footers are as before. Other journeys run in parallel and
-// every storefront page asks storefront.listPages, so a list that another request read before the insert can land in
-// the cache after the drop (ota/backend/src/storefront/public-pages.service.ts); the cache is therefore dropped again
-// until the API's list shows the change, as support/ota.ts `enableAirlineCard` does for storefront.get.
+// Arranged through public APIs only (PADR-0017 item 5; FIX-W46-OTA, lead decision (11l) of 2026-11-06): an OTA of the
+// journey's own (`newOwnerWithActiveOta`), whose owner signs in to its console as a custom console's server does
+// (`signInStaffWithApi` of support/ota.ts: createApiKey for a test secret key scoped `console`, createConsoleToken,
+// console.auth.signIn) and creates the two pages with console.settings.pages.create; the OTA admin's page editor is
+// OAD-015's, which settings-effects.e2e.ts drives. The demo OTA has no staff member to sign in (dev:seed creates its
+// rows without one, and its console key holds `amadeus:read` only), so its pages are out of the API's reach; an OTA of
+// its own also leaves the footer of the demo OTA, which every other storefront journey shows, as it is. The preview
+// serves the demo OTA's host, so each test's context sends the `/api/*` requests of the preview's pages to the OTA API
+// as the journey OTA's storefront edge (`serveStorefrontOf`), as Caddy does in front of the OTA's host. No other
+// journey reads that OTA's pages, and the console's change deletes the API's pages cache itself after its commit, so
+// the journey writes nothing to a tenant schema or to Redis.
 import { randomBytes } from "node:crypto";
-import Redis from "ioredis";
-import { DEMO_TENANT_SCHEMA, demoTenantId, withTenantTx } from "../../support/ota";
-import { stack } from "../../support/seed";
-import { STOREFRONT_URL } from "../../support/stack";
+import type { components } from "@velexis/api-types";
+import { uniqueTestIp } from "../../support/fixtures";
+import {
+  EdgeApi,
+  newOwnerWithActiveOta,
+  serveStorefrontOf,
+  signInStaffWithApi,
+  type OwnedOta,
+} from "../../support/ota";
 import { expect, test } from "../../support/storefront-guards";
+
+type PageInput = components["schemas"]["StorefrontPageInput"];
 
 /** A suffix no other run uses: lower-case letters and digits, as a slug allows. */
 const RUN = randomBytes(5).toString("hex");
@@ -38,109 +49,58 @@ const PAGE_BODY = [
   "More about fares on [the airline's site](https://www.example.org/fares).",
 ].join("\n");
 
-/** A page id as the API writes it: `stp_` and 26 letters and digits. */
-const pageId = (): string => `stp_${randomBytes(13).toString("hex").toUpperCase()}`;
-/** How long the API may take to list a page change (each poll drops a list filled meanwhile from the old rows). */
-const PAGES_CHANGE_WAIT_MS = 10_000;
+/** The journey's two pages, in the OTA's default locale: one published in the footer, one draft. */
+const PAGES: readonly Omit<PageInput, "locale">[] = [
+  {
+    slug: PAGE_SLUG,
+    kind: "about",
+    title: PAGE_TITLE,
+    bodyMarkdown: PAGE_BODY,
+    isPublished: true,
+    showInFooter: true,
+    sortOrder: 5,
+  },
+  {
+    slug: DRAFT_SLUG,
+    kind: "content",
+    title: `Draft ${RUN}`,
+    bodyMarkdown: "Not published yet.",
+    isPublished: false,
+    showInFooter: true,
+    sortOrder: 6,
+  },
+];
 
-/** Deletes the demo OTA's pages cache of the test environment (every locale) on the stack's Redis. */
-async function dropPagesCache(tenantId: string): Promise<void> {
-  const redis = new Redis(stack().redisUrl, { lazyConnect: true, maxRetriesPerRequest: 1 });
-  redis.on("error", () => undefined);
-  try {
-    await redis.connect();
-    let cursor = "0";
-    do {
-      const [next, keys] = await redis.scan(cursor, "MATCH", `t:${tenantId}:test:pages:*`, "COUNT", 100);
-      cursor = next;
-      if (keys.length > 0) {
-        await redis.del(...keys);
-      }
-    } while (cursor !== "0");
-  } finally {
-    redis.disconnect();
-  }
-}
-
-/** Whether storefront.listPages, asked through the preview as the storefront edge, lists the journey's page now. */
-async function listsJourneyPage(): Promise<boolean> {
-  const answer = await fetch(`${STOREFRONT_URL}/api/v1/storefront/pages`, {
-    headers: { accept: "application/json" },
-  });
-  if (!answer.ok) {
-    return false;
-  }
-  const list = (await answer.json()) as { data?: Array<{ slug?: unknown }> };
-  return Array.isArray(list.data) && list.data.some((page) => page.slug === PAGE_SLUG);
-}
-
-/**
- * Drops the pages cache until storefront.listPages lists the journey's page (`listed`) or no longer does: each poll
- * drops first, so a list that another journey's request filled from the old rows meanwhile goes too.
- */
-async function waitForPagesCache(listed: boolean): Promise<void> {
-  await expect
-    .poll(
-      async () => {
-        await dropPagesCache(tenantId);
-        return await listsJourneyPage();
-      },
-      { timeout: PAGES_CHANGE_WAIT_MS },
-    )
-    .toBe(listed);
-}
-
-let tenantId = "";
+let owned: OwnedOta;
 
 test.beforeAll(async () => {
-  tenantId = await demoTenantId();
-  await withTenantTx(DEMO_TENANT_SCHEMA, async (trx) => {
-    const settings = await trx.selectFrom("storefront_settings").select("default_locale").executeTakeFirst();
-    const locale = settings?.default_locale ?? "en";
-    await trx
-      .insertInto("storefront_pages")
-      .values([
-        {
-          id: pageId(),
-          slug: PAGE_SLUG,
-          locale,
-          kind: "about",
-          title: PAGE_TITLE,
-          body_markdown: PAGE_BODY,
-          is_published: true,
-          show_in_footer: true,
-          sort_order: 5,
-          published_at: new Date(),
-        },
-        {
-          id: pageId(),
-          slug: DRAFT_SLUG,
-          locale,
-          kind: "content",
-          title: `Draft ${RUN}`,
-          body_markdown: "Not published yet.",
-          is_published: false,
-          show_in_footer: true,
-          sort_order: 6,
-          published_at: null,
-        },
-      ])
-      .execute();
-  });
-  await waitForPagesCache(true);
-});
-
-test.afterAll(async () => {
-  await withTenantTx(DEMO_TENANT_SCHEMA, async (trx) => {
-    await trx.deleteFrom("storefront_pages").where("slug", "in", [PAGE_SLUG, DRAFT_SLUG]).execute();
-  });
-  await waitForPagesCache(false);
+  // Budget: a sign-up with its verification e-mail (up to 15 s), the OTA's set-up on the OTA worker (about 2 s locally;
+  // PF-11 allows a minute) and six API calls of a second at most.
+  test.setTimeout(120_000);
+  owned = await newOwnerWithActiveOta("Paula Pages", "pag");
+  // The OTA's default locale, as storefront.get gives it to its storefront.
+  const storefront = (await new EdgeApi(owned.storefrontHost, uniqueTestIp()).call(
+    "storefront.get",
+    "GET",
+    "/v1/storefront",
+  )) as { defaultLocale?: unknown } | undefined;
+  const locale = storefront?.defaultLocale;
+  if (typeof locale !== "string") {
+    throw new Error("storefront.get answered without a defaultLocale");
+  }
+  const staff = await signInStaffWithApi(owned);
+  for (const page of PAGES) {
+    const input: PageInput = { ...page, locale };
+    await staff.call("consoleCreateStorefrontPage", "POST", "/v1/console/settings/pages", input, 201);
+  }
 });
 
 test("[OFE-020 AC2] /p/<slug> shows the published page, built from its blocks, and the footer lists it", async ({
+  context,
   page,
   guards,
 }) => {
+  await serveStorefrontOf(context, owned.storefrontHost);
   const response = await page.goto(`/p/${PAGE_SLUG}`);
   expect(response?.status()).toBe(200);
 
@@ -173,9 +133,11 @@ test("[OFE-020 AC2] /p/<slug> shows the published page, built from its blocks, a
 });
 
 test("[OFE-020 AC2] a page that is not published shows the not-found content with noindex", async ({
+  context,
   page,
   guards,
 }) => {
+  await serveStorefrontOf(context, owned.storefrontHost);
   const response = await page.goto(`/p/${DRAFT_SLUG}`);
   // The HTML is static, so the status stays 200; the page shows the 404 content and adds noindex.
   expect(response?.status()).toBe(200);

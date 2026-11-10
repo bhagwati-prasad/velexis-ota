@@ -23,6 +23,9 @@ import { ERROR_CATALOGUE, OTA_ERROR_CODES, type ErrorCode } from "@velexis/error
 import { createResponseChecker, responseChecker, type ResponseChecker } from "@velexis/testing";
 import { beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { requestScope, scopedOperation } from "../../src/common/auth/scope.guard";
+import { ENDED_STAFF_SESSION_AS_NONE, staffRequirementOf } from "../../src/common/auth/staff.guard";
+import { PATH_TENANT_OPERATIONS } from "../../src/common/auth/tenant.guard";
 import { PENDING_OPERATIONS } from "../../src/common/http/pending-operations";
 import { RATE_LIMITS, rateLimitsOf } from "../../src/common/http/rate-limits";
 import { APP_DIR } from "../../src/config";
@@ -472,15 +475,17 @@ describe("edge and cookie mode (api-changes §2)", () => {
         "application/json",
         "schema",
       );
-      expect([operationId, schema["oneOf"]]).toEqual([
+      // `anyOf` since FIX-W46-OTA (lead decision (11k) of 2026-11-06): Redocly 2's no-illogical-composition-keywords
+      // asks `oneOf` schemas to differ where it can see it, and these two differ inside `session` only. Each body is
+      // still exactly one of the two (below), and a body of neither shape fails.
+      expect([operationId, schema["anyOf"], schema["oneOf"]]).toEqual([
         operationId,
         [
           { $ref: "#/components/schemas/AuthSessionResult" },
           { $ref: "#/components/schemas/AuthSessionInfo" },
         ],
+        undefined,
       ]);
-      // `oneOf` needs exactly one match: the token body is only an AuthSessionResult, the edge body only an
-      // AuthSessionInfo (no `session.accessToken`), and a body of neither shape fails.
       expect([operationId, checker.check(operationId, { status: 200, body: tokenBody })]).toEqual([
         operationId,
         [],
@@ -493,6 +498,28 @@ describe("edge and cookie mode (api-changes §2)", () => {
         [],
       );
     }
+    // What `oneOf` said holds for the bodies the API gives: the token body is only an AuthSessionResult, the edge body
+    // only an AuthSessionInfo (no `session.accessToken`). Each schema alone, as a probe's 200 response.
+    const shapes = ["AuthSessionResult", "AuthSessionInfo"];
+    const paths: Json = {};
+    for (const name of shapes) {
+      paths[`/session-shapes/${name}`] = {
+        post: {
+          operationId: name,
+          responses: {
+            "200": {
+              description: name,
+              content: { "application/json": { schema: { $ref: `#/components/schemas/${name}` } } },
+            },
+          },
+        },
+      };
+    }
+    const shapeChecker = createResponseChecker({ ...working, paths }, { label: "OTA session shapes" });
+    const shapesOf = (body: unknown): string[] =>
+      shapes.filter((name) => shapeChecker.check(name, { status: 200, body }).length === 0);
+    expect(shapesOf(tokenBody)).toEqual(["AuthSessionResult"]);
+    expect(shapesOf(edgeBody)).toEqual(["AuthSessionInfo"]);
   });
 
   it("makes AuthRefreshRequest.refreshToken optional and BookingLookupResult.bookingToken nullable", () => {
@@ -1837,16 +1864,31 @@ describe("the generic refusals of the guards (lead decision (9e) of 2026-11-06)"
   const TOKEN_SCHEMES = ["customerAuth", "customerCookie", "staffAuth", "bookingToken", "bookingCookie"];
 
   /**
+   * The console operations whose handler checks the membership that the credential in its body names (the portal
+   * token's, the refresh token's family's), as staff-auth.service.ts does: they take no staff token.
+   */
+  const MEMBERSHIP_GRANT_OPERATIONS: ReadonlySet<string> = new Set([
+    "consoleSignIn",
+    "consoleRefreshSession",
+  ]);
+
+  /**
    * The generic codes a request to `op` can meet, by the rules of info.description's **Generic refusals**, which follow
    * the guards' code: the caller guard checks a credential on every route (caller-resolver.ts, api-key.verifier.ts,
    * caller.guard.ts), the scope guard every route bound to an operation, which the health endpoints are not
    * (scope.guard.ts), the tenant, customer, staff and booking access guards a token where the operation reads one, the
    * tenant guard also the service key's console calls without a staff token (tenant.guard.ts, tenant-resolver.ts), and
-   * the permission guard a console operation's `x-permission` (permission.guard.ts).
+   * the permission guard a console operation's `x-permission` (permission.guard.ts). Since FIX-W46-OTA (lead decision
+   * (11k) of 2026-11-06) also the tenant guard's host check, on every operation it resolves an OTA for (all but the
+   * health endpoints, which bind no operation, and `PATH_TENANT_OPERATIONS`, whose path names the OTA), and the staff
+   * membership check: the staff guard's on every operation that takes a staff token (`staffRequirementOf`) but those
+   * that take an ended session as none (`ENDED_STAFF_SESSION_AS_NONE`: console.auth.signOut), and the sign-in's and the
+   * refresh's own (`MEMBERSHIP_GRANT_OPERATIONS`).
    */
   function genericCodesOf(op: Operation): string[] {
     const codes = ["VALIDATION_FAILED", "INVALID_REQUEST", "INVALID_API_KEY", "ORIGIN_NOT_ALLOWED"];
-    if (!op.path.startsWith("/health/")) {
+    const health = op.path.startsWith("/health/");
+    if (!health) {
       codes.push("SCOPE_NOT_ALLOWED");
     }
     const console = op.spec["x-scope"] === "console";
@@ -1860,8 +1902,21 @@ describe("the generic refusals of the guards (lead decision (9e) of 2026-11-06)"
     if (console && typeof permission === "string" && permission !== "none") {
       codes.push("FORBIDDEN");
     }
+    if (!health && !(PATH_TENANT_OPERATIONS as ReadonlySet<string>).has(op.operationId)) {
+      codes.push("HOST_NOT_ALLOWED");
+    }
+    const staffToken = staffRequirementOf(op.spec["security"]) !== "none";
+    if (
+      (staffToken && !ENDED_STAFF_SESSION_AS_NONE.has(op.operationId)) ||
+      MEMBERSHIP_GRANT_OPERATIONS.has(op.operationId)
+    ) {
+      codes.push("STAFF_MEMBERSHIP_INACTIVE");
+    }
     return codes;
   }
+
+  /** The codes of the host and membership checks, which an operation lists exactly when its code path can answer them. */
+  const EXACT_CODES = ["HOST_NOT_ALLOWED", "STAFF_MEMBERSHIP_INACTIVE"] as const;
 
   it("[FIX-W45-OTA AC1] lists the generic refusals a request can meet in every operation's x-error-codes", () => {
     expect(workingOperations.length).toBeGreaterThanOrEqual(135);
@@ -1886,6 +1941,94 @@ describe("the generic refusals of the guards (lead decision (9e) of 2026-11-06)"
     );
     expect(genericCodesOf(operation("consoleSignIn"))).not.toContain("FORBIDDEN");
     expect(genericCodesOf(operation("consoleListBookings"))).toContain("FORBIDDEN");
+  });
+
+  it("[FIX-W46-OTA AC1] lists HOST_NOT_ALLOWED and STAFF_MEMBERSHIP_INACTIVE on exactly the operations whose code path can answer them", () => {
+    const listed = (op: Operation, code: string): boolean =>
+      ((op.spec["x-error-codes"] as string[] | undefined) ?? []).includes(code);
+    // Listed where the guards can answer it, and nowhere else (a pending operation as once served).
+    const wrong = workingOperations.flatMap((op) =>
+      EXACT_CODES.filter((code) => listed(op, code) !== genericCodesOf(op).includes(code)).map(
+        (code) => `${op.operationId}: ${code} ${listed(op, code) ? "listed" : "missing"}`,
+      ),
+    );
+    expect(wrong).toEqual([]);
+    const listing = (code: string): string[] =>
+      workingOperations.filter((op) => listed(op, code)).map((op) => op.operationId);
+    // The host: every operation but the two health endpoints and getPublicAsset.
+    expect([...PATH_TENANT_OPERATIONS]).toEqual(["getPublicAsset"]);
+    expect(
+      workingOperations.filter((op) => !listed(op, "HOST_NOT_ALLOWED")).map((op) => op.operationId),
+    ).toEqual(["getPublicAsset", "healthLive", "healthReady"]);
+    expect(listing("HOST_NOT_ALLOWED")).toEqual(expect.arrayContaining(["consoleSignIn", "downloadFile"]));
+    // The membership: the console operations but console.auth.signOut, and the `both` operations that take a staff
+    // token from a `console:automation` key in console scope; never a customer-only operation.
+    const membership = listing("STAFF_MEMBERSHIP_INACTIVE");
+    expect(membership).toEqual(
+      expect.arrayContaining([
+        "consoleSignIn",
+        "consoleRefreshSession",
+        "consoleGetMe",
+        "createFlightSearch",
+      ]),
+    );
+    expect(membership).not.toContain("consoleSignOut");
+    expect(membership.filter((id) => operation(id).spec["x-scope"] === "customer")).toEqual([]);
+    expect(
+      membership
+        .filter((id) => operation(id).spec["x-scope"] === "both")
+        .every((id) =>
+          securityOf(operation(id)).some(
+            (requirement) => "apiKey" in requirement && "staffAuth" in requirement,
+          ),
+        ),
+    ).toBe(true);
+  });
+
+  it("[FIX-W46-OTA AC1] says in the Keys paragraph what the scope guard does with a secret key on a both operation", () => {
+    const description = String(objectAt(working, "info")["description"]);
+    const start = description.indexOf("**Keys.**");
+    const paragraph = description.slice(start, description.indexOf("**Users.**", start)).replace(/\s+/g, " ");
+    expect(paragraph).toContain(
+      "console scope there needs a key with the `console:automation` scope that sends `X-Velexis-Scope: console`",
+    );
+    expect(paragraph).toContain("A staff token does not open console scope on such an operation");
+    expect(paragraph).not.toContain("unless the call carries a staff token");
+    // What the paragraph says, as the scope guard decides it (scope.guard.ts `requestScope`).
+    const both = scopedOperation("createFlightSearch");
+    expect(both.scope).toBe("both");
+    const key = (scopes: readonly string[]) =>
+      ({
+        type: "key",
+        id: "key_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+        keyId: "key_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+        kind: "secret",
+        tenantId: "ten_01JA2Z9W5K7Q3M8N4P6R2T0V1X",
+        environment: "test",
+        scopes,
+      }) as const;
+    const refusal = (run: () => unknown): unknown => {
+      try {
+        run();
+      } catch (error) {
+        const { code, details } = error as { code?: string; details?: Record<string, unknown> };
+        return [code, details];
+      }
+      return "allowed";
+    };
+    const staffToken = { staffToken: true, deferPermission: true };
+    expect(requestScope(both, key(["console"]), undefined, staffToken)).toBe("customer");
+    expect(refusal(() => requestScope(both, key(["console"]), "console", staffToken))).toEqual([
+      "SCOPE_NOT_ALLOWED",
+      { requiredScope: "console:automation" },
+    ]);
+    expect(requestScope(both, key(["console:automation", "bookings:read"]), "console", staffToken)).toBe(
+      "console",
+    );
+    expect(refusal(() => requestScope(both, key(["storefront"]), "console", staffToken))).toEqual([
+      "SCOPE_NOT_ALLOWED",
+      { reason: "storefront_key" },
+    ]);
   });
 
   it("[FIX-W45-OTA AC1] answers every listed code with a listed status and lists a code for every error status", () => {
@@ -1931,12 +2074,65 @@ describe("the generic refusals of the guards (lead decision (9e) of 2026-11-06)"
       "`401 UNAUTHENTICATED`",
       "`403 FORBIDDEN`",
       "`501 NOT_IMPLEMENTED`",
-      // The refusals these rules do not list everywhere are named as such, so no reader takes the list as complete.
+      // The host and membership checks, listed by rule since FIX-W46-OTA.
       "`403 HOST_NOT_ALLOWED`",
+      "`403 STAFF_MEMBERSHIP_INACTIVE`",
+      // The refusals these rules do not list everywhere are named as such, so no reader takes the list as complete.
+      "`403 TENANT_SUSPENDED`",
       "`503 SERVICE_UNAVAILABLE`",
     ]) {
       expect([answer, paragraph.includes(answer)]).toEqual([answer, true]);
     }
+  });
+
+  it("[FIX-W46-OTA AC1] describes 503 SERVICE_UNAVAILABLE once, as an answer any operation may give, with Retry-After", () => {
+    const description = String(objectAt(working, "info")["description"]).replace(/\s+/g, " ");
+    const sentences = description
+      .split(/(?<=\.) /)
+      .filter((sentence) => sentence.includes("`503 SERVICE_UNAVAILABLE`"));
+    expect(sentences).toHaveLength(1);
+    expect(sentences[0]).toContain("is an answer any operation may give");
+    expect(description).toContain("`Retry-After`");
+    // Not added to every operation: the operations that list it are those whose own description says when.
+    const listing = workingOperations.filter((op) =>
+      ((op.spec["x-error-codes"] as string[] | undefined) ?? []).includes("SERVICE_UNAVAILABLE"),
+    );
+    expect(listing.length).toBeGreaterThan(0);
+    expect(listing.length).toBeLessThan(workingOperations.length / 2);
+    for (const op of listing) {
+      expect([op.operationId, Object.hasOwn(objectAt(op.spec, "responses"), "503")]).toEqual([
+        op.operationId,
+        true,
+      ]);
+    }
+    // The shared response documents the header.
+    expect(objectAt(working, "components", "responses", "ServiceUnavailable", "headers")).toHaveProperty(
+      "Retry-After",
+    );
+  });
+});
+
+describe("partial travellers in checkout.setTravelers (lead decision (11m) of 2026-11-06)", () => {
+  it("[FIX-W46-OTA AC3] the contract takes a traveller without its name and says so in the operation's description", () => {
+    // Deliberate: a multi-step form saves one traveller, or part of one, at a time, and what is still missing is
+    // reported in progress.missing (checkout/requirements.ts); so no name part is required by the request schemas.
+    expect(schemaOf("TravelerInput")["required"]).toEqual(["travelerId"]);
+    expect(schemaOf("AmadeusBaseName")["required"]).toBeUndefined();
+    for (const part of ["firstName", "lastName"]) {
+      expect([part, objectAt(schemaOf("AmadeusBaseName"), "properties", part)["minLength"]]).toEqual([
+        part,
+        undefined,
+      ]);
+    }
+    const requests = requestBodyChecker(["setCheckoutTravelers"]);
+    for (const travelers of [[{ travelerId: "1" }], [{ travelerId: "1", name: { lastName: "Berg" } }]]) {
+      expect(requests.check("setCheckoutTravelers", { status: 200, body: { travelers } })).toEqual([]);
+    }
+    const description = String(operation("setCheckoutTravelers").spec["description"]).replace(/\s+/g, " ");
+    expect(description).toContain("**Partial travellers.**");
+    expect(description).toContain("`progress.missing`");
+    expect(description).toContain("`422 CHECKOUT_INCOMPLETE`");
+    expect(description).not.toContain("Missing-but-optional data");
   });
 });
 

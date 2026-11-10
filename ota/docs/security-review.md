@@ -36,6 +36,14 @@ audit and the secret scan, and every finding with its severity and status. Every
   on a console operation or a `503 SERVICE_UNAVAILABLE` where no `503` is documented, are not listed by these rules),
   and the authentication matrix checks that every error code it gets is listed, with two more credentials that meet
   the caller guard's refusals on every operation (§3.1). No finding: the API's answers did not change.
+- **2026-11-10 (FIX-W46-OTA, lead decision (11k)):** `HOST_NOT_ALLOWED` and `STAFF_MEMBERSHIP_INACTIVE` are listed on
+  exactly the operations whose code path can answer them (the host on every operation but the health endpoints and
+  getPublicAsset, the membership on every operation that takes a staff token but console.auth.signOut, and on the
+  console sign-in and refresh), `503 SERVICE_UNAVAILABLE` is described once in **Generic refusals**, and the **Keys**
+  paragraph says what the scope guard does on a `both` operation (console scope only with `console:automation` and
+  `X-Velexis-Scope: console`; it said a staff token opened it). The matrix gains two credentials that meet the two
+  checks and checks that each code is answered on exactly the operations that list it, the pending ones aside (§3.1).
+  No finding: the API's answers did not change.
 
 ## 1. Scope
 
@@ -49,7 +57,7 @@ audit and the secret scan, and every finding with its severity and status. Every
 
 | Area | How | Evidence |
 |---|---|---|
-| Authentication matrix | Every operation of the operations index (`otaOperations`, generated from the document) called with 14 credentials: none, the storefront edge, `pk_`, `sk_` scoped `storefront`, `sk_` scoped `console`, the OTA admin's service key, a wrong-tenant credential, the right one, a `console:automation` key with exactly the operation's `x-permission` and one with every other permission, the service key with the forwarding headers of `api.ota.example.com` and of a storefront's `/api/*`, and (FIX-W45-OTA) a publishable key from an origin it does not list and the service key without `X-Velexis-End-User-IP`. The expected answer of each cell is computed from the operation's `x-scope`, `x-edge-only`, `x-permission`, `security` and pending state, not read back from the code. 1,724 requests (135 operations by 12 credentials, and the two permission keys on the 52 guarded console operations). Every answer but a pending operation's `501` is also checked against the document: a status the operation lists and a body of that response's schema (OBE-095), and an error code among the operation's `x-error-codes` (FIX-W45-OTA). | [`auth-matrix.int.test.ts`](../backend/test/integration/m6/auth-matrix.int.test.ts) |
+| Authentication matrix | Every operation of the operations index (`otaOperations`, generated from the document) called with 16 credentials: none, the storefront edge, `pk_`, `sk_` scoped `storefront`, `sk_` scoped `console`, the OTA admin's service key, a wrong-tenant credential, the right one, a `console:automation` key with exactly the operation's `x-permission` and one with every other permission, the service key with the forwarding headers of `api.ota.example.com` and of a storefront's `/api/*`, and (FIX-W45-OTA) a publishable key from an origin it does not list and the service key without `X-Velexis-End-User-IP`, and (FIX-W46-OTA) the storefront edge of a host no OTA has and a staff credential of a suspended agent (on the 81 operations that take a staff token or check a membership). The expected answer of each cell is computed from the operation's `x-scope`, `x-edge-only`, `x-permission`, `security` and pending state, not read back from the code. 1,940 requests (135 operations by 13 credentials, the suspended agent on 81 and the two permission keys on the 52 guarded console operations). Every answer but a pending operation's `501` is also checked against the document: a status the operation lists and a body of that response's schema (OBE-095), and an error code among the operation's `x-error-codes` (FIX-W45-OTA). | [`auth-matrix.int.test.ts`](../backend/test/integration/m6/auth-matrix.int.test.ts) |
 | Rate limits | One test per limit of architecture §8, through the real routes: the limit used up by one end user, the next request `429 RATE_LIMITED` with `Retry-After`, another end user not limited; `console.auth.signIn` per forwarded end-user IP through the service caller (two staff members never share a bucket, the service key without `X-Velexis-End-User-IP` is `400`); the handler-side counters (customer sign-in lockout, airline-card attempts per checkout, the tenant's decline suspension); no counted value in clear in the Redis keys or the log lines. A coverage test fails when a limit of `RATE_LIMITS` has no test. | [`rate-limits.int.test.ts`](../backend/test/integration/m6/rate-limits.int.test.ts); the counting of airline-card declines with the Amadeus stub: [`airline-card-completion.int.test.ts`](../backend/test/integration/payments/airline-card-completion.int.test.ts) (OBE-051) |
 | Response headers | helmet's headers and no `X-Powered-By` on every kind of answer (successes, every guard's refusal, validation, unknown route, `501`, health); `Cache-Control` with `no-store` on every answer with personal data, a session or an error; the document download and the public image with `nosniff`, their own type, CSP and caching. | [`headers.int.test.ts`](../backend/test/integration/m6/headers.int.test.ts) |
 | Redaction coverage | Every schema property marked `x-sensitive`, every property the central list names (`REDACT_PATHS` of `@velexis/logger`) and the document and card numbers of its literal paths, found by walking the whole document (more than a thousand places), with a marker value at its place: absent from log lines (top level and one level down), `supplier_requests`, `staff_actions`, `idempotency_keys` (plain copy; the answer is kept encrypted), `payment_events` and `notifications.payload` (no template variable is sensitive). A test fails when a new writer of one of these tables appears. | [`redaction-coverage.contract.test.ts`](../backend/test/contract/redaction-coverage.contract.test.ts) |
@@ -63,8 +71,8 @@ audit and the secret scan, and every finding with its severity and status. Every
 ### 3.1 Authentication matrix
 
 Every one of the 135 operations answered every credential as its contract metadata says (all 15 tests of OBE-084
-pass, the 16th of OBE-095 since 2026-11-05, and since 2026-11-06 the 17th of FIX-W45-OTA and the column tests of its two
-credentials, 19 in all):
+pass, the 16th of OBE-095 since 2026-11-05, since 2026-11-06 the 17th of FIX-W45-OTA and the column tests of its two
+credentials, and since 2026-11-10 the 20th of FIX-W46-OTA and the column tests of its two credentials, 22 in all):
 
 - **No credential:** `401 INVALID_API_KEY` on every authenticated route and every pending (`501`) route; the open routes
   (`getPublicAsset`, `downloadFile`, the three Stripe receivers, health) answer without one.
@@ -109,6 +117,16 @@ credentials, 19 in all):
   service key's `SCOPE_NOT_ALLOWED` on 42 `customer` and `both` operations, the edge header's `INVALID_REQUEST` on 71,
   a wrong customer cookie's `UNAUTHENTICATED` on 20 and beta's publishable key's `ORIGIN_NOT_ALLOWED` on 7), more with
   the two new credentials.
+- **Host and membership checks (FIX-W46-OTA, 2026-11-10):** the storefront edge with a host no OTA has
+  (`gamma.<base>`) answers `403 HOST_NOT_ALLOWED` (`details.reason: unknown`) on every operation bound to a handler
+  but getPublicAsset, whose path names the OTA (the tenant guard resolves the host before the scope guard runs, so the
+  console operations, downloadFile and the receivers answer it too); the health endpoints answer `200` and the
+  pending routes `501`. An agent of alpha signed in twice and then suspended, as the platform suspends a membership:
+  its staff token with the service key on the console operations, its portal token on console.auth.signIn, its second
+  session's refresh token on console.auth.refresh, and its staff token with a `console:automation` key and
+  `X-Velexis-Scope: console` on the 19 `both` operations that take a staff token, answer `403
+  STAFF_MEMBERSHIP_INACTIVE`, but console.auth.signOut, which takes the ended session as none and validates its body.
+  A 20th test checks that each of the two codes is answered on exactly the served operations that list it.
 
 ### 3.2 Rate limits
 

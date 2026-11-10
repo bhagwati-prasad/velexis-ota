@@ -300,6 +300,7 @@ export const STRINGS = Object.freeze({
   "checkout.documentStored":
     "We have the number {number}. Leave the field empty to keep it, or enter the number again to change it.",
   "checkout.travellersSaved": "Travellers saved",
+  "checkout.travellersIncomplete": "Travellers saved. Some details are still missing",
   "checkout.contactsSaved": "Contact details saved",
   "checkout.extrasFailed": "Extras cannot be added right now",
   "checkout.extrasGroup": "{kind}: {flights}",

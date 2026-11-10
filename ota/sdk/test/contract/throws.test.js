@@ -34,7 +34,8 @@ const HTTP_METHODS = ["get", "put", "post", "delete", "patch"];
 
 /**
  * The generic refusals of the guards whose code the JSDoc names where the operation lists them (info.description,
- * **Generic refusals**): the caller guard's, the scope guard's, the session guards' and the permission guard's.
+ * **Generic refusals**): the caller guard's, the scope guard's, the session guards' and the permission guard's, and
+ * since FIX-W46-OTA (lead decision (11k) of 2026-11-06) the tenant guard's host check and the staff membership check.
  */
 const GENERIC = [
   "VALIDATION_FAILED",
@@ -44,6 +45,8 @@ const GENERIC = [
   "SCOPE_NOT_ALLOWED",
   "UNAUTHENTICATED",
   "FORBIDDEN",
+  "HOST_NOT_ALLOWED",
+  "STAFF_MEMBERSHIP_INACTIVE",
 ];
 
 /** Classes of failures the client raises itself, which no API code maps to. */
@@ -186,6 +189,8 @@ describe("the @throws JSDoc of the client's methods (FIX-W45-OTA)", () => {
       ["SCOPE_NOT_ALLOWED", "PermissionError"],
       ["UNAUTHENTICATED", "AuthenticationError"],
       ["FORBIDDEN", "PermissionError"],
+      ["HOST_NOT_ALLOWED", "PermissionError"],
+      ["STAFF_MEMBERSHIP_INACTIVE", "PermissionError"],
     ]);
     // The document's introduction says how it lists them.
     for (const code of GENERIC) {
@@ -247,6 +252,31 @@ describe("the @throws JSDoc of the client's methods (FIX-W45-OTA)", () => {
         name,
         expect.arrayContaining(["VALIDATION_FAILED", "INVALID_REQUEST"]),
       ]);
+    }
+  });
+
+  it("[FIX-W46-OTA AC1] names HOST_NOT_ALLOWED on every method and STAFF_MEMBERSHIP_INACTIVE where a staff token is taken", () => {
+    const permissionCodes = (name) =>
+      (methods.get(name) ?? []).filter((tag) => tag.cls === "PermissionError").flatMap(codesOf);
+    const missingHost = [...operations.keys()].filter(
+      (name) => !permissionCodes(name).includes("HOST_NOT_ALLOWED"),
+    );
+    expect(missingHost).toEqual([]);
+    // The console methods but console.auth.signOut, and the shopping and checkout methods a console:automation key
+    // calls in console scope with a staff token.
+    for (const name of [
+      "console.auth.signIn",
+      "console.auth.me",
+      "flights.search",
+      "checkout.setTravelers",
+    ]) {
+      expect([name, permissionCodes(name)]).toEqual([
+        name,
+        expect.arrayContaining(["STAFF_MEMBERSHIP_INACTIVE"]),
+      ]);
+    }
+    for (const name of ["console.auth.signOut", "auth.signIn", "bookings.get", "storefront.get"]) {
+      expect([name, permissionCodes(name).includes("STAFF_MEMBERSHIP_INACTIVE")]).toEqual([name, false]);
     }
   });
 

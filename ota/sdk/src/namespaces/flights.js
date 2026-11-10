@@ -85,7 +85,7 @@ export function createFlightsApi(core) {
      * @returns {Promise<FlightSearch>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `UNPROCESSABLE` (422: past dates, infants > adults, more than 9 seats)
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED`
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED`, `HOST_NOT_ALLOWED`, `STAFF_MEMBERSHIP_INACTIVE`
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED`, `CONFLICT` (first attempt still running)
      * @throws {RateLimitError} `RATE_LIMITED`
      * @throws {SupplierError} `SUPPLIER_NOT_CONFIGURED` (424), `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504)
@@ -102,7 +102,7 @@ export function createFlightsApi(core) {
      * @returns {Promise<FlightSearch>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST`
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `HOST_NOT_ALLOWED`, `STAFF_MEMBERSHIP_INACTIVE`
      * @throws {NotFoundError} `NOT_FOUND` (unknown, purged, another customer's search, or an availability search id)
      * @throws {RateLimitError} `RATE_LIMITED`
      * @throws {ServerError} `INTERNAL_ERROR`
@@ -119,7 +119,7 @@ export function createFlightsApi(core) {
      * @returns {Promise<FlightResultsPage>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (bad filter, a cursor from other filters)
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `HOST_NOT_ALLOWED`, `STAFF_MEMBERSHIP_INACTIVE`
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {ConflictError} `SEARCH_NOT_COMPLETED` (an asynchronous search still pending, or failed)
      * @throws {ExpiredError} `SEARCH_EXPIRED` (search again)
@@ -137,7 +137,7 @@ export function createFlightsApi(core) {
      * @returns {Promise<FlightOffer>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST`
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `HOST_NOT_ALLOWED`, `STAFF_MEMBERSHIP_INACTIVE`
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {ExpiredError} `OFFER_EXPIRED` (search again)
      * @throws {RateLimitError} `RATE_LIMITED`
@@ -154,7 +154,7 @@ export function createFlightsApi(core) {
      * @returns {Promise<UpsellResult>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `OFFER_COMBINATION_INVALID` (422)
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED`
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED`, `HOST_NOT_ALLOWED`, `STAFF_MEMBERSHIP_INACTIVE`
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {SoldOutError} `SOLD_OUT`
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED`, `CONFLICT`
@@ -175,7 +175,7 @@ export function createFlightsApi(core) {
      * @returns {Promise<FlightAvailabilitySearchResult>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `UNPROCESSABLE` (422)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED`
-     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED`, `ORIGIN_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED`, `ORIGIN_NOT_ALLOWED`, `HOST_NOT_ALLOWED`, `STAFF_MEMBERSHIP_INACTIVE` (403)
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED`, `CONFLICT`
      * @throws {RateLimitError} `RATE_LIMITED`
      * @throws {SupplierError} `SUPPLIER_NOT_CONFIGURED` (424), `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504)
@@ -193,7 +193,7 @@ export function createFlightsApi(core) {
      * @returns {Promise<PricedOffer>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `UNPROCESSABLE`, `TRAVELER_DATA_INVALID`, `OFFER_COMBINATION_INVALID`, `ANCILLARY_NOT_AVAILABLE` (422)
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `HOST_NOT_ALLOWED`, `STAFF_MEMBERSHIP_INACTIVE`
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {PriceChangedError} `PRICE_CHANGED` (only with `expectedTotal`)
      * @throws {SoldOutError} `SOLD_OUT`
@@ -213,7 +213,7 @@ export function createFlightsApi(core) {
      * @returns {Promise<PricedOffer>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST`
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `HOST_NOT_ALLOWED`, `STAFF_MEMBERSHIP_INACTIVE`
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {ExpiredError} `OFFER_EXPIRED` (price again)
      * @throws {RateLimitError} `RATE_LIMITED`
@@ -230,7 +230,7 @@ export function createFlightsApi(core) {
      * @returns {Promise<AncillaryCatalogue>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED`
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED`, `HOST_NOT_ALLOWED`, `STAFF_MEMBERSHIP_INACTIVE`
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {ExpiredError} `OFFER_EXPIRED`
      * @throws {RateLimitError} `RATE_LIMITED`
@@ -247,7 +247,7 @@ export function createFlightsApi(core) {
      * @returns {Promise<FareRuleSet>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `HOST_NOT_ALLOWED`, `STAFF_MEMBERSHIP_INACTIVE`
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {ExpiredError} `OFFER_EXPIRED`
      * @throws {RateLimitError} `RATE_LIMITED`

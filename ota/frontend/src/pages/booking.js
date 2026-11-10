@@ -20,8 +20,9 @@
 // 5. Cancel (`canCancel`, which the API already denies when the OTA turned self-service cancellation off):
 //    components/cancel-dialog.js. When it is not allowed for a reason the traveller cannot change (flown, too close to
 //    departure, turned off), the page says "This booking can no longer be cancelled online" with the support contact.
-// 6. Fare rules: `bookings.getFareRules` when the "Changes and refunds" disclosure is first opened. Timeline:
-//    `bookings.listEvents` (components/booking-timeline.js).
+// 6. Fare rules: `bookings.getFareRules` when the "Changes and refunds" disclosure is first opened; a `429
+//    RATE_LIMITED` (after the SDK's own retries) waits its `Retry-After`, at most 10 s, with the loading state shown, and
+//    asks once more before the error is shown. Timeline: `bookings.listEvents` (components/booking-timeline.js).
 //
 // Every control follows `allowedActions` exactly (`ACTION_CONTROLS`); the actions the MVP does not offer
 // (`canModifyTravelerDocuments`, `canModifyLoyaltyPrograms`, `canAddRemarks`, `canAddAncillaries`) have none.
@@ -82,6 +83,10 @@ export const PENDING_POLL_SECONDS = 10;
 export const RETRY_POLL_SECONDS = 10;
 /** How long a pending booking is polled. */
 export const PENDING_POLL_LIMIT_MS = 30 * 60_000;
+/** The longest wait before the fare rules are asked again after a `429` (its `Retry-After`, capped). */
+export const RULES_RETRY_MAX_SECONDS = 10;
+/** The wait before the fare rules are asked again after a `429` without `Retry-After`. */
+export const RULES_RETRY_DEFAULT_SECONDS = 2;
 /** How long the issue of tickets is polled; the banner already says that the tickets follow by e-mail. */
 export const TICKETING_POLL_LIMIT_MS = 10 * 60_000;
 /** Booking states in which the traveller can act. */
@@ -920,6 +925,52 @@ export function start(context, env = {}) {
     }
   };
 
+  /**
+   * Resolves after `seconds`, or at once when `signal` aborts (the page is destroyed).
+   * @param {number} seconds
+   * @param {AbortSignal} signal
+   * @returns {Promise<void>}
+   */
+  const pause = (seconds, signal) =>
+    new Promise((resolve) => {
+      const wait = setTimeout(resolve, seconds * 1000);
+      signal.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(wait);
+          resolve();
+        },
+        { once: true },
+      );
+    });
+
+  /**
+   * `bookings.getFareRules`; a `429 RATE_LIMITED` waits its `Retry-After` (at most RULES_RETRY_MAX_SECONDS, the loading
+   * state still shown) and asks once more, whose failure is the caller's to show.
+   * @param {string} id
+   * @param {AbortSignal} signal
+   * @returns {Promise<BookingFareRules | null>} `null` when the page was destroyed during the wait
+   */
+  const fareRules = async (id, signal) => {
+    try {
+      return await client.bookings.getFareRules({ bookingId: id }, { signal });
+    } catch (error) {
+      const state = pageStateFor(error);
+      if (destroyed || isAborted(error) || state.code !== "RATE_LIMITED") {
+        throw error;
+      }
+      const seconds = Math.min(
+        state.retryAfterSeconds ?? RULES_RETRY_DEFAULT_SECONDS,
+        RULES_RETRY_MAX_SECONDS,
+      );
+      await pause(Math.max(seconds, 0), signal);
+      if (destroyed || signal.aborted) {
+        return null;
+      }
+      return await client.bookings.getFareRules({ bookingId: id }, { signal });
+    }
+  };
+
   /** The fare rules, once, when the disclosure is first opened. */
   const loadRules = async () => {
     if (bookingId === null || rulesLoaded) {
@@ -930,8 +981,8 @@ export function start(context, env = {}) {
     el.rulesLoading.hidden = false;
     const call = track();
     try {
-      const rules = await client.bookings.getFareRules({ bookingId }, { signal: call.signal });
-      if (destroyed) {
+      const rules = await fareRules(bookingId, call.signal);
+      if (destroyed || rules === null) {
         return;
       }
       const lines = fareRuleLines(rules, locale);

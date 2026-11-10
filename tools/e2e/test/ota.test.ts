@@ -1,12 +1,16 @@
 // The pure helpers of support/ota.ts (OFE-008, OFE-019, OAD-016, OAD-017, OFE-022). The database and Redis helpers run in the storefront
 // journeys (specs/storefront/search.e2e.ts, account-bookings.e2e.ts, keyboard-checkout.e2e.ts) and the OTA admin's
 // (specs/ota-admin/), against the stack's own database; the API clients, the booking seed and the stub order run here
-// against a fake browser context, a fake API and a fake `fetch`.
+// against a fake browser context, a fake API and a fake `fetch`. The arrangements FIX-W46-OTA moved out of the specs
+// run here too: the console client and the staff sign-in against a fake `fetch` and platform API, and the move into
+// the live environment in a real `tenantTx` on a fake pool that records the SQL it is sent.
 import { createPublicKey, generateKeyPairSync, randomBytes, sign, verify } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { aadFor, decryptValue, DecryptionError, LocalFileKeyProvider } from "@velexis/crypto";
+import { createTenantDb, tenantTx } from "@velexis/db";
+import type { ApiCall } from "../support/fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ACCESS_TOKEN_TTL_SECONDS,
@@ -30,7 +34,12 @@ import {
   bookAirlineCardTrip,
   createStubOrder,
   customerScopeLeaks,
+  ConsoleApi,
   DEMO_TENANT_SCHEMA,
+  moveBookingIntoLive,
+  signInStaffWithApi,
+  STAFF_CONSOLE_KEY,
+  type TenantTxRunner,
   departureDate,
   EdgeApi,
   edgeRequestOf,
@@ -1430,5 +1439,207 @@ describe("serveStorefrontHost", () => {
     await routing.handle(`${sub}/api/v1/storefront`, "GET", {}, null);
     expect(routing.fulfilled).toEqual([]);
     expect(routing.aborted).toEqual(["connectionrefused"]);
+  });
+});
+
+describe("ConsoleApi and signInStaffWithApi (FIX-W46-OTA)", () => {
+  const KEY = `sk_test_${"k".repeat(40)}`;
+  const TOKEN = "eyJ.staff.token";
+
+  it("[FIX-W46-OTA AC2] calls the console with the secret key and the end user, then the staff session's token", async () => {
+    const { fetch, calls } = fakeFetch([
+      json(200, { session: { accessToken: TOKEN, refreshToken: "rt_x" }, staff: {} }),
+      json(201, { id: "stp_1" }),
+      json(200, { data: [] }),
+    ]);
+    const api = new ConsoleApi(KEY, "198.18.9.9", { fetch, baseUrl: OTA_API_URL });
+    await api.signIn("ptk_portal");
+    await expect(
+      api.call("consoleCreateStorefrontPage", "POST", "/v1/console/settings/pages", { slug: "a" }, 201),
+    ).resolves.toEqual({ id: "stp_1" });
+    await expect(
+      api.call("consoleListStorefrontPages", "GET", "/v1/console/settings/pages"),
+    ).resolves.toEqual({
+      data: [],
+    });
+
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      `POST ${OTA_API_URL}/v1/console/auth/sign-in`,
+      `POST ${OTA_API_URL}/v1/console/settings/pages`,
+      `GET ${OTA_API_URL}/v1/console/settings/pages`,
+    ]);
+    const base = {
+      accept: "application/json",
+      "x-api-key": KEY,
+      "x-velexis-end-user-ip": "198.18.9.9",
+      "x-velexis-end-user-agent": "velexis-e2e",
+    };
+    const [signIn, create, list] = calls;
+    expect(signIn?.headers).toEqual({
+      ...base,
+      "content-type": "application/json",
+      "idempotency-key": expect.stringMatching(UUID),
+    });
+    expect(signIn?.body).toBe(JSON.stringify({ grantType: "portal_token", portalToken: "ptk_portal" }));
+    expect(create?.headers).toEqual({
+      ...base,
+      authorization: `Bearer ${TOKEN}`,
+      "content-type": "application/json",
+      "idempotency-key": expect.stringMatching(UUID),
+    });
+    expect(create?.headers["idempotency-key"]).not.toBe(signIn?.headers["idempotency-key"]);
+    expect(list?.headers).toEqual({ ...base, authorization: `Bearer ${TOKEN}` });
+  });
+
+  it("[FIX-W46-OTA AC2] names the operation, the status and the code of a refusal, never the key, the token or the body", async () => {
+    const { fetch } = fakeFetch([
+      json(200, { session: { accessToken: TOKEN } }),
+      json(403, { error: { code: "FORBIDDEN", message: `secret-detail ${KEY}` } }),
+      json(200, { session: {} }),
+    ]);
+    const api = new ConsoleApi(KEY, "198.18.9.9", { fetch, baseUrl: OTA_API_URL });
+    await api.signIn("ptk_portal");
+    const refusal = await api
+      .call("consoleCreateStorefrontPage", "POST", "/v1/console/settings/pages", {}, 201)
+      .catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(StorefrontApiError);
+    expect(String(refusal)).toBe("StorefrontApiError: consoleCreateStorefrontPage answered 403 FORBIDDEN");
+    expect(String(refusal)).not.toContain(KEY);
+    // A sign-in that answers no session is refused here, not later.
+    await expect(
+      new ConsoleApi(KEY, "198.18.9.9", { fetch, baseUrl: OTA_API_URL }).signIn("ptk_x"),
+    ).rejects.toThrow("console.auth.signIn answered without a session");
+  });
+
+  it("[FIX-W46-OTA AC2] signs the owner in through createApiKey, createConsoleToken and console.auth.signIn only", async () => {
+    const platformCalls: ApiCall[] = [];
+    const platform = async <T>(call: ApiCall): Promise<T> => {
+      platformCalls.push(call);
+      const answers: Record<string, unknown> = {
+        createApiKey: { apiKey: { id: "key_1", kind: "secret", scopes: ["console"] }, key: KEY },
+        createConsoleToken: {
+          portalToken: "ptk_owner",
+          expiresAt: "2026-11-10T12:01:00Z",
+          consoleSsoUrl: "x",
+        },
+      };
+      return await Promise.resolve(answers[call.operation] as T);
+    };
+    const { fetch, calls } = fakeFetch([json(200, { session: { accessToken: TOKEN } }), json(200, {})]);
+    const owner = {
+      account: { email: "o@example.com", password: "p", fullName: "O", endUserIp: "198.18.0.9" },
+      accessToken: "owner-token",
+    };
+    const api = await signInStaffWithApi(
+      { owner, ota: { id: "ten_01JA2Z9W5K7Q3M8N4P6R2T0V1X" } as never },
+      { platform, fetch, baseUrl: OTA_API_URL, endUserIp: "198.18.9.10" },
+    );
+    expect(platformCalls).toEqual([
+      {
+        operation: "createApiKey",
+        method: "POST",
+        path: "/v1/tenants/ten_01JA2Z9W5K7Q3M8N4P6R2T0V1X/api-keys",
+        endUserIp: "198.18.0.9",
+        accessToken: "owner-token",
+        body: STAFF_CONSOLE_KEY,
+      },
+      {
+        operation: "createConsoleToken",
+        method: "POST",
+        path: "/v1/tenants/ten_01JA2Z9W5K7Q3M8N4P6R2T0V1X/console-token",
+        endUserIp: "198.18.0.9",
+        accessToken: "owner-token",
+      },
+    ]);
+    // A test secret key scoped `console`: console calls with a staff token only (no permission of its own).
+    expect(STAFF_CONSOLE_KEY).toEqual({
+      name: "E2E console server",
+      kind: "secret",
+      environment: "test",
+      scopes: ["console"],
+    });
+    expect(calls[0]?.body).toBe(JSON.stringify({ grantType: "portal_token", portalToken: "ptk_owner" }));
+    expect(calls[0]?.headers).toMatchObject({ "x-api-key": KEY, "x-velexis-end-user-ip": "198.18.9.10" });
+    await api.call("consoleGetMe", "GET", "/v1/console/auth/me");
+    expect(calls[1]?.headers).toMatchObject({ authorization: `Bearer ${TOKEN}`, "x-api-key": KEY });
+  });
+});
+
+describe("moveBookingIntoLive (FIX-W46-OTA)", () => {
+  const BOOKING = { bookingId: "bkg_1", paymentId: "pay_1", checkoutId: "chk_1" };
+
+  /**
+   * `tenantTx` of @velexis/db on a fake pool: every statement recorded (whitespace collapsed), an UPDATE answered with
+   * the row count `rowCounts` gives its table.
+   */
+  function fakeTenantTx(rowCounts: Readonly<Record<string, number>>): {
+    readonly run: TenantTxRunner;
+    readonly statements: Array<{ readonly sql: string; readonly values: readonly unknown[] }>;
+  } {
+    const statements: Array<{ readonly sql: string; readonly values: readonly unknown[] }> = [];
+    const client = {
+      query: async (text: string, values: readonly unknown[] = []) => {
+        statements.push({ sql: text.replace(/\s+/g, " ").trim(), values });
+        const table = /^update "(\w+)"/.exec(text)?.[1];
+        return await Promise.resolve(
+          table === undefined
+            ? { command: "SELECT", rowCount: 0, rows: [] }
+            : { command: "UPDATE", rowCount: rowCounts[table] ?? 0, rows: [] },
+        );
+      },
+      release: () => undefined,
+    };
+    const pool = { connect: async () => await Promise.resolve(client), end: async () => undefined };
+    // `production`: no search_path leak guard, whose query a fake pool would have to answer.
+    const db = createTenantDb(pool as never, { appEnv: "production" });
+    return { run: (schema, fn) => tenantTx(db, schema, fn), statements };
+  }
+
+  it("[FIX-W46-OTA AC2] moves the booking, its payments and its checkout into live in one tenant transaction", async () => {
+    const { run, statements } = fakeTenantTx({ bookings: 1, payments: 2, checkouts: 1 });
+    await moveBookingIntoLive("tenant_liv0a1b2c3d4e", BOOKING, run);
+    expect(statements.map((statement) => statement.sql)).toEqual([
+      "begin",
+      "SELECT set_config('search_path', $1, true)",
+      "SELECT set_config('statement_timeout', $1, true)",
+      'update "bookings" set "environment" = $1, "updated_at" = now() where "id" = $2 and "environment" = $3',
+      'update "payments" set "environment" = $1 where ("booking_id" = $2 or "id" = $3) and "environment" = $4',
+      'update "checkouts" set "environment" = $1 where "id" = $2 and "environment" = $3',
+      "commit",
+    ]);
+    expect(statements[1]?.values).toEqual(["tenant_liv0a1b2c3d4e, reference"]);
+    expect(statements.slice(3, 6).map((statement) => statement.values)).toEqual([
+      ["live", "bkg_1", "test"],
+      ["live", "bkg_1", "pay_1", "test"],
+      ["live", "chk_1", "test"],
+    ]);
+  });
+
+  it("[FIX-W46-OTA AC2] rolls back and throws when the booking is not a test booking, or has no payment or checkout to move", async () => {
+    const missing = fakeTenantTx({ bookings: 0, payments: 1, checkouts: 1 });
+    await expect(moveBookingIntoLive("tenant_liv0a1b2c3d4e", BOOKING, missing.run)).rejects.toThrow(
+      "the OTA has no test booking bkg_1",
+    );
+    expect(missing.statements.map((statement) => statement.sql.split(" ")[0])).toEqual([
+      "begin",
+      "SELECT",
+      "SELECT",
+      "update",
+      "rollback",
+    ]);
+    for (const rowCounts of [
+      { bookings: 1, payments: 0, checkouts: 1 },
+      { bookings: 1, payments: 1, checkouts: 0 },
+    ]) {
+      const partial = fakeTenantTx(rowCounts);
+      await expect(moveBookingIntoLive("tenant_liv0a1b2c3d4e", BOOKING, partial.run)).rejects.toThrow(
+        "the test booking bkg_1 has no test payment or no test checkout to move",
+      );
+      expect(partial.statements.at(-1)?.sql).toBe("rollback");
+    }
+    // The schema is checked before any SQL.
+    const refused = fakeTenantTx({});
+    await expect(moveBookingIntoLive("public", BOOKING, refused.run)).rejects.toThrow();
+    expect(refused.statements).toEqual([]);
   });
 });

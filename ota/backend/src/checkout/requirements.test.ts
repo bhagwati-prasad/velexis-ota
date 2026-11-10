@@ -299,6 +299,24 @@ describe("travelerErrors", () => {
     );
   });
 
+  it("[FIX-W46-OTA AC3] refuses an empty or blank name part that is sent, as setCheckoutTravelers' Partial travellers says", () => {
+    // A name part left out is missing (progress.missing); one that is sent must be valid.
+    expect(
+      codes(
+        travelerErrors(
+          [
+            adult({ name: { firstName: "", lastName: "SAMPLE" } }),
+            { travelerId: "2", name: { lastName: "  " } },
+          ],
+          context(requirements),
+        ),
+      ),
+    ).toEqual([
+      ["/travelers/0/name/firstName", "INVALID_CHARACTERS"],
+      ["/travelers/1/name/lastName", "INVALID_CHARACTERS"],
+    ]);
+  });
+
   it("refuses unknown and repeated traveller ids, and saved travellers (deferred)", () => {
     expect(
       codes(

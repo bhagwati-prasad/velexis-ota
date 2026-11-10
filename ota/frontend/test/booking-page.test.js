@@ -10,6 +10,7 @@ import {
   AuthenticationError,
   ConflictError,
   NotFoundError,
+  RateLimitError,
   ServerError,
   SupplierError,
   ValidationError,
@@ -23,7 +24,13 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { includePartials } from "../scripts/vite-plugins.js";
 import { cancellationKey } from "../src/components/cancel-dialog.js";
 import { formatMoney } from "../src/lib/format.js";
-import { ACTION_CONTROLS, contactsUpdate, downloadTarget, start } from "../src/pages/booking.js";
+import {
+  ACTION_CONTROLS,
+  contactsUpdate,
+  downloadTarget,
+  RULES_RETRY_MAX_SECONDS,
+  start,
+} from "../src/pages/booking.js";
 import { STOREFRONT_ROOT } from "./helpers/storefront.js";
 
 /** The mocked boot() of the page module never resolves here (the static import above). */
@@ -364,6 +371,34 @@ const ticketing = (overrides = {}) => ({
 const apiError = (ErrorClass, code, status, body = {}) =>
   new ErrorClass({ code, message: `${code} from the fake API`, status, requestId: "req_booking", ...body });
 
+/** The booking's fare rules: refundable for a fee, not changeable. */
+function fareRules() {
+  return {
+    bookingId: BOOKING_ID,
+    currency: "EUR",
+    available: true,
+    types: ["rebooks", "refunds"],
+    summary: {
+      refundable: true,
+      changeable: false,
+      refundPenalty: eur("50.00"),
+      changePenalty: null,
+      source: "fare_rules",
+    },
+    rules: [
+      {
+        flightOfferId: "1",
+        category: "REFUND",
+        applicable: true,
+        chargeable: true,
+        maxPenalty: eur("50.00"),
+        texts: [],
+      },
+    ],
+    loadedAt: "2026-10-24T09:00:00Z",
+  };
+}
+
 /**
  * A fake API: each method answers its list in turn (the last one again and again; an Error is thrown).
  * @param {Partial<Record<"get" | "listDocuments" | "listEvents" | "getTicketingStatus" | "getFareRules" | "quoteCancellation" | "cancel" | "update" | "getDocumentDownloadUrl", unknown[]>>} [answers]
@@ -388,32 +423,7 @@ function fakeApi(answers = {}) {
       pageOf([[event(2, "Tickets issued"), event(1, "Booking confirmed")], [event(0, "Booking created")]]),
     ],
     getTicketingStatus: [ticketing()],
-    getFareRules: [
-      {
-        bookingId: BOOKING_ID,
-        currency: "EUR",
-        available: true,
-        types: ["rebooks", "refunds"],
-        summary: {
-          refundable: true,
-          changeable: false,
-          refundPenalty: eur("50.00"),
-          changePenalty: null,
-          source: "fare_rules",
-        },
-        rules: [
-          {
-            flightOfferId: "1",
-            category: "REFUND",
-            applicable: true,
-            chargeable: true,
-            maxPenalty: eur("50.00"),
-            texts: [],
-          },
-        ],
-        loadedAt: "2026-10-24T09:00:00Z",
-      },
-    ],
+    getFareRules: [fareRules()],
     quoteCancellation: [quote()],
     cancel: [{ cancellation: cancelledBooking().cancellation, booking: cancelledBooking() }],
     update: [booking({ version: 4 })],
@@ -655,6 +665,88 @@ describe("booking page: the booking", () => {
     expect(items("[data-rules-categories]")).toEqual([
       `Refund: Allowed for a fee of up to ${money("50.00")}`,
     ]);
+  });
+
+  it("[FIX-W46-OTA AC3] a 429 of the fare rules waits its Retry-After, capped at 10 s, with the loading state, and asks once more", async () => {
+    vi.useFakeTimers();
+    const rateLimited = (/** @type {number} */ seconds) =>
+      new RateLimitError(
+        {
+          code: "RATE_LIMITED",
+          message: "RATE_LIMITED from the fake API",
+          status: 429,
+          requestId: "req_booking",
+        },
+        { retryAfterSeconds: seconds },
+      );
+    const { client } = await openBooking({
+      fake: fakeApi({ getFareRules: [rateLimited(25), fareRules()] }),
+    });
+    const rules = /** @type {HTMLDetailsElement} */ ($("details[data-fare-rules]"));
+    rules.open = true;
+    rules.dispatchEvent(new Event("toggle"));
+    await settle();
+    expect(client.bookings.getFareRules).toHaveBeenCalledTimes(1);
+    // Waiting: the loading state, no error, no second call before the capped Retry-After (25 s asked, 10 s waited).
+    expect(RULES_RETRY_MAX_SECONDS).toBe(10);
+    expect($("[data-rules-loading]").hidden).toBe(false);
+    expect(text($("[data-rules-state]"))).toBe("");
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(client.bookings.getFareRules).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await settle();
+    expect(client.bookings.getFareRules).toHaveBeenCalledTimes(2);
+    expect(client.bookings.getFareRules).toHaveBeenLastCalledWith(
+      { bookingId: BOOKING_ID },
+      expect.anything(),
+    );
+    expect($("[data-rules-loading]").hidden).toBe(true);
+    expect(items("[data-rules-summary]")).toEqual([
+      `Refund: Allowed for a fee of up to ${money("50.00")} per traveller`,
+      "Change: Not allowed",
+    ]);
+  });
+
+  it("[FIX-W46-OTA AC3] a second 429 of the fare rules shows the error with Retry, after one more call only", async () => {
+    vi.useFakeTimers();
+    const limited = new RateLimitError(
+      {
+        code: "RATE_LIMITED",
+        message: "RATE_LIMITED from the fake API",
+        status: 429,
+        requestId: "req_booking",
+      },
+      { retryAfterSeconds: 3 },
+    );
+    const { client } = await openBooking({ fake: fakeApi({ getFareRules: [limited] }) });
+    const rules = /** @type {HTMLDetailsElement} */ ($("details[data-fare-rules]"));
+    rules.open = true;
+    rules.dispatchEvent(new Event("toggle"));
+    await settle();
+    await vi.advanceTimersByTimeAsync(3_000);
+    await settle();
+    expect(client.bookings.getFareRules).toHaveBeenCalledTimes(2);
+    expect($("[data-rules-loading]").hidden).toBe(true);
+    expect(text($("[data-rules-state]"))).toContain("The fare rules could not be loaded right now");
+    expect($("[data-rules-state] [data-action='retry']")).not.toBeNull();
+    // Nothing else is asked by itself.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(client.bookings.getFareRules).toHaveBeenCalledTimes(2);
+  });
+
+  it("[FIX-W46-OTA AC3] a fare-rules failure other than a 429 shows the error at once, without a wait or a second call", async () => {
+    vi.useFakeTimers();
+    const failed = apiError(SupplierError, "SUPPLIER_UNAVAILABLE", 503);
+    const { client } = await openBooking({ fake: fakeApi({ getFareRules: [failed] }) });
+    const rules = /** @type {HTMLDetailsElement} */ ($("details[data-fare-rules]"));
+    rules.open = true;
+    rules.dispatchEvent(new Event("toggle"));
+    await settle();
+    expect(client.bookings.getFareRules).toHaveBeenCalledTimes(1);
+    expect($("[data-rules-loading]").hidden).toBe(true);
+    expect(text($("[data-rules-state]"))).toContain("The fare rules could not be loaded right now");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(client.bookings.getFareRules).toHaveBeenCalledTimes(1);
   });
 
   it("[OFE-015] a cancelled booking shows its cancellation and refund; a requested one says so in its status", async () => {

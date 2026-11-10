@@ -169,7 +169,7 @@ export function createAuthApi(core) {
      * @returns {Promise<Schemas["AuthSignUpResult"]>}
      * @throws {ValidationError} `VALIDATION_FAILED` (see `fieldErrors`, for example `/email` or an outdated `/termsVersion`), `PASSWORD_TOO_WEAK` (422, `details.violations`), `INVALID_REQUEST` (400)
      * @throws {ConflictError} `EMAIL_ALREADY_REGISTERED` (offer sign-in or a password reset), `IDEMPOTENCY_KEY_REUSED` (409)
-     * @throws {PermissionError} `FEATURE_DISABLED` (customer accounts off), `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FEATURE_DISABLED` (customer accounts off), `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED` (403)
      * @throws {AuthenticationError} `INVALID_API_KEY` (401)
      * @throws {RateLimitError} `RATE_LIMITED` (429: 5 sign-ups per hour per end-user IP and per e-mail)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -185,7 +185,7 @@ export function createAuthApi(core) {
      * @returns {Promise<Schemas["EmailVerificationResult"]>}
      * @throws {ValidationError} `VERIFICATION_TOKEN_INVALID` (`details.reason`: `unknown`, `used` or `expired`; offer `resendVerification`), `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {ConflictError} `EMAIL_ALREADY_REGISTERED` (the new address was taken meanwhile), `IDEMPOTENCY_KEY_REUSED` (409)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED` (403)
      * @throws {AuthenticationError} `INVALID_API_KEY` (401)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -201,7 +201,7 @@ export function createAuthApi(core) {
      * @returns {Promise<Schemas["AuthAcceptedResult"]>}
      * @throws {ValidationError} `VALIDATION_FAILED` (no `email` when anonymous), `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` (401)
-     * @throws {PermissionError} `FEATURE_DISABLED`, `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FEATURE_DISABLED`, `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED` (403)
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {RateLimitError} `RATE_LIMITED` (429: 20 per hour per end-user IP)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -220,7 +220,7 @@ export function createAuthApi(core) {
      * @param {RequestOptions} [options] pass `endUser` from server code (lockouts and limits per visitor)
      * @returns {Promise<Schemas["AuthSessionResult"] | Schemas["AuthSessionInfo"]>}
      * @throws {AuthenticationError} `INVALID_CREDENTIALS` (`details.remainingAttempts`), `INVALID_API_KEY` (401)
-     * @throws {PermissionError} `EMAIL_NOT_VERIFIED` (a fresh link was sent, `details.verificationSentTo`), `FEATURE_DISABLED`, `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `EMAIL_NOT_VERIFIED` (a fresh link was sent, `details.verificationSentTo`), `FEATURE_DISABLED`, `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED` (403)
      * @throws {VelexisError} `ACCOUNT_LOCKED` (423, `details.lockedUntil`; offer a password reset)
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED` (409)
@@ -241,7 +241,7 @@ export function createAuthApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<Schemas["AuthSessionResult"] | Schemas["AuthSessionInfo"]>}
      * @throws {AuthenticationError} `REFRESH_TOKEN_INVALID` (expired or revoked), `REFRESH_TOKEN_REUSED` (the family is revoked): sign the customer out; `INVALID_API_KEY` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED` (403)
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
@@ -262,7 +262,7 @@ export function createAuthApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<void>}
      * @throws {AuthenticationError} `UNAUTHENTICATED` (neither a token nor a refresh token), `TOKEN_EXPIRED`, `INVALID_API_KEY` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED` (403)
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
@@ -280,7 +280,7 @@ export function createAuthApi(core) {
      * @param {RequestOptions} [options] pass `endUser` from server code (per-IP limits)
      * @returns {Promise<Schemas["AuthAcceptedResult"]>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
-     * @throws {PermissionError} `FEATURE_DISABLED`, `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `FEATURE_DISABLED`, `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED` (403)
      * @throws {AuthenticationError} `INVALID_API_KEY` (401)
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {RateLimitError} `RATE_LIMITED` (429: 10 per hour per end-user IP)
@@ -298,7 +298,7 @@ export function createAuthApi(core) {
      * @param {RequestOptions} [options]
      * @returns {Promise<Schemas["PasswordResetResult"]>}
      * @throws {ValidationError} `PASSWORD_RESET_TOKEN_INVALID` (`details.reason`), `PASSWORD_TOO_WEAK` (422), `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED` (403)
      * @throws {AuthenticationError} `INVALID_API_KEY` (401)
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
@@ -319,7 +319,7 @@ export function createAuthApi(core) {
      * @throws {ValidationError} `CURRENT_PASSWORD_INCORRECT` (422), `PASSWORD_TOO_WEAK` (422), `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED`, `TOKEN_EXPIRED`, `INVALID_API_KEY` (401)
      * @throws {VelexisError} `ACCOUNT_LOCKED` (423 after repeated wrong current passwords)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `CSRF_TOKEN_INVALID`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED` (403)
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED` (409)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
@@ -336,7 +336,7 @@ export function createAuthApi(core) {
      * @returns {Promise<Schemas["AuthSessionInfo"]>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED` (render signed-out UI), `TOKEN_EXPIRED` (the SDK refreshes and retries once when it can), `INVALID_API_KEY` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED` (403)
      * @throws {RateLimitError} `RATE_LIMITED` (429)
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */

@@ -1142,7 +1142,9 @@ export interface paths {
          *
          *     **Saved travellers.** With a customer token, `savedTravelerId` (`trv_…`, B1 SavedTraveler.id) copies the saved traveller (`saved_travelers`, decrypted `saved_traveler_documents`) and explicit fields override it; `saveToAccount: true` creates/updates a saved traveller after the booking succeeds. Guests sending `savedTravelerId` get `422 TRAVELER_DATA_INVALID` (`SAVED_TRAVELER_NOT_FOUND`).
          *
-         *     **Validation (no Amadeus call).** Against the checkout `requirements` and the itinerary: `travelerId`s must exist in the priced offer (`UNKNOWN_TRAVELER_ID`); names Latin letters/space/hyphen/apostrophe, ≤ 57 characters in total (`INVALID_CHARACTERS`, `NAME_TOO_LONG`); date of birth inside the traveller type's range at the travel dates (`AGE_MISMATCH_TRAVELER_TYPE`; a HELD_INFANT must be younger than its adult); documents present when `documentRequired`, of an accepted type, not expired at the last flight (`DOCUMENT_EXPIRES_BEFORE_RETURN`); issuance city when `documentIssuanceCityRequired`; discount data when `spanishResidentDiscountRequired` / `airFranceDiscountRequired` (`DISCOUNT_DATA_REQUIRED`); same name + date of birth twice (`DUPLICATE_TRAVELER`); phone digits and calling codes (`PHONE_INVALID`). Format errors answer `400 VALIDATION_FAILED`; business-rule errors answer `422 TRAVELER_DATA_INVALID` with `fieldErrors` (`path` = JSON pointer into the request, e.g. `/travelers/0/documents/0/expiryDate`, `code` from TravelerFieldErrorCode). Valid travellers of the same request are not saved when any traveller fails (all-or-nothing). Missing-but-optional data (e.g. documents not yet required) is accepted and reported in `progress.missing`.
+         *     **Validation (no Amadeus call).** Against the checkout `requirements` and the itinerary: `travelerId`s must exist in the priced offer (`UNKNOWN_TRAVELER_ID`); names Latin letters/space/hyphen/apostrophe, ≤ 57 characters in total (`INVALID_CHARACTERS`, `NAME_TOO_LONG`); date of birth inside the traveller type's range at the travel dates (`AGE_MISMATCH_TRAVELER_TYPE`; a HELD_INFANT must be younger than its adult); documents present when `documentRequired`, of an accepted type, not expired at the last flight (`DOCUMENT_EXPIRES_BEFORE_RETURN`); issuance city when `documentIssuanceCityRequired`; discount data when `spanishResidentDiscountRequired` / `airFranceDiscountRequired` (`DISCOUNT_DATA_REQUIRED`); same name + date of birth twice (`DUPLICATE_TRAVELER`); phone digits and calling codes (`PHONE_INVALID`). Format errors answer `400 VALIDATION_FAILED`; business-rule errors answer `422 TRAVELER_DATA_INVALID` with `fieldErrors` (`path` = JSON pointer into the request, e.g. `/travelers/0/documents/0/expiryDate`, `code` from TravelerFieldErrorCode). Valid travellers of the same request are not saved when any traveller fails (all-or-nothing).
+         *
+         *     **Partial travellers.** The checks judge what a request sends, never what it leaves out, so a multi-step form can save one traveller, or part of one, at a time: a field the traveller's requirement asks for (`requirements.travelers[].requiredFields`: the first and last name, the date of birth, the gender, an identity document, …) that the request leaves out is accepted, and the answer is `200` with the field in `progress.missing` (a pointer into the checkout, `/travelers/{index in checkout.travelers}/name` with code `REQUIRED`) and in the traveller's `missingFields`; `TravelerInput` and `AmadeusName` require no name part for this reason. A value that is sent must be valid: an empty or blank name part is `422 TRAVELER_DATA_INVALID` (`INVALID_CHARACTERS`). checkout.createPayment and checkout.complete answer `422 CHECKOUT_INCOMPLETE` while `progress.missing` names a field, so a client moves on from its travellers step only once `progress.missing` names none of that step's fields.
          *
          *     **Storage.** `checkout_travelers` (documents encrypted with the tenant data key: `documents_ciphertext`, `encryption_key_id`); `checkouts.version` incremented. Responses return documents with `numberMasked` only. The checkout must belong to the key's environment (`404` otherwise). Fare-relevant data (discountEligibility, loyaltyPrograms, dates of birth) is sent to Flight Offers Price at checkout.complete, which may then answer `409 PRICE_CHANGED`.
          *
@@ -13552,7 +13554,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description The caller is authenticated but not allowed to perform this operation on this resource. Possible codes: FORBIDDEN, SCOPE_NOT_ALLOWED, ORIGIN_NOT_ALLOWED, TENANT_SUSPENDED, FEATURE_DISABLED. */
+        /** @description The caller is authenticated but not allowed to perform this operation on this resource. Possible codes (see the operation's `x-error-codes`): FORBIDDEN, SCOPE_NOT_ALLOWED, ORIGIN_NOT_ALLOWED, TENANT_SUSPENDED, HOST_NOT_ALLOWED (the storefront edge's host is not an OTA's), STAFF_MEMBERSHIP_INACTIVE (a staff token of a member who is no longer active), FEATURE_DISABLED. */
         Forbidden: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -15534,7 +15536,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description The caller may not perform this checkout step. Possible codes (see the operation's `x-error-codes`): ORIGIN_NOT_ALLOWED, TENANT_SUSPENDED, FEATURE_DISABLED (guest checkout, ancillaries or the payment method disabled), EMAIL_NOT_VERIFIED (storefront requires a verified e-mail before checkout), SCOPE_NOT_ALLOWED (the `airline_card` method asked by a caller other than the hosted storefront's edge). */
+        /** @description The caller may not perform this checkout step. Possible codes (see the operation's `x-error-codes`): ORIGIN_NOT_ALLOWED, TENANT_SUSPENDED, FEATURE_DISABLED (guest checkout, ancillaries or the payment method disabled), EMAIL_NOT_VERIFIED (storefront requires a verified e-mail before checkout), SCOPE_NOT_ALLOWED (the `airline_card` method asked by a caller other than the hosted storefront's edge), HOST_NOT_ALLOWED (the storefront edge's host is not an OTA's), STAFF_MEMBERSHIP_INACTIVE (a staff token of a member who is no longer active, sent with a `console:automation` key in console scope). */
         CheckoutForbidden: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -15665,7 +15667,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description The caller may not perform this console operation. Possible codes: FORBIDDEN (role lacks the permission, details.requiredPermission), SCOPE_NOT_ALLOWED (publishable key or customer token), TENANT_SUSPENDED, FEATURE_DISABLED, STAFF_MEMBERSHIP_INACTIVE, OFFICE_NOT_ALLOWED, ENVIRONMENT_NOT_ALLOWED (the OTA admin asked for `live` while the OTA is not live or for a test-only role), MFA_REQUIRED (console.auth.signIn only: the OTA is live and the portal token says the account has no MFA). */
+        /** @description The caller may not perform this console operation. Possible codes: FORBIDDEN (role lacks the permission, details.requiredPermission), SCOPE_NOT_ALLOWED (publishable key or customer token), TENANT_SUSPENDED, HOST_NOT_ALLOWED (the storefront edge's host is not an OTA's; the host is resolved before the scope is checked), FEATURE_DISABLED, STAFF_MEMBERSHIP_INACTIVE, OFFICE_NOT_ALLOWED, ENVIRONMENT_NOT_ALLOWED (the OTA admin asked for `live` while the OTA is not live or for a test-only role), MFA_REQUIRED (console.auth.signIn only: the OTA is live and the portal token says the account has no MFA). */
         ConsoleForbidden: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];
@@ -15760,7 +15762,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description The caller may not change the storefront settings this way. Possible codes: FORBIDDEN (the role lacks `settings:write`, details.requiredPermission), SCOPE_NOT_ALLOWED, TENANT_SUSPENDED, STAFF_MEMBERSHIP_INACTIVE, ENVIRONMENT_NOT_ALLOWED, FEATURE_DISABLED (`details.feature = "airlineCard"`: the airline card cannot be turned on in live, from a stored `false` to `true`, while the global switch is off). */
+        /** @description The caller may not change the storefront settings this way. Possible codes: FORBIDDEN (the role lacks `settings:write`, details.requiredPermission), SCOPE_NOT_ALLOWED, TENANT_SUSPENDED, HOST_NOT_ALLOWED (the storefront edge's host is not an OTA's), STAFF_MEMBERSHIP_INACTIVE, ENVIRONMENT_NOT_ALLOWED, FEATURE_DISABLED (`details.feature = "airlineCard"`: the airline card cannot be turned on in live, from a stored `false` to `true`, while the global switch is off). */
         StorefrontSettingsForbidden: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];

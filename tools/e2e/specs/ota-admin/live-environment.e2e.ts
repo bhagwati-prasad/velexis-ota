@@ -24,11 +24,11 @@
 //     platform's `tenant` invalidation published, as the platform does after its commit;
 //   - and the go-live's first live booking is seeded: the stack has no live Amadeus account (dev:seed seeds the test
 //     account and its forty test offices only; a live connection's secret is sealed by the platform), so no live
-//     storefront search can reach Amadeus. The manual-review booking's rows that the console reads (the booking and
-//     its payment, with the checkout they came from) are moved into the live environment through `tenantTx` as
-//     velexis_ota_app, as moveBookingIntoThePast of support/ota.ts moves a booking into the past. The console reads
-//     every row of one environment only (OBE-081), so that booking is the live environment's one booking, and the
-//     ticketed one the test environment's.
+//     storefront search can reach Amadeus, and no operation moves a booking between environments. The manual-review
+//     booking's rows that the console reads (the booking and its payment, with the checkout they came from) are moved
+//     into the live environment by `moveBookingIntoLive` of support/ota.ts (`tenantTx` as velexis_ota_app; FIX-W46-OTA,
+//     lead decision (11l) of 2026-11-06). The console reads every row of one environment only (OBE-081), so that
+//     booking is the live environment's one booking, and the ticketed one the test environment's.
 //
 // No step sends a live action: the dialogs are opened and closed, so nothing reaches the live Amadeus connection the
 // stack does not have. The billing notice is the platform's `tenants.billing_notice`, which its billing sync writes;
@@ -41,7 +41,6 @@
 // order (`mode: "serial"`) on a browser context per member, which the member's first step opens.
 import { type Browser, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import type { components } from "@velexis/api-types/platform";
-import { sql } from "@velexis/db";
 import { expectNoSeriousA11yViolations } from "../../support/a11y";
 import {
   addSessionCookies,
@@ -60,6 +59,7 @@ import { uniqueEmail, waitForLink } from "../../support/mailpit";
 import {
   bookAirlineCardTrip,
   EdgeApi,
+  moveBookingIntoLive,
   newOwnerWithActiveOta,
   openConsoleFromPortal,
   publishTenantInvalidation,
@@ -181,43 +181,6 @@ async function goLive(tenantId: string): Promise<void> {
 async function setBillingNotice(tenantId: string, notice: "past_due" | "trial_ending" | null): Promise<void> {
   await setTenantBillingNotice(tenantId, notice);
   await publishTenantInvalidation(tenantId);
-}
-
-/**
- * Moves the booking `booking` of `schema` into the live environment (see the file header): the booking, its payments
- * and the checkout it came from, in one `tenantTx` as velexis_ota_app. Throws when the booking is not a test booking.
- */
-async function moveBookingIntoLive(schema: string, booking: SeededBooking): Promise<void> {
-  await withTenantTx(schema, async (trx) => {
-    const moved = await trx
-      .updateTable("bookings")
-      .set({ environment: "live", updated_at: sql<Date>`now()` })
-      .where("id", "=", booking.bookingId)
-      .where("environment", "=", "test")
-      .executeTakeFirst();
-    if (moved.numUpdatedRows !== 1n) {
-      throw new Error(`the OTA has no test booking ${booking.bookingId}`);
-    }
-    // The booking's payment (at least the one its checkout started) and its checkout move with it, or the
-    // arrangement fails here instead of leaving a live booking with a test payment for a later step to trip over.
-    const payments = await trx
-      .updateTable("payments")
-      .set({ environment: "live" })
-      .where((eb) => eb.or([eb("booking_id", "=", booking.bookingId), eb("id", "=", booking.paymentId)]))
-      .where("environment", "=", "test")
-      .executeTakeFirst();
-    const checkout = await trx
-      .updateTable("checkouts")
-      .set({ environment: "live" })
-      .where("id", "=", booking.checkoutId)
-      .where("environment", "=", "test")
-      .executeTakeFirst();
-    if (payments.numUpdatedRows < 1n || checkout.numUpdatedRows !== 1n) {
-      throw new Error(
-        `the test booking ${booking.bookingId} has no test payment or no test checkout to move`,
-      );
-    }
-  });
 }
 
 /** The member's browser on the OTA admin, with their portal session, in the console of the OTA (on /bookings). */

@@ -32,6 +32,13 @@
 //   pkOtherOrigin   alpha's publishable key from an origin it does not list: `403 ORIGIN_NOT_ALLOWED` (FIX-W45-OTA)
 //   serviceNoIp     the OTA admin's service key on a direct loopback connection without X-Velexis-End-User-IP:
 //                   `400 VALIDATION_FAILED` (FIX-W45-OTA)
+//   edgeUnknownHost the storefront edge with an X-Velexis-Host that no OTA has (`gamma.<base>`): `403 HOST_NOT_ALLOWED`
+//                   wherever the tenant guard resolves an OTA (FIX-W46-OTA)
+//   staffInactive   (operations that take a staff token or check a membership) a staff credential of an agent of alpha
+//                   whose membership was suspended after the agent signed in: the service key with the agent's staff
+//                   token on console operations (its portal token on console.auth.signIn, its refresh token on
+//                   console.auth.refresh), a `console:automation` key with the token and `X-Velexis-Scope: console` on
+//                   `both` operations: `403 STAFF_MEMBERSHIP_INACTIVE`, but console.auth.signOut (FIX-W46-OTA)
 //
 // The requests reach no use case: every path parameter is a placeholder no schema takes (`~`) and every body `[]`, so
 // an allowed call ends in the request validation (`400 VALIDATION_FAILED`), or `200` for a read without a path
@@ -45,8 +52,11 @@
 // all of them since OBE-095 closed finding OTA-SR-05: the `400`s of a path value and of the edge header beside an API
 // key, and the credential refusals (`401`, `403`) of the Stripe receivers, were missing before. And every error code an
 // answer carries, that `501` aside, is one of the operation's `x-error-codes` (FIX-W45-OTA, lead decision (9e) of
-// 2026-11-06): the generic refusals of the guards included, which the last four columns meet on every operation (the
-// caller guard checks a credential on every route, the 501 ones, the public files, the receivers and health included).
+// 2026-11-06): the generic refusals of the guards included, which the columns from serviceViaApi to serviceNoIp meet
+// on every operation (the caller guard checks a credential on every route, the 501 ones, the public files, the
+// receivers and health included). Since FIX-W46-OTA (lead decision (11k)) the last two columns meet the tenant guard's
+// host check and the staff membership check, and the matrix checks that each of the two codes is answered on exactly
+// the operations that list it, the pending ones aside (they answer `501`).
 //
 // Every request has an end-user IP address of its own (X-Forwarded-For through "Caddy", X-Velexis-End-User-IP for the
 // key servers and the service caller), so no per-IP limit of architecture §8 ever answers 429 here. All requests run in
@@ -110,11 +120,16 @@ const COLUMNS = [
   "serviceViaEdge",
   "pkOtherOrigin",
   "serviceNoIp",
+  "edgeUnknownHost",
+  "staffInactive",
 ] as const;
 type Column = (typeof COLUMNS)[number];
 
 /** The permission columns apply to console operations with an `x-permission` other than `none` only. */
 const PERMISSION_COLUMNS: ReadonlySet<Column> = new Set<Column>(["permOnly", "permMissing"]);
+
+/** The storefront host of no OTA (the `edgeUnknownHost` column): a tenant key's shape, so the lookup runs. */
+const UNKNOWN_HOST = `gamma.${TEST_STOREFRONT_BASE_DOMAIN}`;
 
 /** The placeholder of every path parameter: a value no path parameter's schema takes. */
 const PLACEHOLDER = "~";
@@ -192,6 +207,15 @@ const errorCodesOf = (operation: Operation): readonly string[] =>
 /** A console operation whose `x-permission` the permission guard checks (not the four staff-session operations). */
 const isGuardedConsole = (operation: Operation): boolean =>
   operation.scope === "console" && operation.permission !== null && operation.permission !== "none";
+/**
+ * An operation whose request can carry a staff credential (the `staffInactive` column): every console operation (a
+ * staff token, or the sign-in's portal token and the refresh's refresh token), and the `both` operations whose key
+ * alternatives take a staff token (in console scope).
+ */
+const readsStaffCredential = (operation: Operation): boolean =>
+  operation.scope === "console" || (operation.scope === "both" && keyStaff(operation) !== "none");
+/** The operation whose path names the OTA (tenant.guard.ts `PATH_TENANT_OPERATIONS`): no host is resolved for it. */
+const namesTenantInPath = (operation: Operation): boolean => operation.operationId === "getPublicAsset";
 
 /** The required query parameters of an operation in the document (its path item's included). */
 function requiredQueryParameters(operation: Operation): string[] {
@@ -222,6 +246,8 @@ const UNAUTHENTICATED: Answer = [401, "UNAUTHENTICATED"];
 const SCOPE_NOT_ALLOWED: Answer = [403, "SCOPE_NOT_ALLOWED"];
 const FORBIDDEN: Answer = [403, "FORBIDDEN"];
 const ORIGIN_NOT_ALLOWED: Answer = [403, "ORIGIN_NOT_ALLOWED"];
+const HOST_NOT_ALLOWED: Answer = [403, "HOST_NOT_ALLOWED"];
+const STAFF_MEMBERSHIP_INACTIVE: Answer = [403, "STAFF_MEMBERSHIP_INACTIVE"];
 const NOT_IMPLEMENTED: Answer = [501, "NOT_IMPLEMENTED"];
 const INVALID_REQUEST: Answer = [400, "INVALID_REQUEST"];
 const NOT_FOUND: Answer = [404, "NOT_FOUND"];
@@ -294,6 +320,24 @@ function expectedAnswer(operation: Operation, column: Column): Expected {
       milestone: "deferred",
       operationId: operation.operationId,
     });
+  }
+  // The tenant guard resolves the edge's host before the scope guard runs, on every operation bound to a handler but
+  // the one whose path names the OTA (tenant.guard.ts); the health endpoints bind none.
+  if (column === "edgeUnknownHost") {
+    if (isOpen(operation) && (isHealth(operation) || namesTenantInPath(operation))) {
+      return expect_(openAnswer(operation), "no host is resolved: health, or the OTA named by the path");
+    }
+    return expect_(HOST_NOT_ALLOWED, "the edge's host is resolved first, whatever the scope", {
+      reason: "unknown",
+    });
+  }
+  // The staff guard checks the membership of a verified staff token (staff.guard.ts, staff-sessions.ts authenticate),
+  // the sign-in and the refresh the membership their portal or refresh token names (staff-auth.service.ts);
+  // console.auth.signOut takes the session of such a token as ended (ENDED_STAFF_SESSION_AS_NONE).
+  if (column === "staffInactive") {
+    return operation.operationId === "consoleSignOut"
+      ? expect_(VALIDATION, "signOut takes an ended session as none, then validates its body")
+      : expect_(STAFF_MEMBERSHIP_INACTIVE, "a staff credential of a suspended member");
   }
   if (isOpen(operation)) {
     return expectedOpen(operation, column);
@@ -388,6 +432,8 @@ function expectedCustomer(operation: Operation, column: Column): Expected {
     case "serviceViaEdge":
     case "pkOtherOrigin":
     case "serviceNoIp":
+    case "edgeUnknownHost":
+    case "staffInactive":
       // Decided before (expectedAnswer) or not a column of a customer operation (columnsOf).
       throw new Error(`${operation.operationId}: no ${column} column on a customer operation`);
   }
@@ -453,6 +499,8 @@ function expectedConsole(operation: Operation, column: Column): Expected {
     case "serviceViaEdge":
     case "pkOtherOrigin":
     case "serviceNoIp":
+    case "edgeUnknownHost":
+    case "staffInactive":
       // Decided before (expectedAnswer).
       throw new Error(`${operation.operationId}: no ${column} column on a console operation`);
   }
@@ -460,9 +508,12 @@ function expectedConsole(operation: Operation, column: Column): Expected {
 
 /** The columns `operation` is called with. */
 function columnsOf(operation: Operation): Column[] {
-  return COLUMNS.filter(
-    (column) => !PERMISSION_COLUMNS.has(column) || (isGuardedConsole(operation) && !isPending(operation)),
-  );
+  return COLUMNS.filter((column) => {
+    if (PERMISSION_COLUMNS.has(column)) {
+      return isGuardedConsole(operation) && !isPending(operation);
+    }
+    return column !== "staffInactive" || readsStaffCredential(operation);
+  });
 }
 
 // ---- Fixtures ------------------------------------------------------------------------------------------------------
@@ -486,6 +537,8 @@ interface Tenant {
   pk: string;
   skStorefront: string;
   skConsole: string;
+  /** A secret key with `console:automation` and one permission (console scope on `both` operations). */
+  skAutomation: string;
   /** The signed-in customer's access token (the `__Host-vx_at` cookie the edge sign-in set). */
   customerAccess: string;
   /** The owner's staff session, signed in through the OTA admin's service key. */
@@ -502,6 +555,7 @@ const newTenant = (key: "alpha" | "beta"): Tenant => ({
   pk: "",
   skStorefront: "",
   skConsole: "",
+  skAutomation: "",
   customerAccess: "",
   staffAccess: "",
   staffRefresh: "",
@@ -634,6 +688,16 @@ const memberships = new Map<string, { readonly accountId: string; readonly staff
 
 async function portalToken(tenant: Tenant, accountId: string, staffId: string): Promise<string> {
   memberships.set(tenant.key, { accountId, staffId });
+  return storePortalToken(tenant, accountId, staffId, "owner");
+}
+
+/** Stores a portal token of membership `staffId` (`role`) as the platform's createConsoleToken does. */
+async function storePortalToken(
+  tenant: Tenant,
+  accountId: string,
+  staffId: string,
+  role: "owner" | "agent",
+): Promise<string> {
   let token = "ptk_";
   for (let index = 0; index < 43; index += 1) {
     token += BASE62[randomInt(BASE62.length)];
@@ -643,7 +707,7 @@ async function portalToken(tenant: Tenant, accountId: string, staffId: string): 
     accountId,
     tenantId: tenant.id,
     membershipId: staffId,
-    role: "owner",
+    role,
     mfa: true,
     issuedAt: new Date().toISOString(),
     requestId: randomUUID(),
@@ -654,18 +718,70 @@ async function portalToken(tenant: Tenant, accountId: string, staffId: string): 
   return token;
 }
 
-/** Signs `tenant`'s owner in through the OTA admin's service key. */
-async function signInStaff(tenant: Tenant): Promise<void> {
+/** A staff session opened with `portalToken` through the OTA admin's service key. */
+async function staffSession(
+  label: string,
+  portalToken: string,
+): Promise<{ readonly accessToken: string; readonly refreshToken: string }> {
   const res = await request(api.server)
     .post("/v1/console/auth/sign-in")
     .set({ ...serviceHeaders(), "Idempotency-Key": randomUUID() })
-    .send({ grantType: "portal_token", portalToken: await ownerPortalToken(tenant) });
+    .send({ grantType: "portal_token", portalToken });
   const session = (res.body as { session?: { accessToken?: string; refreshToken?: string } }).session;
   if (res.status !== 200 || session?.accessToken === undefined || session.refreshToken === undefined) {
-    throw new Error(`${tenant.key}: the staff sign-in answered ${res.status} ${JSON.stringify(res.body)}`);
+    throw new Error(`${label}: the staff sign-in answered ${res.status} ${JSON.stringify(res.body)}`);
   }
+  return { accessToken: session.accessToken, refreshToken: session.refreshToken };
+}
+
+/** Signs `tenant`'s owner in through the OTA admin's service key. */
+async function signInStaff(tenant: Tenant): Promise<void> {
+  const session = await staffSession(tenant.key, await ownerPortalToken(tenant));
   tenant.staffAccess = session.accessToken;
   tenant.staffRefresh = session.refreshToken;
+}
+
+/** The credentials of alpha's agent whose membership was suspended after it signed in (the `staffInactive` column). */
+const inactive = { accessToken: "", refreshToken: "", portalToken: "" };
+
+/**
+ * An agent of `tenant` signed in twice, then suspended as the platform suspends a membership: the first session's access
+ * token for the staff guard's cells, the second's refresh token for console.auth.refresh (a refused refresh revokes
+ * its family, so it gets one of its own), and a portal token stored before the suspension for console.auth.signIn. The
+ * cached membership is deleted, as the platform's `membership` invalidation does.
+ */
+async function suspendedAgent(tenant: Tenant): Promise<void> {
+  const accountId = newId("acc");
+  await migrator
+    .insertInto("platform.accounts")
+    .values({
+      id: accountId,
+      email: `agent.${randomBytes(4).toString("hex")}@example.com`,
+      full_name: "Ines Inactive",
+      status: "active",
+      email_verified_at: new Date(),
+      locale: "en-GB",
+      time_zone: "Europe/Paris",
+      mfa_enabled: true,
+    })
+    .execute();
+  const staffId = newId("stf");
+  await migrator
+    .insertInto("platform.tenant_memberships")
+    .values({ id: staffId, tenant_id: tenant.id, account_id: accountId, role: "agent", status: "active" })
+    .execute();
+  const label = `${tenant.key}'s agent`;
+  const first = await staffSession(label, await storePortalToken(tenant, accountId, staffId, "agent"));
+  const second = await staffSession(label, await storePortalToken(tenant, accountId, staffId, "agent"));
+  inactive.accessToken = first.accessToken;
+  inactive.refreshToken = second.refreshToken;
+  inactive.portalToken = await storePortalToken(tenant, accountId, staffId, "agent");
+  await migrator
+    .updateTable("platform.tenant_memberships")
+    .set({ status: "suspended" })
+    .where("id", "=", staffId)
+    .execute();
+  await redis.client.del(redisKeys.member(accountId, tenant.id).key);
 }
 
 // ---- Headers of each credential -------------------------------------------------------------------------------------
@@ -765,6 +881,12 @@ function credentialOf(
       const { "X-Velexis-End-User-IP": _ip, ...withoutIp } = serviceHeaders();
       return { headers: withoutIp };
     }
+    case "edgeUnknownHost":
+      return {
+        headers: edgeHeaders({ ...alpha, host: UNKNOWN_HOST, origin: `https://${UNKNOWN_HOST}` }, write),
+      };
+    case "staffInactive":
+      return staffInactiveOf(operation);
     case "right":
       if (isOpen(operation)) {
         return { headers: {} };
@@ -803,6 +925,26 @@ function wrongTenantOf(
     return { headers: edgeHeaders(alpha, write, beta.customerAccess) };
   }
   return { headers: pkHeaders(beta.pk, alpha.origin) };
+}
+
+/** The suspended agent's credential of `operation` (see the file header). */
+function staffInactiveOf(operation: Operation): { headers: Record<string, string>; body?: unknown } {
+  if (operation.scope !== "console") {
+    // A `both` operation in console scope: a `console:automation` key, the staff token beside it.
+    return {
+      headers: { ...skHeaders(alpha.skAutomation, inactive.accessToken), "X-Velexis-Scope": "console" },
+    };
+  }
+  if (operation.operationId === "consoleSignIn") {
+    return {
+      headers: serviceHeaders(),
+      body: { grantType: "portal_token", portalToken: inactive.portalToken },
+    };
+  }
+  if (operation.operationId === "consoleRefreshSession") {
+    return { headers: serviceHeaders(), body: { refreshToken: inactive.refreshToken } };
+  }
+  return { headers: serviceHeaders(inactive.accessToken) };
 }
 
 /** A portal token of beta's owner for the wrong-tenant sign-in (kept until the end: the key's sign-in refuses it). */
@@ -906,6 +1048,7 @@ beforeAll(async () => {
   const permissions = [
     ...new Set(otaOperations.filter(isGuardedConsole).map((operation) => String(operation.permission))),
   ];
+  alpha.skAutomation = await issueKey(alpha, "sk", ["console:automation", String(permissions[0])]);
   for (const permission of permissions) {
     permissionKeys.set(permission, {
       only: await issueKey(alpha, "sk", ["console:automation", permission]),
@@ -925,6 +1068,7 @@ beforeAll(async () => {
     throw new Error("beta has no owner");
   }
   betaPortalToken = await portalToken(beta, betaOwner.accountId, betaOwner.staffId);
+  await suspendedAgent(alpha);
 }, SETUP_TIMEOUT_MS);
 
 afterAll(async () => {
@@ -1103,6 +1247,13 @@ describe("the authentication matrix", () => {
         .map((operation) => operation.operationId)
         .sort(),
     );
+    // The tenant guard's host check on every operation bound to a handler but getPublicAsset (FIX-W46-OTA).
+    expect(answering("HOST_NOT_ALLOWED").sort()).toEqual(
+      otaOperations
+        .filter((operation) => !isHealth(operation) && !isPending(operation) && !namesTenantInPath(operation))
+        .map((operation) => operation.operationId)
+        .sort(),
+    );
     for (const code of ["UNAUTHENTICATED", "FORBIDDEN"]) {
       expect([code, answering(code).length > 0]).toEqual([code, true]);
     }
@@ -1114,6 +1265,40 @@ describe("the authentication matrix", () => {
         ["/header/X-Velexis-End-User-IP"],
       ]);
     }
+  });
+
+  it("[FIX-W46-OTA AC1] answers HOST_NOT_ALLOWED and STAFF_MEMBERSHIP_INACTIVE on exactly the operations that list them, the pending ones aside", () => {
+    const answering = (code: string): string[] => [
+      ...new Set(
+        cells
+          .filter(({ operation, res }) => !isPendingAnswer(operation, res) && answerOf(res)[1] === code)
+          .map(({ operation }) => operation.operationId),
+      ),
+    ];
+    const listing = (code: string): string[] =>
+      otaOperations
+        .filter((operation) => !isPending(operation) && errorCodesOf(operation).includes(code))
+        .map((operation) => operation.operationId);
+    for (const code of ["HOST_NOT_ALLOWED", "STAFF_MEMBERSHIP_INACTIVE"]) {
+      expect([code, answering(code).sort()]).toEqual([code, listing(code).sort()]);
+    }
+    // The membership: every served console operation but console.auth.signOut, and the `both` operations with a staff
+    // token in console scope; the sign-in and the refresh by the membership their portal or refresh token names.
+    const membership = answering("STAFF_MEMBERSHIP_INACTIVE");
+    expect(membership).toEqual(
+      expect.arrayContaining([
+        "consoleSignIn",
+        "consoleRefreshSession",
+        "consoleGetMe",
+        "createFlightSearch",
+      ]),
+    );
+    expect(membership).not.toContain("consoleSignOut");
+    expect(membership.length).toBeGreaterThan(70);
+    // The host: the console operations, downloadFile and the receivers through the edge too.
+    expect(answering("HOST_NOT_ALLOWED")).toEqual(
+      expect.arrayContaining(["consoleSignIn", "downloadFile", "receiveStripeVelexisWebhook"]),
+    );
   });
 
   it("[OBE-084 AC1] leaves the other tenant's sessions as they were: its tokens presented at alpha changed nothing", () => {

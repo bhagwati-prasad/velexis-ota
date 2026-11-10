@@ -11,12 +11,15 @@ info:
 
     **Keys.** Publishable keys (`pk_test_…`, `pk_live_…`) are browser-safe, limited to customer-scope operations and to
     the key's origin allow-list. Secret keys (`sk_…`) are server-only (Next.js server code, the console backend). On
-    operations available to both scopes a secret key acts in **customer scope** (selling prices only, ownership checks
-    apply) unless the call carries a staff token, or the key has the `console:automation` scope and sends
-    `X-Velexis-Scope: console`. Key scopes (`storefront`, `console`, `console:automation`) are set in the portal: a
-    `storefront` key is refused on every console operation, and key-only console calls get exactly the permissions
-    listed on the key. Hosting keys (`hk_…`) serve several OTA domains from one deployment and must send
-    `X-Velexis-Host`. Test keys use the tenant's Amadeus test environment.
+    operations available to both scopes (`x-scope: both`) a secret key acts in **customer scope** (selling prices only,
+    ownership checks apply); console scope there needs a key with the `console:automation` scope that sends
+    `X-Velexis-Scope: console` (`403 SCOPE_NOT_ALLOWED` with `details.requiredScope` for any other secret key that asks
+    for it). A staff token does not open console scope on such an operation: one sent with a `console:automation`
+    call in console scope is checked as that staff member's session. Console operations take a secret key with a staff
+    token (the staff member's role decides), or a `console:automation` key alone, which gets exactly the permissions
+    listed on it. Key scopes (`storefront`, `console`, `console:automation`) are set in the portal: a `storefront` key
+    is refused on every console operation and console scope. Hosting keys (`hk_…`) serve several OTA domains from one
+    deployment and must send `X-Velexis-Host`. Test keys use the tenant's Amadeus test environment.
 
 
     **Users.** Customers authenticate with `/v1/auth/*` (bearer access token + rotating refresh token). Staff (portal
@@ -80,15 +83,34 @@ info:
 
     - `403 FORBIDDEN`: every console operation with an `x-permission` other than `none`.
 
+    - `403 HOST_NOT_ALLOWED` (the storefront edge's `X-Velexis-Host` is not a storefront host of an active OTA: an
+    unknown host, or a custom domain that is not verified or whose OTA is not active; an OTA's own sub-domain answers
+    `403 TENANT_SUSPENDED` while the OTA is not active): every operation the tenant guard resolves an OTA for, which is
+    every operation but the health endpoints and getPublicAsset (whose path names the OTA). The edge's host is resolved
+    before the scope is checked, so a console operation, downloadFile and a webhook receiver called through the edge
+    meet it too.
+
+    - `403 STAFF_MEMBERSHIP_INACTIVE` (the staff member's membership was suspended or removed, or its account is no
+    longer active): every operation that takes a staff token (`staffAuth` in its `security`: the console operations,
+    and the `both` operations that a `console:automation` key calls in console scope with one) but
+    console.auth.signOut, which takes the session of such a token as ended and answers `204`; and console.auth.signIn
+    and console.auth.refresh, which check the membership that their portal token or refresh token names.
+
     So a publishable key from an origin it does not list answers `403 ORIGIN_NOT_ALLOWED` also where its scope is
     refused. A pending operation (`x-milestone`) answers `501 NOT_IMPLEMENTED` once the caller's credential passes;
     that answer is not one of its responses or `x-error-codes`, which describe the operation once it is served. The
     guards' other refusals are listed with each operation's own codes, not by these rules, so a request can meet one
-    that its operation does not list: the tenant's `403 TENANT_SUSPENDED` and `403 HOST_NOT_ALLOWED`
-    (the edge's host is resolved before the scope is checked, on a console operation too), the sessions' `401
-    TOKEN_EXPIRED` and `403 STAFF_MEMBERSHIP_INACTIVE`, `403 CSRF_TOKEN_INVALID`, `429 RATE_LIMITED`, `403
-    ENVIRONMENT_NOT_ALLOWED`, and `503 SERVICE_UNAVAILABLE` when a key, the OTA or a rate limit cannot be looked up
-    (listed only where the operation documents a `503`).
+    that its operation does not list: the tenant's `403 TENANT_SUSPENDED`, the sessions' `401 TOKEN_EXPIRED`, `403
+    CSRF_TOKEN_INVALID`, `429 RATE_LIMITED` and `403 ENVIRONMENT_NOT_ALLOWED`.
+
+    `503 SERVICE_UNAVAILABLE` (the shared `ServiceUnavailable` response) is an answer any operation may give while the
+    API or a dependency it needs is down: PostgreSQL or Redis when a key, the OTA, a session or a rate limit cannot be
+    looked up (the API's own answer, without `Retry-After`), or the API itself while it restarts (the answer of the
+    proxy in front of it, with `Retry-After` in seconds). Nothing about the request was wrong: send it again later,
+    after `Retry-After` when the answer has one, else with a backoff of a few seconds. It is described here once
+    instead of on every operation: an operation lists `SERVICE_UNAVAILABLE` in its `x-error-codes` and documents the
+    `503` only where its own description says when it answers one, and the SDK throws it as a `ServerError` wherever it
+    comes.
 
 
     **MVP vendor extensions.** Added to the original design for the MVP:
@@ -1633,12 +1655,13 @@ paths:
           content:
             application/json:
               schema:
-                oneOf:
+                anyOf:
                   - $ref: '#/components/schemas/AuthSessionResult'
                   - $ref: '#/components/schemas/AuthSessionInfo'
                 description: >-
                   Token mode: AuthSessionResult (with `session.accessToken`). Edge mode (hosted storefront):
-                  AuthSessionInfo, without token fields.
+                  AuthSessionInfo, without token fields. Each answer is exactly one of the two; they differ inside
+                  `session` (the tokens, or the session's details), where no discriminator can tell them apart.
               example:
                 session:
                   accessToken: >-
@@ -1768,12 +1791,13 @@ paths:
           content:
             application/json:
               schema:
-                oneOf:
+                anyOf:
                   - $ref: '#/components/schemas/AuthSessionResult'
                   - $ref: '#/components/schemas/AuthSessionInfo'
                 description: >-
                   Token mode: AuthSessionResult (with `session.accessToken`). Edge mode (hosted storefront):
-                  AuthSessionInfo, without token fields.
+                  AuthSessionInfo, without token fields. Each answer is exactly one of the two; they differ inside
+                  `session` (the tokens, or the session's details), where no discriminator can tell them apart.
               example:
                 session:
                   accessToken: >-
@@ -2209,12 +2233,13 @@ paths:
           content:
             application/json:
               schema:
-                oneOf:
+                anyOf:
                   - $ref: '#/components/schemas/AuthSessionResult'
                   - $ref: '#/components/schemas/AuthSessionInfo'
                 description: >-
                   Token mode: AuthSessionResult (with `session.accessToken`). Edge mode (hosted storefront):
-                  AuthSessionInfo, without token fields.
+                  AuthSessionInfo, without token fields. Each answer is exactly one of the two; they differ inside
+                  `session` (the tokens, or the session's details), where no discriminator can tell them apart.
               example:
                 session:
                   accessToken: >-
@@ -4549,6 +4574,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - HOST_NOT_ALLOWED
+        - STAFF_MEMBERSHIP_INACTIVE
         - FEATURE_DISABLED
         - IDEMPOTENCY_KEY_REUSED
         - CONFLICT
@@ -4774,6 +4800,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - HOST_NOT_ALLOWED
+        - STAFF_MEMBERSHIP_INACTIVE
         - NOT_FOUND
         - RATE_LIMITED
         - INTERNAL_ERROR
@@ -5051,6 +5078,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - HOST_NOT_ALLOWED
+        - STAFF_MEMBERSHIP_INACTIVE
         - NOT_FOUND
         - SEARCH_NOT_COMPLETED
         - SEARCH_EXPIRED
@@ -5172,6 +5200,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - HOST_NOT_ALLOWED
+        - STAFF_MEMBERSHIP_INACTIVE
         - NOT_FOUND
         - OFFER_EXPIRED
         - RATE_LIMITED
@@ -5809,6 +5838,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - HOST_NOT_ALLOWED
+        - STAFF_MEMBERSHIP_INACTIVE
         - FEATURE_DISABLED
         - NOT_FOUND
         - IDEMPOTENCY_KEY_REUSED
@@ -5958,6 +5988,8 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
+        - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - FEATURE_DISABLED
         - IDEMPOTENCY_KEY_REUSED
@@ -6238,6 +6270,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - HOST_NOT_ALLOWED
+        - STAFF_MEMBERSHIP_INACTIVE
         - NOT_FOUND
         - IDEMPOTENCY_KEY_REUSED
         - CONFLICT
@@ -6408,6 +6441,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - HOST_NOT_ALLOWED
+        - STAFF_MEMBERSHIP_INACTIVE
         - NOT_FOUND
         - OFFER_EXPIRED
         - RATE_LIMITED
@@ -6537,6 +6571,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - HOST_NOT_ALLOWED
+        - STAFF_MEMBERSHIP_INACTIVE
         - FEATURE_DISABLED
         - NOT_FOUND
         - OFFER_EXPIRED
@@ -6650,6 +6685,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - TENANT_SUSPENDED
         - HOST_NOT_ALLOWED
+        - STAFF_MEMBERSHIP_INACTIVE
         - NOT_FOUND
         - OFFER_EXPIRED
         - SUPPLIER_NOT_CONFIGURED
@@ -6777,6 +6813,7 @@ paths:
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
         - HOST_NOT_ALLOWED
+        - STAFF_MEMBERSHIP_INACTIVE
         - FEATURE_DISABLED
         - EMAIL_NOT_VERIFIED
         - NOT_FOUND
@@ -6900,6 +6937,7 @@ paths:
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
         - HOST_NOT_ALLOWED
+        - STAFF_MEMBERSHIP_INACTIVE
         - NOT_FOUND
         - RATE_LIMITED
         - INTERNAL_ERROR
@@ -6963,8 +7001,19 @@ paths:
         phone digits and calling codes (`PHONE_INVALID`). Format errors answer `400 VALIDATION_FAILED`; business-rule
         errors answer `422 TRAVELER_DATA_INVALID` with `fieldErrors` (`path` = JSON pointer into the request, e.g.
         `/travelers/0/documents/0/expiryDate`, `code` from TravelerFieldErrorCode). Valid travellers of the same request
-        are not saved when any traveller fails (all-or-nothing). Missing-but-optional data (e.g. documents not yet
-        required) is accepted and reported in `progress.missing`.
+        are not saved when any traveller fails (all-or-nothing).
+
+
+        **Partial travellers.** The checks judge what a request sends, never what it leaves out, so a multi-step form
+        can save one traveller, or part of one, at a time: a field the traveller's requirement asks for
+        (`requirements.travelers[].requiredFields`: the first and last name, the date of birth, the gender, an identity
+        document, …) that the request leaves out is accepted, and the answer is `200` with the field in
+        `progress.missing` (a pointer into the checkout, `/travelers/{index in checkout.travelers}/name` with code
+        `REQUIRED`) and in the traveller's `missingFields`; `TravelerInput` and `AmadeusName` require no name part for
+        this reason. A value that is sent must be valid: an empty or blank name part is `422 TRAVELER_DATA_INVALID`
+        (`INVALID_CHARACTERS`). checkout.createPayment and checkout.complete answer `422 CHECKOUT_INCOMPLETE` while
+        `progress.missing` names a field, so a client moves on from its travellers step only once `progress.missing`
+        names none of that step's fields.
 
 
         **Storage.** `checkout_travelers` (documents encrypted with the tenant data key: `documents_ciphertext`,
@@ -7012,6 +7061,7 @@ paths:
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
         - HOST_NOT_ALLOWED
+        - STAFF_MEMBERSHIP_INACTIVE
         - NOT_FOUND
         - CHECKOUT_ALREADY_COMPLETED
         - CHECKOUT_BEING_COMPLETED
@@ -7179,6 +7229,7 @@ paths:
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
         - HOST_NOT_ALLOWED
+        - STAFF_MEMBERSHIP_INACTIVE
         - NOT_FOUND
         - CHECKOUT_ALREADY_COMPLETED
         - CHECKOUT_BEING_COMPLETED
@@ -7352,6 +7403,7 @@ paths:
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
         - HOST_NOT_ALLOWED
+        - STAFF_MEMBERSHIP_INACTIVE
         - FEATURE_DISABLED
         - NOT_FOUND
         - CHECKOUT_ALREADY_COMPLETED
@@ -7490,6 +7542,7 @@ paths:
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
         - HOST_NOT_ALLOWED
+        - STAFF_MEMBERSHIP_INACTIVE
         - NOT_FOUND
         - CHECKOUT_ALREADY_COMPLETED
         - CHECKOUT_BEING_COMPLETED
@@ -7655,6 +7708,7 @@ paths:
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
         - HOST_NOT_ALLOWED
+        - STAFF_MEMBERSHIP_INACTIVE
         - FEATURE_DISABLED
         - SCOPE_NOT_ALLOWED
         - NOT_FOUND
@@ -7855,6 +7909,7 @@ paths:
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
         - HOST_NOT_ALLOWED
+        - STAFF_MEMBERSHIP_INACTIVE
         - NOT_FOUND
         - RATE_LIMITED
         - INTERNAL_ERROR
@@ -7978,6 +8033,7 @@ paths:
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
         - HOST_NOT_ALLOWED
+        - STAFF_MEMBERSHIP_INACTIVE
         - NOT_FOUND
         - CHECKOUT_ALREADY_COMPLETED
         - CHECKOUT_BEING_COMPLETED
@@ -8226,6 +8282,7 @@ paths:
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
         - HOST_NOT_ALLOWED
+        - STAFF_MEMBERSHIP_INACTIVE
         - EMAIL_NOT_VERIFIED
         - NOT_FOUND
         - IDEMPOTENCY_KEY_REUSED
@@ -11613,6 +11670,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - IDEMPOTENCY_KEY_REUSED
@@ -11741,6 +11799,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - IDEMPOTENCY_KEY_REUSED
@@ -11840,6 +11899,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - ENVIRONMENT_NOT_ALLOWED
         - IDEMPOTENCY_KEY_REUSED
         - RATE_LIMITED
@@ -11936,6 +11996,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - RATE_LIMITED
@@ -12047,6 +12108,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - RATE_LIMITED
@@ -12393,6 +12455,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - OFFICE_NOT_ALLOWED
@@ -12626,6 +12689,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
@@ -12786,6 +12850,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - FEATURE_DISABLED
@@ -13022,6 +13087,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - FEATURE_DISABLED
@@ -13082,7 +13148,6 @@ paths:
                 value:
                   formOfPayments:
                     - b2bWallet:
-                        cardId: '1245365895336'
                         cardUsageName: AIR
                         cardFriendlyName: CB1
                         reportingData:
@@ -13232,6 +13297,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
@@ -13373,6 +13439,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
@@ -13493,6 +13560,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
@@ -13621,6 +13689,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - OFFICE_NOT_ALLOWED
@@ -13769,6 +13838,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - OFFICE_NOT_ALLOWED
@@ -13906,6 +13976,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
@@ -14034,6 +14105,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - OFFICE_NOT_ALLOWED
@@ -14193,6 +14265,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - RATE_LIMITED
@@ -14351,6 +14424,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - RATE_LIMITED
@@ -14507,6 +14581,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
@@ -14670,6 +14745,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - RATE_LIMITED
@@ -14911,6 +14987,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
@@ -15125,6 +15202,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
@@ -15400,6 +15478,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
@@ -15569,6 +15648,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
@@ -15788,6 +15868,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
@@ -16078,6 +16159,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
@@ -16351,6 +16433,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
@@ -16522,6 +16605,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
@@ -16732,6 +16816,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
@@ -16920,6 +17005,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
@@ -17056,6 +17142,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
@@ -17205,6 +17292,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - FEATURE_DISABLED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
@@ -17341,6 +17429,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - RATE_LIMITED
@@ -17432,6 +17521,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - IDEMPOTENCY_KEY_REUSED
@@ -17550,6 +17640,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
@@ -17642,6 +17733,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
@@ -17747,6 +17839,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
@@ -17828,6 +17921,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - RATE_LIMITED
@@ -17918,6 +18012,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - IDEMPOTENCY_KEY_REUSED
@@ -18029,6 +18124,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
@@ -18111,6 +18207,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
@@ -18204,6 +18301,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
@@ -18283,6 +18381,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - RATE_LIMITED
@@ -18397,6 +18496,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - FEATURE_DISABLED
@@ -18513,6 +18613,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - RATE_LIMITED
@@ -18613,6 +18714,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - CONFLICT
@@ -18723,6 +18825,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
@@ -18813,6 +18916,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
@@ -18923,6 +19027,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
@@ -19004,6 +19109,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - RATE_LIMITED
@@ -19115,6 +19221,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - CONFLICT
@@ -19211,6 +19318,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
@@ -19290,6 +19398,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - RATE_LIMITED
@@ -19365,6 +19474,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - RATE_LIMITED
@@ -19454,6 +19564,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - PRECONDITION_FAILED
@@ -19570,6 +19681,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - TEMPLATE_INVALID
@@ -19669,6 +19781,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - RATE_LIMITED
@@ -19760,6 +19873,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - RATE_LIMITED
@@ -19925,6 +20039,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
@@ -20034,6 +20149,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
@@ -20169,6 +20285,7 @@ paths:
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
         - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
         - STAFF_MEMBERSHIP_INACTIVE
         - ENVIRONMENT_NOT_ALLOWED
         - NOT_FOUND
@@ -21716,8 +21833,10 @@ components:
                   requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
     Forbidden:
       description: >-
-        The caller is authenticated but not allowed to perform this operation on this resource. Possible codes:
-        FORBIDDEN, SCOPE_NOT_ALLOWED, ORIGIN_NOT_ALLOWED, TENANT_SUSPENDED, FEATURE_DISABLED.
+        The caller is authenticated but not allowed to perform this operation on this resource. Possible codes (see
+        the operation's `x-error-codes`): FORBIDDEN, SCOPE_NOT_ALLOWED, ORIGIN_NOT_ALLOWED, TENANT_SUSPENDED,
+        HOST_NOT_ALLOWED (the storefront edge's host is not an OTA's), STAFF_MEMBERSHIP_INACTIVE (a staff token of a
+        member who is no longer active), FEATURE_DISABLED.
       headers:
         X-Request-Id:
           $ref: '#/components/headers/X-Request-Id'
@@ -23881,7 +24000,9 @@ components:
         The caller may not perform this checkout step. Possible codes (see the operation's `x-error-codes`):
         ORIGIN_NOT_ALLOWED, TENANT_SUSPENDED, FEATURE_DISABLED (guest checkout, ancillaries or the payment method
         disabled), EMAIL_NOT_VERIFIED (storefront requires a verified e-mail before checkout), SCOPE_NOT_ALLOWED (the
-        `airline_card` method asked by a caller other than the hosted storefront's edge).
+        `airline_card` method asked by a caller other than the hosted storefront's edge), HOST_NOT_ALLOWED (the
+        storefront edge's host is not an OTA's), STAFF_MEMBERSHIP_INACTIVE (a staff token of a member who is no longer
+        active, sent with a `console:automation` key in console scope).
       headers:
         X-Request-Id:
           $ref: '#/components/headers/X-Request-Id'
@@ -24437,9 +24558,10 @@ components:
       description: >-
         The caller may not perform this console operation. Possible codes: FORBIDDEN (role lacks the permission,
         details.requiredPermission), SCOPE_NOT_ALLOWED (publishable key or customer token), TENANT_SUSPENDED,
-        FEATURE_DISABLED, STAFF_MEMBERSHIP_INACTIVE, OFFICE_NOT_ALLOWED, ENVIRONMENT_NOT_ALLOWED (the OTA admin asked
-        for `live` while the OTA is not live or for a test-only role), MFA_REQUIRED (console.auth.signIn only: the OTA
-        is live and the portal token says the account has no MFA).
+        HOST_NOT_ALLOWED (the storefront edge's host is not an OTA's; the host is resolved before the scope is
+        checked), FEATURE_DISABLED, STAFF_MEMBERSHIP_INACTIVE, OFFICE_NOT_ALLOWED, ENVIRONMENT_NOT_ALLOWED (the OTA
+        admin asked for `live` while the OTA is not live or for a test-only role), MFA_REQUIRED (console.auth.signIn
+        only: the OTA is live and the portal token says the account has no MFA).
       headers:
         X-Request-Id:
           $ref: '#/components/headers/X-Request-Id'
@@ -24920,9 +25042,10 @@ components:
     StorefrontSettingsForbidden:
       description: >-
         The caller may not change the storefront settings this way. Possible codes: FORBIDDEN (the role lacks
-        `settings:write`, details.requiredPermission), SCOPE_NOT_ALLOWED, TENANT_SUSPENDED, STAFF_MEMBERSHIP_INACTIVE,
-        ENVIRONMENT_NOT_ALLOWED, FEATURE_DISABLED (`details.feature = "airlineCard"`: the airline card cannot be
-        turned on in live, from a stored `false` to `true`, while the global switch is off).
+        `settings:write`, details.requiredPermission), SCOPE_NOT_ALLOWED, TENANT_SUSPENDED, HOST_NOT_ALLOWED (the
+        storefront edge's host is not an OTA's), STAFF_MEMBERSHIP_INACTIVE, ENVIRONMENT_NOT_ALLOWED, FEATURE_DISABLED
+        (`details.feature = "airlineCard"`: the airline card cannot be turned on in live, from a stored `false` to
+        `true`, while the global switch is off).
       headers:
         X-Request-Id:
           $ref: '#/components/headers/X-Request-Id'
@@ -37105,6 +37228,7 @@ components:
       then:
         properties:
           provider: false
+        unevaluatedProperties: true
     PaymentUpdateRequest:
       type: object
       additionalProperties: false

@@ -301,7 +301,7 @@ export function createCheckoutApi(core) {
      * @returns {Promise<Checkout>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `UNAUTHENTICATED` (guest checkout disabled: sign in), `INVALID_API_KEY`, `TOKEN_EXPIRED`
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED`, `EMAIL_NOT_VERIFIED`, `SCOPE_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED`, `EMAIL_NOT_VERIFIED`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED`, `STAFF_MEMBERSHIP_INACTIVE` (403)
      * @throws {NotFoundError} `NOT_FOUND` (unknown priced offer, or another customer's)
      * @throws {ConflictError} `IDEMPOTENCY_KEY_REUSED`
      * @throws {ExpiredError} `OFFER_EXPIRED` (price again with `flights.price`)
@@ -320,7 +320,7 @@ export function createCheckoutApi(core) {
      * @returns {Promise<Checkout>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST`
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED`, `STAFF_MEMBERSHIP_INACTIVE`
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {RateLimitError} `RATE_LIMITED`
      * @throws {ServerError} `INTERNAL_ERROR`
@@ -338,7 +338,7 @@ export function createCheckoutApi(core) {
      * @returns {Promise<Checkout>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `TRAVELER_DATA_INVALID` (422, `fieldErrors` with paths such as `/travelers/0/documents/0/expiryDate`)
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED`, `STAFF_MEMBERSHIP_INACTIVE`
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {ConflictError} `CHECKOUT_ALREADY_COMPLETED`, `CHECKOUT_BEING_COMPLETED` (`details.bookingId`: `complete` is creating or confirming its booking; nothing can change until it is decided)
      * @throws {ExpiredError} `CHECKOUT_EXPIRED`
@@ -358,7 +358,7 @@ export function createCheckoutApi(core) {
      * @returns {Promise<Checkout>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `CONTACT_DATA_INVALID` (422, `fieldErrors` such as `PRIMARY_CONTACT_REQUIRED`, `MOBILE_PHONE_REQUIRED`)
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED`, `STAFF_MEMBERSHIP_INACTIVE`
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {ConflictError} `CHECKOUT_ALREADY_COMPLETED`, `CHECKOUT_BEING_COMPLETED` (`details.bookingId`: `complete` is creating or confirming its booking; nothing can change until it is decided)
      * @throws {ExpiredError} `CHECKOUT_EXPIRED`
@@ -379,7 +379,7 @@ export function createCheckoutApi(core) {
      * @returns {Promise<Checkout>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `ANCILLARY_NOT_AVAILABLE` (422, `details.selectionIndex`, `details.reason`)
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED`, `STAFF_MEMBERSHIP_INACTIVE`
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {PriceChangedError} `PRICE_CHANGED` (checkout unchanged: call again with `expectedTotal` = `newPrice`)
      * @throws {SoldOutError} `SOLD_OUT`
@@ -401,7 +401,7 @@ export function createCheckoutApi(core) {
      * @returns {Promise<Checkout>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400)
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED`, `STAFF_MEMBERSHIP_INACTIVE` (403)
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {ConflictError} `CHECKOUT_ALREADY_COMPLETED`, `CHECKOUT_BEING_COMPLETED` (`details.bookingId`: `complete` is creating or confirming its booking; nothing can change until it is decided)
      * @throws {ExpiredError} `CHECKOUT_EXPIRED`
@@ -424,7 +424,7 @@ export function createCheckoutApi(core) {
      * @returns {Promise<Payment>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `CHECKOUT_INCOMPLETE` (422, `fieldErrors`), `UNPROCESSABLE` (422, card brand not accepted)
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` (401)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED` (method not enabled), `SCOPE_NOT_ALLOWED` (`airline_card` from a key caller)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `FEATURE_DISABLED` (method not enabled), `SCOPE_NOT_ALLOWED` (`airline_card` from a key caller), `HOST_NOT_ALLOWED`, `STAFF_MEMBERSHIP_INACTIVE`
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {PriceChangedError} `PRICE_CHANGED` (the fare moved while the card fee was fetched; checkout updated)
      * @throws {ConflictError} `CHECKOUT_ALREADY_COMPLETED`, `IDEMPOTENCY_KEY_REUSED`, `CHECKOUT_BEING_COMPLETED` (`details.bookingId`: `complete` is creating or confirming its booking; nothing can change until it is decided)
@@ -447,7 +447,7 @@ export function createCheckoutApi(core) {
      * @returns {Promise<Payment>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `UNPROCESSABLE` (422, card brand not accepted)
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED`, `STAFF_MEMBERSHIP_INACTIVE`
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {ConflictError} `PAYMENT_NOT_UPDATABLE` (`details.status`: create a new payment), `CHECKOUT_ALREADY_COMPLETED`, `CHECKOUT_BEING_COMPLETED` (`details.bookingId`: `complete` is creating or confirming its booking; nothing can change until it is decided)
      * @throws {PriceChangedError} `PRICE_CHANGED` (checkout moved to the new price and this payment was cancelled)
@@ -468,7 +468,7 @@ export function createCheckoutApi(core) {
      * @returns {Promise<Payment>}
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST`
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED`, `STAFF_MEMBERSHIP_INACTIVE`
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {RateLimitError} `RATE_LIMITED`
      * @throws {ServerError} `INTERNAL_ERROR`
@@ -490,7 +490,7 @@ export function createCheckoutApi(core) {
      * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `CHECKOUT_INCOMPLETE`, `TRAVELER_DATA_INVALID`, `CONTACT_DATA_INVALID`, `UNPROCESSABLE` (422; `details.reason = "use_airline_card_completion"` for an airline-card payment)
      * @throws {AuthenticationError} `INVALID_API_KEY`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` (401)
      * @throws {PaymentError} `PAYMENT_REQUIRED` (payment not authorised yet), `PAYMENT_DECLINED` (402)
-     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `EMAIL_NOT_VERIFIED`, `SCOPE_NOT_ALLOWED` (403)
+     * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `EMAIL_NOT_VERIFIED`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED`, `STAFF_MEMBERSHIP_INACTIVE` (403)
      * @throws {NotFoundError} `NOT_FOUND`
      * @throws {PriceChangedError} `PRICE_CHANGED` (authorisation voided, checkout moved to the new price: create a new payment)
      * @throws {SoldOutError} `SOLD_OUT` (nothing booked, payment voided)

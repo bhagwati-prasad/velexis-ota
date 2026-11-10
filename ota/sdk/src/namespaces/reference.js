@@ -44,7 +44,7 @@ export function createReferenceApi(core) {
        * @returns {Promise<Page<Schemas["Location"]>>}
        * @throws {ValidationError} `VALIDATION_FAILED` (keyword shorter than 2 characters, bad `countryCode`), `INVALID_REQUEST`
        * @throws {AuthenticationError} `INVALID_API_KEY`
-       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`
+       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED`
        * @throws {RateLimitError} `RATE_LIMITED`
        * @throws {ServerError} `INTERNAL_ERROR`
        * @throws {ConnectionError} `ABORTED` when `options.signal` cancels a stale request
@@ -63,7 +63,7 @@ export function createReferenceApi(core) {
        * @throws {NotFoundError} `NOT_FOUND` (unknown code)
        * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST`
        * @throws {AuthenticationError} `INVALID_API_KEY`
-       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`
+       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED`
        * @throws {RateLimitError} `RATE_LIMITED`
        * @throws {ServerError} `INTERNAL_ERROR`
        */
@@ -80,7 +80,7 @@ export function createReferenceApi(core) {
        * @returns {Promise<Page<Schemas["Airline"]>>}
        * @throws {ValidationError} `VALIDATION_FAILED` (more than 100 codes, bad code format), `INVALID_REQUEST`
        * @throws {AuthenticationError} `INVALID_API_KEY`
-       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`
+       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED`
        * @throws {RateLimitError} `RATE_LIMITED`
        * @throws {ServerError} `INTERNAL_ERROR`
        */
@@ -94,7 +94,7 @@ export function createReferenceApi(core) {
        * @throws {NotFoundError} `NOT_FOUND`
        * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST`
        * @throws {AuthenticationError} `INVALID_API_KEY`
-       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`
+       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED`
        * @throws {RateLimitError} `RATE_LIMITED`
        * @throws {ServerError} `INTERNAL_ERROR`
        */
@@ -111,7 +111,7 @@ export function createReferenceApi(core) {
        * @returns {Promise<Page<Schemas["Country"]>>}
        * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST`
        * @throws {AuthenticationError} `INVALID_API_KEY`
-       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`
+       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED`
        * @throws {RateLimitError} `RATE_LIMITED`
        * @throws {ServerError} `INTERNAL_ERROR`
        */
@@ -128,7 +128,7 @@ export function createReferenceApi(core) {
        * @returns {Promise<Page<Schemas["Currency"]>>}
        * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST`
        * @throws {AuthenticationError} `INVALID_API_KEY`
-       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`
+       * @throws {PermissionError} `ORIGIN_NOT_ALLOWED`, `TENANT_SUSPENDED`, `SCOPE_NOT_ALLOWED`, `HOST_NOT_ALLOWED`
        * @throws {RateLimitError} `RATE_LIMITED`
        * @throws {ServerError} `INTERNAL_ERROR`
        */
