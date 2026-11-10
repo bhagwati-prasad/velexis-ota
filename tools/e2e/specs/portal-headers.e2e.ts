@@ -29,18 +29,18 @@
 // links (`reset`, `invite`); the browser keeps them so.
 //
 // The answers. No answer of the portal (page HTML, RSC payloads, server actions, scripts, JSON, text) holds an access
-// token (`eyJ`, a JWT's start) or the value of any token cookie the journey saw set (`at`, `rt`, `mfa`, `reset`,
-// `invite`); a portal token (`ptk_…`) is only in the hand-off page's one hidden `portalToken` field, which PADR-0007
-// point 4 makes its carrier (the navigation to the OTA admin's `/sso` is cancelled in this browser context, so the
-// browser stays on the page and the token is never redeemed); and a full API key (`pk_`/`sk_` of test or live and 40
-// characters) is only in the server action answer that shows it once, never in any other answer. Every page, RSC
-// payload and script is read: the journey reads a page's answers before it leaves the page (the browser drops them
-// then), and a GET that the browser dropped before its end (an RSC prefetch the next navigation cancelled) is fetched
-// again with the same request headers from the same browser context (so with its cookies), and that answer is checked
-// as well. A server action that ends with `redirect()` answers `303` without a `Location` and with the RSC payload of
-// the page it leads to, which is read like any answer; only a redirect the browser follows has no body. A server
-// action's answer cannot be asked for again, and the browser does not always keep its streamed body for the journey:
-// one it no longer holds is named in the last step's annotation, and any other unread answer fails that step.
+// token (a JWT: its `eyJ…` header, payload and signature) or the value of any token cookie the journey saw set (`at`,
+// `rt`, `mfa`, `reset`, `invite`); a portal token (`ptk_…`) is only in the hand-off page's one hidden `portalToken`
+// field, which PADR-0007 point 4 makes its carrier (the navigation to the OTA admin's `/sso` is cancelled in this
+// browser context, so the browser stays on the page and the token is never redeemed); and a full API key (`pk_`/`sk_`
+// of test or live and 40 characters) is only in the server action answer that shows it once, never in any other answer.
+// Every page, RSC payload and script is read: the journey reads a page's answers before it leaves the page (the browser
+// drops them then), and a GET that the browser dropped before its end (an RSC prefetch the next navigation cancelled)
+// is fetched again with the same request headers from the same browser context (so with its cookies), and that answer
+// is checked as well. A server action that ends with `redirect()` answers `303` without a `Location` and with the RSC
+// payload of the page it leads to, which is read like any answer; only a redirect the browser follows has no body. A
+// server action's answer cannot be asked for again, and the browser does not always keep its streamed body for the
+// journey: one it no longer holds is named in the last step's annotation, and any other unread answer fails that step.
 //
 // Arranged in `beforeAll` through the platform API (PADR-0017 item 5): the owner's active OTA (`newOwnerWithActiveOta`
 // with MFA, set up by the OTA worker, so the journey needs `E2E_WITH_OTA=1` and fails at once without it); an admin, a
@@ -194,6 +194,12 @@ const NONCE = /^'nonce-([A-Za-z0-9+/]{22,}={0,2})'$/;
 const SCRIPT_TAG = /<script\b[^>]*>/g;
 /** A portal token (PADR-0007: `ptk_` and 43 base62 characters; the OTA contract's pattern is 24 to 64). */
 const PORTAL_TOKEN = /ptk_[A-Za-z0-9]{24,64}/g;
+/**
+ * An access token: a JWT's header, payload and signature (base64url of a JSON header and payload, both starting with
+ * `{"`, so `eyJ`), the shape a11y-headers.e2e.ts looks for in the OTA admin's answers. A bare `eyJ` is not enough: an
+ * API key's displayed prefix is random base62 and can hold it (one did in wave 46's integration run).
+ */
+const ACCESS_TOKEN = /eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{20,}/;
 /** A full API key of the OTA booking API (PADR-0005): its prefix and 40 base62 characters. */
 const FULL_API_KEY = /\b(?:pk|sk)_(?:test|live)_[A-Za-z0-9]{40}\b/g;
 /** The hand-off page's one carrier of the portal token (the launch route handler's form). */
@@ -1027,9 +1033,16 @@ test("every answer carried the portal's headers and cookie attributes, every rou
   // was read (a GET it dropped was read again), and every other answer but a server action's, which cannot be asked
   // for again; a server action's answer the browser no longer held is named in the annotation.
   expect(answers.unreadBodies.filter((answer) => !answer.endsWith(" (server action)"))).toEqual([]);
-  expect(bodies.filter((answer) => answer.body.includes("eyJ")).map((answer) => answer.pathname)).toEqual([]);
   expect(answers.secrets.size).toBeGreaterThanOrEqual(4);
   const secrets = [...answers.secrets];
+  // The shape catches the journey's own access tokens (the `at` cookie values it saw set), so it would catch one in an
+  // answer too.
+  const accessTokens = secrets.filter((secret) => secret.startsWith("eyJ"));
+  expect(accessTokens.length).toBeGreaterThan(0);
+  expect(accessTokens.every((token) => ACCESS_TOKEN.test(token))).toBe(true);
+  expect(bodies.filter((answer) => ACCESS_TOKEN.test(answer.body)).map((answer) => answer.pathname)).toEqual(
+    [],
+  );
   expect(
     bodies
       .filter((answer) => secrets.some((secret) => answer.body.includes(secret)))
