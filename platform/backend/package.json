@@ -70,7 +70,7 @@
     "@types/supertest": "7.2.1",
     "@velexis/testing": "workspace:*",
     "eslint": "9.39.5",
-    "supertest": "7.3.1",
+    "supertest": "7.3.2",
     "typescript": "5.6.3",
     "vitest": "4.1.12"
   }
