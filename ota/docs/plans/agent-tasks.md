@@ -2666,6 +2666,7 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 - **Verify:** `pnpm --filter @velexis/ota-frontend build && pnpm --filter @velexis/ota-frontend test`
 
 ### OBE-085 · Write the PCI evidence pack for the airline-card path
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the developer's review of the pack and its date in `ota/docs/pci/README.md` §6 (AC2, human step))
 - **Component:** ota-backend
 - **Milestone:** M6
 - **Depends on:** OBE-052, OFE-023

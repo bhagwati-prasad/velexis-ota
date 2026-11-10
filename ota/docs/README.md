@@ -29,6 +29,18 @@ Related: [`../README.md`](../README.md) (what the OTA group is), [platform docs]
 | [`performance.md`](performance.md) | Measured figures of the OTA backend, each run with its date, commit and machine, and the decisions taken from them: the M2 search load test and the Amadeus buckets (OBE-028). |
 | [`storefront-accessibility.md`](storefront-accessibility.md) | The hosted storefront's accessibility and performance pass (OFE-024): axe on every page and state, the findings and fixes, the manual screen-reader script and record, Lighthouse's mobile figures with their follow-ups, and the font budget. |
 
+## PCI evidence pack
+
+The evidence for Velexis's PCI DSS v4.0.1 self-assessment (SAQ D for Service Providers) of the airline-card path ([ADR-0011](../../docs/mvp/adr/0011-payments-stripe-and-airline-card.md) §C, [ADR-0027](../../docs/mvp/adr/0027-pci-scope-and-vm-controls.md); task OBE-085).
+
+| Document | One line |
+|---|---|
+| [`pci/README.md`](pci/README.md) | The pack's index: scope, the calendar of scans, tests and reviews with their records, how its references to code are checked, the developer's review record, the malware evaluation (5.2.3) and the open questions. |
+| [`pci/data-flow.md`](pci/data-flow.md) | The card from the storefront page through Caddy, the OTA API and the Amadeus client to the airline (Mermaid diagram), what exists where (memory only), and every control of ADR-0011 §C mapped to code, tests and VM settings and checks. |
+| [`pci/script-inventory.md`](pci/script-inventory.md) | Every storefront page and its scripts, Stripe.js with its justification, how each script is authorised and checked daily (6.4.3, 11.6.1), and the residual risk of the shared origin (OADR-0017). |
+| [`pci/incident-response.md`](pci/incident-response.md) | The incident response plan: roles, detection, containment (the airline card off, rollback, evidence), card data found where it must not be, the Stripe, Amadeus and OTA notifications, recovery and yearly test. |
+| [`pci/responsibility-matrix.md`](pci/responsibility-matrix.md) | Velexis versus the OTA for each requirement of the SAQ D (and Appendix A1), with the controls of ADR-0027, and the third-party service providers. |
+
 ## Flows
 
 Each flow has a Mermaid sequence diagram, numbered steps, failure handling, the tables it touches and the SDK methods it uses.
