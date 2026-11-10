@@ -2733,6 +2733,7 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 - **Verify:** `node ota/backend/test/load/booking-load.mjs --tenants 5 --minutes 30`
 
 ### OBE-089 · Write the OTA operations runbooks and launch checklist
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the developer's walk-through of the launch checklist and its date, human step)
 - **Component:** ota-backend
 - **Milestone:** M6
 - **Depends on:** OBE-084

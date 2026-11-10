@@ -41,6 +41,20 @@ The evidence for Velexis's PCI DSS v4.0.1 self-assessment (SAQ D for Service Pro
 | [`pci/incident-response.md`](pci/incident-response.md) | The incident response plan: roles, detection, containment (the airline card off, rollback, evidence), card data found where it must not be, the Stripe, Amadeus and OTA notifications, recovery and yearly test. |
 | [`pci/responsibility-matrix.md`](pci/responsibility-matrix.md) | Velexis versus the OTA for each requirement of the SAQ D (and Appendix A1), with the controls of ADR-0027, and the third-party service providers. |
 
+## Runbooks
+
+What to do when something goes wrong in operation, and the launch checklist (task OBE-089; the go-live gate of the airline card is OBE-086's). Each runbook names the signals (log lines, `/health/ready`, the health check's e-mails, the OTA admin's views, the staff alerts), the commands and the escalation.
+
+| Document | One line |
+|---|---|
+| [`runbooks/README.md`](runbooks/README.md) | The runbooks' index: which runbook for which incident, where the signals are (health, logs, the OTA admin, the platform admin, staff alerts), the escalation levels, and Redis lost or restarted without its data (staff sign in again). |
+| [`runbooks/supplier-timeout-and-reconciliation.md`](runbooks/supplier-timeout-and-reconciliation.md) | Amadeus slow or down, bookings whose order may exist after `504 SUPPLIER_TIMEOUT` and their reconciliation, the bookings it hands to the staff, orphan PNRs on the booking queue. |
+| [`runbooks/ticketing-failures.md`](runbooks/ticketing-failures.md) | Ticketing given up, issuances failing for many bookings, airline-card bookings in manual review, bookings near their ticketing deadline. |
+| [`runbooks/stripe-incidents.md`](runbooks/stripe-incidents.md) | Stripe down or slow, a webhook backlog (deliveries failing, refused or not processed), voids, captures and refunds that fail, authorisations about to lapse, disputes. |
+| [`runbooks/tenant-migration-failures.md`](runbooks/tenant-migration-failures.md) | Tenant schemas that fail in the deploy's fan-out or in a `tenant.migrate` job: the signals, the errors and their fixes, running the migration again, a lost report. |
+| [`runbooks/launch-checklist.md`](runbooks/launch-checklist.md) | The OTA launch checklist: every item with its owner and its check, the go/no-go, the developer's walk-through record and the restore drill record. |
+| [`runbooks/airline-card-go-live.md`](runbooks/airline-card-go-live.md) | The gate before `AIRLINE_CARD_ENABLED=true` in production (OBE-086). |
+
 ## Flows
 
 Each flow has a Mermaid sequence diagram, numbered steps, failure handling, the tables it touches and the SDK methods it uses.
