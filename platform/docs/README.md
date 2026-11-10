@@ -27,6 +27,7 @@ When you add, rename or remove a platform document, update this index in the sam
 | [`data-model-migration-0002-part2.md`](data-model-migration-0002-part2.md) | Part 2: payment connection modes, plans ↔ Stripe prices, settlements, payout accounts. |
 | [`data-model-migration-0002-part3.md`](data-model-migration-0002-part3.md) | Part 3: billing customers, subscription statuses, invoices, Stripe event inbox, e-mail outbox, privileges. |
 | [`security-review.md`](security-review.md) | The M6 security review (PBE-062): the §12 checklist per module, the auth matrix, rate limits, secrets at rest, `pnpm audit`, CSP and cookies, the findings and their tasks. |
+| [`performance.md`](performance.md) | The M6 performance smoke test (PBE-063): p50 and p95 of sign-in, the tenant reads, `ask` and `createTenant`, and the RSS of the API and the worker against the VM's memory budget, with the targets and what was decided. |
 
 ## Flows
 

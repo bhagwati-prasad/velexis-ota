@@ -1988,7 +1988,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Verify:** `pnpm --filter @velexis/platform-backend test:int security && pnpm audit --audit-level high`
 - **Note (2026-11-05, lead decision (5e), FIX-W43-PLATFORM):** the acceptance criteria gain "Every rate limit of api-inventory §2 has a test answering `429` with `Retry-After`" (step 2): `rate-limits.int.test.ts` proves it with one group per row of the table (and the sign-in lockout's `423` with `Retry-After`), its first test failing when the table and the file disagree, and its tests stay tagged `[PBE-062 step 2]` as they already are. The task stays done (lead decision (5d)): the other criteria are unchanged, and the audit's findings are F-2 to F-5 of `platform/docs/security-review.md`.
 
-### PBE-063 · Measure platform performance and memory against the VM budget
+### PBE-063 · Measure platform performance and memory against the VM budget ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M6
 - **Depends on:** PBE-061
