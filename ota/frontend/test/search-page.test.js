@@ -1,7 +1,8 @@
 // The results page (ota/frontend/docs/pages.md §4): search.html with its partials expanded by the build's include
 // plugin, run by src/pages/search.js against a fake SDK. It covers the search and the `search=srch_…` id in the
 // address, filters and sort mirrored in the query string and kept over a reload without a new search, "Show more
-// flights", offer cards that show the API's totals as text, and the states of §4 for their error codes.
+// flights", offer cards that show the API's totals as text, the states of §4 for their error codes, and the "Filters"
+// disclosure that narrow screens show above the results from the searching state on (OFE-027).
 import {
   ConnectionError,
   ExpiredError,
@@ -819,6 +820,63 @@ describe("results page: states", () => {
     expect(document.querySelectorAll("[data-offer-skeleton]")).toHaveLength(0);
     expect($("[data-offers]").getAttribute("aria-busy")).toBe("false");
     expect(text($("[data-live-region]"))).toBe("42 flights");
+  });
+
+  it("[OFE-027 AC1] the 'Filters' disclosure takes its place with the searching state and is enabled, closed, with the facets", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    /** @type {(search: unknown) => void} */
+    let answer = () => {};
+    const client = fakeClient({ search: () => new Promise((resolve) => (answer = resolve)) });
+    const { view } = open(`${QUERY}&stops=0&carriers=KL`, client);
+    await vi.advanceTimersByTimeAsync(200);
+
+    // Searching: the layout with the skeletons shows the toggle already (narrow screens put it above the results),
+    // disabled and closed, so the facets' arrival adds nothing above the results; the form waits for the facets.
+    const toggle = /** @type {HTMLButtonElement} */ ($("button[data-filters-toggle]"));
+    expect($("[data-results-layout]").hidden).toBe(false);
+    expect(toggle.hidden).toBe(false);
+    expect(toggle.disabled).toBe(true);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.getAttribute("aria-controls")).toBe("filters");
+    expect(text(toggle)).toBe("Filters (2)");
+    expect($("form[data-filters]").hidden).toBe(true);
+
+    answer(structuredClone(SEARCH));
+    await view.done;
+    await vi.advanceTimersByTimeAsync(200);
+    expect($("form[data-filters]").hidden).toBe(false);
+    expect(toggle.disabled).toBe(false);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(text(toggle)).toBe("Filters (2)");
+    // The result count is still announced politely, whatever the disclosure's state.
+    expect(text($("[data-live-region]"))).toBe("42 flights");
+
+    // Opening it asks nothing of the API; a filter changed in it updates the count on the toggle.
+    const calls = client.flights.listResults.mock.calls.length;
+    toggle.click();
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(client.flights.listResults).toHaveBeenCalledTimes(calls);
+    tick(option("carriers", "KL"), false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lastList(client)).toEqual({ searchId: SEARCH_ID, sort: "best", stops: [0], limit: 20 });
+    expect(text(toggle)).toBe("Filters (1)");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("[OFE-027] keeps the page's own heights from the first paint: main, heading, summary and the results' heading row", () => {
+    // The stylesheet's contract (happy-dom loads no CSS; Lighthouse sees the result, storefront-accessibility.md §3.4):
+    // main is at least one screen high, so the footer does not move while the page fills; the summary keeps a line
+    // before its text arrives, and below sm the heading and the summary keep two lines each for the airport names;
+    // below sm the results' heading row is one column, so "Searching airlines…" and "5 flights" give it one height.
+    expect($("main[data-results-page]").classList).toContain("min-h-screen");
+    expect($("h1[data-results-title]").classList).toContain("max-sm:min-h-[2lh]");
+    const summary = $("p[data-search-summary]").classList;
+    expect(summary).toContain("min-h-[1lh]");
+    expect(summary).toContain("max-sm:min-h-[2lh]");
+    const row = Array.from(/** @type {HTMLElement} */ ($("#results-count").parentElement).classList);
+    expect(row).toEqual(expect.arrayContaining(["flex", "flex-col", "sm:flex-row"]));
+    // No unprefixed class puts the row back on one line below sm.
+    expect(row.filter((name) => /^(flex-row|flex-wrap|justify-|items-)/.test(name))).toEqual([]);
   });
 
   it("[OFE-005 AC3] no offers shows 'No flights found', the form pre-filled, nearby dates and airports", async () => {

@@ -16,11 +16,16 @@
     <main
       id="main"
       tabindex="-1"
-      class="mx-auto w-full max-w-6xl flex-1 px-4 py-8 focus:outline-none"
+      class="mx-auto min-h-screen w-full max-w-6xl flex-1 px-4 py-8 focus:outline-none"
       data-results-page
     >
-      <h1 class="font-heading text-2xl font-semibold sm:text-3xl" data-results-title>Flight results</h1>
-      <p class="mt-2 text-muted" data-search-summary></p>
+      <!-- Lighthouse's layout shifts (OFE-027): the page keeps the footer below the fold, the summary its line from the
+           first paint, and on phones the heading and the summary two lines each, which the airport names of the search
+           usually fill, so the results below them do not move when the names arrive. -->
+      <h1 class="font-heading text-2xl font-semibold max-sm:min-h-[2lh] sm:text-3xl" data-results-title>
+        Flight results
+      </h1>
+      <p class="mt-2 min-h-[1lh] text-muted max-sm:min-h-[2lh]" data-search-summary></p>
 
       <details class="mt-4" data-search-panel>
         <summary class="min-h-6 cursor-pointer font-medium text-primary">Change search</summary>
@@ -30,141 +35,185 @@
       <div data-results-state></div>
 
       <div class="mt-6 grid items-start gap-6 lg:grid-cols-[17rem_1fr]" data-results-layout hidden>
-        <form
-          class="rounded-ui border border-muted/30 bg-panel p-4"
-          aria-labelledby="filters-title"
-          data-filters
-          hidden
-        >
-          <div class="flex items-center justify-between gap-2">
-            <h2
-              id="filters-title"
-              tabindex="-1"
-              class="font-heading text-lg font-semibold"
-              data-filters-title
+        <!-- Narrow screens (one column): the filters behind this disclosure above the results, closed by default; it
+             takes its place with the layout, disabled until the facets arrive, so nothing below it moves when they do
+             (OFE-027). From lg the sidebar is always shown and the toggle is not. -->
+        <div class="min-w-0">
+          <button
+            type="button"
+            aria-expanded="false"
+            aria-controls="filters"
+            disabled
+            data-filters-toggle
+            class="group peer flex min-h-11 w-full items-center justify-between gap-3 rounded-ui border border-primary bg-surface px-4 py-2 font-medium text-primary hover:bg-panel disabled:cursor-default disabled:opacity-60 lg:hidden"
+          >
+            <span>Filters <span data-filters-count></span></span>
+            <svg
+              aria-hidden="true"
+              focusable="false"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+              class="size-5 shrink-0 group-aria-expanded:rotate-180 motion-safe:transition-transform"
             >
-              Filters
-            </h2>
-            <button
-              type="button"
-              hidden
-              data-action="clear-filters"
-              class="min-h-6 text-sm font-medium text-primary underline"
-            >
-              Clear filters
-            </button>
-          </div>
-
-          <fieldset class="mt-4 border-t border-muted/30 pt-3" data-filter-group="stops" hidden>
-            <legend class="font-semibold">Stops</legend>
-            <ul class="mt-2 space-y-1" data-filter-options></ul>
-          </fieldset>
-
-          <fieldset class="mt-4 border-t border-muted/30 pt-3" data-filter-group="carriers" hidden>
-            <legend class="font-semibold">Airlines</legend>
-            <ul class="mt-2 space-y-1" data-filter-options></ul>
-          </fieldset>
-
-          <fieldset class="mt-4 border-t border-muted/30 pt-3" data-filter-group="price" hidden>
-            <legend class="font-semibold">Price</legend>
-            <p class="text-sm text-muted">Total for all travellers.</p>
-            <label for="filter-price-range" class="mt-2 block text-sm font-medium">Maximum price</label>
-            <input
-              id="filter-price-range"
-              type="range"
-              class="mt-1 block w-full accent-primary"
-              aria-describedby="filter-price-output"
-              data-price-range
-            />
-            <output
-              id="filter-price-output"
-              for="filter-price-range"
-              class="text-sm"
-              data-price-output
-            ></output>
-            <div class="mt-2 grid grid-cols-2 gap-2">
-              <div>
-                <label for="filter-min-price" class="block text-sm font-medium">From</label>
-                <input
-                  id="filter-min-price"
-                  name="minPrice"
-                  type="number"
-                  min="0"
-                  step="any"
-                  inputmode="decimal"
-                  class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-2 py-1 aria-invalid:border-error"
-                />
-              </div>
-              <div>
-                <label for="filter-max-price" class="block text-sm font-medium">To</label>
-                <input
-                  id="filter-max-price"
-                  name="maxPrice"
-                  type="number"
-                  min="0"
-                  step="any"
-                  inputmode="decimal"
-                  class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-2 py-1 aria-invalid:border-error"
-                />
-              </div>
-            </div>
-          </fieldset>
-
-          <fieldset class="mt-4 border-t border-muted/30 pt-3" data-filter-group="departureWindow" hidden>
-            <legend class="font-semibold">Departure time</legend>
-            <ul class="mt-2 space-y-1" data-filter-options></ul>
-          </fieldset>
-
-          <fieldset class="mt-4 border-t border-muted/30 pt-3" data-filter-group="arrivalWindow" hidden>
-            <legend class="font-semibold">Arrival time</legend>
-            <ul class="mt-2 space-y-1" data-filter-options></ul>
-          </fieldset>
-
-          <fieldset class="mt-4 border-t border-muted/30 pt-3" data-filter-group="maxDurationMinutes" hidden>
-            <legend class="font-semibold">Journey time</legend>
-            <label for="filter-duration" class="mt-2 block text-sm font-medium">Longest flight time</label>
-            <input
-              id="filter-duration"
-              type="range"
-              class="mt-1 block w-full accent-primary"
-              aria-describedby="filter-duration-output"
-              data-duration-range
-            />
-            <output
-              id="filter-duration-output"
-              for="filter-duration"
-              class="text-sm"
-              data-duration-output
-            ></output>
-          </fieldset>
-
-          <fieldset class="mt-4 border-t border-muted/30 pt-3" data-filter-group="cabins" hidden>
-            <legend class="font-semibold">Cabin</legend>
-            <ul class="mt-2 space-y-1" data-filter-options></ul>
-          </fieldset>
-
-          <fieldset
-            class="mt-4 border-t border-muted/30 pt-3"
-            data-filter-group="minIncludedCheckedBags"
+              <path
+                fill-rule="evenodd"
+                d="M5.22 7.22a.75.75 0 0 1 1.06 0L10 10.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 8.28a.75.75 0 0 1 0-1.06Z"
+                clip-rule="evenodd"
+              />
+            </svg>
+          </button>
+          <form
+            id="filters"
+            class="rounded-ui border border-muted/30 bg-panel p-4 max-lg:mt-3 max-lg:peer-aria-[expanded=false]:hidden"
+            aria-labelledby="filters-title"
+            data-filters
             hidden
           >
-            <legend class="font-semibold">Checked bags</legend>
-            <ul class="mt-2 space-y-1" data-filter-options></ul>
-          </fieldset>
+            <div class="flex items-center justify-between gap-2">
+              <h2
+                id="filters-title"
+                tabindex="-1"
+                class="font-heading text-lg font-semibold"
+                data-filters-title
+              >
+                Filters
+              </h2>
+              <button
+                type="button"
+                hidden
+                data-action="clear-filters"
+                class="min-h-6 text-sm font-medium text-primary underline"
+              >
+                Clear filters
+              </button>
+            </div>
 
-          <fieldset class="mt-4 border-t border-muted/30 pt-3" data-filter-group="conditions" hidden>
-            <legend class="font-semibold">Fare conditions</legend>
-            <ul class="mt-2 space-y-1" data-filter-options></ul>
-          </fieldset>
+            <fieldset class="mt-4 border-t border-muted/30 pt-3" data-filter-group="stops" hidden>
+              <legend class="font-semibold">Stops</legend>
+              <ul class="mt-2 space-y-1" data-filter-options></ul>
+            </fieldset>
 
-          <fieldset class="mt-4 border-t border-muted/30 pt-3" data-filter-group="brandedFares" hidden>
-            <legend class="font-semibold">Fare types</legend>
-            <ul class="mt-2 space-y-1" data-filter-options></ul>
-          </fieldset>
-        </form>
+            <fieldset class="mt-4 border-t border-muted/30 pt-3" data-filter-group="carriers" hidden>
+              <legend class="font-semibold">Airlines</legend>
+              <ul class="mt-2 space-y-1" data-filter-options></ul>
+            </fieldset>
+
+            <fieldset class="mt-4 border-t border-muted/30 pt-3" data-filter-group="price" hidden>
+              <legend class="font-semibold">Price</legend>
+              <p class="text-sm text-muted">Total for all travellers.</p>
+              <label for="filter-price-range" class="mt-2 block text-sm font-medium">Maximum price</label>
+              <input
+                id="filter-price-range"
+                type="range"
+                class="mt-1 block w-full accent-primary"
+                aria-describedby="filter-price-output"
+                data-price-range
+              />
+              <output
+                id="filter-price-output"
+                for="filter-price-range"
+                class="text-sm"
+                data-price-output
+              ></output>
+              <div class="mt-2 grid grid-cols-2 gap-2">
+                <div>
+                  <label for="filter-min-price" class="block text-sm font-medium">From</label>
+                  <input
+                    id="filter-min-price"
+                    name="minPrice"
+                    type="number"
+                    min="0"
+                    step="any"
+                    inputmode="decimal"
+                    class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-2 py-1 aria-invalid:border-error"
+                  />
+                </div>
+                <div>
+                  <label for="filter-max-price" class="block text-sm font-medium">To</label>
+                  <input
+                    id="filter-max-price"
+                    name="maxPrice"
+                    type="number"
+                    min="0"
+                    step="any"
+                    inputmode="decimal"
+                    class="mt-1 block w-full rounded-ui border border-muted/60 bg-surface px-2 py-1 aria-invalid:border-error"
+                  />
+                </div>
+              </div>
+            </fieldset>
+
+            <fieldset class="mt-4 border-t border-muted/30 pt-3" data-filter-group="departureWindow" hidden>
+              <legend class="font-semibold">Departure time</legend>
+              <ul class="mt-2 space-y-1" data-filter-options></ul>
+            </fieldset>
+
+            <fieldset class="mt-4 border-t border-muted/30 pt-3" data-filter-group="arrivalWindow" hidden>
+              <legend class="font-semibold">Arrival time</legend>
+              <ul class="mt-2 space-y-1" data-filter-options></ul>
+            </fieldset>
+
+            <fieldset
+              class="mt-4 border-t border-muted/30 pt-3"
+              data-filter-group="maxDurationMinutes"
+              hidden
+            >
+              <legend class="font-semibold">Journey time</legend>
+              <label for="filter-duration" class="mt-2 block text-sm font-medium">Longest flight time</label>
+              <input
+                id="filter-duration"
+                type="range"
+                class="mt-1 block w-full accent-primary"
+                aria-describedby="filter-duration-output"
+                data-duration-range
+              />
+              <output
+                id="filter-duration-output"
+                for="filter-duration"
+                class="text-sm"
+                data-duration-output
+              ></output>
+            </fieldset>
+
+            <fieldset class="mt-4 border-t border-muted/30 pt-3" data-filter-group="cabins" hidden>
+              <legend class="font-semibold">Cabin</legend>
+              <ul class="mt-2 space-y-1" data-filter-options></ul>
+            </fieldset>
+
+            <fieldset
+              class="mt-4 border-t border-muted/30 pt-3"
+              data-filter-group="minIncludedCheckedBags"
+              hidden
+            >
+              <legend class="font-semibold">Checked bags</legend>
+              <ul class="mt-2 space-y-1" data-filter-options></ul>
+            </fieldset>
+
+            <fieldset class="mt-4 border-t border-muted/30 pt-3" data-filter-group="conditions" hidden>
+              <legend class="font-semibold">Fare conditions</legend>
+              <ul class="mt-2 space-y-1" data-filter-options></ul>
+            </fieldset>
+
+            <fieldset class="mt-4 border-t border-muted/30 pt-3" data-filter-group="brandedFares" hidden>
+              <legend class="font-semibold">Fare types</legend>
+              <ul class="mt-2 space-y-1" data-filter-options></ul>
+            </fieldset>
+
+            <p class="mt-4 border-t border-muted/30 pt-4 lg:hidden">
+              <button
+                type="button"
+                data-action="hide-filters"
+                class="min-h-11 w-full rounded-ui bg-primary px-4 py-2 font-medium text-on-primary hover:opacity-90"
+              >
+                Hide filters
+              </button>
+            </p>
+          </form>
+        </div>
 
         <section aria-labelledby="results-count" class="min-w-0 lg:col-start-2">
-          <div class="flex flex-wrap items-end justify-between gap-3">
+          <!-- Stacked on phones: "Searching airlines…" and "5 flights" give the row the same height. -->
+          <div class="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
             <h2
               id="results-count"
               tabindex="-1"

@@ -1,6 +1,7 @@
 // The filter sidebar and the sort of the results page (ota/frontend/docs/pages.md §4, src/components/filters.js and
 // sort.js): the query-string form of every filter (read, written, checked), and the sidebar of search.html (partials
-// expanded by the build's include plugin) built from facets, reporting the filters its controls hold.
+// expanded by the build's include plugin) built from facets, reporting the filters its controls hold, with the
+// "Filters (n)" disclosure of narrow screens (OFE-027).
 import { Browser } from "happy-dom";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -9,6 +10,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { includePartials } from "../scripts/vite-plugins.js";
 import {
   FILTER_PARAMS,
+  activeFilterCount,
   filtersToQuery,
   hasFilters,
   mount,
@@ -471,4 +473,123 @@ describe("filter sidebar", () => {
     expect(labels("carriers")).toContain("easyJet (U2) (3)");
     view.destroy();
   });
+});
+
+describe("the filters' disclosure on narrow screens", () => {
+  const toggle = () =>
+    /** @type {HTMLButtonElement} */ (document.querySelector("button[data-filters-toggle]"));
+  const hideButton = () =>
+    /** @type {HTMLButtonElement} */ (form().querySelector('[data-action="hide-filters"]'));
+
+  it("[OFE-027 AC1] sits above the results, closed by default, and is enabled once the facets arrive", () => {
+    const layout = /** @type {HTMLElement} */ (document.querySelector("[data-results-layout]"));
+    // One column on narrow screens: the toggle comes first, then the form it controls, then the results.
+    const area = /** @type {HTMLElement} */ (toggle().parentElement);
+    expect(area.parentElement).toBe(layout);
+    expect(Array.from(area.children)).toEqual([toggle(), form()]);
+    expect(area.nextElementSibling).toBe(document.querySelector('section[aria-labelledby="results-count"]'));
+    expect(toggle().type).toBe("button");
+    expect(toggle().getAttribute("aria-controls")).toBe(form().id);
+    expect(form().id).toBe("filters");
+    // The stylesheet's contract (happy-dom loads no CSS; Lighthouse and the e2e journeys see the result): below lg
+    // the form is hidden while its toggle, a `peer` before it, says collapsed; from lg the toggle and "Hide filters"
+    // are hidden and the form is the sidebar.
+    expect(toggle().classList).toContain("peer");
+    expect(toggle().classList).toContain("lg:hidden");
+    expect(form().classList).toContain("max-lg:peer-aria-[expanded=false]:hidden");
+    expect(Array.from(form().classList).some((name) => name.startsWith("lg:"))).toBe(false);
+    expect(hideButton().closest("p")?.classList).toContain("lg:hidden");
+
+    const view = mount(form(), { locale: "en-GB", onChange: vi.fn(), toggle: toggle() });
+    // Before the facets: the form hidden, the toggle in place but disabled, closed.
+    expect(form().hidden).toBe(true);
+    expect(toggle().disabled).toBe(true);
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    expect(text(toggle())).toBe("Filters");
+
+    view.update({ facets: /** @type {never} */ (FACETS), filters: {}, tripType: "round_trip" });
+    expect(form().hidden).toBe(false);
+    expect(toggle().disabled).toBe(false);
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    view.destroy();
+  });
+
+  it("[OFE-027] opens and closes with its button; 'Hide filters' closes it and gives the focus back", () => {
+    const onChange = vi.fn();
+    const view = mount(form(), { locale: "en-GB", onChange, toggle: toggle() });
+    view.update({ facets: /** @type {never} */ (FACETS), filters: {}, tripType: "round_trip" });
+
+    toggle().click();
+    expect(toggle().getAttribute("aria-expanded")).toBe("true");
+    toggle().click();
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    toggle().click();
+    option("stops", "0").focus();
+    tick(option("stops", "0"));
+    // A change keeps the disclosure open and the focus on the control.
+    expect(toggle().getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(option("stops", "0"));
+
+    hideButton().click();
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(toggle());
+    // Neither button is a filter: the filters reported are the ticked box's only.
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(view.read()).toEqual({ stops: [0] });
+
+    view.destroy();
+    toggle().click();
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("[OFE-027] says how many filter values are chosen: 'Filters (n)'", () => {
+    const { view } = mountSidebarWithToggle({ stops: [0, 1], carriers: ["KL"] });
+    expect(text(toggle())).toBe("Filters (3)");
+
+    tick(option("carriers", "KL"), false);
+    expect(text(toggle())).toBe("Filters (2)");
+    commit(field('input[name="maxPrice"]'), "500");
+    commit(field('input[name="minPrice"]'), "100");
+    tick(option("refundable", "true"));
+    expect(text(toggle())).toBe("Filters (5)");
+
+    /** @type {HTMLButtonElement} */ (form().querySelector('[data-action="clear-filters"]')).click();
+    expect(text(toggle())).toBe("Filters");
+    view.update({ filters: { cabins: ["ECONOMY"] } });
+    expect(text(toggle())).toBe("Filters (1)");
+    view.destroy();
+
+    expect(activeFilterCount({})).toBe(0);
+    expect(
+      activeFilterCount({
+        stops: [0, 2],
+        carriers: ["AF", "KL"],
+        minPrice: "100",
+        maxPrice: "500.50",
+        departureWindow: ["0:06:00-11:59"],
+        maxDurationMinutes: 600,
+        cabins: ["ECONOMY"],
+        minIncludedCheckedBags: 2,
+        refundable: true,
+        changeable: true,
+        brandedFares: ["LIGHT", "FLEX"],
+      }),
+    ).toBe(14);
+  });
+
+  /**
+   * Mounts the sidebar with its disclosure and the facets above.
+   * @param {FlightResultFilters} filters
+   */
+  function mountSidebarWithToggle(filters) {
+    const onChange = vi.fn();
+    const view = mount(form(), { locale: "en-GB", onChange, toggle: toggle() });
+    view.update({
+      facets: /** @type {never} */ (FACETS),
+      filters,
+      carrierName: () => null,
+      tripType: "round_trip",
+    });
+    return { view, onChange };
+  }
 });

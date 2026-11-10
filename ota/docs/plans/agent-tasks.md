@@ -2857,6 +2857,7 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 - **Verify:** `E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront --project=ota-admin`
 
 ### OFE-027 · Keep the results page from shifting on phones
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: Lighthouse mobile CLS of the results page ≤ 0.1 in three runs, 0.152 now, of which 0.127 is the header and test-banner shift of every page that OFE-028 and OFE-029 remove: measured again with `pnpm --filter @velexis/ota-frontend lighthouse` once they are merged)
 - **Component:** ota-frontend
 - **Milestone:** M6
 - **Depends on:** OFE-024
@@ -2885,6 +2886,21 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - Lighthouse mobile CLS of the home page on a test storefront is at most 0.1 in each of three runs; the figures are in `storefront-accessibility.md` §3.
   - `boot.test.js` still proves the banner and `noindex` per environment, and the banner is announced once (its `role="note"` kept).
 - **Verify:** `pnpm --filter @velexis/ota-frontend build && pnpm --filter @velexis/ota-frontend exec vitest run test/boot.test.js && E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront specs/storefront/a11y-pages.e2e.ts`
+
+### OFE-029 · Keep the header from growing when the configuration arrives
+- **Component:** ota-frontend
+- **Milestone:** M6
+- **Depends on:** OFE-027, OFE-028
+- **Size:** S
+- **Read first:** ota/docs/storefront-accessibility.md §3.4 (OFE-027's figures: the header's shift, 0.121 of CLS on home and results without the banner); ota/frontend/README.md §5.1 point 3 and §9; ota/frontend/src/components/header.js
+- **Files:** `ota/frontend/partials/header.html`, `ota/frontend/src/components/header.js`, `ota/frontend/test/boot.test.js`, `ota/docs/storefront-accessibility.md`
+- **Steps:**
+  1. On a phone (412 px wide) the header grows from one row to two, 52 to 88 px, when `boot()` fills it after storefront.get answers: the OTA's name ("Demo Travel" instead of the static "Flights") no longer fits beside the navigation, which wraps under it, and a currency selector (two or more currencies) or a signed-in account menu adds to it; everything below moves, on every page and for live storefronts too. Give the header its final shape from the first paint (for example the navigation on its own row below `sm`, with room for the currency selector and the account menu), or a layout where filling it moves nothing; keep the skip link, the landmarks, the selector's label, the logo and the account menu.
+  2. Measure the home and results pages again with `pnpm --filter @velexis/ota-frontend lighthouse` (the method of `storefront-accessibility.md` §3.1) on a test storefront, three runs each, and record the figures in §3.
+- **Acceptance:**
+  - Lighthouse mobile CLS of the home and results pages on a test storefront is at most 0.1 in each of three runs (with OFE-027 and OFE-028); the figures are in `storefront-accessibility.md` §3.
+  - `boot.test.js` still proves the header's name, logo, currency selector and account menu.
+- **Verify:** `pnpm --filter @velexis/ota-frontend build && pnpm --filter @velexis/ota-frontend test && E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront specs/storefront/a11y-pages.e2e.ts`
 
 ## Cross-group dependencies at a glance
 

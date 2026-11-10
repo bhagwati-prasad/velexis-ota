@@ -67,6 +67,7 @@ Related: [`architecture.md`](architecture.md) (where each piece runs), [`convent
 | HTTP tests | Supertest | 7.x | Drives a NestJS app in-process over HTTP. |
 | DOM tests | `@testing-library/react`, `happy-dom` | 16.x / **21** (21.0.4 in the portal, the platform admin, the OTA admin, the storefront and the SDK: PBE-070) | React client components, and the storefront's DOM modules. happy-dom runs no `<script>` of a page unless asked (since 20.0) and caches its query results, so a `:checked` query can keep the radio checked before the group changed: the storefront reads checked inputs with `checkedInput()` of `lib/dom.js`. 17.x carried one critical and four high advisories (security review F-5). |
 | End-to-end tests | Playwright + `@axe-core/playwright` | 1.6x / 4.x | Several origins, Stripe iframes, accessibility checks. |
+| Web performance figures | Lighthouse (`lighthouse`) + `puppeteer-core` | 13.5.0 / 25.16.0 (exact, devDependencies of the storefront only: OFE-027) | Repeatable LCP, CLS and INP figures of the storefront's mobile profile (`ota/frontend/scripts/lighthouse.mjs`, run by hand against a running preview with a given Chromium; [storefront README §9](../../ota/frontend/README.md#9-performance-budgets)). Never shipped: nothing on the VM runs it. |
 | Lint | ESLint (flat config) + `typescript-eslint` + `@next/eslint-plugin-next` + `eslint-config-prettier` | **9** / 8.x / 15.x / 10.x | One root `eslint.config.mjs`. |
 | Format | Prettier | 3.x | One formatting style. Not debated in reviews. |
 | Webhook development | Stripe CLI | 1.x | `stripe listen --forward-to`, test events. |
@@ -127,7 +128,7 @@ Related: [`architecture.md`](architecture.md) (where each piece runs), [`convent
 | Runtime | Browser (evergreen, ES2022). No server process. |
 | Framework | None: HTML pages + vanilla ES modules |
 | Key libraries | `@velexis/ota-sdk` (cookie mode), Tailwind CSS 4 via `@tailwindcss/vite`, Stripe.js loaded from `js.stripe.com` on payment pages only, `Intl` for formatting |
-| Test tools | Vitest + happy-dom (modules), Playwright + axe (pages) |
+| Test tools | Vitest + happy-dom (modules), Playwright + axe (pages), Lighthouse (mobile LCP, CLS and INP, by hand) |
 | Build output | `dist/` static files with hashed assets, served by Caddy from `/srv/velexis/current/storefront` |
 | Port | none in production; Vite dev server 5173 (proxies `/api` to 4000 with a dev edge secret) |
 

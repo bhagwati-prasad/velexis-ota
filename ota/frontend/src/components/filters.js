@@ -19,6 +19,14 @@
 // Facet updates change counts in place (no re-render), so the focus stays on the control the traveller just used.
 // Counts and "from" prices are the API's own; slider bounds are whole currency units of the API's price range,
 // derived from the decimal strings without floating-point arithmetic.
+//
+// On narrow screens, where the filters come before the results in one column, the form sits behind a disclosure
+// above the results (OFE-027): the `toggle` button ("Filters (n)", n the chosen values, `activeFilterCount`) has
+// `aria-expanded` and `aria-controls` the form, starts closed and disabled, and is enabled once the facets arrive.
+// The stylesheet hides the form below `lg` while the toggle says it is collapsed (`peer-aria-[expanded=false]`) and
+// hides the toggle and the form's "Hide filters" button from `lg`, where the sidebar is always shown. The toggle
+// takes its place with the results layout, so the facets' arrival moves nothing below it (Lighthouse's layout
+// shifts, ota/docs/storefront-accessibility.md §3).
 
 import { clone, fill } from "../lib/dom.js";
 import { formatMinutes, formatMoney } from "../lib/format.js";
@@ -209,6 +217,20 @@ export function filtersToQuery(filters) {
 export const hasFilters = (filters) => FILTER_PARAMS.some((name) => filters[name] !== undefined);
 
 /**
+ * How many filter values are chosen, the "n" of the narrow screens' "Filters (n)": one per value of a list filter
+ * (each ticked box), one per other active filter (each price bound, the journey time, the bags, each condition).
+ * @param {FlightResultFilters} filters
+ */
+export const activeFilterCount = (filters) =>
+  FILTER_PARAMS.reduce((count, name) => {
+    const value = /** @type {unknown} */ (filters[name]);
+    if (value === undefined || value === null) {
+      return count;
+    }
+    return count + (Array.isArray(value) ? value.length : 1);
+  }, 0);
+
+/**
  * The whole currency units of a non-negative decimal amount, rounded down or up ("412.30" → 412n or 413n), without
  * floating-point arithmetic; `null` when the text is not such an amount.
  * @param {unknown} amount
@@ -244,11 +266,12 @@ function windowLabel(index, band, from, to, trip) {
 
 /**
  * Mounts the filter sidebar on the `<form data-filters>` of search.html. `onChange(filters)` runs after every change
- * of a control (not while a slider is dragged) and after "Clear filters". Returns `{ update, clear, read, destroy }`.
+ * of a control (not while a slider is dragged) and after "Clear filters". `toggle` is the narrow screens' disclosure
+ * button (`[data-filters-toggle]`, see the top of this file). Returns `{ update, clear, read, destroy }`.
  * @param {HTMLFormElement} form
- * @param {{ locale?: string, onChange: (filters: FlightResultFilters) => void }} props
+ * @param {{ locale?: string, onChange: (filters: FlightResultFilters) => void, toggle?: HTMLButtonElement | null }} props
  */
-export function mount(form, { locale, onChange }) {
+export function mount(form, { locale, onChange, toggle = null }) {
   const doc = form.ownerDocument;
   /** @type {Map<string, HTMLElement>} */
   const groups = new Map(
@@ -270,6 +293,10 @@ export function mount(form, { locale, onChange }) {
   const clearButton = /** @type {HTMLButtonElement | null} */ (
     form.querySelector('[data-action="clear-filters"]')
   );
+  const hideButton = /** @type {HTMLButtonElement | null} */ (
+    form.querySelector('[data-action="hide-filters"]')
+  );
+  const toggleCount = toggle?.querySelector("[data-filters-count]") ?? null;
 
   /** @type {FiltersState} */
   const state = { facets: null, filters: {}, carrierName: () => null, tripType: "one_way" };
@@ -300,6 +327,19 @@ export function mount(form, { locale, onChange }) {
       params.set("maxDurationMinutes", durationRange.value);
     }
     return readFilters(params);
+  };
+
+  /** "Filters (n)" on the disclosure: the chosen values, nothing after "Filters" when there are none. */
+  const showActiveCount = () => {
+    if (toggleCount) {
+      const count = activeFilterCount(state.filters);
+      toggleCount.textContent = count > 0 ? t("filters.count", { count }) : "";
+    }
+  };
+
+  /** @param {boolean} open the disclosure's state (narrow screens only: from `lg` the form is always shown) */
+  const setExpanded = (open) => {
+    toggle?.setAttribute("aria-expanded", String(open));
   };
 
   /**
@@ -631,8 +671,12 @@ export function mount(form, { locale, onChange }) {
     if (clearButton) {
       clearButton.hidden = !hasFilters(filters);
     }
+    showActiveCount();
     if (facets) {
       form.hidden = false;
+      if (toggle) {
+        toggle.disabled = false;
+      }
     }
   };
 
@@ -657,6 +701,7 @@ export function mount(form, { locale, onChange }) {
     if (clearButton) {
       clearButton.hidden = !hasFilters(state.filters);
     }
+    showActiveCount();
     onChange(state.filters);
   };
 
@@ -724,11 +769,24 @@ export function mount(form, { locale, onChange }) {
     /** @type {HTMLElement | null} */ (form.querySelector("[data-filters-title]"))?.focus();
   };
 
+  const onToggle = () => setExpanded(toggle?.getAttribute("aria-expanded") !== "true");
+
+  /** "Hide filters" at the end of the form: closed, the focus back on the disclosure, right above the results. */
+  const onHide = () => {
+    setExpanded(false);
+    toggle?.focus();
+  };
+
+  // Closed by default; the toggle stays disabled until the facets arrive (render()).
+  setExpanded(false);
+  showActiveCount();
   form.addEventListener("input", onInput);
   form.addEventListener("change", onFormChange);
   form.addEventListener("submit", onSubmit);
   form.addEventListener("keydown", onKeyDown);
   clearButton?.addEventListener("click", onClear);
+  toggle?.addEventListener("click", onToggle);
+  hideButton?.addEventListener("click", onHide);
 
   return {
     /** @param {Partial<FiltersState>} next */
@@ -744,6 +802,8 @@ export function mount(form, { locale, onChange }) {
       form.removeEventListener("submit", onSubmit);
       form.removeEventListener("keydown", onKeyDown);
       clearButton?.removeEventListener("click", onClear);
+      toggle?.removeEventListener("click", onToggle);
+      hideButton?.removeEventListener("click", onHide);
     },
   };
 }

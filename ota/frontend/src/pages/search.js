@@ -9,7 +9,9 @@
 // 2. `flights.listResults({ searchId, sort, ...filters, limit: 20 })` for the first page and after every filter or sort
 //    change (the cursor dropped, the previous call aborted); "Show more flights" calls `page.next()`.
 // 3. Filters and sort live in the query string (src/components/filters.js, sort.js), so a filtered view survives a
-//    reload within the search's lifetime. Airline names for the filters come from `reference.airlines.list`.
+//    reload within the search's lifetime. Airline names for the filters come from `reference.airlines.list`. On
+//    narrow screens the filters sit behind the "Filters (n)" disclosure above the results, closed by default, so the
+//    facets' arrival moves nothing (OFE-027); from `lg` they are the sidebar.
 //
 // States (pages.md §4): searching (summary, skeleton cards, "Searching airlines…" in the live region); no offers ("No
 // flights found", the search form opened and pre-filled, nearby dates and airports as links); filters that exclude
@@ -394,6 +396,9 @@ export function start(context, env = {}) {
     state: find("[data-results-state]"),
     layout: find("[data-results-layout]"),
     filters: /** @type {HTMLFormElement | null} */ (main.querySelector("form[data-filters]")),
+    filtersToggle: /** @type {HTMLButtonElement | null} */ (
+      main.querySelector("button[data-filters-toggle]")
+    ),
     count: find("[data-results-count]"),
     sort: /** @type {HTMLSelectElement | null} */ (main.querySelector("select[data-sort]")),
     message: find("[data-results-message]"),
@@ -973,6 +978,7 @@ export function start(context, env = {}) {
   const filtersView = el.filters
     ? mountFilters(el.filters, {
         ...(locale ? { locale } : {}),
+        toggle: el.filtersToggle,
         onChange(next) {
           filters = next;
           reload();
