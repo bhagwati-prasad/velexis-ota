@@ -33,7 +33,7 @@ pnpm build && E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront specs/storefr
 | Complete | a card payment that did not go through (routed: the payment read with method `card` and status `failed`); no id |
 | Confirmation | a guest's ticketed booking with "Save your reference"; the customer's; a booking the airline has not confirmed (the stub's `server-error` at Flight Create Orders: `504`, pending); no access (another browser); no id |
 | My bookings | the empty upcoming tab of a new customer; one upcoming trip; empty past and cancelled tabs; a visitor sent to sign-in |
-| Booking | the customer's booking; the contact dialog; the cancel dialog with its refund preview; "Changes and refunds" open (for a booking synced less than a minute ago the API has no rules yet: `429`, "The fare rules could not be loaded right now" with Try again); a booking not found; a visitor ("Find your booking") |
+| Booking | the customer's booking; the contact dialog; the cancel dialog with its refund preview; "Changes and refunds" open (for a booking synced less than a minute ago the API has no rules yet: `429`, "The fare rules will be available in about a minute" with Try again, FIX-W47-OTA); a booking not found; a visitor ("Find your booking") |
 | Lookup | the form; its checks; no booking found; too many attempts (`429`, routed) |
 | Sign-in, sign-up | the forms; sign-up's checks; wrong credentials; a locked account (`423`, routed); a new customer's sign-up; an address that has an account (`409 EMAIL_ALREADY_REGISTERED`, the address signed up first in another browser) |
 | Verify, password reset | no token; the new-password form; a token the API refuses; the address confirmed from the e-mail's link (Mailpit); the reset request sent |

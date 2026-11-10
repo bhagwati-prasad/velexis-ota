@@ -1883,7 +1883,9 @@ describe("the generic refusals of the guards (lead decision (9e) of 2026-11-06)"
    * health endpoints, which bind no operation, and `PATH_TENANT_OPERATIONS`, whose path names the OTA), and the staff
    * membership check: the staff guard's on every operation that takes a staff token (`staffRequirementOf`) but those
    * that take an ended session as none (`ENDED_STAFF_SESSION_AS_NONE`: console.auth.signOut), and the sign-in's and the
-   * refresh's own (`MEMBERSHIP_GRANT_OPERATIONS`).
+   * refresh's own (`MEMBERSHIP_GRANT_OPERATIONS`). Since FIX-W47-OTA (lead decision (13f) of 2026-11-10) also the
+   * tenant guard's status check (tenant-resolver.ts: an OTA that is not active, for the edge's sub-domain, a key or the
+   * service caller's staff credential), on the same operations as its host check.
    */
   function genericCodesOf(op: Operation): string[] {
     const codes = ["VALIDATION_FAILED", "INVALID_REQUEST", "INVALID_API_KEY", "ORIGIN_NOT_ALLOWED"];
@@ -1903,7 +1905,7 @@ describe("the generic refusals of the guards (lead decision (9e) of 2026-11-06)"
       codes.push("FORBIDDEN");
     }
     if (!health && !(PATH_TENANT_OPERATIONS as ReadonlySet<string>).has(op.operationId)) {
-      codes.push("HOST_NOT_ALLOWED");
+      codes.push("HOST_NOT_ALLOWED", "TENANT_SUSPENDED");
     }
     const staffToken = staffRequirementOf(op.spec["security"]) !== "none";
     if (
@@ -1983,6 +1985,40 @@ describe("the generic refusals of the guards (lead decision (9e) of 2026-11-06)"
           ),
         ),
     ).toBe(true);
+  });
+
+  it("[FIX-W47-OTA AC2] lists TENANT_SUSPENDED on exactly the operations whose code path can answer it, as HOST_NOT_ALLOWED", () => {
+    const lists = (op: Operation, code: string): boolean =>
+      ((op.spec["x-error-codes"] as string[] | undefined) ?? []).includes(code);
+    // Listed where the tenant guard resolves an OTA, and nowhere else (a pending operation as once served).
+    const wrong = workingOperations
+      .filter((op) => lists(op, "TENANT_SUSPENDED") !== genericCodesOf(op).includes("TENANT_SUSPENDED"))
+      .map((op) => `${op.operationId}: ${lists(op, "TENANT_SUSPENDED") ? "listed" : "missing"}`);
+    expect(wrong).toEqual([]);
+    // Every operation but the two health endpoints and getPublicAsset, which serves a suspended OTA's images: the
+    // operations that list HOST_NOT_ALLOWED, resolveStorefrontHost (deferred, as once served) and the receivers too.
+    expect(
+      workingOperations.filter((op) => !lists(op, "TENANT_SUSPENDED")).map((op) => op.operationId),
+    ).toEqual(["getPublicAsset", "healthLive", "healthReady"]);
+    const listing = (code: string): string[] =>
+      workingOperations.filter((op) => lists(op, code)).map((op) => op.operationId);
+    expect(listing("TENANT_SUSPENDED")).toEqual(listing("HOST_NOT_ALLOWED"));
+    expect(listing("TENANT_SUSPENDED")).toEqual(
+      expect.arrayContaining([
+        "resolveStorefrontHost",
+        "consoleSignIn",
+        "downloadFile",
+        "receiveStripeVelexisWebhook",
+      ]),
+    );
+    expect(listing("TENANT_SUSPENDED")).toHaveLength(workingOperations.length - 3);
+    // Every operation that lists it answers 403 (FIX-W45-OTA's status check below covers each code).
+    for (const op of workingOperations.filter((found) => lists(found, "TENANT_SUSPENDED"))) {
+      expect([op.operationId, Object.hasOwn(objectAt(op.spec, "responses"), "403")]).toEqual([
+        op.operationId,
+        true,
+      ]);
+    }
   });
 
   it("[FIX-W46-OTA AC1] says in the Keys paragraph what the scope guard does with a secret key on a both operation", () => {
@@ -2074,15 +2110,42 @@ describe("the generic refusals of the guards (lead decision (9e) of 2026-11-06)"
       "`401 UNAUTHENTICATED`",
       "`403 FORBIDDEN`",
       "`501 NOT_IMPLEMENTED`",
-      // The host and membership checks, listed by rule since FIX-W46-OTA.
+      // The host and membership checks, listed by rule since FIX-W46-OTA, and the tenant's status since FIX-W47-OTA.
       "`403 HOST_NOT_ALLOWED`",
       "`403 STAFF_MEMBERSHIP_INACTIVE`",
-      // The refusals these rules do not list everywhere are named as such, so no reader takes the list as complete.
       "`403 TENANT_SUSPENDED`",
+      // The refusals these rules do not list everywhere are named as such, so no reader takes the list as complete.
+      "`401 TOKEN_EXPIRED`",
       "`503 SERVICE_UNAVAILABLE`",
     ]) {
       expect([answer, paragraph.includes(answer)]).toEqual([answer, true]);
     }
+  });
+
+  it("[FIX-W47-OTA AC2] describes TENANT_SUSPENDED in Generic refusals by the same rule as HOST_NOT_ALLOWED", () => {
+    const description = String(objectAt(working, "info")["description"]);
+    const start = description.indexOf("**Generic refusals.**");
+    const paragraph = description
+      .slice(start, description.indexOf("**MVP vendor extensions.**", start))
+      .replace(/\s+/g, " ");
+    // Its own rule, a bullet like the host's, naming the same operations.
+    const rules = paragraph.split(" - ").slice(1);
+    const tenant = rules.find((rule) => rule.startsWith("`403 TENANT_SUSPENDED`"));
+    const host = rules.find((rule) => rule.startsWith("`403 HOST_NOT_ALLOWED`"));
+    expect(tenant).toBeDefined();
+    expect(host).toBeDefined();
+    for (const rule of [tenant, host]) {
+      expect(rule).toContain("every operation the tenant guard resolves an OTA for");
+      expect(rule).toContain("every operation but the health endpoints and getPublicAsset");
+    }
+    expect(tenant).toContain("the same operations as `403 HOST_NOT_ALLOWED`");
+    expect(tenant).toContain(
+      "of the edge's sub-domain host, of the API key, or that the OTA admin's staff credential",
+    );
+    // No longer among the refusals that are listed with each operation's own codes only.
+    const others = paragraph.slice(paragraph.indexOf("The guards' other refusals"));
+    expect(others).toContain("`401 TOKEN_EXPIRED`");
+    expect(others).not.toContain("TENANT_SUSPENDED");
   });
 
   it("[FIX-W46-OTA AC1] describes 503 SERVICE_UNAVAILABLE once, as an answer any operation may give, with Retry-After", () => {

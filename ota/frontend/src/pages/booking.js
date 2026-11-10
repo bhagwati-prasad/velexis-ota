@@ -20,9 +20,12 @@
 // 5. Cancel (`canCancel`, which the API already denies when the OTA turned self-service cancellation off):
 //    components/cancel-dialog.js. When it is not allowed for a reason the traveller cannot change (flown, too close to
 //    departure, turned off), the page says "This booking can no longer be cancelled online" with the support contact.
-// 6. Fare rules: `bookings.getFareRules` when the "Changes and refunds" disclosure is first opened; a `429
-//    RATE_LIMITED` (after the SDK's own retries) waits its `Retry-After`, at most 10 s, with the loading state shown, and
-//    asks once more before the error is shown. Timeline: `bookings.listEvents` (components/booking-timeline.js).
+// 6. Fare rules: `bookings.getFareRules` when the "Changes and refunds" disclosure is first opened. A `429
+//    RATE_LIMITED` (after the SDK's own retries) whose `Retry-After` is at most 10 s waits it, with the loading state
+//    shown, and asks once more; a longer `Retry-After`, or none, asks nothing more and says that the fare rules are
+//    available in about a minute (its seconds rounded up to whole minutes above 90 s), as does a second `429`; any other
+//    failure shows the error at once (lead decision (13e) of 2026-11-10). Timeline: `bookings.listEvents`
+//    (components/booking-timeline.js).
 //
 // Every control follows `allowedActions` exactly (`ACTION_CONTROLS`); the actions the MVP does not offer
 // (`canModifyTravelerDocuments`, `canModifyLoyaltyPrograms`, `canAddRemarks`, `canAddAncillaries`) have none.
@@ -83,10 +86,16 @@ export const PENDING_POLL_SECONDS = 10;
 export const RETRY_POLL_SECONDS = 10;
 /** How long a pending booking is polled. */
 export const PENDING_POLL_LIMIT_MS = 30 * 60_000;
-/** The longest wait before the fare rules are asked again after a `429` (its `Retry-After`, capped). */
+/**
+ * The longest `Retry-After` of a `429` after which the page asks for the fare rules once more by itself (it waits that
+ * long with the loading state shown); a longer one, or none, is not waited for (lead decision (13e) of 2026-11-10).
+ */
 export const RULES_RETRY_MAX_SECONDS = 10;
-/** The wait before the fare rules are asked again after a `429` without `Retry-After`. */
-export const RULES_RETRY_DEFAULT_SECONDS = 2;
+/**
+ * Up to this `Retry-After` (and without one) the page says the fare rules are available "in about a minute"; above it,
+ * in its seconds rounded up to whole minutes.
+ */
+export const RULES_ABOUT_A_MINUTE_SECONDS = 90;
 /** How long the issue of tickets is polled; the banner already says that the tickets follow by e-mail. */
 export const TICKETING_POLL_LIMIT_MS = 10 * 60_000;
 /** Booking states in which the traveller can act. */
@@ -371,6 +380,30 @@ export function fareRuleLines(rules, locale) {
     };
   });
   return { summary, categories };
+}
+
+/**
+ * Whether the page waits out a `429` of the fare rules and asks once more: only when its `Retry-After` is known and at
+ * most RULES_RETRY_MAX_SECONDS (lead decision (13e) of 2026-11-10).
+ * @param {number | undefined} retryAfterSeconds
+ * @returns {retryAfterSeconds is number}
+ */
+export const retriesFareRules = (retryAfterSeconds) =>
+  typeof retryAfterSeconds === "number" &&
+  retryAfterSeconds >= 0 &&
+  retryAfterSeconds <= RULES_RETRY_MAX_SECONDS;
+
+/**
+ * When the fare rules can be asked for again after a `429` the page does not wait out: "in about a minute" without a
+ * `Retry-After` or up to RULES_ABOUT_A_MINUTE_SECONDS of it, else its seconds rounded up to whole minutes.
+ * @param {number | undefined} retryAfterSeconds
+ * @returns {string}
+ */
+export function fareRulesWaitMessage(retryAfterSeconds) {
+  if (typeof retryAfterSeconds !== "number" || !(retryAfterSeconds > RULES_ABOUT_A_MINUTE_SECONDS)) {
+    return t("rules.availableSoon");
+  }
+  return t("rules.availableInMinutes", { count: Math.ceil(retryAfterSeconds / 60) });
 }
 
 /**
@@ -945,8 +978,9 @@ export function start(context, env = {}) {
     });
 
   /**
-   * `bookings.getFareRules`; a `429 RATE_LIMITED` waits its `Retry-After` (at most RULES_RETRY_MAX_SECONDS, the loading
-   * state still shown) and asks once more, whose failure is the caller's to show.
+   * `bookings.getFareRules`; a `429 RATE_LIMITED` whose `Retry-After` is at most RULES_RETRY_MAX_SECONDS waits it (the
+   * loading state still shown) and asks once more, whose failure is the caller's to show. Any other failure, a `429`
+   * with a longer `Retry-After` or without one included, is the caller's to show at once.
    * @param {string} id
    * @param {AbortSignal} signal
    * @returns {Promise<BookingFareRules | null>} `null` when the page was destroyed during the wait
@@ -956,14 +990,11 @@ export function start(context, env = {}) {
       return await client.bookings.getFareRules({ bookingId: id }, { signal });
     } catch (error) {
       const state = pageStateFor(error);
-      if (destroyed || isAborted(error) || state.code !== "RATE_LIMITED") {
+      const seconds = state.retryAfterSeconds;
+      if (destroyed || isAborted(error) || state.code !== "RATE_LIMITED" || !retriesFareRules(seconds)) {
         throw error;
       }
-      const seconds = Math.min(
-        state.retryAfterSeconds ?? RULES_RETRY_DEFAULT_SECONDS,
-        RULES_RETRY_MAX_SECONDS,
-      );
-      await pause(Math.max(seconds, 0), signal);
+      await pause(seconds, signal);
       if (destroyed || signal.aborted) {
         return null;
       }
@@ -998,9 +1029,13 @@ export function start(context, env = {}) {
       }
       rulesLoaded = false;
       const state = pageStateFor(error);
+      // A `429` not waited out (a long or missing `Retry-After`, or a second one) says when the rules are available;
+      // its Retry is enabled after the `Retry-After` (renderState's rate-limited state).
+      const message =
+        state.code === "RATE_LIMITED" ? fareRulesWaitMessage(state.retryAfterSeconds) : t("rules.failed");
       renderState(
         el.rulesState,
-        { ...state, scope: "inline", message: t("rules.failed") },
+        { ...state, scope: "inline", message },
         { support, onRetry: () => loadRules().catch(report) },
       );
     } finally {

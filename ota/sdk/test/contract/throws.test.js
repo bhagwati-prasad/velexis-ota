@@ -34,8 +34,9 @@ const HTTP_METHODS = ["get", "put", "post", "delete", "patch"];
 
 /**
  * The generic refusals of the guards whose code the JSDoc names where the operation lists them (info.description,
- * **Generic refusals**): the caller guard's, the scope guard's, the session guards' and the permission guard's, and
- * since FIX-W46-OTA (lead decision (11k) of 2026-11-06) the tenant guard's host check and the staff membership check.
+ * **Generic refusals**): the caller guard's, the scope guard's, the session guards' and the permission guard's, since
+ * FIX-W46-OTA (lead decision (11k) of 2026-11-06) the tenant guard's host check and the staff membership check, and
+ * since FIX-W47-OTA (lead decision (13f) of 2026-11-10) the tenant guard's status check.
  */
 const GENERIC = [
   "VALIDATION_FAILED",
@@ -47,6 +48,7 @@ const GENERIC = [
   "FORBIDDEN",
   "HOST_NOT_ALLOWED",
   "STAFF_MEMBERSHIP_INACTIVE",
+  "TENANT_SUSPENDED",
 ];
 
 /** Classes of failures the client raises itself, which no API code maps to. */
@@ -191,6 +193,7 @@ describe("the @throws JSDoc of the client's methods (FIX-W45-OTA)", () => {
       ["FORBIDDEN", "PermissionError"],
       ["HOST_NOT_ALLOWED", "PermissionError"],
       ["STAFF_MEMBERSHIP_INACTIVE", "PermissionError"],
+      ["TENANT_SUSPENDED", "PermissionError"],
     ]);
     // The document's introduction says how it lists them.
     for (const code of GENERIC) {
@@ -278,6 +281,21 @@ describe("the @throws JSDoc of the client's methods (FIX-W45-OTA)", () => {
     for (const name of ["console.auth.signOut", "auth.signIn", "bookings.get", "storefront.get"]) {
       expect([name, permissionCodes(name).includes("STAFF_MEMBERSHIP_INACTIVE")]).toEqual([name, false]);
     }
+  });
+
+  it("[FIX-W47-OTA AC2] names TENANT_SUSPENDED on every method, as its operation lists it beside HOST_NOT_ALLOWED", () => {
+    const permissionCodes = (name) =>
+      (methods.get(name) ?? []).filter((tag) => tag.cls === "PermissionError").flatMap(codesOf);
+    // Every SDK operation lists it (the tenant guard resolves an OTA for each of them, storefront.resolve as once served).
+    const unlisted = [...operations].filter(([, operation]) => !operation.codes.includes("TENANT_SUSPENDED"));
+    expect(unlisted.map(([name]) => name)).toEqual([]);
+    const missing = [...operations.keys()].filter(
+      (name) => !permissionCodes(name).includes("TENANT_SUSPENDED"),
+    );
+    expect(missing).toEqual([]);
+    expect(permissionCodes("storefront.resolve")).toEqual(
+      expect.arrayContaining(["TENANT_SUSPENDED", "HOST_NOT_ALLOWED"]),
+    );
   });
 
   it("[FIX-W45-OTA AC3] names only codes its operation lists, each under the class the SDK throws it as", () => {

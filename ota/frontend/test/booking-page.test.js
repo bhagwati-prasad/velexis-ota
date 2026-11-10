@@ -28,6 +28,9 @@ import {
   ACTION_CONTROLS,
   contactsUpdate,
   downloadTarget,
+  fareRulesWaitMessage,
+  retriesFareRules,
+  RULES_ABOUT_A_MINUTE_SECONDS,
   RULES_RETRY_MAX_SECONDS,
   start,
 } from "../src/pages/booking.js";
@@ -667,32 +670,46 @@ describe("booking page: the booking", () => {
     ]);
   });
 
-  it("[FIX-W46-OTA AC3] a 429 of the fare rules waits its Retry-After, capped at 10 s, with the loading state, and asks once more", async () => {
-    vi.useFakeTimers();
-    const rateLimited = (/** @type {number} */ seconds) =>
-      new RateLimitError(
-        {
-          code: "RATE_LIMITED",
-          message: "RATE_LIMITED from the fake API",
-          status: 429,
-          requestId: "req_booking",
-        },
-        { retryAfterSeconds: seconds },
-      );
-    const { client } = await openBooking({
-      fake: fakeApi({ getFareRules: [rateLimited(25), fareRules()] }),
-    });
+  /**
+   * A `429 RATE_LIMITED` of the fare rules, with the `Retry-After` the SDK read (`undefined`: the answer had none).
+   * @param {number | undefined} seconds
+   */
+  const rulesRateLimited = (seconds) =>
+    new RateLimitError(
+      {
+        code: "RATE_LIMITED",
+        message: "RATE_LIMITED from the fake API",
+        status: 429,
+        requestId: "req_booking",
+      },
+      seconds === undefined ? {} : { retryAfterSeconds: seconds },
+    );
+
+  /** Opens "Changes and refunds" and lets the first answer arrive. */
+  const openRules = async () => {
     const rules = /** @type {HTMLDetailsElement} */ ($("details[data-fare-rules]"));
     rules.open = true;
     rules.dispatchEvent(new Event("toggle"));
     await settle();
+  };
+
+  const rulesRetry = () =>
+    /** @type {HTMLButtonElement | null} */ ($("[data-rules-state] [data-action='retry']"));
+
+  it("[FIX-W47-OTA AC1] a 429 of the fare rules with a Retry-After of at most 10 s waits it with the loading state and asks once more", async () => {
+    vi.useFakeTimers();
+    const { client } = await openBooking({
+      fake: fakeApi({ getFareRules: [rulesRateLimited(RULES_RETRY_MAX_SECONDS), fareRules()] }),
+    });
+    await openRules();
     expect(client.bookings.getFareRules).toHaveBeenCalledTimes(1);
-    // Waiting: the loading state, no error, no second call before the capped Retry-After (25 s asked, 10 s waited).
+    // Waiting: the loading state, no message, no second call before the Retry-After has passed.
     expect(RULES_RETRY_MAX_SECONDS).toBe(10);
     expect($("[data-rules-loading]").hidden).toBe(false);
     expect(text($("[data-rules-state]"))).toBe("");
     await vi.advanceTimersByTimeAsync(9_999);
     expect(client.bookings.getFareRules).toHaveBeenCalledTimes(1);
+    expect($("[data-rules-loading]").hidden).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     await settle();
     expect(client.bookings.getFareRules).toHaveBeenCalledTimes(2);
@@ -701,37 +718,98 @@ describe("booking page: the booking", () => {
       expect.anything(),
     );
     expect($("[data-rules-loading]").hidden).toBe(true);
+    expect(text($("[data-rules-state]"))).toBe("");
     expect(items("[data-rules-summary]")).toEqual([
       `Refund: Allowed for a fee of up to ${money("50.00")} per traveller`,
       "Change: Not allowed",
     ]);
   });
 
-  it("[FIX-W46-OTA AC3] a second 429 of the fare rules shows the error with Retry, after one more call only", async () => {
+  it.each([
+    ["11 s", 11, "The fare rules will be available in about a minute"],
+    ["no", undefined, "The fare rules will be available in about a minute"],
+    ["90 s", 90, "The fare rules will be available in about a minute"],
+    ["91 s", 91, "The fare rules will be available in about 2 minutes"],
+    ["150 s", 150, "The fare rules will be available in about 3 minutes"],
+  ])(
+    "[FIX-W47-OTA AC1] a 429 of the fare rules with %s Retry-After asks nothing more and says when they are available",
+    async (_label, seconds, message) => {
+      vi.useFakeTimers();
+      const { client } = await openBooking({
+        fake: fakeApi({ getFareRules: [rulesRateLimited(seconds), fareRules()] }),
+      });
+      await openRules();
+      // At once: no wait with the loading state, and the message instead of "could not be loaded".
+      expect(client.bookings.getFareRules).toHaveBeenCalledTimes(1);
+      expect($("[data-rules-loading]").hidden).toBe(true);
+      expect(text($("[data-rules-state] [data-field='title']"))).toBe(message);
+      expect(text($("[data-rules-state]"))).not.toContain("could not be loaded");
+      // Retry is the visitor's, enabled once the Retry-After has passed; nothing is asked by itself meanwhile.
+      expect(rulesRetry()).not.toBeNull();
+      expect(rulesRetry()?.disabled).toBe(seconds !== undefined);
+      await vi.advanceTimersByTimeAsync((seconds ?? 0) * 1000 + 60_000);
+      expect(client.bookings.getFareRules).toHaveBeenCalledTimes(1);
+      expect(rulesRetry()?.disabled).toBe(false);
+      rulesRetry()?.click();
+      await settle();
+      expect(client.bookings.getFareRules).toHaveBeenCalledTimes(2);
+      expect(items("[data-rules-summary]")).toHaveLength(2);
+      expect(text($("[data-rules-state]"))).toBe("");
+    },
+  );
+
+  it("[FIX-W47-OTA AC1] a second 429 of the fare rules says when they are available, with Retry, after one more call only", async () => {
     vi.useFakeTimers();
-    const limited = new RateLimitError(
-      {
-        code: "RATE_LIMITED",
-        message: "RATE_LIMITED from the fake API",
-        status: 429,
-        requestId: "req_booking",
-      },
-      { retryAfterSeconds: 3 },
-    );
-    const { client } = await openBooking({ fake: fakeApi({ getFareRules: [limited] }) });
-    const rules = /** @type {HTMLDetailsElement} */ ($("details[data-fare-rules]"));
-    rules.open = true;
-    rules.dispatchEvent(new Event("toggle"));
-    await settle();
+    const { client } = await openBooking({
+      fake: fakeApi({ getFareRules: [rulesRateLimited(3), rulesRateLimited(120)] }),
+    });
+    await openRules();
     await vi.advanceTimersByTimeAsync(3_000);
     await settle();
     expect(client.bookings.getFareRules).toHaveBeenCalledTimes(2);
     expect($("[data-rules-loading]").hidden).toBe(true);
-    expect(text($("[data-rules-state]"))).toContain("The fare rules could not be loaded right now");
-    expect($("[data-rules-state] [data-action='retry']")).not.toBeNull();
+    expect(text($("[data-rules-state] [data-field='title']"))).toBe(
+      "The fare rules will be available in about 2 minutes",
+    );
+    expect(rulesRetry()).not.toBeNull();
     // Nothing else is asked by itself.
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(180_000);
     expect(client.bookings.getFareRules).toHaveBeenCalledTimes(2);
+  });
+
+  it("[FIX-W47-OTA AC1] a page closed while it waits out a 429 of the fare rules asks nothing more", async () => {
+    vi.useFakeTimers();
+    const { client, view } = await openBooking({
+      fake: fakeApi({ getFareRules: [rulesRateLimited(5), fareRules()] }),
+    });
+    await openRules();
+    expect($("[data-rules-loading]").hidden).toBe(false);
+    view.destroy();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await settle();
+    expect(client.bookings.getFareRules).toHaveBeenCalledTimes(1);
+    expect(items("[data-rules-summary]")).toEqual([]);
+  });
+
+  it("[FIX-W47-OTA AC1] retries the fare rules only for a known Retry-After of at most 10 s, and rounds longer waits up to minutes above 90 s", () => {
+    expect([0, 1, 9.5, 10].map(retriesFareRules)).toEqual([true, true, true, true]);
+    expect([10.001, 11, 60, undefined, Number.NaN, -1].map(retriesFareRules)).toEqual([
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(RULES_ABOUT_A_MINUTE_SECONDS).toBe(90);
+    const aboutAMinute = "The fare rules will be available in about a minute";
+    for (const seconds of [undefined, 0, 11, 45, 60, 89, 90]) {
+      expect([seconds, fareRulesWaitMessage(seconds)]).toEqual([seconds, aboutAMinute]);
+    }
+    expect(fareRulesWaitMessage(90.5)).toBe("The fare rules will be available in about 2 minutes");
+    expect(fareRulesWaitMessage(120)).toBe("The fare rules will be available in about 2 minutes");
+    expect(fareRulesWaitMessage(121)).toBe("The fare rules will be available in about 3 minutes");
+    expect(fareRulesWaitMessage(3_600)).toBe("The fare rules will be available in about 60 minutes");
   });
 
   it("[FIX-W46-OTA AC3] a fare-rules failure other than a 429 shows the error at once, without a wait or a second call", async () => {
@@ -745,6 +823,21 @@ describe("booking page: the booking", () => {
     expect(client.bookings.getFareRules).toHaveBeenCalledTimes(1);
     expect($("[data-rules-loading]").hidden).toBe(true);
     expect(text($("[data-rules-state]"))).toContain("The fare rules could not be loaded right now");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(client.bookings.getFareRules).toHaveBeenCalledTimes(1);
+  });
+
+  it("[FIX-W47-OTA AC1] a fare-rules failure other than a 429 is not waited out even with a short Retry-After of its own", async () => {
+    vi.useFakeTimers();
+    // The proxy's 503 while the API restarts carries Retry-After; were the SDK to read it, only a 429 is waited out.
+    const failed = Object.assign(apiError(ServerError, "SERVICE_UNAVAILABLE", 503), { retryAfterSeconds: 2 });
+    const { client } = await openBooking({ fake: fakeApi({ getFareRules: [failed, fareRules()] }) });
+    await openRules();
+    expect(client.bookings.getFareRules).toHaveBeenCalledTimes(1);
+    expect($("[data-rules-loading]").hidden).toBe(true);
+    expect(text($("[data-rules-state] [data-field='title']"))).toBe(
+      "The fare rules could not be loaded right now",
+    );
     await vi.advanceTimersByTimeAsync(60_000);
     expect(client.bookings.getFareRules).toHaveBeenCalledTimes(1);
   });

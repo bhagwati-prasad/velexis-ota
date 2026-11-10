@@ -39,6 +39,9 @@
 //                   token on console operations (its portal token on console.auth.signIn, its refresh token on
 //                   console.auth.refresh), a `console:automation` key with the token and `X-Velexis-Scope: console` on
 //                   `both` operations: `403 STAFF_MEMBERSHIP_INACTIVE`, but console.auth.signOut (FIX-W46-OTA)
+//   edgeSuspended   the storefront edge on the sub-domain of tenant delta, which is suspended (`delta.<base>`):
+//                   `403 TENANT_SUSPENDED` wherever the tenant guard resolves an OTA (FIX-W47-OTA)
+//   keySuspended    a secret key of delta: `403 TENANT_SUSPENDED` on the same operations (FIX-W47-OTA)
 //
 // The requests reach no use case: every path parameter is a placeholder no schema takes (`~`) and every body `[]`, so
 // an allowed call ends in the request validation (`400 VALIDATION_FAILED`), or `200` for a read without a path
@@ -54,9 +57,11 @@
 // answer carries, that `501` aside, is one of the operation's `x-error-codes` (FIX-W45-OTA, lead decision (9e) of
 // 2026-11-06): the generic refusals of the guards included, which the columns from serviceViaApi to serviceNoIp meet
 // on every operation (the caller guard checks a credential on every route, the 501 ones, the public files, the
-// receivers and health included). Since FIX-W46-OTA (lead decision (11k)) the last two columns meet the tenant guard's
-// host check and the staff membership check, and the matrix checks that each of the two codes is answered on exactly
-// the operations that list it, the pending ones aside (they answer `501`).
+// receivers and health included). Since FIX-W46-OTA (lead decision (11k)) edgeUnknownHost and staffInactive meet the
+// tenant guard's host check and the staff membership check, and since FIX-W47-OTA (lead decision (13f) of 2026-11-10)
+// edgeSuspended and keySuspended meet its status check (tenant-resolver.ts: the sub-domain's and the key's OTA is not
+// active); the matrix checks that each of the three codes is answered on exactly the operations that list it, the
+// pending ones aside (they answer `501`).
 //
 // Every request has an end-user IP address of its own (X-Forwarded-For through "Caddy", X-Velexis-End-User-IP for the
 // key servers and the service caller), so no per-IP limit of architecture §8 ever answers 429 here. All requests run in
@@ -122,8 +127,17 @@ const COLUMNS = [
   "serviceNoIp",
   "edgeUnknownHost",
   "staffInactive",
+  "edgeSuspended",
+  "keySuspended",
 ] as const;
 type Column = (typeof COLUMNS)[number];
+
+/** The columns of an OTA the tenant guard refuses: an unknown host, or the sub-domain or a key of a suspended OTA. */
+const TENANT_REFUSAL_COLUMNS: ReadonlySet<Column> = new Set<Column>([
+  "edgeUnknownHost",
+  "edgeSuspended",
+  "keySuspended",
+]);
 
 /** The permission columns apply to console operations with an `x-permission` other than `none` only. */
 const PERMISSION_COLUMNS: ReadonlySet<Column> = new Set<Column>(["permOnly", "permMissing"]);
@@ -142,7 +156,7 @@ const UNKNOWN_BOOKING_ID = `bkg_${randomBytes(12).toString("hex")}`;
 
 const SETUP_TIMEOUT_MS = Math.max(OPENAPI_SETUP_TIMEOUT_MS, 90_000);
 /**
- * The matrix: about seventeen hundred requests, each answered by a guard or the request validation, a few seconds
+ * The matrix: about twenty-two hundred requests, each answered by a guard or the request validation, a few seconds
  * locally; the bound allows for a busy 4-CPU runner and only stops a run that hangs.
  */
 const MATRIX_TIMEOUT_MS = 180_000;
@@ -248,6 +262,7 @@ const FORBIDDEN: Answer = [403, "FORBIDDEN"];
 const ORIGIN_NOT_ALLOWED: Answer = [403, "ORIGIN_NOT_ALLOWED"];
 const HOST_NOT_ALLOWED: Answer = [403, "HOST_NOT_ALLOWED"];
 const STAFF_MEMBERSHIP_INACTIVE: Answer = [403, "STAFF_MEMBERSHIP_INACTIVE"];
+const TENANT_SUSPENDED: Answer = [403, "TENANT_SUSPENDED"];
 const NOT_IMPLEMENTED: Answer = [501, "NOT_IMPLEMENTED"];
 const INVALID_REQUEST: Answer = [400, "INVALID_REQUEST"];
 const NOT_FOUND: Answer = [404, "NOT_FOUND"];
@@ -321,11 +336,14 @@ function expectedAnswer(operation: Operation, column: Column): Expected {
       operationId: operation.operationId,
     });
   }
-  // The tenant guard resolves the edge's host before the scope guard runs, on every operation bound to a handler but
-  // the one whose path names the OTA (tenant.guard.ts); the health endpoints bind none.
-  if (column === "edgeUnknownHost") {
+  // The tenant guard resolves the edge's host and a key's OTA before the scope guard runs, on every operation bound to
+  // a handler but the one whose path names the OTA (tenant.guard.ts); the health endpoints bind none.
+  if (TENANT_REFUSAL_COLUMNS.has(column)) {
     if (isOpen(operation) && (isHealth(operation) || namesTenantInPath(operation))) {
-      return expect_(openAnswer(operation), "no host is resolved: health, or the OTA named by the path");
+      return expect_(openAnswer(operation), "no OTA is resolved: health, or the OTA named by the path");
+    }
+    if (column !== "edgeUnknownHost") {
+      return expect_(TENANT_SUSPENDED, "the OTA is resolved first, whatever the scope, and it is not active");
     }
     return expect_(HOST_NOT_ALLOWED, "the edge's host is resolved first, whatever the scope", {
       reason: "unknown",
@@ -434,6 +452,8 @@ function expectedCustomer(operation: Operation, column: Column): Expected {
     case "serviceNoIp":
     case "edgeUnknownHost":
     case "staffInactive":
+    case "edgeSuspended":
+    case "keySuspended":
       // Decided before (expectedAnswer) or not a column of a customer operation (columnsOf).
       throw new Error(`${operation.operationId}: no ${column} column on a customer operation`);
   }
@@ -501,6 +521,8 @@ function expectedConsole(operation: Operation, column: Column): Expected {
     case "serviceNoIp":
     case "edgeUnknownHost":
     case "staffInactive":
+    case "edgeSuspended":
+    case "keySuspended":
       // Decided before (expectedAnswer).
       throw new Error(`${operation.operationId}: no ${column} column on a console operation`);
   }
@@ -563,11 +585,27 @@ const newTenant = (key: "alpha" | "beta"): Tenant => ({
 const alpha = newTenant("alpha");
 const beta = newTenant("beta");
 
+/**
+ * Tenant delta, suspended (the `edgeSuspended` and `keySuspended` columns): a platform row and a secret key, no schema,
+ * which no request of the matrix reaches (the tenant guard refuses them first).
+ */
+const delta = {
+  key: "delta",
+  host: `delta.${TEST_STOREFRONT_BASE_DOMAIN}`,
+  origin: `https://delta.${TEST_STOREFRONT_BASE_DOMAIN}`,
+  id: "",
+  sk: "",
+};
+
 /** The `console:automation` keys of alpha by permission: holding only it, and holding every other one. */
 const permissionKeys = new Map<string, { readonly only: string; readonly missing: string }>();
 
 /** Issues a test key of `tenant` as the platform does. */
-async function issueKey(tenant: Tenant, kind: "pk" | "sk", scopes: readonly string[] = []): Promise<string> {
+async function issueKey(
+  tenant: Pick<Tenant, "id" | "origin">,
+  kind: "pk" | "sk",
+  scopes: readonly string[] = [],
+): Promise<string> {
   const key = newApiKey(kind);
   await migrator
     .insertInto("platform.api_keys")
@@ -609,6 +647,26 @@ async function insertTenant(tenant: Tenant): Promise<void> {
       defaultLocale: "en",
     }),
   );
+}
+
+/** Writes delta's platform row as the platform suspends a tenant, and issues its secret key (see `delta`). */
+async function insertSuspendedTenant(): Promise<void> {
+  delta.id = newId("ten");
+  await migrator
+    .insertInto("platform.tenants")
+    .values({
+      id: delta.id,
+      key: delta.key,
+      name: "delta Travel",
+      status: "suspended",
+      plan_code: "early_access",
+      time_zone: "Europe/Madrid",
+      storefront_environment: "test",
+      suspended_at: new Date(),
+      suspension_reason: "billing",
+    })
+    .execute();
+  delta.sk = await issueKey(delta, "sk");
 }
 
 /** Inserts an active, verified customer of `tenant` with PASSWORD and signs it in through the storefront edge. */
@@ -796,7 +854,11 @@ const newIp = (): string => {
 const isWrite = (method: string): boolean => !["get", "head", "options"].includes(method);
 
 /** The headers Caddy adds to a storefront's `/api/*` request, from a new client address; the CSRF pair on writes. */
-function edgeHeaders(tenant: Tenant, write: boolean, customerAccess?: string): Record<string, string> {
+function edgeHeaders(
+  tenant: Pick<Tenant, "host" | "origin">,
+  write: boolean,
+  customerAccess?: string,
+): Record<string, string> {
   const csrf = newCsrfToken();
   const cookies = [
     ...(write ? [`${STOREFRONT_COOKIES.csrf}=${csrf}`] : []),
@@ -885,6 +947,10 @@ function credentialOf(
       return {
         headers: edgeHeaders({ ...alpha, host: UNKNOWN_HOST, origin: `https://${UNKNOWN_HOST}` }, write),
       };
+    case "edgeSuspended":
+      return { headers: edgeHeaders(delta, write) };
+    case "keySuspended":
+      return { headers: skHeaders(delta.sk) };
     case "staffInactive":
       return staffInactiveOf(operation);
     case "right":
@@ -1045,6 +1111,7 @@ beforeAll(async () => {
     tenant.skStorefront = await issueKey(tenant, "sk", ["storefront"]);
     tenant.skConsole = await issueKey(tenant, "sk", ["console"]);
   }
+  await insertSuspendedTenant();
   const permissions = [
     ...new Set(otaOperations.filter(isGuardedConsole).map((operation) => String(operation.permission))),
   ];
@@ -1299,6 +1366,53 @@ describe("the authentication matrix", () => {
     expect(answering("HOST_NOT_ALLOWED")).toEqual(
       expect.arrayContaining(["consoleSignIn", "downloadFile", "receiveStripeVelexisWebhook"]),
     );
+  });
+
+  it("[FIX-W47-OTA AC2] answers TENANT_SUSPENDED on exactly the operations that list it, the pending ones aside, to the edge and to a key of a suspended OTA", () => {
+    const answering = (column: Column): string[] => [
+      ...new Set(
+        cells
+          .filter(
+            (cell) =>
+              cell.column === column &&
+              !isPendingAnswer(cell.operation, cell.res) &&
+              answerOf(cell.res)[1] === "TENANT_SUSPENDED",
+          )
+          .map(({ operation }) => operation.operationId),
+      ),
+    ];
+    const listing = otaOperations
+      .filter((operation) => !isPending(operation) && errorCodesOf(operation).includes("TENANT_SUSPENDED"))
+      .map((operation) => operation.operationId)
+      .sort();
+    // Through the sub-domain and with a key of the OTA alike: every served operation that lists it, and only those.
+    for (const column of ["edgeSuspended", "keySuspended"] as const) {
+      expect([column, answering(column).sort()]).toEqual([column, listing]);
+    }
+    // The tenant guard's operations: every operation bound to a handler but getPublicAsset, the same as the host check.
+    expect(listing).toEqual(
+      otaOperations
+        .filter((operation) => !isHealth(operation) && !isPending(operation) && !namesTenantInPath(operation))
+        .map((operation) => operation.operationId)
+        .sort(),
+    );
+    expect(listing).toEqual(
+      expect.arrayContaining([
+        "consoleSignIn",
+        "downloadFile",
+        "receiveStripeVelexisWebhook",
+        "getStorefront",
+      ]),
+    );
+    // No other column meets it: alpha and beta are active.
+    expect(
+      cells.filter(
+        (cell) =>
+          cell.column !== "edgeSuspended" &&
+          cell.column !== "keySuspended" &&
+          answerOf(cell.res)[1] === "TENANT_SUSPENDED",
+      ),
+    ).toEqual([]);
   });
 
   it("[OBE-084 AC1] leaves the other tenant's sessions as they were: its tokens presented at alpha changed nothing", () => {

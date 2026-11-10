@@ -64,8 +64,8 @@ info:
 
     **Generic refusals.** The guards run before an operation's own code, in this order: the caller's credential, the
     tenant, the scope, the customer or staff session, the CSRF check, the rate limits, the console permission; the
-    first that refuses answers. These refusals of the credential, scope, session and permission checks are listed in
-    the `x-error-codes` of every operation whose request can meet them, beside the operation's own codes:
+    first that refuses answers. These refusals of the credential, tenant, scope, session and permission checks are
+    listed in the `x-error-codes` of every operation whose request can meet them, beside the operation's own codes:
 
     - `400 INVALID_REQUEST` (the edge credential beside `X-Api-Key`, or without `X-Velexis-Host`), `400
     VALIDATION_FAILED` (the OTA admin's service key without a valid `X-Velexis-End-User-IP`), `401 INVALID_API_KEY`
@@ -90,6 +90,14 @@ info:
     before the scope is checked, so a console operation, downloadFile and a webhook receiver called through the edge
     meet it too.
 
+    - `403 TENANT_SUSPENDED` (the OTA's status is not `active`: suspended, still being provisioned, or removed; the OTA
+    of the edge's sub-domain host, of the API key, or that the OTA admin's staff credential names): every operation the
+    tenant guard resolves an OTA for, the same operations as `403 HOST_NOT_ALLOWED`, which is every operation but the
+    health endpoints and getPublicAsset (whose path names the OTA, and which serves a suspended OTA's images). The
+    tenant is resolved before the scope is checked, so an API key of a suspended OTA meets it on a console operation
+    and a webhook receiver too. An operation whose handler reads the OTA's storefront settings also answers it while
+    they are not provisioned yet.
+
     - `403 STAFF_MEMBERSHIP_INACTIVE` (the staff member's membership was suspended or removed, or its account is no
     longer active): every operation that takes a staff token (`staffAuth` in its `security`: the console operations,
     and the `both` operations that a `console:automation` key calls in console scope with one) but
@@ -100,8 +108,8 @@ info:
     refused. A pending operation (`x-milestone`) answers `501 NOT_IMPLEMENTED` once the caller's credential passes;
     that answer is not one of its responses or `x-error-codes`, which describe the operation once it is served. The
     guards' other refusals are listed with each operation's own codes, not by these rules, so a request can meet one
-    that its operation does not list: the tenant's `403 TENANT_SUSPENDED`, the sessions' `401 TOKEN_EXPIRED`, `403
-    CSRF_TOKEN_INVALID`, `429 RATE_LIMITED` and `403 ENVIRONMENT_NOT_ALLOWED`.
+    that its operation does not list: the sessions' `401 TOKEN_EXPIRED`, `403 CSRF_TOKEN_INVALID`, `429 RATE_LIMITED`
+    and `403 ENVIRONMENT_NOT_ALLOWED`.
 
     `503 SERVICE_UNAVAILABLE` (the shared `ServiceUnavailable` response) is an answer any operation may give while the
     API or a dependency it needs is down: PostgreSQL or Redis when a key, the OTA, a session or a rate limit cannot be
@@ -730,6 +738,9 @@ paths:
         that host. Hosts of OTAs the key may not act for, unverified hosts and hosts of deleted or failed OTAs all
         answer `404 NOT_FOUND`, so nothing about other OTAs leaks. Provisioning and suspended OTAs resolve with their
         `tenantStatus` so the app can render a maintenance page (their other operations answer `403 TENANT_SUSPENDED`).
+        An OTA's own API keys (its publishable keys included) and the storefront edge on its sub-domain get `403
+        TENANT_SUSPENDED` here too while that OTA is not active: the tenant check of **Generic refusals** runs before
+        the operation, and so before the scope check.
 
 
         **Primary domain.** Only the OTA's platform sub-domain (the `domains` entry of kind `subdomain`) redirects to
@@ -763,6 +774,7 @@ paths:
         - INVALID_API_KEY
         - SCOPE_NOT_ALLOWED
         - ORIGIN_NOT_ALLOWED
+        - TENANT_SUSPENDED
         - HOST_NOT_ALLOWED
         - NOT_FOUND
         - RATE_LIMITED

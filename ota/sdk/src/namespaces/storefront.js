@@ -99,7 +99,7 @@ export function createStorefrontApi(core) {
      * @returns {Promise<Schemas["StorefrontHostResolution"]>}
      * @throws {NotFoundError} `NOT_FOUND` (unknown or unverified host, or an OTA the key may not act for)
      * @throws {ValidationError} `VALIDATION_FAILED` (malformed host), `INVALID_REQUEST`
-     * @throws {PermissionError} `SCOPE_NOT_ALLOWED` (publishable key), `HOST_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED`
+     * @throws {PermissionError} `SCOPE_NOT_ALLOWED` (publishable key), `TENANT_SUSPENDED` (the key's OTA is not active), `HOST_NOT_ALLOWED`, `ORIGIN_NOT_ALLOWED`
      * @throws {AuthenticationError} `INVALID_API_KEY`
      * @throws {RateLimitError} `RATE_LIMITED`
      * @throws {ServerError} `NOT_IMPLEMENTED` (501, deferred), `INTERNAL_ERROR`

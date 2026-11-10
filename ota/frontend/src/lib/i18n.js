@@ -268,6 +268,11 @@ export const STRINGS = Object.freeze({
   "rules.categoryFeeUpTo": "Allowed for a fee of up to {price}",
   "rules.unknown": "Not known",
   "rules.failed": "The fare rules could not be loaded right now",
+  "rules.availableSoon": "The fare rules will be available in about a minute",
+  "rules.availableInMinutes": {
+    one: "The fare rules will be available in about {count} minute",
+    other: "The fare rules will be available in about {count} minutes",
+  },
   "rules.category.REFUND": "Refund",
   "rules.category.EXCHANGE": "Change",
   "rules.category.REVALIDATION": "Revalidation",

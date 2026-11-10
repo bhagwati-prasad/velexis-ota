@@ -320,18 +320,20 @@ async function withoutBrowserChecks(form: Locator): Promise<void> {
 }
 
 /**
- * The booking page's wait after a `429` of its fare rules: the `Retry-After`, at most 10 s, before it asks once more
- * (`RULES_RETRY_MAX_SECONDS` of ota/frontend/src/pages/booking.js, FIX-W46-OTA).
+ * The longest wait of the booking page after a `429` of its fare rules: a `Retry-After` of at most 10 s is waited out
+ * before it asks once more (`RULES_RETRY_MAX_SECONDS` of ota/frontend/src/pages/booking.js, FIX-W46-OTA and
+ * FIX-W47-OTA); a longer one is not.
  */
 const FARE_RULES_RETRY_MAX_MS = 10_000;
 
 /**
  * Opens the "Changes and refunds" disclosure of the price or booking page and waits for what its first opening loads,
  * so that axe judges the loaded disclosure: the airline's rule categories or full rules, its "no detailed rules", or a
- * state (a booking synced less than a minute ago has no rules to show until then: `429`, which the booking page asks
- * again once after its `Retry-After`, at most 10 s, then "could not be loaded right now" with Try again,
- * customer-bookings.service.ts). With `skipRetryWait` (the booking page, whose context's clock the caller installed
- * before the page loaded) the page's clock jumps over that wait instead of the test waiting it out.
+ * state (a booking synced less than a minute ago has no rules to show until then: `429` with the seconds left as
+ * `Retry-After`, customer-bookings.service.ts; the booking page says "available in about a minute" with Try again at
+ * once, or, when the `Retry-After` is 10 s or less, asks once more after it, FIX-W47-OTA). With `skipRetryWait` (the
+ * booking page, whose context's clock the caller installed before the page loaded) the page's clock jumps over such a
+ * wait instead of the test waiting it out.
  */
 async function openFareRules(page: Page, { skipRetryWait = false } = {}): Promise<void> {
   const rules = page.locator("details[data-fare-rules]");
