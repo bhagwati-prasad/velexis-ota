@@ -2800,6 +2800,7 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 - **Verify:** `pnpm --filter @velexis/ota-frontend build && E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront specs/storefront/a11y-pages.e2e.ts`
 
 ### OFE-025 · Finalise the build-your-own-frontend guide
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: CORS answers of the OTA API, without which a browser on another origin cannot call it (a backend task to plan; the browser samples ran through a local CORS stand-in, guide §2.4), and the Stripe steps of guide §7.2–§7.3 against Stripe's test mode with the Stripe test keys, human step)
 - **Component:** ota-frontend
 - **Milestone:** M6
 - **Depends on:** SDK-014, OFE-019
