@@ -10,8 +10,8 @@ Related: [`implementation-plan.md`](implementation-plan.md), [`agent-tasks.md`](
 |---|---|
 | People | One developer, no agents, five working days a week |
 | Effort per task size | S = ½ day, M = 1 day, L = 2 days, including tests, docs and self-review against the definition of done (the same rule as the platform plan) |
-| OTA work | 159 tasks = 176.5 days (M0 3.5, M1 6.5, M2 39.5, M3 55.5, M4 45, M5 9.5, M6 17; M6's 17 days are the first plan's 11.5 and the follow-ups of its reviews, 5.5 days, in Weeks 39a and 40 since 2026-11-06, §4). One of them, OBE-007 (1 day, M1), runs in the calendar week of platform Week 17, so the OTA weeks hold 175.5 task days |
-| Buffer and demos | 16.5 days inside OTA weeks (mostly at milestone exits: Weeks 1, 4, 12, 24, 33, 36, 39a, 40) |
+| OTA work | 160 tasks = 177 days (M0 3.5, M1 6.5, M2 39.5, M3 55.5, M4 45, M5 9.5, M6 17.5; M6's 17.5 days are the first plan's 11.5 and the follow-ups of its reviews, 6 days, in Weeks 39a and 40 since 2026-11-06 and 2026-11-10, §4). One of them, OBE-007 (1 day, M1), runs in the calendar week of platform Week 17, so the OTA weeks hold 176 task days |
+| Buffer and demos | 16 days inside OTA weeks (mostly at milestone exits: Weeks 1, 4, 12, 24, 33, 36, 40) |
 | Length | **41 OTA weeks**: Weeks 1–40 and the follow-up Week 39a (added 2026-11-06, §4), holding 192 OTA days: 36 full weeks and 5 split weeks (Weeks 3, 12, 24, 34, 37) that share a calendar week with platform work |
 | Start | Week 1 starts when the foundation tasks `X-001` to `X-016` are merged, like platform Week 1 |
 | Week numbers | OTA-plan weeks. The roadmap maps them to calendar weeks. The **Overlap** column names the platform weeks (platform-plan numbering) that sit in the same calendar window, and the gates between the groups |
@@ -62,7 +62,7 @@ Related: [`implementation-plan.md`](implementation-plan.md), [`agent-tasks.md`](
 | 37 | M5 exit | Cross-backend proof and live journey | OBE-083, OFE-022 | 2.5 (split) | **Split week** after platform Week 28 (needs PBE-053, PBE-055, PBE-057, PBE-061) and before platform Week 29 |
 | 38 | M6 | Security review, inventory, PCI pack, erasure | OBE-084, OFE-023, OBE-085, OBE-087 | 5 | Shared hardening with platform Week 30 and foundation X-029 … X-032 |
 | 39 | M6 | Performance, runbooks, accessibility, guide, admin suite | OBE-088, OBE-089, OFE-024, OFE-025, OAD-019 | 5 | Shared with platform Week 30 |
-| 39a | M6 | Follow-ups: search CPU, dependencies, generic refusals, layout shifts | OBE-092, OBE-093, OBE-094, OBE-095, OAD-020, OFE-027, OFE-028 | 4.5 + ½ buffer | Calendar week of its own before platform Weeks 30a and 30b (added 2026-11-06); OBE-094 is merged before PBE-069 (platform Week 30a) |
+| 39a | M6 | Follow-ups: search CPU, dependencies, generic refusals, layout shifts | OBE-092, OBE-093, OBE-094, OBE-095, OAD-020, OFE-027, OFE-028, OFE-029 | 5 (OFE-029 took the ½ day of buffer on 2026-11-10) | Calendar week of its own before platform Weeks 30a and 30b (added 2026-11-06); OBE-094 is merged before PBE-069 (platform Week 30a) |
 | 40 | M6 exit | SDK 1.0.0, airline-card gate, search budget, stable suites, launch | SDK-015, OBE-086, OBE-096, OFE-026 | 5 | Shared launch week with platform Week 31 |
 
 ```mermaid
@@ -386,10 +386,12 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 
 *Note (2026-11-06, FIX-W46-SHARED, lead decision (11g)).* The M6 reviews found work that the first plan did not hold: eight OTA tasks of 5.5 days in all ([`implementation-plan.md`](implementation-plan.md#m6--hardening--launch), the M6 note of 2026-11-06). Seven of them, 4.5 days, take one week inserted after Week 39 and numbered 39a, so that Weeks 1–40 keep the numbers the roadmap's calendar maps (Week 40 stays the launch week): OBE-092 from the load test of OBE-028, OBE-093, OBE-094, OBE-095 and OAD-020 from the security review (Week 38), OFE-027 and OFE-028 from the Lighthouse pass (Week 39). OBE-096 (1 day), which FIX-W46-SHARED added when the larger young generation left the search p95 above 500 ms ([`../performance.md`](../performance.md) §4, Step 4), takes one of Week 40's two buffer days. The plan therefore holds 159 tasks of 176.5 days (M6 17) in 41 weeks, with 16.5 days of buffer (§1, §5). The roadmap's calendar places Week 39a in a calendar week of its own before the platform's Weeks 30a and 30b, because PBE-069 needs OBE-094 ([`../../../docs/mvp/plans/roadmap.md`](../../../docs/mvp/plans/roadmap.md) §1.3, the re-baseline of 2026-11-06 under [ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 6).
 
+*Note (2026-11-10, wave 46).* OFE-029 (S, 2 h, ½ solo day), which OFE-027 added on 2026-11-10 when its measurement found the header's shift, takes Week 39a's ½ day of buffer, after OFE-027 and OFE-028. The plan therefore holds 160 tasks of 177 days (M6 17.5) in 41 weeks, with 16 days of buffer (§1, §5).
+
 ### Week 39a — M6: follow-ups of the reviews (added 2026-11-06)
 
-- **Tasks:** OBE-092 (1), OBE-093 (½), OBE-094 (½), OBE-095 (½), OAD-020 (½), OFE-027 (1), OFE-028 (½); ½ day buffer.
-- **Deliverables:** less API CPU per search of 250 offers, measured against the search budget (OBE-092, [`../performance.md`](../performance.md) §4); nodemailer, multer and the backend's vulnerable transitive packages past their advisories, and zod 4 in the OTA admin (the security review's dependency findings); every operation's generic refusals in its `x-error-codes`; a results page and a test banner that do not shift the layout on phones.
+- **Tasks:** OBE-092 (1), OBE-093 (½), OBE-094 (½), OBE-095 (½), OAD-020 (½), OFE-027 (1), OFE-028 (½), OFE-029 (½; since 2026-11-10, in what was the week's ½ day of buffer).
+- **Deliverables:** less API CPU per search of 250 offers, measured against the search budget (OBE-092, [`../performance.md`](../performance.md) §4); nodemailer, multer and the backend's vulnerable transitive packages past their advisories, and zod 4 in the OTA admin (the security review's dependency findings); every operation's generic refusals in its `x-error-codes`; a results page, a test banner and a header that do not shift the layout on phones.
 - **Demo:** `pnpm audit --prod` without a high advisory; the load test's report next to OBE-088's figures; the results page in a phone-sized Lighthouse run.
 - **Overlap:** a calendar week of its own after Week 39 and before platform Weeks 30a and 30b (roadmap C74); OBE-094's root `multer` override is merged before PBE-069 (platform Week 30a).
 
@@ -404,7 +406,7 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 
 | Rule | Why |
 |---|---|
-| Buffer is 16.5 days: 1½ in Week 1, ½ in Weeks 2, 3, 11, 23, 35 (demo), 37, 38 and 39a, 1 in Week 4, 2½ in Weeks 12 and 24, 2 in Week 33, 1 in Week 36, 2 in Week 40 (the launch day and 1 day of buffer; 3 until 2026-11-06, when OBE-096 took one day; Week 39a's ½ day is new) | Placed at milestone exits and before cross-group gates, where integration surprises appear |
+| Buffer is 16 days: 1½ in Week 1, ½ in Weeks 2, 3, 11, 23, 35 (demo), 37 and 38, 1 in Week 4, 2½ in Weeks 12 and 24, 2 in Week 33, 1 in Week 36, 2 in Week 40 (the launch day and 1 day of buffer; 3 until 2026-11-06, when OBE-096 took one day; Week 39a's ½ day, new on 2026-11-06, went to OFE-029 on 2026-11-10) | Placed at milestone exits and before cross-group gates, where integration surprises appear |
 | A week that slips moves its unfinished tasks to the next week of the same milestone and uses that milestone's buffer; when the buffer is gone, the developer re-plans the rest of the milestone in the Friday note | Keeps the plan honest without silent drift |
 | Gated weeks (3, 12, 24, 34, 37) are never skipped: if the other side is late, do the next OTA task without the gate and come back; never fake the platform side | The gates protect the platform's PBE-035, PBE-036, PAD-011, PFE-019 and the M5 switches |
 | Human steps (OBE-027 recordings and the Amadeus question, OBE-086 penetration test and ASV scan, SDK-015 npm organisation) are started early: ask Amadeus in Week 6, book the penetration test during M5 | External lead times are the most likely cause of delay |

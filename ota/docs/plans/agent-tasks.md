@@ -26,7 +26,7 @@ Common commands: backend `pnpm --filter @velexis/ota-backend test` and `test:int
 | M3 Book & pay | OBE-029 … OBE-057, SDK-008 … SDK-010, OFE-009 … OFE-019 | Guest and customer bookings paid by Stripe (3-D Secure) or by airline card (test), tickets, e-mails and PDFs, my bookings, guest lookup, change contacts, cancel with refund (OF-03 … OF-08). |
 | M4 OTA admin | OBE-058 … OBE-075, OBE-090, OBE-091, SDK-011 … SDK-014, OAD-002 … OAD-017, OFE-020 | "Open console" in the portal lands in the OTA admin; staff issue, cancel, import a PNR, read queues, capture and refund, change markups, branding, pages and templates (OF-09, OF-10). |
 | M5 Monetisation & self-service | OBE-076 … OBE-083, OAD-018, OFE-021, OFE-022 | The same code serves an OTA on its own Stripe (Connect or keys) and its own Amadeus credentials, a custom domain, and the live environment after go-live (OF-12). |
-| M6 Hardening & launch | OBE-084 … OBE-089, OBE-092 … OBE-096, OFE-023 … OFE-028, OAD-019, OAD-020, SDK-015 | Security review and PCI evidence closed, airline card live-ready, erasure job, performance measured, nightly suites green, SDK 1.0.0 published. |
+| M6 Hardening & launch | OBE-084 … OBE-089, OBE-092 … OBE-096, OFE-023 … OFE-029, OAD-019, OAD-020, SDK-015 | Security review and PCI evidence closed, airline card live-ready, erasure job, performance measured, nightly suites green, SDK 1.0.0 published. |
 
 ## M0 — Foundations
 

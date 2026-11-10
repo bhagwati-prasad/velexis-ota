@@ -14,7 +14,7 @@ Related: [`roadmap.md`](roadmap.md), [`../../../AGENTS.md`](../../../AGENTS.md) 
 | [`platform/docs/plans/agent-tasks.md`](../../../platform/docs/plans/agent-tasks.md) | Agent tasks | Platform backend, portal, platform admin | `PBE-001` … `PBE-071`, `PFE-001` … `PFE-030`, `PAD-001` … `PAD-017` | What exactly does each platform task change, and how is it proven? |
 | [`platform/docs/plans/solo-developer-plan.md`](../../../platform/docs/plans/solo-developer-plan.md) | Solo developer (week by week) | Platform group, without agents | References platform ids | In which order does one developer build the platform, week by week (33 platform weeks: Weeks 1–31 and the follow-up Weeks 30a and 30b of 2026-11-06)? |
 | [`ota/docs/plans/implementation-plan.md`](../../../ota/docs/plans/implementation-plan.md) | Implementation plan | OTA backend, storefront, OTA admin, JS SDK | `OBE-`, `OFE-`, `OAD-`, `SDK-` (referenced) | Per milestone: goal, epics, demo, exit criteria, interface with the platform group, risks; traceability from OF features and operations to tasks |
-| [`ota/docs/plans/agent-tasks.md`](../../../ota/docs/plans/agent-tasks.md) | Agent tasks | OTA backend, storefront, OTA admin, JS SDK | `OBE-001` … `OBE-096`, `OFE-001` … `OFE-028`, `OAD-001` … `OAD-020`, `SDK-001` … `SDK-015` | What exactly does each OTA task change, and how is it proven? |
+| [`ota/docs/plans/agent-tasks.md`](../../../ota/docs/plans/agent-tasks.md) | Agent tasks | OTA backend, storefront, OTA admin, JS SDK | `OBE-001` … `OBE-096`, `OFE-001` … `OFE-029`, `OAD-001` … `OAD-020`, `SDK-001` … `SDK-015` | What exactly does each OTA task change, and how is it proven? |
 | [`ota/docs/plans/solo-developer-plan.md`](../../../ota/docs/plans/solo-developer-plan.md) | Solo developer (week by week) | OTA group, without agents | References OTA ids | In which order does one developer build the OTA side, week by week (41 OTA weeks: Weeks 1–40 and the follow-up Week 39a of 2026-11-06)? |
 
 ## 2. How they relate
@@ -35,7 +35,7 @@ flowchart TD
 - **Decisions flow down.** [`decisions.md`](../decisions.md) wins over everything. The ADRs refine it, the implementation plans apply it per milestone, and the task blocks turn it into work.
 - **Task blocks are the single source of scope.** Each task is defined once, in one agent task plan. The solo plans and the roadmap reference task ids and never redefine a task.
 - **Dependencies cross files.** Component tasks depend on `X-` tasks, and some platform and OTA tasks depend on each other (for example OBE-003 on PBE-002, and OAD-016 on PFE-017). A few platform tasks carry a **Gate** that names an OTA feature (PBE-035, PBE-036, PAD-011, PFE-019).
-- **The roadmap combines them.** It schedules all 317 tasks (since its re-baseline of 2026-11-06) in one calendar, maps the two solo plans' week numbers to calendar weeks, and keeps the milestone status, outside steps and change log.
+- **The roadmap combines them.** It schedules all 318 tasks (317 since its re-baseline of 2026-11-06, and OFE-029 of 2026-11-10) in one calendar, maps the two solo plans' week numbers to calendar weeks, and keeps the milestone status, outside steps and change log.
 
 ## 3. Which file to open
 
@@ -72,14 +72,14 @@ flowchart TD
 
 Calendars: **30 working weeks** with AI agents, **76 working weeks** without ([`roadmap.md`](roadmap.md) §1).
 
-**Re-baseline (2026-11-06, [ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md) item 6, the owner's decision (11g)).** `node tools/plan-lint/plan-lint.mjs`: `tasks: 317  estimated hours: 1466`, `ERRORS: 0`, the same critical path. The 16 tasks added since the baseline are M6 follow-ups of the milestone's reviews ([`roadmap.md`](roadmap.md) §4.5).
+**Re-baseline (2026-11-06, [ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md) item 6, the owner's decision (11g)).** `node tools/plan-lint/plan-lint.mjs`: `tasks: 317  estimated hours: 1466`, `ERRORS: 0`, the same critical path. The 16 tasks added since the baseline are M6 follow-ups of the milestone's reviews ([`roadmap.md`](roadmap.md) §4.5). Since 2026-11-10 the table also counts OFE-029 (S, 2 h, ½ solo day), which OFE-027 added on 2026-11-10 when its measurement found the header's shift: `tasks: 318  estimated hours: 1468`.
 
 | Plan | Tasks | Agent-hours | Solo days |
 |---|---|---|---|
 | Foundation (`X-`) | 40 | 170 | 42.5 |
 | Platform (`PBE-` 71, `PFE-` 30, `PAD-` 17) | 118 | 590 | 147.5 |
-| OTA (`OBE-` 96, `OFE-` 28, `OAD-` 20, `SDK-` 15) | 159 | 706 | 176.5 |
-| **Total** | **317** | **1,466** | **366.5** |
+| OTA (`OBE-` 96, `OFE-` 29, `OAD-` 20, `SDK-` 15) | 160 | 708 | 177 |
+| **Total** | **318** | **1,468** | **367** |
 
 Calendars: **30 working weeks** with AI agents (M6's buffer holds the follow-ups), **79 working weeks** without (the platform's Weeks 30a and 30b and the OTA's Week 39a get calendar weeks of their own; [`roadmap.md`](roadmap.md) §1.3).
 
