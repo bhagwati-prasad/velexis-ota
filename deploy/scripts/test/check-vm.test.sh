@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # =====================================================================================================
 # check-vm.test.sh — tests deploy/scripts/check-vm.sh and the env file checks of provision-vm.sh (task X-020), the
-# master-key rotation of provision-vm.sh's step keys (task X-040), and the SSH second factor of its step ssh (X-037).
+# master-key rotation of provision-vm.sh's step keys (task X-040), the SSH second factor of its step ssh (X-037) and
+# its lockout guard, and check-vm.sh's check of AIDE's daily timer (lead decisions (13k) and (13j) of 2026-11-10).
 #
 #   sudo bash deploy/scripts/test/check-vm.test.sh
 #
@@ -19,7 +20,8 @@
 #     checks the drop-ins with the fake alone.
 # Users, groups and folders the test created are removed at the end (CHECKVM_KEEP=1 keeps them for inspection). It
 # refuses to run on a provisioned Velexis VM. It prints one PASS or FAIL line per check; a check that proves an
-# acceptance criterion of X-020, X-040 or X-037 ends in [X-020 AC<n>], [X-040 AC<n>] or [X-037 AC<n>].
+# acceptance criterion of X-020, X-040 or X-037 ends in [X-020 AC<n>], [X-040 AC<n>] or [X-037 AC<n>]; a check of
+# the lead's fix of 2026-11-10 (the AIDE timer, the lockout guard) in [FIX-W47-SHARED AC4] or [FIX-W47-SHARED AC5].
 #
 # What it proves:
 #   1. Two runs of provision-vm.sh --steps users,keys,envfiles: the second changes no key, env or secrets file
@@ -32,6 +34,8 @@
 #      SSH logins, swap, core dumps, a missing role, a wrong search_path, PostgreSQL or Caddy's admin API on a public
 #      or TCP address, the Redis eviction policy, a failing caddy validate, /run/caddy, key and env file modes,
 #      differing key copies, a writable release, the velexis group, the deploy key options and shared env values.
+#      AIDE's daily check (lead decision (13j) of 2026-11-10, [FIX-W47-SHARED AC4]): PASS for an active and enabled
+#      dailyaidecheck.timer, FAIL for one stopped, not enabled or missing.
 #   4. With a variable removed from a test copy of an env file, check-vm.sh reports FAIL naming the variable, and
 #      provision-vm.sh --steps envfiles warns about it by name and leaves the file as it is (AC3).
 #   5. A master-key rotation (X-040): NEW_MASTER_KEY=v2 with the step keys creates master-v2.key once, as copies with
@@ -46,6 +50,12 @@
 #      and a later run removes the old name 90-velexis.conf. check-vm.sh --only ssh reports PASS for the admin's FIDO2 or TOTP factor and the deploy
 #      user's public key only, and FAIL for each weakened setting (AC2). With a real sshd, the same on its sshd -T.
 #      Also decision 11j: velexis-healthcheck.timer and /usr/local/sbin/velexis-healthcheck are checked.
+#      The lockout guard (lead decision (13k) of 2026-11-10, [FIX-W47-SHARED AC5]): run through sudo by a user the new
+#      AllowUsers leaves out, the step ssh (also after the steps users and keys) refuses before any step, exits 1 and
+#      changes and reloads nothing; run by the admin through sudo with a second factor that sshd -T would ask of them
+#      and they have not enrolled (a TOTP code, or a FIDO2 key; also on a real sshd), it refuses before writing; a root
+#      session without sudo, root's own sudo, the deploy user and the admin with the factor enrolled are let through.
+#      harden, which cannot run under VELEXIS_ROOT, gets the same guard: read from provision-vm.sh.
 #   7. No output of either script, no command line of a fake and no line of provision.log holds a generated
 #      secret, a key, a TOTP secret or a value of an env file, even when caddy validate fails with a message that
 #      quotes the edge secret or caddy.env has a malformed line; provision-vm.sh substitutes no placeholder through
@@ -431,6 +441,7 @@ redis-server active enabled
 caddy active enabled
 velexis-backup.timer active enabled
 velexis-healthcheck.timer active enabled
+dailyaidecheck.timer active enabled
 ssh active enabled
 fail2ban active enabled
 auditd active enabled
@@ -546,6 +557,8 @@ PASS Caddy's admin API is not on TCP (ss -ltn shows no :2019)
 PASS /run/caddy is caddy:caddy 700
 PASS velexis-healthcheck.timer is active and enabled
 PASS /usr/local/sbin/velexis-healthcheck is root:root 755
+PASS the AIDE database exists
+PASS dailyaidecheck.timer is active and enabled (AIDE's daily check)
 PASS sshd -T: AllowUsers $ADMIN_TEST_USER $DEPLOY_TEST_USER
 PASS sshd -T -C user=$ADMIN_TEST_USER: second factor FIDO2 (publickey with sk-ssh-ed25519@openssh.com only, pubkeyauthoptions touch-required verify-required)
 PASS sshd -T -C user=$ADMIN_TEST_USER: keys only from .ssh/authorized_keys
@@ -597,6 +610,22 @@ healthy
 edit units 's/^velexis-healthcheck.timer active enabled/velexis-healthcheck.timer active disabled/'
 broken "a health check timer that does not start at boot" services 'velexis-healthcheck.timer is active and enabled \(found: active disabled\)' X-037
 healthy
+# AIDE's daily check (lead decision (13j) of 2026-11-10): the timer of aide-common stopped, or not started at boot.
+edit units 's/^dailyaidecheck.timer active enabled/dailyaidecheck.timer inactive disabled/'
+broken "AIDE's daily check off" system "dailyaidecheck.timer is active and enabled \\(found: inactive disabled;" "FIX-W47-SHARED AC4"
+healthy
+edit units 's/^dailyaidecheck.timer active enabled/dailyaidecheck.timer active disabled/'
+broken "AIDE's daily check that does not start at boot" system "dailyaidecheck.timer is active and enabled \\(found: active disabled;" "FIX-W47-SHARED AC4"
+healthy
+edit units '/^dailyaidecheck.timer /d'
+broken "no AIDE timer (aide-common missing)" system "dailyaidecheck.timer is active and enabled \\(found: inactive not-found;" "FIX-W47-SHARED AC4"
+healthy
+if run_check "$OUT/aide-timer.out" --only system && grep -qx "PASS dailyaidecheck.timer is active and enabled (AIDE's daily check)" "$OUT/aide-timer.out"; then
+  pass "check-vm.sh --only system reports PASS for an active and enabled dailyaidecheck.timer, beside the AIDE database [FIX-W47-SHARED AC4]"
+else
+  indent "$OUT/aide-timer.out"
+  fail "check-vm.sh --only system reports PASS for an active and enabled dailyaidecheck.timer [FIX-W47-SHARED AC4]"
+fi
 edit units 's/^postgresql@16-main active/postgresql@16-main failed/'
 broken "a stopped PostgreSQL cluster" services 'postgresql@16-main is active'
 healthy
@@ -896,11 +925,15 @@ sed -i -E 's/^MASTER_KEY_CURRENT=.*/MASTER_KEY_CURRENT=local:v2/' "$ETC/ota-back
 # ---- 6. the SSH second factor (X-037): provision-vm.sh --steps ssh, check-vm.sh --only ssh ---------------------
 step "the SSH second factor: provision-vm.sh --steps ssh without and with an enrolled factor"
 SSH_PATH="$FAKEBIN"
+SSH_RUNNER="$ADMIN_TEST_USER" # SUDO_USER of the step ssh: the admin runs it through sudo; empty: a root session (console)
+SSH_STEPS=ssh                 # the --steps of provision_ssh
 provision_ssh() { # log mfa [VAR=value...]: the step ssh as an operator runs it, with the fake (or a real) sshd on PATH
-  local log="$1" mfa="$2"
+  local log="$1" mfa="$2" runner=(-u SUDO_USER)
   shift 2
-  env PATH="$SSH_PATH:$PATH" CHECKVM_FAKE="$FAKE" CHECKVM_PROVISION=1 VELEXIS_ROOT="$ROOT" ADMIN_USER="$ADMIN_TEST_USER" \
-    ADMIN_MFA="$mfa" DEPLOY_USER="$DEPLOY_TEST_USER" "$@" bash "$PROVISION" --steps ssh >"$log" 2>&1
+  [ -z "$SSH_RUNNER" ] || runner=(SUDO_USER="$SSH_RUNNER")
+  env "${runner[@]}" PATH="$SSH_PATH:$PATH" CHECKVM_FAKE="$FAKE" CHECKVM_PROVISION=1 VELEXIS_ROOT="$ROOT" \
+    ADMIN_USER="$ADMIN_TEST_USER" ADMIN_MFA="$mfa" DEPLOY_USER="$DEPLOY_TEST_USER" "$@" \
+    bash "$PROVISION" --steps "$SSH_STEPS" >"$log" 2>&1
 }
 ssh_state() { fingerprint_all "$ROOT/etc/ssh" "$ROOT/etc/pam.d"; } # every file sshd and PAM read: inode, times, content
 reloads() { if [ -f "$FAKE/reloads" ]; then grep -c . "$FAKE/reloads"; else echo 0; fi; }
@@ -995,18 +1028,18 @@ cp -p "$PREFIX/pam-sshd.orig" "$PAM_FILE"
 rm -f "$TOTP_FILE"
 
 # Enrolled, but the new configuration does not pass: nothing is written, nothing reloaded, and the run fails.
-guard() { # description mfa pattern -> the step ssh exits 1 with that message and changes nothing
-  local what="$1" mfa="$2" pattern="$3" log before rc
+guard() { # description mfa pattern [tag] -> the step ssh exits 1 with that message and changes nothing
+  local what="$1" mfa="$2" pattern="$3" tag="${4:-X-037}" log before rc
   N=$((N + 1))
   log="$OUT/ssh-guard-$N.log"
   before="$(ssh_state)"
   rm -f "$FAKE/reloads"
   if provision_ssh "$log" "$mfa"; then rc=0; else rc=$?; fi
   if [ "$rc" = 1 ] && [ "$(ssh_state)" = "$before" ] && [ "$(reloads)" = 0 ] && grep -qE -- "^ERROR: .*$pattern" "$log"; then
-    pass "$what: nothing written or reloaded: $(grep -m 1 '^ERROR' "$log" | cut -c 8- | sed "s#$PREFIX#<prefix>#g") [X-037]"
+    pass "$what: nothing written or reloaded: $(grep -m 1 '^ERROR' "$log" | cut -c 8- | sed "s#$PREFIX#<prefix>#g") [$tag]"
   else
     indent "$log"
-    fail "$what: nothing written or reloaded (exit $rc, expected: $pattern) [X-037]"
+    fail "$what: nothing written or reloaded (exit $rc, expected: $pattern) [$tag]"
   fi
 }
 admin_keys "$ADMIN_SK_KEY" "$ADMIN_PLAIN_KEY" # enrolled; the plain key still there until the FIDO2 login works
@@ -1020,11 +1053,74 @@ sshd_user "$DEPLOY_TEST_USER" "${DEPLOY_LIMITS[@]}" "permittty yes"
 guard "sshd -T would not show the deploy limits" fido2 "for $DEPLOY_TEST_USER, sshd -T shows permittty yes, not no"
 healthy
 
+# The lockout guard (lead decision (13k) of 2026-11-10): the SSH changes never lock out whoever runs them through sudo
+# (SUDO_USER). The admin's FIDO2 key is enrolled, so a run would now write 01-velexis-mfa.conf and reload ssh.
+lockout() { # description pattern -> provision_ssh (fido2) exits 1 before any step with that message, and changes nothing
+  local what="$1" pattern="$2" log before rc #  (sshd, PAM, the env and key files, the deploy key) and reloads nothing
+  N=$((N + 1))
+  log="$OUT/ssh-lockout-$N.log"
+  before="$(ssh_state; fingerprint "$ETC" "$DEPLOY_HOME/.ssh")"
+  rm -f "$FAKE/reloads"
+  if provision_ssh "$log" fido2; then rc=0; else rc=$?; fi
+  if [ "$rc" = 1 ] && [ "$(ssh_state; fingerprint "$ETC" "$DEPLOY_HOME/.ssh")" = "$before" ] && [ "$(reloads)" = 0 ] &&
+    [ ! -e "$DROPIN" ] && grep -qE -- "^ERROR: refused, nothing changed: .*$pattern" "$log" && ! grep -q '^==> ' "$log"; then
+    pass "$what: refused before any step, nothing changed or reloaded: $(grep -m 1 '^ERROR' "$log" | cut -c 8- | sed "s#$PREFIX#<prefix>#g") [FIX-W47-SHARED AC5]"
+  else
+    indent "$log"
+    fail "$what: refused before any step, nothing changed or reloaded (exit $rc, expected: $pattern) [FIX-W47-SHARED AC5]"
+  fi
+}
+OTHER_RUNNER="vxops-$RUN_ID" # a sudo user the new AllowUsers leaves out (the guard compares names; it need not exist)
+SSH_RUNNER="$OTHER_RUNNER"
+lockout "a sudo user outside the new AllowUsers runs the step ssh" \
+  "you run this through sudo as $OTHER_RUNNER, but the new SSH settings let only $ADMIN_TEST_USER and $DEPLOY_TEST_USER log in \\(AllowUsers\\), so $OTHER_RUNNER would lose SSH access"
+SSH_STEPS=users,keys,ssh
+lockout "the same user runs the steps users, keys and ssh (the guard comes before the first step)" \
+  "so $OTHER_RUNNER would lose SSH access. Run it as $ADMIN_TEST_USER, pass ADMIN_USER=$OTHER_RUNNER, or run it from the provider's console"
+SSH_STEPS=ssh
+# harden runs the step ssh too, but never under VELEXIS_ROOT: that the same guard covers it is read from the script.
+# shellcheck disable=SC2016 # the script's own line, $STEPS unexpanded
+if grep -qxF 'case " $STEPS " in *" harden "* | *" ssh "*) runner_in_allowusers ;; esac' "$PROVISION" &&
+  awk '/^step_harden\(\) \{$/, /^\}$/' "$PROVISION" | grep -qx '  step_ssh'; then
+  pass "a run with harden, which runs the step ssh, gets the same guard before any step (read from provision-vm.sh) [FIX-W47-SHARED AC5]"
+else
+  fail "a run with harden, which runs the step ssh, gets the same guard before any step (read from provision-vm.sh) [FIX-W47-SHARED AC5]"
+fi
+# Allowed: a root session without sudo (the provider's console), root's own sudo, and the deploy user (in AllowUsers).
+# Each run writes the drop-in and reloads once; the drop-in is removed again for the next one.
+for runner in "" root "$DEPLOY_TEST_USER"; do
+  SSH_RUNNER="$runner"
+  rm -f "$FAKE/reloads"
+  if provision_ssh "$OUT/ssh-allowed-${runner:-console}.log" fido2 && dropin_has fido2 && [ "$(reloads)" = 1 ]; then
+    pass "the step ssh run by ${runner:-a root session without sudo} applies the second factor: the lockout guard lets it through [FIX-W47-SHARED AC5]"
+  else
+    indent "$OUT/ssh-allowed-${runner:-console}.log"
+    fail "the step ssh run by ${runner:-a root session without sudo} applies the second factor (reloads: $(reloads)) [FIX-W47-SHARED AC5]"
+  fi
+  rm -f "$DROPIN"
+done
+SSH_RUNNER="$ADMIN_TEST_USER"
+# The second factor would ask the admin who runs it for a factor they have not enrolled (here because another drop-in
+# wins for the admin in the fake sshd -T): refused before anything is written.
+sshd_user "$ADMIN_TEST_USER" "${TOTP_ADMIN[@]}"
+guard "the admin, through sudo, would be asked for a TOTP code without a TOTP secret" fido2 \
+  "refused, nothing changed: with the new SSH settings $ADMIN_TEST_USER, who runs this, would need a TOTP code \\(sshd -T: authenticationmethods publickey,keyboard-interactive:pam\\), but .*/.google_authenticator does not exist, and would lose SSH access" \
+  "FIX-W47-SHARED AC5"
+admin_keys "$ADMIN_PLAIN_KEY"
+totp_file 0400 "$ADMIN_TEST_USER"
+sshd_user "$ADMIN_TEST_USER" "${FIDO2_ADMIN[@]}"
+guard "the admin, through sudo, would be asked for a FIDO2 key with only a plain key" totp \
+  "would need a FIDO2 key \\(sshd -T: pubkeyacceptedalgorithms sk-ssh-ed25519@openssh.com\\), but .*/.ssh/authorized_keys holds no FIDO2 key with user verification, and would lose SSH access" \
+  "FIX-W47-SHARED AC5"
+rm -f "$TOTP_FILE"
+admin_keys "$ADMIN_SK_KEY" "$ADMIN_PLAIN_KEY"
+healthy
+
 # Enrolled: the drop-in once, one reload, then nothing on a second run.
 rm -f "$FAKE/reloads"
 if provision_ssh "$OUT/ssh-fido2.log" fido2 && dropin_has fido2 && [ "$(reloads)" = 1 ] &&
   cmp -s "$PAM_FILE" "$PREFIX/pam-sshd.orig" && grep -q 'Keep this session open' "$OUT/ssh-fido2.log"; then
-  pass "ADMIN_MFA=fido2 with an enrolled key writes 01-velexis-mfa.conf (FIDO2 for the admin, limits for deploy), leaves PAM alone and reloads ssh once [X-037]"
+  pass "ADMIN_MFA=fido2 with an enrolled key writes 01-velexis-mfa.conf (FIDO2 for the admin, limits for deploy), leaves PAM alone and reloads ssh once; run by the admin through sudo, whom the lockout guard lets through [X-037] [FIX-W47-SHARED AC5]"
 else
   indent "$OUT/ssh-fido2.log"
   fail "ADMIN_MFA=fido2 with an enrolled key writes 01-velexis-mfa.conf and reloads ssh once (reloads: $(reloads)) [X-037]"
@@ -1054,7 +1150,7 @@ if provision_ssh "$OUT/ssh-totp.log" totp && dropin_has totp && [ "$(reloads)" =
   [ "$(grep -cxF 'auth required pam_google_authenticator.so' "$PAM_FILE")" = 1 ] && grep -qx '#@include common-auth' "$PAM_FILE" &&
   ! grep -qx '@include common-auth' "$PAM_FILE" && grep -qx '@include common-account' "$PAM_FILE" &&
   [ "$(stat -c '%U:%G %a' "$PAM_FILE")" = "root:root 644" ]; then
-  pass "ADMIN_MFA=totp with an enrolled secret writes the TOTP drop-in and puts pam_google_authenticator in place of the password in /etc/pam.d/sshd, one reload [X-037]"
+  pass "ADMIN_MFA=totp with an enrolled secret writes the TOTP drop-in and puts pam_google_authenticator in place of the password in /etc/pam.d/sshd, one reload; run by the admin through sudo [X-037] [FIX-W47-SHARED AC5]"
 else
   indent "$OUT/ssh-totp.log"
   fail "ADMIN_MFA=totp with an enrolled secret writes the TOTP drop-in and /etc/pam.d/sshd, one reload (reloads: $(reloads)) [X-037]"
@@ -1184,6 +1280,17 @@ if [ -x "$REAL_SSHD" ] && "$REAL_SSHD" -t -f "$PREFIX/sshd-probe.conf" >"$OUT/ss
   printf 'Match User %s\n  AuthenticationMethods any\n' "$ADMIN_TEST_USER" >"$ROOT/etc/ssh/sshd_config.d/00-aaa-other.conf"
   guard "real sshd -T: an earlier Match block that would win over the second factor" totp \
     "the new SSH settings would not be in force: for $ADMIN_TEST_USER, sshd -T shows authenticationmethods any"
+  # The lockout guard on the real sshd -T: with the FIDO2 drop-in about to be written, an earlier Match block would ask
+  # the admin, who runs the step through sudo with FIDO2 keys only, for a TOTP code too.
+  printf 'Match User %s\n  AuthenticationMethods publickey,keyboard-interactive:pam\n  KbdInteractiveAuthentication yes\n' \
+    "$ADMIN_TEST_USER" >"$ROOT/etc/ssh/sshd_config.d/00-aaa-other.conf"
+  mv "$TOTP_FILE" "$PREFIX/google_authenticator.saved"
+  mv "$DROPIN" "$PREFIX/01-velexis-mfa.conf.real"
+  guard "real sshd -T: the admin, through sudo, would be asked for a TOTP code without a TOTP secret" fido2 \
+    "refused, nothing changed: with the new SSH settings $ADMIN_TEST_USER, who runs this, would need a TOTP code \\(sshd -T: authenticationmethods publickey,keyboard-interactive:pam\\), but .*/.google_authenticator does not exist" \
+    "FIX-W47-SHARED AC5"
+  mv "$PREFIX/01-velexis-mfa.conf.real" "$DROPIN"
+  mv "$PREFIX/google_authenticator.saved" "$TOTP_FILE"
   rm -f "$ROOT/etc/ssh/sshd_config.d/00-aaa-other.conf"
   CHECK_PATH="$FAKEBIN"
   SSH_PATH="$FAKEBIN"

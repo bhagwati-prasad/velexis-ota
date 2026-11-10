@@ -17,7 +17,8 @@
 # Groups and their items (docs/mvp/deployment-single-vm.md §2 to §7):
 #   system    Ubuntu 24.04; time zone UTC; no swap (swapon --show is empty, no swap line in /etc/fstab); no core
 #             dumps (kernel.core_pattern |/bin/false, fs.suid_dumpable 0, apport.service masked); unattended
-#             upgrades on; an AIDE database exists
+#             upgrades on; an AIDE database exists, and dailyaidecheck.timer (package aide-common), which runs AIDE's
+#             daily check, is active and enabled (PCI DSS 11.5.2; lead decision (13j) of 2026-11-10)
 #   services  postgresql, redis-server, caddy, velexis-backup.timer and velexis-healthcheck.timer active and enabled,
 #             the cluster postgresql@16-main active; fail2ban, auditd and chrony active and enabled; Node.js 22
 #   firewall  ufw active, incoming denied by default, and only 22, 80 and 443 allowed (each of them allowed)
@@ -186,6 +187,13 @@ group_system() {
     fail "unattended-upgrades runs daily (/etc/apt/apt.conf.d/20auto-upgrades)"
   fi
   if [ -s "$R/var/lib/aide/aide.db" ]; then pass "the AIDE database exists"; else fail "the AIDE database exists (/var/lib/aide/aide.db; run aideinit)"; fi
+  # AIDE's daily check (PCI DSS 11.5.2) runs from the timer of the package aide-common, which provision-vm.sh enables.
+  state="$(unit_state dailyaidecheck.timer)"
+  if [ "$state" = "active enabled" ]; then
+    pass "dailyaidecheck.timer is active and enabled (AIDE's daily check)"
+  else
+    fail "dailyaidecheck.timer is active and enabled (found: $state; systemctl enable --now dailyaidecheck.timer)"
+  fi
 }
 
 # ---- services ---------------------------------------------------------------------------------------------

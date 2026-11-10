@@ -29,7 +29,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 | **M1** Platform core | X-024 to X-027, X-035 | Nightly encrypted backups reach the off-site bucket. Integration tests assert e-mails through Mailpit. `pnpm stub:amadeus` serves token and flight-offers search, and tests start the stub in-process (PBE-020 and the M1 end-to-end harness use it). plan-lint reports the remaining work. |
 | **M2** Search & price | X-034, X-036 | Fixtures are recorded from the Amadeus test environment with scrubbing, and a scan keeps personal data out of them. The second-agent review procedure is ready for M3. |
 | **M3** Book & pay | X-028 | Signed Stripe webhook fixtures in tests; Stripe CLI forwarding for manual checks. |
-| **M6** Hardening & launch | X-029 to X-032, X-037 to X-040 | Uptime monitor and on-VM health checks alert. The restore drill is documented with a measured RTO and cannot reach live services. The move to managed services is proven to be configuration only. SSH needs a second factor, security logs are kept 12 months off the VM with a daily review, the WAF protects the public hosts, and the master key can be rotated. |
+| **M6** Hardening & launch | X-029 to X-032, X-037 to X-041 | Uptime monitor and on-VM health checks alert. The restore drill is documented with a measured RTO and cannot reach live services. The move to managed services is proven to be configuration only. SSH needs a second factor, security logs are kept 12 months off the VM with a daily review, the WAF protects the public hosts, the master key can be rotated, and the VM reaches only the outside hosts it needs, with every refused attempt logged (X-041, since 2026-11-10). |
 
 ## What the component plans can depend on
 
@@ -1063,6 +1063,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - On the VM (human step): an hour after a test SSH login its line is in the bucket, and the next daily summary lists it.
   - `shellcheck -S style` is clean, and `systemd-analyze verify` reports only the expected missing binaries off the VM.
 - **Verify:** `bash deploy/scripts/test/ship-logs.test.sh && bash deploy/scripts/test/log-review.test.sh && shellcheck -S style deploy/scripts/ship-logs.sh deploy/scripts/log-review.sh`
+- **Note (2026-11-10, lead decision (13h), FIX-W47-SHARED):** X-041 adds an outbound allow-list whose refused connections are logged with the prefix `VELEXIS-EGRESS-DENY` (PCI DSS 11.5.1.1). When X-041 is merged first, step 3's daily summary also counts those refusals by destination and user, and an unusual burst is an immediate alert, both covered by `log-review.test.sh`; when this task is merged first, X-041 adds them (its step 3). This Note changes no Status.
 
 ### X-039 · Put a web application firewall in front of the public hosts
 - **Status:** todo
@@ -1103,6 +1104,28 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - A row changed concurrently is skipped and counted, not overwritten.
   - The runbook names both component commands and the order; `provision-vm.sh` creates the new key in both folders with the same SHA-256.
 - **Verify:** `pnpm --filter @velexis/crypto test && shellcheck -S style deploy/scripts/provision-vm.sh`
+
+### X-041 · Allow only the outbound connections the VM needs and log the refused ones
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M6
+- **Depends on:** X-020
+- **Size:** M
+- **Read first:** docs/mvp/adr/0027-pci-scope-and-vm-controls.md (row 11.5 and its note of 2026-11-10: PCI DSS 11.5.1.1, covert malware communication channels); ota/docs/pci/README.md §8 item 2; ota/docs/pci/responsibility-matrix.md (row 11); docs/mvp/deployment-single-vm.md §2, §4 and §12; docs/mvp/architecture.md §6 (the outside services and their env variables); deploy/scripts/provision-vm.sh (step_harden, the firewall); deploy/scripts/check-vm.sh (group firewall); deploy/scripts/test/check-vm.test.sh; this plan's X-031 (the restore drill's outbound rules) and X-038 (the daily review)
+- **Files:** `deploy/scripts/provision-vm.sh`, `deploy/scripts/check-vm.sh`, `deploy/scripts/test/check-vm.test.sh`, `deploy/egress/allowed-hosts.conf`, `deploy/systemd/velexis-egress-refresh.service`, `deploy/systemd/velexis-egress-refresh.timer`, `deploy/scripts/log-review.sh`, `deploy/scripts/test/log-review.test.sh`, `docs/mvp/runbooks/outbound-allow-list.md`, `docs/mvp/deployment-single-vm.md`, `ota/docs/pci/README.md`, `ota/docs/pci/responsibility-matrix.md`
+- **Steps:**
+  1. List every outbound connection of the VM, from the code, the env templates and the units: DNS only to the configured resolvers (the system resolver and the platform's `DNS_RESOLVERS`), NTP (chrony's servers), Stripe's API hosts, Amadeus's API hosts (test and live, the token endpoint included), the mail relay of `SMTP_URL`, the backup bucket's endpoint (rclone), Let's Encrypt's ACME directory (Caddy), the Ubuntu archive and security mirrors and the vendor apt repositories of the step packages that unattended-upgrades and `apt-get update` read, the health check's TLS checks of the VM's own public hosts, and GitHub only where the deploy needs it (the Deploy workflow pushes over SSH, so the VM itself may need none: prove it). Write them to `deploy/egress/allowed-hosts.conf`, one host, port and protocol per line with the reason and the env variable or unit that uses it; placeholder hosts only where the real host is a secret of the VM (decisions.md §4).
+  2. `provision-vm.sh` writes the allow-list in a step `egress` (named, also run by `harden`, allowed under `VELEXIS_ROOT` for the test): outgoing connections denied by default with `ufw default deny outgoing` and `ufw allow out` rules, or with nftables when ufw cannot express it (host names whose addresses change, such as CDN-fronted APIs: an `inet` table whose address sets a root timer, `velexis-egress-refresh.timer`, resolves from `allowed-hosts.conf` every few minutes through the allowed resolvers, keeping the last good set when a lookup fails). Loopback, established and related traffic stay allowed, IPv4 and IPv6 alike; the open SSH session and the inbound rules of X-020 never change. Idempotent: a second run changes nothing.
+  3. Every refused outbound attempt is logged with the prefix `VELEXIS-EGRESS-DENY` (the one X-038's note of 2026-11-10 names), rate-limited (for example `log prefix "VELEXIS-EGRESS-DENY " limit rate 10/minute`, with the owning user where the kernel knows it), into the kernel log that journald keeps. X-038's daily review counts the refusals by destination and user and alerts at once on a burst (if X-038 is merged first, this task adds that to `log-review.sh` and its test; otherwise X-038 does, its note of 2026-11-10).
+  4. `check-vm.sh` (group firewall) checks it: outgoing denied by default, the rules or sets equal `allowed-hosts.conf` (an extra destination fails, named), refusals logged, and the refresh timer active and enabled when nftables is used. `check-vm.test.sh` covers both scripts: the step writes the allow-list once under `VELEXIS_ROOT` and a second run changes nothing; `check-vm.sh` reports PASS on the healthy fixture and FAIL for outgoing allowed by default, an extra destination, logging off and a stopped refresh timer.
+  5. Write `docs/mvp/runbooks/outbound-allow-list.md`: how to add a host (a pull request that changes `allowed-hosts.conf` with the reason, deploy, `provision-vm.sh --steps egress`, `check-vm.sh --only firewall`, the refusal log quiet), how to read a refusal, and the emergency opening (a time-limited rule, recorded, reviewed as an incident). Update `deployment-single-vm.md` §2 and §12, and the PCI pack: README §8 item 2 and the responsibility matrix's row 11 (11.5.1.1 in place, PCI DSS 11.5.1.1 cited).
+  6. Human step: on the throwaway VM a deploy, a backup, an alert e-mail, a Stripe test call, an Amadeus test search, a certificate renewal and unattended-upgrades work with the allow-list on, and `curl https://example.org` from the VM is refused and logged; then the same `check-vm.sh` on the production VM.
+- **Acceptance:**
+  - `check-vm.test.sh`: the step `egress` writes the allow-list once (a second run changes nothing), and `check-vm.sh` reports PASS for it and FAIL, naming the item, for outgoing allowed by default, a destination missing from `allowed-hosts.conf`, refusals not logged and a stopped refresh timer.
+  - On the throwaway VM (human step): every connection of step 1 works, a host outside the list is refused, and the refusal is logged once per rate window and counted in X-038's daily review.
+  - The runbook says how to add a host, and the PCI pack names this control for PCI DSS 11.5.1.1.
+  - `shellcheck -S style` is clean.
+- **Verify:** `shellcheck -S style deploy/scripts/provision-vm.sh deploy/scripts/check-vm.sh && sudo bash deploy/scripts/test/check-vm.test.sh`
 
 ## Dependency graph
 
@@ -1159,6 +1182,7 @@ flowchart LR
     X_038["X-038"]
     X_039["X-039"]
     X_040["X-040"]
+    X_041["X-041"]
   end
   X_001 --> X_002
   X_001 --> X_003
@@ -1215,6 +1239,7 @@ flowchart LR
   X_023 --> X_039
   X_004 --> X_040
   X_033 --> X_040
+  X_020 --> X_041
 ```
 
 The critical path printed by plan-lint runs through the database work (X-002 → X-010 → X-011 → X-012 → X-013 → X-015). Start X-016, X-003, X-004, X-006, X-017, X-019 and X-021 in parallel on day one; they do not share files. The VM chain (X-021 → X-033 → X-020 → X-023, 24 agent-hours) also carries the human steps on the VM: start X-033 as soon as X-021 is merged.

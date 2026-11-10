@@ -26,7 +26,7 @@ Common commands: backend `pnpm --filter @velexis/ota-backend test` and `test:int
 | M3 Book & pay | OBE-029 … OBE-057, SDK-008 … SDK-010, OFE-009 … OFE-019 | Guest and customer bookings paid by Stripe (3-D Secure) or by airline card (test), tickets, e-mails and PDFs, my bookings, guest lookup, change contacts, cancel with refund (OF-03 … OF-08). |
 | M4 OTA admin | OBE-058 … OBE-075, OBE-090, OBE-091, SDK-011 … SDK-014, OAD-002 … OAD-017, OFE-020 | "Open console" in the portal lands in the OTA admin; staff issue, cancel, import a PNR, read queues, capture and refund, change markups, branding, pages and templates (OF-09, OF-10). |
 | M5 Monetisation & self-service | OBE-076 … OBE-083, OAD-018, OFE-021, OFE-022 | The same code serves an OTA on its own Stripe (Connect or keys) and its own Amadeus credentials, a custom domain, and the live environment after go-live (OF-12). |
-| M6 Hardening & launch | OBE-084 … OBE-089, OBE-092 … OBE-096, OFE-023 … OFE-029, OAD-019, OAD-020, SDK-015 | Security review and PCI evidence closed, airline card live-ready, erasure job, performance measured, nightly suites green, SDK 1.0.0 published. |
+| M6 Hardening & launch | OBE-084 … OBE-089, OBE-092 … OBE-096, OFE-023 … OFE-030, OAD-019, OAD-020, SDK-015 | Security review and PCI evidence closed, airline card live-ready, erasure job, performance measured, nightly suites green, SDK 1.0.0 published. |
 
 ## M0 — Foundations
 
@@ -2889,7 +2889,8 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - `boot.test.js` still proves the banner and `noindex` per environment, and the banner is announced once (its `role="note"` kept).
 - **Verify:** `pnpm --filter @velexis/ota-frontend build && pnpm --filter @velexis/ota-frontend exec vitest run test/boot.test.js && E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront specs/storefront/a11y-pages.e2e.ts`
 
-### OFE-029 · Keep the header from growing when the configuration arrives
+### OFE-029 · Keep the header from growing when the configuration arrives ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M6
 - **Depends on:** OFE-027, OFE-028
@@ -2903,6 +2904,24 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - Lighthouse mobile CLS of the home and results pages on a test storefront is at most 0.1 in each of three runs (with OFE-027 and OFE-028); the figures are in `storefront-accessibility.md` §3.
   - `boot.test.js` still proves the header's name, logo, currency selector and account menu.
 - **Verify:** `pnpm --filter @velexis/ota-frontend build && pnpm --filter @velexis/ota-frontend test && E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront specs/storefront/a11y-pages.e2e.ts`
+- **Note (2026-11-10, lead decision 13a, FIX-W47-SHARED):** done (2026-11-10, lead decision 13a: OFE-028's header change (c99ce87) met its targets, CLS home 0.040 and results 0.027, `storefront-accessibility.md` §3), without a change of its own. Its Verify passed on 2026-11-10: the build, `pnpm --filter @velexis/ota-frontend test` (622 tests, `boot.test.js` among them) and `a11y-pages.e2e.ts` (36 passed). The shifts left are OFE-030. This Note gives the Status above its reason.
+
+### OFE-030 · Remove the layout shifts left on phones and run axe at phone width
+- **Component:** ota-frontend
+- **Milestone:** M6
+- **Depends on:** OFE-028
+- **Size:** M
+- **Read first:** ota/docs/storefront-accessibility.md §3.5 ("Still moving, not the banner": the shifts OFE-028 found left) and §3.6 (OFE-027 and OFE-028 merged: home 0.040, results 0.027 at 412 px), §3.1 (the method); ota/frontend/README.md §5.1 point 3, §8 and §9; ota/frontend/partials/header.html, search-form.html and footer.html; ota/frontend/src/components/header.js and search-form.js; tools/e2e/specs/storefront/a11y-pages.e2e.ts (the pages, their states and `expectNoSeriousA11yViolations`)
+- **Files:** `ota/frontend/partials/header.html`, `ota/frontend/partials/search-form.html`, `ota/frontend/partials/footer.html`, `ota/frontend/src/components/header.js`, `ota/frontend/src/components/search-form.js`, `ota/frontend/src/styles/main.css`, `ota/frontend/scripts/lighthouse.mjs`, `ota/frontend/test/boot.test.js`, `ota/frontend/test/search-form.test.js`, `tools/e2e/specs/storefront/a11y-phone.e2e.ts`, `ota/docs/storefront-accessibility.md`
+- **Steps:**
+  1. Keep what is painted from moving when the modules and the configuration arrive, on a 360 px and a 412 px phone and above: the search form's enhancement on home and results (0.04 at 412 px, the text under the form moving up when the passenger fieldset folds into its button; 0.122 on a 360 px phone with storefront.get held back, when the trip-type radios wrap onto a second row as "Multi-city" appears); the footer of a page shorter than the window growing as it fills (0.016); on a window 640 px or wider, an OTA name long enough to push the navigation onto a second row; and the currency selector of an OTA with two or more currencies, a taller control that can make the navigation row grow. Give each its final size from the first paint, or a layout where filling it moves nothing; keep the skip link, the landmarks, every label and keyboard path, the test banner of OFE-028 and the results page of OFE-027.
+  2. Run axe on the storefront pages at phone width, where no e2e or axe check runs today (every journey runs at `lg` or wider): `a11y-phone.e2e.ts` visits the pages of `a11y-pages.e2e.ts` in their shared states at 360 × 800 with the same `expectNoSeriousA11yViolations`, plus the header with a long OTA name, two currencies and a signed-in account menu; fix what it finds (reflow 1.4.10, target size 2.5.8, focus not obscured 2.4.11).
+  3. Give `scripts/lighthouse.mjs` a phone width option (360 px besides Lighthouse's default 412 px, the same throttling) and measure home and results at both widths, three runs each, on a test storefront, once with the demo OTA and once with a long name and two currencies (the method of `storefront-accessibility.md` §3.1); record the figures and the shifts left in §3.
+- **Acceptance:**
+  - Lighthouse mobile CLS of the home and results pages is at most 0.1 in each of three runs at 360 px and at 412 px, with LCP and INP still within target; the figures are in `storefront-accessibility.md` §3.
+  - axe reports no serious or critical violation on any storefront page at 360 px (`a11y-phone.e2e.ts`), and `a11y-pages.e2e.ts`, `search.e2e.ts` and `keyboard-checkout.e2e.ts` still pass.
+  - `boot.test.js` still proves the header's name, logo, currency selector and account menu.
+- **Verify:** `pnpm --filter @velexis/ota-frontend build && pnpm --filter @velexis/ota-frontend test && E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront specs/storefront/a11y-phone.e2e.ts specs/storefront/a11y-pages.e2e.ts`
 
 ## Cross-group dependencies at a glance
 

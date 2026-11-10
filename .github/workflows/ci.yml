@@ -2,10 +2,11 @@
 # Jobs: plan-lint (no install), deploy-files (shellcheck, Caddyfile validation and its end-to-end smoke test, the
 # velexis-deploy test with a fake systemctl, the velexis-healthcheck test with fake endpoints, systemd units and their
 # sandbox exposure), systemd-units (the real units run a stand-in app under systemd; a failure alert reaches Mailpit),
+# check-vm (check-vm.test.sh as root with a real sshd; lead decision (13l) of 2026-11-10, approved by the owner),
 # dev-setup (docs/mvp/local-development.md §2 on a clean runner: PostgreSQL 16 and Redis 7.4 from apt, dev-setup.sh and
 # dev-keys.mjs twice), build-test (repository guards and tools/ci/check-package-json.mjs before the install, then
-# install, the tools/ci tests, format, lint, typecheck, unit, contracts up to date, build, the cross-backend tests,
-# release dry run), integration (in parallel with build-test: the integration tests with PostgreSQL 16 + Redis 7.4 +
+# install, the tools/ci and tools/perf tests, format, lint, typecheck, unit, contracts up to date, build, the
+# cross-backend tests, release dry run), integration (in parallel with build-test: the integration tests with PostgreSQL 16 + Redis 7.4 +
 # Mailpit and the PAN-absence proof that reads their report; lead decision (5o) of 2026-11-05, approved by the owner).
 # Agents never change this file to get their own change through (AGENTS.md §7). What each guard enforces and how to
 # run it locally: tools/ci/README.md.
@@ -147,6 +148,35 @@ jobs:
       - name: Run the real units with a stand-in app, kill one into failed, check the alert in Mailpit
         # X-021: the production sandboxing against what the apps need; see the header of units-smoke.sh.
         run: sudo env SMOKE_NODE="$(command -v node)" bash deploy/systemd/test/units-smoke.sh
+
+  # Lead decision (13l) of 2026-11-10, approved by the owner: check-vm.test.sh (check-vm.sh, and the steps users, keys,
+  # envfiles and ssh of provision-vm.sh under a temporary VELEXIS_ROOT with fake system tools: X-020, X-037, X-040 and
+  # the SSH lockout guard) as root on a clean Ubuntu 24.04 runner, with the real sshd of openssh-server validating the
+  # SSH drop-ins. The runner is never a provisioned VM (the test refuses a host with /etc/velexis).
+  check-vm:
+    name: VM check test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install openssh-server if the runner image lacks it (the real sshd -t and sshd -T of the test)
+        # sshd -t also needs its privilege separation folder, which ssh.service creates only while it runs (socket
+        # activation on Ubuntu 24.04); without it the real-sshd checks would not run. provision-vm.sh does the same.
+        run: |
+          if [ ! -x /usr/sbin/sshd ]; then
+            sudo apt-get update -y
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server
+          fi
+          dpkg-query -W openssh-server
+          sudo install -d -m 0755 -o root -g root /run/sshd
+      - name: check-vm.test.sh as root (temporary VELEXIS_ROOT, fake system tools, the real sshd)
+        # Every check must pass, the real-sshd ones included: the test's last line says when those did not run.
+        run: |
+          set -o pipefail
+          sudo bash deploy/scripts/test/check-vm.test.sh 2>&1 | tee "$RUNNER_TEMP/check-vm.log"
+          tail -n 1 "$RUNNER_TEMP/check-vm.log" | grep -qx 'check-vm.test: all checks passed'
 
   # X-016: the one-time setup of docs/mvp/local-development.md §2, up to `pnpm dev:keys`, on a clean runner with
   # native PostgreSQL and Redis (systemd, sudo), exactly as a developer runs it. No service containers here.
@@ -433,11 +463,14 @@ jobs:
       - name: Generate local key files
         run: pnpm dev:keys
 
-      # The scripts in tools/ci have no package.json, so Turborepo does not lint or test them.
-      - name: Lint and test the CI checks
+      # The scripts in tools/ci and tools/perf have no package.json, so Turborepo does not lint or test them. tools/perf
+      # (the pure helpers of platform-smoke.mjs) since lead decision (13c) of 2026-11-10, approved by the owner.
+      - name: Lint and test the CI checks and tools/perf
         run: |
           pnpm exec eslint tools/ci
           node --test tools/ci/*.test.mjs
+          pnpm exec eslint tools/perf
+          node --test tools/perf/*.test.mjs
 
       - name: Format
         run: pnpm format:check

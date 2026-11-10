@@ -349,6 +349,84 @@ describe("workflow shape", () => {
     assert.match(sandbox.name, /velexis-healthcheck/);
   });
 
+  it("[FIX-W47-SHARED AC6] build-test lints and tests tools/perf with the CI checks, before the tests", () => {
+    // Lead decision (13c) of 2026-11-10, approved by the owner.
+    const at = stepIndex("build-test", (s) => /node --test tools\/ci\/\*\.test\.mjs/.test(s.run ?? ""));
+    assert.ok(at >= 0, "build-test has the step of the CI checks");
+    const step = JOBS.get("build-test").steps[at];
+    const lines = step.run.split("\n");
+    for (const line of [
+      "pnpm exec eslint tools/ci",
+      "node --test tools/ci/*.test.mjs",
+      "pnpm exec eslint tools/perf",
+      "node --test tools/perf/*.test.mjs",
+    ]) {
+      assert.ok(lines.includes(line), `the step runs: ${line}`);
+    }
+    assert.equal(step.if, undefined, "it always runs");
+    assert.equal(step["continue-on-error"], undefined, "a failing perf test fails the job");
+    assert.ok(
+      at > stepIndex("build-test", (s) => s.run === "pnpm install --frozen-lockfile"),
+      "after the install",
+    );
+    assert.ok(at < stepIndex("build-test", (s) => s.run === "pnpm test"), "before the tests");
+    // The glob matches the unit tests of the smoke script's helpers.
+    const perfTests = readdirSync(join(ROOT, "tools/perf")).filter((f) => f.endsWith(".test.mjs"));
+    assert.ok(perfTests.includes("platform-smoke.test.mjs"), "tools/perf/platform-smoke.test.mjs exists");
+  });
+
+  it("[FIX-W47-SHARED AC7] a job of its own runs check-vm.test.sh as root on ubuntu-24.04 with a real sshd", () => {
+    // Lead decision (13l) of 2026-11-10, approved by the owner.
+    const job = JOBS.get("check-vm");
+    assert.ok(job, "ci.yml has a check-vm job");
+    assert.deepEqual(jobKey("check-vm", "name"), ["    name: VM check test"]);
+    assert.deepEqual(jobKey("check-vm", "runs-on"), ["    runs-on: ubuntu-24.04"]);
+    const timeout = jobKey("check-vm", "timeout-minutes")[0]?.match(/^ {4}timeout-minutes: (\d+)$/)?.[1];
+    assert.ok(
+      timeout !== undefined && Number(timeout) > 0 && Number(timeout) <= 30,
+      "a timeout of at most 30 minutes",
+    );
+    // It always runs and a failure fails it: no condition, no continue-on-error, on the job or any step.
+    assert.deepEqual(jobKey("check-vm", "if"), [], "no condition on the job");
+    assert.deepEqual(jobKey("check-vm", "continue-on-error"), [], "no continue-on-error on the job");
+    assert.deepEqual(jobKey("check-vm", "needs"), [], "it waits for no other job");
+    const code = job.lines.filter((line) => !/^\s*#/.test(line)).join("\n");
+    assert.doesNotMatch(
+      code,
+      /^\s*(?:if|continue-on-error):/m,
+      "no condition and no continue-on-error anywhere",
+    );
+
+    const steps = job.steps;
+    const checkout = steps.find((s) => (s.uses ?? "").startsWith("actions/checkout@"));
+    assert.ok(checkout, "it checks out the repository");
+    assert.ok(withOf(checkout).includes("persist-credentials: false"));
+    const ssh = steps.findIndex((s) =>
+      /apt-get install -y --no-install-recommends openssh-server/.test(s.run ?? ""),
+    );
+    const test = steps.findIndex((s) =>
+      /^sudo bash deploy\/scripts\/test\/check-vm\.test\.sh\b/m.test(s.run ?? ""),
+    );
+    assert.ok(ssh >= 0, "it installs openssh-server when the image lacks it");
+    // Without /run/sshd, sshd -t fails ("Missing privilege separation directory") and the real-sshd checks are skipped.
+    assert.match(
+      steps[ssh].run,
+      /^sudo install -d -m 0755 -o root -g root \/run\/sshd$/m,
+      "it creates sshd's privilege separation folder",
+    );
+    assert.ok(test > ssh, "and then runs check-vm.test.sh as root");
+    const run = steps[test].run;
+    assert.match(run, /^set -o pipefail$/m, "a failing test fails the step through the pipe");
+    // The real-sshd checks must have run: the test's last line says so only when they did.
+    assert.match(run, /grep -qx 'check-vm\.test: all checks passed'/);
+    assert.ok(
+      readFileSync(join(ROOT, "deploy/scripts/test/check-vm.test.sh"), "utf8").includes(
+        'echo "check-vm.test: all checks passed"',
+      ),
+      "check-vm.test.sh prints that line",
+    );
+  });
+
   it("[X-019 AC5] every uses: in .github/workflows is pinned to a 40-character commit SHA", () => {
     const dir = join(ROOT, ".github/workflows");
     let uses = 0;

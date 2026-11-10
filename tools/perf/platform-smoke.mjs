@@ -47,10 +47,11 @@
 // errors are the operation, the HTTP status and the error code.
 import { execFileSync } from "node:child_process";
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
-import { readdirSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import { performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 /** The measured phases of PBE-063 step 1, in order: the rate each runs at and its p95 target. */
@@ -1240,12 +1241,48 @@ function publicOptions(options) {
   };
 }
 
-main().then(
-  (code) => {
-    process.exitCode = code;
-  },
-  (error) => {
-    process.stderr.write(`platform-smoke: ${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = 1;
-  },
-);
+// The pure helpers, for the unit tests next to this file (platform-smoke.test.mjs, lead decision (13c) of 2026-11-10).
+export {
+  PHASES,
+  UsageError,
+  accountsNeeded,
+  decimal,
+  errorKey,
+  failureKey,
+  fmt,
+  loadText,
+  parseOptions,
+  percentile,
+  phaseRequests,
+  phaseVerdict,
+  positiveInt,
+  problemsOf,
+  publicOptions,
+  round,
+  table,
+};
+
+// Run only as a program (`node tools/perf/platform-smoke.mjs ...`), never when a test imports the helpers above.
+if (isProgram()) {
+  main().then(
+    (code) => {
+      process.exitCode = code;
+    },
+    (error) => {
+      process.stderr.write(`platform-smoke: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.exitCode = 1;
+    },
+  );
+}
+
+/** True when Node runs this file itself: it is the script Node was started with (symbolic links resolved). */
+function isProgram() {
+  if (process.argv[1] === undefined) {
+    return false;
+  }
+  try {
+    return realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+}

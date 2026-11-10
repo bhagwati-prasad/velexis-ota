@@ -24,6 +24,13 @@ Both users' keys are read only from `~/.ssh/authorized_keys` (`AuthorizedKeysFil
 2. checks a copy of the whole sshd configuration with the new files before it writes anything: `sshd -t`, then `sshd -T -C user=<admin>` and `sshd -T -C user=deploy` must show the second factor and the deploy limits (another file in `sshd_config.d` that would win is caught here);
 3. writes the files, runs `sshd -t` on the real configuration (and puts the previous files back if it fails), then reloads `ssh`. A reload never closes an open session.
 
+**It never locks out the person who runs it** (lead decision (13k) of 2026-11-10). Run through `sudo`, `provision-vm.sh` takes you from `SUDO_USER`:
+
+- **Before any step**, a run with `harden` or `ssh` (a full run included) refuses, changes nothing and exits 1 when you are not one of the two users the new `AllowUsers` lets in, `ADMIN_USER` and `DEPLOY_USER`: `refused, nothing changed: you run this through sudo as <you>, but the new SSH settings let only ubuntu and deploy log in (AllowUsers), so <you> would lose SSH access`. Run it as the admin, pass `ADMIN_USER=<you>` if you are to be the admin from now on, or run it from the provider's console (§5).
+- **Before it writes anything**, the step `ssh` also refuses, the same way, when the second factor it applies would ask you for a factor you have not enrolled: it reads `sshd -T -C user=<you>` of the copy of point 2, and a TOTP code needs your own `~/.google_authenticator` (and the PAM module), only FIDO2 keys need one with `verify-required` in your `~/.ssh/authorized_keys`. The message names the factor and what is missing: enrol it (§2 or §3) and run the step again.
+- A root session without `sudo`, such as the provider's console, has no `SUDO_USER` and is not checked (nor is root's own `sudo`): nobody logs in over SSH as root, and the console stays reachable whatever sshd allows.
+- So run it with `sudo` itself: a shell from `sudo -i` keeps `SUDO_USER`, but one from `sudo su -` loses it and is not checked, like the console.
+
 Pass the same `ADMIN_MFA` on every later run of `harden` or `ssh`. A run with the other value switches only when that factor is enrolled too; otherwise the factor in force stays.
 
 ## 2. Enrol a FIDO2 key (`ADMIN_MFA=fido2`)
@@ -143,6 +150,6 @@ To rotate the deploy key: create a new pair (`ssh-keygen -t ed25519 -f velexis-d
 - `PASS sshd -T -C user=ubuntu: second factor FIDO2 (…)` or `… second factor TOTP (…)`, then `keys only from .ssh/authorized_keys`, and either `every key of ubuntu is a FIDO2 key (sk-ssh-ed25519) with verify-required (2)` or the TOTP secret file and `/etc/pam.d/sshd asks for the TOTP code`
 - `PASS sshd -T -C user=deploy: public key only (authenticationmethods publickey)`, `… no TTY and no forwarding (…)` and `… keys only from .ssh/authorized_keys`
 
-Every user of `AllowUsers` other than `deploy` counts as an admin and needs the second factor. [`deploy/scripts/test/check-vm.test.sh`](../../../deploy/scripts/test/check-vm.test.sh) tests the step `ssh` and these checks (with a real `sshd` when one works on the machine).
+Every user of `AllowUsers` other than `deploy` counts as an admin and needs the second factor. [`deploy/scripts/test/check-vm.test.sh`](../../../deploy/scripts/test/check-vm.test.sh) tests the step `ssh`, its lockout guard (§1) and these checks (with a real `sshd` when one works on the machine); CI's `check-vm` job runs it as root with the real `sshd` of `openssh-server` (lead decision (13l) of 2026-11-10).
 
 **The acceptance check of X-037 on the throwaway VM** (a human step): enrol as in §2 (or §3), then show that an admin login with a plain ed25519 key alone is refused and one with the FIDO2 key (or the key and a TOTP code) succeeds, that `check-vm.sh --only ssh` shows only `PASS` lines, and that the Deploy workflow still deploys. Keep the terminal outputs with the rehearsal outputs of [`deployment-single-vm.md`](../deployment-single-vm.md) §3.

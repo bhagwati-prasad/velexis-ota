@@ -29,6 +29,13 @@
 # sshd -t and sshd -T -C accept a copy of the whole configuration with it; otherwise sshd stays as it is and the
 # enrolment steps are printed. sshd is then reloaded, which keeps every open session.
 #
+# Lockout guard (lead decision (13k) of 2026-11-10, docs/mvp/runbooks/ssh-access.md §1): the SSH changes of the steps
+# harden and ssh never lock out the person who runs them through sudo (SUDO_USER). A run with harden or ssh refuses
+# before any step, changing nothing and exiting 1, when that user is not one of the two users the new AllowUsers lets in
+# (ADMIN_USER, DEPLOY_USER). The step ssh also refuses, before it writes anything, when the second factor it applies
+# would ask that user (sshd -T -C user=<them> of a copy of the new configuration) for a FIDO2 key or a TOTP code they
+# have not enrolled. A root session without sudo, such as the provider's console, has no such user and is not checked.
+#
 # Master keys (ADR-0010): the first run creates master-v1.key (KEK local:v1). NEW_MASTER_KEY=v<N> with the step keys
 # adds master-v<N>.key for a KEK rotation (docs/mvp/runbooks/master-key-rotation.md): 32 random bytes, generated
 # once, installed as identical 0400 copies in both zone folders. It refuses a version below the highest master key
@@ -82,6 +89,8 @@ SSHD_MFA="$SSHD_DROPINS/01-velexis-mfa.conf"   # the admin's second factor and t
 PAM_SSHD="$VELEXIS_ROOT/etc/pam.d/sshd"
 SSH_TMP=""                               # the private folder of the step ssh, removed when it ends (and on exit)
 MFA_PENDING=""                           # why the step ssh did not apply the second factor; repeated by the summary
+RUNNER=""                                # who runs this through sudo (SUDO_USER); the lockout guard keeps their SSH access
+RUNNER_REASON=""                         # the factor the new SSH settings would ask of RUNNER, and why they lack it
 LOG_FILE=""                              # $LOGS/provision.log once the folder exists
 # The generated values: names in .provision-secrets and @@NAME@@ placeholders in deploy/env and deploy/redis.
 SECRET_NAMES="MIGRATOR_DB_PASSWORD PROVISIONER_DB_PASSWORD PLATFORM_DB_PASSWORD OTA_DB_PASSWORD REDIS_PASSWORD EDGE_SECRET OTA_ADMIN_SERVICE_KEY PLATFORM_BFF_KEY"
@@ -138,6 +147,8 @@ done
 [ "$ADMIN_USER" != "$DEPLOY_USER" ] || die "ADMIN_USER and DEPLOY_USER must be different users"
 
 [ "$(id -u)" -eq 0 ] || die "run as root"
+# The person behind sudo; nobody for a root session without sudo (the provider's console) or root's own sudo.
+case "${SUDO_USER:-root}" in root) RUNNER="" ;; *) RUNNER="$SUDO_USER" ;; esac
 if [ -n "$VELEXIS_ROOT" ]; then
   case "$VELEXIS_ROOT" in /?*) ;; *) die "VELEXIS_ROOT must be an absolute path other than /" ;; esac
   [ -d "$VELEXIS_ROOT" ] || die "VELEXIS_ROOT $VELEXIS_ROOT is not a folder"
@@ -309,6 +320,10 @@ EOF
     log "Initialising the AIDE database (takes a few minutes)"
     aideinit -y -f >/dev/null || warn "aideinit failed; run it manually"
   fi
+  # AIDE's daily check (PCI DSS 11.5.2): the package aide-common's timer, enabled by the package; a re-run repairs a
+  # disabled one. check-vm.sh checks it (lead decision (13j) of 2026-11-10).
+  systemctl enable --now dailyaidecheck.timer >/dev/null 2>&1 \
+    || warn "could not enable dailyaidecheck.timer (package aide-common); AIDE's daily check does not run"
 
   if install_changed 0644 root:root "$DEPLOY_DIR/journald/velexis.conf" /etc/systemd/journald.conf.d/velexis.conf; then
     systemctl restart systemd-journald
@@ -391,13 +406,13 @@ fido2_key_count() { # authorized_keys -> how many lines are sk-ssh-ed25519 keys 
     "$1" 2>/dev/null || true
 }
 
-totp_secret_ok() { # home -> 0 when ~/.google_authenticator is a time-based secret only the admin reads; else MFA_REASON
-  local f="$1/.google_authenticator" first="" got
+totp_secret_ok() { # home [user] -> 0 when ~/.google_authenticator is a time-based secret only the user (the admin) reads
+  local f="$1/.google_authenticator" user="${2:-$ADMIN_USER}" first="" got #  else MFA_REASON says why
   if [ ! -f "$f" ] || [ -L "$f" ]; then MFA_REASON="$f does not exist"; return 1; fi
   got="$(stat -c '%U %a' "$f")"
   case "$got" in
-    "$ADMIN_USER 400" | "$ADMIN_USER 600") ;;
-    *) MFA_REASON="$f must belong to $ADMIN_USER with mode 0400 or 0600 (found: $got)"; return 1 ;;
+    "$user 400" | "$user 600") ;;
+    *) MFA_REASON="$f must belong to $user with mode 0400 or 0600 (found: $got)"; return 1 ;;
   esac
   # The secret is read into memory only to recognise it, and never printed.
   IFS= read -r first <"$f" || true
@@ -511,6 +526,52 @@ mfa_effective_ok() { # mirror config -> 0 when sshd -T shows the second factor a
     "kbdinteractiveauthentication no" "authorizedkeysfile .ssh/authorized_keys" "permittty no" "disableforwarding yes"
 }
 
+# ---- the lockout guard (lead decision (13k) of 2026-11-10; see the header) -----------------------------------------
+runner_in_allowusers() { # -> dies, before any step, when RUNNER is not one of the users the new AllowUsers lets in
+  if [ -z "$RUNNER" ]; then
+    to_log "no sudo user (a root session, such as the provider's console): the lockout guard has nobody to keep"
+    return 0
+  fi
+  case " $ADMIN_USER $DEPLOY_USER " in *" $RUNNER "*) return 0 ;; esac
+  die "refused, nothing changed: you run this through sudo as $RUNNER, but the new SSH settings let only $ADMIN_USER and $DEPLOY_USER log in (AllowUsers), so $RUNNER would lose SSH access. Run it as $ADMIN_USER, pass ADMIN_USER=$RUNNER, or run it from the provider's console (docs/mvp/runbooks/ssh-access.md §1)."
+}
+
+runner_factor_ok() { # mirror config -> 0 when RUNNER has every factor the new configuration asks of them; else RUNNER_REASON
+  local cfg="$1" out home lists list algs n need_totp=1
+  local -a alternatives
+  if ! out="$(sshd -T -f "$cfg" -C "user=$RUNNER" 2>&1)"; then
+    RUNNER_REASON="a login that sshd -T -C user=$RUNNER can show, but it fails: $(printf '%s\n' "$out" | head -n 1)"
+    return 1
+  fi
+  home="$(getent passwd "$RUNNER" | cut -d: -f6)"
+  # AuthenticationMethods: space-separated alternatives, each a comma list. A TOTP code is needed when every
+  # alternative holds keyboard-interactive ("any", the default, holds none).
+  lists="$(printf '%s\n' "$out" | awk '$1 == "authenticationmethods" { $1 = ""; print; exit }')"
+  read -r -a alternatives <<<"${lists:-any}"
+  for list in "${alternatives[@]}"; do
+    case ",$list," in *,keyboard-interactive*) ;; *) need_totp=0 ;; esac
+  done
+  if [ "$need_totp" = 1 ]; then
+    if ! pam_totp_module; then
+      RUNNER_REASON="a TOTP code (sshd -T: authenticationmethods${lists}), but the PAM module pam_google_authenticator.so is not installed"
+      return 1
+    fi
+    if ! totp_secret_ok "$home" "$RUNNER"; then
+      RUNNER_REASON="a TOTP code (sshd -T: authenticationmethods${lists}), but $MFA_REASON"
+      return 1
+    fi
+  fi
+  # Only FIDO2 keys accepted: the user needs one with user verification, as the step enrols it.
+  algs="$(printf '%s\n' "$out" | awk '$1 == "pubkeyacceptedalgorithms" { print $2; exit }')"
+  if [ "$algs" = sk-ssh-ed25519@openssh.com ]; then
+    n="$(fido2_key_count "$home/.ssh/authorized_keys")"
+    if [ "${n:-0}" -eq 0 ]; then
+      RUNNER_REASON="a FIDO2 key (sshd -T: pubkeyacceptedalgorithms $algs), but $home/.ssh/authorized_keys holds no FIDO2 key with user verification"
+      return 1
+    fi
+  fi
+}
+
 mfa_enrolment_steps() { # admin home -> how to enrol the factor of ADMIN_MFA (stdout)
   local again="sudo ADMIN_USER=$ADMIN_USER ADMIN_MFA=$ADMIN_MFA bash $DEPLOY_DIR/scripts/provision-vm.sh --steps ssh"
   if [ "$ADMIN_MFA" = fido2 ]; then
@@ -586,6 +647,10 @@ step_ssh() {
     ssh_mirror "$SSH_TMP/check"
     if ! out="$(sshd -t -f "$SSH_TMP/check/sshd_config" 2>&1)"; then
       die "sshd -t refuses the new SSH settings, so nothing changed: $(printf '%s\n' "$out" | head -n 1)"
+    fi
+    # The lockout guard: whoever runs this through sudo must have the factor the new settings ask of them.
+    if [ -n "$RUNNER" ] && [ "$mfa_new" = 1 ] && ! runner_factor_ok "$SSH_TMP/check/sshd_config"; then
+      die "refused, nothing changed: with the new SSH settings $RUNNER, who runs this, would need $RUNNER_REASON, and would lose SSH access. Enrol it first (docs/mvp/runbooks/ssh-access.md §2 or §3), or run this from the provider's console."
     fi
     if [ "$mfa_new" = 1 ] && ! mfa_effective_ok "$SSH_TMP/check/sshd_config"; then
       die "the new SSH settings would not be in force: $MFA_REASON. Nothing changed."
@@ -1033,6 +1098,8 @@ Next steps (docs/mvp/deployment-single-vm.md §3):
 EOF
 }
 
+# The lockout guard, before any step changes anything: whoever runs this through sudo stays in AllowUsers.
+case " $STEPS " in *" harden "* | *" ssh "*) runner_in_allowusers ;; esac
 for step in $STEPS; do
   "step_${step}"
 done

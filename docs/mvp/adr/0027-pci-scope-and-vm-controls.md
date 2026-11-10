@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (airline card through Amadeus, single VM), security reviewer and Platform/DevOps engineer (planning review). Decided during planning; revisit when the card path moves to a vault or forwarding service ([ADR-0011](0011-payments-stripe-and-airline-card.md) follow-up), when the card path gets its own segmented host, or when Velexis passes the level-1 service-provider threshold.
+**Revisions:** 2026-11-10 (lead decisions (13i) and (13h) of 2026-11-10, recording FIX-W47-SHARED): row 12's scope confirmation is at least every six months and after a significant change (PCI DSS 12.5.2.1, a service provider's requirement), and row 11.5 names task X-041, an outbound allow-list with logging, for 11.5.1.1 (dated notes under the table).
 
 ## Context
 
@@ -39,6 +40,10 @@ The airline-card method of [`decisions.md`](../decisions.md) §2 puts card numbe
    | 12 | Policies, incident response plan, responsibility matrix with OTAs and service providers, yearly scope confirmation; the matrix references the rows above | OBE-085 |
    | 12.10.1 (recovery; backups hold no card data) | Backups encrypted to off-VM keys; the bucket has object lock and lifecycle rules, and the VM's key cannot delete; a restore drill that cannot reach live Amadeus or Stripe | X-024, X-031 |
 
+   **2026-11-10 (lead decision (13i) of 2026-11-10; FIX-W47-SHARED), row 12:** PCI DSS v4.0.1 12.5.2.1 asks a service provider to confirm its PCI DSS scope at least once every six months and after a significant change to the in-scope environment, not yearly as the row's "yearly scope confirmation" reads. Velexis is a service provider (Context), so the scope is confirmed every six months and after a significant change. The evidence pack already uses that frequency: its calendar and scope record ([`ota/docs/pci/README.md`](../../../ota/docs/pci/README.md) §2 and §3, OBE-085). Nothing else in the row changes.
+
+   **2026-11-10 (lead decision (13h) of 2026-11-10; FIX-W47-SHARED), row 11.5:** PCI DSS 11.5.1.1 (service providers detect, alert on and address covert malware communication channels) gets its control in task X-041 ([`../plans/foundation-tasks.md`](../plans/foundation-tasks.md)): the VM's firewall denies outgoing connections except to an allow-list of the hosts it needs, and every refused attempt is logged and reviewed in X-038's daily review. Until X-041 is done the firewall allows all outgoing traffic, and 11.5.1.1 is open ([`ota/docs/pci/README.md`](../../../ota/docs/pci/README.md) §8).
+
 3. **The card path stays as narrow as ADR-0011 describes**, so that the data-handling controls (rows 3, 6.4.3) stay small. The environment controls above apply to the whole VM regardless.
 
 ## Consequences
@@ -58,6 +63,7 @@ The airline-card method of [`decisions.md`](../decisions.md) §2 puts card numbe
 ### Follow-ups
 
 - X-037, X-038, X-039 (M6) and X-033 (M0) are new foundation tasks; OBE-085 records the calendar and references this ADR.
+- 2026-11-10 (lead decision (13h)): X-041 (M6) is a new foundation task for 11.5.1.1, the outbound allow-list with logged refusals (the note on row 11.5).
 - If the card path moves to a vault or forwarding service, most of this scope goes away; record that in a new ADR that supersedes this one.
 
 ## Alternatives considered

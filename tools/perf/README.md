@@ -4,8 +4,19 @@
 
 - **Plain Node 22, no dependency.** It uses `fetch`, a small concurrency limiter and the standard library. It has no `package.json` and loads no workspace package.
 - **A client of a running API.** It talks to a production build of the platform API (`node dist/main.js`) and its worker, as the portal's server and Caddy do. It opens no database connection.
-- **Not part of `pnpm test`, `pnpm test:int` or CI.** It measures the machine it runs on, so it runs by hand. Every recorded run names the machine, `nproc` and the load average.
+- **The measurement is not part of `pnpm test`, `pnpm test:int` or CI.** It measures the machine it runs on, so it runs by hand. Every recorded run names the machine, `nproc` and the load average. Its pure helpers have unit tests that CI runs ([below](#lint-and-unit-tests)).
 - **Scratch stacks only.** It signs up accounts and creates OTAs on the API it is given. Run it against the scratch stack below, never against the VM or the development database `velexis`.
+
+## Lint and unit tests
+
+The folder has no `package.json`, so Turborepo neither lints nor tests it. CI's `build-test` job does both in the step that also checks `tools/ci` (lead decision (13c) of 2026-11-10, approved by the owner; [`tools/ci/README.md`](../ci/README.md)). Run them the same way, from the repository root, after `pnpm install` (ESLint reads `eslint.config.mjs`):
+
+```bash
+pnpm exec eslint tools/perf
+node --test tools/perf/*.test.mjs        # plain Node 22, no running API, about a second
+```
+
+`platform-smoke.test.mjs` imports the helpers that `platform-smoke.mjs` exports (the options and their usage errors, `accountsNeeded` and `phaseRequests`, `percentile`, the error keys, the verdicts and `problemsOf`, `table`, `publicOptions`) and checks them without a network: the 33 accounts of the defaults and the 8 of `--duration 10`, nearest-rank percentiles, a remote `--base` refused, and the BFF key in neither an error nor the JSON options. Importing the script measures nothing: it runs only when Node runs the file itself.
 
 ## Run it
 
