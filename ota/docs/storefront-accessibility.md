@@ -6,7 +6,7 @@ The pass of task OFE-024 over the hosted storefront ([`ota/frontend`](../fronten
 |---|---|---|
 | Automated pass: axe (WCAG 2.2 A and AA) on every page and state | No serious or critical violation on any of the 20 pages: 120 checks of the shared states and 76 of the pages' own states (2026-11-06) | Done; runs in every `storefront` run |
 | Manual screen-reader pass (NVDA, VoiceOver) through search and checkout | Script below; not yet run | **Pending: human step** (no Windows or macOS machine here) |
-| Lighthouse mobile, home and results | LCP and INP within target on both; CLS above 0.1 on both. After OFE-027 (2026-11-10) the results page's own shifts are 0.025 of its 0.152 (0.749 before); the rest, 0.127, is the header growing and the test banner appearing when the configuration arrives, on every page (§3.4) | Follow-up tasks OFE-027 (its part done, the figure pending), OFE-028 and OFE-029 in the plan (§3.3) |
+| Lighthouse mobile, home and results | LCP and INP within target on both; CLS above 0.1 on both (2026-11-06). After OFE-027 (2026-11-10) the results page's own shifts are 0.025 of its 0.152 (0.749 before); the rest, 0.127, was the header growing and the test banner appearing when the configuration arrives, on every page (§3.4). Home on a test storefront: CLS 0.04 in each of three runs since OFE-028, which moved the banner and keeps the header's two rows on a phone from the first paint (2026-11-10, §3.5) | Home done (OFE-028); results: OFE-027 (its part done, the figure to be measured again with OFE-028 merged) and OFE-029 in the plan (§3.3) |
 | Font budget: at most 2 families and 120 KB per page | In `scripts/check-budgets.mjs` (every build); every page within it after one fix (§4) | Done |
 
 ## 1. Automated pass (axe)
@@ -50,7 +50,7 @@ What the stack cannot answer on demand is answered in the browser (`page.route`)
 |---|---|---|---|
 | 1 | The visually hidden "Status" heading of the confirmation page had no weight class, so it is set in the heading font at 400: with an OTA's heading family other than its body family, the page loads that family's regular face as well, 142.8 KB of fonts (Merriweather headings on Inter text) against the budget of 120 KB. Hidden text still loads its face | `ota/frontend/confirmation.html` | `font-semibold` like every other heading; the font budget of `check-budgets.mjs` now catches such a heading on every page (§4) |
 | 2 | The travellers step sent with its fields empty (the browser's checks off) went on to the contact step: the page sent `{"travelers":[{"travelerId":"1"}]}` and `PUT /v1/checkouts/{id}/travelers` answered `200`. Not an API defect: `TravelerInput` requires only `travelerId` (a form may send a traveller in parts), and the API keeps what is missing in `progress.missing` (`/travelers/0/name`, `REQUIRED`) with `travelersComplete: false`; `checkout.createPayment` later answers `422 CHECKOUT_INCOMPLETE` and the page goes back to the first incomplete step (pages.md §7). The page itself moves on after every `200` without reading `progress.missing`; in a browser the fields' `required` stops the empty form first | `ota/frontend/src/pages/checkout.js` (the travellers step) | Nothing for axe to fix. Whether the step should stay on its own form while `progress.missing` names its fields is a question to the lead (OFE-024's questions). The spec routes the `422 TRAVELER_DATA_INVALID` a refused name gets, so that axe judges the field errors and their summary |
-| 3 | Layout shifts above the CLS target on both pages Lighthouse measures | Storefront layout | Follow-up tasks OFE-027 and OFE-028 (§3.3); OFE-029 for the header, which OFE-027's measurement found (§3.4) |
+| 3 | Layout shifts above the CLS target on both pages Lighthouse measures | Storefront layout | Follow-up tasks OFE-027 and OFE-028 (§3.3); OFE-029 for the header, which OFE-027's measurement found (§3.4); OFE-028 moved the test banner and kept the header's rows on a phone (§3.5) |
 
 ## 3. Performance (Lighthouse)
 
@@ -88,7 +88,7 @@ Bytes transferred: home 118 to 124 KB, results 162 KB. Fonts: one family on both
 
 **LCP and INP are met on both pages; CLS is not.** Lighthouse's layout-shift culprits:
 
-- **Both pages, 0.127 and 0.039:** `main` and the text under the form move down when the "Test mode: no real bookings or payments" banner (`partials/test-banner.html`, `hidden` in the HTML) is shown after storefront.get answers. A live storefront shows no banner and has no such shift; every test storefront has it. The third runs had no shift because the configuration answered before the first paint. (Corrected in §3.4: most of the 0.127 is the header growing in the same frame, which a live storefront has too.)
+- **Both pages, 0.127 and 0.039:** `main` and the text under the form move down when the "Test mode: no real bookings or payments" banner (`partials/test-banner.html`, `hidden` in the HTML) is shown after storefront.get answers. A live storefront shows no banner and has no such shift; every test storefront has it. The third runs had no shift because the configuration answered before the first paint. (Corrected in §3.4 and §3.5: the 0.127 is the banner and, on a phone, the header growing in the same frame, which a live storefront has too; the 0.039 is the search form, not the banner.)
 - **Results, 0.503 (and 0.073, 0.046):** on a phone the filters come before the results in one column; when the facets arrive, the filters grow by about 2 000 px and push the results and the footer down. With a real Amadeus search, which takes seconds, the results always arrive after the first paint, so the shift is the rule, not the exception.
 
 ### 3.3 Follow-up tasks (in the plan)
@@ -98,7 +98,7 @@ The CLS target is not met, so it has follow-up tasks in [`plans/agent-tasks.md`]
 | Task | What it changes | Acceptance |
 |---|---|---|
 | [OFE-027](plans/agent-tasks.md#ofe-027--keep-the-results-page-from-shifting-on-phones) · Keep the results page from shifting on phones | On narrow screens the filters behind a disclosure above the results, or their space reserved before the facets arrive; the desktop sidebar, every filter's label and keyboard path kept | CLS of the results page ≤ 0.1 in three runs; `search.e2e.ts`, `keyboard-checkout.e2e.ts` and `a11y-pages.e2e.ts` pass |
-| [OFE-028](plans/agent-tasks.md#ofe-028--show-the-test-banner-without-moving-the-page) · Show the test banner without moving the page | The banner's space kept from the first paint, or a place where showing it moves nothing and obscures nothing (2.4.11); a live storefront still without banner (OFE-021) | CLS of the home page on a test storefront ≤ 0.1 in three runs; `boot.test.js` still proves banner and `noindex` per environment |
+| [OFE-028](plans/agent-tasks.md#ofe-028--show-the-test-banner-without-moving-the-page) · Show the test banner without moving the page | The banner's space kept from the first paint, or a place where showing it moves nothing and obscures nothing (2.4.11); a live storefront still without banner (OFE-021) | CLS of the home page on a test storefront ≤ 0.1 in three runs; `boot.test.js` still proves banner and `noindex` per environment. **Met on 2026-11-10: 0.04 in each run (§3.5)** |
 | [OFE-029](plans/agent-tasks.md#ofe-029--keep-the-header-from-growing-when-the-configuration-arrives) · Keep the header from growing when the configuration arrives (found by OFE-027, §3.4) | The header's final shape from the first paint on a phone, where the OTA's name now pushes the navigation onto a second row | CLS of the home and results pages on a test storefront ≤ 0.1 in three runs, with OFE-027 and OFE-028 |
 
 ### 3.4 The results page after OFE-027 (2026-11-10)
@@ -129,6 +129,55 @@ LCP and INP stay within target (the results timespan has one interaction more, t
 **Result.** The results page's CLS fell from 0.749 to 0.152 in each of three runs; of the 0.152, 0.127 is the header and banner shift of every page and 0.025 the results page's own. The target of 0.1 is therefore not met yet: OFE-027's acceptance waits for OFE-028 and OFE-029, measured again with the script. A scratch build without the banner (its partial taken out of `dist/`, not a product state) shows the split: results 0.148 (0.121 the header alone, 0.027 the page's own), home 0.161 (0.121 the header, 0.040 the text under the form); the header's growth is about the whole shift that §3.2 put on the banner, and a live storefront with a name as long has it too.
 
 **Review check (2026-11-10, the same build and stack).** The script repeated these figures (results 0.152 and home 0.166 in each of three runs, LCP medians 2.00 s and 1.60 s, INP medians 75 ms and 34 ms; load average about 4). A `PerformanceObserver` trace at 412 × 823 px (its sums equal Lighthouse's CLS) with CSS injected into the page, not a product state, splits the 0.127 frame: without the banner 0.121 (the navigation moves from y 16 to 56 when it wraps); with the header in its final shape from the first paint (the navigation on its own row under the name) and the banner still shown 0.046, so the results page would measure 0.072 and the home page 0.085; with both, 0.027 and 0.040. The header (OFE-029) is therefore what keeps both pages above the target; the banner (OFE-028) adds 0.046.
+
+### 3.5 The test banner and the header (OFE-028, 2026-11-10)
+
+**What moved.** Measured again, with storefront.get also held back in the browser so that it always answers after the first paint (below), the home page's 0.127 of §3.2 is two changes in one frame when the configuration arrives: the banner, shown above the header, pushes the page down by its 38 px; and on a phone the header grows by 36 px, because the OTA's name ("Demo Travel"), longer than the placeholder "Flights", pushes the navigation onto a second row. The second change happens on a live storefront too. The 0.039 is not the banner: the home page's module folds the search form's passenger fieldset into its "Passengers" button, so the text under the form moves up.
+
+**What changed.**
+
+- The banner is fixed to the bottom of the window (`fixed inset-x-0 bottom-0 z-10` in `partials/test-banner.html`; the location suggestions, and on wider screens the passenger panel, open over it), so showing it moves nothing that is painted. While it shows, `components/test-banner.js` keeps its height in `--vx-test-banner-height` on `<html>`, measured when it appears and again on every size change through a `ResizeObserver` (wrapped text on a narrow screen, a font that arrives, zoomed text). `main.css` turns that height into the root's `padding-bottom`, so the end of every page can be scrolled clear of the banner, and into its `scroll-padding-bottom`, so the browser scrolls a focused element above the banner rather than behind it (2.4.11, technique C43).
+- A live storefront shows no banner and keeps no space for it (the property is unset, both values are 0); an environment the build does not know is still shown as test (OFE-021), now on the airline-card page too, which mounts the banner with storefront.get's value as it is: the component itself hides it only for `live`. The banner stays the first element of the page, before the skip link and the header, a `role="note"` and not a live region, so a screen reader reads it once, first (`test/boot.test.js`, `[OFE-028 AC2]`).
+- On a phone (below 640 px, `max-sm:flex-col max-sm:items-start` in `partials/header.html`) the header's name and navigation are two rows from the first paint, so the OTA's name no longer moves the page when it arrives. A name longer than the placeholder already gave the header these two rows on a phone.
+
+**Lighthouse mobile figures** (the method of §3.1, three runs per page and build: Lighthouse 13.5.0 and puppeteer-core 25.16.0 in a scratch folder, by hand: the pinned script of OFE-027 was not merged yet; headless Chromium 153.0.8010.12; the e2e harness's stack under its lock, the demo OTA in the test environment with one currency, EUR; this task's build on `task/OFE-028-test-banner-cls` (6d8ab82 with this task's changes) in the stack's preview on 4173, and the build of 6d8ab82 itself in a second `vite preview` on 4180 with the same proxy; the agents' Linux machine, 4 CPUs, load average 0.66 at the start):
+
+| Page | Build | Run | Performance score | FCP | LCP (≤ 2.5 s) | CLS (≤ 0.1) | TBT | INP (≤ 200 ms) |
+|---|---|---|---|---|---|---|---|---|
+| Home | 6d8ab82 | 1 | 0.92 | 1.66 s | 1.66 s | 0.166 | 6 ms | 25 ms |
+| Home | 6d8ab82 | 2 | 0.92 | 1.57 s | 1.57 s | 0.166 | 8 ms | 28 ms |
+| Home | 6d8ab82 | 3 | 0.92 | 1.61 s | 1.63 s | 0.166 | 0 ms | 27 ms |
+| Home | OFE-028 | 1 | 0.99 | 1.58 s | 1.82 s | **0.04** | 25 ms | 28 ms |
+| Home | OFE-028 | 2 | 0.99 | 1.57 s | 1.78 s | **0.04** | 12 ms | 19 ms |
+| Home | OFE-028 | 3 | 0.99 | 1.57 s | 1.79 s | **0.04** | 19 ms | 32 ms |
+| **Home, OFE-028, median** | | | 0.99 | 1.57 s | **1.79 s** | **0.04** | 19 ms | **28 ms** |
+| Results | 6d8ab82 | 1 | 0.75 | 1.72 s | 1.97 s | 0.749 | 23 ms | 36 ms |
+| Results | 6d8ab82 | 2 | 0.75 | 1.73 s | 1.97 s | 0.749 | 16 ms | 38 ms |
+| Results | 6d8ab82 | 3 | 0.75 | 1.52 s | 2.05 s | 0.749 | 0 ms | 54 ms |
+| Results | OFE-028 | 1 | 0.75 | 1.73 s | 1.98 s | 0.67 | 17 ms | 51 ms |
+| Results | OFE-028 | 2 | 0.75 | 1.73 s | 1.96 s | 0.67 | 15 ms | 50 ms |
+| Results | OFE-028 | 3 | 0.76 | 1.71 s | 1.92 s | 0.67 | 0 ms | 40 ms |
+| **Results, OFE-028, median** | | | 0.75 | 1.73 s | **1.96 s** | **0.67** | 15 ms | **50 ms** |
+
+Bytes transferred: home 119.0 to 124.8 KB (124.5 KB before), results 162.4 to 168.2 KB (162.1 to 167.8 KB before).
+
+- **Home: CLS 0.04 in each of the three runs, at most 0.1 (OFE-028's acceptance); LCP and INP within target.** The one shift left is the search form's (0.04: `main > p.mt-8`, the text under the form). The build of 6d8ab82 had 0.166 in all three runs (0.127 on `main`, 0.039 on that text). The LCP of this build is the same paint as its FCP (observed at 118 to 156 ms on this unthrottled machine, as before); Lighthouse's simulation counts storefront.get in its path when the request ended before that paint, as it did in these runs, hence about 0.2 s more than the FCP.
+- **Results: CLS 0.67** (0.749 before): the 0.127 of the banner and the header is gone; what is left is OFE-027's (the filters and the results, 0.546 and 0.078, and the footer, 0.037 and 0.010).
+
+**With storefront.get held** (the same comparison independent of how fast the local API answers, which here was often before the first paint): Playwright 1.64.1 with the same Chromium, `vite preview` of both builds, storefront.get answered in the browser 800 ms after the request (the demo configuration, test environment, its other calls refused), the layout shifts of a `PerformanceObserver` summed until a second after the header shows the OTA's name:
+
+| Page | Window | 6d8ab82 | OFE-028 |
+|---|---|---|---|
+| Home | 412 × 823 (Lighthouse's phone) | 0.166 | 0.040 (the search form) |
+| Find a booking, not found (404) | 412 × 823 | 0.127 | 0.016 (the footer growing as it fills, on a page shorter than the window) |
+| Home | 1280 × 720 | 0.063 | 0.037 (the search form) |
+| Find a booking, not found (404) | 1280 × 720 | 0.025 | 0 |
+
+A live storefront in the same check: no banner, no space after the page, home 0.040 on the phone (the search form). Focus: Tab through home, find a booking, sign-in, sign-up and the 404 page in both windows met no focused element behind the banner; the same walk without the root's scroll padding left the sign-up button and, on the short pages of the desktop window, five footer links behind it.
+
+**Still moving, not the banner** (a question to the lead, not yet a task in the plan): the search form's enhancement on home and results (0.04 on Lighthouse's phone; on a 360 px phone the trip type radios also wrap onto a second row when "Multi-city" appears, 0.122 with storefront.get held); the footer of a page shorter than the window growing as it fills (0.016); on a window 640 px or wider, an OTA name long enough to push the navigation onto a second row; and the currency selector of an OTA with two or more currencies, a taller control that can make the navigation row grow.
+
+The journeys pass with the banner at the bottom (2026-11-10, the same build and machine): `a11y-pages.e2e.ts` (36 tests: no serious or critical axe violation on any page or state), every spec of the `storefront` project (91 tests, `search.e2e.ts` and `keyboard-checkout.e2e.ts` among them), and the two other journeys that look for the banner, `ota-admin/settings-effects.e2e.ts` (5) and `admin-suspension-storefront.e2e.ts` (7).
 
 ## 4. Font budget
 

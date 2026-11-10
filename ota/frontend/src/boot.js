@@ -13,9 +13,10 @@
 //    (legal links, the content pages of `storefront.listPages` with `showInFooter` once they arrive, their failure
 //    ignored, support contacts), the environment (`applyEnvironment`: only `environment = live` hides the test banner
 //    and takes away the `noindex` of a test storefront; `test`, and any value this build does not know, shows the
-//    banner and adds `noindex`), and `auth.getSession` for the account menu (`401` = signed out; called only when the
-//    SDK has the `auth` namespace, SDK-008, and the OTA has customer accounts). A component that fails is reported and
-//    skipped: it never stops the page.
+//    banner and adds `noindex`; the banner is fixed to the bottom of the window with its space after the end of the
+//    page, so showing it this late moves nothing already painted, OFE-028), and `auth.getSession` for the account menu
+//    (`401` = signed out; called only when the SDK has the `auth` namespace, SDK-008, and the OTA has customer
+//    accounts). A component that fails is reported and skipped: it never stops the page.
 // 4. `client` is the SDK client for the page's calls: with the currency the traveller chose in the header
 //    (`localStorage`, `client.withOptions({ currency })`, sent as `X-Currency`), else the shared client. Choosing
 //    another currency stores it and dispatches `vx:currency-change` on the document with `{ currency, client }`; the
@@ -184,7 +185,9 @@ const TEST_NOINDEX_ATTRIBUTE = "data-vx-test-noindex";
  * `environment = live` hides the "Test mode" banner and takes away the `noindex` that a test storefront's pages get;
  * `test`, and any value this build does not know, shows the banner and adds `noindex`, so a storefront never looks real
  * unless the API says it is live. The page's own robots meta tag (the private and short-lived pages carry `noindex` in
- * their HTML) is kept in both environments: live gives it back as the page had it.
+ * their HTML) is kept in both environments: live gives it back as the page had it. The banner shows over the bottom of
+ * the window, with its height as space after the page (components/test-banner.js, OFE-028), so the page painted before
+ * `storefront.get` answered does not move; a live storefront keeps no such space.
  * @param {Document} doc
  * @param {unknown} environment `config.environment`
  */

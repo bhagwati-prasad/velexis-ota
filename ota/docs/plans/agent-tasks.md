@@ -2872,7 +2872,8 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - `search.e2e.ts`, `keyboard-checkout.e2e.ts` and `a11y-pages.e2e.ts` pass, unchanged or with their selectors only adapted.
 - **Verify:** `pnpm --filter @velexis/ota-frontend build && pnpm --filter @velexis/ota-frontend test && E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront specs/storefront/search.e2e.ts specs/storefront/keyboard-checkout.e2e.ts specs/storefront/a11y-pages.e2e.ts`
 
-### OFE-028 · Show the test banner without moving the page
+### OFE-028 · Show the test banner without moving the page ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M6
 - **Depends on:** OFE-024

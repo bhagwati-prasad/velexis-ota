@@ -18,6 +18,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { htmlInputs, includePartials } from "../scripts/vite-plugins.js";
 import { CURRENCY_CHANGE_EVENT, CURRENCY_STORAGE_KEY, boot, renderState } from "../src/boot.js";
 import { mount as mountLiveRegion } from "../src/components/live-region.js";
+import { HEIGHT_PROPERTY, mount as mountTestBanner } from "../src/components/test-banner.js";
 import { NEUTRAL_PALETTE } from "../src/lib/theme.js";
 import { STOREFRONT_ROOT } from "./helpers/storefront.js";
 
@@ -293,6 +294,12 @@ const text = (/** @type {Element | null | undefined} */ element) =>
 const mainHeading = (/** @type {Document} */ doc) => text(doc.querySelector("main h1"));
 const robots = (/** @type {Document} */ doc) =>
   doc.head.querySelector('meta[name="robots"]')?.getAttribute("content");
+/** The space the page keeps after its end for the shown test banner (`--vx-test-banner-height` on `<html>`). */
+const reservedHeight = (/** @type {Document} */ doc) =>
+  doc.documentElement.style.getPropertyValue(HEIGHT_PROPERTY);
+/** A box of `height` CSS pixels as a browser measures the banner (happy-dom lays nothing out). */
+const bannerRect = (/** @type {number} */ height) =>
+  /** @type {DOMRect} */ (/** @type {unknown} */ ({ x: 0, y: 0, top: 0, left: 0, width: 412, height }));
 
 describe("boot: full-page states of storefront.get", () => {
   it("[OFE-003 AC2] 403 TENANT_SUSPENDED renders the 'temporarily unavailable' page and the page module never runs", async () => {
@@ -562,6 +569,60 @@ describe("boot: theme, header, footer, banner and session", () => {
     expect(live.head.querySelector('meta[name="robots"]')).toBeNull();
   });
 
+  it("[OFE-028 AC2] shows the banner, its space after the page and noindex per environment; only live has none", async () => {
+    for (const environment of ["test", "live", "production", undefined]) {
+      const doc = openPage();
+      const banner = /** @type {HTMLElement} */ (doc.querySelector('[data-slot="test-banner"]'));
+      // happy-dom lays nothing out: the banner's height as a browser measures it (two lines on a narrow phone).
+      vi.spyOn(banner, "getBoundingClientRect").mockReturnValue(bannerRect(57.5));
+
+      await boot({
+        client: fakeClient([{ ...CONFIG, environment }]),
+        storage: null,
+        preferences: memoryStorage(),
+        doc,
+      });
+
+      const label = String(environment);
+      if (environment === "live") {
+        expect(banner.hidden, label).toBe(true);
+        expect(reservedHeight(doc), label).toBe("");
+        expect(doc.head.querySelector('meta[name="robots"]'), label).toBeNull();
+      } else {
+        // Test, and a value this build does not know, look like a test storefront.
+        expect(banner.hidden, label).toBe(false);
+        expect(text(banner), label).toBe("Test mode: no real bookings or payments");
+        expect(reservedHeight(doc), label).toBe("58px");
+        expect(robots(doc), label).toBe("noindex");
+      }
+    }
+  });
+
+  it("[OFE-028 AC2] the banner is one note, read once before the header and never a live region", async () => {
+    const doc = openPage();
+    await boot({ client: fakeClient([CONFIG]), storage: null, preferences: memoryStorage(), doc });
+
+    const banner = /** @type {HTMLElement} */ (doc.querySelector('[data-slot="test-banner"]'));
+    expect(banner.hidden).toBe(false);
+    // The page's only note (the noscript partial's note is text while scripts run; happy-dom parses it, so it is left
+    // out here).
+    const notes = Array.from(doc.querySelectorAll('[role="note"]')).filter(
+      (note) => !note.closest("noscript"),
+    );
+    expect(notes).toEqual([banner]);
+    expect(banner.closest("[aria-live], [role='status'], [role='alert']")).toBeNull();
+    expect(doc.body.textContent?.split("Test mode").length).toBe(2);
+    expect(text(doc.querySelector("[data-live-region]"))).not.toContain("Test mode");
+    // First in the reading order: before the skip link, the header and the main content (the noscript note aside).
+    const order = Array.from(doc.body.children);
+    expect(order.indexOf(banner)).toBeLessThan(
+      order.indexOf(/** @type {Element} */ (doc.querySelector("body > a"))),
+    );
+    expect(order.indexOf(banner)).toBeLessThan(
+      order.indexOf(/** @type {Element} */ (doc.querySelector("main"))),
+    );
+  });
+
   it("[OFE-003] hides the support contacts when only the API's .invalid placeholder address is known", async () => {
     const doc = openPage();
     const placeholder = {
@@ -714,6 +775,137 @@ describe("boot: theme, header, footer, banner and session", () => {
       doc.querySelectorAll("style, link[rel~='stylesheet']:not([href='/src/styles/main.css'])").length,
     ).toBe(0);
     expect(Array.from(doc.querySelectorAll("[style]"), (element) => element.tagName)).toEqual(["HTML"]);
+  });
+});
+
+describe("test banner (OFE-028)", () => {
+  /**
+   * A ResizeObserver for the page's window that records what it observes and is fired by the test.
+   * @param {Document} doc
+   */
+  function fakeResizeObserver(doc) {
+    const observers =
+      /** @type {{ callback: () => void, targets: Set<Element>, disconnected: boolean }[]} */ ([]);
+    class FakeResizeObserver {
+      /** @param {() => void} callback */
+      constructor(callback) {
+        this.state = { callback, targets: new Set(), disconnected: false };
+        observers.push(this.state);
+      }
+      /** @param {Element} target */
+      observe(target) {
+        this.state.targets.add(target);
+      }
+      /** @param {Element} target */
+      unobserve(target) {
+        this.state.targets.delete(target);
+      }
+      disconnect() {
+        this.state.targets.clear();
+        this.state.disconnected = true;
+      }
+    }
+    Object.defineProperty(doc.defaultView, "ResizeObserver", {
+      value: FakeResizeObserver,
+      configurable: true,
+      writable: true,
+    });
+    return observers;
+  }
+
+  it("[OFE-028 AC1] keeps the banner's measured height as the root's custom property while it shows", () => {
+    const doc = openPage();
+    const observers = fakeResizeObserver(doc);
+    const banner = /** @type {HTMLElement} */ (doc.querySelector('[data-slot="test-banner"]'));
+    let height = 38;
+    vi.spyOn(banner, "getBoundingClientRect").mockImplementation(() => bannerRect(height));
+
+    const shown = mountTestBanner(doc.body, { environment: "test" });
+    expect(banner.hidden).toBe(false);
+    expect(HEIGHT_PROPERTY).toBe("--vx-test-banner-height");
+    expect(reservedHeight(doc)).toBe("38px");
+    const [observer] = observers;
+    expect(Array.from(observer?.targets ?? [])).toEqual([banner]);
+
+    // The text wraps (a narrow screen, a font that arrived, zoomed text): the space follows, in whole pixels.
+    height = 75.2;
+    observer?.callback();
+    expect(reservedHeight(doc)).toBe("76px");
+
+    // Hidden (the environment turned live), the banner keeps no space and is no longer watched.
+    shown.update({ environment: "live" });
+    expect(banner.hidden).toBe(true);
+    expect(reservedHeight(doc)).toBe("");
+    expect(observer?.targets.size).toBe(0);
+
+    shown.update({ environment: "test" });
+    expect(reservedHeight(doc)).toBe("76px");
+    // The custom property on the root element is the only style written on the page.
+    expect(Array.from(doc.querySelectorAll("[style]"), (element) => element.tagName)).toEqual(["HTML"]);
+    shown.destroy();
+    expect(banner.hidden).toBe(true);
+    expect(reservedHeight(doc)).toBe("");
+    expect(observer?.disconnected).toBe(true);
+  });
+
+  it("[OFE-028 AC1] shows the banner without a ResizeObserver, and keeps no space for a banner the browser does not lay out", () => {
+    const doc = openPage();
+    Object.defineProperty(doc.defaultView, "ResizeObserver", {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    });
+    const banner = /** @type {HTMLElement} */ (doc.querySelector('[data-slot="test-banner"]'));
+    const rect = vi.spyOn(banner, "getBoundingClientRect").mockReturnValue(bannerRect(40));
+    mountTestBanner(doc.body, { environment: "test" });
+    expect(banner.hidden).toBe(false);
+    expect(reservedHeight(doc)).toBe("40px");
+
+    // Not laid out (display: none from the outside, or no layout at all): no space is reserved.
+    const other = openPage();
+    mountTestBanner(other.body, { environment: "test" });
+    expect(reservedHeight(other)).toBe("");
+    expect(rect).toHaveBeenCalled();
+  });
+
+  it("[OFE-028 AC2] the component hides the banner only for live, so a page that passes the API's value as it is shows an unknown environment as test", () => {
+    // The airline-card page mounts the banner with storefront.get's environment unchanged (no boot()).
+    for (const [environment, hidden] of /** @type {const} */ ([
+      ["test", false],
+      ["sandbox", false],
+      ["", false],
+      ["live", true],
+    ])) {
+      const doc = openPage();
+      const banner = /** @type {HTMLElement} */ (doc.querySelector('[data-slot="test-banner"]'));
+      vi.spyOn(banner, "getBoundingClientRect").mockReturnValue(bannerRect(38));
+      mountTestBanner(doc.body, { environment });
+      expect(banner.hidden, environment).toBe(hidden);
+      expect(reservedHeight(doc), environment).toBe(hidden ? "" : "38px");
+    }
+  });
+
+  it("[OFE-028 AC1] the banner is out of the page's flow and its space comes after the page, so showing it moves nothing", () => {
+    const doc = openPage();
+    const banner = /** @type {HTMLElement} */ (doc.querySelector('[data-slot="test-banner"]'));
+    // Fixed to the bottom of the window, over the page and under the menus that open over it.
+    expect(Array.from(banner.classList)).toEqual(
+      expect.arrayContaining(["fixed", "inset-x-0", "bottom-0", "z-10"]),
+    );
+    expect(banner.hidden).toBe(true);
+
+    // main.css: the reserved height pads the end of the page and is the root's scroll padding (WCAG 2.4.11), 0 unset.
+    const css = readFileSync(join(STOREFRONT_ROOT, "src", "styles", "main.css"), "utf8");
+    const html = /@layer base\s*\{[\s\S]*?\bhtml\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(html).toContain("padding-bottom: var(--vx-test-banner-height, 0px);");
+    expect(html).toContain("scroll-padding-bottom: var(--vx-test-banner-height, 0px);");
+
+    // On a phone the header has its two rows from the first paint: the OTA's name, longer than the placeholder, no
+    // longer pushes the navigation onto a new row when storefront.get answers (the shift Lighthouse measured).
+    const row = doc.querySelector("body > header > div");
+    expect(Array.from(row?.classList ?? [])).toEqual(
+      expect.arrayContaining(["max-sm:flex-col", "max-sm:items-start"]),
+    );
   });
 });
 

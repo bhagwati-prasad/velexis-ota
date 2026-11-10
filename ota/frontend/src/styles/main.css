@@ -66,10 +66,18 @@
 }
 
 @layer base {
+  /*
+   * The "Test mode" banner (partials/test-banner.html) is fixed to the bottom of the window, so showing it moves nothing
+   * (OFE-028). While it shows, components/test-banner.js keeps its height in --vx-test-banner-height: the page ends with
+   * that much space, so its end can be scrolled clear of the banner, and the browser scrolls a focused element above the
+   * banner rather than behind it (WCAG 2.4.11). Unset (no banner, as on a live storefront), both are 0.
+   */
   html {
     background-color: var(--color-surface);
     color: var(--color-ink);
     font-family: var(--font-body);
+    padding-bottom: var(--vx-test-banner-height, 0px);
+    scroll-padding-bottom: var(--vx-test-banner-height, 0px);
   }
 
   h1,
