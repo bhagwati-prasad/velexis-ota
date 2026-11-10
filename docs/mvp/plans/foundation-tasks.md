@@ -68,10 +68,11 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 - **Depends on:** —
 - **Size:** S
 - **Read first:** AGENTS.md §10; docs/mvp/adr/0002-monorepo-pnpm-turborepo.md; docs/mvp/tech-stack.md §1 and §2; package.json; turbo.json; eslint.config.mjs; tsconfig.base.json
-- **Files:** `package.json`, `vitest.workspace.ts`, `AGENTS.md`, `README.md`
+- **Files:** `package.json`, `vitest.config.ts` (vitest.workspace.ts until 2026-11-06, step 2), `AGENTS.md`, `README.md`
 - **Steps:**
   1. With Node 22 (`nvm use`) and `corepack enable`, run `pnpm install`. Commit the generated `pnpm-lock.yaml` together with this task: the lockfile is always allowed.
   2. Create `vitest.workspace.ts` (Vitest 3, `defineWorkspace` from `vitest/config`). It lists the globs `packages/*/vitest.config.ts`, `platform/*/vitest.config.ts`, `ota/*/vitest.config.ts` and `tools/*/vitest.config.ts`, so editors can run any test file. CI keeps running tests per package through Turborepo.
+     - **Note (2026-11-06, lead decision (11f), FIX-W46-SHARED):** Vitest 4 (PBE-070) has no `defineWorkspace` and reads no workspace file, so the root file is now `vitest.config.ts`, a projects config: `defineConfig` from `vitest/config` with `test.projects` globs `packages/*/vitest.config.{ts,js}`, `platform/*/vitest.config.{ts,js}`, `ota/*/vitest.config.{ts,js}` and `tools/*/vitest.config.{ts,js}`, which match every package's own config, the `.js` configs of the storefront and the SDK included. An editor or an ad-hoc run names it (`pnpm exec vitest run --config vitest.config.ts --project <name>`); each package's `pnpm test` keeps its own config, and CI still runs the tests per package through Turborepo ([ADR-0002](../adr/0002-monorepo-pnpm-turborepo.md) item 6).
   3. Run every root script on the still-empty workspace: `build`, `lint`, `typecheck`, `test`, `format:check`, `plan:lint`. Fix only root configuration problems; do not create packages. Turborepo must report that there are no tasks, not fail.
   4. Check that ESLint loads the shared config with `pnpm exec eslint --print-config eslint.config.mjs`. Check that Prettier ignores `docs/velexis-sdk/` and Markdown: `pnpm exec prettier --check .`.
   5. If a script name in `package.json` differs from the cheat sheet in `AGENTS.md` §10, fix the table, because `package.json` wins. Keep the "Status" line of `README.md` as it is.
@@ -442,6 +443,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 - **Files:** `packages/db/scripts/codegen.mjs`, `packages/db/src/generated/platform.ts`, `packages/db/src/generated/reference.ts`, `packages/db/src/generated/tenant.ts`, `packages/db/src/index.ts`, `packages/db/src/tenant-db.ts`, `packages/db/src/types.test.ts`, `packages/db/package.json`
 - **Steps:**
   1. Add `kysely-codegen` 0.18.x (exact) as a devDependency, and a `codegen` script that runs `scripts/codegen.mjs`.
+     - **Note (2026-11-06, lead decision (11e), FIX-W46-SHARED):** `packages/db` pins `kysely-codegen` 0.20.0 (zod 4, so no zod 3 is left in the lockfile); the script's Node API and its output did not change ([`../tech-stack.md`](../tech-stack.md)).
   2. The script:
      - creates a scratch database `velexis_codegen_<pid>` as `TEST_DATABASE_ADMIN_URL`;
      - applies the platform and reference sets and creates `tenant_template` with the tenant set, using the runner library;

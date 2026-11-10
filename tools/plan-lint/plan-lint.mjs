@@ -42,7 +42,7 @@ const PREFIX = {
 };
 const REQUIRED = ["Component", "Milestone", "Depends on", "Size", "Read first", "Files", "Steps", "Acceptance", "Verify"];
 const ALLOWED_DIRS = ["platform/", "ota/", "packages/", "deploy/", "docs/", "tools/", ".github/", "package.json", "pnpm-workspace.yaml", "turbo.json",
-  "tsconfig.base.json", ".editorconfig", ".nvmrc", ".gitignore", ".prettierrc.json", "eslint.config.mjs", "AGENTS.md", "CLAUDE.md", "README.md", "vitest.workspace.ts", ".env.example"];
+  "tsconfig.base.json", ".editorconfig", ".nvmrc", ".gitignore", ".prettierrc.json", "eslint.config.mjs", "AGENTS.md", "CLAUDE.md", "README.md", "vitest.config.ts", ".env.example"];
 const SIZE_HOURS = { S: 2, M: 4, L: 8 };
 const DONE_MARK = " ✅";
 const DONE_STATUS = /^done \((?:PR #\d+|branch [^\s()]+)\)$/;

@@ -21,7 +21,9 @@ WorkingDirectory=/srv/velexis/current/ota-backend
 EnvironmentFile=/etc/velexis/ota-backend.env
 Environment=NODE_ENV=production
 Environment=PORT=4000
-Environment=NODE_OPTIONS=--max-old-space-size=640
+# A young generation of 32 MiB per semi-space (lead decision (11h) of 2026-11-06): less garbage collection per search
+# for about 45 MiB more RSS, well inside MemoryMax (ota/docs/performance.md §4, Step 4).
+Environment="NODE_OPTIONS=--max-old-space-size=640 --max-semi-space-size=32"
 ExecStart=/usr/bin/node --enable-source-maps dist/main.js
 Restart=always
 RestartSec=3

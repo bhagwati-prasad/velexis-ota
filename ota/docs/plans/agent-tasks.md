@@ -26,7 +26,7 @@ Common commands: backend `pnpm --filter @velexis/ota-backend test` and `test:int
 | M3 Book & pay | OBE-029 … OBE-057, SDK-008 … SDK-010, OFE-009 … OFE-019 | Guest and customer bookings paid by Stripe (3-D Secure) or by airline card (test), tickets, e-mails and PDFs, my bookings, guest lookup, change contacts, cancel with refund (OF-03 … OF-08). |
 | M4 OTA admin | OBE-058 … OBE-075, OBE-090, OBE-091, SDK-011 … SDK-014, OAD-002 … OAD-017, OFE-020 | "Open console" in the portal lands in the OTA admin; staff issue, cancel, import a PNR, read queues, capture and refund, change markups, branding, pages and templates (OF-09, OF-10). |
 | M5 Monetisation & self-service | OBE-076 … OBE-083, OAD-018, OFE-021, OFE-022 | The same code serves an OTA on its own Stripe (Connect or keys) and its own Amadeus credentials, a custom domain, and the live environment after go-live (OF-12). |
-| M6 Hardening & launch | OBE-084 … OBE-089, OBE-092, OFE-023 … OFE-026, OAD-019, SDK-015 | Security review and PCI evidence closed, airline card live-ready, erasure job, performance measured, nightly suites green, SDK 1.0.0 published. |
+| M6 Hardening & launch | OBE-084 … OBE-089, OBE-092 … OBE-096, OFE-023 … OFE-028, OAD-019, OAD-020, SDK-015 | Security review and PCI evidence closed, airline card live-ready, erasure job, performance measured, nightly suites green, SDK 1.0.0 published. |
 
 ## M0 — Foundations
 
@@ -2761,6 +2761,24 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - With `--visitors 10 --searches 200 --offers 250`, the p95 of `flights.search` without the stub delay is below 500 ms, or performance.md records why not and the decision it needs (a lower default `maxResults`, a worker thread, a second API process).
   - Every stored `supplier_requests` body is still redacted and cut to 64 KB (the repository's redaction tests pass unchanged), and the search and price integration tests pass unchanged.
 - **Verify:** `pnpm --filter @velexis/ota-backend test supplier-requests facets && node ota/backend/test/load/search-load.mjs --visitors 10 --searches 200 --offers 250`
+
+### OBE-096 · Meet the search budget at 10 visitors with fewer offers per search by default
+- **Component:** ota-backend
+- **Milestone:** M6
+- **Depends on:** OBE-092
+- **Size:** M
+- **Read first:** ota/docs/performance.md §2 and §4 (Steps 3 and 4, and OBE-092's decision (b) and (c)); ota/backend/test/load/README.md; ota/docs/adr/0002-offer-and-priced-offer-caching.md (point 1); ota/docs/adr/0014-per-tenant-workers-and-schedulers.md; ota/backend/src/shopping/offers.mapper.ts (`parseSearchDefaults`, `MAX_OFFERS_PER_SEARCH`)
+- **Files:** `ota/backend/src/shopping/offers.mapper.ts`, `ota/backend/src/shopping/offers.mapper.test.ts`, `ota/backend/test/load/search-load.mjs`, `ota/backend/test/load/README.md`, `ota/docs/performance.md`
+- **Steps:**
+  1. Added by FIX-W46-SHARED (lead decision (11h) of 2026-11-06): with `--max-semi-space-size=32` the API spends about 9 % less CPU per journey, but the p95 of `flights.search` without the stub delay at `--visitors 10 --searches 200 --offers 250` is still 475–535 ms (performance.md §4, Step 4), so OBE-092's decision (b) is next. Make the load test's Amadeus proxy answer no more offers than the API asks for (`max` of a GET search, `maxFlightOffers` of a POST search), as Amadeus does, and say so in its README.
+  2. Measure the budget with smaller answers, under the machine-wide end-to-end lock with `nproc` and the load average recorded, three runs each: `--offers 200`, `--offers 150` and `--offers 100` beside `--offers 250`, with the p95, the API's CPU per journey and its RSS, in performance.md.
+  3. Human step: the owner picks the number of offers a storefront without its own `maxResults` asks Amadeus for (fewer offers on its results page; a storefront can still set up to 250 in its search defaults), or, when no number they accept meets the budget, decision (c): a worker thread for the pricing, facets and insert of a search, or a second API process behind Caddy.
+  4. For (b): `parseSearchDefaults` returns the chosen number when `search_defaults` has no valid `maxResults`; a valid one (1–250) is kept, and `MAX_OFFERS_PER_SEARCH` stays the bound of what a search stores. Unit tests for both. Run the Verify command three times and record the runs. For (c): record the decision and add its task (next free id, all fields).
+- **Acceptance:**
+  - With `--visitors 10 --searches 200 --offers 250`, the p95 of `flights.search` without the stub delay is within 500 ms in three runs out of three under the end-to-end lock, or performance.md records why not and the owner's decision for (c) with its task.
+  - A storefront whose `search_defaults` sets `maxResults` (1–250) keeps it, a search's `max` and `maxFlightOffers` are still bounded by it, and the search and price integration tests pass.
+  - The load test's proxy never answers more offers than the API asked for.
+- **Verify:** `pnpm --filter @velexis/ota-backend test offers.mapper && node ota/backend/test/load/search-load.mjs --visitors 10 --searches 200 --offers 250`
 
 ### OFE-024 · Run the accessibility and performance pass on the storefront
 - **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the manual NVDA and VoiceOver pass through search and checkout, recorded with its date, human step)

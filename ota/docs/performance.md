@@ -4,6 +4,7 @@ This page records measured figures of the OTA backend and the decisions taken fr
 
 - OBE-028 started the page with the M2 search load test and the decision on the Amadeus buckets.
 - OBE-092 cut the API's CPU per search of 250 offers (§4).
+- FIX-W46-SHARED gave the API a larger young generation, decision (a) of §4, and measured it (§4, Step 4); OBE-096 takes the next step.
 - OBE-088 adds the M6 measurements against the VM's memory budget ([architecture §3](../../docs/mvp/architecture.md#3-hosts-ports-and-the-vm)).
 
 Related:
@@ -253,9 +254,40 @@ The API's RSS was 252–258 MiB after start and at most 296 MiB in every run but
 - **(b)** If (a) is not enough: a lower default `maxResults` (for example 150). The API's time grows with the offers of an answer (§2 item 2), but a storefront then shows fewer offers.
 - **(c)** Otherwise a second API process behind Caddy (twice the API's memory) or a worker thread for pricing, facets and the insert of a search.
 
+*2026-11-06 (lead decision (11h)).* The owner took (a): the OTA API starts with `--max-semi-space-size=32` since FIX-W46-SHARED (Step 4). It is not enough on its own, so (b) is next: OBE-096.
+
+### Step 4: a larger young generation (FIX-W46-SHARED, 10 November 2026)
+
+Lead decision (11h) of 2026-11-06 carried out (a): `deploy/systemd/velexis-ota-api.service` starts the API with `NODE_OPTIONS=--max-old-space-size=640 --max-semi-space-size=32` (32 MiB per semi-space instead of V8's default of 16 MiB for this heap; the old generation keeps its 640 MiB, and V8's heap limit grows from 688 to 736 MiB, under the unit's `MemoryMax` of 768 MiB), and `search-load.mjs` starts it the same way. The runs below compare the two start commands on the same build.
+
+| Item | Value |
+|---|---|
+| Code | The API built from `6d8ab821b324` (the integration branch head this fix started from); no source file of the API changed. **Before:** `--max-old-space-size=640` (the unit and `search-load.mjs` of `6d8ab821b324`). **After:** `--max-old-space-size=640 --max-semi-space-size=32` (this fix). The script prints `6d8ab821b324+changes` for both. As in Step 3, a copy of the script (not committed) also recorded the API process's CPU time over the measured phase (`process.cpuUsage()`, user and system); the API ran unchanged. |
+| Machine | 4 vCPUs (`nproc` 4; Intel Xeon @ 2.10 GHz), 15.7 GiB RAM, Linux 6.18.44 x64, Node 22.23.4, PostgreSQL 16.15, Redis 7.0.15 (a private instance on its own port). The machine was replaced on 2026-11-06, so these runs compare only with each other. The six runs held the machine-wide end-to-end lock, ran back to back and alternated the two start commands; the machine was idle at the first (1-minute load average 0.02) and other agents' builds started during the fourth. |
+| API, Amadeus, tenants, visitors | As in §2, with `--visitors 10 --searches 200 --offers 250` (the Verify command of OBE-092). |
+
+| Run | Start command | Started (UTC) | Load avg start → end | Journeys completed / refused | search p50 / p95 | **search p95 −delay** | search p95 −Amadeus | listResults p95 | price p95 −delay | API CPU (s) | CPU per journey (ms) | RSS after start / peak (MiB) | Event-loop delay p99 / max |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| S1 | before | 10:04:48 | 0.02 → 0.39 | 174 / 26 | 438 / 817 | **517** | 486 | 107 | 202 | 21.1 | 121 | 260 / 294 | 26 / 61 |
+| S2 | after | 10:05:33 | 0.39 → 0.60 | 179 / 21 | 424 / 775 | **475** | 443 | 80 | 165 | 20.1 | 112 | 306 / 343 | 25 / 71 |
+| S3 | before | 10:06:19 | 0.60 → 0.70 | 174 / 26 | 436 / 807 | **507** | 479 | 107 | 179 | 20.6 | 118 | 259 / 299 | 28 / 46 |
+| S4 | after | 10:07:03 | 0.70 → 1.47 | 180 / 20 | 433 / 807 | **507** | 473 | 71 | 143 | 19.5 | 108 | 309 / 343 | 26 / 99 |
+| S5 | before | 10:07:48 | 1.47 → 2.08 | 173 / 27 | 449 / 799 | **499** | 466 | 75 | 194 | 20.4 | 118 | 259 / 293 | 31 / 78 |
+| S6 | after | 10:08:33 | 2.08 → 1.45 | 189 / 11 | 424 / 835 | **535** | 457 | 92 | 182 | 20.1 | 106 | 299 / 336 | 25 / 45 |
+
+Every run had 0 unexpected answers. The offer insert kept its time (p50 25–29 ms in every run).
+
+**What the runs show.**
+
+1. **CPU: about 9 % less per journey.** 106–112 ms after against 118–121 ms before (means 109 and 119 ms), with fewer refused journeys in the same phase; the event-loop delay p99 fell from 26–31 ms to 25–26 ms. This confirms Y1 and Y2 of Step 3.
+2. **RSS: about 45 MiB more.** 299–309 MiB after start and a peak of 336–343 MiB, against 259–260 and 293–299 MiB before: less than half of the unit's `MemoryMax` of 768 MiB, and inside the API's line of the VM's memory budget ([architecture §3](../../docs/mvp/architecture.md#3-hosts-ports-and-the-vm)). OBE-088 checks it under mixed traffic.
+3. **The 500 ms p95 is still not met reliably.** Without the stub delay the p95 was 475, 507 and 535 ms after (one run of three within the budget) and 517, 507 and 499 ms before (also one of three); the medians are equal (507 ms). The p95 comes from the bursts after a `429` (§2 item 1, Step 3 item 2): ten searches then share the event loop, and a run that refuses fewer journeys (S6: 11) has more of them. A young generation of 32 MiB per semi-space takes about 10 ms of CPU off a journey, which the bursts do not show.
+4. **Kept.** The flag changes no behaviour and costs 45 MiB, and the CPU it saves is real, so the unit keeps it. The next step of the decision above, (b) a lower default `maxResults`, is task **OBE-096**; (c) stays the fallback.
+
 ## 5. Follow-ups
 
 | Task | What |
 |---|---|
 | OBE-092 (M6) | Added by OBE-028. Cut the API's CPU per search so that answers of 250 offers meet the 500 ms p95 at 10 concurrent visitors. The largest shares are the `supplier_requests` copy of the whole answer, facets, `decimal.js` and the driver (§2 item 2). If it cannot be met, this page records the decision needed: a lower default `maxResults`, a worker thread or a second API process. **Done (§4):** about 30 ms of CPU less per search; the p95 is 433–619 ms, so §4 records the decision needed (a larger young generation first). |
+| OBE-096 (M6) | Added by FIX-W46-SHARED (Step 4): `--max-semi-space-size=32` takes about 9 % of the API's CPU per journey off but leaves the p95 at 475–535 ms. Measure the search budget with fewer offers per answer and, once the owner picks the default number of offers a storefront asks for, set it; if no default the owner accepts meets the budget, record the decision for a worker thread or a second API process. |
 | OBE-088 (M6) | Mixed traffic on five tenants for 30 minutes with the worker running; the API's and the worker's RSS against `MemoryMax`, PostgreSQL connections, Redis memory, queue latency; the table growth of §2 item 4 against the VM's disk. |

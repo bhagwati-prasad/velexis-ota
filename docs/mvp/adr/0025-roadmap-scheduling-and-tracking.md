@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (solo developer driving AI coding agents, plain Markdown plans), program manager (master roadmap). Decided during planning; revisit when M1 is done and the review hours actually spent per task size are known, or when an outside approval (Amadeus, Stripe, legal, PCI) is refused.
-**Revisions:** 2026-10-12 (planning review): eight new foundation tasks (298 tasks, 1,392 agent-hours, calendars unchanged); X-026 and X-027 tagged M1; OBE-016 added to the PBE-036 gate; OBE-007 placed in the M1 block; explicit launch exceptions; item 6 amends [ADR-0020](0020-ai-agent-development-workflow.md); new item 7 on where demos run. 2026-10-13 (review fixes): PBE-066, OBE-090 and OBE-091 added and M3 storefront tasks re-ordered (301 tasks, 1,406 agent-hours, calendars unchanged; see the roadmap change log).
+**Revisions:** 2026-10-12 (planning review): eight new foundation tasks (298 tasks, 1,392 agent-hours, calendars unchanged); X-026 and X-027 tagged M1; OBE-016 added to the PBE-036 gate; OBE-007 placed in the M1 block; explicit launch exceptions; item 6 amends [ADR-0020](0020-ai-agent-development-workflow.md); new item 7 on where demos run. 2026-10-13 (review fixes): PBE-066, OBE-090 and OBE-091 added and M3 storefront tasks re-ordered (301 tasks, 1,406 agent-hours, calendars unchanged; see the roadmap change log). 2026-11-06 (re-baseline under item 6, the owner's decision (11g) of 2026-11-06, recording FIX-W46-SHARED): 16 M6 follow-up tasks (317 tasks, 1,466 agent-hours); the calendar without agents is 79 weeks, the calendar with agents stays at 30 (dated note under item 2; roadmap §4.5).
 
 ## Context
 
@@ -29,6 +29,8 @@ Writing that roadmap needed decisions that neither `decisions.md` nor [ADR-0020]
    - Platform W31, OTA W40, X-029 … X-032, X-038 and X-039 form a three-week launch block.
 
    The result is **76 working weeks**; the extra tasks use foundation and launch buffer days.
+
+   **2026-11-06 (re-baseline under item 6, the owner's decision (11g) of 2026-11-06, FIX-W46-SHARED):** **79 working weeks.** M6's own reviews found 16 tasks (15 solo days) that the solo plans place in follow-up weeks numbered so that the mapped weeks keep their numbers: the platform's Weeks 30a and 30b and the OTA's Week 39a (and a day of OTA W40). They take calendar weeks of their own before the launch block, OTA W39a first (C74, because PBE-069 needs OBE-094), then platform W30a–W30b (C75–C76), then the launch block (C77–C79). M0–M5 keep their weeks. With agents (item 1) M6's buffer absorbs them, and the calendar stays at 30 weeks ([roadmap](../plans/roadmap.md) §1 and §4.5).
 3. **Strict milestone order, with one exception.** A milestone's tasks start after the previous milestone's go/no-go. When fewer than three tasks of the current milestone are ready, the developer may give an agent a batch-1 task of the next milestone by id, if its dependencies are merged. Agents never pick ahead on their own ([AGENTS.md](../../../AGENTS.md) §3 is unchanged).
 4. **Batches.** A task's batch is one more than the highest batch of its dependencies in the same milestone. Gated tasks (PBE-035, PBE-036, PAD-011, PFE-019, PBE-064) count the tasks named in their **Gate** step as dependencies; the PBE-036 gate is OBE-011 … OBE-013 **and OBE-016** (`getStorefront`, which its cross-backend test calls). Within a batch, tasks on the plan-lint critical path start first. **Launch exceptions:** PBE-064 (M6) runs after the launch, once all six switches have been on in production for one release, and OBE-086 (M6) may stay open at launch while its outside steps (penetration test, ASV scan) are missing; the airline card then stays off. Both are named exceptions to the go criterion "every task of the milestone is done".
 5. **Launch does not wait for outside approvals.** M6 ends when its go/no-go list is met. A feature whose outside step is missing stays off in production: the airline card until OBE-086 is fully checked, each `FEATURE_*` switch until its approval, and live tenants until Amadeus live access exists. If Amadeus test access is missing at the M2 exit, M2 may close with OBE-027 open (a conditional go), but the M5 go-live is a no-go until OBE-027 is done.
@@ -49,7 +51,7 @@ Writing that roadmap needed decisions that neither `decisions.md` nor [ADR-0020]
 
 - The review-time figures are estimates until M1 shows real numbers.
 - Strict milestone order leaves some agent capacity unused at the end of each milestone; the exception recovers only part of it.
-- The calendar without agents carries less buffer (about 8 %) than the agent calendar (about 27 %), because it keeps the solo plans' own buffers.
+- The calendar without agents carries less buffer (about 8 %) than the agent calendar (about 27 %), because it keeps the solo plans' own buffers. Since the re-baseline of 2026-11-06 (item 2) they carry about 7 % and 23 %.
 - Launching without live tenants or without the airline card is possible, but commercially weaker.
 - Some demo steps (stub scenarios, airline card, billing in test mode) are only ever shown locally before launch.
 

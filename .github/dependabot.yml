@@ -68,7 +68,7 @@ updates:
       # a minor update, although it may break the API.
       - dependency-name: kysely # 0.28.x
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
-      - dependency-name: kysely-codegen # 0.18.x
+      - dependency-name: kysely-codegen # 0.20.x
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: openapi-fetch # 0.13.x
         update-types: ["version-update:semver-major", "version-update:semver-minor"]

@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Lead architect. Decided during planning; revisit when CI time on a pull request exceeds 15 minutes or flaky tests exceed 1 % of runs.
-**Revisions:** 2026-10-12 (planning review): the Amadeus stub arrives in M1 (X-026, X-027), because PBE-020 and the M1 end-to-end harness use it; recording and the fixture scan are task X-034 (M2).
+**Revisions:** 2026-10-12 (planning review): the Amadeus stub arrives in M1 (X-026, X-027), because PBE-020 and the M1 end-to-end harness use it; recording and the fixture scan are task X-034 (M2). 2026-11-06 (lead decision (11f) of 2026-11-06, recording PBE-070 and FIX-W46-SHARED): the tools of the test-level table run on Vitest 4.1.12, happy-dom 21.0.4 and Redocly CLI 2.76.0, and the root Vitest file is the projects config `vitest.config.ts` (dated note under Test levels).
 
 ## Context
 
@@ -26,6 +26,16 @@ There are also two contracts that must not drift: the OpenAPI documents and the 
 | **Contract** | Vitest + Ajv, `tsc` | Responses against the OpenAPI document, route parity, SDK declarations against the contract `.d.ts`, generated types up to date | Every PR | `test/contract/**/*.contract.test.ts` |
 | **Component (UI)** | Vitest + Testing Library (Next.js apps), Vitest + happy-dom (storefront modules) | Client components, form state, DOM rendering helpers | Every PR | `*.test.tsx` / `*.test.js` |
 | **End-to-end** | Playwright | Full stack built and started locally: sign-up → create OTA → storefront search → book → OTA admin actions | Nightly, before deploy, and on PRs labelled `e2e` | `tools/e2e/specs/**/*.e2e.ts` |
+
+**2026-11-06 (lead decision (11f) of 2026-11-06; PBE-070, FIX-W46-SHARED):** the table's tools run on these releases, pinned exactly in every package that uses them ([`../tech-stack.md`](../tech-stack.md) holds the rows):
+
+| Tool | Release | Where | Since |
+|---|---|---|---|
+| Vitest | **4.1.12** (the unit row's "Vitest 3" reads Vitest 4) | Every package and the root | PBE-070 (3.x carried Tinypool 1.1.1, security review F-5) |
+| happy-dom | **21.0.4** | The DOM tests of the storefront and the SDK, and the component tests of the portal and both admins (`// @vitest-environment happy-dom`) | PBE-070 |
+| Redocly CLI | **2.76.0** | `pnpm contracts:lint` in `@velexis/api-types` (the OpenAPI documents of the contract-test row) | PBE-070 |
+
+Vitest 4 reads no workspace file, so the root file that lists every package's Vitest config as a project for editors and ad-hoc runs is `vitest.config.ts` (`test.projects`, run with `--config vitest.config.ts --project <name>`; [ADR-0002](0002-monorepo-pnpm-turborepo.md) item 6). CI still runs the tests per package through Turborepo.
 
 **Target mix:** many unit tests, a solid integration layer for every endpoint, and a few end-to-end journeys (one per milestone's main flow). There is no coverage percentage gate. Instead, **every acceptance criterion in a plan task maps to at least one test**, and the PR lists which.
 

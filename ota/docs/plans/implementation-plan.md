@@ -8,8 +8,8 @@ Related: [`../scope.md`](../scope.md) (features OF-01 … OF-12, the 96 operatio
 
 | Item | Value |
 |---|---|
-| Agent tasks | 151: 91 backend (`OBE-`), 26 storefront (`OFE-`), 19 OTA admin (`OAD-`), 15 SDK (`SDK-`) |
-| Estimate | 684 agent-hours by the plan-lint sizes (S 2 h, M 4 h, L 8 h, review included); 171 developer-days without agents (S ½ day, M 1 day, L 2 days) |
+| Agent tasks | 159: 96 backend (`OBE-`), 28 storefront (`OFE-`), 20 OTA admin (`OAD-`), 15 SDK (`SDK-`); 151 until the M6 follow-ups (§4 M6, note of 2026-11-06) |
+| Estimate | 706 agent-hours by the plan-lint sizes (S 2 h, M 4 h, L 8 h, review included); 176.5 developer-days without agents (S ½ day, M 1 day, L 2 days); 684 and 171 until the M6 follow-ups |
 | Foundation dependencies | `X-001` … `X-030` ([`foundation-tasks.md`](../../../docs/mvp/plans/foundation-tasks.md)); the OTA plan never re-does them and adds the 11 Amadeus stub operations X-026 leaves to it |
 | Platform dependencies | PBE-002, PBE-004, PBE-034, PFE-014, PFE-017, PBE-053, PBE-055, PBE-057, PBE-061 (named in **Depends on**); the platform gates PBE-035, PBE-036, PAD-011 and PFE-019 on OTA features |
 | Validation | `node tools/plan-lint/plan-lint.mjs docs/mvp/plans/foundation-tasks.md platform/docs/plans/agent-tasks.md ota/docs/plans/agent-tasks.md` (0 errors) |
@@ -42,7 +42,7 @@ Rules that shape the order of the tasks:
 | OE13 | Hosted storefront | Shared modules, theming, search-to-price pages, checkout and payment pages, accounts, bookings, lookup, content pages, live mode | OFE-002 … OFE-016, OFE-020, OFE-021, OFE-023 |
 | OE14 | OTA admin | Server-side SDK client and sessions, SSO, shell, dashboard, bookings, PNR, queues, shopping, payments, customers, settings, live and billing banner | OAD-002 … OAD-015, OAD-018 |
 | OE15 | Self-service and live | Account modes, Connect webhooks, own Amadeus, custom domains, live environment, cross-backend proof | OBE-076 … OBE-083, OAD-018, OFE-021, OFE-022 |
-| OE16 | Quality, security and launch | Journeys, security review, PCI evidence and the airline-card live gate, performance, runbooks, accessibility, guide, stable nightly suites | OFE-008, OFE-017 … OFE-019, OFE-022, OFE-024 … OFE-026, OAD-016, OAD-017, OAD-019, OBE-084 … OBE-086, OBE-088, OBE-089, SDK-015 |
+| OE16 | Quality, security and launch | Journeys, security review and its follow-ups, PCI evidence and the airline-card live gate, performance and its follow-up, runbooks, accessibility and its follow-ups, guide, stable nightly suites | OFE-008, OFE-017 … OFE-019, OFE-022, OFE-024 … OFE-026, OAD-016, OAD-017, OAD-019, OBE-084 … OBE-086, OBE-088, OBE-089, SDK-015; the M6 follow-ups (2026-11-06, FIX-W46-SHARED): OBE-092 … OBE-096, OAD-020, OFE-027, OFE-028 |
 
 Some tasks belong to two epics (for example OBE-079 in OE4 and OE15); the table lists them where they matter most.
 
@@ -56,8 +56,8 @@ Some tasks belong to two epics (for example OBE-079 in OE4 and OE15); the table 
 | M3 Book & pay | Checkout, cookie accounts, Stripe, airline card (test), orders, tickets, e-mails, bookings, cancel (OF-03 … OF-08) | 43 | 222 | 55.5 | Statement descriptor (PBE-037, PBE-038, PFE-016) |
 | M4 OTA admin | Console API, `console` SDK, OTA admin, settings, content pages (OF-09, OF-10) | 41 | 180 | 45 | Console token and Open console (PBE-039, PFE-017 … PFE-019), gated on OF-09 |
 | M5 Monetisation & self-service | Gateways and resolver that follow the platform's data, custom domains, live (OF-12) | 11 | 38 | 9.5 | Billing, own Stripe, settlements, own Amadeus, domains, go-live |
-| M6 Hardening & launch | Security review, PCI evidence, airline-card live gate, erasure, performance, runbooks, SDK 1.0.0 | 12 | 46 | 11.5 | Platform security review, performance, suites, switch removal; foundation monitoring and restore drill |
-| **Total** | | **151** | **684** | **171** | |
+| M6 Hardening & launch | Security review and its follow-ups, PCI evidence, airline-card live gate, erasure, performance, runbooks, SDK 1.0.0 | 20 | 68 | 17 | Platform security review and its follow-ups, performance, suites, switch removal; foundation monitoring and restore drill |
+| **Total** | | **159** | **706** | **176.5** | |
 
 ```mermaid
 flowchart LR
@@ -69,12 +69,12 @@ flowchart LR
   PM1 --> M2
   M2 -. OF-01 opens PBE-036 and PAD-011 .-> PM2(["platform M2"])
   M2 --> M3["M3 book & pay<br/>43 tasks"]
-  M3 --> M4["M4 OTA admin<br/>39 tasks"]
+  M3 --> M4["M4 OTA admin<br/>41 tasks"]
   PF17(["PFE-017 Open console"]) -.-> M4
   M4 -. OF-09 opens PFE-019 .-> PM4(["platform M4"])
   M4 --> M5["M5 self-service<br/>11 tasks"]
   PM5(["PBE-053, PBE-055,<br/>PBE-057, PBE-061"]) -.-> M5
-  M5 --> M6["M6 hardening<br/>12 tasks"]
+  M5 --> M6["M6 hardening<br/>20 tasks"]
 ```
 
 The critical path printed by plan-lint runs through the foundation database tasks, PBE-002, the tenancy and Amadeus tasks (OBE-011 → OBE-018), shopping and checkout (OBE-021 → OBE-038), the orchestrator and after-sales (OBE-042 → OBE-049), console issue and cancel (OBE-063) and the OTA admin journeys (OAD-008 → OAD-019, OFE-026).
@@ -337,6 +337,8 @@ The critical path printed by plan-lint runs through the foundation database task
 
 **Scope.** OE16 and OE6: OBE-084 (security review), OFE-023 (payment-page inventory), OBE-085 (PCI pack), OBE-086 (airline-card live gate), OBE-087 (erasure), OBE-088 (performance), OBE-089 (runbooks, launch checklist), OFE-024 (accessibility and Lighthouse), OFE-025 (build-your-own guide), OAD-019 (admin suite), SDK-015 (npm), OFE-026 (stable nightly suites). Foundation X-029 … X-032 run in the same milestone; X-030 reads OFE-023's inventory.
 
+*Note (2026-11-06, FIX-W46-SHARED, lead decision (11g)).* The M6 reviews found work that the first plan did not hold, and the milestone's count and hours in §1 and §3 include it since (20 tasks, 68 agent-hours, 17 solo days; 12, 46 and 11.5 before): OBE-092 (the API's CPU per search of 250 offers, from OBE-028's load test; [`../performance.md`](../performance.md) §4), OBE-093 (nodemailer), OBE-094 (the multer override and the backend's vulnerable transitive packages), OBE-095 (the generic refusals of every operation in `x-error-codes`) and OAD-020 (zod in the OTA admin), all four from the security review OBE-084 ([`../security-review.md`](../security-review.md)), OFE-027 (the results page without layout shifts on phones) and OFE-028 (the test banner without moving the page), from OFE-024's Lighthouse pass, and OBE-096 (fewer offers per search by default, or the owner's decision for a worker thread or a second API process), added by FIX-W46-SHARED when the larger young generation of decision (11h) left the search p95 above 500 ms ([`../performance.md`](../performance.md) §4, Step 4). They belong to OE16 (§2, §6). The [solo plan](solo-developer-plan.md) places the first seven in Week 39a and OBE-096 in Week 40, and the roadmap's calendar puts Week 39a in its own week before the platform's Weeks 30a and 30b ([`../../../docs/mvp/plans/roadmap.md`](../../../docs/mvp/plans/roadmap.md) §1.3, re-baseline of 2026-11-06).
+
 **Demo.** Walk through `ota/docs/security-review.md`, the PCI pack and `ota/docs/performance.md`; show three consecutive green nightly runs of `storefront`, `storefront-stripe` and `ota-admin`; install `@velexis/ota-sdk@1.0.0` in an empty project and run the guide's sample; walk through the OTA launch checklist.
 
 **Exit criteria.**
@@ -412,7 +414,7 @@ Every feature of [`../scope.md`](../scope.md) §4, every part of §2, the contra
 | OADR-0017 follow-ups (path CSP for the airline-card page, integrity check, review) | M3, M6 | OE13, OE16 | OFE-014, OFE-023, OBE-085, OBE-086 |
 | OADR-0018 follow-up (refuse `creditCard` in console form of payment) | M4 | OE10 | OBE-058, OBE-062, OBE-063 |
 | ADR-0011 §C PCI controls and documentation | M3, M6 | OE7, OE16 | OBE-050 … OBE-052, OBE-084, OBE-085, OBE-086 |
-| Security checklist, performance, operations | M6 | OE16 | OBE-084, OBE-088, OBE-089, OFE-024, OAD-019, OFE-026 |
+| Security checklist, performance, operations | M6 | OE16 | OBE-084, OBE-088, OBE-089, OFE-024, OAD-019, OFE-026; the M6 follow-ups (2026-11-06, FIX-W46-SHARED): OBE-092 and OBE-096 (search CPU), OBE-093 … OBE-095 and OAD-020 (security review), OFE-027 and OFE-028 (accessibility and Lighthouse) |
 
 ## 7. Operation coverage
 

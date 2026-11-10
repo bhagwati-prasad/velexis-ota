@@ -1,12 +1,12 @@
 # CI for every pull request and every push to main (ADR-0015, ADR-0020).
 # Jobs: plan-lint (no install), deploy-files (shellcheck, Caddyfile validation and its end-to-end smoke test, the
-# velexis-deploy test with a fake systemctl, systemd units and their sandbox exposure), systemd-units (the real
-# units run a stand-in app under systemd; a failure alert reaches Mailpit), dev-setup (docs/mvp/local-development.md
-# §2 on a clean runner: PostgreSQL 16 and Redis 7.4 from apt, dev-setup.sh and dev-keys.mjs twice), build-test
-# (repository guards and tools/ci/check-package-json.mjs before the install, then install, the tools/ci tests,
-# format, lint, typecheck, unit, contracts up to date, build, the cross-backend tests, release dry run), integration
-# (in parallel with build-test: the integration tests with PostgreSQL 16 + Redis 7.4 + Mailpit and the PAN-absence
-# proof that reads their report; lead decision (5o) of 2026-11-05, approved by the owner).
+# velexis-deploy test with a fake systemctl, the velexis-healthcheck test with fake endpoints, systemd units and their
+# sandbox exposure), systemd-units (the real units run a stand-in app under systemd; a failure alert reaches Mailpit),
+# dev-setup (docs/mvp/local-development.md §2 on a clean runner: PostgreSQL 16 and Redis 7.4 from apt, dev-setup.sh and
+# dev-keys.mjs twice), build-test (repository guards and tools/ci/check-package-json.mjs before the install, then
+# install, the tools/ci tests, format, lint, typecheck, unit, contracts up to date, build, the cross-backend tests,
+# release dry run), integration (in parallel with build-test: the integration tests with PostgreSQL 16 + Redis 7.4 +
+# Mailpit and the PAN-absence proof that reads their report; lead decision (5o) of 2026-11-05, approved by the owner).
 # Agents never change this file to get their own change through (AGENTS.md §7). What each guard enforces and how to
 # run it locally: tools/ci/README.md.
 # Third-party actions are pinned to full commit SHAs with the tag as the last thing in the comment, so Dependabot
@@ -60,7 +60,9 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version-file: .nvmrc # the echo upstream of the Caddyfile smoke test and the fake apps of deploy.test.sh
+          # The echo upstream of the Caddyfile smoke test, the fake apps of deploy.test.sh and the fake endpoints of
+          # healthcheck.test.sh.
+          node-version-file: .nvmrc
       - name: shellcheck deploy scripts
         run: shellcheck -S style deploy/scripts/*.sh deploy/scripts/test/*.sh deploy/systemd/test/*.sh deploy/caddy/test/*.sh
       - name: Validate the Caddyfile with Caddy ${{ env.CADDY_VERSION }}
@@ -76,6 +78,20 @@ jobs:
       - name: velexis-deploy test (temporary VM root, fake systemctl and apps, no root)
         # X-023: deploy.sh against fake releases (happy path, refusals, rollbacks, pruning); see deploy.test.sh's header.
         run: bash deploy/scripts/test/deploy.test.sh
+      - name: velexis-healthcheck test (temporary VM root, fake endpoints and stand-ins, no root)
+        # X-030: healthcheck.sh against fake units, queues, Redis, disk, backup marker, certificates and payment pages;
+        # see healthcheck.test.sh's header. The runner image has curl, jq and openssl; a missing one is installed first.
+        # Lead decision (11i) of 2026-11-06, approved by the owner (FIX-W46-SHARED).
+        run: |
+          missing=()
+          for tool in curl jq openssl; do
+            command -v "$tool" > /dev/null || missing+=("$tool")
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            sudo apt-get update -y
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
+          fi
+          bash deploy/scripts/test/healthcheck.test.sh
       - name: Verify systemd units
         run: |
           # Off the VM only the missing /usr/bin/node and helper paths are reported; anything else fails.
@@ -84,11 +100,11 @@ jobs:
           if echo "$out" | grep -v -E "Command /usr/(bin/node|local/sbin/velexis-[a-z]+) is not executable|velexis-alert@|caddy.service" | grep -q .; then
             exit 1
           fi
-      - name: Unit sandboxing (every app unit and velexis-alert@ at exposure 2.0 or lower)
+      - name: Unit sandboxing (every app unit, velexis-alert@ and velexis-healthcheck at exposure 2.0 or lower)
         run: |
           # --threshold counts in tenths: 20 is 2.0 ("OK"); systemd-analyze exits non-zero above it.
           for unit in deploy/systemd/velexis-{platform-api,platform-worker,portal,platform-admin,ota-api,ota-worker,ota-admin}.service \
-                      deploy/systemd/velexis-alert@.service; do
+                      deploy/systemd/velexis-alert@.service deploy/systemd/velexis-healthcheck.service; do
             if ! out="$(systemd-analyze security --offline=true --threshold=20 --no-pager "$unit" 2>&1)"; then
               echo "$out"
               echo "::error::$unit is above exposure 2.0"

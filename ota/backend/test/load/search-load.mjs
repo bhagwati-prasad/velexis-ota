@@ -22,11 +22,12 @@
 //      --offers n makes the proxy answer with n (the stub's repeated, each with its own id), since Amadeus answers up
 //      to 250 and the API asks for 250;
 //   3. the built API (`ota/backend/dist/main.js`) in a child process on a free port, started as the VM starts it
-//      (APP_ENV and NODE_ENV production, `--enable-source-maps`, `--max-old-space-size=640`; --app-env test turns on
-//      the development checks such as the search_path leak guard), with random key files, edge secret and service key
-//      of its own, Redis database --redis-db, and a preload (written into the run's temporary folder) that measures
-//      without changing anything: the INSERT and UPDATE statements of the shopping tables, the waits for a connection
-//      of the API's pool, the RSS and the event-loop delay;
+//      (APP_ENV and NODE_ENV production, `--enable-source-maps`, `--max-old-space-size=640 --max-semi-space-size=32`,
+//      the NODE_OPTIONS of deploy/systemd/velexis-ota-api.service; --app-env test turns on the development checks such
+//      as the search_path leak guard), with random key files, edge secret and service key of its own, Redis database
+//      --redis-db, and a preload (written into the run's temporary folder) that measures without changing anything:
+//      the INSERT and UPDATE statements of the shopping tables, the waits for a connection of the API's pool, the RSS
+//      and the event-loop delay;
 //   4. --warmup journeys per visitor at the measured concurrency and at every tenant (not counted, so the API's pool
 //      has its connections and the code is compiled; then a pause for the buckets to refill), then --visitors concurrent visitors run
 //      --searches journeys in all. A journey is one storefront visitor with an address of their own (X-Forwarded-For in 198.18.0.0/15, the
@@ -779,7 +780,10 @@ async function startApi(options, run) {
     process.execPath,
     [
       "--enable-source-maps",
+      // The NODE_OPTIONS of deploy/systemd/velexis-ota-api.service: the young generation of 32 MiB per semi-space is
+      // lead decision (11h) of 2026-11-06 (ota/docs/performance.md §4).
       "--max-old-space-size=640",
+      "--max-semi-space-size=32",
       "--require",
       preload,
       join(BACKEND_DIR, "dist", "main.js"),

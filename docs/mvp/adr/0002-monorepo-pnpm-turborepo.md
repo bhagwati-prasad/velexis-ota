@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (one repository, shared libraries), lead architect (tooling)
-**Revisions:** 2026-10-12 (planning review): the table lists `@velexis/testing` ([ADR-0022](0022-shared-test-support-package.md)) and `@velexis/reference-data` ([ADR-0024](0024-reference-data-sources-and-loader.md)); 17 workspace packages.
+**Revisions:** 2026-10-12 (planning review): the table lists `@velexis/testing` ([ADR-0022](0022-shared-test-support-package.md)) and `@velexis/reference-data` ([ADR-0024](0024-reference-data-sources-and-loader.md)); 17 workspace packages. 2026-11-06 (lead decision (11f) of 2026-11-06, recording FIX-W46-SHARED): the shared root Vitest file is `vitest.config.ts`, a projects config, instead of `vitest.workspace.ts` (dated note under item 6).
 
 ## Context
 
@@ -46,7 +46,8 @@
    - `platform/*` never imports from `ota/*` and the reverse. They share only `packages/*`.
    - The OTA admin and the storefront reach the OTA backend only through `@velexis/ota-sdk`.
    - The SDK has **no runtime dependencies**. It may use `@velexis/api-types` for types only.
-6. **Shared root configuration files:** `tsconfig.base.json`, `eslint.config.mjs` (flat config), `.prettierrc.json`, `.editorconfig`, `vitest.workspace.ts`, `.env.example`. Packages extend them instead of copying them. There are no separate config packages.
+6. **Shared root configuration files:** `tsconfig.base.json`, `eslint.config.mjs` (flat config), `.prettierrc.json`, `.editorconfig`, `vitest.config.ts`, `.env.example`. Packages extend them instead of copying them. There are no separate config packages.
+   - **2026-11-06 (lead decision (11f) of 2026-11-06, FIX-W46-SHARED):** the root Vitest file is `vitest.config.ts`, no longer `vitest.workspace.ts`. Vitest 4 (PBE-070) has no `defineWorkspace` and reads no workspace file, so the root file is a projects config: `defineConfig` with `test.projects` globs that match every package's own `vitest.config.ts` or `vitest.config.js` (the storefront and the SDK have `.js` configs), for editors and ad-hoc runs from the root (`pnpm exec vitest run --config vitest.config.ts --project <name>`). Each package keeps its own config and its `pnpm test`; CI runs the tests per package through Turborepo, as before.
 7. **Versions** are exact in `package.json` (no `^`). Dependabot opens weekly grouped update PRs. [`../tech-stack.md`](../tech-stack.md) lists the versions.
 
 ## Consequences

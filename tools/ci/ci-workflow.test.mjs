@@ -292,6 +292,63 @@ describe("workflow shape", () => {
     assert.equal(uses(steps, "actions/cache"), undefined);
   });
 
+  it("[FIX-W46-SHARED AC5] deploy-files runs the health check test and keeps velexis-healthcheck in the sandbox loop", () => {
+    // Lead decision (11i) of 2026-11-06, approved by the owner.
+    const node = stepIndex("deploy-files", (s) => (s.uses ?? "").startsWith("actions/setup-node@"));
+    const deployTest = stepIndex("deploy-files", (s) => s.run === "bash deploy/scripts/test/deploy.test.sh");
+    const healthTest = stepIndex("deploy-files", (s) =>
+      /^bash deploy\/scripts\/test\/healthcheck\.test\.sh$/m.test(s.run ?? ""),
+    );
+    assert.ok(
+      node >= 0 && deployTest >= 0 && healthTest >= 0,
+      "setup-node, deploy.test.sh and healthcheck.test.sh",
+    );
+    assert.ok(node < healthTest, "the fake endpoints of healthcheck.test.sh need Node");
+    const healthStep = JOBS.get("deploy-files").steps[healthTest];
+    // A failing health check test fails the job: the step runs on every pull request and is never allowed to fail.
+    assert.equal(healthStep.if, undefined, "the health check test always runs");
+    assert.equal(healthStep["continue-on-error"], undefined, "a failing health check test fails the job");
+    assert.deepEqual(jobKey("deploy-files", "continue-on-error"), [], "and the job with it");
+    const run = healthStep.run;
+    assert.match(run, /for tool in curl jq openssl; do/, "it checks the tools the runner image must have");
+    assert.match(
+      run,
+      /apt-get install -y --no-install-recommends "\$\{missing\[@\]\}"/,
+      "and installs only a missing one",
+    );
+
+    // The unit list of the sandboxing loop, expanded by bash as the step expands it.
+    const sandbox = JOBS.get("deploy-files").steps.find((s) => /systemd-analyze security/.test(s.run ?? ""));
+    assert.ok(sandbox, "deploy-files has the unit sandboxing step");
+    assert.equal(sandbox.if, undefined, "the sandboxing step always runs");
+    assert.equal(sandbox["continue-on-error"], undefined, "an exposure above 2.0 fails the job");
+    const list = sandbox.run.match(/for unit in ([\s\S]*?); do/)?.[1];
+    assert.ok(list, "the step loops over a unit list");
+    const units = execFileSync("bash", ["-c", `printf '%s\\n' ${list.replace(/\\\n/g, " ")}`], {
+      encoding: "utf8",
+    })
+      .trim()
+      .split("\n");
+    const apps = [
+      "platform-api",
+      "platform-worker",
+      "portal",
+      "platform-admin",
+      "ota-api",
+      "ota-worker",
+      "ota-admin",
+    ];
+    assert.deepEqual(units, [
+      ...apps.map((app) => `deploy/systemd/velexis-${app}.service`),
+      "deploy/systemd/velexis-alert@.service",
+      "deploy/systemd/velexis-healthcheck.service",
+    ]);
+    for (const unit of units) {
+      assert.ok(readFileSync(join(ROOT, unit), "utf8").includes("[Service]"), `${unit} exists`);
+    }
+    assert.match(sandbox.name, /velexis-healthcheck/);
+  });
+
   it("[X-019 AC5] every uses: in .github/workflows is pinned to a 40-character commit SHA", () => {
     const dir = join(ROOT, ".github/workflows");
     let uses = 0;
