@@ -20,8 +20,8 @@
 //     `agent` and `finance` (createInvitation) and which accept with the token of the invitation e-mail
 //     (acceptInvitation);
 //   - then the OTA goes live, as roles.e2e.ts makes it: no operation makes an OTA live before the platform's go-live
-//     (PBE-061), so its platform row is set `storefront_environment = live` as velexis_migrator and the platform's
-//     `tenant` invalidation published, as the platform does after its commit;
+//     (PBE-061), so its platform row is set `storefront_environment = live` as the platform API's own role and the
+//     platform's `tenant` invalidation published, as the platform does after its commit;
 //   - and the go-live's first live booking is seeded: the stack has no live Amadeus account (dev:seed seeds the test
 //     account and its forty test offices only; a live connection's secret is sealed by the platform), so no live
 //     storefront search can reach Amadeus. The manual-review booking's rows that the console reads (the booking and
@@ -32,8 +32,9 @@
 //
 // No step sends a live action: the dialogs are opened and closed, so nothing reaches the live Amadeus connection the
 // stack does not have. The billing notice is the platform's `tenants.billing_notice`, which its billing sync writes;
-// the journey writes it as velexis_migrator and publishes the `tenant` invalidation, as the sync does, and reloads the
-// page until the OTA API's next `console.auth.me` answers it (its cached tenant row is dropped by the invalidation).
+// the journey writes it as the platform API's own role and publishes the `tenant` invalidation, as the sync does, and
+// reloads the page until the OTA API's next `console.auth.me` answers it (its cached tenant row is dropped by the
+// invalidation).
 //
 // Every page the journey visits passes axe once its title is in place (in live mode too, with its warning colours, and
 // with each billing notice), and on every page of the OTA admin JavaScript reads no cookie. The steps are tests in
@@ -163,8 +164,9 @@ async function addMember(role: MemberRole, fullName: string): Promise<Member> {
 
 /**
  * Makes the OTA live (`storefront_environment = live`), as the platform's go-live of M5 will (see roles.e2e.ts): its
- * platform row as velexis_migrator (`setTenantLive` of support/seed.ts), then the platform's `tenant` invalidation, as
- * the platform publishes after its commit (the OTA API reads the row again at once instead of after its 60 s cache).
+ * platform row as the platform API's own role (`setTenantLive` of support/seed.ts), then the platform's `tenant`
+ * invalidation, as the platform publishes after its commit (the OTA API reads the row again at once instead of after
+ * its 60 s cache).
  */
 async function goLive(tenantId: string): Promise<void> {
   await setTenantLive(tenantId);
@@ -173,7 +175,8 @@ async function goLive(tenantId: string): Promise<void> {
 
 /**
  * Sets the OTA's billing notice (`past_due`, `trial_ending`, `null`) as the platform's billing sync does
- * (`setTenantBillingNotice` of support/seed.ts, as velexis_migrator), then the platform's `tenant` invalidation.
+ * (`setTenantBillingNotice` of support/seed.ts, as the platform API's own role), then the platform's `tenant`
+ * invalidation.
  */
 async function setBillingNotice(tenantId: string, notice: "past_due" | "trial_ending" | null): Promise<void> {
   await setTenantBillingNotice(tenantId, notice);

@@ -1,6 +1,7 @@
 // dist/worker.js: the platform worker (unit velexis-platform-worker). It runs no HTTP API (ADR-0003): a Nest
 // application context for queues and schedules (later tasks), plus a small node:http server on
-// 127.0.0.1:HEALTH_PORT (3101) that answers /health/live and /health/ready for deploy.sh and the on-VM checks.
+// 127.0.0.1:HEALTH_PORT (3101) that answers /health/live and /health/ready for deploy.sh and the on-VM checks; its
+// readiness lists the worker's queues as the OTA worker's does (health/queue-age.ts, FIX-W46-PLATFORM).
 //
 // Start-up: validate the configuration (a ConfigError names every bad variable, and the process exits 1), build the
 // context, start the health server. systemd's SIGTERM closes the context, the health server included, through
@@ -76,9 +77,21 @@ async function answer(health: HealthService, req: IncomingMessage, res: ServerRe
   if (readable && path === LIVE_PATH) {
     sendJson(req, res, 200, health.live());
   } else if (readable && path === READY_PATH) {
-    const { report, failures } = await health.ready();
+    const { report, failures, queuesUnknown } = await health.ready();
     for (const { dependency, error } of failures) {
       req.log.warn({ dependency, err: error }, "health.dependency_down");
+    }
+    if (queuesUnknown !== undefined) {
+      // The answer has no `queues` (unknown, never "no job waits"). As for the probes: the type, message, stack and
+      // code of a Redis error, never a URL or a job.
+      req.log.warn(
+        {
+          part: "queues",
+          status: queuesUnknown.status,
+          ...(queuesUnknown.status === "down" ? { err: queuesUnknown.error } : {}),
+        },
+        "health.queues_unknown",
+      );
     }
     sendJson(req, res, report.status === "ok" ? 200 : 503, report);
   } else {

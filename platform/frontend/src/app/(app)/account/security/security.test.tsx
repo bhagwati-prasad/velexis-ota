@@ -132,6 +132,21 @@ function account(overrides: Partial<Account> = {}): Account {
 
 const MFA_ON: Partial<Account> = { mfaEnabled: true, mfaEnabledAt: iso(-10 * DAY_MS) };
 
+/** An OTA of the account as `listTenants` lists it: an active test OTA it owns unless the test says otherwise. */
+function listedOta(overrides: Partial<Schemas["TenantSummary"]> = {}): Schemas["TenantSummary"] {
+  return {
+    id: "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F",
+    key: "acme",
+    name: "Acme Travel",
+    status: "active",
+    role: "owner",
+    planCode: "early_access",
+    storefrontUrl: "https://acme.ota.example.com/",
+    storefrontEnvironment: "test",
+    ...overrides,
+  };
+}
+
 /** The session of this browser, another browser of the account, and a platform admin session. */
 const THIS_SESSION: AccountSession = {
   familyId: "asn_01JA2ZB4N8Q6R1T5V9X3Z7C2E6",
@@ -221,10 +236,11 @@ function apiError(
 
 type Route = (call: Call) => Response | Promise<Response>;
 
-/** The routes of the pages: the account (MFA off) and its three sessions. */
+/** The routes of the pages: the account (MFA off), the test OTA it owns and its three sessions. */
 function defaultRoutes(): Record<string, Route> {
   return {
     "GET /v1/me": () => json(account(), 200, { etag: '"3"' }),
+    "GET /v1/tenants": () => json({ data: [listedOta()] }, 200),
     "GET /v1/me/sessions": () => json({ data: SESSIONS }, 200),
   };
 }
@@ -1007,6 +1023,72 @@ describe("/account/security two-factor authentication", () => {
     });
   });
 
+  it("[FIX-W46-PLATFORM AC3] shows an owner or admin of a live OTA no way to turn MFA off, from listTenants, and says why", async () => {
+    // The roles and environments of PADR-0008's rule (revision of 2026-11-05), as listTenants names them.
+    const cases: ReadonlyArray<{ readonly otas: Schemas["TenantSummary"][]; readonly mandatory: boolean }> = [
+      { otas: [listedOta({ storefrontEnvironment: "live" })], mandatory: true },
+      { otas: [listedOta(), listedOta({ role: "admin", storefrontEnvironment: "live" })], mandatory: true },
+      { otas: [listedOta({ status: "suspended", storefrontEnvironment: "live" })], mandatory: true },
+      { otas: [listedOta()], mandatory: false },
+      { otas: [], mandatory: false },
+      ...(["agent", "finance", "viewer"] as const).map((role) => ({
+        otas: [listedOta({ role, storefrontEnvironment: "live" })],
+        mandatory: false,
+      })),
+    ];
+    for (const { otas, mandatory } of cases) {
+      routes({
+        "GET /v1/me": () => json(account(MFA_ON), 200),
+        "GET /v1/tenants": () => json({ data: otas }, 200),
+      });
+      await openSecurity();
+      expect(screen.queryByRole("button", { name: SECURITY_STRINGS.turnOff }) === null).toBe(mandatory);
+      expect(document.querySelector('[data-notice="live-ota"]')?.textContent).toBe(
+        mandatory ? SECURITY_STRINGS.liveOtaKeepsMfa : undefined,
+      );
+      // The recovery codes can still be replaced.
+      expect(screen.getByRole("button", { name: SECURITY_STRINGS.replaceCodes })).toBeTruthy();
+      cleanup();
+    }
+
+    // A list that cannot be read cannot tell: "Turn off" stays, and the API decides.
+    routes({
+      "GET /v1/me": () => json(account(MFA_ON), 200),
+      "GET /v1/tenants": () => apiError("SERVICE_UNAVAILABLE", 503),
+    });
+    await openSecurity();
+    expect(screen.getByRole("button", { name: SECURITY_STRINGS.turnOff })).toBeTruthy();
+    expect(document.querySelector('[data-notice="live-ota"]')).toBeNull();
+    expect(screen.getByRole("table", { name: SECURITY_STRINGS.sessionsCaption })).toBeTruthy();
+  });
+
+  it("[FIX-W46-PLATFORM AC3] shows disableMfa's 409 mfa_mandatory with its own message, not the general conflict, and keeps MFA on", async () => {
+    // The page could not tell (the OTA went live after it was rendered): the API refuses after the step-up.
+    routes({
+      "GET /v1/me": () => json(account(MFA_ON), 200),
+      "POST /v1/me/mfa/disable": () => apiError("CONFLICT", 409, { details: { reason: "mfa_mandatory" } }),
+    });
+    await openSecurity();
+    await confirmWith(SECURITY_STRINGS.turnOff, SECURITY_STRINGS.turnOffConfirm);
+
+    const notice = await screen.findByText(SECURITY_STRINGS.liveOtaKeepsMfa, {}, ACTION_WAIT);
+    expect(notice.closest('[data-notice="failed"]')?.getAttribute("data-code")).toBe("CONFLICT");
+    expect(screen.queryByText(ERROR_MESSAGES.CONFLICT)).toBeNull();
+    expect(document.body.textContent).not.toContain("The API's own text");
+    expect(document.querySelector('[data-mfa="on"]')).not.toBeNull();
+    expect(calls("POST", "/v1/me/mfa/disable")).toHaveLength(1);
+    expect(nextCache.revalidatePath).not.toHaveBeenCalled();
+
+    // The action's answer; another conflict keeps the general message.
+    expect(await turnOffMfa({ status: "idle" }, new FormData())).toEqual({
+      status: "failed",
+      code: "CONFLICT",
+      message: SECURITY_STRINGS.liveOtaKeepsMfa,
+    });
+    routes({ "POST /v1/me/mfa/disable": () => apiError("CONFLICT", 409) });
+    expect((await turnOffMfa({ status: "idle" }, new FormData())).message).toBe(ERROR_MESSAGES.CONFLICT);
+  });
+
   it("answers the step-up, MFA_REQUIRED, malformed answers and ended sessions of the MFA actions", async () => {
     routes({ "POST /v1/me/mfa/recovery-codes": () => apiError("REAUTH_REQUIRED", 401) });
     expect(await replaceRecoveryCodes({ status: "idle" }, new FormData())).toEqual({
@@ -1271,7 +1353,7 @@ describe("/account/security password and page", () => {
     ).rejects.toThrow("NEXT_REDIRECT /verify-pending");
   });
 
-  it("reads the account and the sessions once each, with one h1 and the sections in order", async () => {
+  it("reads the account, its OTAs and the sessions once each, with one h1 and the sections in order", async () => {
     await openSecurity();
 
     expect(screen.getAllByRole("heading", { level: 1 }).map((heading) => heading.textContent)).toEqual([
@@ -1282,16 +1364,18 @@ describe("/account/security password and page", () => {
       SECURITY_STRINGS.mfaTitle,
       SECURITY_STRINGS.sessionsTitle,
     ]);
-    for (const path of ["/v1/me", "/v1/me/sessions"]) {
+    for (const path of ["/v1/me", "/v1/tenants", "/v1/me/sessions"]) {
       const [call, ...more] = calls("GET", path);
       expect(more).toHaveLength(0);
       expectSessionHeaders(call);
     }
-    expect(sent).toHaveLength(2);
+    expect(sent).toHaveLength(3);
   });
 
   it("sends an ended session to sign-in and back, and keeps the other sections when a list fails", async () => {
     routes({ "GET /v1/me/sessions": () => apiError("UNAUTHENTICATED", 401) });
+    await expect(SecurityPage({})).rejects.toThrow("NEXT_REDIRECT /sign-in?next=%2Faccount%2Fsecurity");
+    routes({ "GET /v1/tenants": () => apiError("TOKEN_EXPIRED", 401) });
     await expect(SecurityPage({})).rejects.toThrow("NEXT_REDIRECT /sign-in?next=%2Faccount%2Fsecurity");
     routes({ "GET /v1/me": () => apiError("TOKEN_EXPIRED", 401) });
     await expect(SecurityPage({})).rejects.toThrow("NEXT_REDIRECT /sign-in?next=%2Faccount%2Fsecurity");

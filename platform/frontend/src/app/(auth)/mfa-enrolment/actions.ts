@@ -3,12 +3,11 @@
 import type { PlatformErrorCode } from "@velexis/errors";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { z } from "zod";
 
 import type { MfaEnableState, MfaSetupState } from "@/app/(app)/account/security/actions";
 import { platformApi, type ApiError } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
-import { qrCode, QR_MAX_TEXT_LENGTH } from "@/lib/qr";
+import { MALFORMED_ANSWER, pendingSetupOf, recoveryCodesOf, TOTP_CODE } from "@/lib/mfa-checks";
 import { REQUESTED_PAGE_HEADER, safeNextPath } from "@/lib/session";
 import { MFA_ENROLMENT_STRINGS, SECURITY_STRINGS } from "@/lib/strings";
 
@@ -23,9 +22,10 @@ import { MFA_ENROLMENT_STRINGS, SECURITY_STRINGS } from "@/lib/strings";
  * Both operations are `portal_unverified` ones, which the API's enrolment gate leaves open (PBE-071). Unlike the
  * security page's actions they revalidate nothing: rendering the page again would send an account that no longer needs
  * the enrolment on to `next` at once, before it has seen its recovery codes; the page's "Continue" leaves instead. The
- * answers' checks are the security page's (`account/security/actions.ts`): an answer that is not the document's shows
- * the general error and nothing of it. The secret, the QR code and the recovery codes leave the server only in an
- * action's answer (`Cache-Control: no-store`) and are never logged, stored, cached, or put in a cookie or a URL.
+ * answers' checks are the security page's, from the one module both import (`lib/mfa-checks.ts`, FIX-W46-PLATFORM): an
+ * answer that is not the document's shows the general error and nothing of it. The secret, the QR code and the recovery
+ * codes leave the server only in an action's answer (`Cache-Control: no-store`) and are never logged, stored, cached,
+ * or put in a cookie or a URL.
  */
 
 /**
@@ -43,37 +43,6 @@ async function leaveOnSessionEnd(error: ApiError): Promise<void> {
     await signInAgain();
   }
 }
-
-/** `MfaSetup.secret` and `otpauthUrl` of the platform document (as the security page checks them). */
-const TOTP_SECRET = /^[A-Z2-7]+=*$/;
-const OTPAUTH_URL = /^otpauth:\/\/totp\//;
-
-/** `TotpCode` of the platform document; spaces a person typed are dropped. */
-const TOTP_CODE = z
-  .string()
-  .transform((value) => value.replace(/\s+/g, ""))
-  .pipe(z.string().regex(/^[0-9]{6}$/));
-
-/** One recovery code as `RecoveryCodes` answers it: four groups of four Crockford base32 characters. */
-const RECOVERY_CODE = /^[0-9A-HJKMNP-TV-Z]{4}(?:-[0-9A-HJKMNP-TV-Z]{4}){3}$/;
-const RECOVERY_CODE_COUNT = 10;
-
-/** The recovery codes of an answer, or `undefined` when the answer is not the document's `RecoveryCodes`. */
-function recoveryCodesOf(value: unknown): readonly string[] | undefined {
-  if (!Array.isArray(value) || value.length !== RECOVERY_CODE_COUNT) {
-    return undefined;
-  }
-  const codes = value.filter((code): code is string => typeof code === "string" && RECOVERY_CODE.test(code));
-  return codes.length === RECOVERY_CODE_COUNT ? Object.freeze(codes) : undefined;
-}
-
-/** A failure of an answer that is not what the document describes; nothing of it is shown. */
-const MALFORMED: ApiError = Object.freeze({
-  code: "INTERNAL_ERROR",
-  status: 500,
-  fieldErrors: Object.freeze([]),
-  details: Object.freeze({}),
-});
 
 const SETUP_MESSAGES: Readonly<Partial<Record<PlatformErrorCode, string>>> = {
   MFA_ALREADY_ENABLED: SECURITY_STRINGS.mfaAlreadyEnabled,
@@ -101,17 +70,11 @@ export async function beginEnrolment(_previous: MfaSetupState, _formData: FormDa
       message: SETUP_MESSAGES[result.error.code] ?? errorMessage(result.error),
     };
   }
-  const { secret, otpauthUrl, expiresIn } = result.data;
-  if (
-    !TOTP_SECRET.test(secret) ||
-    !OTPAUTH_URL.test(otpauthUrl) ||
-    otpauthUrl.length > QR_MAX_TEXT_LENGTH ||
-    !Number.isInteger(expiresIn) ||
-    expiresIn < 1
-  ) {
-    return { status: "failed", code: MALFORMED.code, message: errorMessage(MALFORMED) };
+  const setup = pendingSetupOf(result.data);
+  if (setup === undefined) {
+    return { status: "failed", code: MALFORMED_ANSWER.code, message: errorMessage(MALFORMED_ANSWER) };
   }
-  return { status: "started", setup: { secret, qr: qrCode(otpauthUrl), expiresIn } };
+  return { status: "started", setup };
 }
 
 /**
@@ -149,7 +112,11 @@ export async function confirmEnrolment(
   const recoveryCodes = recoveryCodesOf(result.data.recoveryCodes);
   if (recoveryCodes === undefined) {
     // MFA is on, so the general "try again" would mislead: the page says to replace the codes on the security page.
-    return { status: "enabled", code: MALFORMED.code, message: MFA_ENROLMENT_STRINGS.codesUnavailable };
+    return {
+      status: "enabled",
+      code: MALFORMED_ANSWER.code,
+      message: MFA_ENROLMENT_STRINGS.codesUnavailable,
+    };
   }
   return { status: "enabled", recoveryCodes };
 }

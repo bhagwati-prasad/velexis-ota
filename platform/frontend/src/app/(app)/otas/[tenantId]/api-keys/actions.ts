@@ -14,6 +14,7 @@ import {
 import {
   isConsoleScope,
   isPermission,
+  MAX_PERMISSIONS,
   scopeMessage,
   scopeProblem,
   scopesOf,
@@ -328,7 +329,8 @@ export async function createKey(_previous: CreateKeyState, formData: FormData): 
   const expiresIn = text(formData, "expiresIn") || "never";
   const sent = sentOrigins(formData);
   const scope = text(formData, "scope");
-  const permissions = texts(formData, "permissions");
+  // As sent: none of them is looked at before the list's count (below).
+  const permissions = formData.getAll("permissions");
 
   const errors: { -readonly [Field in keyof KeyFieldErrors]: KeyFieldErrors[Field] } = {};
   const nameError = nameProblem(name);
@@ -344,6 +346,10 @@ export async function createKey(_previous: CreateKeyState, formData: FormData): 
     access = { allowedOrigins: sent.origins };
   } else if (!isConsoleScope(scope)) {
     errors.scopes = scopeMessage(scope === "" ? "scopeRequired" : "unknownScope");
+  } else if (permissions.length > MAX_PERMISSIONS) {
+    // A list longer than a key can hold is refused by its count alone, before any of its items is checked
+    // (FIX-W46-PLATFORM, lead decision (11b), as the origins above: README "Zod").
+    errors.scopes = API_KEYS_STRINGS.permissionsTooMany(MAX_PERMISSIONS);
   } else if (!permissions.every(isPermission)) {
     errors.scopes = scopeMessage("unknownScope");
   } else {

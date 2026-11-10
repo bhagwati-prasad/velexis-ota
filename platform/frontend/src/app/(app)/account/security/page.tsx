@@ -1,3 +1,4 @@
+import type { components } from "@velexis/api-types/platform";
 import type { PlatformErrorCode } from "@velexis/errors";
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
@@ -25,6 +26,21 @@ const SESSION_ENDED: ReadonlySet<PlatformErrorCode> = new Set<PlatformErrorCode>
   "UNAUTHENTICATED",
   "TOKEN_EXPIRED",
 ]);
+
+/** The roles whose two-factor sign-in is mandatory in a live OTA (PADR-0008, revision of 2026-11-05; PBE-071). */
+const MFA_MANDATORY_ROLES: ReadonlySet<components["schemas"]["TenantRole"]> = new Set(["owner", "admin"]);
+
+/**
+ * Whether the account must keep MFA on as an owner or admin of a live OTA, from `listTenants`, the dashboard's read:
+ * it lists the OTAs of the account's active memberships in the statuses members see, with the role and the storefront
+ * environment, the very rows the API's `mfa_mandatory` rule reads (FIX-W46-PLATFORM, lead decision (11c); no contract
+ * change). `false` when the list could not be read: "Turn off" then stays, and the API's refusal has its own message.
+ */
+function mustKeepMfa(tenants: readonly components["schemas"]["TenantSummary"][] | undefined): boolean {
+  return (tenants ?? []).some(
+    (tenant) => MFA_MANDATORY_ROLES.has(tenant.role) && tenant.storefrontEnvironment === "live",
+  );
+}
 
 /** A section of the page with its heading and intro. */
 function Section({
@@ -64,7 +80,8 @@ function Unavailable({ title, error }: { readonly title: string; readonly error:
 /**
  * `/account/security` (README §2 Signed in; PF-04, PF-06): the password, two-factor authentication and the sessions
  * of the signed-in account. The page reads `getMe` (whether MFA is on, since when, a platform admin, the time zone of
- * the dates) and `listSessions` side by side. It never holds a secret: the TOTP secret, its QR code and the recovery
+ * the dates), `listTenants` (whether the account is an owner or admin of a live OTA, who must keep MFA on) and
+ * `listSessions` side by side. It never holds a secret: the TOTP secret, its QR code and the recovery
  * codes exist only in the answers of the actions, rendered by the client components, so a reload shows none of them.
  * An ended session goes to sign-in and back here; a call that fails otherwise shows the portal's message in place of
  * its section, and the rest of the page stays. "Open console" of a live OTA refused for an account without MFA
@@ -78,8 +95,12 @@ export default async function SecurityPage({
   const consoleFailure = consoleProblemOf(query);
   const consoleTenant = searchParam(query[CONSOLE_QUERY.tenant]);
   const api = await platformApi();
-  const [me, sessions] = await Promise.all([api.GET("/v1/me"), api.GET("/v1/me/sessions")]);
-  for (const answer of [me, sessions]) {
+  const [me, tenants, sessions] = await Promise.all([
+    api.GET("/v1/me"),
+    api.GET("/v1/tenants"),
+    api.GET("/v1/me/sessions"),
+  ]);
+  for (const answer of [me, tenants, sessions]) {
     if (answer.error !== undefined && SESSION_ENDED.has(answer.error.code)) {
       redirect(`/sign-in?${new URLSearchParams({ next: "/account/security" }).toString()}`);
     }
@@ -115,6 +136,7 @@ export default async function SecurityPage({
             mfaEnabled={me.data.mfaEnabled}
             mfaEnabledAt={me.data.mfaEnabledAt}
             isPlatformAdmin={me.data.isPlatformAdmin}
+            mfaMandatory={mustKeepMfa(tenants.data?.data)}
             timeZone={timeZone}
           />
         )}

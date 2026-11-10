@@ -1,7 +1,10 @@
 // Liveness and readiness of a platform backend process (ADR-0016). Both processes use it: the API serves it through
 // HealthController, the worker through its node:http health server (worker.ts). The service only probes and reports;
-// the caller logs the failures with its request logger, so every line carries the request's requestId.
-import { Inject, Injectable } from "@nestjs/common";
+// the caller logs the failures with its request logger, so every line carries the request's requestId. The worker's
+// readiness also reports its BullMQ queues (FIX-W46-PLATFORM, queue-age.ts), within QUEUE_REPORT_TIMEOUT_MS and in
+// parallel with the probes, as the OTA worker's does; the queues never make it unready.
+import { Inject, Injectable, Optional } from "@nestjs/common";
+import { HEALTH_QUEUE_AGES, QUEUE_REPORT_TIMEOUT_MS, type QueueAges, type QueueAgeSource } from "./queue-age";
 
 /** How long one dependency may take to answer before it counts as down. deploy.sh polls for up to 90 s. */
 export const HEALTH_CHECK_TIMEOUT_MS = 2_000;
@@ -21,6 +24,11 @@ export interface LiveReport {
 export interface ReadyReport {
   readonly status: "ok" | "unavailable";
   readonly checks: Readonly<Record<HealthDependency, DependencyStatus>>;
+  /**
+   * The worker's queues (FIX-W46-PLATFORM): absent in the API's answer, and in the worker's while they are unknown
+   * (Redis did not answer them within QUEUE_REPORT_TIMEOUT_MS).
+   */
+  readonly queues?: QueueAges;
 }
 
 /** Why a dependency is down. For the log only: the error never reaches a response. */
@@ -29,9 +37,18 @@ export interface DependencyFailure {
   readonly error: unknown;
 }
 
+/**
+ * Why the worker's queues are unknown: no answer within QUEUE_REPORT_TIMEOUT_MS, or Redis refused or failed (the error
+ * for the log only).
+ */
+export type QueuesUnknown =
+  { readonly status: "timeout" } | { readonly status: "down"; readonly error: unknown };
+
 export interface Readiness {
   readonly report: ReadyReport;
   readonly failures: readonly DependencyFailure[];
+  /** Set when the worker's queue part is unknown; the caller logs it (`health.queues_unknown`). */
+  readonly queuesUnknown?: QueuesUnknown;
 }
 
 /** What the readiness check needs of the PostgreSQL pool (`createPool` of @velexis/db). */
@@ -84,11 +101,16 @@ async function withTimeout<T>(
   }
 }
 
+/** The outcome of the queue part: the queues, or why they are unknown; nothing in the API. */
+type QueuePart =
+  { readonly queues: QueueAges } | { readonly unknown: QueuesUnknown } | Readonly<Record<string, never>>;
+
 @Injectable()
 export class HealthService {
   constructor(
     @Inject(HEALTH_POSTGRES) private readonly postgres: PostgresProbeTarget,
     @Inject(HEALTH_REDIS) private readonly redis: RedisProbeTarget,
+    @Optional() @Inject(HEALTH_QUEUE_AGES) private readonly queueAges?: QueueAgeSource,
   ) {}
 
   /** The process is up and serving. Checks nothing else. */
@@ -96,22 +118,55 @@ export class HealthService {
     return { status: "ok" };
   }
 
-  /** PostgreSQL (`SELECT 1`) and Redis (`PING`), probed in parallel, each within HEALTH_CHECK_TIMEOUT_MS. */
+  /**
+   * PostgreSQL (`SELECT 1`) and Redis (`PING`), probed in parallel, each within HEALTH_CHECK_TIMEOUT_MS. The worker's
+   * queues are read meanwhile and added when they answered in time; they never change the status.
+   */
   async ready(): Promise<Readiness> {
-    const results = await Promise.all([
-      this.probe("postgres", () => this.postgres.query("SELECT 1")),
-      this.probe("redis", async () => {
-        if ((await this.redis.ping()) !== "PONG") {
-          throw new UnexpectedPingReplyError();
-        }
-      }),
+    const [results, queuePart] = await Promise.all([
+      Promise.all([
+        this.probe("postgres", () => this.postgres.query("SELECT 1")),
+        this.probe("redis", async () => {
+          if ((await this.redis.ping()) !== "PONG") {
+            throw new UnexpectedPingReplyError();
+          }
+        }),
+      ]),
+      this.readQueues(),
     ]);
     const failures = results.filter((failure) => failure !== undefined);
     const down = new Set(failures.map((failure) => failure.dependency));
     const checks = Object.fromEntries(
       HEALTH_DEPENDENCIES.map((dependency) => [dependency, down.has(dependency) ? "down" : "ok"]),
     ) as Record<HealthDependency, DependencyStatus>;
-    return { report: { status: failures.length === 0 ? "ok" : "unavailable", checks }, failures };
+    const status = failures.length === 0 ? "ok" : "unavailable";
+    if ("queues" in queuePart) {
+      return { report: { status, checks, queues: queuePart.queues }, failures };
+    }
+    return "unknown" in queuePart
+      ? { report: { status, checks }, failures, queuesUnknown: queuePart.unknown }
+      : { report: { status, checks }, failures };
+  }
+
+  /** The worker's queues within QUEUE_REPORT_TIMEOUT_MS, or why they are unknown; nothing in the API. */
+  private async readQueues(): Promise<QueuePart> {
+    if (this.queueAges === undefined) {
+      return {};
+    }
+    let timer: NodeJS.Timeout | undefined;
+    const timedOut = new Promise<"timeout">((resolveTimeout) => {
+      timer = setTimeout(() => resolveTimeout("timeout"), QUEUE_REPORT_TIMEOUT_MS);
+      timer.unref();
+    });
+    try {
+      // `Promise.race` keeps its handler on the read, so a rejection after the timeout is not unhandled.
+      const outcome = await Promise.race([this.queueAges.read(), timedOut]);
+      return outcome === "timeout" ? { unknown: { status: "timeout" } } : { queues: outcome };
+    } catch (error) {
+      return { unknown: { status: "down", error } };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private async probe(

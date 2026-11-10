@@ -59,6 +59,16 @@ export const STAFF_PERMISSIONS: readonly StaffPermission[] = Object.freeze(
   Object.keys(PERMISSIONS) as StaffPermission[],
 );
 
+/** `maxItems` of `CreateApiKeyRequest.scopes` in the platform document: the use and its permissions together. */
+export const API_KEY_SCOPES_MAX_ITEMS = 32;
+
+/**
+ * The most permissions a secret key's form may send (FIX-W46-PLATFORM, lead decision (11b) of 2026-11-06): a key holds
+ * each `StaffPermission` at most once, so the picker never sends more than there are, and the API's `scopes` holds the
+ * use besides them. `createKey` refuses a longer list by its count alone, before it looks at any of its items.
+ */
+export const MAX_PERMISSIONS = Math.min(STAFF_PERMISSIONS.length, API_KEY_SCOPES_MAX_ITEMS - 1);
+
 /** The use a new secret key starts with (PADR-0005 item 6). */
 export const DEFAULT_SCOPE: ConsoleApiKeyScope = "storefront";
 

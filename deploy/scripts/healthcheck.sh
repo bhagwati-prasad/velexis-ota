@@ -12,9 +12,10 @@
 #   ready-<unit>          GET http://127.0.0.1:<port>/health/ready of every ENABLED Velexis unit answers 200. Masked,
 #                         disabled and missing units are skipped, and so are all of them while velexis-deploy holds its
 #                         lock (/run/velexis-deploy.lock, read from /proc/locks and never taken, so no deploy is refused).
-#   failed-jobs-<unit>    a worker whose readiness lists `queues` (the OTA worker, OBE-025) had at most 20 jobs that
-#                         failed in the last hour, over all its queues. A readiness without `queues` (the platform
-#                         worker, or Redis did not answer the queue report) is skipped: unknown, never "no failures".
+#   failed-jobs-<unit>    a worker whose readiness lists `queues` (both workers: the OTA worker since OBE-025, the
+#                         platform worker since FIX-W46-PLATFORM, in the same shape) had at most 20 jobs that failed in
+#                         the last hour, over all its queues. A readiness without `queues` (Redis did not answer the
+#                         queue report) is skipped: unknown, never "no failures".
 #   queue-age-<unit>      the same worker has no queue whose oldest waiting job has waited more than 10 minutes.
 #   disk-<path>           `/` and `/var/lib/postgresql` are at most 80 % full (each file system once).
 #   redis-memory          Redis `used_memory` is at most 70 % of `maxmemory` (password from .provision-secrets, given to

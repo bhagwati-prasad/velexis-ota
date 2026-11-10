@@ -8,7 +8,13 @@ import { z } from "zod";
 
 import { platformApi, type ApiError } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
-import { qrCode, QR_MAX_TEXT_LENGTH, type QrCode } from "@/lib/qr";
+import {
+  MALFORMED_ANSWER,
+  pendingSetupOf,
+  recoveryCodesOf,
+  TOTP_CODE,
+  type PendingMfaSetup,
+} from "@/lib/mfa-checks";
 import {
   MFA_CHALLENGE_COOKIE,
   NEXT_PATH_COOKIE,
@@ -24,10 +30,12 @@ import { ERROR_MESSAGES, SECURITY_STRINGS, SIGN_UP_STRINGS } from "@/lib/strings
  * - `changeAccountPassword` (`changePassword`): the current and a new password; the API signs out every other
  *   session of the account.
  * - `beginMfaSetup` (`startMfaSetup`) and `confirmMfaSetup` (`enableMfa`): the pending TOTP secret with its QR code,
- *   encoded here on the server (`lib/qr.ts`), then the ten recovery codes, answered once [PF-04 AC1].
+ *   encoded here on the server (`lib/qr.ts`), then the ten recovery codes, answered once [PF-04 AC1]. The answers and
+ *   the typed code are checked by `lib/mfa-checks.ts`, which the MFA enrolment page's actions use too.
  * - `turnOffMfa` (`disableMfa`) and `replaceRecoveryCodes` (`regenerateRecoveryCodes`): both need a TOTP step-up
  *   within 15 minutes; without one they answer `stepUp`, and `useStepUpAction` sends the same submission again after
- *   the code [PF-04 AC3].
+ *   the code [PF-04 AC3]. `disableMfa` refuses an owner or admin of a live OTA (`409 CONFLICT`, `mfa_mandatory`;
+ *   PADR-0008, revision of 2026-11-05), which has its own message.
  * - `revokeAccountSession` (`revokeSession`) and `signOutEverywhere` (`signOutEverywhere`) [PF-06].
  *
  * The TOTP secret, the recovery codes and the passwords leave the server only in an action's answer (which Next.js
@@ -176,12 +184,8 @@ export async function changeAccountPassword(
 
 // ---- Two-factor set-up ------------------------------------------------------------------------------------------
 
-/** A pending TOTP set-up: the base32 secret, its QR code and the seconds until it expires. Shown once. */
-export interface PendingMfaSetup {
-  readonly secret: string;
-  readonly qr: QrCode;
-  readonly expiresIn: number;
-}
+/** A pending TOTP set-up (`lib/mfa-checks.ts`), as `MfaSetup` (below) renders it. */
+export type { PendingMfaSetup };
 
 /** What "Set up two-factor authentication" answers. */
 export interface MfaSetupState {
@@ -205,37 +209,6 @@ export interface MfaEnableState {
   readonly recoveryCodes?: readonly string[];
 }
 
-/** `MfaSetup.secret` and `otpauthUrl` of the platform document. */
-const TOTP_SECRET = /^[A-Z2-7]+=*$/;
-const OTPAUTH_URL = /^otpauth:\/\/totp\//;
-
-/** `TotpCode` of the platform document; spaces a person typed are dropped. */
-const TOTP_CODE = z
-  .string()
-  .transform((value) => value.replace(/\s+/g, ""))
-  .pipe(z.string().regex(/^[0-9]{6}$/));
-
-/** One recovery code as `RecoveryCodes` answers it: four groups of four Crockford base32 characters. */
-const RECOVERY_CODE = /^[0-9A-HJKMNP-TV-Z]{4}(?:-[0-9A-HJKMNP-TV-Z]{4}){3}$/;
-const RECOVERY_CODE_COUNT = 10;
-
-/** The recovery codes of an answer, or `undefined` when the answer is not the document's `RecoveryCodes`. */
-function recoveryCodesOf(value: unknown): readonly string[] | undefined {
-  if (!Array.isArray(value) || value.length !== RECOVERY_CODE_COUNT) {
-    return undefined;
-  }
-  const codes = value.filter((code): code is string => typeof code === "string" && RECOVERY_CODE.test(code));
-  return codes.length === RECOVERY_CODE_COUNT ? Object.freeze(codes) : undefined;
-}
-
-/** A failure of an answer that is not what the document describes; nothing of it is shown. */
-const MALFORMED: ApiError = Object.freeze({
-  code: "INTERNAL_ERROR",
-  status: 500,
-  fieldErrors: Object.freeze([]),
-  details: Object.freeze({}),
-});
-
 const SETUP_MESSAGES: Readonly<Partial<Record<PlatformErrorCode, string>>> = {
   MFA_ALREADY_ENABLED: SECURITY_STRINGS.mfaAlreadyEnabled,
   RATE_LIMITED: SECURITY_STRINGS.rateLimited,
@@ -257,17 +230,11 @@ export async function beginMfaSetup(_previous: MfaSetupState, _formData: FormDat
       message: SETUP_MESSAGES[result.error.code] ?? errorMessage(result.error),
     };
   }
-  const { secret, otpauthUrl, expiresIn } = result.data;
-  if (
-    !TOTP_SECRET.test(secret) ||
-    !OTPAUTH_URL.test(otpauthUrl) ||
-    otpauthUrl.length > QR_MAX_TEXT_LENGTH ||
-    !Number.isInteger(expiresIn) ||
-    expiresIn < 1
-  ) {
-    return { status: "failed", code: MALFORMED.code, message: errorMessage(MALFORMED) };
+  const setup = pendingSetupOf(result.data);
+  if (setup === undefined) {
+    return { status: "failed", code: MALFORMED_ANSWER.code, message: errorMessage(MALFORMED_ANSWER) };
   }
-  return { status: "started", setup: { secret, qr: qrCode(otpauthUrl), expiresIn } };
+  return { status: "started", setup };
 }
 
 /**
@@ -306,7 +273,7 @@ export async function confirmMfaSetup(
   const recoveryCodes = recoveryCodesOf(result.data.recoveryCodes);
   if (recoveryCodes === undefined) {
     // MFA is on; the codes can be replaced from the page that follows.
-    return { status: "enabled", code: MALFORMED.code, message: errorMessage(MALFORMED) };
+    return { status: "enabled", code: MALFORMED_ANSWER.code, message: errorMessage(MALFORMED_ANSWER) };
   }
   return { status: "enabled", recoveryCodes };
 }
@@ -340,6 +307,10 @@ function mfaChangeMessage(error: ApiError, stepUpCancelled: string): string {
   if (error.code === "FORBIDDEN" && error.details.reason === "platform_admin") {
     return SECURITY_STRINGS.platformAdminKeepsMfa;
   }
+  if (error.code === "CONFLICT" && error.details.reason === "mfa_mandatory") {
+    // disableMfa's refusal of an owner or admin of a live OTA, after the step-up (PBE-071; FIX-W46-PLATFORM).
+    return SECURITY_STRINGS.liveOtaKeepsMfa;
+  }
   if (error.code === "MFA_REQUIRED") {
     return SECURITY_STRINGS.mfaNotEnabled;
   }
@@ -349,7 +320,8 @@ function mfaChangeMessage(error: ApiError, stepUpCancelled: string): string {
 /**
  * Turns MFA off (`POST /v1/me/mfa/disable`). Without a TOTP step-up in the last 15 minutes the API answers
  * `REAUTH_REQUIRED`: the state asks for one, and the same submission runs again with the stepped-up session
- * [PF-04 AC3]. A platform admin cannot turn MFA off (`FORBIDDEN`, `platform_admin`).
+ * [PF-04 AC3]. A platform admin cannot turn MFA off (`FORBIDDEN`, `platform_admin`), and neither can an owner or admin
+ * of a live OTA (`CONFLICT`, `mfa_mandatory`): each refusal has its own message.
  */
 export async function turnOffMfa(_previous: MfaDisableState, _formData: FormData): Promise<MfaDisableState> {
   const api = await platformApi();
@@ -388,7 +360,7 @@ export async function replaceRecoveryCodes(
   }
   const recoveryCodes = recoveryCodesOf(result.data.recoveryCodes);
   if (recoveryCodes === undefined) {
-    return { status: "failed", code: MALFORMED.code, message: errorMessage(MALFORMED) };
+    return { status: "failed", code: MALFORMED_ANSWER.code, message: errorMessage(MALFORMED_ANSWER) };
   }
   return { status: "replaced", message: SECURITY_STRINGS.codesReplaced, recoveryCodes };
 }

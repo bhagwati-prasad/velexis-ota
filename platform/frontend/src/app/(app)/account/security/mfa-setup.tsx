@@ -32,7 +32,9 @@ import { MFA_ENROLMENT_STRINGS, SECURITY_STRINGS } from "@/lib/strings";
  *   on and answers the ten recovery codes, which show once in `SecretRevealPanel` [PF-04 AC1].
  * - **On:** "Replace the recovery codes" and "Turn off two-factor authentication", each after a `ConfirmDialog` and
  *   through `useStepUpAction`: without a TOTP step-up in the last 15 minutes the API asks for one, `StepUpDialog` takes
- *   the code, and the same action runs again [PF-04 AC3]. A platform admin cannot turn MFA off and is told so.
+ *   the code, and the same action runs again [PF-04 AC3]. A platform admin cannot turn MFA off and is told so, and
+ *   neither can an owner or admin of a live OTA (PADR-0008, revision of 2026-11-05): the page knows it from
+ *   `listTenants` (`mfaMandatory`), and the API's `409 mfa_mandatory` has the same words when it knows more.
  *
  * `MfaEnrolment` (below) is the same set-up for the MFA enrolment page `/mfa-enrolment` (PFE-030), with the page's own
  * actions and "Continue" to the page the account asked for once MFA is on, instead of the controls of an account that
@@ -49,6 +51,12 @@ export interface MfaSetupProps {
   readonly mfaEnabledAt: string | null;
   /** Platform admins keep MFA on (PADR-0006). */
   readonly isPlatformAdmin: boolean;
+  /**
+   * The account is an owner or admin of a live OTA (`listTenants` when the page was rendered), so it keeps MFA on
+   * (PADR-0008, revision of 2026-11-05). `false` when the page could not tell: the API still refuses with its own
+   * message.
+   */
+  readonly mfaMandatory: boolean;
   /** The account's time zone, for the date MFA was turned on. */
   readonly timeZone: string;
 }
@@ -185,7 +193,13 @@ function PendingSetup({
   );
 }
 
-export function MfaSetup({ mfaEnabled, mfaEnabledAt, isPlatformAdmin, timeZone }: MfaSetupProps) {
+export function MfaSetup({
+  mfaEnabled,
+  mfaEnabledAt,
+  isPlatformAdmin,
+  mfaMandatory,
+  timeZone,
+}: MfaSetupProps) {
   const [setupState, begin, starting] = useActionState(beginMfaSetup, IDLE_SETUP);
   const [enableState, confirm, confirming] = useActionState(confirmMfaSetup, IDLE_ENABLE);
   const disable = useStepUpAction(turnOffMfa, IDLE_DISABLE);
@@ -321,7 +335,7 @@ export function MfaSetup({ mfaEnabled, mfaEnabledAt, isPlatformAdmin, timeZone }
               destructive={false}
               onConfirm={() => replace.dispatch(new FormData())}
             />
-            {isPlatformAdmin ? null : (
+            {isPlatformAdmin || mfaMandatory ? null : (
               <ConfirmDialog
                 trigger={
                   <Button type="button" variant="outline" disabled={disable.isPending}>
@@ -338,6 +352,10 @@ export function MfaSetup({ mfaEnabled, mfaEnabledAt, isPlatformAdmin, timeZone }
           {isPlatformAdmin ? (
             <p className="text-sm text-muted-foreground" data-notice="platform-admin">
               {SECURITY_STRINGS.platformAdminKeepsMfa}
+            </p>
+          ) : mfaMandatory ? (
+            <p className="text-sm text-muted-foreground" data-notice="live-ota">
+              {SECURITY_STRINGS.liveOtaKeepsMfa}
             </p>
           ) : null}
         </div>

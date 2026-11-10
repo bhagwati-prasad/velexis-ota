@@ -5,7 +5,9 @@
 // the developer's database `velexis`: a worker that starts runs the e-mail sweep at once (PBE-011), which reads
 // `platform.email_outbox` and sends, or fails, the rows it finds. Redis is this Vitest worker's test database
 // (`useRedis()`, never the developer's database 0), because a worker that starts with Redis up registers its job
-// schedulers there (`vx:platform-maintenance:*`, PBE-009; `email.sweep` on `vx:platform-emails:*`, PBE-011).
+// schedulers there (`vx:platform-maintenance:*`, PBE-009; `email.sweep` on `vx:platform-emails:*`, PBE-011). The
+// worker's readiness also lists the platform queues (FIX-W46-PLATFORM, src/health/queue-age.ts): the last part of the
+// file arranges a failed and a waiting job in that database before the worker starts.
 import { createServer as createHttpServer, request as httpRequest, type Server } from "node:http";
 import { createServer as createTcpServer, type AddressInfo } from "node:net";
 import {
@@ -17,12 +19,21 @@ import {
   type INestApplicationContext,
 } from "@nestjs/common";
 import type { NestExpressApplication } from "@nestjs/platform-express";
-import { createTestDatabase, useRedis, type TestDatabase, type TestRedis } from "@velexis/testing";
+import {
+  createTestDatabase,
+  responseChecker,
+  useRedis,
+  type ResponseChecker,
+  type TestDatabase,
+  type TestRedis,
+} from "@velexis/testing";
+import { Queue, UnrecoverableError, Worker } from "bullmq";
 import { Redis } from "ioredis";
 import { ClsService } from "nestjs-cls";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { AppModule } from "../../../src/app.module";
+import { BULLMQ_PREFIX, PLATFORM_QUEUE, PLATFORM_QUEUES } from "../../../src/common/queues/queue-names";
 import { createProcessLogger, PLATFORM_PROCESSES, parseConfig } from "../../../src/config";
 import { API_HOST, createApiApp, startApi } from "../../../src/main";
 import { startWorker, WORKER_HEALTH_HOST, WorkerHealthServer } from "../../../src/worker";
@@ -267,7 +278,13 @@ describe("the worker's health server", () => {
     expect(live.status).toBe(200);
     expect(live.body).toEqual({ status: "ok" });
     expect(ready.status).toBe(200);
-    expect(ready.body).toEqual({ status: "ok", checks: { postgres: "ok", redis: "ok" } });
+    // The worker's answer adds its queues (FIX-W46-PLATFORM): every platform queue, whatever jobs this database holds.
+    expect(ready.body).toEqual({
+      status: "ok",
+      checks: { postgres: "ok", redis: "ok" },
+      queues: expect.any(Object),
+    });
+    expect(Object.keys((ready.body as { queues: object }).queues)).toEqual([...PLATFORM_QUEUES]);
     expect(ready.headers.get("cache-control")).toBe("no-store");
   });
 
@@ -285,6 +302,17 @@ describe("the worker's health server", () => {
         requestId: ready.headers.get("x-request-id"),
       }),
     ]);
+    // The queues are unknown, so the answer above has none, and the request's line says why (FIX-W46-PLATFORM).
+    expect(logs.withMessage("health.queues_unknown")).toEqual([
+      expect.objectContaining({
+        level: 40,
+        app: "platform-worker",
+        part: "queues",
+        status: "down",
+        requestId: ready.headers.get("x-request-id"),
+      }),
+    ]);
+    expect(JSON.stringify(logs.lines)).not.toContain(UNREACHABLE_REDIS_URL);
   });
 
   it("answers any other path with the error envelope, and logs that request with its requestId", async () => {
@@ -314,24 +342,17 @@ describe("the worker's health server", () => {
       expect(logs.withMessage("worker.start_failed")).toEqual([
         expect.objectContaining({ level: 60, err: expect.objectContaining({ code: "EADDRINUSE" }) }),
       ]);
-      // The context was closed again: its shutdown hooks disconnected the readiness probe's Redis client and the
-      // blocking connections of the platform-emails processor (PBE-011), the platform-maintenance processor
-      // (PBE-021), the platform-connections processor (PBE-020), the platform-tenant-events processor (PBE-022), the
-      // platform-stripe-events processor (PBE-043), the platform-settlements processor (PBE-059) and the
-      // platform-domains processor (PBE-050), and all eight have ended.
+      // The context was closed again: its shutdown hooks disconnected the readiness probe's Redis client, the queue
+      // report's connection (FIX-W46-PLATFORM) and the blocking connections of the platform-emails processor
+      // (PBE-011), the platform-maintenance processor (PBE-021), the platform-connections processor (PBE-020), the
+      // platform-tenant-events processor (PBE-022), the platform-stripe-events processor (PBE-043), the
+      // platform-settlements processor (PBE-059) and the platform-domains processor (PBE-050), and all nine have ended.
       const disconnected = disconnect.mock.contexts as Redis[];
-      expect(disconnected).toHaveLength(8);
-      expect(disconnected.map((client) => client.options.connectionName)).toContain("platform-worker");
-      expect(disconnected.map((client) => client.status)).toEqual([
-        "end",
-        "end",
-        "end",
-        "end",
-        "end",
-        "end",
-        "end",
-        "end",
-      ]);
+      expect(disconnected).toHaveLength(9);
+      expect(disconnected.map((client) => client.options.connectionName)).toEqual(
+        expect.arrayContaining(["platform-worker", "platform-worker-health-queues"]),
+      );
+      expect(disconnected.map((client) => client.status)).toEqual(Array.from({ length: 9 }, () => "end"));
     } finally {
       await new Promise<void>((done) => blocker.close(() => done()));
     }
@@ -344,6 +365,107 @@ describe("the worker's health server", () => {
     await app.close();
 
     await expect(get(`${url}/health/live`)).rejects.toThrow(/ECONNREFUSED/);
+  });
+});
+
+describe("the worker's queues in /health/ready (FIX-W46-PLATFORM)", () => {
+  /** BullMQ connections the tests open on the file's database, closed after each test. */
+  const connections: Redis[] = [];
+  let checker: ResponseChecker;
+
+  // Parsing the platform document and compiling its response schemas is a one-time cost of a few seconds on a loaded
+  // runner: paid here, with the hooks' budget.
+  beforeAll(() => {
+    checker = responseChecker("platform");
+  }, SETUP_TIMEOUT_MS);
+
+  afterEach(async () => {
+    for (const connection of connections.splice(0)) {
+      await connection.quit().catch(() => undefined);
+    }
+  });
+
+  /** A BullMQ connection on the file's database (a worker's needs `maxRetriesPerRequest: null`). */
+  function bullmqConnection(): Redis {
+    const connection = new Redis(REDIS_URL, { maxRetriesPerRequest: null });
+    connections.push(connection);
+    return connection;
+  }
+
+  /** Adds `count` jobs to `queue` and lets a worker of the test fail each of them for good; resolves when all failed. */
+  async function failJobs(name: string, count: number): Promise<void> {
+    const queue = new Queue(name, { connection: bullmqConnection(), prefix: BULLMQ_PREFIX });
+    const failing = new Worker(
+      name,
+      () => Promise.reject(new UnrecoverableError("the test fails this job")),
+      {
+        connection: bullmqConnection(),
+        prefix: BULLMQ_PREFIX,
+        autorun: false,
+      },
+    );
+    let failed = 0;
+    const done = new Promise<void>((resolveDone) => {
+      failing.on("failed", () => {
+        failed += 1;
+        if (failed === count) {
+          resolveDone();
+        }
+      });
+    });
+    try {
+      for (let index = 0; index < count; index += 1) {
+        await queue.add("test.fail", { index });
+      }
+      void failing.run();
+      await done;
+    } finally {
+      await failing.close();
+      await queue.close();
+    }
+  }
+
+  it("[FIX-W46-PLATFORM AC4] lists every platform queue with a job that has waited 2 minutes and the job that failed, with 200", async () => {
+    // Before the worker starts: one platform-settlements job failed for good, then the queue is paused, so that the
+    // job added afterwards with a BullMQ timestamp 2 minutes old waits there (the worker's consumer takes nothing
+    // from a paused queue).
+    await failJobs(PLATFORM_QUEUE.settlements, 1);
+    const settlements = new Queue(PLATFORM_QUEUE.settlements, {
+      connection: bullmqConnection(),
+      prefix: BULLMQ_PREFIX,
+    });
+    try {
+      await settlements.pause();
+      await settlements.add("test.waiting", { test: true }, { timestamp: Date.now() - 2 * 60_000 });
+      const { app, url, logs } = await worker();
+
+      const ready = await get(`${url}/health/ready`);
+
+      expect(ready).toMatchObject({
+        status: 200,
+        body: { status: "ok", checks: { postgres: "ok", redis: "ok" } },
+      });
+      expect(checker.check("healthReady", ready)).toEqual([]);
+      const queues = (ready.body as { queues: Record<string, { oldestWaitingSeconds: number | null }> })
+        .queues;
+      expect(Object.keys(queues)).toEqual([...PLATFORM_QUEUES]);
+      // The shape the on-VM check reads of both workers (deploy/scripts/healthcheck.sh: failedLastHour,
+      // oldestWaitingSeconds, waiting).
+      expect(queues[PLATFORM_QUEUE.settlements]).toEqual({
+        waiting: 1,
+        oldestWaitingSeconds: expect.any(Number),
+        failedLastHour: 1,
+      });
+      expect(queues[PLATFORM_QUEUE.settlements]?.oldestWaitingSeconds).toBeGreaterThanOrEqual(120);
+      expect(logs.withMessage("health.queues_unknown")).toEqual([]);
+
+      // The worker's own processors leave a paused queue alone: stopped, then the queue goes, for the tests after.
+      running.splice(running.indexOf(app), 1);
+      await app.close();
+    } finally {
+      await settlements.obliterate({ force: true });
+      await settlements.close();
+    }
   });
 });
 

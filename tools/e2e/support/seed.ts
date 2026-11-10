@@ -21,18 +21,19 @@
 //   await ageAdminMfa(admin.email);                    // the admin's last TOTP code 20 minutes old
 //
 // The arrangements that specs once wrote to the stack's database themselves are helpers here too (FIX-W45-PLATFORM,
-// lead decision (9d) of 2026-11-06, PADR-0017 item 5), each with the role the spec wrote it as, so no spec writes a
-// platform row with a database client of its own any more (a spec may still read stored state to assert it; an OTA's
-// own schema stays with support/ota.ts's `tenantTx` helpers, as above):
+// lead decision (9d) of 2026-11-06, PADR-0017 item 5), so no spec writes a platform row with a database client of its
+// own any more (a spec may still read stored state to assert it; an OTA's own schema stays with support/ota.ts's
+// `tenantTx` helpers, as above):
 //
 //   await insertQueuedProvisioningJob({ … });          // a job back in the queue after a lost attempt (admin-step-up)
 //   await setTenantLive(tenantId);                     // an OTA live before any go-live (ota-admin/roles, live-environment)
 //   await setTenantBillingNotice(tenantId, "past_due"); // an OTA's billing notice (ota-admin/live-environment)
 //
-// The two OTA rows are written as velexis_migrator, as the OTA journeys' platform rows always are (support/ota.ts
-// `withSuspendedTenant` and OFE-022's fixtures, OBE-083's cross-backend test), so `roles` and `live-environment` keep
-// making their OTA live through the migrator; the caller publishes the platform's `tenant` invalidation
-// (support/ota.ts `publishTenantInvalidation`), which this file cannot import.
+// All three write as the platform API's own role (`platform`, velexis_platform_app), like every other helper of this
+// file: the two OTA rows moved from velexis_migrator to it on 2026-11-06 (FIX-W46-PLATFORM, lead decision (11a)); the
+// role's DML grants on the `platform` schema (deploy/postgres/schemas.sql) cover `platform.tenants`. The caller
+// publishes the platform's `tenant` invalidation (support/ota.ts `publishTenantInvalidation`), which this file cannot
+// import.
 //
 // `moveOtaToNewPlan` goes through the platform admin API (an operation exists), with the `callPlatformApi` the journey
 // hands in: support/fixtures.ts imports this file, so this file never imports it (nor support/ota.ts or
@@ -632,16 +633,16 @@ export async function insertQueuedProvisioningJob(input: QueuedProvisioningJobIn
 }
 
 /**
- * Runs `update`, an `UPDATE platform.tenants … WHERE id = $1 …` with `values` as `$2` on, as velexis_migrator (see the
- * header), and throws `failure` unless it changed exactly one row.
+ * Runs `update`, an `UPDATE platform.tenants … WHERE id = $1 …` with `values` as `$2` on, as the platform API's own
+ * role (see the header), and throws `failure` unless it changed exactly one row.
  */
-async function updateTenantAsMigrator(
+async function updateTenant(
   tenantId: string,
   update: string,
   values: readonly unknown[],
   failure: string,
 ): Promise<void> {
-  const changed = await withDatabase("migrator", async (client) => {
+  const changed = await withDatabase("platform", async (client) => {
     const { rowCount } = await client.query(update, [tenantId, ...values]);
     return rowCount ?? 0;
   });
@@ -652,12 +653,13 @@ async function updateTenantAsMigrator(
 
 /**
  * Makes the active test OTA `tenantId` live (`storefront_environment = live`, `live_enabled_at` now, the next version)
- * as velexis_migrator, for the OTA admin journeys that need a live OTA before the go-live they do not test (roles.e2e.ts,
- * live-environment.e2e.ts). Throws unless the OTA was active and in the test environment. The caller publishes the
- * platform's `tenant` invalidation, so the OTA API reads the row again at once instead of after its 60 s cache.
+ * as the platform API's own role, for the OTA admin journeys that need a live OTA before the go-live they do not test
+ * (roles.e2e.ts, live-environment.e2e.ts). Throws unless the OTA was active and in the test environment. The caller
+ * publishes the platform's `tenant` invalidation, so the OTA API reads the row again at once instead of after its 60 s
+ * cache.
  */
 export async function setTenantLive(tenantId: string): Promise<void> {
-  await updateTenantAsMigrator(
+  await updateTenant(
     tenantId,
     `UPDATE platform.tenants
         SET storefront_environment = 'live', live_enabled_at = now(), version = version + 1, updated_at = now()
@@ -669,14 +671,14 @@ export async function setTenantLive(tenantId: string): Promise<void> {
 
 /**
  * Sets the billing notice of the active OTA `tenantId` (`past_due`, `trial_ending`, or `null` for none) as the
- * platform's billing sync does, with the next version, as velexis_migrator (live-environment.e2e.ts). Throws unless the
- * OTA was active. The caller publishes the platform's `tenant` invalidation.
+ * platform's billing sync does, with the next version, as the platform API's own role (live-environment.e2e.ts). Throws
+ * unless the OTA was active. The caller publishes the platform's `tenant` invalidation.
  */
 export async function setTenantBillingNotice(
   tenantId: string,
   notice: Schemas["BillingNotice"],
 ): Promise<void> {
-  await updateTenantAsMigrator(
+  await updateTenant(
     tenantId,
     `UPDATE platform.tenants
         SET billing_notice = $2, version = version + 1, updated_at = now()

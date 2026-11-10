@@ -1086,6 +1086,8 @@ export const API_KEYS_STRINGS = Object.freeze({
   scopeCombination:
     "This combination is not allowed. Choose one use and, for Console automation, its permissions.",
   scopeUnknown: "One of the chosen permissions is not known. Reload the page and try again.",
+  permissionsTooMany: (max: number) =>
+    `A key can have at most ${max} permissions. Reload the page and try again.`,
   // Edit
   editTitle: (name: string) => `Edit “${name}”`,
   editIntro:
@@ -2732,6 +2734,8 @@ export const SECURITY_STRINGS = Object.freeze({
     "Two-factor authentication is still on: turning it off needs a code from your authenticator app.",
   replaceCancelled: "Your recovery codes were not replaced: it needs a code from your authenticator app.",
   platformAdminKeepsMfa: "As a Velexis platform admin, you must keep two-factor authentication on.",
+  liveOtaKeepsMfa:
+    "As an owner or admin of a live OTA, you must keep two-factor authentication on. It stays on while you hold that role.",
   mfaNotEnabled:
     "Two-factor authentication is not on any more, maybe turned off in another tab. Reload the page to see it.",
   mfaRateLimited: "Too many codes were tried. Wait a few minutes, then try again.",

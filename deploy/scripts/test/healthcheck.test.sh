@@ -19,8 +19,8 @@
 #   VELEXIS_ALERT   a stand-in for velexis-alert that records every `message <subject> <body>` (and refuses them all
 #                   while the flag file alert-fails exists, as an SMTP outage would)
 #   HEALTH_HOST     a random 127.x.y.z address, where fake-endpoints.mjs answers /health/ready on the seven unit ports
-#                   (3000-3002, 3100, 3101, 4000, 4001) from a file per port (200 by default; the OTA worker's answer
-#                   lists its queues), serves the storefront on 8080 with the headers of a JSON file per path, and
+#                   (3000-3002, 3100, 3101, 4000, 4001) from a file per port (200 by default; both workers' answers
+#                   list their queues), serves the storefront on 8080 with the headers of a JSON file per path, and
 #                   speaks TLS on 8443 with a certificate per SNI name (made here with openssl, 90 days each)
 #   STOREFRONT_URL  http://<that address>:8080
 #   TLS_CONNECT     <that address>:8443
@@ -42,8 +42,9 @@
 #    4. the units: a unit that does not answer and one that answers 503 alert once each and recover once; masked and
 #       disabled units are not checked; while velexis-deploy holds its lock no unit check runs (state kept) and the
 #       payment pages due that day wait for the first run after it;
-#    5. the OTA worker's queues: more than 20 failures in the hour and a job waiting more than 10 minutes alert
-#       (20 and 600 s do not); an answer without queues keeps the states (no recovery from an unknown);
+#    5. the workers' queues: more than 20 failures in the hour and a job waiting more than 10 minutes alert
+#       (20 and 600 s do not); an answer without queues keeps the states (no recovery from an unknown); the
+#       platform worker's queues are read alike (FIX-W46-PLATFORM);
 #    6. Redis memory above 70 % of maxmemory (the password only in redis-cli's environment), a backup marker older than
 #       26 hours, and a certificate that expires within 14 days alert once each and recover once; a Redis that never
 #       answers alerts once redis-cli's 10 s are up, and the checks after it still run;
@@ -336,7 +337,8 @@ cat >"$PREFIX/fake-endpoints.mjs" <<'JS'
 // healthcheck.test.sh's endpoints. node fake-endpoints.mjs <host> <state> <storefront root> <http port> <tls port>
 // <health port>...
 //   health ports: GET /health/ready answers from <state>/health/<port> (first line: the status, or "close" to drop the
-//                 connection; the rest: the body), else 200 with a readiness body (the OTA worker's, 4001, lists queues)
+//                 connection; the rest: the body), else 200 with a readiness body (the workers', 3101 and 4001, list
+//                 their queues)
 //   http port:    the storefront: files of <storefront root> (resolved per request, as Caddy follows `current`) with
 //                 try_files {path} {path}.html {path}/index.html, and the headers of <state>/storefront-headers.json
 //                 (`default`, then `paths[<path>]`; a null value removes a header); while <state>/storefront-silent
@@ -358,10 +360,14 @@ const read = (file) => {
   }
 };
 const queue = (failedLastHour, oldestWaitingSeconds) => ({ waiting: oldestWaitingSeconds === null ? 0 : 1, oldestWaitingSeconds, failedLastHour });
+const QUEUES = {
+  3101: { "platform-emails": queue(0, null), "platform-maintenance": queue(0, null) },
+  4001: { "ota-payments": queue(0, null), "ota-stripe-events": queue(0, null) },
+};
 const readiness = (port) => ({
   status: "ok",
   checks: { postgres: "ok", redis: "ok" },
-  ...(port === "4001" ? { queues: { "ota-payments": queue(0, null), "ota-stripe-events": queue(0, null) } } : {}),
+  ...(QUEUES[port] === undefined ? {} : { queues: QUEUES[port] }),
 });
 
 let listening = 0;
@@ -574,19 +580,20 @@ queues_body() { # payments-failed payments-oldest stripe-failed stripe-oldest ->
 }
 
 ALL_IDS=(ready-velexis-platform-worker ready-velexis-ota-worker ready-velexis-platform-api ready-velexis-ota-api
-  ready-velexis-portal ready-velexis-platform-admin ready-velexis-ota-admin failed-jobs-velexis-ota-worker
-  queue-age-velexis-ota-worker disk-root disk-var-lib-postgresql redis-memory backup-age tls-platform.example.com
-  tls-admin.platform.example.com tls-api.platform.example.com tls-admin.ota.example.com tls-api.ota.example.com
+  ready-velexis-portal ready-velexis-platform-admin ready-velexis-ota-admin failed-jobs-velexis-platform-worker
+  queue-age-velexis-platform-worker failed-jobs-velexis-ota-worker queue-age-velexis-ota-worker disk-root
+  disk-var-lib-postgresql redis-memory backup-age tls-platform.example.com tls-admin.platform.example.com
+  tls-api.platform.example.com tls-admin.ota.example.com tls-api.ota.example.com
   payment-inventory payment-page-checkout-pay-card payment-page-checkout-pay-airline)
 
 # ---- 1. a clean pass ----------------------------------------------------------------------------------------------------
 step "1. a clean pass"
 run_hc
 check "a clean first run exits 0 and sends no alert [X-030 AC1]" quiet_run
-check "every check passes: the seven units, the OTA worker's queues, both disks, Redis, the backup, the five certificates and both payment pages [X-030 AC1]" \
+check "every check passes: the seven units, both workers' queues, both disks, Redis, the backup, the five certificates and both payment pages [X-030 AC1]" \
   ok_ids "${ALL_IDS[@]}"
-check "the platform worker's readiness lists no queues, so its job checks are skipped, not passed [X-030 AC1]" \
-  out_has "skip failed-jobs-velexis-platform-worker, queue-age-velexis-platform-worker: its readiness lists no queues"
+check "the platform worker's readiness lists its queues as the OTA worker's does, so its job checks run too [FIX-W46-PLATFORM AC4]" \
+  not out_has "skip failed-jobs-velexis-platform-worker"
 fetched_all() {
   fetched /checkout/pay-card.html && fetched /checkout/pay-airline.html && fetched /checkout/pay-airline &&
     fetched "$CARD_JS" && fetched "$BOOT_JS" && fetched "$CARD_CSS" && fetched "$AIRLINE_JS" && fetched "$AIRLINE_CSS"
@@ -812,8 +819,8 @@ set_health 4000 default
 run_hc
 check "and recovers once [X-030 AC1]" recovered "velexis-ota-api readiness"
 
-# ---- 5. the OTA worker's queues ---------------------------------------------------------------------------------------
-step "5. failed and waiting jobs of the OTA worker"
+# ---- 5. the workers' queues -------------------------------------------------------------------------------------------
+step "5. failed and waiting jobs of the workers"
 set_health 4001 200 "$(queues_body 15 null 6 601)"
 run_hc
 jobs_alerted() {
@@ -836,6 +843,21 @@ set_health 4001 200 "$(queues_body 14 600 6 null)"
 run_hc
 check "20 failures and 600 s are within the limits: one recovery each [X-030 AC1]" recoveries 2
 set_health 4001 default
+set_health 3101 200 "$(jq -cn '{status: "ok", checks: {postgres: "ok", redis: "ok"}, queues: {
+  "platform-emails": {waiting: 0, oldestWaitingSeconds: null, failedLastHour: 12},
+  "platform-tenant-events": {waiting: 0, oldestWaitingSeconds: null, failedLastHour: 9},
+  "platform-maintenance": {waiting: 1, oldestWaitingSeconds: 30, failedLastHour: 0}}}')"
+run_hc
+platform_jobs_alerted() {
+  rc_is 0 && alerts_are 1 &&
+    alerts_match 1 "health check failed: failed jobs of velexis-platform-worker: 21 jobs of velexis-platform-worker failed in the last hour (more than 20)" &&
+    body_has "  platform-emails: 12 failed" && body_has "  platform-tenant-events: 9 failed" && not body_has "platform-maintenance"
+}
+check "the platform worker's queues in the same shape: 21 failures in the hour alert once, naming its queues [FIX-W46-PLATFORM AC4]" \
+  platform_jobs_alerted
+set_health 3101 default
+run_hc
+check "and recover once [FIX-W46-PLATFORM AC4]" recovered "failed jobs of velexis-platform-worker"
 
 # ---- 6. Redis memory, backup age, TLS expiry -----------------------------------------------------------------------
 step "6. Redis memory, backup age and TLS expiry"

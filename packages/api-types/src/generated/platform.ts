@@ -3316,7 +3316,7 @@ export interface paths {
         };
         /**
          * Readiness of the API process and its dependencies
-         * @description Runs `SELECT 1` on PostgreSQL and `PING` on Redis in parallel, each within 2 seconds, and answers `200` when both are `ok`, otherwise `503` with `unavailable` and `down` for each failed dependency. The cause is logged, never answered. `deploy.sh` and the on-VM checks poll it on `127.0.0.1:3100`; it is loopback only, without `X-Forwarded-For` (`404` otherwise). Writes no request log line. The worker serves the same report on `127.0.0.1:3101`.
+         * @description Runs `SELECT 1` on PostgreSQL and `PING` on Redis in parallel, each within 2 seconds, and answers `200` when both are `ok`, otherwise `503` with `unavailable` and `down` for each failed dependency. The cause is logged, never answered. `deploy.sh` and the on-VM checks poll it on `127.0.0.1:3100`; it is loopback only, without `X-Forwarded-For` (`404` otherwise). Writes no request log line. The worker serves the same report on `127.0.0.1:3101`, with its BullMQ queues in `queues` as the OTA worker reports its own (FIX-W46-PLATFORM): per platform queue the waiting jobs, the age of the oldest one and the jobs failed in the last hour, for the on-VM check's failed-job and waiting-job alerts. Old jobs never make it unready. The queues are read in parallel with the checks, within 1 second: when Redis refuses or does not answer them in time, `queues` is left out (the queue part is unknown) and the answer is not delayed. The API's answer has no `queues`.
          */
         get: operations["healthReady"];
         put?: never;
@@ -3642,7 +3642,7 @@ export interface components {
             /** @constant */
             status: "ok";
         };
-        /** @description The readiness report. The age of the oldest waiting job per platform queue (ADR-0016, api-inventory-admin §9) joins it as the optional `queues` once the platform queues exist; until then the report has no `queues`. */
+        /** @description The readiness report. The worker's adds its BullMQ queues as the optional `queues` (ADR-0016, api-inventory-admin §9; FIX-W46-PLATFORM): absent in the API's answer, and in the worker's while the queue part is unknown (Redis did not answer it within 1 second). */
         HealthReady: {
             /** @enum {string} */
             status: "ok" | "unavailable";
@@ -3650,10 +3650,19 @@ export interface components {
                 postgres: components["schemas"]["DependencyStatus"];
                 redis: components["schemas"]["DependencyStatus"];
             };
-            /** @description Seconds since the oldest waiting job of each platform queue was added; null when none waits. */
+            /** @description Every queue the platform worker consumes, by name (`PLATFORM_QUEUES` of `@velexis/api-types/jobs`), in the shape of the OTA worker's `queues`. */
             queues?: {
-                [key: string]: number | null;
+                [key: string]: components["schemas"]["HealthQueue"];
             };
+        };
+        /** @description One BullMQ queue in the worker's readiness, as the OTA document's `HealthQueue` (OBE-025). A delayed job counts as waiting once it is due; a job retried after a failed attempt waits since that attempt started. */
+        HealthQueue: {
+            /** @description Jobs waiting to run. */
+            waiting: number;
+            /** @description Age of the oldest waiting job, in seconds; `null` when no job waits. */
+            oldestWaitingSeconds: number | null;
+            /** @description Jobs that failed in the last hour. */
+            failedLastHour: number;
         };
         /** @enum {string} */
         DependencyStatus: "ok" | "down";
@@ -14829,15 +14838,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    /**
-                     * @example {
-                     *       "status": "ok",
-                     *       "checks": {
-                     *         "postgres": "ok",
-                     *         "redis": "ok"
-                     *       }
-                     *     }
-                     */
                     "application/json": components["schemas"]["HealthReady"];
                 };
             };

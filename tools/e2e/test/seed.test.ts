@@ -467,11 +467,14 @@ describe("insertQueuedProvisioningJob", () => {
 });
 
 describe("setTenantLive", () => {
-  it("makes the active test OTA live with the next version, as velexis_migrator [FIX-W45-PLATFORM AC4]", async () => {
+  it("makes the active test OTA live with the next version, as the platform API's own role [FIX-W45-PLATFORM AC4] [FIX-W46-PLATFORM AC1]", async () => {
     script.answer = () => ({ rowCount: 1 });
     await setTenantLive("ten_1");
     expect(clients).toHaveLength(1);
-    expect(clients[0]?.connectionString).toContain("velexis_migrator");
+    // velexis_platform_app, the role of every other helper here (lead decision (11a)); never the migrator any more.
+    expect(clients[0]?.connectionString).toContain("velexis_platform_app");
+    expect(clients[0]?.connectionString).not.toContain("velexis_migrator");
+    expect(clients[0]?.connectionString).toContain("velexis_e2e_unit_000000");
     expect(clients[0]?.ended).toBe(true);
     expect(statements()).toEqual([
       "UPDATE platform.tenants SET storefront_environment = 'live', live_enabled_at = now(), version = version + 1, " +
@@ -488,14 +491,16 @@ describe("setTenantLive", () => {
 });
 
 describe("setTenantBillingNotice", () => {
-  it("sets or clears the active OTA's billing notice with the next version, as velexis_migrator [FIX-W45-PLATFORM AC4]", async () => {
+  it("sets or clears the active OTA's billing notice with the next version, as the platform API's own role [FIX-W45-PLATFORM AC4] [FIX-W46-PLATFORM AC1]", async () => {
     script.answer = () => ({ rowCount: 1 });
     await setTenantBillingNotice("ten_1", "past_due");
     await setTenantBillingNotice("ten_1", null);
-    expect(clients.map((client) => client.connectionString.includes("velexis_migrator"))).toEqual([
+    expect(clients.map((client) => client.connectionString.includes("velexis_platform_app"))).toEqual([
       true,
       true,
     ]);
+    expect(clients.some((client) => client.connectionString.includes("velexis_migrator"))).toBe(false);
+    expect(clients.every((client) => client.ended)).toBe(true);
     expect(statements()).toEqual([
       "UPDATE platform.tenants SET billing_notice = $2, version = version + 1, updated_at = now() " +
         "WHERE id = $1 AND status = 'active'",
@@ -513,5 +518,6 @@ describe("setTenantBillingNotice", () => {
     await expect(setTenantBillingNotice("ten_1", "trial_ending")).rejects.toThrow(
       "the OTA ten_1 is not an active OTA",
     );
+    expect(clients[0]?.ended).toBe(true);
   });
 });

@@ -52,7 +52,13 @@ import {
 import ApiKeysPage from "@/app/(app)/otas/[tenantId]/api-keys/page";
 import { formatDateTime } from "@/components/date-time";
 import { MAX_ALLOWED_ORIGINS, originProblem } from "@/components/origins-field";
-import { CONSOLE_API_KEY_SCOPES, STAFF_PERMISSIONS, scopeProblem } from "@/components/scope-picker";
+import {
+  API_KEY_SCOPES_MAX_ITEMS,
+  CONSOLE_API_KEY_SCOPES,
+  MAX_PERMISSIONS,
+  STAFF_PERMISSIONS,
+  scopeProblem,
+} from "@/components/scope-picker";
 import { BFF_KEY_HEADER, END_USER_AGENT_HEADER, END_USER_IP_HEADER } from "@/lib/end-user";
 import { ACCESS_TOKEN_COOKIE } from "@/lib/session";
 import {
@@ -466,6 +472,24 @@ function otaEnum(schema: string): string[] {
     }
   }
   return values;
+}
+
+/** `maxItems` of the property `property` of the schema `schema` of the platform document. */
+function platformMaxItems(schema: string, property: string): number {
+  const document = readFileSync(
+    join(repositoryRoot(), "platform/backend/openapi/velexis-platform-api.openapi.yaml"),
+    "utf8",
+  );
+  const lines = document.split("\n");
+  const start = lines.indexOf(`    ${schema}:`);
+  expect(start).toBeGreaterThan(-1);
+  const at = lines.indexOf(`        ${property}:`, start);
+  expect(at).toBeGreaterThan(start);
+  const maxItems = lines
+    .slice(at + 1)
+    .map((line) => /^ {10}maxItems: (\d+)$/.exec(line)?.[1])
+    .find((value) => value !== undefined);
+  return Number(maxItems);
 }
 
 /** happy-dom keeps some character references of attribute values as text, where a browser decodes them. */
@@ -1128,6 +1152,68 @@ describe("/otas/[tenantId]/api-keys: creating a key", () => {
     });
     expect(Object.keys(atBound.fieldErrors.origins ?? {})).toHaveLength(MAX_ALLOWED_ORIGINS);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("[FIX-W46-PLATFORM AC2] refuses more permissions than a key can hold by their count alone, before any of them is checked, without a call", async () => {
+    // The bound: each StaffPermission once, and the use besides them within the document's `scopes`.
+    expect(API_KEY_SCOPES_MAX_ITEMS).toBe(platformMaxItems("CreateApiKeyRequest", "scopes"));
+    expect(MAX_PERMISSIONS).toBe(Math.min(STAFF_PERMISSIONS.length, API_KEY_SCOPES_MAX_ITEMS - 1));
+    // Every item would be refused on its own (unknown, empty, a known one twice), whatever the use.
+    const malformed = Array.from(
+      { length: MAX_PERMISSIONS + 1 },
+      (_, index) => ["bookings:everything", "", "bookings:read"][index % 3] ?? "",
+    );
+    for (const scope of ["console:automation", "console"]) {
+      const state = await createKey(
+        { status: "idle", fieldErrors: {} },
+        formData({
+          tenantId: TENANT_ID,
+          environment: "test",
+          name: "Forged",
+          kind: "secret",
+          scope,
+          permissions: malformed,
+        }),
+      );
+      expect(state).toEqual({
+        status: "failed",
+        code: "VALIDATION_FAILED",
+        fieldErrors: { scopes: API_KEYS_STRINGS.permissionsTooMany(MAX_PERMISSIONS) },
+      });
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // At the bound the items are checked as before: an unknown one is named, and no count message.
+    const atBound = await createKey(
+      { status: "idle", fieldErrors: {} },
+      formData({
+        tenantId: TENANT_ID,
+        environment: "test",
+        name: "Forged",
+        kind: "secret",
+        scope: "console:automation",
+        permissions: malformed.slice(0, MAX_PERMISSIONS),
+      }),
+    );
+    expect(atBound.fieldErrors).toEqual({ scopes: API_KEYS_STRINGS.scopeUnknown });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // Every permission once is at the bound and goes to the API: the use, then all of them.
+    const everything = await createKey(
+      { status: "idle", fieldErrors: {} },
+      formData({
+        tenantId: TENANT_ID,
+        environment: "test",
+        name: "Everything",
+        kind: "secret",
+        scope: "console:automation",
+        permissions: [...STAFF_PERMISSIONS].reverse(),
+      }),
+    );
+    expect(everything.status).toBe("created");
+    expect(await bodyOf(calls("POST", KEYS_PATH)[0])).toMatchObject({
+      scopes: ["console:automation", ...STAFF_PERMISSIONS],
+    });
   });
 
   it("checks the name and the origins before any call, at their rows", async () => {
