@@ -2036,6 +2036,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Verify:** `node tools/plan-lint/plan-lint.mjs docs/mvp/plans/foundation-tasks.md platform/docs/plans/agent-tasks.md && grep -c "\[ \]" platform/docs/runbooks/launch-checklist.md`
 
 ### PFE-028 · Complete the portal end-to-end suite with accessibility and security checks
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: three consecutive green nightly runs)
 - **Component:** platform-frontend
 - **Milestone:** M6
 - **Depends on:** PFE-027, PFE-019
