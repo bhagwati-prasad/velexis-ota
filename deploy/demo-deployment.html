@@ -350,6 +350,56 @@
         background: var(--code-bg);
         font-weight: 600;
       }
+      /* A command box inside a table cell wraps its long lines (Copy still copies them exactly). */
+      td .cmd pre {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      td .cmd pre code {
+        overflow-wrap: anywhere;
+      }
+      td .cmd {
+        background: var(--code-bg);
+      }
+      /* On a phone the troubleshooting table becomes one card per problem. */
+      @media (max-width: 700px) {
+        table.stack thead {
+          display: none;
+        }
+        table.stack,
+        table.stack tbody,
+        table.stack tr,
+        table.stack td {
+          display: block;
+          width: 100%;
+        }
+        table.stack tr {
+          border-bottom: 1px solid var(--line);
+          padding: 6px 0;
+        }
+        table.stack tr:last-child {
+          border-bottom: 0;
+        }
+        table.stack td {
+          border-bottom: 0;
+          padding: 4px 12px;
+        }
+        table.stack td::before {
+          display: block;
+          font-size: 0.8rem;
+          font-weight: 600;
+          color: var(--muted);
+        }
+        table.stack td:nth-child(1)::before {
+          content: "What you see";
+        }
+        table.stack td:nth-child(2)::before {
+          content: "What it means";
+        }
+        table.stack td:nth-child(3)::before {
+          content: "What to do";
+        }
+      }
       .cards {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
@@ -742,6 +792,12 @@
 
         <section id="part-a">
           <h2>Part A. Create the codespace <span class="step-time">about 5 minutes</span></h2>
+          <p class="hint">
+            Optional, before you start: a codespace stops by itself after 30 minutes without activity. To make
+            that longer (up to 240 minutes), change the idle timeout at
+            <a href="https://github.com/settings/codespaces">github.com/settings/codespaces</a>
+            <strong>now</strong>: the setting applies only to codespaces created afterwards.
+          </p>
           <ol>
             <li>
               Sign in to GitHub and open
@@ -791,8 +847,8 @@
           <ul>
             <li>
               Building all the apps once (Part D) needs memory and processor time. The demo itself runs on
-              about 1.25 GB of memory, but the build is slow on 2 cores. A 2-core machine also works: Part D
-              shows the slower build command for it.
+              about 1.25 GB of memory when idle, but the build is slow on 2 cores. A 2-core machine should
+              also work (not tested): Part D shows the slower build command for it.
             </li>
             <li>
               Free quota for a personal account on GitHub Free: <strong>120 core-hours</strong> and
@@ -804,8 +860,9 @@
             <li>
               A codespace <strong>stops by itself after 30 minutes</strong> without activity (you can set up
               to 240 minutes at
-              <a href="https://github.com/settings/codespaces">github.com/settings/codespaces</a>). Stopped
-              codespaces are deleted automatically after 30 days by default.
+              <a href="https://github.com/settings/codespaces">github.com/settings/codespaces</a>; change it
+              before you create the codespace: the setting applies only to codespaces created afterwards).
+              Stopped codespaces are deleted automatically after 30 days by default.
             </li>
             <li>
               <strong>Stop or delete the codespace when you are done</strong> (<a href="#part-g">Part G</a>).
@@ -846,8 +903,10 @@ pnpm -v</code></pre>
             <p>
               <strong>If it fails:</strong> <code>nvm: command not found</code>: open a new terminal (☰ &gt;
               Terminal &gt; New Terminal) and run the box again. <code>pnpm -v</code> shows another number:
-              run <code>corepack prepare pnpm@9.15.9 --activate</code>, then <code>pnpm -v</code> again.
+              run this box, which should then print <code>9.15.9</code>:
             </p>
+            <pre class="cmd" data-where="cs"><code>corepack prepare pnpm@9.15.9 --activate
+pnpm -v</code></pre>
           </div>
 
           <h3>B2. PostgreSQL 16 and Redis 7.4</h3>
@@ -951,14 +1010,14 @@ mailpit version</code></pre>
                   <span class="badge">no install</span><br />
                   Nothing to install: the apps open at addresses like
                   <code>https://&lt;codespace&gt;-3000.app.github.dev</code>. A small helper program
-                  (included) works around how GitHub forwards these links. You make five ports Public.
+                  (included) works around how GitHub forwards these links. You make four ports Public.
                 </span>
               </label>
             </fieldset>
 
             <div class="field">
               <label for="f-where">2. Your codespace name and forwarding domain</label>
-              <p class="hint">
+              <p class="hint" id="hint-where">
                 Run <code>echo "$CODESPACE_NAME $GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN"</code> in the
                 codespace terminal and paste what it prints (two words), <strong>or</strong> paste any address
                 of a forwarded port, such as <code>https://name-3000.app.github.dev</code>.
@@ -970,6 +1029,7 @@ mailpit version</code></pre>
                 id="f-where"
                 spellcheck="false"
                 placeholder="fluffy-space-giggle-x5g7w9rj app.github.dev"
+                aria-describedby="hint-where where-parsed err-where"
               />
               <p class="hint" id="where-parsed"></p>
               <p class="error" id="err-where"></p>
@@ -977,12 +1037,19 @@ mailpit version</code></pre>
 
             <div class="field">
               <label for="f-otakey">3. The OTA key the storefront shows</label>
-              <p class="hint">
+              <p class="hint" id="hint-otakey">
                 Leave <code>demo</code> for now (the demo OTA of the seed). In Part F you create your own OTA
-                and switch the storefront to its key with one command. A key is 3 to 30 lower-case letters or
-                digits, starting with a letter.
+                and switch the storefront to its key with one command (<a href="#part-f">F6</a>). After that,
+                type your own OTA's key here before you make the files again, or the storefront goes back to
+                the demo OTA. A key is 3 to 30 lower-case letters or digits, starting with a letter.
               </p>
-              <input type="text" id="f-otakey" value="demo" spellcheck="false" />
+              <input
+                type="text"
+                id="f-otakey"
+                value="demo"
+                spellcheck="false"
+                aria-describedby="hint-otakey err-otakey"
+              />
               <p class="error" id="err-otakey"></p>
             </div>
 
@@ -1000,20 +1067,35 @@ mailpit version</code></pre>
                 <label for="f-stripe-secret"
                   >Stripe secret test key (<code>sk_test_…</code> or <code>rk_test_…</code>)</label
                 >
-                <input type="text" id="f-stripe-secret" spellcheck="false" />
+                <input
+                  type="text"
+                  id="f-stripe-secret"
+                  spellcheck="false"
+                  aria-describedby="err-stripe-secret"
+                />
                 <p class="error" id="err-stripe-secret"></p>
               </div>
               <div class="field">
                 <label for="f-stripe-publishable">Stripe publishable test key (<code>pk_test_…</code>)</label>
-                <input type="text" id="f-stripe-publishable" spellcheck="false" />
+                <input
+                  type="text"
+                  id="f-stripe-publishable"
+                  spellcheck="false"
+                  aria-describedby="err-stripe-publishable"
+                />
                 <p class="error" id="err-stripe-publishable"></p>
               </div>
               <div class="field">
                 <label for="f-stripe-webhook">Webhook signing secret (<code>whsec_…</code>, optional)</label>
-                <p class="hint">
+                <p class="hint" id="hint-stripe-webhook">
                   What <code>stripe listen</code> prints; you can add it later and make the files again.
                 </p>
-                <input type="text" id="f-stripe-webhook" spellcheck="false" />
+                <input
+                  type="text"
+                  id="f-stripe-webhook"
+                  spellcheck="false"
+                  aria-describedby="hint-stripe-webhook err-stripe-webhook"
+                />
                 <p class="error" id="err-stripe-webhook"></p>
               </div>
             </details>
@@ -1135,7 +1217,9 @@ ls -l .local/demo/</code></pre>
 pnpm install --frozen-lockfile</code></pre>
           <div class="see">
             <p>
-              <strong>What you should see:</strong> after 1 to 3 minutes, <code>Done in</code> and a time.
+              <strong>What you should see:</strong> after 1 to 3 minutes, <code>Done in</code> and a time. A
+              box <em>Update available!</em> may appear: ignore it and do not update pnpm (the project needs
+              9.15.9).
             </p>
           </div>
           <div class="fails">
@@ -1200,14 +1284,15 @@ pnpm db:seed:reference</code></pre>
 
           <h3>D6. Start the fake airline system, then fill in the demo data</h3>
           <p>
-            The seeds need PostgreSQL, Redis and the Amadeus stub. The first line starts just those. The seeds
-            print the demo admin's password and keys <strong>only once</strong>, so their output is also saved
-            into <code>.local/</code> (a folder git ignores), readable only by you.
+            The seeds need PostgreSQL, Redis and the Amadeus stub. The second line starts just those. The
+            seeds print the demo admin's password and keys <strong>only once</strong>, so their output is also
+            added to the end of two files in <code>.local/</code> (a folder git ignores), readable only by
+            you.
           </p>
           <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
 bash .local/demo/start.sh stub
-( umask 077; (cd platform/backend &amp;&amp; node --enable-source-maps dist/cli.js dev:seed) 2&gt;&amp;1 | tee .local/platform-seed.txt )
-( umask 077; (cd ota/backend &amp;&amp; node --enable-source-maps dist/cli.js dev:seed) 2&gt;&amp;1 | tee .local/ota-seed.txt )</code></pre>
+( umask 077; (cd platform/backend &amp;&amp; node --enable-source-maps dist/cli.js dev:seed) 2&gt;&amp;1 | tee -a .local/platform-seed.txt )
+( umask 077; (cd ota/backend &amp;&amp; node --enable-source-maps dist/cli.js dev:seed) 2&gt;&amp;1 | tee -a .local/ota-seed.txt )</code></pre>
           <div class="see">
             <p><strong>What you should see</strong>, and what to keep:</p>
             <ul>
@@ -1226,16 +1311,23 @@ bash .local/demo/start.sh stub
                 trying the developer SDK.
               </li>
               <li>
-                Both are saved: <code>cat .local/platform-seed.txt</code> shows them again. Do not share these
-                files.
+                Both are saved in <code>.local/platform-seed.txt</code> and <code>.local/ota-seed.txt</code>
+                (the box below shows the admin's lines again). Do not share these files, and delete them when
+                you delete the demo.
               </li>
             </ul>
           </div>
           <div class="fails">
             <p>
               <strong>If it fails:</strong> <code>exists already; nothing changed</code> means the seed ran
-              before: the password is in <code>.local/platform-seed.txt</code> from that first run. Lost it?
-              See <a href="#trouble-password">Part H</a>. A <code>ConfigError</code>: see
+              before: the password of that first run is further up in <code>.local/platform-seed.txt</code>.
+              This box shows the saved lines; the last <code>Password:</code> and
+              <code>TOTP set-up URI:</code> lines are the current ones:
+            </p>
+            <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+grep -E "Password:|TOTP set-up URI:" .local/platform-seed.txt</code></pre>
+            <p>
+              Nothing there? See <a href="#trouble-password">Part H</a>. A <code>ConfigError</code>: see
               <a href="#trouble-config">Part H</a>.
             </p>
           </div>
@@ -1310,13 +1402,14 @@ bash .local/demo/start.sh</code></pre>
                 <pre
                   class="cmd"
                   data-where="pc"
-                ><code>gh codespace ports forward 3000:3000 3001:3001 3002:3002 4173:4173 8025:8025 -c <span class="fill" data-fill="csname">&lt;your codespace name&gt;</span></code></pre>
+                ><code>gh codespace ports forward 3000:3000 3001:3001 3002:3002 4173:4173 8025:8025<span class="fill" data-fill="csflag"></span></code></pre>
                 <p class="hint">
-                  Your codespace name is filled in from Part C. Without it, remove <code>-c</code> and the
-                  name: gh then asks you to pick the codespace. If gh says it needs the
-                  <code>codespace</code> permission, run
-                  <code>gh auth refresh -h github.com -s codespace</code> and try again.
+                  Your codespace name is filled in from Part C, field 2. Without it (field 2 empty), gh shows
+                  a list of your codespaces: choose this one with the arrow keys and press <kbd>Enter</kbd>.
+                  If gh says it needs the <code>codespace</code> permission, run this, then the box above
+                  again:
                 </p>
+                <pre class="cmd" data-where="pc"><code>gh auth refresh -h github.com -s codespace</code></pre>
               </li>
             </ol>
             <div class="see">
@@ -1335,9 +1428,11 @@ bash .local/demo/start.sh</code></pre>
           <div class="mode-box only-browser">
             <span class="mode-label">Your choice: in the browser, through the codespace links</span>
             <p>
-              Make five ports <strong>Public</strong>, so the apps can send you from one to another. Public
-              means that anyone who knows the address can open it; the addresses are long and random, and they
-              stop working when the codespace stops.
+              Make four ports <strong>Public</strong> (3000, 3001, 3002 and 4173), so the apps can send you
+              from one to another. Public means that anyone who knows the address can open it; the addresses
+              are long and random, and they stop working when the codespace stops. Leave Mailpit (8025)
+              <strong>Private</strong>: it shows every e-mail of the demo, including password-reset links.
+              When you open it, GitHub asks you to sign in once.
             </p>
             <ol>
               <li>
@@ -1345,7 +1440,7 @@ bash .local/demo/start.sh</code></pre>
                 <span class="ui">TERMINAL</span> at the bottom).
               </li>
               <li>
-                For each of <strong>3000, 3001, 3002, 4173 and 8025</strong>: right-click the row &gt;
+                For each of <strong>3000, 3001, 3002 and 4173</strong>: right-click the row &gt;
                 <span class="ui">Port Visibility</span> &gt; <span class="ui">Public</span>.
               </li>
             </ol>
@@ -1353,16 +1448,13 @@ bash .local/demo/start.sh</code></pre>
             <pre
               class="cmd"
               data-where="cs"
-            ><code>gh codespace ports visibility 3000:public 3001:public 3002:public 4173:public 8025:public -c "$CODESPACE_NAME"</code></pre>
-            <p class="hint">
-              If this command answers with a permission error, use the clicks above. Mailpit (8025) shows
-              every e-mail of the demo, including password-reset links: you can leave it Private (it then asks
-              you to sign in to GitHub once) or make it Private again when you are done.
-            </p>
+            ><code>gh codespace ports visibility 3000:public 3001:public 3002:public 4173:public -c "$CODESPACE_NAME"</code></pre>
+            <p class="hint">If this command answers with a permission error, use the clicks above.</p>
             <div class="see">
               <p>
                 <strong>What you should see:</strong> the <span class="ui">Visibility</span> column says
-                <code>Public</code> for the five ports. Open the platform admin at
+                <code>Public</code> for 3000, 3001, 3002 and 4173, and <code>Private</code> for 8025. Open the
+                platform admin at
                 <a class="fill" data-fill-href="platform-admin" data-fill="platform-admin-url" href="#part-c"
                   >https://&lt;codespace&gt;-3001.app.github.dev</a
                 >.
@@ -1460,10 +1552,10 @@ bash .local/demo/start.sh</code></pre>
           <h3>F1. Get a 6-digit sign-in code</h3>
           <p>
             The demo admin needs a code that changes every 30 seconds. This command reads the secret from the
-            saved seed output and prints the current code:
+            saved seed output (the last one, if the seed ran more than once) and prints the current code:
           </p>
           <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
-(cd platform/backend &amp;&amp; node -e "const s = /secret=([A-Z2-7]+)/i.exec(require('fs').readFileSync('../../.local/platform-seed.txt', 'utf8'))[1]; console.log(require('otplib').authenticator.generate(s))")</code></pre>
+(cd platform/backend &amp;&amp; node -e "const m = [...require('fs').readFileSync('../../.local/platform-seed.txt', 'utf8').matchAll(/secret=([A-Z2-7]+)/gi)]; if (m.length === 0) { console.error('No secret in .local/platform-seed.txt: see Part H'); process.exit(1); } console.log(require('otplib').authenticator.generate(m[m.length - 1][1]))")</code></pre>
           <div class="see">
             <p>
               <strong>What you should see:</strong> six digits, for example <code>492817</code>. Type it
@@ -1475,9 +1567,11 @@ bash .local/demo/start.sh</code></pre>
             <strong>Or use an authenticator app</strong> on your phone (Google Authenticator, Microsoft
             Authenticator, 1Password, …): add an account with <span class="ui">Enter a setup key</span>, name
             it Velexis demo, and type the secret: the letters and digits after <code>secret=</code> in the
-            <code>TOTP set-up URI</code> line, up to the next <code>&amp;</code>. Show the line again with
-            <code>grep TOTP .local/platform-seed.txt</code>.
+            last <code>TOTP set-up URI:</code> line, up to the next <code>&amp;</code>. This box shows that
+            line again:
           </p>
+          <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+grep "TOTP set-up URI:" .local/platform-seed.txt | tail -n 1</code></pre>
 
           <h3>F2. Sign in to the platform admin</h3>
           <ol>
@@ -1493,9 +1587,12 @@ bash .local/demo/start.sh</code></pre>
             </li>
             <li>
               E-mail <code>admin@example.com</code>, the <code>Password</code> from the seed output, then
-              <span class="ui">Sign in</span>.
+              <span class="ui">Continue</span>.
             </li>
-            <li>Type the 6-digit code (F1) and continue.</li>
+            <li>
+              Type the 6-digit code (F1) into <span class="ui">Authentication code</span> and click
+              <span class="ui">Verify and sign in</span>.
+            </li>
           </ol>
           <div class="see">
             <p>
@@ -1511,8 +1608,11 @@ bash .local/demo/start.sh</code></pre>
               Open the portal:
               <a class="fill" data-fill="portal-url" data-fill-href="portal" href="http://localhost:3000"
                 >http://localhost:3000</a
-              >. Sign in with the <strong>same</strong> e-mail and password, and a <strong>new</strong> code
-              (wait for the next 30 seconds, then run F1 again).
+              >. Click <span class="ui">Sign in</span> at the top right (not
+              <span class="ui">Get started</span>, which makes a new account). Sign in with the
+              <strong>same</strong> e-mail and password, click <span class="ui">Sign in</span>, then type a
+              <strong>new</strong> code into <span class="ui">Authentication code</span> (wait for the next 30
+              seconds, then run F1 again) and click <span class="ui">Verify and sign in</span>.
             </li>
             <li>Click <span class="ui">Create an OTA</span>.</li>
             <li>
@@ -1544,8 +1644,8 @@ bash .local/demo/start.sh</code></pre>
           </div>
           <div class="fails">
             <p>
-              <strong>If it fails:</strong> the set-up does not move: the workers may not run; run
-              <code>bash .local/demo/start.sh</code> in the codespace and reload the page. A key that is
+              <strong>If it fails:</strong> the set-up does not move: the workers may not run; run the box of
+              <a href="#part-e">E1</a> again (it starts what is missing) and reload the page. A key that is
               <em>taken</em> or <em>reserved</em>: choose another one, and use it instead of
               <code>myota</code>
               below.
@@ -1570,10 +1670,13 @@ bash .local/demo/start.sh</code></pre>
           <h3>F5. Switch on the airline card</h3>
           <ol>
             <li>
-              In the OTA admin's menu, open <span class="ui">Settings</span> &gt;
+              In the OTA admin's menu, under <span class="ui">Settings</span>, click
               <span class="ui">Storefront</span>.
             </li>
-            <li>Open the tab <span class="ui">Payments</span>.</li>
+            <li>
+              In the row of tabs at the top of <em>Storefront settings</em>, click
+              <span class="ui">Payments</span> (not the <span class="ui">Payments</span> item of the menu).
+            </li>
             <li>
               In the section <span class="ui">Airline card</span>, tick
               <span class="ui">Offer the airline card in the test environment</span> and click
@@ -1581,7 +1684,10 @@ bash .local/demo/start.sh</code></pre>
             </li>
           </ol>
           <div class="see">
-            <p><strong>What you should see:</strong> <em>Saved</em>.</p>
+            <p>
+              <strong>What you should see:</strong>
+              <em>Saved. The storefront shows the change within 5 minutes.</em>
+            </p>
           </div>
 
           <h3>F6. Point the storefront at your OTA</h3>
@@ -1591,9 +1697,16 @@ bash .local/demo/start.sh</code></pre>
             <code>ota/frontend/.env.local</code>
             and restarts only the storefront.
           </p>
+          <div class="warn">
+            <p>
+              Also type the same key into <a href="#part-c">field 3 of Part C</a>, so that files you make
+              there later keep showing your OTA. Otherwise putting the files in place again sends the
+              storefront back to the demo OTA, which has no airline card.
+            </p>
+          </div>
           <div class="field">
             <label for="f-newkey">Your OTA's key</label>
-            <input type="text" id="f-newkey" value="myota" spellcheck="false" />
+            <input type="text" id="f-newkey" value="myota" spellcheck="false" aria-describedby="err-newkey" />
             <p class="error" id="err-newkey"></p>
           </div>
           <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
@@ -1613,14 +1726,15 @@ bash .local/demo/start.sh</code></pre>
           <h3>F7. Book a flight on the storefront</h3>
           <ol>
             <li>
-              Open the storefront:
+              Open the storefront in a <strong>new</strong> tab:
               <a
                 class="fill"
                 data-fill="storefront-url"
                 data-fill-href="storefront"
                 href="http://localhost:4173"
                 >http://localhost:4173</a
-              >. A banner says it is in test mode.
+              >. A banner says it is in test mode. (A tab that already showed the storefront keeps its old
+              settings for up to 5 minutes.)
             </li>
             <li>
               Choose <span class="ui">One way</span>. <span class="ui">From</span>: type
@@ -1630,12 +1744,13 @@ bash .local/demo/start.sh</code></pre>
               made-up flights.)
             </li>
             <li>
-              Click <span class="ui">Select this flight</span> on a result, then
+              Click <span class="ui">Select</span> (the button under the price) on a result, then
               <span class="ui">Continue with this fare</span>, then
               <span class="ui">Continue to checkout</span>.
             </li>
             <li>
-              Traveller: any first and last name, a date of birth such as <code>1985-04-12</code>, a gender;
+              Traveller: any first and last name, a date of birth (for example 12 April 1985; type it in the
+              order the field shows, or pick it from the calendar), a gender;
               <span class="ui">Continue</span>. Contact: your e-mail address (it goes to Mailpit, nowhere
               else), country calling code <code>34</code>, mobile <code>600000000</code>;
               <span class="ui">Continue</span>. Extras: <span class="ui">Continue</span>.
@@ -1697,9 +1812,10 @@ bash tools/dev/stripe-listen.sh --only ota</code></pre>
           <p>
             Paste your <code>sk_test_…</code> key when asked (it is not shown). The tool prints a line
             <code>STRIPE_WEBHOOK_SECRET_VELEXIS_TEST=whsec_…</code>: put that <code>whsec_…</code> value into
-            the form (Part C, field 4), put the files in place again and restart (<a href="#part-g">Part G</a
-            >), with the Stripe tool still running. Then the storefront also offers Stripe's card form; use
-            Stripe's test card <code>4242 4242 4242 4242</code>.
+            the form (Part C, field 4), check that field 3 holds your OTA's key (<a href="#part-f">F6</a>),
+            put the files in place again and restart (<a href="#part-g">Part G</a>), with the Stripe tool
+            still running. Then the storefront also offers Stripe's card form; use Stripe's test card
+            <code>4242 4242 4242 4242</code>.
           </p>
         </section>
 
@@ -1716,11 +1832,18 @@ bash .local/demo/start.sh</code></pre>
             It starts PostgreSQL and Redis again (through <code>deploy/scripts/dev-setup.sh</code>), then
             every app. Your data (accounts, OTAs, bookings) is still there.
             <span class="only-browser"
-              >Check in the <span class="ui">PORTS</span> tab that the five ports are still Public.</span
+              >Check in the <span class="ui">PORTS</span> tab that 3000, 3001, 3002 and 4173 are still
+              Public.</span
             ><span class="only-local">Connect your browser again as in <a href="#part-e">E2</a>.</span>
           </p>
           <h3>After you change the form</h3>
-          <p>Put all the files in place again (Part C), then restart everything:</p>
+          <p>
+            Before you make the files again, check field 3 of the form: once you did
+            <a href="#part-f">F6</a>, it must hold your own OTA's key (for example <code>myota</code>), or the
+            storefront goes back to the demo OTA. Put all the files in place again (<a href="#part-c"
+              >Part C</a
+            >), then restart everything:
+          </p>
           <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
 bash .local/demo/stop.sh
 bash .local/demo/start.sh</code></pre>
@@ -1732,7 +1855,8 @@ bash .local/demo/start.sh</code></pre>
             what is outside it: Node.js 22, PostgreSQL, Redis, Mailpit
             <strong>and the database with all its data</strong>. After a rebuild: do Part B again, then Part D
             from <a href="#part-d">D2</a> (skip D1, D3 and D4), and Part E. The seed then makes a new admin
-            password.
+            password and sign-in secret, added at the end of <code>.local/platform-seed.txt</code>, and the
+            command of F1 uses the new secret. Your own OTA is gone too: do Part F again.
           </p>
           <h3>Stop or delete the codespace</h3>
           <ul>
@@ -1748,7 +1872,9 @@ bash .local/demo/start.sh</code></pre>
               <span class="ui">Delete</span>.
             </li>
             <li>
-              To stop only the apps and keep the codespace running: <code>bash .local/demo/stop.sh</code>.
+              To stop only the apps and keep the codespace running:
+              <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+bash .local/demo/stop.sh</code></pre>
             </li>
           </ul>
         </section>
@@ -1762,7 +1888,7 @@ bash .local/demo/start.sh</code></pre>
             >).
           </p>
           <div class="table-wrap">
-            <table>
+            <table class="stack">
               <thead>
                 <tr>
                   <th>What you see</th>
@@ -1771,7 +1897,7 @@ bash .local/demo/start.sh</code></pre>
                 </tr>
               </thead>
               <tbody>
-                <tr id="trouble-config">
+                <tr id="trouble-config" data-name="Part H, a setting is missing or wrong">
                   <td>
                     In a log:
                     <code
@@ -1785,21 +1911,30 @@ bash .local/demo/start.sh</code></pre>
                     the app stops.
                   </td>
                   <td>
-                    A key file: run <code>pnpm dev:keys</code>. Anything else: make the files again in Part C,
-                    put <strong>all</strong> of them in place, then <code>bash .local/demo/stop.sh</code> and
-                    <code>bash .local/demo/start.sh</code>.
+                    A key file (a name ending in <code>_FILE</code> or <code>_DIR</code>): run
+                    <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+pnpm dev:keys</code></pre>
+                    Anything else: make the files again in Part C, put <strong>all</strong> of them in place,
+                    then restart:
+                    <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+bash .local/demo/stop.sh
+bash .local/demo/start.sh</code></pre>
                   </td>
                 </tr>
-                <tr>
+                <tr data-name="Part H, port already used">
                   <td>
                     <code>port 3000 is already used by a program that this script did not start</code>, or
                     <code>EADDRINUSE</code> in a log
                   </td>
                   <td>Another program (or an old copy of an app) holds the port.</td>
                   <td>
-                    Run <code>bash .local/demo/stop.sh</code>, then <code>bash .local/demo/start.sh</code>.
-                    Still there? See which program it is with <code>ss -ltnp | grep ':3000 '</code> (with the
-                    port number of the message) and close it, or stop and start the codespace.
+                    Restart the demo:
+                    <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+bash .local/demo/stop.sh
+bash .local/demo/start.sh</code></pre>
+                    Still there? This shows which program holds the port (change <code>3000</code> to the port
+                    number of the message); close it, or stop and start the codespace:
+                    <pre class="cmd" data-where="cs"><code>ss -ltnp | grep ':3000 '</code></pre>
                   </td>
                 </tr>
                 <tr>
@@ -1834,44 +1969,54 @@ bash .local/demo/start.sh</code></pre>
                     again.
                     <span class="only-browser"
                       >Check that <code>start.sh</code> printed <code>ota-admin-proxy: ready</code> (it
-                      handles this case) and that port 3000 is Public.</span
+                      handles this case) and that ports 3000 and 3002 are Public.</span
                     >
                   </td>
                 </tr>
-                <tr>
+                <tr data-name="Part H, blocked request on the storefront">
                   <td><code>Blocked request. This host (…) is not allowed.</code> on the storefront</td>
                   <td>The storefront's files are for the other way of opening the apps.</td>
                   <td>
                     Make the files again in Part C with the right choice in field 1, put them in place, then
-                    <code>bash .local/demo/stop.sh storefront</code> and
-                    <code>bash .local/demo/start.sh</code>.
+                    restart the storefront:
+                    <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+bash .local/demo/stop.sh storefront
+bash .local/demo/start.sh</code></pre>
                   </td>
                 </tr>
-                <tr>
+                <tr data-name="Part H, key file problem">
                   <td>
-                    A key file <code>… is readable by others</code>, a permission error on
+                    A key file <code>… is accessible by group or others</code> or
+                    <code>… grants access to group or others</code>, a permission error on
                     <code>.local/keys</code>, or a file like <code>master-v1 (1).key</code>
                   </td>
                   <td>The key files must be readable by you only, and have their exact names.</td>
                   <td>
-                    Delete any copy with <code>(1)</code> in its name from <code>.local/keys/</code>, then run
-                    <code>pnpm dev:keys</code> (it keeps the keys and fixes their permissions).
+                    This deletes any copy with <code>(</code> in its name from <code>.local/keys/</code>, then
+                    runs <code>pnpm dev:keys</code> (it keeps the keys and fixes their permissions):
+                    <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+rm -f .local/keys/*'('*
+pnpm dev:keys</code></pre>
                   </td>
                 </tr>
-                <tr id="trouble-memory">
+                <tr id="trouble-memory" data-name="Part H, out of memory">
                   <td>
                     <code>Killed</code>, <code>exit code 137</code> or
                     <code>JavaScript heap out of memory</code>
                   </td>
                   <td>The machine ran out of memory, most often during <code>pnpm build</code>.</td>
                   <td>
-                    Run <code>bash .local/demo/stop.sh</code>, then <code>pnpm build --concurrency=2</code>.
-                    Check the memory with <code>free -h</code>. Or change the machine type to 4-core (at
+                    Stop the apps and build with fewer tasks at a time (the last line shows the free memory):
+                    <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+bash .local/demo/stop.sh
+pnpm build --concurrency=2
+free -h</code></pre>
+                    Or change the machine type to 4-core (at
                     <a href="https://github.com/codespaces">github.com/codespaces</a>:
                     <span class="ui">…</span> &gt; <span class="ui">Change machine type</span>).
                   </td>
                 </tr>
-                <tr id="trouble-apt">
+                <tr id="trouble-apt" data-name="Part H, apt-get update fails">
                   <td>
                     <code>sudo apt-get update</code> fails with <code>NO_PUBKEY</code>,
                     <code>EXPKEYSIG</code> or <code>is not signed</code> for a source that is not PostgreSQL
@@ -1882,30 +2027,40 @@ bash .local/demo/start.sh</code></pre>
                     Velexis.
                   </td>
                   <td>
-                    List the sources with <code>ls /etc/apt/sources.list.d/</code>, remove the one named in
-                    the error, for example <code>sudo rm /etc/apt/sources.list.d/yarn.list</code>, and run the
-                    box again.
+                    List the sources:
+                    <pre class="cmd" data-where="cs"><code>ls /etc/apt/sources.list.d/</code></pre>
+                    Remove the one named in the error, for example the Yarn one:
+                    <pre
+                      class="cmd"
+                      data-where="cs"
+                    ><code>sudo rm /etc/apt/sources.list.d/yarn.list</code></pre>
+                    Then run the box of <a href="#part-b">B2</a> again.
                   </td>
                 </tr>
-                <tr id="trouble-redis">
+                <tr id="trouble-redis" data-name="Part H, Redis did not start">
                   <td><code>Redis did not become ready</code> from <code>dev-setup.sh</code></td>
                   <td>Redis is installed but could not be started as a service.</td>
                   <td>
                     Start it by hand, then run the script again:
-                    <code>sudo redis-server /etc/redis/redis.conf --daemonize yes</code> and
-                    <code>bash deploy/scripts/dev-setup.sh</code>.
+                    <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+sudo redis-server /etc/redis/redis.conf --daemonize yes
+bash deploy/scripts/dev-setup.sh</code></pre>
                   </td>
                 </tr>
-                <tr id="trouble-password">
+                <tr id="trouble-password" data-name="Part H, lost password or secret">
                   <td>You lost the admin password or the sign-in secret</td>
                   <td>The seed prints them only once.</td>
                   <td>
-                    First look in <code>.local/platform-seed.txt</code>. Lost the secret only: run
-                    <code
-                      >(cd platform/backend &amp;&amp; node --enable-source-maps dist/cli.js admin:reset-mfa
-                      admin@example.com)</code
-                    >, sign in to the portal with the password, and set up two-factor sign-in again where the
-                    portal asks (it shows a key to type into an authenticator app). Lost the password: on the
+                    First look in the saved seed output (the last lines are the current ones):
+                    <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+grep -E "Password:|TOTP set-up URI:" .local/platform-seed.txt</code></pre>
+                    Lost the secret only: run this, then sign in to the portal with the password and set up
+                    two-factor sign-in again where the portal asks (it shows a key to type into an
+                    authenticator app):
+                    <pre class="cmd" data-where="cs"><code>cd /workspaces/velexis-ota
+(cd platform/backend &amp;&amp; node --enable-source-maps dist/cli.js admin:reset-mfa admin@example.com)</code></pre>
+                    After this, the command of <a href="#part-f">F1</a> no longer works (it reads the old
+                    secret): type the new key into an authenticator app instead. Lost the password: on the
                     portal's sign-in page click <span class="ui">Forgot your password?</span>, enter
                     <code>admin@example.com</code>, and open the e-mail in Mailpit (port 8025) to choose a new
                     one.
@@ -1918,11 +2073,18 @@ bash .local/demo/start.sh</code></pre>
                 </tr>
                 <tr id="trouble-payment">
                   <td>No <em>Card, charged by the airline</em> at the storefront's payment step</td>
-                  <td>The storefront shows an OTA where the airline card is off.</td>
+                  <td>
+                    The storefront shows an OTA where the airline card is off, or the tab still holds the
+                    settings it loaded earlier.
+                  </td>
                   <td>
                     Do <a href="#part-f">F5</a> in the OTA admin of the OTA the storefront shows, and check
-                    that F6 used that OTA's key. The seed's <code>demo</code> OTA has no owner, so its console
-                    cannot be opened: use your own OTA.
+                    that F6 used that OTA's key. The table that <code>start.sh</code> prints names the OTA the
+                    storefront shows: if it says <code>demo.ota.example.com</code> although you did F6, you
+                    put the files in place again with <code>demo</code> in field 3 of Part C: type your OTA's
+                    key there and do F6 again. The seed's <code>demo</code> OTA has no owner, so its console
+                    cannot be opened: use your own OTA. Or the tab still holds the settings it loaded earlier:
+                    open the storefront in a new tab, or wait 5 minutes.
                   </td>
                 </tr>
                 <tr>
@@ -1937,8 +2099,10 @@ bash .local/demo/start.sh</code></pre>
                   <td><code>502</code> or a GitHub error page for a codespace link</td>
                   <td>Nothing answers on that port.</td>
                   <td>
-                    Run <code>bash .local/demo/start.sh</code>: it starts what is missing. Then look at the
-                    app's log.
+                    Run the box of <a href="#part-e">E1</a> again: it starts what is missing. Then look at the
+                    app's log (<a href="#ref-logs">Logs</a>). Still a <code>502</code> while
+                    <code>start.sh</code> says every app is ready? Use the way
+                    <em>On my computer, through localhost</em> instead (Part C, field 1).
                   </td>
                 </tr>
               </tbody>
@@ -1959,6 +2123,14 @@ bash .local/demo/start.sh</code></pre>
               refuse to run where <code>/etc/velexis</code> exists.
             </p>
           </div>
+          <div class="note">
+            <p>
+              <strong>One rule for this whole page:</strong> many boxes start with the line
+              <code>cd /workspaces/velexis-ota</code>, which exists only in a codespace. On your computer,
+              leave that line out and run the rest of the box in your <code>velexis-ota</code> folder (step 1
+              takes you there; in a new terminal, run <code>cd velexis-ota</code> first).
+            </p>
+          </div>
           <ol>
             <li>
               Install the basics, Node's version manager and the code:
@@ -1970,9 +2142,8 @@ git clone --branch claude/intelligent-bardeen-90hhu7 https://github.com/bhagwati
 cd velexis-ota</code></pre>
             </li>
             <li>
-              Do <a href="#part-b">Part B</a>, but skip its first line (<code>cd /workspaces/velexis-ota</code
-              >): you are already in the <code>velexis-ota</code> folder. On an ARM computer, download
-              <code>mailpit-linux-arm64.tar.gz</code> instead in B3, with the checksum
+              Do <a href="#part-b">Part B</a>, without the line <code>cd /workspaces/velexis-ota</code>. On an
+              ARM computer, download <code>mailpit-linux-arm64.tar.gz</code> instead in B3, with the checksum
               <code>e782d4d0ab97f03abaab65cb297c5b8a5acc82ad9932bf08a3b9cf69950b862a</code>.
             </li>
             <li>
@@ -1985,11 +2156,14 @@ cd velexis-ota</code></pre>
               (sudo).
             </li>
             <li>
-              Skip E2. Open the addresses of E3 in Chrome, Edge or Firefox on this computer, then do Part F.
+              Skip E2. Open the addresses of E3 in Chrome, Edge or Firefox on this computer, then do Part F,
+              again without the line <code>cd /workspaces/velexis-ota</code> (run the boxes in the
+              <code>velexis-ota</code> folder). Part G and the boxes of Part H work the same way.
             </li>
             <li>
-              After a restart of the computer:
-              <code>cd velexis-ota &amp;&amp; bash .local/demo/start.sh</code>.
+              After a restart of the computer, open a terminal and run:
+              <pre class="cmd" data-where="vm"><code>cd velexis-ota
+bash .local/demo/start.sh</code></pre>
             </li>
           </ol>
           <h3>A VM in the cloud, reached over SSH</h3>
@@ -2028,8 +2202,8 @@ cd velexis-ota</code></pre>
               <tbody>
                 <tr>
                   <td>
-                    <strong>Memory</strong>: about 1.25 GB when idle, 1.6 to 2 GB in use (measured on this
-                    code on 6 November 2026)
+                    <strong>Memory</strong>: about 1.25 GB when idle (measured on this code on 6 November
+                    2026), an estimated 1.6 to 2 GB in use
                   </td>
                   <td>512 MB per free web service</td>
                   <td>No long-running servers, only short functions</td>
@@ -2072,7 +2246,10 @@ cd velexis-ota</code></pre>
                     Free database expires after 30 days, and the set-up script needs changes without an
                     administrator account
                   </td>
-                  <td>No database</td>
+                  <td>
+                    No database of its own; partner databases (such as Neon) need the same set-up changes as
+                    Render's
+                  </td>
                 </tr>
                 <tr>
                   <td><strong>Sending e-mail</strong></td>
@@ -2115,11 +2292,11 @@ cd velexis-ota</code></pre>
             the section above.
           </p>
           <p class="hint">
-            Sources and confidence: the memory figures, the private-listening design and the database set-up
-            come from this repository and a full run of the stack on 6 November 2026 (high confidence). The
-            Render and Vercel limits and prices come from their public pages as summarised by web search on 6
-            November 2026, because their sites could not be opened directly (medium confidence: plans change,
-            check
+            Sources and confidence: the idle memory figure, the private-listening design and the database
+            set-up come from this repository and a full run of the stack on 6 November 2026 (high confidence;
+            the figure in use is an estimate from the project's own load measurements). The Render and Vercel
+            limits and prices come from their public pages as summarised by web search on 6 November 2026,
+            because their sites could not be opened directly (medium confidence: plans change, check
             <a href="https://render.com/pricing">render.com/pricing</a> and
             <a href="https://vercel.com/pricing">vercel.com/pricing</a>).
           </p>
@@ -2263,7 +2440,7 @@ cd velexis-ota</code></pre>
                   </td>
                   <td>
                     <code>APP_ENV</code>, <code>LOG_LEVEL=info</code>, the three <code>PUBLIC_*_URL</code>,
-                    the three secrets, Stripe test keys (empty unless given)
+                    the three secrets, Stripe test keys and webhook secrets (empty unless given)
                   </td>
                 </tr>
                 <tr>
@@ -2272,7 +2449,8 @@ cd velexis-ota</code></pre>
                   <td>
                     <code>APP_ENV</code>, <code>LOG_LEVEL</code>, <code>PUBLIC_OTA_ADMIN_URL</code> (links in
                     staff e-mails), <code>VELEXIS_EDGE_SECRET</code>, <code>OTA_ADMIN_SERVICE_KEY</code>,
-                    Stripe test keys; <code>AIRLINE_CARD_ENABLED=true</code> as in the example
+                    Stripe test keys and webhook secrets (empty unless given);
+                    <code>AIRLINE_CARD_ENABLED=true</code> as in the example
                   </td>
                 </tr>
                 <tr>
@@ -2995,7 +3173,8 @@ say ""
 say "Open first: the platform admin. Sign in as admin@example.com with the password that the platform seed"
 say "printed (saved in .local/platform-seed.txt) and a 6-digit code (Part F of the guide)."
 if [ "$MODE" = browser ]; then
-  say "The ports 3000, 3001, 3002, 4173 and 8025 must be Public in the PORTS panel (Part E of the guide)."
+  say "The ports 3000, 3001, 3002 and 4173 must be Public in the PORTS panel; Mailpit (8025) stays Private"
+  say "(Part E of the guide)."
 else
   say "These addresses work on your own computer while VS Code Desktop or 'gh codespace ports forward'"
   say "connects the ports (Part E of the guide). On your own Ubuntu computer they work as they are."
@@ -3237,7 +3416,34 @@ http
           selection.addRange(range);
         }
 
-        function decorate(pre) {
+        const HEADINGS = Array.from(document.querySelectorAll("main h2, main h3, main h4, main .mode-label"));
+
+        /** The visible text of an element without its `.step-time` badge, on one line. */
+        function plainText(element) {
+          return Array.from(element.childNodes)
+            .filter((node) => !(node.nodeType === Node.ELEMENT_NODE && node.classList.contains("step-time")))
+            .map((node) => node.textContent)
+            .join("")
+            .replace(/\s+/g, " ")
+            .trim();
+        }
+
+        /** Where a command box sits: its table row's name, else the nearest heading before it. */
+        function placeOf(pre) {
+          const row = pre.closest("tr");
+          if (row && row.dataset.name) {
+            return row.dataset.name;
+          }
+          let place = "";
+          for (const heading of HEADINGS) {
+            if (heading.compareDocumentPosition(pre) & Node.DOCUMENT_POSITION_FOLLOWING) {
+              place = plainText(heading);
+            }
+          }
+          return place;
+        }
+
+        function decorate(pre, place) {
           const box = document.createElement("div");
           box.className = pre.classList.contains("tall") ? "cmd tall" : "cmd";
           const bar = document.createElement("div");
@@ -3247,7 +3453,11 @@ http
           const button = document.createElement("button");
           button.type = "button";
           button.textContent = "Copy";
-          button.setAttribute("aria-label", `Copy the commands (${label.textContent.toLowerCase()})`);
+          const where = label.textContent;
+          button.setAttribute(
+            "aria-label",
+            `Copy: ${place || "commands"} (${where.charAt(0).toLowerCase()}${where.slice(1)})`,
+          );
           button.addEventListener("click", async () => {
             const copied = await copyText(pre.textContent);
             button.textContent = copied ? "Copied" : "Select and copy by hand";
@@ -3372,10 +3582,14 @@ http
               "Needed for the codespace links: paste the output of the echo command, or a forwarded address.";
           }
           ok = setError("err-where", whereMessage, whereInput) && ok;
-          $("where-parsed").textContent =
-            where.name && whereMessage === ""
-              ? `Codespace ${where.name}, domain ${where.domain}: the portal's codespace link is https://${where.name}-3000.${where.domain}`
-              : "";
+          let parsed = "";
+          if (where.name && whereMessage === "") {
+            parsed =
+              mode === "browser"
+                ? `Codespace ${where.name}, domain ${where.domain}: the portal's codespace link is https://${where.name}-3000.${where.domain}`
+                : `Codespace ${where.name}: filled into the gh command of Part E.`;
+          }
+          $("where-parsed").textContent = parsed;
 
           const otaKey = keyInput.value.trim();
           ok =
@@ -3393,7 +3607,11 @@ http
           let secretMessage = "";
           let publishableMessage = "";
           let webhookMessage = "";
-          if (/_live_/.test(stripeSecret)) {
+          const PLACEHOLDER =
+            "This is the placeholder of .env.example, not a real key: leave both Stripe fields empty.";
+          if (/replace_me/i.test(stripeSecret)) {
+            secretMessage = PLACEHOLDER;
+          } else if (/_live_/.test(stripeSecret)) {
             secretMessage = "This is a live key. The demo only takes test keys (sk_test_… or rk_test_…).";
           } else if (stripeSecret !== "" && STRIPE_SECRET.test(stripeSecret) === false) {
             secretMessage =
@@ -3401,7 +3619,9 @@ http
           } else if (stripeSecret === "" && stripePublishable !== "") {
             secretMessage = "Give the secret test key too, or leave both keys empty.";
           }
-          if (/_live_/.test(stripePublishable)) {
+          if (/replace_me/i.test(stripePublishable)) {
+            publishableMessage = PLACEHOLDER;
+          } else if (/_live_/.test(stripePublishable)) {
             publishableMessage = "This is a live key. The demo only takes a test key (pk_test_…).";
           } else if (stripePublishable !== "" && STRIPE_PUBLISHABLE.test(stripePublishable) === false) {
             publishableMessage =
@@ -3409,7 +3629,10 @@ http
           } else if (stripePublishable === "" && stripeSecret !== "") {
             publishableMessage = "Give the publishable test key too, or leave both keys empty.";
           }
-          if (stripeWebhook !== "" && STRIPE_WEBHOOK.test(stripeWebhook) === false) {
+          if (/replace_me/i.test(stripeWebhook)) {
+            webhookMessage =
+              "This is the placeholder of .env.example: paste what stripe listen prints, or leave it empty.";
+          } else if (stripeWebhook !== "" && STRIPE_WEBHOOK.test(stripeWebhook) === false) {
             webhookMessage = "A webhook signing secret starts with whsec_ (as stripe listen prints it).";
           } else if (stripeWebhook !== "" && stripeSecret === "") {
             webhookMessage = "Only with the two Stripe keys above; otherwise leave it empty.";
@@ -3503,12 +3726,13 @@ http
           const appPorts = browser
             ? { portal: 13000, platformAdmin: 13001, otaAdmin: 13002 }
             : { portal: 3000, platformAdmin: 3001, otaAdmin: 3002 };
+          // Never a dummy value of .env.example: the dummy keys pass the backend's checks, and the dummy webhook
+          // secrets are public. An empty value counts as unset (no Stripe card form, webhooks refused with 400).
           const stripe = [
             ["STRIPE_SECRET_KEY_TEST", state.stripe.secret],
             ["STRIPE_PUBLISHABLE_KEY_TEST", state.stripe.publishable],
-            ...(state.stripe.webhook === ""
-              ? []
-              : [["STRIPE_WEBHOOK_SECRET_VELEXIS_TEST", state.stripe.webhook]]),
+            ["STRIPE_WEBHOOK_SECRET_VELEXIS_TEST", state.stripe.webhook],
+            ["STRIPE_WEBHOOK_SECRET_CONNECT_TEST", ""],
           ];
           const common = [
             ["APP_ENV", "test"],
@@ -3701,6 +3925,7 @@ http
             `chmod 600 ${envPaths.join(" ")}${state.mode === "browser" ? " .local/demo/origin-fix-proxy.mjs" : ""}`,
             "chmod 700 .local/demo/start.sh .local/demo/stop.sh",
             `echo "Velexis demo: ${files.length} files written for: ${MODES[state.mode].label}. Next: Part D."`,
+            "history -d -1 2>/dev/null || true  # keeps the secrets above out of the shell history",
             "else",
             'echo "This is not the velexis-ota folder. Run  cd /workspaces/velexis-ota  (or cd into the folder you cloned) and paste again."',
             "fi",
@@ -3826,7 +4051,7 @@ http
         function fillPage(state) {
           const urls = addresses(state);
           const values = {
-            csname: state.name === "" ? "<your codespace name>" : state.name,
+            csflag: state.name === "" ? "" : ` -c ${state.name}`,
             "portal-url": urls.portal,
             "platform-admin-url": urls.platformAdmin,
             "ota-admin-url": urls.otaAdmin,
@@ -3958,9 +4183,15 @@ http
         }
 
         // ---- Start -------------------------------------------------------------------------------------------------
-        for (const pre of document.querySelectorAll("pre.cmd")) {
-          decorate(pre);
-        }
+        // Each Copy button names its box; boxes that share a place are numbered ("box 2 of 3").
+        const boxes = Array.from(document.querySelectorAll("pre.cmd"));
+        const places = boxes.map(placeOf);
+        boxes.forEach((pre, index) => {
+          const place = places[index];
+          const total = places.filter((other) => other === place).length;
+          const position = places.slice(0, index + 1).filter((other) => other === place).length;
+          decorate(pre, total > 1 ? `${place}, box ${position} of ${total}` : place);
+        });
         if (window.matchMedia("(max-width: 1099px)").matches) {
           document.querySelector("nav.toc details").open = false;
         }
