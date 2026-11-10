@@ -45,6 +45,17 @@ Each flow has a Mermaid sequence diagram, numbered steps, failure handling and t
 | [`flows/team-and-ota-admin-sso.md`](flows/team-and-ota-admin-sso.md) | M1, M4 | Invitations, roles, removal, "Open console" SSO into the OTA admin, sign out everywhere. |
 | [`flows/platform-admin-operations.md`](flows/platform-admin-operations.md) | M1, M5 | Admin sign-in, suspend and resume, job retry, plans, offices, settlements, account support. |
 
+## Runbooks
+
+Human procedures in the platform admin, the providers' dashboards and on the VM (PBE-065). AI agents never run them ([`AGENTS.md`](../../AGENTS.md) §8).
+
+| Runbook | One line |
+|---|---|
+| [`runbooks/launch-checklist.md`](runbooks/launch-checklist.md) | Before the first real OTA: Stripe live keys, the two webhook endpoints and their events, the Customer Portal and Connect settings, the first admin through `admin:grant`, the live Velexis Amadeus account and offices, `OPS_ALERT_EMAIL`, the legal sign-off of Velexis-collected payments and the order of the six switches; every item with an owner and a check. |
+| [`runbooks/platform-operations.md`](runbooks/platform-operations.md) | Stuck provisioning job, failed Stripe event, Stripe deauthorisation, abusive custom domain, lost authenticator of an owner or admin, JWT key and master key rotation, and why the API key pepper is never rotated: signals, commands, fix, check and escalation of each. |
+
+The cross-cutting runbooks are in `docs/mvp/runbooks/`: [master-key rotation](../../docs/mvp/runbooks/master-key-rotation.md) and [SSH access](../../docs/mvp/runbooks/ssh-access.md). The OTA's runbooks and launch checklist are in `ota/docs/runbooks/` (OBE-089).
+
 ## Platform ADRs
 
 The index with status and one-line summaries is in [`adr/README.md`](adr/README.md). Platform ADRs are numbered `PADR-NNNN` so they never clash with the cross-cutting `ADR-NNNN`.

@@ -2021,7 +2021,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - The whole backend, portal and admin test suites pass.
 - **Verify:** `pnpm --filter @velexis/platform-backend test && pnpm --filter @velexis/platform-backend test:int && pnpm --filter @velexis/platform-frontend test && pnpm --filter @velexis/platform-admin test`
 
-### PBE-065 · Write the platform launch checklist and runbooks
+### PBE-065 · Write the platform launch checklist and runbooks ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M6
 - **Depends on:** PBE-062
