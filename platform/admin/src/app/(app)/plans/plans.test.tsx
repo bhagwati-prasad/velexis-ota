@@ -1048,8 +1048,9 @@ describe("plans/plan-form.tsx: a new plan", () => {
     ]) {
       expect(within(form).getByText(message)).toBeTruthy();
     }
-    // The focus is on the first field with a problem, and what was typed stays.
-    expect(document.activeElement).toBe(codeField);
+    // The focus is on the first field with a problem, and what was typed stays. The form moves the focus in an effect
+    // after the render that marks the fields, so the test waits for it (as billing-admin.test.tsx does).
+    await waitFor(() => expect(document.activeElement).toBe(codeField), UI_WAIT);
     expect(codeField.value).toBe("Growth Plus");
     expect(field(PLAN_FORM_STRINGS.monthlyPriceLabel("EUR"), form).value).toBe("199.999");
     expect(calls("POST", PLANS_PATH)).toHaveLength(0);
