@@ -6,11 +6,11 @@ This page records measured figures of the OTA backend and the decisions taken fr
 - OBE-092 cut the API's CPU per search of 250 offers (§4).
 - FIX-W46-SHARED gave the API a larger young generation, decision (a) of §4, and measured it (§4, Step 4).
 - OBE-096 took decision (b) of §4: a storefront without its own `maxResults` asks Amadeus for 175 offers per search, the largest number measured within the search budget (§5).
-- OBE-088 adds the M6 measurements against the VM's memory budget ([architecture §3](../../docs/mvp/architecture.md#3-hosts-ports-and-the-vm)).
+- OBE-088 measured the API and the worker together under 30 minutes of mixed traffic against the VM's memory budget ([architecture §3](../../docs/mvp/architecture.md#3-hosts-ports-and-the-vm)) and the queue latency of [OADR-0014](adr/0014-per-tenant-workers-and-schedulers.md) (§6).
 
 Related:
 
-- [`../backend/test/load/README.md`](../backend/test/load/README.md): how to run the load test and read its report.
+- [`../backend/test/load/README.md`](../backend/test/load/README.md): how to run the load tests and read their reports.
 - [OADR-0001](adr/0001-amadeus-client-design.md): the Amadeus client and its buckets.
 - [OADR-0002](adr/0002-offer-and-priced-offer-caching.md): offers in PostgreSQL.
 - [ADR-0012](../../docs/mvp/adr/0012-amadeus-account-model.md): the shared Amadeus account.
@@ -94,7 +94,7 @@ The options of each run are added to `--visitors 10 --searches 200` unless they 
    - 460 ms with 50 offers (B);
    - 945–972 ms with 250 offers (C, H).
 
-   A single visitor with 250 offers stays at 214 ms (D). So the time is CPU, not waiting: a 250-offer search costs the API about 150 ms of CPU, and ten of them queue on the one event loop (event-loop delay p99 73–75 ms in C and H). Amadeus answers up to 250 offers, and the API asked for 250 unless a storefront set a lower `maxResults` (175 by default since OBE-096, §5). With real answers of that size, 10 simultaneous searches therefore miss the budget. **Follow-up task OBE-092** in the plan (§6) covers it; §4 has its runs.
+   A single visitor with 250 offers stays at 214 ms (D). So the time is CPU, not waiting: a 250-offer search costs the API about 150 ms of CPU, and ten of them queue on the one event loop (event-loop delay p99 73–75 ms in C and H). Amadeus answers up to 250 offers, and the API asked for 250 unless a storefront set a lower `maxResults` (175 by default since OBE-096, §5). With real answers of that size, 10 simultaneous searches therefore miss the budget. **Follow-up task OBE-092** in the plan (§7) covers it; §4 has its runs.
 
    This is where the CPU goes. The API was profiled with the inspector during 60 journeys of 2 visitors with 250 offers, 10.1 s of busy CPU in all. The shares overlap, because `decimal.js` runs inside the pricing engine and the facets.
 
@@ -421,10 +421,138 @@ Lead decision (15i) of 2026-11-11, which the owner approved, changed two things 
 
 OBE-088 measures the VM's mixed traffic with the default of 150; this section's figures stay those of OBE-096.
 
-## 6. Follow-ups
+## 6. Mixed traffic with the worker against the VM's memory budget (OBE-088, 11 November 2026)
+
+OBE-088 ran the API and the worker together, each as its systemd unit starts it, under 30 minutes of mixed traffic on five tenants: storefront searches and prices, checkouts paid by airline card against the stub, and console list calls, while the worker ran the booking sync, ticketing, the reconciliation of a lost answer, documents, e-mails and every scheduler. It measures what [architecture §3](../../docs/mvp/architecture.md#3-hosts-ports-and-the-vm) budgets for the OTA: the RSS of each process against its unit's `MemoryMax`, PostgreSQL connections, Redis memory, and the queue latency per queue, the follow-up of [OADR-0014](adr/0014-per-tenant-workers-and-schedulers.md). The test is [`booking-load.mjs`](../backend/test/load/booking-load.mjs); its README says how it runs and what each figure is.
+
+### Set-up
+
+| Item | Value |
+|---|---|
+| Code | The API and the worker built from the backend's sources at `ad5e6662e8cd`, the integration branch head this task started from (the task changes no backend source), with one local change that was not committed: `DEFAULT_OFFERS_PER_SEARCH` 150 instead of 175 in `offers.mapper.ts`, lead decision (15i) of 2026-11-11, which FIX-W48-OTA commits. So every storefront search asked Amadeus for 150 offers, and the proxy answered 150. **V2**, the run of record, ran this task's final scripts (it printed `f7177ba8a1b7+changes`: the review's changes to the scripts before they were folded into the task's commit, and the 150). **V1** and **S1** ran the task's first script. Its sync fixture aged `last_synced_at` only, so each scan found only the bookings made since the scan before: a booking claimed by a sync in the last 30 minutes is not due (`BOOKING_SYNC_RETRY_MS`). It counted every process of the database, autovacuum included, as a connection, and it had no Redis breakdown by job name (V1 had none by kind of key either). |
+| Machine | 4 vCPUs (`nproc` 4; Intel Xeon @ 2.10 GHz), 15.7 GiB RAM, Linux 6.18.44 x64, Node 22.23.4. PostgreSQL 16.15 with the development defaults (`shared_buffers` 128 MB, `max_connections` 100; the VM has 1.5 GB of shared buffers). Redis 7.0.15, an instance of the runs' own started as the VM's Redis (`maxmemory 512mb`, `noeviction`; the VM runs 7.4). The test and its stub, proxy and SMTP sink ran on the same machine, so their CPU is in the load average. |
+| The lock and the load | Every recorded run held the machine-wide end-to-end lock, so no end-to-end suite shared the machine; other agents' builds and tests may have. V2 started once the 1-minute load average was below 3 (it was 14.7 four minutes before, from another agent's `pnpm test`). Each table below names its runs' `nproc` and 1-minute load average (mean and maximum over the phase); the timeline gives them per 5 minutes. |
+| API and worker | `APP_ENV` and `NODE_ENV` `production`, `--enable-source-maps`; the API with `--max-old-space-size=640 --max-semi-space-size=32` (pool of 20 connections), the worker with `--max-old-space-size=400` (pool of 10), as `deploy/systemd/velexis-ota-api.service` and `velexis-ota-worker.service` start them. `LOG_LEVEL=info` to a file. The worker sent its e-mails to the test's SMTP sink and wrote its documents to the run's folder. |
+| Tenants | `alpha` to `epsilon`, as `search-load.mjs` writes them, with the Velexis Stripe test connection, two staff members each (`agent`, MFA on) and, in the storefront settings, the airline card on for the test environment, an alert address and a booking queue. |
+| Traffic | The defaults of `booking-load.mjs`, the tenants in turn, each journey starting at its own fixed rate whatever the answers took: **120 shopper journeys a minute** (search, first results page, price: 2 searches a second with the bookers), **4 booker journeys a minute** (the shopper's three calls, the checkout with traveller, contact, airline-card payment, card fee, completion and the guest's booking: 240 bookings an hour, under the airline card's limit of 60 an hour per tenant), **30 staff journeys a minute** (bookings list and detail, payments list, Amadeus calls list), 1 s between two calls of a journey, the stub holding every answer 300 ms. 1 booking in 4 came back without tickets, and 1 in 25 lost its Create Orders answer (the stub's `timeout`: a 504 after 30 s, the order written). |
+| Fixtures | Once a minute the run made every booking with an order look last synchronised, and last claimed by a sync, 7 hours ago (V1 and S1: last synchronised only), so each `bookings.sync_scan` enqueued every such booking, at most 20 `booking.sync` per tenant. It also rewrote each booking without tickets as a card-paid booking whose issuance failed after the capture, so the next `ticketing.scan` enqueued its `ticketing.issue`. The run cannot reach Stripe, and an airline-card booking without tickets goes to the staff, never to the ticketing job; this is the work the card path gives `ota-ticketing` (the test's README, step 6). Both write as `velexis_ota_app` through `tenantTx`. |
+
+### The runs
+
+| Run | Started (UTC) | Options | Load avg 1 min: start → end (mean / max over the phase), `nproc` 4 | Journeys completed / started | Bookings: issued at once / by the worker / reconciled | Exit |
+|---|---|---|---|---|---|---|
+| **V2** | 14:10:34 | `--tenants 5 --minutes 30` (the Verify command), the final script | 2.76 → 0.22 (1.4 / 6.9) | 4 620 / 4 620 (3 600 shoppers, 120 bookers, 900 staff) | 87 / 29 / 4 | 0 |
+| V1 | 03:59:26 | `--tenants 5 --minutes 30`, the first script | 1.57 → 5.27 (1.4 / 6.0) | 4 620 / 4 620 | 87 / 29 / 4 | 0 |
+| S1 | 04:32:54 | `--tenants 5 --minutes 10`, the first script | 1.15 → 0.43 (0.6 / 1.4) | 1 540 / 1 540 (1 200, 40, 300) | 29 / 10 / 1 | 0 |
+
+In V2 every answer was an expected one. Two `flights.search` and two `flights.price` calls got a `429 RATE_LIMITED` (V1 and S1 none), all four in the minute of a sync burst (item 2); each was retried after its `Retry-After`, as the SDK does, and then answered. The four lost Create Orders answers were `504 SUPPLIER_TIMEOUT` as asked. No journey was skipped or still running at the end, and none started more than 11 ms after its time (at most 12 were in flight). At the end 124 bookings were ticketed: 120 at once or by the ticketing job, and 4 found by the reconciliation. One waited for the next `ticketing.scan` when the run ended; in V1 none did, and in S1 four. The SMTP sink took 278 e-mails (9.4 MiB). The Amadeus side had 4.1 search and price calls a second on average (6 in the busiest second), 209 `get-order` calls of the sync and the ticketing job's resync (V1: 152), and 28 Flight Order Issue calls.
+
+**Latency of the expected answers (V2, ms; `nproc` 4, load average 1.4 mean, 6.9 max).** Client-side, from sending to the last byte; the stub holds every Amadeus answer 300 ms. The last column is V1's p95 (load average 1.4 mean, 6.0 max).
+
+| Operation | Count | p50 | p95 | p99 | max | V1 p95 |
+|---|---|---|---|---|---|---|
+| `flights.search` | 3 720 | 386 | **419** | 483 | 1 487 | 394 |
+| `flights.search` without the stub delay | 3 720 | 86 | **119** | 183 | 1 187 | 94 |
+| `flights.listResults` | 3 720 | 17 | 28 | 41 | 153 | 23 |
+| `flights.price` | 3 720 | 344 | 366 | 429 | 1 154 | 354 |
+| `checkout.create` | 120 | 26 | 37 | 49 | 294 | 34 |
+| `checkout.setTravelers` | 120 | 21 | 30 | 65 | 107 | 26 |
+| `checkout.setContacts` | 120 | 19 | 27 | 32 | 80 | 20 |
+| `checkout.createPayment` | 120 | 40 | 58 | 64 | 126 | 42 |
+| `checkout.updatePayment` (card fee: Flight Offers Price) | 120 | 341 | 365 | 415 | 637 | 351 |
+| `checkout.get` | 120 | 15 | 24 | 45 | 45 | 24 |
+| `checkout.completeWithAirlineCard` | 116 | 424 | **493** | 522 | 575 | 445 |
+| `checkout.completeWithAirlineCard`, lost answer (`504` as asked) | 4 | 30 387 | 30 392 | 30 392 | 30 392 | 30 361 |
+| `bookings.get` (the guest's cookie) | 116 | 24 | 44 | 62 | 77 | 37 |
+| `console.bookings.list` | 900 | 12 | 19 | 28 | 42 | 15 |
+| `console.bookings.get` | 900 | 30 | 42 | 61 | 133 | 33 |
+| `console.payments.list` | 900 | 14 | 32 | 52 | 97 | 18 |
+| `console.supplierRequests.list` | 900 | 10 | 28 | 41 | 94 | 14 |
+| `console.auth.refresh` | 20 | 12 | 19 | 21 | 21 | 15 |
+
+The three answers above 1 s came in the first minute of the phase. The p95 was highest in the 15th to 20th minute, when the load average reached 6.9 (timeline below).
+
+**Processes, connections and Redis (`nproc` 4; load average V2 1.4 mean, 6.9 max; V1 1.4, 6.0).** RSS at the start of the phase (after the warm-up) → peak → end of the phase, sampled every 5 s and by each process's own peak.
+
+| Figure | V2 | V1 | Budget |
+|---|---|---|---|
+| API RSS (MiB) | 329 → **347** → 205 | 323 → 341 → 206 | `MemoryMax` 768: peak 45 % |
+| API CPU, share of one core | 22.5 % (406 s) | 18.6 % (336 s) | — |
+| API heap used, peak (MiB) | 160 | 148 | V8 limit 736 |
+| API event-loop delay p99 / max (ms) | 18 / 112 | 16 / 101 | — |
+| Worker RSS (MiB) | 185 → **211** → 174 | 183 → 213 → 155 | `MemoryMax` 512: peak 41 % |
+| Worker CPU, share of one core | 3.9 % (69 s) | 3.4 % (61 s) | — |
+| Worker heap used, peak (MiB) | 96 | 96 | V8 limit 400 + young generation |
+| Worker event-loop delay p99 / max (ms) | 12 / 223 | 11 / 144 | — |
+| Client connections to the database, most at once | 14. The most per application, at different times: API 7, worker 9, worker health 1, the run's fixture 1 (its sampling connection not counted) | 17, every process counted: API 10, worker 9, worker health 1, fixture 1, and 1 of PostgreSQL's own processes without a name (autovacuum) | pools API 20, worker 10; `max_connections` 100 |
+| Pool waits p95 / max (ms) | API 0.1 / 32; worker 13 / 282 (at most 5 waiting) | API 0.1 / 30; worker 11 / 134 (4) | — |
+| Redis used memory (MiB) | 2.6 → 6.4 → 6.3; RSS peak 12.7 | 2.3 → 5.7 → 5.8; RSS peak 11.7 | `maxmemory` 512 |
+| Redis keys of the run, end | 2 199 | 2 023 | — |
+
+**Queue latency (V2; `nproc` 4, load average 1.4 mean, 6.9 max).** From the moment a job was due (added, or its delay over) to the start of its first attempt; every job the worker took during the phase. No attempt failed and no job was retried. The health columns are the worker's own `/health/ready`, sampled every 5 s. The last column is V1's longest wait.
+
+| Queue (concurrency) | Jobs | Wait p50 / p95 / max (ms) | Run p95 / max (ms) | Health: waiting max, oldest wait max (s) | V1 wait max (ms) |
+|---|---|---|---|---|---|
+| `ota-ticketing` (2): `ticketing.issue` | 28 | 656 / 1 606 / **1 829** | 1 006 / 1 179 | 0, 0 | 1 560 (29 jobs) |
+| `ota-bookings` (4): `booking.sync` | 221 | 3 018 / 6 078 / **6 770** | 519 / 714 | 55, 3 | 3 423 (133 jobs) |
+| `ota-bookings` (4): `booking.reconcile` | 6 | 3 / 23 / 23 | 796 / 796 | (with the sync) | 59 |
+| `ota-notifications` (4): `notify` | 422 | 2 / 91 / 308 | 223 / 328 | 0, 0 | 184 |
+| `ota-documents` (2): `document.render` | 267 | 2 / 68 / 352 | 281 / 460 | 0, 0 | 174 |
+| `ota-maintenance` (2): the 11 schedules' fan-outs and per-tenant jobs | 672 | 33 / 144 / 275 | 21 / 73 | 0, 0 | 164 |
+| `ota-payments`, `ota-stripe-events`, `ota-tenant-ops` | 0 | — | — | 0, 0 | — |
+
+The sync's three scans of V2 enqueued about 40, 80 and 100 `booking.sync` jobs at once (in the 9th, 19th and 29th minute: the bookings made by then, at most 20 per tenant, so the last scan enqueued its most). The health report saw 17, 55 and 46 of them waiting. V1's scans enqueued about 44 each: only the bookings made since the scan before, because its fixture left the sync's 30-minute claim in place.
+
+**Timeline (V2).** Per 5 minutes: the journeys completed that started in the window, the p95 of the main operations (ms), the most RSS (MiB), client connections and Redis memory (MiB), the longest wait of the main queues (ms), and the 1-minute load average (mean / max; `nproc` 4).
+
+| Minutes | Journeys | Search p95 | Price p95 | Completion p95 | Console list p95 | API RSS | Worker RSS | Conns | Redis | `ota-ticketing` | `ota-bookings` | `ota-notifications` | `ota-documents` | `ota-maintenance` | Load avg |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 0–5 | 770 | 408 | 359 | 473 | 18 | 338 | 193 | 14 | 3.3 | 746 | – | 308 | 237 | 189 | 0.9 / 2.3 |
+| 5–10 | 770 | 412 | 362 | 522 | 19 | 341 | 205 | 14 | 4.0 | 1 573 | 3 571 | 117 | 283 | 123 | 0.4 / 0.9 |
+| 10–15 | 770 | 411 | 360 | 458 | 18 | 342 | 207 | 11 | 4.5 | 1 422 | 23 | 101 | 169 | 129 | 1.6 / 5.1 |
+| 15–20 | 770 | 461 | 409 | 495 | 25 | 343 | 211 | 14 | 5.1 | 1 829 | 6 770 | 162 | 352 | 275 | 3.1 / 6.9 |
+| 20–25 | 770 | 413 | 361 | 454 | 19 | 343 | 207 | 10 | 5.6 | 1 606 | – | 99 | 255 | 107 | 1.8 / 6.3 |
+| 25–30 | 770 | 413 | 359 | 449 | 18 | 344 | 204 | 14 | 6.3 | 848 | 6 082 | 102 | 14 | 104 | 0.4 / 1.0 |
+
+The minutes after the 30th (the journeys still in flight, 2.5 s) are in the totals above, not in this table.
+
+**What the tables grew by (V2, all five tenants; `nproc` 4, load average 1.4 mean, 6.9 max).** After the 30 minutes the database had grown from 37 to 1 422 MiB, and the worker had stored 277 documents (6.5 MiB). V1 gave the same figures within 1 %.
+
+| Table | Rows at the end | Grew by (MiB) | Per search | Kept |
+|---|---|---|---|---|
+| `flight_offers` | 558 600 | 1 268 | 0.34 MiB (150 offers) | the offer lifetime (30 min), purged every 15 min |
+| `supplier_requests` | 7 949 | 45 | 12 KiB | 90 days |
+| `idempotency_keys` | 7 865 | 37 | 10 KiB | 24 hours |
+| `priced_offers` | 3 730 | 19 | 5 KiB | with their search |
+| `flight_searches` | 3 726 | 10 | 3 KiB | with their offers |
+| `bookings` and their children, `notifications`, `payments` | 125 bookings | about 4 | — | the financial records: never purged |
+
+**Redis by kind of key (V2, `MEMORY USAGE` of every key of the run at the end).** 1 647 BullMQ job hashes held 2.2 MiB, **1 399 bytes a job** on average (S1: 1 383). By job name, the per-tenant jobs of the schedules and their fan-outs held 1 304 to 1 400 bytes each, `notify` 1 256, `booking.sync` 1 518 and `document.render` 1 610. The queues' events streams held 1.0 MiB (BullMQ caps each at about 10 000 events), the queues' other keys 0.3 MiB, and the application's keys (caches, tokens, limits, all with a TTL) almost nothing. The worker completed 54 jobs a minute, most of them the schedulers': 31 per tenant in 30 minutes for each schedule that runs every minute. A day of completed jobs at that rate holds about 103 MiB.
+
+### What the runs show
+
+1. **Memory: both processes stay well within their `MemoryMax`.** The API peaked at 347 MiB, 45 % of its 768 MiB, and the worker at 211 MiB, 41 % of its 512 MiB (V1: 341 and 213 MiB). Neither grew over the 30 minutes: the API's RSS stayed within 338–344 MiB in every 5 minutes, and the worker's within 193–211 MiB, with its documents rendered and its e-mails sent. The heaps used at most 160 MiB (API) and 96 MiB (worker). The API line of architecture §3 holds, and the worker's leaves room for more tenants' jobs.
+2. **Queue latency: no booking-critical job waited longer than 6.8 s, and no queue held another back, so the worker stays one process.** The longest wait of an `ota-ticketing` job was 1.8 s (V1: 1.6 s), and of an `ota-bookings` job 6.8 s (V1: 3.4 s), against the 60 s of the plan. These waits come from each queue's own bursts, not from another queue. A `ticketing.scan` enqueues every due booking of its tenant at once for the queue's 2 workers. A `bookings.sync_scan` enqueues up to 20 bookings per tenant for the queue's 4 workers: in V2, 100 at once with five tenants, which they worked through in about 6 s (6.1 s, load average 0.4), and 80 in 6.8 s while the load average reached 6.9. A `booking.reconcile` shares `ota-bookings` with the sync and waits behind a burst: in V2 at most 23 ms, as no reconciliation fell into one. Meanwhile `ota-notifications`, `ota-documents` and `ota-maintenance` kept their longest waits at 352 ms or less in every 5 minutes, also while a sync burst ran. The OADR-0014 follow-up's split into booking-critical and housekeeping processes is therefore not needed. The on-VM check's 10-minute threshold is far away.
+
+   The sync's wait grows with the jobs one scan enqueues, divided among the queue's 4 workers, each taking its Amadeus call's time (the stub's 300 ms here). A tenant has 20 bookings due at one scan only with about 720 active bookings with an order (each is due every 6 hours, so every 36th scan). At these volumes the 60 s budget is far away.
+
+   The sync's calls take their tokens from the same Amadeus buckets as the storefront's searches and prices: the tenant's (5 a second, burst 10) and the shared account's (20 a second for every OTA on it; [OADR-0001](adr/0001-amadeus-client-design.md) point 6). The four `429 RATE_LIMITED` answers of V2 came in the 19th and 29th minute, the minutes of the two largest sync bursts, while 4 workers sent up to about 12 order reads a second (about 330 ms each) on top of the storefront's 4 calls a second. The SDK's retry after `Retry-After` hid them from the shoppers. With more OTAs on the shared account, a burst of the background sync takes a larger share of the account's 20 calls a second from every OTA's shoppers. This needs no task at the tested load, but it is a decision for the lead (whether the sync, which can wait, should keep part of the buckets free for shopping).
+3. **Connections: 14 at most, but the worker's pool is nearly full during the bursts.** The API used 7 of its 20 connections (V1: 10) and the worker 9 of its 10, against `max_connections` 100 and the ~50 pooled of [deployment §14](../../docs/mvp/deployment-single-vm.md#14-capacity-limits-of-one-vm). The queues' concurrencies add up to 24 against the worker's pool of 10. A job holds a connection only for its transactions, never during an Amadeus call. So the jobs waited for a connection at most 282 ms (5 waiting at most) while a sync burst, documents and e-mails ran together (V1: 134 ms). That is harmless here, and the first place to look if the worker's queues slow down with more tenants. No task.
+4. **Redis: 6 MiB after 30 minutes, but the completed jobs grow with the tenants.** Every job the worker completes stays in Redis for a day (`KEEP_COMPLETED_JOBS`, ADR-0009 item 7), at 1 304 to 1 400 bytes for the schedules' jobs (V2). The schedulers alone give each active tenant about 5 260 jobs a day (three schedules every minute, two every 5 minutes, and the rest): about 7 MiB a day. Their own fan-out jobs add another 7 MiB, and the run's traffic (e-mails, documents, the sync, ticketing) about 61 MiB a day at its rate. So Redis's `maxmemory` of 512 MiB, with `noeviction`, holds the completed jobs of about 60 active tenants, not the ~300 tenants of deployment §14. Past that, Redis refuses writes and BullMQ cannot add jobs. Five tenants need about 100 MiB. **Follow-up task OBE-101** (§7) bounds what the completed jobs keep, before the tenants grow; it needs a dated revision of ADR-0009 item 7.
+5. **Disk and PostgreSQL: §2 item 4's tables fit the VM at MVP volumes.** A search with 150 offers stores 0.34 MiB of offers, which stay at most 45 minutes (lifetime and purge). It also stores 12 KiB of `supplier_requests`, kept 90 days, and 10 KiB of `idempotency_keys`, kept a day. With the 160 GB disk and its 70 % resize rule:
+   - `supplier_requests` hold about 1.05 GiB for every 1 000 search journeys a day, over their 90 days (§2 item 4 gave 1.1 GiB). 20 000 journeys a day keep 21 GiB. The run's rate kept up for a whole day (about 179 000 journeys) would need about 190 GiB, more than the disk.
+   - The live offers are about 0.34 MiB × the searches of the last 45 minutes: 1.9 GiB at the run's 2 searches a second. That is more than the VM's 1.5 GB of shared buffers, so at that rate the results pages and prices of older searches read from the disk cache. 1 search a second keeps them at about 0.9 GiB.
+
+   Nothing here is a task at MVP volumes. Revisit `supplier_requests`' retention or what a search stores in it if the searches stay above about 20 000 a day on average.
+6. **CPU: the API takes about a fifth of a core at this load, the worker 4 %.** 2 searches a second, 4 bookings and 30 console journeys a minute cost the API 22.5 % of one core (V1: 18.6 %; the shopper journey is the most of it, as in §5) and the worker 3.9 %. The search's p95 without the stub delay was 119 ms (V1: 94 ms), far from the 500 ms budget of §2, because the arrivals are spread: §5's budget is about 10 visitors searching at once without a pause.
+
+**No decision is needed.** The worker stays one process, and the memory lines of architecture §3 hold. OBE-101 is the one follow-up.
+
+## 7. Follow-ups
 
 | Task | What |
 |---|---|
 | OBE-092 (M6) | Added by OBE-028. Cut the API's CPU per search so that answers of 250 offers meet the 500 ms p95 at 10 concurrent visitors. The largest shares are the `supplier_requests` copy of the whole answer, facets, `decimal.js` and the driver (§2 item 2). If it cannot be met, this page records the decision needed: a lower default `maxResults`, a worker thread or a second API process. **Done (§4):** about 30 ms of CPU less per search; the p95 is 433–619 ms, so §4 records the decision needed (a larger young generation first). |
 | OBE-096 (M6) | Added by FIX-W46-SHARED (Step 4): `--max-semi-space-size=32` takes about 9 % of the API's CPU per journey off but leaves the p95 at 475–535 ms. Measure the search budget with fewer offers per answer and, once the owner picks the default number of offers a storefront asks for, set it; if no default the owner accepts meets the budget, record the decision for a worker thread or a second API process. **Done (§5):** lead decision (13d) of 2026-11-10 set the rule, and the runs set the default: a storefront without its own `maxResults` asks for 175 offers per search, and the Verify command met the budget in three runs of three (440–470 ms). The review's six re-runs met it five times (413–499 ms) and missed it once at 526 ms, after a busy quarter of an hour. A storefront can still set up to 250. On a busy machine the margin is gone (§5 item 3); OBE-088 measures the VM's mixed traffic. |
-| OBE-088 (M6) | Mixed traffic on five tenants for 30 minutes with the worker running; the API's and the worker's RSS against `MemoryMax`, PostgreSQL connections, Redis memory, queue latency; the table growth of §2 item 4 against the VM's disk. |
+| OBE-088 (M6) | Mixed traffic on five tenants for 30 minutes with the worker running; the API's and the worker's RSS against `MemoryMax`, PostgreSQL connections, Redis memory, queue latency; the table growth of §2 item 4 against the VM's disk. **Done (§6):** the API peaked at 347 MiB of its 768 MiB and the worker at 211 MiB of its 512 MiB; the longest wait of an `ota-ticketing` job was 1.8 s and of an `ota-bookings` job 6.8 s, with the sync scans enqueueing their most, so the worker stays one process; the disk holds §2 item 4's tables at MVP volumes (§6 item 5). Redis's completed jobs grow with the tenants: **OBE-101**. |
+| OBE-101 (M6) | Added by OBE-088 (§6 item 4). Every per-tenant job of the schedulers stays in Redis for a day after it completed (ADR-0009 item 7): about 7 MiB a day per active tenant, measured at 1.3 to 1.4 KB a job, so Redis's `maxmemory` of 512 MiB holds those of about 60 tenants, not the ~300 of the capacity table ([deployment §14](../../docs/mvp/deployment-single-vm.md#14-capacity-limits-of-one-vm)). Bound what the completed jobs keep, for example how long the scheduled per-tenant jobs stay, without losing the deduplication their deterministic ids get from the completed jobs, with the dated revision of ADR-0009 item 7 it needs, and measure it with `booking-load.mjs`. |

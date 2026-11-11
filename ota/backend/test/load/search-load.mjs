@@ -54,6 +54,11 @@
 // without the stub delay is within --p95-budget-ms; 1 an unexpected answer (a search answer of the proxy with more
 // offers than asked for counts as one), the budget missed, or the run could not be set up; 2 a usage error; 130
 // interrupted. Nothing it prints or writes carries a key, a password, a token or a connection string.
+//
+// booking-load.mjs (OBE-088, the M6 mixed traffic with the worker running) imports the exported parts of this file:
+// the helpers, the stub and its proxy (with a hook that picks a stub scenario per request), the measuring preload (with
+// the BullMQ part the worker's copy turns on), the process start and the set-up. Importing it runs nothing: `main`
+// runs only when this file is the script node was started with.
 import { execFileSync, fork, spawn } from "node:child_process";
 import { generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
 import {
@@ -78,15 +83,15 @@ import { parseArgs, parseEnv } from "node:util";
 
 const SCRIPT = fileURLToPath(import.meta.url);
 /** ota/backend (this file is ota/backend/test/load/search-load.mjs). */
-const BACKEND_DIR = resolve(dirname(SCRIPT), "..", "..");
-const REPO_ROOT = resolve(BACKEND_DIR, "..", "..");
+export const BACKEND_DIR = resolve(dirname(SCRIPT), "..", "..");
+export const REPO_ROOT = resolve(BACKEND_DIR, "..", "..");
 const TENANT_MIGRATIONS_DIR = join(BACKEND_DIR, "migrations", "tenant");
 const require = createRequire(import.meta.url);
 
 /** What builds every file the run loads. */
-const BUILD_COMMAND = "pnpm build --filter=@velexis/ota-backend...";
+export const BUILD_COMMAND = "pnpm build --filter=@velexis/ota-backend...";
 /** The built files the run needs, relative to the repository root. */
-const BUILT_FILES = [
+export const BUILT_FILES = [
   "ota/backend/dist/main.js",
   "packages/config/dist/index.js",
   "packages/crypto/dist/index.js",
@@ -98,14 +103,23 @@ const BUILT_FILES = [
 /** The internal role of the child process that runs the stub and its proxy (`--role amadeus`). */
 const AMADEUS_ROLE = "amadeus";
 /** `<key>.<base>` is a tenant's storefront host (the value of the `.env.example` files). */
-const STOREFRONT_BASE_DOMAIN = "ota.example.com";
+export const STOREFRONT_BASE_DOMAIN = "ota.example.com";
 /**
  * The API's public URL, the VM's (deploy/env/ota-backend.env.example): APP_ENV=production refuses an http one
  * (FIX-W40-OTA). The journeys go through the edge, which gets same-origin asset and file paths, so nothing uses it.
  */
-const PUBLIC_OTA_API_URL = "https://api.ota.example.com";
+export const PUBLIC_OTA_API_URL = "https://api.ota.example.com";
 /** The tenants of a run, in order: --tenants takes the first n (alpha and beta are the template's schemas). */
-const TENANT_KEYS = Object.freeze(["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"]);
+export const TENANT_KEYS = Object.freeze([
+  "alpha",
+  "beta",
+  "gamma",
+  "delta",
+  "epsilon",
+  "zeta",
+  "eta",
+  "theta",
+]);
 /** The routes of the measured searches (airports of the reference fixture); each search has its own route and day. */
 const ROUTES = Object.freeze([
   ["MAD", "ORY"],
@@ -120,8 +134,8 @@ const DAYS = 300;
 const WARMUP_ROUTE = Object.freeze(["ORY", "MAD"]);
 const WARMUP_DAY = 15;
 /** The storefront's first results page (ota/frontend/src/pages/search.js) and its `include` of flights.price (offer.js). */
-const RESULTS_LIMIT = 20;
-const PRICE_INCLUDE = Object.freeze(["bags", "other-services", "detailed-fare-rules"]);
+export const RESULTS_LIMIT = 20;
+export const PRICE_INCLUDE = Object.freeze(["bags", "other-services", "detailed-fare-rules"]);
 /** The SDK's timeout of flights.search and flights.price (ota/sdk/scripts/operation-overrides.json). */
 const REQUEST_TIMEOUT_MS = 60_000;
 /** The SDK waits at most this long for a Retry-After; a longer one ends the call. */
@@ -132,7 +146,7 @@ const LAST_TICKETING_DAYS = 60;
  * The most offers Amadeus answers to one search, and what it answers when the search names no `max` or
  * `maxFlightOffers` (Flight Offers Search: "Max 250", default 250). --offers has the same bound.
  */
-const AMADEUS_MAX_OFFERS = 250;
+export const AMADEUS_MAX_OFFERS = 250;
 /** The tenant tables whose statements the preload times and whose rows and sizes the report shows. */
 const MEASURED_TABLES = Object.freeze([
   "flight_searches",
@@ -142,7 +156,7 @@ const MEASURED_TABLES = Object.freeze([
   "idempotency_keys",
 ]);
 /** `application_name` of the API's pool (OTA_POOL_MAX of src/tenancy/tenancy.module.ts). */
-const API_POOL = "ota-api";
+export const API_POOL = "ota-api";
 /** The DSNs of the `.env.example` files, which name the development database: the run sets its own. */
 const WITHHELD = Object.freeze([
   "DATABASE_URL",
@@ -155,14 +169,14 @@ const WITHHELD = Object.freeze([
  * The pause between the warm-up and the measured phase: a tenant's bucket refills its burst of 10 in 2 s at 5 per
  * second (src/amadeus/limits.ts), well before the API's pool closes an idle connection (10 s).
  */
-const BUCKET_REFILL_MS = 3_000;
+export const BUCKET_REFILL_MS = 3_000;
 /** How long the API may take to answer GET /health/ready, and to stop after SIGTERM before it gets SIGKILL. */
 const READY_TIMEOUT_MS = 60_000;
 const STOP_TIMEOUT_MS = 10_000;
 /** How long a child process may take to answer a message. */
 const MESSAGE_TIMEOUT_MS = 10_000;
 /** How many lines of the API's log a failed start shows. */
-const LOG_TAIL_LINES = 40;
+export const LOG_TAIL_LINES = 40;
 
 const USAGE = `Usage: node ota/backend/test/load/search-load.mjs [options]
 
@@ -186,28 +200,28 @@ Build first with \`${BUILD_COMMAND}\`; PostgreSQL and Redis must run (TEST_DATAB
 
 // ---- Output ------------------------------------------------------------------------------------------------------
 
-const out = (text) => process.stdout.write(text);
-const err = (text) => process.stderr.write(text);
+export const out = (text) => process.stdout.write(text);
+export const err = (text) => process.stderr.write(text);
 
-class UsageError extends Error {}
+export class UsageError extends Error {}
 
 /** The run was stopped by Ctrl-C (SIGINT) or SIGTERM. */
-class Interrupted extends Error {}
+export class Interrupted extends Error {}
 
 /**
  * Aborted by the first SIGINT or SIGTERM: the visitors stop, every request in flight is aborted, the set-up stops after
  * the step it is in, and the run cleans up what it created before it exits with 130.
  */
-const interruption = new AbortController();
+export const interruption = new AbortController();
 
-function throwIfInterrupted() {
+export function throwIfInterrupted() {
   if (interruption.signal.aborted) {
     throw new Interrupted("interrupted");
   }
 }
 
 /** `sleep(ms)` that ends early, without an error, when the run is interrupted. */
-const pauseFor = (ms) => sleep(ms, undefined, { signal: interruption.signal }).catch(() => undefined);
+export const pauseFor = (ms) => sleep(ms, undefined, { signal: interruption.signal }).catch(() => undefined);
 
 // ---- Options -----------------------------------------------------------------------------------------------------
 
@@ -278,12 +292,12 @@ function parseOptions(argv) {
 // ---- Small helpers -----------------------------------------------------------------------------------------------
 
 /** `date` plus `days` days, as an ISO day (UTC). */
-function isoDay(days, from = new Date()) {
+export function isoDay(days, from = new Date()) {
   return new Date(from.getTime() + days * 86_400_000).toISOString().slice(0, 10);
 }
 
 /** Count, mean and nearest-rank percentiles of `values` (milliseconds or any number). */
-function summarize(values) {
+export function summarize(values) {
   if (values.length === 0) {
     return { count: 0 };
   }
@@ -302,17 +316,17 @@ function summarize(values) {
   };
 }
 
-const round1 = (value) => (value === undefined ? undefined : Math.round(value * 10) / 10);
-const mib = (bytes) => (bytes === undefined ? undefined : Math.round((bytes / 1_048_576) * 10) / 10);
+export const round1 = (value) => (value === undefined ? undefined : Math.round(value * 10) / 10);
+export const mib = (bytes) => (bytes === undefined ? undefined : Math.round((bytes / 1_048_576) * 10) / 10);
 
 /** A summary with every figure rounded to 0.1. */
-const rounded = (summary) =>
+export const rounded = (summary) =>
   Object.fromEntries(
     Object.entries(summary).map(([key, value]) => [key, key === "count" ? value : round1(value)]),
   );
 
 /** A free TCP port of 127.0.0.1 (released before it is used: good enough on a developer's machine). */
-function freePort() {
+export function freePort() {
   return new Promise((resolvePort, reject) => {
     const server = createNetServer();
     server.unref();
@@ -325,7 +339,7 @@ function freePort() {
 }
 
 /** The variables of `files` (relative to the repository root), parsed like `.env` files; a later file wins. */
-function exampleEnv(files) {
+export function exampleEnv(files) {
   const values = {};
   for (const file of files) {
     for (const [name, value] of Object.entries(parseEnv(readFileSync(join(REPO_ROOT, file), "utf8")))) {
@@ -338,7 +352,7 @@ function exampleEnv(files) {
 }
 
 /** The last `lines` lines of a log file, or nothing when it cannot be read. */
-function tail(file, lines) {
+export function tail(file, lines) {
   try {
     return readFileSync(file, "utf8").trimEnd().split("\n").slice(-lines).join("\n");
   } catch {
@@ -353,7 +367,7 @@ let messageId = 0;
  * exited (its IPC channel closed) rejects the promise: `send` gets a callback, so the failure never becomes an
  * unhandled `error` event that would end the run before its clean-up.
  */
-function ask(child, type) {
+export function ask(child, type) {
   messageId += 1;
   const id = messageId;
   return new Promise((resolveAnswer, reject) => {
@@ -390,7 +404,7 @@ function ask(child, type) {
 }
 
 /** SIGTERM, then SIGKILL after STOP_TIMEOUT_MS; resolves once the process has exited. */
-async function stopProcess(child) {
+export async function stopProcess(child) {
   if (child.exitCode !== null || child.signalCode !== null) {
     return;
   }
@@ -409,8 +423,20 @@ async function stopProcess(child) {
 
 // ---- The Amadeus side: the stub behind a delaying proxy (child process, --role amadeus) ---------------------------
 
+/** The order operations of the stub (tools/amadeus-stub/src/routes.ts) by method and path, as the report names them. */
+const ORDER_OPERATIONS = Object.freeze([
+  ["POST", /^\/v1\/booking\/flight-orders$/, "create-order"],
+  ["POST", /^\/v1\/booking\/flight-orders\/[^/]+\/issuance$/, "issue-order"],
+  ["GET", /^\/v1\/booking\/flight-orders\/by-reference$/, "order-by-reference"],
+  ["GET", /^\/v1\/booking\/flight-orders\/[^/]+$/, "get-order"],
+  ["PATCH", /^\/v1\/booking\/flight-orders\/[^/]+$/, "patch-order"],
+  ["DELETE", /^\/v1\/booking\/flight-orders\/[^/]+$/, "cancel-order"],
+  ["GET", /^\/v1\/office\/queues\/[^/]+$/, "queue-list"],
+  ["POST", /^\/v1\/shopping\/flight-offers\/upselling$/, "upsell"],
+]);
+
 /** The operation of a request to the stub, as the report names it. */
-function amadeusOperationOf(method, url) {
+export function amadeusOperationOf(method, url) {
   const path = url.split("?")[0];
   if (path === "/v1/security/oauth2/token") {
     return "token";
@@ -421,7 +447,8 @@ function amadeusOperationOf(method, url) {
   if (method === "POST" && path === "/v1/shopping/flight-offers/pricing") {
     return "price";
   }
-  return "other";
+  const order = ORDER_OPERATIONS.find(([verb, pattern]) => verb === method && pattern.test(path));
+  return order === undefined ? "other" : order[2];
 }
 
 /**
@@ -484,8 +511,8 @@ function relayedHeaders(headers, length) {
 }
 
 /**
- * The Amadeus counters of the proxy: calls, statuses and the stub's own time per operation, calls per second, and the
- * offers each search answer asked for and got.
+ * The Amadeus counters of the proxy: calls, statuses, stub scenarios and the stub's own time per operation, calls per
+ * second, and the offers each search answer asked for and got.
  */
 function newAmadeusCounters() {
   return {
@@ -503,6 +530,7 @@ function summarizeAmadeus(counters) {
     operations[name] = {
       calls: entry.calls,
       statuses: entry.statuses,
+      ...(Object.keys(entry.scenarios).length === 0 ? {} : { scenarios: entry.scenarios }),
       stubMs: rounded(summarize(entry.stubMs)),
     };
   }
@@ -524,22 +552,30 @@ function summarizeAmadeus(counters) {
   };
 }
 
-/** Runs the stub and its proxy until the parent disconnects or sends SIGTERM (the `--role amadeus` process). */
-async function serveAmadeus(options) {
+/**
+ * Runs the stub and its proxy until the parent disconnects or sends SIGTERM (the `--role amadeus` process). `hooks`
+ * (booking-load.mjs; this script passes none): `scenarioOf(operation, body)` names the stub scenario of a request (the
+ * proxy sends it to the stub as its `X-Stub-Scenario` header, tools/amadeus-stub/src/scenarios.ts), or `undefined` for
+ * the stub's normal answer; the report counts the scenarios sent per operation.
+ */
+export async function serveAmadeus(options, hooks = {}) {
   const { startAmadeusStub } = require("@velexis/testing/amadeus");
   const stub = await startAmadeusStub();
   const upstream = new URL(stub.url);
   const lastTicketingDate = isoDay(LAST_TICKETING_DAYS);
   let counters = newAmadeusCounters();
 
-  const record = (operation, status, stubMs) => {
+  const record = (operation, status, stubMs, scenario) => {
     let entry = counters.operations.get(operation);
     if (entry === undefined) {
-      entry = { calls: 0, statuses: {}, stubMs: [] };
+      entry = { calls: 0, statuses: {}, scenarios: {}, stubMs: [] };
       counters.operations.set(operation, entry);
     }
     entry.calls += 1;
     entry.statuses[status] = (entry.statuses[status] ?? 0) + 1;
+    if (scenario !== undefined) {
+      entry.scenarios[scenario] = (entry.scenarios[scenario] ?? 0) + 1;
+    }
     entry.stubMs.push(stubMs);
     if (operation === "search" || operation === "price") {
       const second = Math.floor(Date.now() / 1000);
@@ -553,16 +589,20 @@ async function serveAmadeus(options) {
     req.on("data", (chunk) => chunks.push(chunk));
     req.on("end", () => {
       const body = Buffer.concat(chunks);
+      const operation = amadeusOperationOf(req.method ?? "GET", req.url ?? "/");
+      const scenario = hooks.scenarioOf?.(operation, body);
       const headers = Object.fromEntries(
-        Object.entries(req.headers).filter(([name]) => name !== "connection"),
+        Object.entries(req.headers).filter(([name]) => name !== "connection" && name !== "x-stub-scenario"),
       );
+      if (scenario !== undefined) {
+        headers["x-stub-scenario"] = scenario;
+      }
       const forward = httpRequest(
         { host: upstream.hostname, port: upstream.port, method: req.method, path: req.url, headers },
         (answer) => {
           const parts = [];
           answer.on("data", (part) => parts.push(part));
           answer.on("end", () => {
-            const operation = amadeusOperationOf(req.method ?? "GET", req.url ?? "/");
             const status = answer.statusCode ?? 502;
             let payload = Buffer.concat(parts);
             if (operation === "search" && status === 200) {
@@ -581,7 +621,7 @@ async function serveAmadeus(options) {
                 }
               }
             }
-            record(operation, status, performance.now() - received);
+            record(operation, status, performance.now() - received, scenario);
             setTimeout(() => {
               res.writeHead(status, relayedHeaders(answer.headers, payload.length));
               res.end(payload);
@@ -624,13 +664,16 @@ async function serveAmadeus(options) {
   process.send({ type: "ready", url: `http://127.0.0.1:${server.address().port}` });
 }
 
-/** Starts the `--role amadeus` child process; resolves once its proxy listens. */
-async function startAmadeus(options, runDir) {
-  const logFile = join(runDir, "amadeus.log");
-  const log = openSync(logFile, "a");
-  const child = fork(
-    SCRIPT,
-    [
+/**
+ * Starts the `--role amadeus` child process; resolves once its proxy listens. booking-load.mjs starts its own script
+ * (`script`) with the arguments of its role (`args`).
+ */
+export async function startAmadeus(
+  options,
+  runDir,
+  {
+    script = SCRIPT,
+    args = [
       "--role",
       AMADEUS_ROLE,
       "--stub-delay-ms",
@@ -638,8 +681,11 @@ async function startAmadeus(options, runDir) {
       "--offers",
       String(options.offers),
     ],
-    { env: {}, execArgv: [], stdio: ["ignore", log, log, "ipc"] },
-  );
+  } = {},
+) {
+  const logFile = join(runDir, "amadeus.log");
+  const log = openSync(logFile, "a");
+  const child = fork(script, args, { env: {}, execArgv: [], stdio: ["ignore", log, log, "ipc"] });
   closeSync(log);
   const url = await new Promise((resolveUrl, reject) => {
     const onExit = (code) =>
@@ -669,24 +715,34 @@ async function startAmadeus(options, runDir) {
 // ---- The API process and its measuring preload --------------------------------------------------------------------
 
 /**
- * The preload of the API process (`node --require`). It wraps `pg.Client#query` and `pg.Pool#connect` of the `pg` the
- * API uses (`__PG__`) to time, never to change: the INSERT and UPDATE statements of the measured tables (`__TABLES__`)
- * from sending to answer, with their row counts, and the wait for a connection of the API's pool. It samples the RSS
- * and the event-loop delay, reads the process's CPU time since the last `reset` (`process.cpuUsage`, user and system),
- * and answers the load test's `stats` and `reset` messages on the IPC channel. Durations, counts and sizes only: never
- * a statement's parameters, a row or a connection string.
+ * The preload of the API process (`node --require`), and of the worker's in booking-load.mjs. It wraps
+ * `pg.Client#query` and `pg.Pool#connect` of the `pg` the process uses (`__PG__`) to time, never to change: the INSERT
+ * and UPDATE statements of the measured tables (`__TABLES__`) from sending to answer, with their row counts, and the
+ * wait for a connection of the process's pool (`__POOL__`). With a BullMQ module (`__BULLMQ__`, the worker's; `null`
+ * for the API) it also wraps `Worker#emit` of that module: when a worker takes a job (`active`) it records the job's
+ * queue, its name and how long it waited, from the moment it was due (added, or its `delay` over) to the start of its
+ * first attempt (`processedOn`; the delay is the larger of the job's `delay` and the one of its options, which BullMQ
+ * keeps when it moves a due job to the wait list), and when an attempt ends (`completed`, `failed`) how long it ran; a retry's wait is
+ * not counted (its backoff is not in the job), only that it was one. It samples the RSS and the event-loop delay, reads
+ * the process's CPU time since the last `reset` (`process.cpuUsage`, user and system), and answers the load test's
+ * `stats`, `sample` and `reset` messages on the IPC channel. Durations, counts, sizes and job names only: never a
+ * statement's parameters, a row, a job's data or a connection string.
  */
 const PRELOAD_SOURCE = `"use strict";
-// Written by ota/backend/test/load/search-load.mjs into the run's temporary folder and preloaded into the API process
-// with node --require. It measures and changes nothing: see PRELOAD_SOURCE in search-load.mjs.
+// Written by ota/backend/test/load/search-load.mjs (or booking-load.mjs) into the run's temporary folder and preloaded
+// into the API or worker process with node --require. It measures and changes nothing: see PRELOAD_SOURCE in
+// search-load.mjs.
 const { monitorEventLoopDelay, performance } = require("node:perf_hooks");
 const pg = require(__PG__);
 const TABLES = new Set(__TABLES__);
-const API_POOL = __POOL__;
+const POOL = __POOL__;
+const BULLMQ = __BULLMQ__;
 const STATEMENT = /^(insert into|update) "([a-z_]+)"/;
 let statements = new Map();
 let poolWaits = [];
 let maxWaiting = 0;
+let jobStarts = [];
+let jobEnds = [];
 let peakRss = process.memoryUsage.rss();
 let cpuSince = process.cpuUsage();
 const loopDelay = monitorEventLoopDelay({ resolution: 10 });
@@ -725,7 +781,7 @@ pg.Client.prototype.query = function measuredQuery(config, values, callback) {
 
 const connect = pg.Pool.prototype.connect;
 pg.Pool.prototype.connect = function measuredConnect(callback) {
-  if (callback !== undefined || !this.options || this.options.application_name !== API_POOL) {
+  if (callback !== undefined || !this.options || this.options.application_name !== POOL) {
     return connect.apply(this, arguments);
   }
   const started = performance.now();
@@ -735,15 +791,62 @@ pg.Pool.prototype.connect = function measuredConnect(callback) {
   return result;
 };
 
+// [queue, job name, when (ms since the epoch), wait in ms or null for a retry] and [queue, job name, when, run in ms,
+// 1 completed or 0 failed]: the worker's jobs (see PRELOAD_SOURCE in search-load.mjs).
+function jobStarted(queue, job) {
+  const now = Date.now();
+  const startedAt = typeof job.processedOn === "number" ? job.processedOn : now;
+  // A delayed job's \`delay\` field is 0 once BullMQ has moved it to the wait list; its options keep the delay it was
+  // added with (a scheduler's next run, a job added for later).
+  const delay = Math.max(
+    typeof job.delay === "number" && job.delay > 0 ? job.delay : 0,
+    job.opts !== null && typeof job.opts === "object" && typeof job.opts.delay === "number" ? job.opts.delay : 0,
+  );
+  const retry = typeof job.attemptsMade === "number" && job.attemptsMade > 0;
+  const wait = retry || typeof job.timestamp !== "number" ? null : Math.max(0, startedAt - (job.timestamp + delay));
+  jobStarts.push([queue, String(job.name), now, wait]);
+}
+
+function jobEnded(queue, job, completed) {
+  const now = Date.now();
+  const startedAt = typeof job.processedOn === "number" ? job.processedOn : now;
+  const finishedAt = typeof job.finishedOn === "number" ? job.finishedOn : now;
+  jobEnds.push([queue, String(job.name), now, Math.max(0, finishedAt - startedAt), completed ? 1 : 0]);
+}
+
+if (BULLMQ !== null) {
+  const { Worker } = require(BULLMQ);
+  const emit = Worker.prototype.emit;
+  Worker.prototype.emit = function measuredEmit(event, job) {
+    if (job !== null && typeof job === "object") {
+      try {
+        if (event === "active") {
+          jobStarted(this.name, job);
+        } else if (event === "completed" || event === "failed") {
+          jobEnded(this.name, job, event === "completed");
+        }
+      } catch {
+        // A measurement never changes what the worker does.
+      }
+    }
+    return emit.apply(this, arguments);
+  };
+}
+
+function cpuMs() {
+  const cpu = process.cpuUsage(cpuSince);
+  return { user: cpu.user / 1000, system: cpu.system / 1000 };
+}
+
 function snapshot() {
   const memory = process.memoryUsage();
-  const cpu = process.cpuUsage(cpuSince);
   peakRss = Math.max(peakRss, memory.rss);
   return {
-    cpuMs: { user: cpu.user / 1000, system: cpu.system / 1000 },
+    cpuMs: cpuMs(),
     statements: Object.fromEntries(statements),
     poolWaitsMs: poolWaits,
     maxWaiting,
+    jobs: BULLMQ === null ? undefined : { starts: jobStarts, ends: jobEnds },
     rssBytes: memory.rss,
     peakRssBytes: peakRss,
     maxRssBytes: process.resourceUsage().maxRSS * 1024,
@@ -766,12 +869,21 @@ if (typeof process.send === "function") {
       statements = new Map();
       poolWaits = [];
       maxWaiting = 0;
+      jobStarts = [];
+      jobEnds = [];
       peakRss = process.memoryUsage.rss();
       cpuSince = process.cpuUsage();
       loopDelay.reset();
       process.send({ id: message.id, body: null });
     } else if (message.type === "stats") {
       process.send({ id: message.id, body: snapshot() });
+    } else if (message.type === "sample") {
+      const memory = process.memoryUsage();
+      peakRss = Math.max(peakRss, memory.rss);
+      process.send({
+        id: message.id,
+        body: { at: Date.now(), rssBytes: memory.rss, heapUsedBytes: memory.heapUsed, cpuMs: cpuMs() },
+      });
     }
   });
   process.channel.unref();
@@ -779,7 +891,7 @@ if (typeof process.send === "function") {
 `;
 
 /** The variables of the API process: its `.env.example` files without the DSNs, and the run's own values. */
-function apiEnv(options, run) {
+export function apiEnv(options, run) {
   const production = options.appEnv === "production";
   const values = exampleEnv([".env.example", "ota/backend/.env.example"]);
   for (const name of WITHHELD) {
@@ -811,74 +923,94 @@ function apiEnv(options, run) {
   };
 }
 
-/** Starts the built API with the preload; resolves once GET /health/ready answers 200. */
-async function startApi(options, run) {
+/**
+ * Starts a built process of the OTA backend with the measuring preload and resolves once `readyUrl` answers 200:
+ * `name` (`api`, `worker`) names its preload and log file in the run's folder, `entry` is its file in `dist`,
+ * `nodeOptions` the NODE_OPTIONS of its systemd unit, `pool` its pool's `application_name`, `bullmq` whether the preload
+ * measures its BullMQ jobs (the worker's).
+ */
+export async function startService(run, { name, entry, nodeOptions, env, pool, bullmq = false, readyUrl }) {
   const dbRequire = createRequire(require.resolve("@velexis/db/package.json"));
-  const preload = join(run.dir, "api-preload.cjs");
+  const backendRequire = createRequire(join(BACKEND_DIR, "package.json"));
+  const preload = join(run.dir, `${name}-preload.cjs`);
   writeFileSync(
     preload,
     PRELOAD_SOURCE.replace("__PG__", JSON.stringify(dbRequire.resolve("pg")))
       .replace("__TABLES__", JSON.stringify(MEASURED_TABLES))
-      .replace("__POOL__", JSON.stringify(API_POOL)),
+      .replace("__POOL__", JSON.stringify(pool))
+      .replace("__BULLMQ__", bullmq ? JSON.stringify(backendRequire.resolve("bullmq")) : "null"),
     { mode: 0o600 },
   );
-  mkdirSync(join(run.dir, "storage"), { mode: 0o700 });
-  const logFile = join(run.dir, "api.log");
+  mkdirSync(join(run.dir, "storage"), { recursive: true, mode: 0o700 });
+  const logFile = join(run.dir, `${name}.log`);
   const log = openSync(logFile, "a");
   const child = spawn(
     process.execPath,
-    [
-      "--enable-source-maps",
-      // The NODE_OPTIONS of deploy/systemd/velexis-ota-api.service: the young generation of 32 MiB per semi-space is
-      // lead decision (11h) of 2026-11-06 (ota/docs/performance.md §4).
-      "--max-old-space-size=640",
-      "--max-semi-space-size=32",
-      "--require",
-      preload,
-      join(BACKEND_DIR, "dist", "main.js"),
-    ],
-    { cwd: BACKEND_DIR, env: apiEnv(options, run), stdio: ["ignore", log, log, "ipc"] },
+    ["--enable-source-maps", ...nodeOptions, "--require", preload, join(BACKEND_DIR, "dist", entry)],
+    { cwd: BACKEND_DIR, env, stdio: ["ignore", log, log, "ipc"] },
   );
   closeSync(log);
-  const api = {
-    url: `http://127.0.0.1:${run.apiPort}`,
+  const service = {
+    pid: child.pid,
     logFile,
     stats: () => ask(child, "stats"),
+    sample: () => ask(child, "sample"),
     reset: () => ask(child, "reset"),
     stop: () => stopProcess(child),
+    exited: () => child.exitCode !== null || child.signalCode !== null,
   };
   const deadline = performance.now() + READY_TIMEOUT_MS;
   while (performance.now() < deadline) {
     if (interruption.signal.aborted) {
-      await api.stop();
+      await service.stop();
       throw new Interrupted("interrupted");
     }
     if (child.exitCode !== null) {
       throw new Error(
-        `the API exited (${child.exitCode}) before it was ready:\n${tail(logFile, LOG_TAIL_LINES)}`,
+        `the ${name} exited (${child.exitCode}) before it was ready:\n${tail(logFile, LOG_TAIL_LINES)}`,
       );
     }
     try {
-      const response = await fetch(`${api.url}/health/ready`, { signal: AbortSignal.timeout(2_000) });
+      const response = await fetch(readyUrl, { signal: AbortSignal.timeout(2_000) });
       await response.arrayBuffer();
       if (response.status === 200) {
-        return api;
+        return service;
       }
     } catch {
       // Not listening yet.
     }
     await sleep(250);
   }
-  await api.stop();
+  await service.stop();
   throw new Error(
-    `the API was not ready within ${READY_TIMEOUT_MS / 1000} s:\n${tail(logFile, LOG_TAIL_LINES)}`,
+    `the ${name} was not ready within ${READY_TIMEOUT_MS / 1000} s:\n${tail(logFile, LOG_TAIL_LINES)}`,
   );
+}
+
+/**
+ * The NODE_OPTIONS of deploy/systemd/velexis-ota-api.service: the young generation of 32 MiB per semi-space is lead
+ * decision (11h) of 2026-11-06 (ota/docs/performance.md §4).
+ */
+export const API_NODE_OPTIONS = Object.freeze(["--max-old-space-size=640", "--max-semi-space-size=32"]);
+
+/** Starts the built API with the preload; resolves once GET /health/ready answers 200. */
+export async function startApi(options, run) {
+  const url = `http://127.0.0.1:${run.apiPort}`;
+  const service = await startService(run, {
+    name: "api",
+    entry: "main.js",
+    nodeOptions: API_NODE_OPTIONS,
+    env: apiEnv(options, run),
+    pool: API_POOL,
+    readyUrl: `${url}/health/ready`,
+  });
+  return { ...service, url };
 }
 
 // ---- Set-up: database, tenants, key files ------------------------------------------------------------------------
 
 /** Random key files as `pnpm dev:keys` writes them (mode 0600), and the run's edge secret and service key. */
-function writeKeyFiles(runDir) {
+export function writeKeyFiles(runDir) {
   const dir = join(runDir, "keys");
   mkdirSync(dir, { mode: 0o700 });
   const keyFile = (name, contents) => {
@@ -926,9 +1058,11 @@ function markupRule(index, newId) {
 
 /**
  * The tenants of the run, written as the platform and provisioning write them (see the file header, step 1): the
- * platform rows as velexis_migrator, the tenant rows through tenantTx as velexis_ota_app.
+ * platform rows as velexis_migrator, the tenant rows through tenantTx as velexis_ota_app. booking-load.mjs passes
+ * `extra`: `amadeusBaseUrl`, the shared account's `base_url` (the worker has no AMADEUS_BASE_URL_* override and calls
+ * it), and `platformRows(platform, tenant)` and `tenantRows(trx, tenant)`, which add its own rows of each tenant.
  */
-async function seedTenants(packages, run, count) {
+export async function seedTenants(packages, run, count, extra = {}) {
   const { createPlatformDb, createPool, createTenantDb, tenantTx } = packages.db;
   const { encryptValue, LocalFileKeyProvider, newId } = packages.crypto;
   const quiet = { error: () => undefined };
@@ -962,7 +1096,7 @@ async function seedTenants(packages, run, count) {
         id: accountId,
         name: "Velexis test (load test)",
         environment: "test",
-        base_url: "https://test.travel.api.amadeus.com",
+        base_url: extra.amadeusBaseUrl ?? "https://test.travel.api.amadeus.com",
         client_id: `velexis-load-${randomBytes(4).toString("hex")}`,
         client_secret_ciphertext: ciphertext,
         encryption_key_id: kekId,
@@ -997,6 +1131,7 @@ async function seedTenants(packages, run, count) {
           status: "active",
         })
         .execute();
+      await extra.platformRows?.(platform, tenant);
       await tenantTx(tenantDb, tenant.schema, async (trx) => {
         await packages.seeds.seedStorefrontSettings(trx, {
           name: `${key} Travel`,
@@ -1005,6 +1140,7 @@ async function seedTenants(packages, run, count) {
         });
         await packages.seeds.seedDefaultMarkupRule(trx);
         await trx.insertInto("markup_rules").values(markupRule(index, newId)).execute();
+        await extra.tenantRows?.(trx, tenant);
       });
       tenants.push(tenant);
     }
@@ -1015,7 +1151,7 @@ async function seedTenants(packages, run, count) {
 }
 
 /** Rows and sizes of the measured tables (all tenants together), and each search's status and Amadeus time. */
-async function databaseFigures(packages, run, tenants) {
+export async function databaseFigures(packages, run, tenants) {
   const { createPool, createTenantDb, sql, tenantTx } = packages.db;
   const pool = createPool(run.otaUrl, {
     applicationName: "ota-load-report",
@@ -1064,7 +1200,7 @@ async function databaseFigures(packages, run, tenants) {
 // ---- The visitors ------------------------------------------------------------------------------------------------
 
 /** The address of journey `index`: 198.18.0.0/15 (RFC 2544), the warm-up journeys at its end. */
-function visitorAddress(index, warmup) {
+export function visitorAddress(index, warmup) {
   const n = warmup ? 131_071 - index : index;
   return `198.${18 + ((n >> 16) & 1)}.${(n >> 8) & 255}.${n & 255}`;
 }
@@ -1083,10 +1219,11 @@ function searchCriteria(index, warmup) {
 }
 
 /**
- * One call of a visitor, with the SDK's retries of a 429 after its Retry-After; every attempt is recorded. An
- * interrupted run aborts the request in flight and answers status 0, code INTERRUPTED, without recording it.
+ * One call of a visitor, with the SDK's retries of a 429 after its Retry-After; every attempt is recorded. It answers
+ * the status, the parsed body, the error code and the response's headers. An interrupted run aborts the request in
+ * flight and answers status 0, code INTERRUPTED, without recording it.
  */
-async function call(context, record, { operation, method, path, body, headers }) {
+export async function call(context, record, { operation, method, path, body, headers }) {
   const interrupted = { status: 0, payload: undefined, code: "INTERRUPTED" };
   for (let attempt = 0; ; attempt += 1) {
     if (interruption.signal.aborted) {
@@ -1098,6 +1235,7 @@ async function call(context, record, { operation, method, path, body, headers })
     let status = 0;
     let payload;
     let code;
+    let responseHeaders;
     let retryAfter = 1;
     try {
       const response = await fetch(`${context.apiUrl}${path}`, {
@@ -1107,6 +1245,7 @@ async function call(context, record, { operation, method, path, body, headers })
         signal: AbortSignal.any([AbortSignal.timeout(REQUEST_TIMEOUT_MS), interruption.signal]),
       });
       status = response.status;
+      responseHeaders = response.headers;
       const text = await response.text();
       try {
         payload = text === "" ? undefined : JSON.parse(text);
@@ -1136,12 +1275,12 @@ async function call(context, record, { operation, method, path, body, headers })
       await pauseFor(retryAfter * 1000);
       continue;
     }
-    return { status, payload, code };
+    return { status, payload, code, headers: responseHeaders };
   }
 }
 
 /** The outcome of a journey that stopped at `answer` of `operation`. */
-function stopped(operation, answer) {
+export function stopped(operation, answer) {
   if (answer.status === 429 && answer.code === "RATE_LIMITED") {
     return { outcome: "refused", detail: `${operation} 429 RATE_LIMITED` };
   }
@@ -1205,7 +1344,7 @@ async function journey(context, tenant, index, warmup, record) {
 // ---- The run -----------------------------------------------------------------------------------------------------
 
 /** The workspace packages and built modules the run uses (after `checkBuilt`). */
-function loadPackages() {
+export function loadPackages() {
   return {
     config: require("@velexis/config"),
     crypto: require("@velexis/crypto"),
@@ -1220,15 +1359,15 @@ function loadPackages() {
   };
 }
 
-function checkBuilt() {
-  const missing = BUILT_FILES.filter((file) => !existsSync(join(REPO_ROOT, file)));
+export function checkBuilt(files = BUILT_FILES) {
+  const missing = files.filter((file) => !existsSync(join(REPO_ROOT, file)));
   if (missing.length > 0) {
     throw new Error(`not built: ${missing.join(", ")}. Run \`${BUILD_COMMAND}\` first.`);
   }
 }
 
 /** The commit of the checkout, with `+changes` when tracked files differ from it. */
-function commitOf() {
+export function commitOf() {
   try {
     const git = (args) =>
       execFileSync("git", args, {
@@ -1243,7 +1382,7 @@ function commitOf() {
   }
 }
 
-const loadAverage = () => os.loadavg().map((value) => Math.round(value * 100) / 100);
+export const loadAverage = () => os.loadavg().map((value) => Math.round(value * 100) / 100);
 
 /**
  * Runs `visitors` concurrent visitors over the journeys `[0, journeys)` and returns what they saw. Visitor i shops at

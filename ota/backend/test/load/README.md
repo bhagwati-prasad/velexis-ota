@@ -1,10 +1,15 @@
 # OTA backend load tests
 
-`search-load.mjs` is the M2 search load test of the OTA API (OBE-028). It answers the follow-ups of [OADR-0001](../../../docs/adr/0001-amadeus-client-design.md) ("load-test the buckets") and [OADR-0002](../../../docs/adr/0002-offer-and-priced-offer-caching.md) ("measure search insert time and table sizes"). The figures of each recorded run and what was decided from them are in [`ota/docs/performance.md`](../../../docs/performance.md).
+Two load tests of the OTA backend. The figures of each recorded run and what was decided from them are in [`ota/docs/performance.md`](../../../docs/performance.md).
 
-- **Plain Node, no dependency of its own.** It uses `fetch` and the workspace packages the OTA backend already has (`@velexis/config`, `@velexis/db`, `@velexis/crypto`, `@velexis/testing`, `ioredis`), and the built API and Amadeus stub.
-- **Not part of `pnpm test`, `pnpm test:int` or CI.** A load test measures the machine it runs on, so it runs by hand. Every run is recorded in `performance.md` with the machine and its load.
-- **Local and test only.** It starts its own API against its own scratch database and the Amadeus stub. It never talks to a deployed API, a real Amadeus or a database it did not create.
+- `search-load.mjs` is the M2 search load test of the OTA API (OBE-028). It answers the follow-ups of [OADR-0001](../../../docs/adr/0001-amadeus-client-design.md) ("load-test the buckets") and [OADR-0002](../../../docs/adr/0002-offer-and-priced-offer-caching.md) ("measure search insert time and table sizes").
+- `booking-load.mjs` is the M6 mixed-traffic test of the API **and the worker** against the VM's memory budget (OBE-088; [architecture §3](../../../../docs/mvp/architecture.md#3-hosts-ports-and-the-vm), the follow-up of [OADR-0014](../../../docs/adr/0014-per-tenant-workers-and-schedulers.md)). It reuses the helpers of `search-load.mjs` and is described in [its own section](#booking-loadmjs-mixed-traffic-with-the-worker-obe-088).
+
+Both:
+
+- **Plain Node, no dependency of their own.** They use `fetch` and the workspace packages the OTA backend already has (`@velexis/config`, `@velexis/db`, `@velexis/crypto`, `@velexis/testing`, `ioredis`), and the built API, worker and Amadeus stub.
+- **Not part of `pnpm test`, `pnpm test:int` or CI.** A load test measures the machine it runs on, so it runs by hand. Every run is recorded in `performance.md` with the machine, its `nproc` and its load.
+- **Local and test only.** They start their own processes against their own scratch database and the Amadeus stub. They never talk to a deployed API, a real Amadeus, a real Stripe, a real mail server or a database they did not create.
 
 ## Run it
 
@@ -71,6 +76,78 @@ The header of `search-load.mjs` describes each step. In short:
 | API process | CPU time over the measured phase (user and system, `process.cpuUsage()`) and per completed journey (the refused journeys' attempts are in the total too), RSS after start, at its peak and at the end, the wait for a pooled connection (`ota-api` pool, 20 connections), and the event-loop delay. |
 | Tables after the run | Rows and sizes (table with TOAST, indexes, total) of the shopping tables over all tenants, and the total per completed search. The warm-up's searches are included. |
 
-## Extending it
+## booking-load.mjs: mixed traffic with the worker (OBE-088)
 
-OBE-088 (M6) extends this script and adds `booking-load.mjs` for mixed traffic on five tenants. Keep a new measurement in the preload or the proxy: the API itself must run unchanged. Keep everything a run creates removable by the clean-up. Keep the output free of keys, tokens, DSNs and request bodies.
+### Run it
+
+The same set-up as `search-load.mjs` above. Its Redis figures are those of the whole Redis server, so run it on a Redis of its own, started as the VM's (`maxmemory 512mb`, `noeviction`), and on a database server no integration suite is using at the time. On a shared development machine, take the machine-wide end-to-end lock so no end-to-end run shares the CPUs, and write down `nproc` and the load:
+
+```bash
+pnpm build --filter=@velexis/ota-backend...
+redis-server --port 6390 --bind 127.0.0.1 --requirepass dev_redis --save '' --appendonly no \
+  --maxmemory 512mb --maxmemory-policy noeviction --daemonize yes      # a Redis of the run's own (a free port)
+export REDIS_URL=redis://:dev_redis@127.0.0.1:6390/0
+nproc; uptime
+node ota/backend/test/load/booking-load.mjs --tenants 5 --minutes 30                  # the run of the plan (Verify)
+node ota/backend/test/load/booking-load.mjs --minutes 5 --window-minutes 1            # a short run while developing
+redis-cli -p 6390 -a dev_redis shutdown nosave
+```
+
+| Option | Default | What it does |
+|---|---|---|
+| `--tenants <n>` | 5 | Tenants, 2 to 8, served in turn. |
+| `--minutes <n>` | 30 | Minutes of measured traffic, after a warm-up of one journey of each kind per tenant. |
+| `--shoppers-per-minute <n>` | 120 | Shopper journeys started per minute: `flights.search`, its first results page (20 offers), `flights.price` of the first offer. |
+| `--bookings-per-minute <n>` | 4 | Booker journeys started per minute: the shopper's three calls, then the checkout paid by airline card (below). At most one per tenant: the airline card allows 60 completions an hour per tenant (`airlineCardPerTenant`, [architecture §8](../../../docs/architecture.md#8-rate-limits)). |
+| `--staff-per-minute <n>` | 30 | Staff journeys started per minute: `console.bookings.list`, `console.bookings.get` of the first, `console.payments.list`, `console.supplierRequests.list`. |
+| `--think-ms <n>` | 1000 | A pause between two calls of a journey. |
+| `--offers <n>` | 250 | Offers in each search answer, never more than the search asked for, as in `search-load.mjs`. With the default, each answer has the storefront limit's offers (`DEFAULT_OFFERS_PER_SEARCH`). |
+| `--stub-delay-ms <n>` | 300 | How long the stub holds every answer. |
+| `--deferred-ticketing-every <n>` | 4 | Every n-th booking's Flight Create Orders comes back without tickets (the stub's `ticketing-failed`), and the run makes it a card-paid issuance retry for the worker (below). 0: never. |
+| `--timeout-every <n>` | 25 | Every n-th booking's Create Orders answer is lost (the stub's `timeout`: the order is written, the answer is a 504 after 30 s), so the worker reconciles it. 0: never. |
+| `--max-retries <n>` | 2 | Retries of a `429 RATE_LIMITED`, as the SDK. |
+| `--max-in-flight <n>` | 400 | Journeys at once. A journey due while that many run is skipped, and the run fails: the load was not delivered. |
+| `--queue-budget-s <n>` | 60 | The longest wait allowed for an `ota-ticketing` or `ota-bookings` job (OBE-088's acceptance). |
+| `--sample-s <n>` | 5 | Seconds between two samples of the processes, PostgreSQL, Redis and the worker's queues. |
+| `--window-minutes <n>` | 5 | Minutes per row of the timeline. |
+| `--redis-db <n>` | 13 | The Redis database of the run, emptied before and after. Not 14 (`search-load.mjs`) or 15 (the end-to-end stack). |
+| `--app-env <env>` | `production` | `APP_ENV` of the API and the worker. |
+| `--json <file>` | — | Also writes the figures, the samples and every attempt of the measured phase as JSON. |
+
+Exit codes: **0** when every answer was expected, no journey was skipped or still running 120 s after the last one started, the API's and the worker's RSS stayed within their `MemoryMax`, and no `ota-ticketing` or `ota-bookings` job waited longer than `--queue-budget-s`, with jobs of both queues measured once a fixture had made their work due long enough before the end (6 minutes for `ota-ticketing`, 11 for `ota-bookings`: a run shorter than about 15 minutes may measure none, and then says so without failing); **1** otherwise, or when the run could not be set up; **2** a usage error; **130** interrupted.
+
+### What a run does
+
+The header of `booking-load.mjs` describes each step. In short:
+
+1. **The tenants** of `search-load.mjs`, and what a booking needs: the shared Amadeus account's `base_url` is the run's proxy (the worker has no `AMADEUS_BASE_URL_*` override), and each tenant has the Velexis Stripe test connection, two staff members (`agent`, MFA on) and, in its storefront settings, the airline card on for the test environment, an alert address and a booking queue (50, category 0).
+2. **The Amadeus side.** The stub behind `search-load.mjs`'s proxy. The proxy picks the stub scenario of each Flight Create Orders from the first traveller's last name, which the booking journey chose: `DEFERRED` (`ticketing-failed`), `LATECOMER` (`timeout`), anything else the normal answer, an issued order.
+3. **An SMTP sink** in a child process takes the worker's e-mails and keeps only their number and size.
+4. **The API and the worker**, built, each started as its systemd unit starts it: `APP_ENV` and `NODE_ENV` `production`, `--enable-source-maps`, the API with `--max-old-space-size=640 --max-semi-space-size=32` and the worker with `--max-old-space-size=400`. Both run with `search-load.mjs`'s preload. The worker's copy also wraps BullMQ's `Worker#emit`: for every job a worker takes, how long it waited from the moment it was due (added, or its delay over) to its first attempt, and how long each attempt ran. A retry is counted but not timed, since its backoff is not in the job.
+5. **The traffic.** Each kind of journey starts at its own fixed rate, evenly spread, the tenants in turn (an open model: a slow answer does not slow the arrivals). A booker goes through the edge as the hosted storefront does: the shopper's three calls, `checkout.create`, the traveller and the contact, `checkout.createPayment {method: "airline_card"}`, the card hint (`checkout.updatePayment`, which quotes the card fee), `checkout.get`, `checkout.completeWithAirlineCard` with Visa's documented test card, and `bookings.get` with the guest cookie the completion set. Staff sign in once through the OTA admin's service key with a portal token, as `console-access.int.test.ts` does, and refresh their session every 10 minutes.
+6. **Two fixtures, once a minute.** The run cannot reach Stripe, and a fresh booking is not due for the booking sync for 6 hours, so it writes what the API cannot:
+   - **The sync.** Every booking with an order is made to look last synchronised 7 hours ago (`last_synced_at`), and its last sync claim, if it has one, as old (`sync_claimed_at`: the scan skips a booking claimed in the last 30 minutes, `BOOKING_SYNC_RETRY_MS`; a claim of the last 2 minutes, a sync that may still run, is left alone). So each `bookings.sync_scan` (every 10 minutes) enqueues its most: every such booking, up to 20 `booking.sync` jobs per tenant.
+   - **Ticketing.** An airline-card booking without tickets goes to the staff (`manual_review`) and never to the ticketing job ([`ticketing.service.ts`](../../src/bookings/ticketing.service.ts)). So the run rewrites each such booking as the card path leaves a booking whose Flight Order Issue failed after the capture: the payment `stripe`/`card`, captured, the booking paid, ticketing `failed` and due now. The next `ticketing.scan` (every 5 minutes) enqueues its `ticketing.issue`, which issues the stub's order.
+
+   Both write as `velexis_ota_app`, through `tenantTx`, as the API does. The report counts the rows they changed.
+7. **Samples** every `--sample-s` seconds: the API's and the worker's RSS, the client connections of the run's database by application (`pg_stat_activity`, read as `velexis_ota_app`, so it sees the state of the API's and the worker's sessions; the sampling connection itself and PostgreSQL's own processes, such as autovacuum, are not counted), Redis's memory, clients and keys, the worker's `/health/ready` queues (waiting jobs, the oldest wait, the failures of the last hour: the on-VM check's signal) and the 1-minute load average.
+8. **The report and the clean-up**, as in `search-load.mjs`. The documents the worker rendered are in the run's temporary folder and go with it.
+
+### Reading the report
+
+| Section | What the figures are |
+|---|---|
+| Header | The run, the machine with `nproc`, the 1-minute load average at the start and the end and its mean and maximum over the measured phase, the load, and the journeys per kind (completed / started, refused, failed), the journeys skipped and still running at the end, how late at most a journey started after its time (the run's own delay), the bookings by kind, the journeys and requests in flight and the rows the fixtures changed. |
+| Latency | Client-side time of each operation's expected answers: 2xx, and the `504 SUPPLIER_TIMEOUT` of a lost Create Orders answer (its own row). `flights.search without the stub delay` subtracts `--stub-delay-ms` once, as in `search-load.mjs`. |
+| Answers per operation | Every attempt with its status. |
+| Amadeus calls | Every call through the proxy by operation and status, with the stub scenarios the proxy sent. |
+| E-mails | The SMTP sink's messages, recipients and size. |
+| API, Worker | CPU over the phase (and as a share of one core), RSS at the start of the phase (after the warm-up), at its peak and at the end against the unit's `MemoryMax` (768 and 512 MiB), the heap used, the pool waits and the event-loop delay. |
+| PostgreSQL, Redis | The most connections to the run's database, by application, against the pools (API 20, worker 10) and `max_connections` (100 on the VM); Redis's used memory at the start, at the peak and at the end against the VM's `maxmemory` of 512 MiB, its clients and the run's keys. Then `MEMORY USAGE` of every key of the run at the end, by kind (BullMQ jobs, the queues' events streams, their other keys, the application's keys), the bytes of one job, and what a day of completed jobs at the run's rate holds: completed jobs stay in Redis for a day (ADR-0009 item 7). Last, the jobs kept by queue and name, with the bytes of one of each. |
+| Queue latency | Per queue and per job name: the jobs started, the retries, the failed attempts, the wait from due to the first attempt (p50, p95, max) and the run time of an attempt (p95, max). The health columns are the most waiting jobs and the oldest wait the worker's `/health/ready` reported. The verdict compares `ota-ticketing` and `ota-bookings` with `--queue-budget-s`. |
+| Database | The database's size after the warm-up and at the end, the largest tenant tables (all tenants together: rows, size and growth), the bookings by status, ticketing status and reconciliation outcome, the notifications by status and the documents by kind, and the document storage. |
+| Timeline | One row per `--window-minutes`: completed journeys and bookings started in the window, the p95 of `flights.search`, `flights.price`, the completion and `console.bookings.list`, the most RSS of the API and the worker, connections and Redis memory, the longest wait of the main queues, and the 1-minute load average (mean/max). |
+
+## Extending them
+
+Keep a new measurement in the preload, the proxy or the sink: the API and the worker themselves must run unchanged. Keep everything a run creates removable by the clean-up. Keep the output free of keys, tokens, card data, DSNs and request bodies.
