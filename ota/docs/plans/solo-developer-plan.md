@@ -10,8 +10,8 @@ Related: [`implementation-plan.md`](implementation-plan.md), [`agent-tasks.md`](
 |---|---|
 | People | One developer, no agents, five working days a week |
 | Effort per task size | S = ½ day, M = 1 day, L = 2 days, including tests, docs and self-review against the definition of done (the same rule as the platform plan) |
-| OTA work | 167 tasks = 184 days (M0 3.5, M1 6.5, M2 39.5, M3 55.5, M4 45, M5 9.5, M6 24.5; M6's 24.5 days are the first plan's 11.5, the follow-ups of its reviews, 7 days, in Weeks 39a, 39c and 40 since 2026-11-06 and 2026-11-10, and the tasks of 2026-11-11, 6 days, in Weeks 39b and 39c, §4). One of them, OBE-007 (1 day, M1), runs in the calendar week of platform Week 17, so the OTA weeks hold 183 task days |
-| Buffer and demos | 16.5 days inside OTA weeks (mostly at milestone exits: Weeks 1, 4, 12, 24, 33, 36, 39c, 40) |
+| OTA work | 168 tasks = 185 days (M0 3.5, M1 6.5, M2 39.5, M3 55.5, M4 45, M5 9.5, M6 25.5; M6's 25.5 days are the first plan's 11.5, the follow-ups of its reviews, 7 days, in Weeks 39a, 39c and 40 since 2026-11-06 and 2026-11-10, and the tasks of 2026-11-11, 7 days, in Weeks 39b, 39c and 40, §4). One of them, OBE-007 (1 day, M1), runs in the calendar week of platform Week 17, so the OTA weeks hold 184 task days |
+| Buffer and demos | 15.5 days inside OTA weeks (mostly at milestone exits: Weeks 1, 4, 12, 24, 33, 36, 39c) |
 | Length | **43 OTA weeks**: Weeks 1–40, the follow-up Week 39a (added 2026-11-06) and the follow-up Weeks 39b and 39c (added 2026-11-11, §4), holding 199.5 OTA days: 37 full weeks and 6 split weeks (Weeks 3, 12, 24, 34, 37, 39c) that share a calendar week with platform or foundation work |
 | Start | Week 1 starts when the foundation tasks `X-001` to `X-016` are merged, like platform Week 1 |
 | Week numbers | OTA-plan weeks. The roadmap maps them to calendar weeks. The **Overlap** column names the platform weeks (platform-plan numbering) that sit in the same calendar window, and the gates between the groups |
@@ -65,7 +65,7 @@ Related: [`implementation-plan.md`](implementation-plan.md), [`agent-tasks.md`](
 | 39a | M6 | Follow-ups: search CPU, dependencies, generic refusals, layout shifts | OBE-092, OBE-093, OBE-094, OBE-095, OAD-020, OFE-027, OFE-028, OFE-029 | 5 (OFE-029 took the ½ day of buffer on 2026-11-10) | Calendar week of its own before platform Weeks 30a and 30b (added 2026-11-06); OBE-094 is merged before PBE-069 (platform Week 30a) |
 | 39b | M6 | Follow-ups of 2026-11-11: CORS, offers per search, closing a Reconciliation review | OBE-097, OBE-098, OAD-021, OBE-099, OAD-022 | 5 | Calendar week of its own after platform Weeks 30a and 30b (added 2026-11-11; roadmap C77) |
 | 39c | M6 | `secrets:rewrap`, layout shifts on phones | OBE-100, OFE-030 | 2.5 (split; ½ day of buffer) | **Split week** with platform Week 30c (PBE-072) and X-041 (added 2026-11-11; roadmap C78) |
-| 40 | M6 exit | SDK 1.0.0, airline-card gate, search budget, stable suites, launch | SDK-015, OBE-086, OBE-096, OFE-026 | 5 | Shared launch week with platform Week 31 |
+| 40 | M6 exit | SDK 1.0.0, airline-card gate, search budget, Redis's completed jobs, stable suites, launch | SDK-015, OBE-086, OBE-096, OBE-101, OFE-026 | 5 | Shared launch week with platform Week 31 |
 
 ```mermaid
 timeline
@@ -394,6 +394,8 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 
 *Note (2026-11-11, lead decisions (15a), (15h), (15j), (15l) and (15m), FIX-W48-SHARED).* Six OTA tasks of 6 days join M6 ([`implementation-plan.md`](implementation-plan.md#m6--hardening--launch), the M6 note of 2026-11-11): OBE-097 (CORS, 1 day), OBE-098 and OAD-021 (a storefront's offers per search, ½ day each), OBE-099 and OAD-022 (closing a booking in Reconciliation review, 2 days and 1 day) and OBE-100 (`secrets:rewrap`, 1 day). They take two weeks inserted after Week 39a and numbered 39b and 39c, so that Weeks 1–40 keep their numbers (Week 40 stays the launch week): Week 39b holds the first five (5 days), Week 39c holds OBE-100 and OFE-030, which moves there from Week 40's buffer day (2 days and ½ day of buffer), so Week 40 has its day of buffer again. The plan therefore holds 167 tasks of 184 days (M6 24.5) in 43 weeks, with 16.5 days of buffer (§1, §5). The roadmap's re-baseline of 2026-11-11 places Week 39b in C77 and Week 39c in C78, beside the platform's Week 30c (PBE-072) and X-041 ([`../../../docs/mvp/plans/roadmap.md`](../../../docs/mvp/plans/roadmap.md) §1.3).
 
+*Note (2026-11-11, OBE-088).* OBE-101 (M, 1 day: a bound of the completed jobs Redis keeps, which OBE-088 added when its measurement found that they grow with the active tenants, [`../performance.md`](../performance.md) §6) takes Week 40's day of buffer, after OBE-088 (Week 39). The plan therefore holds 168 tasks of 185 days (M6 25.5) in 43 weeks, with 15.5 days of buffer (§1, §5); Week 40 keeps the launch day, and the roadmap's calendar does not change.
+
 ### Week 39a — M6: follow-ups of the reviews (added 2026-11-06)
 
 - **Tasks:** OBE-092 (1), OBE-093 (½), OBE-094 (½), OBE-095 (½), OAD-020 (½), OFE-027 (1), OFE-028 (½), OFE-029 (½; since 2026-11-10, in what was the week's ½ day of buffer).
@@ -417,8 +419,8 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 
 ### Week 40 — M6 exit: SDK 1.0.0, airline-card gate, search budget, stable suites, launch
 
-- **Tasks:** SDK-015 (1), OBE-086 (½), OBE-096 (1, since 2026-11-06), OFE-026 (½); 1 day launch with the platform; 1 day of buffer (OFE-030 used it from 2026-11-10 until it moved to Week 39c on 2026-11-11).
-- **Deliverables:** `@velexis/ota-sdk@1.0.0` on npm; the airline-card go-live runbook (the card stays off until it is fully checked); the search budget met with fewer offers per search by default, or the owner's decision for a worker thread or a second API process (OBE-096); three green nightly runs; the OTA launch checklist checked.
+- **Tasks:** SDK-015 (1), OBE-086 (½), OBE-096 (1, since 2026-11-06), OBE-101 (1, since 2026-11-11, in what was the week's day of buffer), OFE-026 (½); 1 day launch with the platform (OFE-030 used the day of buffer from 2026-11-10 until it moved to Week 39c on 2026-11-11, and OBE-101 took it the same day).
+- **Deliverables:** `@velexis/ota-sdk@1.0.0` on npm; the airline-card go-live runbook (the card stays off until it is fully checked); the search budget met with fewer offers per search by default, or the owner's decision for a worker thread or a second API process (OBE-096); the completed jobs Redis keeps bounded (OBE-101); three green nightly runs; the OTA launch checklist checked.
 - **Demo:** install the SDK in an empty project and run the guide's sample; walk through the launch checklist.
 - **Overlap:** shared launch week with platform Week 31.
 
@@ -426,7 +428,7 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 
 | Rule | Why |
 |---|---|
-| Buffer is 16.5 days: 1½ in Week 1, ½ in Weeks 2, 3, 11, 23, 35 (demo), 37, 38 and 39c, 1 in Week 4, 2½ in Weeks 12 and 24, 2 in Week 33, 1 in Week 36, 2 in Week 40 (the launch day and a day of buffer; 3 until 2026-11-06, when OBE-096 took one day, and 1 from 2026-11-10, when OFE-030 took the day of buffer, until 2026-11-11, when OFE-030 moved to Week 39c; Week 39a's ½ day, new on 2026-11-06, went to OFE-029 on 2026-11-10; Week 39c's ½ day is new on 2026-11-11) | Placed at milestone exits and before cross-group gates, where integration surprises appear |
+| Buffer is 15.5 days: 1½ in Week 1, ½ in Weeks 2, 3, 11, 23, 35 (demo), 37, 38 and 39c, 1 in Week 4, 2½ in Weeks 12 and 24, 2 in Week 33, 1 in Week 36, 1 in Week 40 (the launch day; 3 until 2026-11-06, when OBE-096 took one day, and 1 from 2026-11-10, when OFE-030 took the day of buffer, until 2026-11-11, when OFE-030 moved to Week 39c and OBE-101 took that day; Week 39a's ½ day, new on 2026-11-06, went to OFE-029 on 2026-11-10; Week 39c's ½ day is new on 2026-11-11) | Placed at milestone exits and before cross-group gates, where integration surprises appear |
 | A week that slips moves its unfinished tasks to the next week of the same milestone and uses that milestone's buffer; when the buffer is gone, the developer re-plans the rest of the milestone in the Friday note | Keeps the plan honest without silent drift |
 | Gated weeks (3, 12, 24, 34, 37) are never skipped: if the other side is late, do the next OTA task without the gate and come back; never fake the platform side | The gates protect the platform's PBE-035, PBE-036, PAD-011, PFE-019 and the M5 switches |
 | Human steps (OBE-027 recordings and the Amadeus question, OBE-086 penetration test and ASV scan, SDK-015 npm organisation) are started early: ask Amadeus in Week 6, book the penetration test during M5 | External lead times are the most likely cause of delay |
