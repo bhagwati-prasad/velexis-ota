@@ -546,7 +546,7 @@ expect_sshd() { # config user "keyword value"... -> 0 when sshd -T -C user=<user
       return 1
     fi
   done
-  if ! printf '%s\n' "$out" | grep -qx "allowusers $user"; then
+  if ! grep -qx "allowusers $user" <<<"$out"; then
     MFA_REASON="sshd -T does not allow $user (AllowUsers)"
     return 1
   fi
@@ -1054,7 +1054,7 @@ step_caddy() {
     changed=1
   fi
   caddy version | grep -q '^v2\.8\.' || warn "Caddy 2.8 expected, got $(caddy version)"
-  caddy list-modules | grep -qx http.handlers.waf || die "/usr/bin/caddy has no web application firewall (http.handlers.waf)"
+  grep -qx http.handlers.waf <<<"$(caddy list-modules)" || die "/usr/bin/caddy has no web application firewall (http.handlers.waf)"
   # A running Caddy keeps its old binary until a restart; the build runs any Caddyfile the package's binary runs.
   if [ "$changed" = 1 ] && is_active caddy; then systemctl restart caddy; fi
 }

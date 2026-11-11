@@ -405,7 +405,7 @@ refresh() {
   fi
   if [ -n "$parsed" ]; then
     for i in allow4 allow6 emergency4 emergency6; do
-      printf '%s\n' "$parsed" | grep -qx "set $i" || why="${why:+$why; }the set $i was missing"
+      grep -qx "set $i" <<<"$parsed" || why="${why:+$why; }the set $i was missing"
     done
     [ "$(printf '%s\n' "$parsed" | awk '$1 == "policy" { print $2; exit }')" = drop ] || why="${why:+$why; }the policy of the chain output was not drop"
     [ "$(printf '%s\n' "$parsed" | sed -n 's/^rule //p')" = "$(printf '%s\n' "${RULES[@]}")" ] || why="${why:+$why; }the rules of the chain output differed"

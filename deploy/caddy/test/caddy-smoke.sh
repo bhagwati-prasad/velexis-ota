@@ -179,7 +179,7 @@ if [ -z "$NODE" ] || [ ! -x "$NODE" ]; then die "node not found: set SMOKE_NODE"
 for tool in curl openssl awk sha256sum; do command -v "$tool" >/dev/null || die "$tool is missing"; done
 version="$("$CADDY" version | awk '{ print $1 }')"
 [ "$version" = "v$CADDY_VERSION" ] || die "this test pins Caddy $CADDY_VERSION; $CADDY is $version"
-"$CADDY" list-modules 2>/dev/null | grep -qx 'http.handlers.waf' \
+grep -qx 'http.handlers.waf' <<<"$("$CADDY" list-modules 2>/dev/null)" \
   || die "$CADDY has no web application firewall (module http.handlers.waf): build the Velexis Caddy with bash deploy/caddy/build/build-caddy.sh $BUILD_OUT"
 PINNED_SHA="$(sed -n 's/^CADDY_SHA256=\([0-9a-f]\{64\}\)$/\1/p' "$DEPLOY/caddy/build/versions.env")"
 

@@ -225,8 +225,8 @@ group_firewall() {
   local out rules to port p seen="" extra="" missing=""
   if ! have ufw; then fail "ufw is installed"; return; fi
   out="$(ufw status verbose 2>&1)"
-  if printf '%s\n' "$out" | grep -q '^Status: active'; then pass "ufw is active"; else fail "ufw is active (found: $(first_line "$out"))"; fi
-  if printf '%s\n' "$out" | grep -q '^Default: deny (incoming)'; then
+  if grep -q '^Status: active' <<<"$out"; then pass "ufw is active"; else fail "ufw is active (found: $(first_line "$out"))"; fi
+  if grep -q '^Default: deny (incoming)' <<<"$out"; then
     pass "ufw denies incoming connections by default"
   else
     fail "ufw denies incoming connections by default"
@@ -785,7 +785,7 @@ firewall_egress() {
     done <<<"$rules"
     for e in "${EGRESS_RULES[@]}"; do
       [ "$e" != "$EGRESS_LOG_RULE" ] || continue
-      printf '%s\n' "$rules" | grep -qxF -- "$e" || missing="$missing [$e]"
+      grep -qxF -- "$e" <<<"$rules" || missing="$missing [$e]"
     done
     if [ -z "$extra" ] && [ -z "$missing" ]; then
       pass "the chain output holds only the allow-list's rules (loopback, replies, the address sets, DHCP, IPv6 neighbour discovery, the refusal log)"
@@ -793,7 +793,7 @@ firewall_egress() {
       [ -z "$extra" ] || fail "the chain output of inet velexis_egress allows more than the allow-list:$extra"
       [ -z "$missing" ] || fail "the chain output of inet velexis_egress lacks rules of the allow-list:$missing"
     fi
-    if printf '%s\n' "$rules" | grep -qxF -- "$EGRESS_LOG_RULE"; then
+    if grep -qxF -- "$EGRESS_LOG_RULE" <<<"$rules"; then
       pass "refused outbound connections are logged (prefix VELEXIS-EGRESS-DENY, at most 10 a minute, with the user)"
     else
       fail "refused outbound connections are logged (no rule logs them with the prefix VELEXIS-EGRESS-DENY)"
@@ -811,7 +811,7 @@ firewall_egress() {
       case "$tail" in *'comment "'*) comment="${tail#*comment \"}"; comment="${comment%\"*}" ;; esac
       if [ -z "$comment" ]; then
         outside="$outside $addr $proto/$port (no comment),"
-      elif ! printf '%s\n' "$lines" | grep -qxF -- "$comment $port $proto"; then
+      elif ! grep -qxF -- "$comment $port $proto" <<<"$lines"; then
         outside="$outside $addr $proto/$port (comment \"$comment\"),"
       elif [ -z "${kept["$comment $addr"]+x}" ]; then
         outside="$outside $addr $proto/$port (comment \"$comment\", not an address the refresh kept for it),"
@@ -859,7 +859,7 @@ firewall_egress() {
     env_value "$ETC/${key%%:*}" "${key#*:}"
     s="$(url_port "$ENV_VALUE" "${key%%:*}")"
     ENV_VALUE=""
-    if [ -n "$s" ] && ! printf '%s\n' "$lines" | grep -qxF -- "$host $s $proto"; then ports="$ports $host (its line: $port/$proto),"; fi
+    if [ -n "$s" ] && ! grep -qxF -- "$host $s $proto" <<<"$lines"; then ports="$ports $host (its line: $port/$proto),"; fi
   done <<<"$lines"
   if [ -z "$ports" ]; then
     pass "the URLs of the allow-list's env: lines use the ports their lines allow"
@@ -875,7 +875,7 @@ firewall_egress() {
     while read -r addr port; do
       s=$((s + 1))
       for proto in udp tcp; do
-        printf '%s\n' "$lines" | grep -qxF -- "$addr $port $proto" || ports="$ports item $s ($proto),"
+        grep -qxF -- "$addr $port $proto" <<<"$lines" || ports="$ports item $s ($proto),"
       done
     done < <(resolver_items "${ENV_VALUE:-1.1.1.1,8.8.8.8}")
     ENV_VALUE=""
@@ -897,7 +897,7 @@ firewall_egress() {
         port="$(url_port "$ENV_VALUE" "$e")"
         case "$host" in
           127.0.0.1 | localhost | ::1) ;;
-          *) printf '%s\n' "$lines" | grep -qxF -- "$host ${port:-443} tcp" || ports="$ports $key of $e," ;;
+          *) grep -qxF -- "$host ${port:-443} tcp" <<<"$lines" || ports="$ports $key of $e," ;;
         esac
       fi
       ENV_VALUE=""
@@ -924,7 +924,7 @@ firewall_egress() {
   apt="$(VELEXIS_ROOT="$R" bash "$EGRESS" apt-hosts 2>/dev/null)"
   while read -r host port; do
     [ -n "$host" ] || continue
-    printf '%s\n' "$lines" | grep -qxF -- "$host $port tcp" || missing="$missing $host:$port"
+    grep -qxF -- "$host $port tcp" <<<"$lines" || missing="$missing $host:$port"
   done <<<"$apt"
   apt="$(printf '%s\n' "$apt" | awk 'NF { printf "%s%s:%s", sep, $1, $2; sep = " " }')"
   if [ -z "$missing" ]; then
