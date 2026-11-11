@@ -815,13 +815,16 @@ describe("migrateTenantSchema and migrate.js tenant on PostgreSQL", () => {
     ).rejects.toBeInstanceOf(TenantChecksumMismatchError);
   });
 
-  it("refuses a missing schema without --create, and schemas that provisioning did not create", async () => {
+  // The four cases below were one test until it ran 5.3 s, over Vitest's 5 s default, on a loaded CI runner
+  // (dependabot PR #34, CI run 42568076597): each case gets its own database and its own budget now.
+  it("refuses a missing schema without --create", async () => {
     const missing = await cli(["tenant", "--schema", "tenant_nowhere", "--dir", TENANT_DIR]);
     expect(missing).toMatchObject({ code: 1, stdout: "" });
     expect(missing.stderr).toContain("Tenant schema tenant_nowhere does not exist");
     expect(await schemaExists("tenant_nowhere")).toBe(false);
+  });
 
-    // Owned by another role: left alone, even with --create.
+  it("leaves a schema owned by another role alone, even with --create", async () => {
     await db.query("BEGIN");
     await db.query("SET LOCAL ROLE velexis_migrator");
     await db.query("CREATE SCHEMA tenant_foreign");
@@ -832,8 +835,9 @@ describe("migrateTenantSchema and migrate.js tenant on PostgreSQL", () => {
       "Tenant schema tenant_foreign belongs to velexis_migrator, not velexis_provisioner",
     );
     expect(await tablesOf("tenant_foreign")).toEqual([]);
+  });
 
-    // Relations without a ledger ("foreign content", OADR-0007): left alone.
+  it('leaves a schema of the provisioner with relations but no ledger ("foreign content", OADR-0007) alone', async () => {
     await db.query("BEGIN");
     await db.query("SET LOCAL ROLE velexis_provisioner");
     await db.query("CREATE SCHEMA tenant_stray");
@@ -851,8 +855,9 @@ describe("migrateTenantSchema and migrate.js tenant on PostgreSQL", () => {
     }).catch((thrown: unknown) => thrown);
     expect(strayError).toBeInstanceOf(TenantSchemaError);
     expect(strayError).toMatchObject({ schema: "tenant_stray", problem: "foreign_content", exitCode: 1 });
+  });
 
-    // An orphan empty schema of the provisioner (a crash between steps) is completed.
+  it("completes an orphan empty schema of the provisioner (a crash between steps) with --create", async () => {
     await db.query("BEGIN");
     await db.query("SET LOCAL ROLE velexis_provisioner");
     await db.query("CREATE SCHEMA tenant_orphan");
