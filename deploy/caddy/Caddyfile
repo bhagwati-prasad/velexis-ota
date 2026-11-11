@@ -8,13 +8,20 @@
 #   PLATFORM_BASE_DOMAIN   platform.example.com  -> portal, admin.<..>, api.<..>
 #   STOREFRONT_BASE_DOMAIN ota.example.com       -> admin.<..>, api.<..>, <key>.<..> storefronts
 #   ACME_EMAIL, VELEXIS_EDGE_SECRET
+#   VELEXIS_WAF_ENGINE     optional: the web application firewall's mode on its blocking paths (default On; see (waf))
 # VELEXIS_ROOT is for the smoke test only: a prefix for the /srv/velexis folders below. It is never set on the VM,
-# where it expands to nothing.
+# where it expands to nothing. VELEXIS_WAF_DIR (default /etc/caddy/waf) is where the firewall's rule files are; only
+# velexis-deploy (to validate the files of a new release before they go live) and the smoke test set it.
 # Every app listens on 127.0.0.1 only; Caddy is the only public process (ports 80 and 443).
+# This file needs the Velexis Caddy build (Caddy 2.8.4 with the Coraza module; deploy/caddy/build/build-caddy.sh),
+# installed as /usr/local/bin/caddy-velexis, which the caddy service runs as /usr/bin/caddy (provision-vm.sh, step caddy).
 # Validate before installing: caddy validate --config deploy/caddy/Caddyfile --adapter caddyfile
 # Test end to end (local CA, test ports, an echo upstream): bash deploy/caddy/test/caddy-smoke.sh
 # =====================================================================================================
 {
+	# The web application firewall runs before every other handler of a site (task X-039, snippet (waf) below).
+	order coraza_waf first
+
 	email {$ACME_EMAIL:ops@example.com}
 	# Admin API on a unix socket in /run/caddy (RuntimeDirectory, mode 0700, user caddy; caddy.service.d drop-in),
 	# never on TCP: an app process could otherwise POST /load and rewrite the live config, for example the payment
@@ -29,6 +36,9 @@
 
 	servers {
 		protocols h1 h2 h3
+		# Request line and headers together (Go's default is 1MB). The apps take 16KiB at most (Node's limit), and the
+		# web application firewall inspects every header, at about 7 ms of CPU per KiB (X-039, waf/coraza.conf).
+		max_header_size 32KiB
 		# `log_credentials` stays OFF (the default), so Cookie, Set-Cookie, Authorization and
 		# Proxy-Authorization are redacted in access logs. Never enable it.
 	}
@@ -138,6 +148,67 @@
 	}
 }
 
+# Web application firewall (task X-039; ADR-0027 row 6.4.2; deployment-single-vm.md §6): Coraza with the OWASP Core
+# Rule Set v4 at paranoia level 1, on every public host. `import waf <matcher> <mode> <body limit>`: the matcher picks
+# the requests (`*` for all of a site), the mode is Coraza's SecRuleEngine:
+#   - DetectionOnly on the portal, both admin hosts, the platform API and the storefront's pages: every match is
+#     logged, nothing is refused;
+#   - blocking on the storefront's /api/* and /checkout/* and on api.<STOREFRONT_BASE_DOMAIN>, with the mode
+#     {$VELEXIS_WAF_ENGINE:On}: On refuses a request whose anomaly score reaches 5 (one critical match) with 403 (400
+#     for a body that cannot be parsed), answered by (waf_refusal_json), or with a short text on the storefront's
+#     pages; arguments above 128 KiB or a body above the limit get 413 (waf/coraza.conf) without a body, as Caddy's
+#     own request_body limits answer. The detection week before blocking (deployment-single-vm.md §6) sets
+#     VELEXIS_WAF_ENGINE=DetectionOnly in caddy.env.
+# The body limit (SecRequestBodyLimit, bytes) is how much of a request body the WAF reads. The WAF runs before
+# `request_body`, so Caddy's own limits apply only after it: each limit is just above the largest request_body limit of
+# its requests, and on the storefront it is 256 KiB, the WAF's in-memory limit (coraza.conf), so a storefront body is
+# never buffered in a temporary file and the airline-card details never reach the disk. A longer body is refused with
+# 413 (rule 200006), in detection mode by Caddy's own limit.
+# Each import is a WAF instance of its own (the first about 24 MB of memory, each further one about 3 MB). It loads, in
+# this order, from VELEXIS_WAF_DIR (velexis-deploy installs deploy/caddy/waf/ there) and from the Core Rule Set that the
+# build embeds: coraza.conf (the engine, the CRS settings), the mode, the body limit, the CRS setup and its request
+# rules (REQUEST-*.conf) and correlation summary (RESPONSE-980; responses are not inspected, so the RESPONSE-950 to 959
+# rules are not loaded), logdata.conf (each matched rule logs its id, its message and the variable's name, never a
+# value), then removes the rules of paranoia levels 2 to 4 (paranoia level 1 skips them anyway; removing them saves
+# memory) and loads exclusions.conf (each exclusion by rule id with its reason). build-caddy.sh generates logdata.conf
+# for the same rule files: change both together.
+# The WAF log is Caddy's log (logger http.handlers.waf, one line per matched rule) in journald: journalctl -u caddy.
+(waf) {
+	coraza_waf {args[0]} {
+		load_owasp_crs
+		directives `
+		Include {$VELEXIS_WAF_DIR:/etc/caddy/waf}/coraza.conf
+		SecRuleEngine {args[1]}
+		SecRequestBodyLimit {args[2]}
+		Include @crs-setup.conf.example
+		Include @owasp_crs/REQUEST-*.conf
+		Include @owasp_crs/RESPONSE-980-CORRELATION.conf
+		Include {$VELEXIS_WAF_DIR:/etc/caddy/waf}/logdata.conf
+		SecRuleRemoveByTag paranoia-level/2
+		SecRuleRemoveByTag paranoia-level/3
+		SecRuleRemoveByTag paranoia-level/4
+		Include {$VELEXIS_WAF_DIR:/etc/caddy/waf}/exclusions.conf
+		`
+	}
+}
+
+# A request the WAF refuses, as the APIs' error envelope: 400 INVALID_REQUEST for a body that cannot be parsed or has too
+# many arguments, 403 FORBIDDEN for an attack. The WAF answers before every other handler, so the request id of
+# (request_id) is set here again, with its site-level matcher. Inside `handle_errors <codes>` Caddy 2.8 replaces the
+# matcher of each top-level directive with the status codes, so the directives sit in a `route` of their own.
+(waf_refusal_json) {
+	route {
+		map {err.status_code} {waf_error_code} {waf_error_message} {
+			400 INVALID_REQUEST "The request body could not be read."
+			default FORBIDDEN "The request was refused by the web application firewall."
+		}
+		request_header @no_request_id X-Request-Id {http.request.uuid}
+		header Content-Type "application/json"
+		header Cache-Control "no-store"
+		respond `{"error":{"code":"{waf_error_code}","message":"{waf_error_message}","status":{err.status_code},"requestId":"{http.request.header.X-Request-Id}"}}` {err.status_code}
+	}
+}
+
 # Shared rules for the two API hosts. Their request body limit is in each site block: the OTA API host raises it for
 # one route.
 (api_common) {
@@ -185,6 +256,15 @@
 	import storefront_headers
 	import request_id
 	encode zstd gzip
+
+	# The WAF blocks on the OTA API (/api/*) and the payment pages (/checkout/*) and only detects on the other pages
+	# (X-039). The two matchers are each other's negation, with the path matcher of `handle /api/*` below, so every
+	# request meets exactly one WAF, and a request that reaches the OTA API always meets the blocking one.
+	# Both read at most 256 KiB of a body (the /api limit below is 256KB), in memory.
+	@waf_blocking path /api/* /checkout/*
+	import waf @waf_blocking {$VELEXIS_WAF_ENGINE:On} 262144
+	@waf_detecting not path /api/* /checkout/*
+	import waf @waf_detecting DetectionOnly 262144
 
 	# The airline-card page (OADR-0017 point 3; its file and `try_files`' name for it): a CSP without any Stripe host,
 	# `Cross-Origin-Opener-Policy: same-origin`, so a window that any other page of the origin opens on it gets no handle
@@ -257,6 +337,21 @@
 			status 404
 		}
 	}
+	# A request the WAF refuses (X-039): the API's error envelope on /api/*, a short text on the payment pages; both with
+	# the storefront headers and no-store. The `route` keeps the path matchers (see (waf_refusal_json)).
+	handle_errors 400 403 {
+		import storefront_headers
+		route {
+			handle /api/* {
+				import waf_refusal_json
+			}
+			handle {
+				header Content-Type "text/plain; charset=utf-8"
+				header Cache-Control "no-store"
+				respond "The request was refused by the web application firewall." {err.status_code}
+			}
+		}
+	}
 	import api_unavailable
 }
 
@@ -268,6 +363,8 @@
 	import security_headers
 	import request_id
 	encode zstd gzip
+	# The WAF reads up to 5 MiB of a body, just above the 5MB below.
+	import waf * DetectionOnly 5242880
 	request_body {
 		max_size 5MB
 	}
@@ -284,6 +381,7 @@ admin.{$PLATFORM_BASE_DOMAIN:platform.example.com} {
 	# Optional: allow Velexis staff networks only. Replace the documentation range and uncomment.
 	# @outside_staff not remote_ip 203.0.113.0/24
 	# respond @outside_staff 403
+	import waf * DetectionOnly 5242880
 	request_body {
 		max_size 5MB
 	}
@@ -294,6 +392,7 @@ admin.{$PLATFORM_BASE_DOMAIN:platform.example.com} {
 # Platform API (platform/backend) incl. /webhooks/stripe/billing. /internal/* is blocked by api_common.
 api.{$PLATFORM_BASE_DOMAIN:platform.example.com} {
 	import api_common
+	import waf * DetectionOnly 1048576
 	request_body {
 		max_size 1MB
 	}
@@ -308,6 +407,7 @@ admin.{$STOREFRONT_BASE_DOMAIN:ota.example.com} {
 	import security_headers
 	import request_id
 	encode zstd gzip
+	import waf * DetectionOnly 10485760
 	request_body {
 		max_size 10MB
 	}
@@ -318,6 +418,14 @@ admin.{$STOREFRONT_BASE_DOMAIN:ota.example.com} {
 # OTA API for SDK users with pk_/sk_ keys, and the Stripe payment webhooks.
 api.{$STOREFRONT_BASE_DOMAIN:ota.example.com} {
 	import api_common
+
+	# The WAF blocks on every path (X-039); Stripe's signed webhook events only detect (exclusions.conf, rule 10001). It
+	# reads up to 1200 KiB of a body, just above the asset upload's 1100KiB below.
+	import waf * {$VELEXIS_WAF_ENGINE:On} 1228800
+	handle_errors 400 403 {
+		import security_headers
+		import waf_refusal_json
+	}
 
 	# Request bodies up to 1MB (1,000,000 bytes), except the storefront asset upload (POST /v1/console/settings/assets,
 	# consoleUploadStorefrontAsset, OADR-0012 point 2; lead decision (2c) of 2026-10-30): a file of up to 1 MiB in a

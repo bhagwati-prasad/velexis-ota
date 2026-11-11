@@ -11,8 +11,11 @@
 # Usage (as root, on the VM, from a copy of the repository's deploy/ folder; later runs from the deploy/ folder of
 # the active release or a newer one, never an older copy: it re-installs units and root-owned scripts):
 #   scp -r deploy/ admin@vm:/tmp/velexis-deploy
-#   sudo DEPLOY_SSH_PUBKEY_FILE=/tmp/deploy.pub ADMIN_USER=ubuntu bash /tmp/velexis-deploy/scripts/provision-vm.sh
+#   sudo DEPLOY_SSH_PUBKEY_FILE=/tmp/deploy.pub ADMIN_USER=ubuntu CADDY_BINARY=/tmp/caddy \
+#     bash /tmp/velexis-deploy/scripts/provision-vm.sh            # CADDY_BINARY: the Velexis Caddy build (X-039)
 #   sudo bash /tmp/velexis-deploy/scripts/provision-vm.sh --steps scripts,caddyconf  # re-run selected steps only
+#   sudo CADDY_BINARY=/tmp/caddy bash /tmp/velexis-deploy/scripts/provision-vm.sh --steps caddy,scripts
+#                                   # a VM provisioned before X-039, once (docs/mvp/deployment-single-vm.md §6)
 #   sudo bash /tmp/velexis-deploy/scripts/check-vm.sh                               # one PASS or FAIL per item
 #   sudo NEW_MASTER_KEY=v2 bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps keys  # add a master key
 #   sudo ADMIN_USER=ubuntu ADMIN_MFA=fido2 bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps ssh
@@ -20,6 +23,17 @@
 #
 # Steps: packages harden users node postgres redis caddy keys database envfiles scripts caddyconf summary, and by name
 # only: ssh, the SSH part of harden alone (harden runs it too).
+#
+# Caddy (task X-039, docs/mvp/deployment-single-vm.md §6): the step caddy installs the caddy package (its unit, user and
+# folders) and the Velexis Caddy build (Caddy 2.8.4 with the Coraza web application firewall) root-owned as
+# /usr/local/bin/caddy-velexis, then points the service at it once: dpkg-divert moves the package's /usr/bin/caddy to
+# /usr/bin/caddy.distrib (package upgrades write there) and /usr/bin/caddy becomes a link to the build. The build comes
+# from CADDY_BINARY, else from the release this deploy folder belongs to (<release>/caddy/bin/caddy), and must have the
+# SHA-256 that deploy/caddy/build/versions.env pins (CADDY_SHA256). On a new VM, copy one with the deploy folder: the
+# caddy/bin/caddy of the release of the same commit (the Deploy workflow's artefact), or a build of
+# `bash deploy/caddy/build/build-caddy.sh /tmp/caddy-build`. velexis-deploy keeps it up to date from then on. The step
+# caddyconf installs the Caddyfile and the firewall's rule files (deploy/caddy/waf, as /etc/caddy/waf), validated
+# together with that build before either replaces the live ones.
 #
 # SSH second factor (ADR-0027 rows 8.4.2 and 8.6, docs/mvp/runbooks/ssh-access.md): the step ssh writes
 # /etc/ssh/sshd_config.d/01-velexis-mfa.conf with one Match block for ADMIN_USER and one for DEPLOY_USER. ADMIN_MFA=fido2
@@ -78,6 +92,7 @@ set -euo pipefail
 : "${PG_MAJOR:=16}"
 : "${REDIS_PIN:=6:7.4*}"                  # packages.redis.io version string of Redis 7.4
 : "${CADDY_PIN:=2.8*}"
+: "${CADDY_BINARY:=}"                     # the Velexis Caddy build for the step caddy (see the header; X-039)
 : "${VELEXIS_ROOT:=}"                     # tests only, see the header; empty on the VM
 : "${NEW_MASTER_KEY:=}"                   # v<N>: the step keys adds master-v<N>.key (KEK rotation, see the header)
 
@@ -305,6 +320,7 @@ EOF
 -w /etc/caddy/ -p wa -k caddy-config
 -w /etc/systemd/system/ -p wa -k systemd-units
 -w /usr/local/sbin/ -p wa -k velexis-scripts
+-w /usr/local/bin/caddy-velexis -p wa -k caddy-binary
 -w /etc/sudoers -p wa -k sudoers
 -w /etc/sudoers.d/ -p wa -k sudoers
 -w /etc/ssh/sshd_config.d/ -p wa -k sshd
@@ -954,11 +970,37 @@ step_redis() {
   die "Redis does not answer on 127.0.0.1:6379"
 }
 
-# ---- caddy: Caddy 2.8 -------------------------------------------------------------------------------------
+# ---- caddy: Caddy 2.8, the Velexis build with the web application firewall (X-039) -------------------------------
+CADDY_BUILD=/usr/local/bin/caddy-velexis
 step_caddy() {
-  log "Caddy 2.8"
+  log "Caddy 2.8: the package, and the Velexis build with the web application firewall as /usr/bin/caddy"
   apt_install caddy
+  local src="$CADDY_BINARY" want got changed=0
+  if [ -z "$src" ] && [ -f "$DEPLOY_DIR/../caddy/bin/caddy" ]; then src="$DEPLOY_DIR/../caddy/bin/caddy"; fi
+  want="$(sed -n 's/^CADDY_SHA256=\([0-9a-f]\{64\}\)$/\1/p' "$DEPLOY_DIR/caddy/build/versions.env")"
+  [ -n "$want" ] || die "$DEPLOY_DIR/caddy/build/versions.env pins no CADDY_SHA256"
+  if [ -n "$src" ]; then
+    [ -f "$src" ] || die "CADDY_BINARY=$src is not a file"
+    got="$(sha256sum "$src" | cut -d' ' -f1)"
+    [ "$got" = "$want" ] \
+      || die "$src has SHA-256 $got, but deploy/caddy/build/versions.env pins $want: take the caddy/bin/caddy of this commit's release, or bash $DEPLOY_DIR/caddy/build/build-caddy.sh /tmp/caddy-build"
+    if install_changed 0755 root:root "$src" "$CADDY_BUILD"; then changed=1; log "installed $CADDY_BUILD ($got)"; fi
+  elif [ ! -x "$CADDY_BUILD" ]; then
+    die "no Velexis Caddy build: pass CADDY_BINARY=<the caddy/bin/caddy of this commit's release, or bash $DEPLOY_DIR/caddy/build/build-caddy.sh /tmp/caddy-build> (deployment-single-vm.md §3)"
+  fi
+  # Once: the package's binary moves aside (and its upgrades with it), and the service runs the build.
+  if ! dpkg-divert --list /usr/bin/caddy | grep -q '/usr/bin/caddy\.distrib'; then
+    dpkg-divert --add --rename --divert /usr/bin/caddy.distrib /usr/bin/caddy
+    changed=1
+  fi
+  if [ "$(readlink /usr/bin/caddy 2>/dev/null || true)" != "$CADDY_BUILD" ]; then
+    ln -sfn "$CADDY_BUILD" /usr/bin/caddy
+    changed=1
+  fi
   caddy version | grep -q '^v2\.8\.' || warn "Caddy 2.8 expected, got $(caddy version)"
+  caddy list-modules | grep -qx http.handlers.waf || die "/usr/bin/caddy has no web application firewall (http.handlers.waf)"
+  # A running Caddy keeps its old binary until a restart; the build runs any Caddyfile the package's binary runs.
+  if [ "$changed" = 1 ] && is_active caddy; then systemctl restart caddy; fi
 }
 
 # ---- keys: one key folder per backend zone (ADR-0010, ADR-0026) ----------------------------------------------
@@ -1170,29 +1212,38 @@ step_scripts() {
   systemctl enable --now velexis-healthcheck.timer
 }
 
-# ---- caddyconf: Caddyfile, validated with the real environment ----------------------------------------------
+# ---- caddyconf: Caddyfile and the firewall's rule files, validated together with the real environment ----------------
 step_caddyconf() {
-  log "Caddyfile"
+  log "Caddyfile and the web application firewall's rule files"
   install -d -m 0755 -o root -g root /srv/velexis/maintenance
   install -m 0644 -o root -g root "$DEPLOY_DIR/caddy/maintenance/index.html" /srv/velexis/maintenance/index.html
   install -m 0644 -o root -g root "$DEPLOY_DIR/caddy/Caddyfile" /etc/caddy/Caddyfile.new
+  rm -rf /etc/caddy/waf.new
+  install -d -m 0755 -o root -g root /etc/caddy/waf.new
+  install -m 0644 -o root -g root "$DEPLOY_DIR"/caddy/waf/*.conf /etc/caddy/waf.new/
   # The subshell's own errors go nowhere either: a malformed caddy.env line would make bash quote part of a value.
+  # VELEXIS_WAF_DIR points the Caddyfile's firewall at the new rule files (the Caddyfile's default is /etc/caddy/waf).
   if ! (
     set -a
     # shellcheck disable=SC1091
     . /etc/velexis/caddy.env
     set +a
-    caddy validate --config /etc/caddy/Caddyfile.new --adapter caddyfile >/dev/null 2>&1
+    VELEXIS_WAF_DIR=/etc/caddy/waf.new caddy validate --config /etc/caddy/Caddyfile.new --adapter caddyfile >/dev/null 2>&1
   ) 2>/dev/null; then
-    rm -f /etc/caddy/Caddyfile.new
-    die "the Caddyfile does not validate with /etc/velexis/caddy.env; run: sudo bash $DEPLOY_DIR/scripts/check-vm.sh --only caddy"
+    rm -rf /etc/caddy/Caddyfile.new /etc/caddy/waf.new
+    die "the Caddyfile does not validate with /etc/velexis/caddy.env and the Velexis Caddy build (step caddy); run: sudo bash $DEPLOY_DIR/scripts/check-vm.sh --only caddy"
   fi
   systemctl enable caddy
   # The first run replaces the package's Caddyfile, whose admin API is TCP 2019: only a restart moves it to the
-  # unix socket. Later runs leave a running Caddy alone unless the file changed.
-  if cmp -s /etc/caddy/Caddyfile.new /etc/caddy/Caddyfile && is_active caddy && [ -S /run/caddy/admin.sock ]; then
-    rm -f /etc/caddy/Caddyfile.new
+  # unix socket. Later runs leave a running Caddy alone unless the file or the rule files changed.
+  if cmp -s /etc/caddy/Caddyfile.new /etc/caddy/Caddyfile && diff -r -q /etc/caddy/waf.new /etc/caddy/waf >/dev/null 2>&1 &&
+    is_active caddy && [ -S /run/caddy/admin.sock ]; then
+    rm -rf /etc/caddy/Caddyfile.new /etc/caddy/waf.new
   else
+    rm -rf /etc/caddy/waf.old
+    if [ -e /etc/caddy/waf ]; then mv -T /etc/caddy/waf /etc/caddy/waf.old; fi
+    mv -T /etc/caddy/waf.new /etc/caddy/waf
+    rm -rf /etc/caddy/waf.old
     mv /etc/caddy/Caddyfile.new /etc/caddy/Caddyfile
     systemctl restart caddy
   fi

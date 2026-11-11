@@ -22,6 +22,11 @@
 #   platform-admin/         Next.js standalone tree; entry platform/admin/server.js
 #   ota-admin/              Next.js standalone tree; entry ota/admin/server.js
 #   storefront/             static files of ota/frontend (served by Caddy, world-readable)
+#   caddy/bin/caddy         the Velexis Caddy build (Caddy 2.8.4 with the Coraza web application firewall), built here
+#                           by deploy/caddy/build/build-caddy.sh from deploy/caddy/build/versions.env and checked
+#                           against its CADDY_SHA256 (task X-039); velexis-deploy installs it as
+#                           /usr/local/bin/caddy-velexis. It needs outbound HTTPS to proxy.golang.org and
+#                           sum.golang.org; CADDY_BUILD_CACHE (see build-caddy.sh) keeps its downloads between runs.
 # =====================================================================================================
 set -euo pipefail
 
@@ -103,10 +108,16 @@ EOF
   cp "$OUT/storefront/index.html" "$OUT/storefront/404.html"
 fi
 
+# ---- the Velexis Caddy build (X-039) ---------------------------------------------------------------------------
+log "Caddy build (deploy/caddy/build/build-caddy.sh) -> caddy/bin/caddy"
+bash deploy/caddy/build/build-caddy.sh "$OUT/caddy/bin"
+
 # ---- deploy/ and the manifest ------------------------------------------------------------------------------
 mkdir -p "$OUT/deploy"
 cp -a deploy/. "$OUT/deploy/"
-find "$OUT/deploy" -name '*.env' -type f -delete   # never ship real env files, even by accident
+# Never ship real env files, even by accident. The Caddy build's versions.env is no env file of the VM: it holds the
+# pinned versions and the SHA-256 that provision-vm.sh checks the build against (step caddy).
+find "$OUT/deploy" -name '*.env' -type f ! -path "$OUT/deploy/caddy/build/versions.env" -delete
 
 node -e '
   const [sha, ref, apps] = process.argv.slice(1);

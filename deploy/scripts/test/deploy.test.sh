@@ -64,6 +64,16 @@
 #       readable, 0644, for the OTA zone user), as the ota zone with ota-backend.env and ota-worker.env and never the
 #       migrator DSN; a failing report stops the deploy and leaves the previous release current; a release without
 #       ota-backend/ skips the step;
+#   14. the Velexis Caddy build (X-039, every check ends with [X-039 AC3]): a release's caddy/bin/caddy (a fake build
+#       that records its validations) waits while the VM's /usr/bin/caddy is no link to /usr/local/bin/caddy-velexis;
+#       once it is (provision-vm.sh, simulated), the same binary again changes nothing and restarts nothing; a changed
+#       binary is staged, validates the new Caddyfile with the staged rule files (deploy/caddy/waf), is installed
+#       root-owned (0755) from the snapshot after the units are healthy, and Caddy is restarted once (no reload);
+#       --rollback re-installs the previous release's binary from its snapshot and restarts Caddy; the same binary with
+#       a changed Caddyfile only reloads; a binary that does not validate changes nothing; an unhealthy release with a
+#       new binary, rule files and Caddyfile rolls back without any of them going live and without a Caddy restart; a
+#       binary with which Caddy does not start stops the deploy with the way back, and --rollback restores the previous
+#       release's binary and restarts Caddy;
 #   and over the whole run: no DSN or secret of the env files in any output, command line or log, no unit used
 #   without a daemon-reload after its file changed, and no call that fake-systemctl.sh does not know.
 #
@@ -322,7 +332,7 @@ make_release() { # label [option ...] -> $BUILD/<sha>, built like pack-release.s
   rm -rf "$dir"
   mkdir -p "$dir/deploy"
   cp -a "$DEPLOY/." "$dir/deploy/"
-  find "$dir/deploy" -name '*.env' -type f -delete
+  find "$dir/deploy" -name '*.env' -type f ! -path "$dir/deploy/caddy/build/versions.env" -delete
   mkdir -p "$dir/db/dist/cli" "$dir/reference-data/dist/cli" "$dir/reference-data/data" "$dir/storefront"
   printf '{ "name": "@velexis/db", "private": true }\n' >"$dir/db/package.json"
   printf '{ "name": "@velexis/reference-data", "private": true }\n' >"$dir/reference-data/package.json"
@@ -424,6 +434,26 @@ JS
         ;;
       report-fail) : >"$dir/FAKE_REPORT_FAIL" ;;
       no-ota-backend) rm -rf "${dir:?}/ota-backend" ;;
+      caddy-bin=*) # the Velexis Caddy build of pack-release.sh (caddy/bin/caddy): a fake that records its validations
+        mkdir -p "$dir/caddy/bin"
+        sed "s/@@BUILD@@/${opt#caddy-bin=}/g" >"$dir/caddy/bin/caddy" <<'SH'
+#!/usr/bin/env bash
+# deploy.test.sh's Velexis Caddy build "@@BUILD@@": only `caddy validate --config <file> --adapter caddyfile`. It records
+# the file, whether caddy.env's edge secret was loaded, its build and the rule files (VELEXIS_WAF_DIR); the build "bad"
+# refuses every Caddyfile, and fake-systemctl.sh fails to restart Caddy with the build "nostart".
+set -euo pipefail
+[ "${1:-}" = validate ] || { echo "fake caddy build: only validate" >&2; exit 2; }
+shift
+cfg=""
+while [ $# -gt 0 ]; do case "$1" in --config) cfg="$2"; shift 2 ;; *) shift ;; esac; done
+printf 'validate %s edge-secret=%s build=@@BUILD@@ waf=%s\n' "$cfg" "${VELEXIS_EDGE_SECRET:+set}" "${VELEXIS_WAF_DIR:-}" \
+  >>"$FAKE_STATE/caddy.log"
+if [ "@@BUILD@@" = bad ]; then echo "Error: loading http app module: provision http.handlers.waf: fake build" >&2; exit 1; fi
+echo 'Valid configuration'
+SH
+        if [ "${opt#caddy-bin=}" = nostart ]; then printf '# deploy.test.sh: fails to start\n' >>"$dir/caddy/bin/caddy"; fi
+        chmod 0755 "$dir/caddy/bin/caddy" ;;
+      waf=*) printf '# deploy.test.sh marker: %s\n' "${opt#waf=}" >>"$dir/deploy/caddy/waf/exclusions.conf" ;;
       *) die "make_release: unknown option $opt" ;;
     esac
   done
@@ -484,14 +514,14 @@ caddy_marker_is() { [ "$(marker_of "$CADDYFILE")" = "$1" ]; }
 no_staged_caddyfile() { [ ! -e "$ROOT/etc/caddy/Caddyfile.next" ]; }
 calls_matching() { printf '%s\n' "$CALLS" | grep -cE "$1" || true; }
 no_call() { [ "$(calls_matching "$1")" = 0 ]; }
-restart_order() { printf '%s\n' "$CALLS" | awk '$1 == "restart" { print $2 }' | paste -sd' ' -; }
+restart_order() { printf '%s\n' "$CALLS" | awk '$1 == "restart" && $2 != "caddy" { print $2 }' | paste -sd' ' -; }
 restarted_all_in_order() { [ "$(restart_order)" = "${UNIT_ORDER[*]}" ]; }
 restart_field() { # unit field -> the field (release, marker, pid) of the unit's last restart in this run
   printf '%s\n' "$CALLS" | awk -v u="$1" -v f="$2=" '$1 == "restart" && $2 == u {
     for (i = 3; i <= NF; i++) if (index($i, f) == 1) v = substr($i, length(f) + 1) } END { print v }'
 }
 every_restart_of() { # release -> every restart of this run started the unit in that release
-  [ -n "$CALLS" ] && ! printf '%s\n' "$CALLS" | awk -v r="$1" '$1 == "restart" && $5 != "release=" r' | grep -q .
+  [ -n "$CALLS" ] && ! printf '%s\n' "$CALLS" | awk -v r="$1" '$1 == "restart" && $2 != "caddy" && $5 != "release=" r' | grep -q .
 }
 first_line_of() { printf '%s\n' "$CALLS" | grep -nE "$1" | head -n 1 | cut -d: -f1; }
 last_line_of() { printf '%s\n' "$CALLS" | grep -nE "$1" | tail -n 1 | cut -d: -f1; }
@@ -1011,6 +1041,170 @@ r14_skipped() {
     printf '%s\n' "$ONEOFFS" | grep -q '^migrate argv=tenants '
 }
 check "a release without ota-backend/ runs the fan-out but skips the report step [OBE-007 AC4]" r14_skipped
+
+# ---- 14. the Velexis Caddy build (X-039) ----------------------------------------------------------------------------------------
+step "14. The Velexis Caddy build: installed from the snapshot when it changed, Caddy restarted; unchanged, nothing restarted"
+# deploy.sh still reaches the VM through the symbolic link of case 12 (VM_ROOT), so the paths it reports start there.
+CADDY_BIN="$ROOT/usr/local/bin/caddy-velexis"
+WAF="$ROOT/etc/caddy/waf"
+sha_file() { sha256sum "$1" | cut -c1-64; }
+caddy_calls() { printf '%s\n' "$CALLS" | grep -E '^(restart|reload) caddy' || true; }
+no_staged_caddy_files() { [ ! -e "$ROOT/etc/caddy/Caddyfile.next" ] && [ ! -e "$CADDY_BIN.next" ] && [ ! -e "$WAF.next" ]; }
+binary_is() { # release dir -> the installed build is that release's caddy/bin/caddy, root's 0755 (the test's user)
+  same_file "$1/caddy/bin/caddy" "$CADDY_BIN" && [ "$(stat -c '%U:%G %a' "$CADDY_BIN")" = "$(id -un):$(id -gn) 755" ]
+}
+restarted_after_units() { # exactly one Caddy restart, after the last unit restart, with the installed binary; no reload
+  local r s
+  [ "$(calls_matching '^restart caddy ')" = 1 ] && no_call '^reload caddy' || return 1
+  r="$(last_line_of '^restart caddy ')"
+  s="$(printf '%s\n' "$CALLS" | grep -nE '^restart velexis-' | tail -n 1 | cut -d: -f1)"
+  [ -n "$s" ] && [ "$r" -gt "$s" ] &&
+    printf '%s\n' "$CALLS" | grep -q "^restart caddy binary=$(sha_file "$CADDY_BIN") caddyfile=$(sha_file "$CADDYFILE")$"
+}
+
+make_release r15 caddy-bin=b1
+R15="$BUILT"
+REL15="$SRV/releases/$R15"
+upload "$R15"
+deploy "$R15"
+r15_waits() {
+  rc_is 0 && current_is "$R15" && output_has "this release's Caddy build waits for provision-vm.sh --steps caddy" &&
+    [ ! -e "$CADDY_BIN" ] && [ -z "$(caddy_calls)" ] && no_staged_caddy_files
+}
+r15_snapshot() {
+  same_file "$REL15/caddy/bin/caddy" "$LIB/system/$R15/caddy-velexis" && [ "$(stat -c %a "$LIB/system/$R15/caddy-velexis")" = 755 ] &&
+    diff -r -q "$REL15/deploy/caddy/waf" "$LIB/system/$R15/caddy-waf" >/dev/null
+}
+check "a VM whose /usr/bin/caddy is no link to caddy-velexis: the release's build waits, nothing is installed or restarted [X-039 AC3]" \
+  r15_waits
+check "the snapshot holds the release's build (0755) and its rule files [X-039 AC3]" r15_snapshot
+check "the rule files are installed from the snapshot (they need no build) [X-039 AC3]" \
+  diff -r -q "$REL15/deploy/caddy/waf" "$WAF"
+
+# provision-vm.sh --steps caddy (X-039): the build installed once, /usr/bin/caddy diverted to a link to it.
+mkdir -p "$ROOT/usr/bin" "$ROOT/usr/local/bin"
+install -m 0755 "$REL15/caddy/bin/caddy" "$CADDY_BIN"
+ln -s /usr/local/bin/caddy-velexis "$ROOT/usr/bin/caddy"
+upload "$R15"
+INODE_BEFORE="$(stat -c '%i %Y' "$CADDY_BIN")"
+deploy "$R15"
+r15_unchanged() {
+  rc_is 0 && current_is "$R15" && [ -z "$(caddy_calls)" ] && [ "$(stat -c '%i %Y' "$CADDY_BIN")" = "$INODE_BEFORE" ] &&
+    [ -z "$VALIDATES" ] && no_staged_caddy_files && restarted_all_in_order
+}
+check "an unchanged build (the same sha again): no install, no validation, Caddy neither restarted nor reloaded [X-039 AC3]" \
+  r15_unchanged
+
+make_release r16 caddy-bin=b2 caddy=r16 waf=r16
+R16="$BUILT"
+REL16="$SRV/releases/$R16"
+upload "$R16"
+deploy "$R16"
+r16_validated() {
+  [ "$VALIDATES" = "validate $VM_ROOT/etc/caddy/Caddyfile.next edge-secret=set build=b2 waf=$VM_ROOT/etc/caddy/waf.next" ]
+}
+r16_live() {
+  rc_is 0 && current_is "$R16" && binary_is "$REL16" && caddy_marker_is r16 && [ "$(marker_of "$WAF/exclusions.conf")" = r16 ] &&
+    no_staged_caddy_files && output_has "Caddy build installed: $VM_ROOT/usr/local/bin/caddy-velexis $(sha_file "$REL16/caddy/bin/caddy")"
+}
+check "a changed build validates the new Caddyfile with itself and the staged rule files (waf.next) [X-039 AC3]" r16_validated
+check "the changed build, rule files and Caddyfile are live, from the snapshot, nothing stays staged [X-039 AC3]" r16_live
+check "Caddy is restarted once after the units are healthy, with the new build, and not reloaded [X-039 AC3]" \
+  restarted_after_units
+r16_serving_check() { serving "$R16"; }
+check "the units restarted in order on r16 and answer for it [X-039 AC3]" all_of restarted_all_in_order r16_serving_check
+upload "$R16"
+INODE_BEFORE="$(stat -c '%i %Y' "$CADDY_BIN")"
+deploy "$R16"
+r16_again() { rc_is 0 && [ -z "$(caddy_calls)" ] && [ "$(stat -c '%i %Y' "$CADDY_BIN")" = "$INODE_BEFORE" ] && [ -z "$VALIDATES" ]; }
+check "the same build again (r16 re-deployed): no install, no validation, no restart, no reload [X-039 AC3]" r16_again
+
+tamper_binary_copy() { # sha: the release folder's copy of the build gets a marker; rollbacks must use the snapshot
+  chmod u+w "$SRV/releases/$1/caddy/bin/caddy"
+  printf '# deploy.test.sh marker: release-folder\n' >>"$SRV/releases/$1/caddy/bin/caddy"
+  chmod u-w "$SRV/releases/$1/caddy/bin/caddy"
+}
+cp "$REL15/caddy/bin/caddy" "$PREFIX/caddy-b1"
+tamper_binary_copy "$R15"
+deploy --rollback
+r15_back() {
+  rc_is 0 && current_is "$R15" && same_file "$PREFIX/caddy-b1" "$CADDY_BIN" && same_file "$LIB/system/$R15/caddy-velexis" "$CADDY_BIN" &&
+    [ "$VALIDATES" = "validate $VM_ROOT/etc/caddy/Caddyfile.next edge-secret=set build=b1 waf=$VM_ROOT/etc/caddy/waf.next" ] && no_staged_caddy_files
+}
+check "--rollback to r15 re-installs r15's build from its snapshot (not the release folder's copy), validated with it [X-039 AC3]" \
+  r15_back
+check "--rollback restarts Caddy once, after the units, with r15's build [X-039 AC3]" restarted_after_units
+
+make_release r17 caddy-bin=b1 caddy=r17
+R17="$BUILT"
+upload "$R17"
+INODE_BEFORE="$(stat -c '%i %Y' "$CADDY_BIN")"
+deploy "$R17"
+r17_reloaded() {
+  rc_is 0 && current_is "$R17" && caddy_marker_is r17 && [ "$(stat -c '%i %Y' "$CADDY_BIN")" = "$INODE_BEFORE" ] &&
+    [ "$VALIDATES" = "validate $VM_ROOT/etc/caddy/Caddyfile.next edge-secret=set build=b1 waf=$VM_ROOT/etc/caddy/waf" ] &&
+    no_call '^restart caddy' && caddy_reload_after_restarts
+}
+check "the same build with a changed Caddyfile: validated with the installed build, Caddy reloaded once, not restarted [X-039 AC3]" \
+  r17_reloaded
+
+make_release r18 caddy-bin=bad caddy=r18
+R18="$BUILT"
+upload "$R18"
+FP_BEFORE="$(live_state; fingerprint "$CADDY_BIN" "$WAF")"
+deploy "$R18"
+r18_refused() {
+  rc_is 1 && output_has "does not validate; nothing was activated" &&
+    output_has "caddy validate failed: Error: loading http app module: provision http.handlers.waf: fake build"
+}
+r18_unchanged() {
+  same_fingerprint "$FP_BEFORE" "$(live_state; fingerprint "$CADDY_BIN" "$WAF")" && no_staged_caddy_files &&
+    [ -z "$CALLS" ] && current_is "$R17"
+}
+check "a build that does not validate the Caddyfile is refused with caddy's message [X-039 AC3]" r18_refused
+check "it changes nothing: build, rule files, Caddyfile, units, releases and current stay, nothing is staged or called [X-039 AC3]" \
+  r18_unchanged
+rm -rf "${SRV:?}/incoming/$R18"
+
+# An unhealthy release with a new build, rule files and Caddyfile: they are staged and validated, but none goes live,
+# the automatic rollback to r17 has nothing of Caddy's to restore (r17's are still live), and Caddy is never restarted.
+make_release r19 caddy-bin=b3 caddy=r19 waf=r19 unhealthy
+R19="$BUILT"
+upload "$R19"
+FP_BEFORE="$(fingerprint "$CADDY_BIN" "$WAF" "$CADDYFILE")"
+deploy "$R19"
+r19_rolled_back() {
+  rc_is 1 && output_has "deploy of $R19 failed health checks; rolled back to $R17" && current_is "$R17" &&
+    history_ends_with "$R17 rollback"
+}
+r19_never_live() {
+  [ "$VALIDATES" = "validate $VM_ROOT/etc/caddy/Caddyfile.next edge-secret=set build=b3 waf=$VM_ROOT/etc/caddy/waf.next" ] &&
+    same_fingerprint "$FP_BEFORE" "$(fingerprint "$CADDY_BIN" "$WAF" "$CADDYFILE")" && [ -z "$(caddy_calls)" ] &&
+    no_staged_caddy_files
+}
+check "an unhealthy release with a new build: exit 1, rolled back to r17 [X-039 AC3]" r19_rolled_back
+check "its build, rule files and Caddyfile were staged and validated but never live: r17's stay, Caddy neither restarted nor reloaded, nothing staged [X-039 AC3]" \
+  r19_never_live
+
+# A build that validates but with which Caddy does not start: the deploy stops with what to do, its healthy release
+# stays current, and --rollback puts r17's build back from its snapshot and restarts Caddy with it.
+make_release r20 caddy-bin=nostart caddy=r20
+R20="$BUILT"
+upload "$R20"
+deploy "$R20"
+r20_stopped() {
+  rc_is 1 && output_has "Caddy did not start with the new build $VM_ROOT/usr/local/bin/caddy-velexis; run: sudo velexis-deploy --rollback" &&
+    current_is "$R20" && [ "$(calls_matching '^restart caddy ')" = 1 ] && ! grep -q " $R20" "$LIB/deploy-history"
+}
+check "a build with which Caddy does not start: exit 1 with the way back (--rollback), the release stays current [X-039 AC3]" \
+  r20_stopped
+deploy --rollback
+r20_back() {
+  rc_is 0 && current_is "$R17" && same_file "$LIB/system/$R17/caddy-velexis" "$CADDY_BIN" && caddy_marker_is r17 &&
+    no_staged_caddy_files
+}
+check "--rollback then re-installs r17's build and Caddyfile [X-039 AC3]" r20_back
+check "and restarts Caddy once, after the units, with r17's build [X-039 AC3]" restarted_after_units
 
 # ---- over the whole run -----------------------------------------------------------------------------------------------------
 step "Over the whole run"

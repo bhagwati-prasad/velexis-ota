@@ -18,7 +18,7 @@ Related: [`architecture.md`](architecture.md) (where each piece runs), [`convent
 | TypeScript | **5.6** (5.6.x) | One compiler version for apps, packages and the SDK's `checkJs`. |
 | PostgreSQL | **16** (16.x, PGDG apt) | The reference DDL was validated on 16 ([db README](../velexis-sdk/db/README.md)). |
 | Redis | **7** (7.4.x, packages.redis.io apt) | BullMQ, caches, one-time tokens, rate limits. |
-| Caddy | **2.8** (2.8.x, Caddy apt; later 2.x after reading the release notes) | Automatic HTTPS, on-demand TLS with an `ask` endpoint, simple reverse proxy ([ADR-0018](adr/0018-hosted-storefront-custom-domains.md)). |
+| Caddy | **2.8** (2.8.4: the Velexis build with the Coraza web application firewall and the OWASP Core Rule Set v4, every version, the Go toolchain and the binary's SHA-256 pinned in `deploy/caddy/build/versions.env`; the Caddy apt package provides the unit and the user; later 2.x after reading the release notes) | Automatic HTTPS, on-demand TLS with an `ask` endpoint, simple reverse proxy ([ADR-0018](adr/0018-hosted-storefront-custom-domains.md)); the WAF is PCI DSS 6.4.2 ([ADR-0027](adr/0027-pci-scope-and-vm-controls.md), task X-039). |
 | Ubuntu | **24.04 LTS** | Long support. Ships systemd 255. |
 | systemd | 255 (Ubuntu's) | Process supervision, sandboxing, journald logs, timers ([ADR-0007](adr/0007-single-vm-without-docker.md)). |
 | GitHub Actions | `actions/checkout` v4, `pnpm/action-setup` v5, `actions/setup-node` v4, `actions/cache` v4, `actions/upload-artifact` and `download-artifact` v4, each **pinned to a full commit SHA** with the tag in a comment | CI and manual deploys. Pinning keeps a moved tag from running new code next to the deploy key ([ADR-0023](adr/0023-release-artefact-and-deploy-user.md)). |

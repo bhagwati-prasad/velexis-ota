@@ -10,21 +10,31 @@
 #
 # Order (docs/mvp/deployment-single-vm.md §8):
 #   verify the upload (SHA256SUMS lists exactly its files, all intact; RELEASE.json; Node major) -> check that
-#   /etc/velexis/*.env have every variable of the release's env templates -> snapshot the units, Caddyfile and
-#   maintenance page root-owned under /var/lib/velexis/system/<sha>/ -> from the snapshot, validate a changed
-#   Caddyfile and install the units, then install the root-owned scripts (velexis-deploy, -backup, -restore, -alert,
+#   /etc/velexis/*.env have every variable of the release's env templates -> snapshot the units, Caddyfile, the web
+#   application firewall's rule files, the Caddy build and the maintenance page root-owned under
+#   /var/lib/velexis/system/<sha>/ -> from the snapshot, stage a changed Caddy build, rule files and Caddyfile and
+#   validate the Caddyfile with the binary the caddy service will run, install the units, then install the root-owned
+#   scripts (velexis-deploy, -backup, -restore, -alert,
 #   -run and -healthcheck; the health check skips its unit checks while this script holds its lock) -> move to
 #   releases/<sha> (root:velexis,
 #   read-only) -> migrations (platform, reference, tenant fan-out; expand-phase files) -> reference data, both as
 #   transient units with a dynamic user (run_transient), and between them the fan-out report published as the OTA
 #   zone (velexis-run ota ... tenants:report-migrations) -> switch the `current` symlink -> restart workers, APIs,
-#   front ends one at a time with health checks -> reload Caddy -> prune old releases (never the active one nor the
-#   --rollback target). Any failed health check rolls back: the previous release's snapshot (units, Caddyfile) is
-#   re-installed, then `current` is switched back and the units restart.
+#   front ends one at a time with health checks -> put the staged Caddy files live and reload Caddy (restart it when
+#   its binary changed) -> prune old releases (never the active one nor the --rollback target). Any failed health
+#   check rolls back: the previous release's snapshot (units, Caddyfile, rule files, Caddy build) is re-installed, then
+#   `current` is switched back and the units restart.
+#
+# The Velexis Caddy build (task X-039, docs/mvp/deployment-single-vm.md §6): a release's caddy/bin/caddy (Caddy 2.8.4
+# with the Coraza web application firewall, deploy/caddy/build/build-caddy.sh) is installed root-owned as
+# /usr/local/bin/caddy-velexis when its content changed, but only on a VM where the caddy service runs that file:
+# /usr/bin/caddy is a link to it (provision-vm.sh, step caddy, once). Until then the release's binary waits, and its
+# Caddyfile is validated with the service's own /usr/bin/caddy (one with the firewall's directives is refused).
 #
 # Tests only (deploy/scripts/test/deploy.test.sh). With VELEXIS_ROOT=<absolute folder> every path of this script
 # (/srv/velexis, /etc/velexis, /var/lib/velexis, /var/lib/velexis-migrate, /var/log/velexis, /usr/local/sbin,
-# /etc/systemd/system, /etc/caddy and the lock in /run) moves under that folder, the script runs without root and
+# /etc/systemd/system, /etc/caddy, /usr/local/bin/caddy-velexis, /usr/bin/caddy and the lock in /run) moves under that
+# folder, the script runs without root and
 # hands files over to the calling user and group instead of root:root and root:velexis, and it takes four more
 # overrides:
 #   SYSTEMCTL      the systemctl to call (required with VELEXIS_ROOT; fake-systemctl.sh in the test)
@@ -79,6 +89,9 @@ LOG_DIR="$R/var/log/velexis"
 SBIN="$R/usr/local/sbin"
 SYSTEMD_DIR="$R/etc/systemd/system"
 CADDY_DIR="$R/etc/caddy"
+CADDY_WAF="$CADDY_DIR/waf"                        # the web application firewall's rule files (deploy/caddy/waf)
+CADDY_BIN="$R/usr/local/bin/caddy-velexis"        # the Velexis Caddy build (X-039)
+CADDY_SERVICE_BIN="$R/usr/bin/caddy"              # what caddy.service runs: a link to CADDY_BIN (provision-vm.sh)
 LOCK_FILE="$R/run/velexis-deploy.lock"
 KEEP_RELEASES=5
 
@@ -259,45 +272,100 @@ verify_upload() { # dir: SHA256SUMS lists exactly the regular files of the folde
 }
 
 snapshot_system_files() { # uploaded dir, sha: root-owned copy of everything root installs from a release
-  local src="$1" dst="$SYSTEM_SNAPSHOTS/$2"
+  local src="$1" dst="$SYSTEM_SNAPSHOTS/$2" want got
   remove_tree "$dst"
   install -d -m 0755 -o "$OWNER" -g "$OWNER_GROUP" "$SYSTEM_SNAPSHOTS" "$dst" "$dst/maintenance"
   cp -R -P "$src/deploy/systemd" "$dst/systemd"
   cp -P "$src/deploy/caddy/Caddyfile" "$dst/Caddyfile"
   cp -P "$src/deploy/caddy/maintenance/index.html" "$dst/maintenance/index.html"
+  if [ -d "$src/deploy/caddy/waf" ]; then cp -R -P "$src/deploy/caddy/waf" "$dst/caddy-waf"; fi
+  if [ -f "$src/caddy/bin/caddy" ] && [ ! -L "$src/caddy/bin/caddy" ]; then
+    cp -P "$src/caddy/bin/caddy" "$dst/caddy-velexis"
+    # The copy root may run as the web server is checked again against SHA256SUMS: the upload stays writable for the
+    # deploy user until it is handed over, after this snapshot.
+    want="$(awk '$2 == "./caddy/bin/caddy" || $2 == "*./caddy/bin/caddy" { print $1 }' "$src/SHA256SUMS")"
+    got="$(sha256sum "$dst/caddy-velexis" | cut -d' ' -f1)"
+    if [ -z "$want" ] || [ "$want" != "$got" ]; then
+      remove_tree "$dst"
+      die "caddy/bin/caddy of $src changed after its verification"
+    fi
+  fi
   chown -R "$OWNER:$OWNER_GROUP" "$dst"
   chmod -R u=rwX,go=rX "$dst"
+  if [ -f "$dst/caddy-velexis" ]; then chmod 0755 "$dst/caddy-velexis"; fi
 }
 
-caddy_validates() { # Caddyfile -> 0 when caddy validates it with caddy.env, as the caddy service reads it
+caddy_service_runs_build() { # 0 when the caddy service's /usr/bin/caddy is the link to the Velexis build
+  [ "$(readlink "$CADDY_SERVICE_BIN" 2>/dev/null || true)" = /usr/local/bin/caddy-velexis ]
+}
+
+caddy_validates() { # caddy-binary Caddyfile waf-folder -> 0 when that caddy validates it with caddy.env and those rules
   local out rc=0
   [ -r "$ETC/caddy.env" ] || { log "cannot read $ETC/caddy.env"; return 1; }
   # Errors of caddy.env itself are dropped: bash would quote part of a value for a malformed line. Caddy's own
   # messages can quote a substituted value (the edge secret), so every value of caddy.env is redacted from them.
+  # VELEXIS_WAF_DIR points the Caddyfile's firewall at the rule files to validate (the staged ones, X-039).
   out="$(
     set -a
     # shellcheck disable=SC1090,SC1091
     . "$ETC/caddy.env" 2>/dev/null
     set +a
-    caddy validate --config "$1" --adapter caddyfile 2>&1
+    VELEXIS_WAF_DIR="$3" "$1" validate --config "$2" --adapter caddyfile 2>&1
   )" || rc=$?
   [ "$rc" -eq 0 ] || log "caddy validate failed: $(redact "$out" "$ETC/caddy.env" | tail -n 5)"
   return "$rc"
 }
 
+same_tree() { # folder folder -> 0 when both hold the same files with the same content
+  [ -d "$1" ] && [ -d "$2" ] && diff -r -q "$1" "$2" >/dev/null 2>&1
+}
+
+drop_staged_caddy() { rm -f "$CADDY_DIR/Caddyfile.next" "$CADDY_BIN.next"; rm -rf "$CADDY_WAF.next"; }
+
 UNITS_CHANGED=0
-CADDY_CHANGED=0
+CADDY_CHANGED=0   # the Caddyfile
+WAF_CHANGED=0     # the firewall's rule files
+BINARY_CHANGED=0  # the Caddy build
 stage_system_files() { # root-owned snapshot dir (never a folder the deploy user or the app user can write)
-  local src="$1" f
+  local src="$1" f validator caddyfile waf
   UNITS_CHANGED=0
   CADDY_CHANGED=0
-  rm -f "$CADDY_DIR/Caddyfile.next"
-  # Validate a changed Caddyfile first, so that a bad one changes nothing at all.
+  WAF_CHANGED=0
+  BINARY_CHANGED=0
+  drop_staged_caddy
+  # Stage a changed Caddy build, rule files and Caddyfile, and validate the Caddyfile with the binary and the rule files
+  # the caddy service will have, so that a set that does not validate changes nothing at all.
+  if [ -f "$src/caddy-velexis" ]; then
+    if ! caddy_service_runs_build; then
+      log "the caddy service does not run $CADDY_BIN yet ($CADDY_SERVICE_BIN is no link to it): this release's Caddy build waits for provision-vm.sh --steps caddy"
+    elif ! cmp -s "$src/caddy-velexis" "$CADDY_BIN"; then
+      install -d -m 0755 "$(dirname "$CADDY_BIN")"
+      install -m 0755 -o "$OWNER" -g "$OWNER_GROUP" "$src/caddy-velexis" "$CADDY_BIN.next"
+      BINARY_CHANGED=1
+    fi
+  fi
+  if [ -d "$src/caddy-waf" ] && ! same_tree "$src/caddy-waf" "$CADDY_WAF"; then
+    install -d -m 0755 -o "$OWNER" -g "$OWNER_GROUP" "$CADDY_WAF.next"
+    for f in "$src"/caddy-waf/*; do
+      if [ -f "$f" ]; then install -m 0644 -o "$OWNER" -g "$OWNER_GROUP" "$f" "$CADDY_WAF.next/$(basename "$f")"; fi
+    done
+    WAF_CHANGED=1
+  fi
   if ! cmp -s "$src/Caddyfile" "$CADDY_DIR/Caddyfile"; then
     install -m 0644 -o "$OWNER" -g "$OWNER_GROUP" "$src/Caddyfile" "$CADDY_DIR/Caddyfile.next"
-    caddy_validates "$CADDY_DIR/Caddyfile.next" \
-      || { rm -f "$CADDY_DIR/Caddyfile.next"; die "Caddyfile from $src does not validate; nothing was activated"; }
     CADDY_CHANGED=1
+  fi
+  if [ "$BINARY_CHANGED$WAF_CHANGED$CADDY_CHANGED" != 000 ]; then
+    if [ "$BINARY_CHANGED" -eq 1 ]; then validator="$CADDY_BIN.next"
+    elif caddy_service_runs_build && [ -x "$CADDY_BIN" ]; then validator="$CADDY_BIN"
+    else validator=caddy                         # the caddy service's own /usr/bin/caddy (PATH)
+    fi
+    caddyfile="$CADDY_DIR/Caddyfile"
+    if [ "$CADDY_CHANGED" -eq 1 ]; then caddyfile="$CADDY_DIR/Caddyfile.next"; fi
+    waf="$CADDY_WAF"
+    if [ "$WAF_CHANGED" -eq 1 ]; then waf="$CADDY_WAF.next"; fi
+    caddy_validates "$validator" "$caddyfile" "$waf" \
+      || { drop_staged_caddy; die "Caddyfile from $src does not validate; nothing was activated"; }
   fi
 
   for f in "$src"/systemd/*.service "$src"/systemd/*.timer; do
@@ -312,13 +380,32 @@ stage_system_files() { # root-owned snapshot dir (never a folder the deploy user
   install_if_changed "$src/maintenance/index.html" "$BASE/maintenance/index.html" 0644 || true
 }
 
-activate_caddyfile() { # after the units are healthy: the staged Caddyfile goes live
-  if [ "$CADDY_CHANGED" -eq 1 ]; then
-    mv "$CADDY_DIR/Caddyfile.next" "$CADDY_DIR/Caddyfile"
+activate_caddyfile() { # after the units are healthy: the staged Caddy build, rule files and Caddyfile go live
+  if [ "$BINARY_CHANGED" -eq 1 ]; then
+    mv -f "$CADDY_BIN.next" "$CADDY_BIN"
+    log "Caddy build installed: $CADDY_BIN $(sha256sum "$CADDY_BIN" | cut -d' ' -f1)"
+  fi
+  if [ "$WAF_CHANGED" -eq 1 ]; then
+    rm -rf "$CADDY_WAF.old"
+    if [ -e "$CADDY_WAF" ]; then mv -T "$CADDY_WAF" "$CADDY_WAF.old"; fi
+    mv -T "$CADDY_WAF.next" "$CADDY_WAF"
+    rm -rf "$CADDY_WAF.old"
+  fi
+  if [ "$CADDY_CHANGED" -eq 1 ]; then mv "$CADDY_DIR/Caddyfile.next" "$CADDY_DIR/Caddyfile"; fi
+  if [ "$BINARY_CHANGED" -eq 1 ]; then
+    # A running Caddy keeps its old binary: only a restart starts the new one (a few seconds without connections).
+    # The build validated the Caddyfile above; should it still not start, the release stays current (its units are
+    # healthy) and --rollback puts the previous release's build back (from its snapshot) and restarts Caddy with it.
+    "$SYSTEMCTL" restart caddy ||
+      die "Caddy did not start with the new build $CADDY_BIN; run: sudo velexis-deploy --rollback (the previous release's build)"
+    log "Caddy restarted (new binary)"
+  elif [ "$WAF_CHANGED$CADDY_CHANGED" != 00 ]; then
     "$SYSTEMCTL" reload caddy
     log "Caddyfile reloaded"
-    CADDY_CHANGED=0
   fi
+  BINARY_CHANGED=0
+  WAF_CHANGED=0
+  CADDY_CHANGED=0
 }
 
 restore_running_system_files() { # failure before the switch: the running release keeps its own units
@@ -326,7 +413,7 @@ restore_running_system_files() { # failure before the switch: the running releas
     log "re-install the units and Caddyfile of the running release $PREV_SHA"
     stage_system_files "$SYSTEM_SNAPSHOTS/$PREV_SHA"
   fi
-  rm -f "$CADDY_DIR/Caddyfile.next"
+  drop_staged_caddy
 }
 
 previous_sha() { # last activated sha different from the current one
@@ -346,7 +433,7 @@ rollback_to() { # sha
     stage_system_files "$SYSTEM_SNAPSHOTS/$1"
   else
     log "no system-file snapshot for $1: the installed units and Caddyfile stay"
-    UNITS_CHANGED=0; CADDY_CHANGED=0; rm -f "$CADDY_DIR/Caddyfile.next"
+    UNITS_CHANGED=0; CADDY_CHANGED=0; WAF_CHANGED=0; BINARY_CHANGED=0; drop_staged_caddy
   fi
   switch_current "$rel"
   restart_units "$rel" || die "rollback release $1 is not healthy either; investigate now"

@@ -14,6 +14,9 @@
 #   is-enabled <unit>    masked, enabled (exit 0) or disabled (exit 1); a missing unit fails
 #   mask, unmask <unit>  what deploy.test.sh uses to mask a unit
 #   reload caddy         recorded with the SHA-256 of the live Caddyfile
+#   restart caddy        recorded with the SHA-256 of the live Caddyfile and of the installed Caddy build
+#                        (<VELEXIS_ROOT>/usr/local/bin/caddy-velexis, X-039); no process is started. A build with the
+#                        line "# deploy.test.sh: fails to start" fails (exit 1), as a Caddy that does not start
 # Every call is appended to <FAKE_STATE>/systemctl.log as one line, "<command> <unit> [key=value ...]"; a restart
 # records the new pid, the port, the release the unit's folder resolves to and the "# deploy.test.sh marker:" line
 # of the loaded unit file, so the test can tell which unit file a restart used.
@@ -140,6 +143,14 @@ case "$command" in
     record "daemon-reload"
     ;;
   restart)
+    if [ "$name" = caddy ]; then
+      record "restart caddy binary=$(sha256sum "$VELEXIS_ROOT/usr/local/bin/caddy-velexis" 2>/dev/null | cut -c1-64) caddyfile=$(sha256sum "$VELEXIS_ROOT/etc/caddy/Caddyfile" 2>/dev/null | cut -c1-64)"
+      if grep -qx '# deploy.test.sh: fails to start' "$VELEXIS_ROOT/usr/local/bin/caddy-velexis" 2>/dev/null; then
+        echo "Job for caddy.service failed because the control process exited with error code." >&2
+        exit 1
+      fi
+      exit 0
+    fi
     record_rc=0
     restart "$name" || record_rc=$?
     exit "$record_rc"

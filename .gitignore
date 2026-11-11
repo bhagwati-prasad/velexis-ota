@@ -5,6 +5,8 @@ node_modules/
 # Build output
 dist/
 build/
+# ... except the Caddy build's script and pinned versions (task X-039), which are sources.
+!/deploy/caddy/build/
 out/
 .next/
 next-env.d.ts

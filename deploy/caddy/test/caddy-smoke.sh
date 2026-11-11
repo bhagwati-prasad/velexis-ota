@@ -1,22 +1,25 @@
 #!/usr/bin/env bash
 # =====================================================================================================
-# caddy-smoke.sh — runs the real deploy/caddy/Caddyfile under Caddy 2.8.4 with an echo upstream (task X-022).
+# caddy-smoke.sh — runs the real deploy/caddy/Caddyfile under the Velexis Caddy build (Caddy 2.8.4 with the Coraza web
+# application firewall) with an echo upstream (task X-022; the firewall: X-039).
 #
-#   bash deploy/caddy/test/caddy-smoke.sh                 # caddy 2.8.4 on PATH
-#   CADDY=/tmp/caddy bash deploy/caddy/test/caddy-smoke.sh
+#   bash deploy/caddy/build/build-caddy.sh /tmp/caddy-build && bash deploy/caddy/test/caddy-smoke.sh
+#   CADDY=/path/to/caddy bash deploy/caddy/test/caddy-smoke.sh
 #
-# Needs no root and no network beyond loopback: Caddy 2.8.4 (CADDY, else `caddy` on PATH), Node 22 (SMOKE_NODE,
-# else `node`), curl, openssl and awk. The app ports 3000, 3001, 3002, 3100 and 4000 (echo upstream), 8080 and 8443
-# (Caddy) must be free on 127.0.0.1, and nothing may listen on 2019. CI runs it in the "deploy-files" job of
-# .github/workflows/ci.yml. How to read a failure: deploy/caddy/test/README.md.
+# Needs no root and no network beyond loopback: the Velexis Caddy build (CADDY, else /tmp/caddy-build/caddy as
+# build-caddy.sh writes it in the command above, else `caddy` on PATH; it must be Caddy 2.8.4 with the module
+# http.handlers.waf), Node 22 (SMOKE_NODE, else `node`), curl, openssl and awk. The app ports 3000, 3001, 3002, 3100 and
+# 4000 (echo upstream), 8080 and 8443 (Caddy) must be free on 127.0.0.1, and nothing may listen on 2019. CI runs it in
+# the "deploy-files" job of .github/workflows/ci.yml. How to read a failure: deploy/caddy/test/README.md.
 #
 # The test copy of the Caddyfile differs from the production file only in its global options block: the admin
 # socket moves to the temporary folder, and `local_certs`, `skip_install_trust`, `default_bind 127.0.0.1`,
 # `http_port 8080` and `https_port 8443` are added. The production `ask` URL (127.0.0.1:3100) already reaches
 # echo-upstream.mjs, which answers 200 only for acme.ota.localhost. Every snippet and site block is the production
 # text byte for byte; the hosts come from the environment of the Caddy process: PLATFORM_BASE_DOMAIN=
-# platform.localhost, STOREFRONT_BASE_DOMAIN=ota.localhost, a random VELEXIS_EDGE_SECRET, and VELEXIS_ROOT (the
-# prefix of the /srv/velexis folders: a fixture storefront release and the maintenance page of deploy/caddy).
+# platform.localhost, STOREFRONT_BASE_DOMAIN=ota.localhost, a random VELEXIS_EDGE_SECRET, VELEXIS_ROOT (the
+# prefix of the /srv/velexis folders: a fixture storefront release and the maintenance page of deploy/caddy) and
+# VELEXIS_WAF_DIR (a copy of deploy/caddy/waf, the firewall's rule files, as velexis-deploy installs them).
 #
 # What it proves (docs/mvp/plans/foundation-tasks.md, X-022; each line ends with the acceptance criterion):
 #   - the production Caddyfile validates and is `caddy fmt` clean (AC2); with an empty environment its host names
@@ -65,6 +68,23 @@
 #     nothing listens on TCP 2019;
 #   - and, for ADR-0027 row 4, TLS 1.2 and 1.3 are accepted, TLS 1.1 is refused, every host sends HSTS (error
 #     pages included), and neither the edge secret nor a client's forged copy reaches Caddy's log;
+#   - the web application firewall (X-039; each line ends with [X-039 AC2]): the binary is the pinned build of
+#     deploy/caddy/build/versions.env; with an empty environment every WAF loads its rule files from /etc/caddy/waf,
+#     three block (On) and six only detect; an SQL-injection and an XSS payload to /api/x on a storefront host, in the
+#     query and in a JSON body, and to api.ota.localhost get 403 with the API's error envelope (FORBIDDEN, the request
+#     id, the host's security headers) and never reach the upstream, an XSS payload to a storefront /checkout/ page gets
+#     403 as text; the same requests on the portal, both admin hosts, the platform API and a storefront page reach
+#     their app and are logged; normal SDK requests (GET, POST, PUT, PATCH, DELETE and OPTIONS with the SDK's headers,
+#     JSON bodies with names, the airline-card details and a multipart upload, and the hosted storefront's cookie mode)
+#     reach the OTA API on both blocking hosts with no WAF log line; arguments above 128 KiB are refused with 413 on a
+#     blocking host and pass uninspected on a detection host; each WAF reads a body only up to its own limit (on the
+#     storefront 256 KiB, in memory, and the WAF itself refuses a longer body with 413); multipart bodies cut before
+#     their closing boundary leave no temporary file in Caddy's TMPDIR; Stripe's webhook paths on api.ota.localhost
+#     only detect; a matched rule's log line names the rule
+#     and the variable but no value of the request (a password in a JSON body, card details); with
+#     VELEXIS_WAF_ENGINE=DetectionOnly (the detection week) a reload makes the blocking paths detect only, and
+#     without it they block again; path traversals that answered 404 before now meet the WAF first on the blocking
+#     hosts (403) and still never reach the upstream;
 #   - on every host (FIX-W29-SECURITY), a request whose query, `Referer` and redirect `Location` carry the values of
 #     the Caddyfile's `(log_query_filter)` (signatures and tokens, Stripe's client secrets of the 3-D Secure return,
 #     the OAuth code and state of Stripe Connect's return to the portal, and the e-mail addresses, names, searches
@@ -74,6 +94,8 @@
 #
 # Settings (environment): CADDY, SMOKE_NODE, SMOKE_TMPDIR (parent of the temporary folder; default TMPDIR or
 # /tmp; the admin socket path must stay under 100 bytes), SMOKE_KEEP=1 (keep the temporary folder and its logs).
+# The request body checks of step 6a send multipart bodies, as the asset upload does: a WAF on a blocking host refuses
+# a body type the Core Rule Set does not allow (CRS 920420), which says nothing about Caddy's limits.
 # =====================================================================================================
 set -euo pipefail
 umask 077
@@ -97,6 +119,10 @@ PROD_ADMIN=unix//run/caddy/admin.sock
 PLACEHOLDER_HOSTS="*.ota.example.com admin.ota.example.com admin.platform.example.com api.ota.example.com api.platform.example.com platform.example.com"
 # deployment-single-vm.md §6: the storefront release and the maintenance page, without any VELEXIS_ROOT prefix.
 PROD_ROOTS="/srv/velexis/current/storefront /srv/velexis/maintenance"
+# X-039: the rule files of every WAF on the VM (velexis-deploy installs deploy/caddy/waf there) and of the build.
+PROD_WAF_INCLUDES="/etc/caddy/waf/coraza.conf /etc/caddy/waf/exclusions.conf /etc/caddy/waf/logdata.conf @crs-setup.conf.example @owasp_crs/REQUEST-*.conf @owasp_crs/RESPONSE-980-CORRELATION.conf"
+# X-039: the mode and body limit (SecRequestBodyLimit, bytes) of every WAF, sorted as text.
+PROD_WAF_LIMITS="DetectionOnly:1048576 DetectionOnly:10485760 DetectionOnly:262144 DetectionOnly:262144 DetectionOnly:5242880 DetectionOnly:5242880 On:1228800 On:262144 On:262144"
 CSP_DIRECTIVES=("default-src 'self'" "frame-ancestors 'none'" "object-src 'none'" "base-uri 'self'" "worker-src 'none'")
 # The general storefront CSP is the one that allows Stripe.js (the card page's).
 STOREFRONT_SCRIPTS="script-src 'self' https://js.stripe.com https://*.js.stripe.com"
@@ -141,15 +167,21 @@ same() { # what actual expected -> PASS, or FAIL with both values
 }
 
 # ---- 0. tools and ports -----------------------------------------------------------------------------------
-CADDY="${CADDY:-$(command -v caddy || true)}"
+BUILD_OUT=/tmp/caddy-build # the output folder of the build command in the header (the X-039 Verify command)
+if [ -z "${CADDY:-}" ]; then
+  if [ -x "$BUILD_OUT/caddy" ]; then CADDY="$BUILD_OUT/caddy"; else CADDY="$(command -v caddy || true)"; fi
+fi
 NODE="${SMOKE_NODE:-$(command -v node || true)}"
 if [ -z "$CADDY" ] || [ ! -x "$CADDY" ]; then
-  die "caddy not found: put Caddy $CADDY_VERSION on PATH or set CADDY (see deploy/caddy/test/README.md)"
+  die "caddy not found: build it with bash deploy/caddy/build/build-caddy.sh $BUILD_OUT, or set CADDY (see deploy/caddy/test/README.md)"
 fi
 if [ -z "$NODE" ] || [ ! -x "$NODE" ]; then die "node not found: set SMOKE_NODE"; fi
-for tool in curl openssl awk; do command -v "$tool" >/dev/null || die "$tool is missing"; done
+for tool in curl openssl awk sha256sum; do command -v "$tool" >/dev/null || die "$tool is missing"; done
 version="$("$CADDY" version | awk '{ print $1 }')"
 [ "$version" = "v$CADDY_VERSION" ] || die "this test pins Caddy $CADDY_VERSION; $CADDY is $version"
+"$CADDY" list-modules 2>/dev/null | grep -qx 'http.handlers.waf' \
+  || die "$CADDY has no web application firewall (module http.handlers.waf): build the Velexis Caddy with bash deploy/caddy/build/build-caddy.sh $BUILD_OUT"
+PINNED_SHA="$(sed -n 's/^CADDY_SHA256=\([0-9a-f]\{64\}\)$/\1/p' "$DEPLOY/caddy/build/versions.env")"
 
 tcp_tables() { local f; for f in /proc/net/tcp /proc/net/tcp6; do [ -r "$f" ] && printf '%s\n' "$f"; done; }
 listening() { # port -> true if any TCP socket of this network namespace listens on it (IPv4 or IPv6)
@@ -203,12 +235,15 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 [ "${#SOCK}" -lt 100 ] || die "admin socket path too long for a unix socket ($SOCK); set SMOKE_TMPDIR=/tmp"
 
-mkdir -p "$TMP/home" "$TMP/data" "$TMP/config"
-# Caddy sees only this environment: no proxy settings, no developer variables, its own data folder.
-caddy_env=(env -i "PATH=$PATH" "HOME=$TMP/home" "XDG_DATA_HOME=$TMP/data" "XDG_CONFIG_HOME=$TMP/config")
+mkdir -p "$TMP/home" "$TMP/data" "$TMP/config" "$TMP/caddy-tmp"
+# Caddy sees only this environment: no proxy settings, no developer variables, its own data folder, and its own
+# temporary folder (TMPDIR), where the WAF buffers long bodies and the files of multipart bodies (step 6e).
+CADDY_TMP="$TMP/caddy-tmp"
+caddy_env=(env -i "PATH=$PATH" "HOME=$TMP/home" "XDG_DATA_HOME=$TMP/data" "XDG_CONFIG_HOME=$TMP/config" "TMPDIR=$CADDY_TMP")
 
 validates() {
-  "${caddy_env[@]}" VELEXIS_EDGE_SECRET=smoke "$CADDY" validate --config "$CADDYFILE" --adapter caddyfile \
+  "${caddy_env[@]}" VELEXIS_EDGE_SECRET=smoke VELEXIS_WAF_DIR="$DEPLOY/caddy/waf" "$CADDY" validate --config "$CADDYFILE" \
+    --adapter caddyfile \
     >"$TMP/validate.log" 2>&1 || { cat "$TMP/validate.log"; return 1; }
 }
 check "caddy validate accepts the production Caddyfile [X-022 AC2]" validates
@@ -216,6 +251,8 @@ fmt_clean() { # caddy fmt --diff exits 1 on a file that is not formatted; print 
   "$CADDY" fmt --diff "$CADDYFILE" >"$TMP/fmt.diff" 2>&1 || { grep -E '^[-+] |^Error' "$TMP/fmt.diff"; return 1; }
 }
 check "caddy fmt --diff is clean for the production Caddyfile [X-022 AC2]" fmt_clean
+same "$CADDY is the pinned build of deploy/caddy/build/versions.env (CADDY_SHA256) [X-039 AC2]" \
+  "$(sha256sum "$CADDY" | cut -d' ' -f1)" "$PINNED_SHA"
 
 if "${caddy_env[@]}" "$CADDY" adapt --config "$CADDYFILE" --adapter caddyfile >"$TMP/prod.json" 2>"$TMP/adapt.log"; then
   # shellcheck disable=SC2016 # JavaScript, not shell
@@ -235,7 +272,27 @@ if "${caddy_env[@]}" "$CADDY" adapt --config "$CADDYFILE" --adapter caddyfile >"
     };
     walk(cfg.apps?.http);
     for (const p of cfg.apps?.tls?.automation?.policies ?? []) { (p.subjects ?? []).forEach((h) => hosts.add(h)); }
-    process.stdout.write(`${cfg.admin?.listen ?? ""}\n${[...hosts].sort().join(" ")}\n${[...roots].sort().join(" ")}\n`);
+    // The web application firewalls (X-039): the files they include, how many run in each mode, and how much of a body
+    // each reads (SecRequestBodyLimit), as <mode>:<bytes> pairs.
+    const includes = new Set();
+    const modes = {};
+    const limits = [];
+    const wafs = (v) => {
+      if (Array.isArray(v)) { v.forEach(wafs); return; }
+      if (v && typeof v === "object") {
+        if (v.handler === "waf") {
+          for (const m of String(v.directives ?? "").matchAll(/^\s*Include\s+(\S+)/gm)) { includes.add(m[1]); }
+          const mode = /^\s*SecRuleEngine\s+(\S+)/m.exec(String(v.directives ?? ""))?.[1] ?? "none";
+          modes[mode] = (modes[mode] ?? 0) + 1;
+          limits.push(`${mode}:${/^\s*SecRequestBodyLimit\s+(\S+)/m.exec(String(v.directives ?? ""))?.[1] ?? "none"}`);
+        }
+        Object.values(v).forEach(wafs);
+      }
+    };
+    wafs(cfg.apps?.http);
+    const modeList = Object.keys(modes).sort().map((k) => `${k}=${modes[k]}`).join(" ");
+    process.stdout.write(`${cfg.admin?.listen ?? ""}\n${[...hosts].sort().join(" ")}\n${[...roots].sort().join(" ")}\n` +
+      `${[...includes].sort().join(" ")}\n${modeList}\n${limits.sort().join(" ")}\n`);
   ' "$TMP/prod.json")"
   same "with an empty environment the host names are the placeholders of decisions.md §4 [X-022 AC3]" \
     "$(sed -n 2p <<<"$prod_facts")" "$PLACEHOLDER_HOSTS"
@@ -244,6 +301,15 @@ if "${caddy_env[@]}" "$CADDY" adapt --config "$CADDYFILE" --adapter caddyfile >"
   # VELEXIS_ROOT (test only) must expand to nothing on the VM: no default may move the production folders.
   same "with an empty environment the file roots are the /srv/velexis folders of the VM" \
     "$(sed -n 3p <<<"$prod_facts")" "$PROD_ROOTS"
+  same "with an empty environment every WAF loads coraza.conf, exclusions.conf and logdata.conf from /etc/caddy/waf and the Core Rule Set's request rules [X-039 AC2]" \
+    "$(sed -n 4p <<<"$prod_facts")" "$PROD_WAF_INCLUDES"
+  same "three WAFs block (On: api.ota.example.com and the /api/* and /checkout/* of both storefront blocks), six detect (the portal, both admin hosts, the platform API, the storefront pages) [X-039 AC2]" \
+    "$(sed -n 5p <<<"$prod_facts")" "DetectionOnly=6 On=3"
+  # The WAF runs before request_body, so its own body limit is what it reads: on the storefront (both WAFs of both
+  # storefront site blocks, 262144) no more than coraza.conf's SecRequestBodyInMemoryLimit, so no storefront body is
+  # written to a temporary file.
+  same "each WAF reads a body up to its own limit: 256 KiB (in memory) on the storefront, just above Caddy's request_body limit elsewhere [X-039 AC2]" \
+    "$(sed -n 6p <<<"$prod_facts")" "$PROD_WAF_LIMITS"
 else
   cat "$TMP/adapt.log"
   fail "caddy adapt failed on the production Caddyfile [X-022 AC3]"
@@ -299,8 +365,11 @@ printf '<!doctype html>\n<title>Smoke content page</title>\n<p>storefront conten
 
 EDGE_SECRET="smoke-edge-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 FORGED_EDGE="forged-edge-$(head -c 8 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+WAF_DIR="$ROOT/etc/caddy/waf"
+mkdir -p "$WAF_DIR"
+cp "$DEPLOY"/caddy/waf/*.conf "$WAF_DIR/"
 caddy_env+=("PLATFORM_BASE_DOMAIN=$PLATFORM" "STOREFRONT_BASE_DOMAIN=$STOREFRONT" "ACME_EMAIL=ops@example.com"
-  "VELEXIS_EDGE_SECRET=$EDGE_SECRET" "VELEXIS_ROOT=$ROOT")
+  "VELEXIS_EDGE_SECRET=$EDGE_SECRET" "VELEXIS_ROOT=$ROOT" "VELEXIS_WAF_DIR=$WAF_DIR")
 
 # ---- 3. start the echo upstream and Caddy ------------------------------------------------------------------
 step "Start echo-upstream.mjs (${UPSTREAM_PORTS[*]}) and Caddy ($HTTP_PORT, $HTTPS_PORT)"
@@ -353,6 +422,7 @@ json() { # dotted path -> the JSON text of that value in the response body ('' i
     if (v !== undefined) { process.stdout.write(typeof v === "string" ? v : JSON.stringify(v)); }
   ' "$1" <"$BODY"
 }
+uuid_id() { grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' <<<"$(json error.requestId)"; }
 handshake_ok() { fetch "$1" / && [ "$CURL_RC" -eq 0 ]; }
 for host in "$PLATFORM" "admin.$PLATFORM" "api.$PLATFORM" "admin.$STOREFRONT" "api.$STOREFRONT"; do
   retry 60 handshake_ok "$host" || die "no TLS for $host after 30 s (curl: $(cat "$TMP/curl.err"))"
@@ -402,9 +472,12 @@ same "without client edge headers, X-Velexis-Edge is still the edge secret [X-02
 # slip past the matcher either.
 STOREFRONT_PRIVATE=(/api/internal/x /api/health/ready /api/health/ready/ /api/health/details
   /api//internal/x /API/Internal/x /api/internal%2Fx /api/health/live/../ready)
+# X-039: the storefront's /api/* meets a blocking WAF first, which refuses a path with a dot segment as a path traversal
+# (CRS 930100, 403) before Caddy's 404; either way the request never reaches the API.
+private_status() { case "$1" in *..*) echo 403 ;; *) echo 404 ;; esac; }
 for path in "${STOREFRONT_PRIVATE[@]}"; do
   fetch "$TENANT" "$path" --path-as-is -H "X-Velexis-Edge: $FORGED_EDGE"
-  same "$path answers 404 [X-022 AC1]" "$STATUS" 404
+  same "$path answers $(private_status "$path") [X-022 AC1]" "$STATUS" "$(private_status "$path")"
   same "$path never reaches the OTA API [X-022 AC1]" "$(json port)" ""
 done
 fetch "$TENANT" /api/health/live
@@ -589,7 +662,9 @@ for api in "api.$STOREFRONT 4000" "api.$PLATFORM 3100"; do
   for path in /internal/x "/internal/tls/ask?domain=$TENANT" /health/ready //internal/x /Internal/x \
     /internal%2Fx /health/live/../ready; do
     fetch "$host" "$path" --path-as-is
-    same "$path answers 404 [X-022 AC1]" "$STATUS" 404
+    want=404 # X-039: api.$STOREFRONT blocks, so its WAF refuses the dot segment (403) first; api.$PLATFORM only detects
+    if [ "$host" = "api.$STOREFRONT" ]; then want="$(private_status "$path")"; fi
+    same "$path answers $want [X-022 AC1]" "$STATUS" "$want"
     same "$path never reaches the upstream [X-022 AC1]" "$(json port)" ""
   done
   fetch "$host" /health/live -H "X-Velexis-Edge: $FORGED_EDGE" -H "X-Velexis-Host: $TENANT"
@@ -606,9 +681,17 @@ step "Request bodies: up to 1100KiB for POST $UPLOAD on api.$STOREFRONT, 1MB on 
 UPLOAD_OK=1060000  # passes the upload route, which the API accepts; too large for every other route
 UPLOAD_BIG=1200000 # too large for the upload route as well
 UNDER_1MB=990000   # passes every route
-body_file() { # bytes -> a file of that many bytes in the temporary folder (written once)
-  local file="$TMP/body-$1.bin"
-  [ -s "$file" ] || head -c "$1" /dev/zero >"$file"
+BOUNDARY="smokeboundary$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+body_file() { # bytes -> a multipart/form-data body of exactly that many bytes, one file part (written once)
+  # Multipart, as the asset upload sends it: the blocking WAF of api.$STOREFRONT and the storefront's /api refuses a
+  # body type the Core Rule Set does not allow (CRS 920420, X-039), and a file part is not an argument of the WAF's
+  # 128 KiB limit. Caddy's request_body limits count the bytes whatever their type.
+  local file="$TMP/body-$1.bin" lead tail
+  lead="--$BOUNDARY"$'\r\n''Content-Disposition: form-data; name="file"; filename="smoke.png"'$'\r\n''Content-Type: image/png'$'\r\n\r\n'
+  tail=$'\r\n'"--$BOUNDARY--"$'\r\n'
+  if [ ! -s "$file" ]; then
+    { printf '%s' "$lead"; head -c "$(($1 - ${#lead} - ${#tail}))" /dev/zero; printf '%s' "$tail"; } >"$file"
+  fi
   printf '%s' "$file"
 }
 send_body() { # host path bytes [method] -> fetch with a request body of that many bytes (POST unless given)
@@ -616,7 +699,7 @@ send_body() { # host path bytes [method] -> fetch with a request body of that ma
   # HTTP/1.1: Caddy then answers `100 Continue` and closes the connection at the limit, and curl can see an empty
   # reply (exit 52) instead of the 413 about one time in twenty-five. Over HTTP/2, which curl negotiates here, curl
   # sends no Expect header anyway.
-  fetch "$1" "$2" -X "${4:-POST}" -H "Content-Type: application/octet-stream" -H "Expect:" \
+  fetch "$1" "$2" -X "${4:-POST}" -H "Content-Type: multipart/form-data; boundary=$BOUNDARY" -H "Expect:" \
     --data-binary "@$(body_file "$3")"
 }
 send_body "api.$STOREFRONT" "$UPLOAD" "$UPLOAD_OK"
@@ -823,6 +906,229 @@ fetch "api.$STOREFRONT" /v1/storefront -H "X-Api-Key: pk_test_smoke"
 same "without an Origin, Caddy adds no CORS header of its own on api.$STOREFRONT [OBE-097 AC1]" \
   "$STATUS $(header_count Access-Control-Allow-Origin) $(header_count Access-Control-Allow-Methods)" "200 0 0"
 
+# ---- 6e. the web application firewall (X-039) -------------------------------------------------------------------
+step "Web application firewall: blocking on the storefront's /api/* and /checkout/* and on api.$STOREFRONT, detection elsewhere"
+# Every request of this step carries a marker of its own in its query (waf=<marker>), so the WAF's log lines of a
+# request are found by its [uri]; values that must never reach a log carry markers of their own.
+WAF_MARK="$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+SQLI="id=1%27%20OR%20%271%27%3D%271"         # 1' OR '1'='1: CRS 942100 (SQL injection, libinjection)
+XSS="q=%3Cscript%3Ealert(1)%3C%2Fscript%3E" # <script>alert(1)</script>: CRS 941100 (XSS, libinjection)
+waf_lines() { grep -F '"logger":"http.handlers.waf"' "$TMP/caddy.log" || true; }
+waf_logged() { # marker [rule id] -> a WAF log line holds the marker and, when given, names the rule
+  local lines
+  lines="$(waf_lines | grep -F -- "$1" || true)"
+  [ -n "$lines" ] || return 1
+  [ -z "${2:-}" ] || grep -qF "[id \\\"$2\\\"]" <<<"$lines"
+}
+no_waf_line() { ! waf_lines | grep -qF -- "$1"; }
+refused_json() { # label: the last response is the WAF's 403 in the API's error envelope, answered by Caddy
+  same "$1 answers 403 [X-039 AC2]" "$STATUS" 403
+  same "$1 is the API's error envelope, FORBIDDEN [X-039 AC2]" \
+    "$(header Content-Type) $(json error.code) $(json error.status)" "application/json FORBIDDEN 403"
+  same "$1 never reaches the upstream [X-039 AC2]" "$(json port)" ""
+  same "$1 is Cache-Control no-store [X-039 AC2]" "$(header Cache-Control)" no-store
+  same "$1 has HSTS (ADR-0027) [X-039 AC2]" "$(header Strict-Transport-Security)" "max-age=31536000"
+  same "$1 hides the Server header [X-039 AC2]" "$(header_count Server)" 0
+}
+passed_to() { # label port: the last response is the upstream's answer on that port
+  same "$1 passes the WAF and reaches its app on $2 [X-039 AC2]" "$STATUS $(json port)" "200 $2"
+}
+
+# Blocking: the storefront's /api/*, in the query and in a JSON body, and the OTA API host.
+n=0
+for payload in "$SQLI 942100" "$XSS 941100"; do
+  read -r query rule <<<"$payload"
+  n=$((n + 1))
+  mark="smkwaf$WAF_MARK-s$n"
+  fetch "$TENANT" "/api/x?$query&waf=$mark"
+  refused_json "$TENANT/api/x with CRS $rule's payload in the query"
+  check "$TENANT/api/x: the storefront CSP on the refusal [X-039 AC2]" csp_ok
+  check "$TENANT/api/x: the refusal is in the WAF log with rule $rule [X-039 AC2]" retry 20 waf_logged "$mark" "$rule"
+  fetch "api.$STOREFRONT" "/x?$query&waf=$mark-api"
+  refused_json "api.$STOREFRONT/x with CRS $rule's payload in the query"
+  same "api.$STOREFRONT/x: X-Frame-Options DENY on the refusal [X-039 AC2]" "$(header X-Frame-Options)" DENY
+  check "api.$STOREFRONT/x: the refusal is in the WAF log with rule $rule [X-039 AC2]" retry 20 waf_logged "$mark-api" "$rule"
+done
+printf '{"name":"x%s OR 1=1--"}' "'" >"$TMP/sqli.json"
+for target in "$TENANT /api/v1/checkouts" "api.$STOREFRONT /v1/checkouts"; do
+  read -r host path <<<"$target"
+  fetch "$host" "$path?waf=smkwaf$WAF_MARK-body" -X POST -H "Content-Type: application/json" --data-binary "@$TMP/sqli.json"
+  refused_json "$host$path with an SQL injection in a JSON field"
+done
+fetch "$TENANT" /api/x -H "X-Request-Id: smoke-waf-$WAF_MARK" --data-urlencode "x=1' OR '1'='1" -G
+same "the refusal's error.requestId is the client's X-Request-Id [X-039 AC2]" "$(json error.requestId)" "smoke-waf-$WAF_MARK"
+fetch "$TENANT" "/api/x?$SQLI"
+check "without a client X-Request-Id, the refusal's error.requestId is a fresh UUID [X-039 AC2]" uuid_id
+fetch "$TENANT" "/checkout/complete.html?$XSS&waf=smkwaf$WAF_MARK-page"
+same "$TENANT/checkout/complete.html with an XSS payload answers 403 as text [X-039 AC2]" \
+  "$STATUS $(header Content-Type) $(cat "$BODY")" \
+  "403 text/plain; charset=utf-8 The request was refused by the web application firewall."
+check "$TENANT/checkout/complete.html's refusal has the storefront CSP [X-039 AC2]" csp_ok
+same "$TENANT/checkout/complete.html's refusal is Cache-Control no-store, with HSTS and no Server header [X-039 AC2]" \
+  "$(header Cache-Control) | $(header Strict-Transport-Security) | $(header_count Server)" "no-store | max-age=31536000 | 0"
+
+# Detection: the same requests pass, and the WAF logs them.
+DETECTING=("$PLATFORM /hello 3000" "admin.$PLATFORM /hello 3001" "admin.$STOREFRONT /hello 3002"
+  "api.$PLATFORM /hello 3100")
+for app in "${DETECTING[@]}"; do
+  read -r host path port <<<"$app"
+  for payload in "$SQLI 942100" "$XSS 941100"; do
+    read -r query rule <<<"$payload"
+    mark="smkwaf$WAF_MARK-$host-$rule"
+    fetch "$host" "$path?$query&waf=$mark"
+    passed_to "$host$path with CRS $rule's payload" "$port"
+    check "$host$path: the WAF logged CRS $rule for it (detection) [X-039 AC2]" retry 20 waf_logged "$mark" "$rule"
+  done
+done
+fetch "$TENANT" "/?$SQLI&waf=smkwaf$WAF_MARK-page-detect"
+same "$TENANT/ (a storefront page) with an SQL injection serves the page (detection) [X-039 AC2]" "$STATUS" 200
+check "$TENANT/: the WAF logged CRS 942100 for it [X-039 AC2]" retry 20 waf_logged "smkwaf$WAF_MARK-page-detect" 942100
+
+# Normal SDK and storefront requests pass both blocking WAFs, and leave no WAF log line.
+BROWSER_UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+cat >"$TMP/travelers.json" <<'JSON'
+{"travelers":[{"firstName":"Seán","lastName":"O'Brien-Núñez","dateOfBirth":"1984-02-29","email":"sean.obrien@example.com","phone":"+353 1 234 5678"},{"firstName":"Maria","lastName":"D'Angelo","dateOfBirth":"2017-07-01"}],"contact":{"email":"ana+test@example.com","address":{"line1":"Rua do Carmo, 12 - 3º Esq.","city":"Lisboa","postalCode":"1200-093","countryCode":"PT"}},"remarks":"Window seat, please; vegetarian meal (no nuts) & extra legroom!"}
+JSON
+cat >"$TMP/card.json" <<'JSON'
+{"card":{"number":"4111111111111111","holderName":"Ana O'Neil","expiryMonth":12,"expiryYear":2030,"cvc":"737"}}
+JSON
+{ printf -- '--%s\r\nContent-Disposition: form-data; name="file"; filename="logo.png"\r\nContent-Type: image/png\r\n\r\n' "$BOUNDARY"
+  head -c 2048 /dev/urandom
+  printf '\r\n--%s--\r\n' "$BOUNDARY"; } >"$TMP/upload.bin"
+SDK_HEADERS=(-H "Accept: application/json" -H "Accept-Language: pt-PT,pt;q=0.9,en;q=0.8" -H "X-Currency: EUR"
+  -H "X-Api-Key: pk_test_smoke$WAF_MARK" -H "X-Velexis-End-User-Agent: $BROWSER_UA" -H "X-Velexis-End-User-IP: 203.0.113.7")
+JWT="eyJhbGciOiJFZERTQSIsImtpZCI6InYxIn0.eyJzdWIiOiJ1c3JfMDEiLCJleHAiOjE3OTQzNzAwMDB9.c2lnbmF0dXJlLXZhbHVl"
+# The hosted storefront's cookie mode (ota/sdk/src/internal/session.js): the session in the __Host-vx_ cookies, the
+# CSRF cookie copied into X-CSRF-Token on writes, and what a browser adds to a same-origin fetch.
+CSRF="Q3NyZi1zbW9rZS10b2tlbi1mb3ItdGhlLXdhZi0wMTIz"
+COOKIE_HEADERS=(-H "Cookie: __Host-vx_at=$JWT; __Host-vx_rt=rt_UmVmcmVzaC1zbW9rZS10b2tlbi1mb3ItdGhlLXdhZg; __Host-vx_csrf=$CSRF"
+  -H "X-CSRF-Token: $CSRF" -H "User-Agent: $BROWSER_UA" -H "Sec-Fetch-Site: same-origin" -H "Sec-Fetch-Mode: same-origin"
+  -H "Sec-Fetch-Dest: empty" -H "Referer: https://$TENANT:$HTTPS_PORT/checkout/travellers?offer=off_01JA2Z7Q4M9R2T6V0X3Z8B1D5F&adults=2")
+for prefix in "$TENANT /api" "api.$STOREFRONT "; do
+  read -r host base <<<"$prefix"
+  n=0
+  for request in \
+    "GET /v1/flight-offers?origin=LIS&destination=LHR&departureDate=2027-05-10&adults=2&children=1&page%5Bsize%5D=20&" \
+    "POST /v1/flight-searches? $TMP/travelers.json" \
+    "PUT /v1/checkouts/chk_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/travelers? $TMP/travelers.json" \
+    "POST /v1/checkouts/chk_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/airline-card? $TMP/card.json" \
+    "PATCH /v1/bookings/bkg_01JA2Z7Q4M9R2T6V0X3Z8B1D5F?" \
+    "DELETE /v1/customers/me/saved-travelers/stv_01JA2Z7Q4M9R2T6V0X3Z8B1D5F?" \
+    "OPTIONS /v1/flight-searches?" \
+    "UPLOAD /v1/console/settings/assets?" \
+    "COOKIE /v1/checkouts/chk_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/travelers? $TMP/travelers.json"; do
+    read -r method path file <<<"$request"
+    n=$((n + 1))
+    mark="smkwaf$WAF_MARK-sdk$n"
+    url="$base${path}waf=$mark"
+    case "$method" in
+      GET | DELETE) fetch "$host" "$url" -X "$method" "${SDK_HEADERS[@]}" -H "Authorization: Bearer $JWT" ;;
+      POST | PUT)
+        fetch "$host" "$url" -X "$method" "${SDK_HEADERS[@]}" -H "Content-Type: application/json" \
+          -H "Idempotency-Key: 6f1c2a9e-3b7d-4c8e-9f01-$WAF_MARK" -H "X-Booking-Token: bt_smoke.$WAF_MARK" \
+          --data-binary "@$file" ;;
+      PATCH)
+        fetch "$host" "$url" -X PATCH "${SDK_HEADERS[@]}" -H 'If-Match: "3"' -H "Authorization: Bearer $JWT" \
+          -H "Content-Type: application/json" --data '{"contact":{"phone":"+44 20 7946 0958"}}' ;;
+      OPTIONS)
+        # A browser's CORS preflight (OBE-097) for a call with every header the SDK's transport can send.
+        fetch "$host" "$url" -X OPTIONS -H "Origin: https://www.example.net" -H "Access-Control-Request-Method: POST" \
+          -H "Access-Control-Request-Headers: accept-language,authorization,content-type,idempotency-key,if-match,x-api-key,x-booking-token,x-currency,x-request-id" ;;
+      UPLOAD)
+        method=POST
+        fetch "$host" "$url" -X POST "${SDK_HEADERS[@]}" -H "Authorization: Bearer $JWT" \
+          -H "Content-Type: multipart/form-data; boundary=$BOUNDARY" --data-binary "@$TMP/upload.bin" ;;
+      COOKIE)
+        method=PUT
+        fetch "$host" "$url" -X PUT -H "Accept: application/json" -H "Accept-Language: pt-PT,pt;q=0.9,en;q=0.8" \
+          "${COOKIE_HEADERS[@]}" -H "Content-Type: application/json" --data-binary "@$file" ;;
+    esac
+    same "$host: a normal $method $base${path%%\?*} reaches the OTA API [X-039 AC2]" \
+      "$STATUS $(json port) $(json method)" "200 4000 $method"
+    check "$host: the normal $method $base${path%%\?*} left no WAF log line [X-039 AC2]" no_waf_line "$mark"
+  done
+done
+
+# What a matched rule writes to the log: the rule and the variable, never a value of the request (logdata.conf).
+SECRET_MARK="smksecret$WAF_MARK"
+CARD_NUMBER="4000002760003184" # a card number that no other request of this run sends
+printf '{"email":"ana@example.com","password":"%s%s OR %s1%s=%s1"}' "$SECRET_MARK" "'" "'" "'" "'" >"$TMP/password.json"
+printf '{"card":{"number":"%s","holderName":"%s%s OR %s1%s=%s1","cvc":"737"}}' "$CARD_NUMBER" "$SECRET_MARK" "'" "'" "'" "'" \
+  >"$TMP/card-attack.json"
+fetch "$PLATFORM" "/sign-in?waf=smkwaf$WAF_MARK-pw" -X POST -H "Content-Type: application/json" --data-binary "@$TMP/password.json"
+passed_to "$PLATFORM/sign-in with an SQL injection in a JSON password (detection)" 3000
+check "the WAF logged CRS 942100 on ARGS:json.password [X-039 AC2]" retry 20 waf_logged "ARGS:json.password" 942100
+fetch "api.$PLATFORM" "/v1/x?waf=smkwaf$WAF_MARK-card" -X POST -H "Content-Type: application/json" \
+  --data-binary "@$TMP/card-attack.json"
+passed_to "api.$PLATFORM with card details and an SQL injection in the holder's name (detection)" 3100
+check "the WAF logged CRS 942100 on ARGS:json.card.holderName [X-039 AC2]" retry 20 waf_logged "ARGS:json.card.holderName" 942100
+check "no WAF log line holds the password's or the holder's value [X-039 AC2]" not grep -qF -- "$SECRET_MARK" "$TMP/caddy.log"
+check "no log line holds the card number [X-039 AC2]" not grep -qF -- "$CARD_NUMBER" "$TMP/caddy.log"
+
+# What one request may cost (coraza.conf rules 200007 and 200008): arguments above 128 KiB.
+"$NODE" -e 'process.stdout.write(JSON.stringify({ bodyHtml: "<p>" + "x".repeat(140000) + "</p>" }))' >"$TMP/big.json"
+fetch "api.$STOREFRONT" "/v1/console/email-templates/x?waf=smkwaf$WAF_MARK-big" -X PUT -H "Content-Type: application/json" \
+  --data-binary "@$TMP/big.json"
+same "api.$STOREFRONT: arguments above 128 KiB are refused with 413 before the Core Rule Set runs [X-039 AC2]" \
+  "$STATUS $(json port)" "413 "
+fetch "api.$PLATFORM" "/v1/x?waf=smkwaf$WAF_MARK-big-detect" -X PUT -H "Content-Type: application/json" \
+  --data-binary "@$TMP/big.json"
+same "api.$PLATFORM: the same arguments pass uninspected on a detection host, with every byte [X-039 AC2]" \
+  "$STATUS $(json port) $(json bytes)" "200 3100 $(wc -c <"$TMP/big.json" | tr -d ' ')"
+check "api.$PLATFORM: the WAF logged rule 200008 (not inspected) for it [X-039 AC2]" \
+  retry 20 waf_logged "smkwaf$WAF_MARK-big-detect" 200008
+
+# How much of a body the WAF reads (its body limit, rule 200006): it runs before request_body, so on the storefront it
+# stops at 256 KiB, in memory, and refuses the rest itself; on a detection host it logs and Caddy's own limit refuses.
+send_body "$TENANT" "/api$UPLOAD?waf=smkwaf$WAF_MARK-limit" 300000
+same "$TENANT/api: a body above the storefront WAF's 256 KiB is refused with 413 and never reaches the API [X-039 AC2]" \
+  "$STATUS $(json port)" "413 "
+check "$TENANT/api: the WAF itself stopped reading it (rule 200006) [X-039 AC2]" retry 20 waf_logged "smkwaf$WAF_MARK-limit" 200006
+send_body "api.$PLATFORM" "$UPLOAD?waf=smkwaf$WAF_MARK-limit-detect" "$UPLOAD_OK"
+same "api.$PLATFORM: a body above the WAF's 1 MiB passes it in detection mode and meets Caddy's 1MB (413) [X-039 AC2]" \
+  "$STATUS $(json port)" "413 "
+check "api.$PLATFORM: the WAF logged rule 200006 for it (detection) [X-039 AC2]" \
+  retry 20 waf_logged "smkwaf$WAF_MARK-limit-detect" 200006
+# Nothing stays in Caddy's temporary folder (TMPDIR): the WAF buffers a body above 256 KiB and every file part of a
+# multipart body there, and must remove them when the request ends, also when the file part has no closing boundary
+# or is cut at the body limit (Coraza up to 3.8.0 kept such a part's file for good, so anyone could fill the disk).
+{
+  printf -- '--%s\r\nContent-Disposition: form-data; name="file"; filename="cut.png"\r\nContent-Type: image/png\r\n\r\n' \
+    "$BOUNDARY"
+  head -c 400000 /dev/zero
+} >"$TMP/cut.bin"
+for target in "$TENANT /api$UPLOAD" "api.$STOREFRONT $UPLOAD" "api.$PLATFORM /v1/x" "$PLATFORM /upload"; do
+  read -r host path <<<"$target"
+  fetch "$host" "$path?waf=smkwaf$WAF_MARK-cut" -X POST -H "Content-Type: multipart/form-data; boundary=$BOUNDARY" \
+    --data-binary "@$TMP/cut.bin"
+  same "$host$path with a multipart body without its closing boundary gets an answer [X-039 AC2]" "$CURL_RC" 0
+done
+caddy_tmp_empty() { [ -z "$(ls -A "$CADDY_TMP")" ] || { ls -l "$CADDY_TMP"; return 1; }; }
+check "no temporary file of the WAF stays in Caddy's TMPDIR after the requests [X-039 AC2]" retry 20 caddy_tmp_empty
+
+# Stripe's webhook paths on the OTA API host only detect (exclusions.conf, rule 10001).
+fetch "api.$STOREFRONT" "/webhooks/stripe/velexis/test?waf=smkwaf$WAF_MARK-hook" -X POST \
+  -H "Content-Type: application/json" --data-binary "@$TMP/sqli.json"
+passed_to "api.$STOREFRONT/webhooks/stripe/velexis/test with an SQL injection in the event (detection only)" 4000
+check "api.$STOREFRONT/webhooks/stripe/...: the WAF logged CRS 942100 for it [X-039 AC2]" \
+  retry 20 waf_logged "smkwaf$WAF_MARK-hook" 942100
+
+# The detection week (deployment-single-vm.md §6): VELEXIS_WAF_ENGINE=DetectionOnly in caddy.env, then a reload.
+waf_reload() { # [VAR=value...] -> caddy reload of the test copy with the test environment and these variables
+  "${caddy_env[@]}" "$@" "$CADDY" reload --config "$TEST_COPY" --adapter caddyfile >"$TMP/reload.log" 2>&1 \
+    || { redact "$(cat "$TMP/reload.log")"; echo; return 1; }
+}
+check "caddy reload with VELEXIS_WAF_ENGINE=DetectionOnly succeeds [X-039 AC2]" waf_reload VELEXIS_WAF_ENGINE=DetectionOnly
+for target in "$TENANT /api/x" "api.$STOREFRONT /x"; do
+  read -r host path <<<"$target"
+  fetch "$host" "$path?$SQLI&waf=smkwaf$WAF_MARK-week-$host"
+  passed_to "$host$path with an SQL injection, VELEXIS_WAF_ENGINE=DetectionOnly" 4000
+  check "$host$path: logged during the detection week [X-039 AC2]" retry 20 waf_logged "smkwaf$WAF_MARK-week-$host" 942100
+done
+check "caddy reload without VELEXIS_WAF_ENGINE succeeds [X-039 AC2]" waf_reload
+fetch "$TENANT" "/api/x?$SQLI"
+refused_json "$TENANT/api/x with an SQL injection after the switch back to blocking"
+
 # ---- 7. hosts without a certificate ---------------------------------------------------------------------------
 step "On-demand TLS: only hosts the ask endpoint allows get a certificate"
 stored() { find "$TMP/data/caddy/certificates" -name "$1.crt" | grep -q .; }
@@ -900,7 +1206,6 @@ fetch "api.$PLATFORM" /v1/anything -H "X-Request-Id: $REQUEST_ID"
 envelope_checks "api.$PLATFORM"
 same "api.$PLATFORM echoes the client's X-Request-Id as error.requestId" "$(json error.requestId)" "$REQUEST_ID"
 fetch "api.$PLATFORM" /v1/anything
-uuid_id() { grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' <<<"$(json error.requestId)"; }
 check "without a client X-Request-Id, error.requestId is a fresh UUID" uuid_id
 fetch "api.$STOREFRONT" /v1/anything
 envelope_checks "api.$STOREFRONT"

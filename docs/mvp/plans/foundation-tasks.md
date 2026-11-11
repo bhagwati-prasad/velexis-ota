@@ -1066,7 +1066,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 - **Note (2026-11-10, lead decision (13h), FIX-W47-SHARED):** X-041 adds an outbound allow-list whose refused connections are logged with the prefix `VELEXIS-EGRESS-DENY` (PCI DSS 11.5.1.1). When X-041 is merged first, step 3's daily summary also counts those refusals by destination and user, and an unusual burst is an immediate alert, both covered by `log-review.test.sh`; when this task is merged first, X-041 adds them (its step 3). This Note changes no Status.
 
 ### X-039 · Put a web application firewall in front of the public hosts
-- **Status:** todo
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: provision-vm.sh --steps caddy,scripts on the VM, one week of detection mode on the VM, the exclusions and the switch to blocking, human step)
 - **Component:** foundation
 - **Milestone:** M6
 - **Depends on:** X-022, X-023

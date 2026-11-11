@@ -1,13 +1,15 @@
 # CI for every pull request and every push to main (ADR-0015, ADR-0020).
-# Jobs: plan-lint (no install), deploy-files (shellcheck, Caddyfile validation and its end-to-end smoke test, the
-# velexis-deploy test with a fake systemctl, the velexis-healthcheck test with fake endpoints, systemd units and their
-# sandbox exposure), systemd-units (the real units run a stand-in app under systemd; a failure alert reaches Mailpit),
-# check-vm (check-vm.test.sh as root with a real sshd; lead decision (13l) of 2026-11-10, approved by the owner),
-# dev-setup (docs/mvp/local-development.md §2 on a clean runner: PostgreSQL 16 and Redis 7.4 from apt, dev-setup.sh and
-# dev-keys.mjs twice), build-test (repository guards and tools/ci/check-package-json.mjs before the install, then
-# install, the tools/ci and tools/perf tests, format, lint, typecheck, unit, contracts up to date, build, the
-# cross-backend tests, release dry run), integration (in parallel with build-test: the integration tests with PostgreSQL 16 + Redis 7.4 +
-# Mailpit and the PAN-absence proof that reads their report; lead decision (5o) of 2026-11-05, approved by the owner).
+# Jobs: plan-lint (no install), deploy-files (shellcheck, the Velexis Caddy build with the web application firewall
+# (deploy/caddy/build/build-caddy.sh, checked against its pinned SHA-256; task X-039), Caddyfile validation and its
+# end-to-end smoke test, the velexis-deploy test with a fake systemctl, the velexis-healthcheck test with fake
+# endpoints, systemd units and their sandbox exposure), systemd-units (the real units run a stand-in app under systemd;
+# a failure alert reaches Mailpit), check-vm (check-vm.test.sh as root with a real sshd; lead decision (13l) of
+# 2026-11-10, approved by the owner), dev-setup (docs/mvp/local-development.md §2 on a clean runner: PostgreSQL 16 and
+# Redis 7.4 from apt, dev-setup.sh and dev-keys.mjs twice), build-test (repository guards and
+# tools/ci/check-package-json.mjs before the install, then install, the tools/ci and tools/perf tests, format, lint,
+# typecheck, unit, contracts up to date, build, the cross-backend tests, release dry run with the Caddy build),
+# integration (in parallel with build-test: the integration tests with PostgreSQL 16 + Redis 7.4 + Mailpit and the
+# PAN-absence proof that reads their report; lead decision (5o) of 2026-11-05, approved by the owner).
 # Agents never change this file to get their own change through (AGENTS.md §7). What each guard enforces and how to
 # run it locally: tools/ci/README.md.
 # Third-party actions are pinned to full commit SHAs with the tag as the last thing in the comment, so Dependabot
@@ -51,10 +53,8 @@ jobs:
   deploy-files:
     name: Deploy files
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    env:
-      CADDY_VERSION: "2.8.4"
-      CADDY_SHA512: "b8bec15d14fb033562af9f207850027bcbaa1f891edc9efe00d38bf39e1bf9944f8b6b8eba041ddd4c171cd70c905174c704d705be2f23bc678fe1eaf37a2485"
+    # 15 minutes since X-039: the Caddy build takes 1 to 3 minutes of them.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -65,17 +65,22 @@ jobs:
           # healthcheck.test.sh.
           node-version-file: .nvmrc
       - name: shellcheck deploy scripts
-        run: shellcheck -S style deploy/scripts/*.sh deploy/scripts/test/*.sh deploy/systemd/test/*.sh deploy/caddy/test/*.sh
-      - name: Validate the Caddyfile with Caddy ${{ env.CADDY_VERSION }}
         run: |
-          curl -fsSL -o /tmp/caddy.tgz "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_amd64.tar.gz"
-          echo "${CADDY_SHA512}  /tmp/caddy.tgz" | sha512sum -c -
-          tar -xzf /tmp/caddy.tgz -C /tmp caddy
-          VELEXIS_EDGE_SECRET=ci /tmp/caddy validate --config deploy/caddy/Caddyfile --adapter caddyfile
-          /tmp/caddy fmt deploy/caddy/Caddyfile | diff -u deploy/caddy/Caddyfile -
-      - name: Caddyfile smoke test (local CA, test ports, echo upstream)
-        # X-022: the real Caddyfile with a test global options block; see the header of caddy-smoke.sh.
-        run: CADDY=/tmp/caddy bash deploy/caddy/test/caddy-smoke.sh
+          shellcheck -S style deploy/scripts/*.sh deploy/scripts/test/*.sh deploy/systemd/test/*.sh deploy/caddy/test/*.sh \
+            deploy/caddy/build/*.sh
+      - name: Build the Velexis Caddy (Caddy 2.8.4 with Coraza, the pinned versions and SHA-256 of versions.env)
+        # X-039: the Go toolchain and the modules come from proxy.golang.org, checked against versions.env and
+        # sum.golang.org; the build fails unless its SHA-256 is CADDY_SHA256, which makes every CI run a check that the
+        # build is reproducible. See the header of build-caddy.sh.
+        run: bash deploy/caddy/build/build-caddy.sh /tmp/caddy-build
+      - name: Validate the Caddyfile with the Velexis Caddy
+        run: |
+          VELEXIS_EDGE_SECRET=ci VELEXIS_WAF_DIR=deploy/caddy/waf /tmp/caddy-build/caddy validate --config deploy/caddy/Caddyfile --adapter caddyfile
+          /tmp/caddy-build/caddy fmt deploy/caddy/Caddyfile | diff -u deploy/caddy/Caddyfile -
+      - name: Caddyfile smoke test (local CA, test ports, echo upstream, the web application firewall)
+        # X-022: the real Caddyfile with a test global options block; X-039: the WAF's blocking and detection. See the
+        # header of caddy-smoke.sh.
+        run: CADDY=/tmp/caddy-build/caddy bash deploy/caddy/test/caddy-smoke.sh
       - name: velexis-deploy test (temporary VM root, fake systemctl and apps, no root)
         # X-023: deploy.sh against fake releases (happy path, refusals, rollbacks, pruning); see deploy.test.sh's header.
         run: bash deploy/scripts/test/deploy.test.sh
@@ -526,6 +531,8 @@ jobs:
         run: pnpm --filter @velexis/ota-backend test:xb
 
       - name: Pack a release folder (dry run of deploy/scripts/pack-release.sh)
+        # pack-release.sh builds the Velexis Caddy into the release (X-039): 1.5 to 2.5 minutes of this step without a
+        # cache (measured on four CPUs and on two), below the 3 minutes that would call for a switch to skip it here.
         run: |
           RELEASE_SHA="${GITHUB_SHA}" bash deploy/scripts/pack-release.sh /tmp/release
           (cd "/tmp/release/${GITHUB_SHA}" && sha256sum --quiet -c SHA256SUMS)
