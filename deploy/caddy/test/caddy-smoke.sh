@@ -47,6 +47,10 @@
 #     proxied request reaches the upstream with exactly Caddy's X-Forwarded-For (the client's address) and
 #     X-Forwarded-Host (the requested host), also when the client sends forged ones, so the OTA admin's service key
 #     can never arrive "direct" through Caddy; a client's X-Velexis-Edge never reaches an upstream;
+#   - CORS on api.ota.localhost (OBE-097; the OTA API answers it itself, ota/backend/src/common/http/cors.ts): a
+#     browser's OPTIONS preflight reaches the OTA API with its Origin and Access-Control-Request-* headers, and the
+#     API's Access-Control-* headers and `Vary: Origin` come back unchanged, once each, on the preflight and on an
+#     actual answer; without an Origin, Caddy adds no CORS header of its own;
 #   - request bodies (lead decision (2c) of 2026-10-30, FIX-W34-SHARED): POST /v1/console/settings/assets on
 #     api.ota.localhost passes a body of 1,060,000 bytes whole to the upstream and answers 413 to 1,200,000 (1100KiB);
 #     every other route and method of both API hosts passes 990,000 bytes and answers 413 to 1,060,000 (1MB), and the
@@ -784,6 +788,40 @@ same "$TENANT/api drops a client-supplied X-Velexis-Edge: the upstream gets the 
   "$(json headers.x-velexis-edge)" "[\"$EDGE_SECRET\"]"
 same "$TENANT/api: X-Velexis-Host is the storefront host, not the client's [OBE-084 AC1]" \
   "$(json headers.x-velexis-host)" "[\"$TENANT\"]"
+
+# ---- 6d. CORS on the OTA API host (OBE-097) ----------------------------------------------------------------------
+step "CORS: a browser's OPTIONS preflight on api.$STOREFRONT reaches the OTA API, and the API's CORS headers come back"
+# The OTA API answers CORS itself (ota/backend/src/common/http/cors.ts): Caddy must pass the preflight through like any
+# other request and pass the API's Access-Control-* headers back unchanged, adding none of its own. The echo upstream
+# answers with the API's headers for a request with an Origin (echo-upstream.mjs), and 200 with its echo instead of the
+# API's 204, so the request that reached it can be read.
+CORS_ORIGIN=https://shop.example.net
+CORS_ASKED="content-type,idempotency-key,x-api-key"
+vary_origin() { grep -i '^vary:' "$HEADERS" | grep -qi 'origin'; }
+allows_api_key() { grep -i '^access-control-allow-headers:' "$HEADERS" | grep -q 'X-Api-Key'; }
+fetch "api.$STOREFRONT" /v1/flight-searches -X OPTIONS -H "Origin: $CORS_ORIGIN" \
+  -H "Access-Control-Request-Method: POST" -H "Access-Control-Request-Headers: $CORS_ASKED"
+same "OPTIONS /v1/flight-searches on api.$STOREFRONT reaches the OTA API as it was sent [OBE-097 AC1]" \
+  "$STATUS $(json port) $(json method) $(json url)" "200 4000 OPTIONS /v1/flight-searches"
+same "the preflight reaches the OTA API with its Origin and its Access-Control-Request-* headers [OBE-097 AC1]" \
+  "$(json headers.origin) $(json headers.access-control-request-method) $(json headers.access-control-request-headers)" \
+  "[\"$CORS_ORIGIN\"] [\"POST\"] [\"$CORS_ASKED\"]"
+same "the preflight's answer carries the API's Access-Control-Allow-Origin once [OBE-097 AC1]" \
+  "$(header_count Access-Control-Allow-Origin) $(header Access-Control-Allow-Origin)" "1 $CORS_ORIGIN"
+same "the preflight's answer carries the API's methods and max age unchanged [OBE-097 AC1]" \
+  "$(header Access-Control-Allow-Methods) | $(header Access-Control-Max-Age)" "GET, POST, PUT, PATCH, DELETE | 7200"
+check "the preflight's answer carries the API's allowed headers, X-Api-Key among them [OBE-097 AC1]" allows_api_key
+check "the preflight's answer keeps the API's Vary: Origin [OBE-097 AC1]" vary_origin
+same "the preflight's answer has no Access-Control-Allow-Credentials [OBE-097 AC1]" \
+  "$(header_count Access-Control-Allow-Credentials)" 0
+fetch "api.$STOREFRONT" /v1/storefront -H "Origin: $CORS_ORIGIN" -H "X-Api-Key: pk_test_smoke"
+same "a GET with an Origin on api.$STOREFRONT gets the API's Allow-Origin and Expose-Headers back once [OBE-097 AC1]" \
+  "$STATUS $(header_count Access-Control-Allow-Origin) $(header Access-Control-Allow-Origin) | $(header Access-Control-Expose-Headers)" \
+  "200 1 $CORS_ORIGIN | X-Request-Id, Retry-After, ETag, Location"
+check "the actual answer keeps the API's Vary: Origin [OBE-097 AC1]" vary_origin
+fetch "api.$STOREFRONT" /v1/storefront -H "X-Api-Key: pk_test_smoke"
+same "without an Origin, Caddy adds no CORS header of its own on api.$STOREFRONT [OBE-097 AC1]" \
+  "$STATUS $(header_count Access-Control-Allow-Origin) $(header_count Access-Control-Allow-Methods)" "200 0 0"
 
 # ---- 7. hosts without a certificate ---------------------------------------------------------------------------
 step "On-demand TLS: only hosts the ask endpoint allows get a certificate"

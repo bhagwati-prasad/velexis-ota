@@ -23,6 +23,12 @@
 // `Cache-Control: public, max-age=31536000, immutable`, `X-Content-Type-Options: nosniff` and
 // `Cross-Origin-Resource-Policy: cross-origin`, with the same echo as its body (FIX-W34-SHARED, lead decision (2b)).
 //
+// On the OTA API port, a request with an `Origin` that does not come through a storefront (no `X-Velexis-Edge`) gets
+// the OTA API's CORS headers for a listed origin (OBE-097, ota/backend/src/common/http/cors.ts): a preflight (`OPTIONS`
+// with `Access-Control-Request-Method`) the preflight's, with 200 and the echo instead of the API's 204, so the smoke
+// test can read what reached the upstream; any other request an actual answer's. The smoke test proves that Caddy
+// passes them on unchanged on api.ota and adds none of its own.
+//
 // GET /redirect answers 302 instead, with `Location: /landing?<the request's own query>` and the same echo, so the
 // smoke test can show which query values of a redirect's `Location` reach Caddy's access log (FIX-W29-SECURITY).
 //
@@ -51,6 +57,32 @@ const PUBLIC_ASSET_HEADERS = {
   "x-content-type-options": "nosniff",
   "cross-origin-resource-policy": "cross-origin",
 };
+
+/** The OTA API's CORS headers (cors.ts): a preflight's besides the origin, and an actual answer's exposed headers. */
+const CORS_PREFLIGHT_HEADERS = {
+  "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE",
+  "access-control-allow-headers":
+    "Accept, Accept-Language, Authorization, Content-Type, Idempotency-Key, If-Match, If-None-Match, X-Api-Key, " +
+    "X-Booking-Token, X-CSRF-Token, X-Currency, X-Request-Id, X-Velexis-End-User-Agent, X-Velexis-End-User-IP, " +
+    "X-Velexis-Environment, X-Velexis-Host, X-Velexis-Scope",
+  "access-control-max-age": "7200",
+};
+const CORS_EXPOSE_HEADERS = "X-Request-Id, Retry-After, ETag, Location";
+
+/** The CORS headers the OTA API would add to its answer of `req` (none for an edge request or without `Origin`). */
+function corsHeaders(req) {
+  const origin = req.headers.origin;
+  if (typeof origin !== "string" || req.headers["x-velexis-edge"] !== undefined) {
+    return {};
+  }
+  return req.method === "OPTIONS" && req.headers["access-control-request-method"] !== undefined
+    ? { "access-control-allow-origin": origin, ...CORS_PREFLIGHT_HEADERS, vary: "Origin" }
+    : {
+        "access-control-allow-origin": origin,
+        "access-control-expose-headers": CORS_EXPOSE_HEADERS,
+        vary: "Origin",
+      };
+}
 
 const ports = (process.env.ECHO_PORTS ?? "3000,3001,3002,3100,4000")
   .split(",")
@@ -101,11 +133,12 @@ function handler(port) {
         return;
       }
       const rawPath = (req.url ?? "/").split("?")[0] ?? "/";
+      const cors = port === OTA_API_PORT ? corsHeaders(req) : {};
       if (port === OTA_API_PORT && req.method === "GET" && PUBLIC_ASSET_PATH.test(rawPath)) {
-        send(res, 200, echo, PUBLIC_ASSET_HEADERS);
+        send(res, 200, echo, { ...PUBLIC_ASSET_HEADERS, ...cors });
         return;
       }
-      send(res, 200, echo);
+      send(res, 200, echo, cors);
     });
   };
 }

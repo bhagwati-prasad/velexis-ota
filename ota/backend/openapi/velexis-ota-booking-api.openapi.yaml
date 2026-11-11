@@ -22,6 +22,25 @@ info:
     deployment and must send `X-Velexis-Host`. Test keys use the tenant's Amadeus test environment.
 
 
+    **Browsers on other origins (CORS).** A page on its own origin calls this API from the browser with a publishable
+    key whose allowed origins list the page's origin. The API answers every CORS preflight (`OPTIONS` with `Origin`
+    and `Access-Control-Request-Method`, on any path) with `204`, `Access-Control-Allow-Origin` echoing the `Origin`,
+    `Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE`, `Access-Control-Allow-Headers` with every request
+    header of this document and of the SDK (`Accept`, `Accept-Language`, `Authorization`, `Content-Type`,
+    `Idempotency-Key`, `If-Match`, `If-None-Match`, `X-Api-Key`, `X-Booking-Token`, `X-CSRF-Token`, `X-Currency`,
+    `X-Request-Id`, `X-Velexis-End-User-Agent`, `X-Velexis-End-User-IP`, `X-Velexis-Environment`, `X-Velexis-Host`,
+    `X-Velexis-Scope`), `Access-Control-Max-Age: 7200` and `Vary: Origin`; a preflight carries no key, so its answer
+    says nothing about one. An actual answer carries `Access-Control-Allow-Origin` (the request's `Origin`),
+    `Access-Control-Expose-Headers: X-Request-Id, Retry-After, ETag, Location` and `Vary: Origin` when the request's
+    publishable key lists its `Origin`, from the moment the key is checked: the guards' later refusals
+    (`403 TENANT_SUSPENDED`, `401 UNAUTHENTICATED`, `429 RATE_LIMITED`, ...) and the operation's own errors carry them
+    too. Secret keys, requests without an `Origin`, the refusals of the key itself (`401 INVALID_API_KEY`,
+    `403 ORIGIN_NOT_ALLOWED` for an origin the key does not list, the `503` of a lookup that fails), answers given
+    before the key is checked (a body that cannot be parsed or is too large, a path that is no operation) and
+    the hosted storefront's edge get none; the edge's preflights are not answered. The API never sends
+    `Access-Control-Allow-Credentials`: cookies never travel cross-origin, and the SDK calls with `credentials: "omit"`.
+
+
     **Users.** Customers authenticate with `/v1/auth/*` (bearer access token + rotating refresh token). Staff (portal
     accounts with a role in the OTA) use staff tokens for console operations. Guests access their booking with
     `X-Booking-Token`.

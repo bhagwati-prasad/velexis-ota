@@ -6,9 +6,11 @@
 // the application through Nest's shutdown hooks.
 //
 // The request pipeline (architecture §3; src/common/http/): `trust proxy` from TRUST_PROXY (`loopback`: Caddy),
-// helmet, cookie-parser, the raw body on /webhooks/*, `multipart/form-data` on the routes of MULTIPART_BODY_LIMITS
-// below and nowhere else, JSON bodies up to 256 KB elsewhere and up to the limits of JSON_BODY_LIMITS below on their
-// routes, OpenAPI validation, the error envelope, and 501 for pending operations.
+// helmet, the CORS preflights of browsers on other origins (cors.ts, OBE-097: `204` on any path; the caller guard
+// opens the actual answers of a publishable key to the origins it lists), cookie-parser, the raw body on /webhooks/*,
+// `multipart/form-data` on the routes of MULTIPART_BODY_LIMITS below and nowhere else, JSON bodies up to 256 KB
+// elsewhere and up to the limits of JSON_BODY_LIMITS below on their routes, OpenAPI validation, the error envelope,
+// and 501 for pending operations.
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import type { EnvSource } from "@velexis/config";
 import { createLogger } from "@velexis/logger";

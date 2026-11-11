@@ -92,8 +92,8 @@ Every request passes the same chain. The order matters: tenant and caller are kn
 |---|---|---|
 | 1 | Request context (`nestjs-cls`) | Reads or creates `X-Request-Id`, starts the per-request context |
 | 2 | Body parsing | Raw body on `/webhooks/*`; JSON limit 256 KB elsewhere (10 KB on the airline-card route); multipart only on asset upload |
-| 3 | `helmet`, `cookie-parser`, `trust proxy loopback` | Security headers, cookies, client IP from Caddy |
-| 4 | `CallerGuard` (tenancy) | Classifies the caller (table below), verifies the credential in constant time |
+| 3 | `helmet`, CORS preflights, `cookie-parser`, `trust proxy loopback` | Security headers; a browser's CORS preflight (`OPTIONS` with `Origin` and `Access-Control-Request-Method`, any path, not through the edge) answers `204` here (`common/http/cors.ts`, OBE-097); cookies, client IP from Caddy |
+| 4 | `CallerGuard` (tenancy) | Classifies the caller (table below), verifies the credential in constant time; opens the answer to the request's `Origin` (CORS headers) for a publishable key that lists it (OBE-097) |
 | 5 | `TenantGuard` (tenancy) | Loads the tenant from Redis or the platform tables; only `active` is served (`403 TENANT_SUSPENDED`), except the worker paths of [PADR-0014](../../platform/docs/adr/0014-tenant-suspension-and-resume.md) |
 | 6 | OpenAPI validation interceptor | Ajv on path, query, headers, body; `400 VALIDATION_FAILED` with field paths, never values |
 | 7 | `ScopeGuard` | Compares the caller with the operation's `x-scope` and the MVP extensions (`x-edge-only`, console permissions) |

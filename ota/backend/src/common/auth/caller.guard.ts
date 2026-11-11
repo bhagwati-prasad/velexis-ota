@@ -31,6 +31,10 @@
 //               `X-Velexis-End-User-Agent`, else the connection's
 //   others      the connection's address (Express' `req.ip`: Caddy's client address) and `User-Agent`; the forwarding
 //               headers are ignored
+//
+// Once the caller is known, the guard opens the answer to a browser page whose publishable key lists the page's
+// `Origin` (OBE-097, common/http/cors.ts `allowCorsAnswer`), so every answer from here on (the later guards' refusals,
+// the validation's, the operation's) carries the CORS headers; a refused credential never does.
 import { isIP } from "node:net";
 import {
   Injectable,
@@ -41,8 +45,9 @@ import {
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { AppError } from "@velexis/errors";
-import type { Request } from "express";
+import type { Request, Response } from "express";
 import { CallerContext, CallerResolver, type Caller, type RouteAccess } from "../../tenancy/caller-resolver";
+import { allowCorsAnswer } from "../http/cors";
 import { endUserIp, END_USER_IP_HEADER, type AddressedRequest } from "../http/rate-limits";
 import { RequestContext, type EndUser } from "../http/request-context";
 
@@ -136,6 +141,7 @@ export class CallerGuard implements CanActivate {
       access,
     );
     this.callers.set(caller);
+    allowCorsAnswer(context.switchToHttp().getResponse<Response>(), caller, req.headers.origin);
     this.context.setEndUser(endUserOf(req, caller));
     return true;
   }

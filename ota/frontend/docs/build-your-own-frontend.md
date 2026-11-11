@@ -30,15 +30,17 @@ A server of yours (Next.js, Nuxt, Angular SSR, Express, a small Node or edge fun
 
 ### 2.2 Browser app with a publishable key and a bundler
 
-A single-page app built with a bundler (Vite, webpack, esbuild, Rollup) imports the ESM build and calls the API from the browser with a publishable key `pk_…`. It is the simplest to host, but the customer's tokens live in the page's JavaScript, which is your risk to accept: keep them in memory only (§8.4), never in `localStorage` or `sessionStorage`. The API checks every call's `Origin` against the key's allowed origins (§3). It needs the API's CORS answers, which are not available yet (§2.4). Samples: §7, §8.4.
+A single-page app built with a bundler (Vite, webpack, esbuild, Rollup) imports the ESM build and calls the API from the browser with a publishable key `pk_…`. It is the simplest to host, but the customer's tokens live in the page's JavaScript, which is your risk to accept: keep them in memory only (§8.4), never in `localStorage` or `sessionStorage`. The API checks every call's `Origin` against the key's allowed origins (§3) and opens its answers to the origins the key lists (§2.4). Samples: §7, §8.4.
 
 ### 2.3 Plain HTML with the IIFE
 
-Small sites load `velexis-sdk.iife.js` with a `<script>` tag and use `window.Velexis` with a publishable key, as §2.2 (and, like it, wait for the API's CORS answers, §2.4). Sample: §6.
+Small sites load `velexis-sdk.iife.js` with a `<script>` tag and use `window.Velexis` with a publishable key, as §2.2, with the same CORS answers (§2.4). Sample: §6.
 
 ### 2.4 Browser calls to the API from your own origin
 
-> **Not yet available (2026-11-10).** The OTA API does not answer CORS preflight requests yet. Every SDK call carries `X-Api-Key`, so a browser first asks with `OPTIONS`; the API answers `404` without `Access-Control-Allow-Origin`, and the browser refuses the call. Until the API answers them, browser code on your own origin reaches the API only through your own server (§2.1). This note goes when it does.
+Your pages and the API are on different origins, so the browser applies CORS to every call. Each SDK call carries `X-Api-Key` (and `Content-Type`, `Idempotency-Key`, `Authorization` or `X-Booking-Token` where they apply), so the browser first asks with an `OPTIONS` preflight. The API answers every preflight with `204`, your origin in `Access-Control-Allow-Origin` and every method and header the SDK sends, and the browser keeps that answer for up to two hours. Those headers are the only ones a browser may send: a header of your own (the client's or a call's `headers` option) that the API does not know makes the browser refuse the call before it is sent. The actual answer is opened to your page only when the publishable key lists your page's origin (§3): it then carries `Access-Control-Allow-Origin` with that origin and exposes `X-Request-Id`, `Retry-After`, `ETag` and `Location`, so the SDK's errors keep their `requestId` and `retryAfterSeconds`, the errors of the call included (`401 UNAUTHENTICATED`, `403 TENANT_SUSPENDED`, `429 RATE_LIMITED`, a validation error).
+
+Your page cannot read an answer that the API gives before it accepts your key: an origin the key does not list (`403 ORIGIN_NOT_ALLOWED`), a wrong, revoked or expired key (`401 INVALID_API_KEY`), a body it cannot parse or that is too large, or a path that is no operation; nor the proxy's own `503 SERVICE_UNAVAILABLE` while the API restarts. The browser reports a CORS error in its console instead, and the SDK throws a `ConnectionError` (`NETWORK_ERROR`, §10.1) once its retries are spent (§10.2); the browser's network panel shows the answer and its code. Check the key and its allowed origins in the portal when every call fails this way. The API never allows credentials: no cookie travels to it, and the SDK calls it with `credentials: "omit"`.
 
 A secret key never goes to a browser: `createVelexisClient({ secretKey })` throws a `TypeError` when `document` exists.
 
