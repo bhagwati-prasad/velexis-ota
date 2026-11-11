@@ -549,12 +549,13 @@ describe("/sign-in page", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("[FIX-W47-PLATFORM AC2] names the password rule of platform admins below the portal's reset link", async () => {
+  it("[FIX-W47-PLATFORM AC2] [FIX-W48-PLATFORM AC1] names the password rule below the portal's reset link", async () => {
     await renderSignInPage();
 
     const rule = screen.getByText(SIGN_IN_STRINGS.passwordRule);
     expect(rule.textContent).toMatch(/at least 12 characters, with at least one letter and one digit/);
     expect(rule.textContent).toMatch(/in the portal/);
+    expect(rule.textContent).toMatch(/like every Velexis account/);
     expect(screen.getByRole("main").lastElementChild).toBe(rule);
   });
 

@@ -15,8 +15,11 @@
 //   its `details`. It may set the plan (an active plan, public or not; `422 UNPROCESSABLE`, `plan_not_active`, for an
 //   unknown or retired one), the end of the trial, or the status: `canceled` sets `canceled_at`; `trialing` reopens
 //   the subscription and clears `canceled_at`, unless the OTA has another current subscription (`409 CONFLICT`,
-//   `current_exists`; `subscriptions_current_uq` refuses a concurrent one the same way). Only the fields that differ
-//   from the stored ones are written (`version + 1`); a request that changes nothing writes nothing.
+//   `current_exists`; `subscriptions_current_uq` refuses a concurrent one the same way); `active` (MANUAL_PAID_STATUS:
+//   paid outside Stripe, which go-live accepts; FIX-W48-PLATFORM, lead decision (15g) of 2026-11-11) does the same from
+//   any status, and the OTA's trial banner goes with it, as the daily run would clear it (`manualTrialStep`; a banner
+//   of another kind stays). Only the fields that differ from the stored ones are written (`version + 1`); a request that
+//   changes nothing writes nothing.
 // - Moving the end of a `past_due` manual trial to a later UTC day than today (without `status`, or with `trialing`)
 //   reopens it (FIX-W41-PLATFORM, lead decision (2l) of 2026-11-04): the status becomes `trialing`, and the OTA's banner
 //   (`tenants.billing_notice`) is what the daily run (`billing.manual_trials`, `manualTrialStep`) sets for a trial of
@@ -68,6 +71,7 @@ import { manualTrialStep, utcDay } from "./sync/manual-trials.scheduler";
 import {
   CURRENT_SUBSCRIPTION_INDEX,
   CURRENT_SUBSCRIPTION_STATUSES,
+  MANUAL_PAID_STATUS,
   SubscriptionsRepository,
   type AdminSubscriptionRow,
   type InvoiceRow,
@@ -424,7 +428,8 @@ export class SubscriptionsService {
         }
       }
       if (request.status !== undefined && request.status !== current.status) {
-        if (request.status === "trialing" && !CURRENT.has(current.status)) {
+        // `trialing` and `active` make the subscription current again: no second current one for the OTA.
+        if (CURRENT.has(request.status) && !CURRENT.has(current.status)) {
           if (await this.subscriptions.hasOtherCurrent(trx, current.tenant_id, current.id)) {
             throw currentExists();
           }
@@ -459,18 +464,21 @@ export class SubscriptionsService {
           ? await this.tenants.setPlanCode(trx, current.tenant_id, planCode, now)
           : undefined;
         const tenantPlanChanged = tenantPlanBefore !== undefined;
-        // The banner the daily run sets for the reopened trial: `trial_ending` within the notice window, else none.
-        const billingNotice = reopened
-          ? manualTrialStep(
-              {
-                status: "trialing",
-                trialEndsAt: changes.trial_ends_at ?? current.trial_ends_at,
-                updatedAt: now,
-                billingNotice: tenant.billing_notice,
-              },
-              now,
-            ).billingNotice
-          : tenant.billing_notice;
+        // The banner the daily run sets for the reopened trial (`trial_ending` within the notice window, else none), or
+        // for a subscription paid outside Stripe (no trial banner).
+        const paid = changes.status === MANUAL_PAID_STATUS;
+        const billingNotice =
+          reopened || paid
+            ? manualTrialStep(
+                {
+                  status: paid ? MANUAL_PAID_STATUS : "trialing",
+                  trialEndsAt: changes.trial_ends_at ?? current.trial_ends_at,
+                  updatedAt: now,
+                  billingNotice: tenant.billing_notice,
+                },
+                now,
+              ).billingNotice
+            : tenant.billing_notice;
         const billingNoticeChanged =
           billingNotice !== tenant.billing_notice &&
           (await this.tenants.setBillingNotice(trx, current.tenant_id, billingNotice, now));

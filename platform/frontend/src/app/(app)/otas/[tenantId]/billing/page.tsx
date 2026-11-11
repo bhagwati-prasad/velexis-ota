@@ -20,6 +20,7 @@ import {
 import {
   checkoutReturnOf,
   isConfirmedSubscription,
+  isPaidOutsideStripe,
   planChoiceOffered,
 } from "@/app/(app)/otas/[tenantId]/billing/billing-rules";
 import { InvoicesTable } from "@/app/(app)/otas/[tenantId]/billing/invoices-table";
@@ -146,7 +147,10 @@ function details(subscription: Subscription, timeZone: string): Detail[] {
     {
       id: "billingProvider",
       term: BILLING_STRINGS.billedBy,
-      value: BILLING_STRINGS.provider[subscription.billingProvider] ?? subscription.billingProvider,
+      // A manual subscription an admin set `active` is paid outside Stripe, not a free trial (FIX-W48-PLATFORM).
+      value: isPaidOutsideStripe(subscription)
+        ? BILLING_STRINGS.paidOutsideStripe
+        : (BILLING_STRINGS.provider[subscription.billingProvider] ?? subscription.billingProvider),
     },
   ];
   if (subscription.billingProvider === "stripe") {
@@ -343,7 +347,9 @@ export default async function BillingPage({
               </p>
             ) : null}
           </section>
-          {subscription.billingProvider === "manual" && !stripeBilling ? (
+          {subscription.billingProvider === "manual" &&
+          !isPaidOutsideStripe(subscription) &&
+          !stripeBilling ? (
             <section
               aria-labelledby="billing-manual-trial"
               className="grid gap-2 rounded-xl border p-5"

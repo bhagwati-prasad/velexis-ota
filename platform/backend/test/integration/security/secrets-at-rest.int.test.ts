@@ -377,7 +377,8 @@ async function waitForOutbox(): Promise<void> {
 beforeAll(async () => {
   const bff = (ip = PERSON_IP): Record<string, string> => t.bffHeaders(ip);
   const ownerEmail = uniqueEmail("sar-owner");
-  const password = `Fjord-${randomBytes(12).toString("base64url")}-Pass`;
+  // The password rule of every portal account: 12+ characters with a letter and a digit (the `-9`), whatever the bytes.
+  const password = `Fjord-${randomBytes(12).toString("base64url")}-Pass-9`;
   remember("password", password);
 
   // Sign-up, verified from the e-mail's link.
@@ -630,7 +631,7 @@ beforeAll(async () => {
   });
   const resetToken = tokenOfLink(resetMail, "/reset-password");
   remember("reset token", resetToken);
-  const newPassword = `Fjord-${randomBytes(12).toString("base64url")}-New`;
+  const newPassword = `Fjord-${randomBytes(12).toString("base64url")}-New-8`;
   remember("password", newPassword);
   const reset = await t.http
     .post("/v1/auth/password-reset/confirm")

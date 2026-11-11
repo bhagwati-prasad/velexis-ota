@@ -9,6 +9,12 @@ import { createPlatformApi, type ApiError } from "@/lib/api";
 import { getConfig } from "@/lib/config";
 import { errorMessage } from "@/lib/errors";
 import {
+  codePoints,
+  meetsPasswordRule,
+  PASSWORD_MAX_LENGTH,
+  passwordFieldMessage,
+} from "@/lib/password-rule";
+import {
   ACCESS_TOKEN_COOKIE,
   PASSWORD_RESET_COOKIE,
   REFRESH_TOKEN_COOKIE,
@@ -26,8 +32,8 @@ import { ERROR_MESSAGES, SIGN_UP_STRINGS } from "@/lib/strings";
  *   cookies of this browser are deleted, and the person signs in again on `/sign-in?reset=1`.
  * - An unknown, used or expired token (`PASSWORD_RESET_TOKEN_INVALID`): the cookie is deleted and the page offers a
  *   new link.
- * - `PASSWORD_TOO_WEAK`: the message at the field, `privileged_rule` included (a platform admin or an owner or admin of an
- *   OTA needs 12 characters with a letter and a digit; ADR-0008, revision of 2026-11-10); the token stays usable.
+ * - `PASSWORD_TOO_WEAK`: the message at the field (`password_rule`: 12 characters with a letter and a digit, every
+ *   portal account's rule, ADR-0008 revision of 2026-11-11; `breached`); the token stays usable.
  * The password is never returned, logged or kept.
  */
 
@@ -43,40 +49,18 @@ export interface ResetPasswordState {
   readonly message?: string;
 }
 
-/**
- * The password rules of PF-01 AC2 the portal can check itself; the breached list is the API's, and so is the privileged
- * rule, because the page does not know whose link it is.
- */
-const PASSWORD_MIN = 10;
-const PASSWORD_MAX = 256;
-
-/** The length of a password as the API counts it: Unicode code points. */
-function codePoints(value: string): number {
-  return [...value].length;
-}
-
+/** The new password: the rule of every portal account (`lib/password-rule.ts`); the breached list is the API's. */
 const NEW_PASSWORD = z
   .string()
-  .refine((value) => codePoints(value) >= PASSWORD_MIN, SIGN_UP_STRINGS.passwordTooShort)
-  .refine((value) => codePoints(value) <= PASSWORD_MAX, SIGN_UP_STRINGS.passwordTooLong);
+  .refine(meetsPasswordRule, SIGN_UP_STRINGS.passwordRule)
+  .refine((value) => codePoints(value) <= PASSWORD_MAX_LENGTH, SIGN_UP_STRINGS.passwordTooLong);
 
 /** The message at the password field for the API's field error `code` on `/newPassword`. */
 function passwordMessage(code: string | undefined, envelope: PlatformErrorCode): string {
-  if (code === "too_short" || code === "minLength") {
-    return SIGN_UP_STRINGS.passwordTooShort;
-  }
-  if (code === "privileged_rule") {
-    return SIGN_UP_STRINGS.passwordPrivilegedRule;
-  }
-  if (code === "breached") {
-    return SIGN_UP_STRINGS.passwordBreached;
-  }
-  if (code === "maxLength") {
-    return SIGN_UP_STRINGS.passwordTooLong;
-  }
-  return envelope === "PASSWORD_TOO_WEAK"
-    ? ERROR_MESSAGES.PASSWORD_TOO_WEAK
-    : ERROR_MESSAGES.VALIDATION_FAILED;
+  return (
+    passwordFieldMessage(code) ??
+    (envelope === "PASSWORD_TOO_WEAK" ? ERROR_MESSAGES.PASSWORD_TOO_WEAK : ERROR_MESSAGES.VALIDATION_FAILED)
+  );
 }
 
 /** The field error of `error` on `pointer`, if any. */
@@ -118,7 +102,7 @@ export async function confirmPasswordReset(
     return {
       status: "failed",
       code: "VALIDATION_FAILED",
-      fieldError: parsed.error.issues[0]?.message ?? SIGN_UP_STRINGS.passwordTooShort,
+      fieldError: parsed.error.issues[0]?.message ?? SIGN_UP_STRINGS.passwordRule,
     };
   }
 

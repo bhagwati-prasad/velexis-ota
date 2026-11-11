@@ -10,15 +10,14 @@
 //   operation's throttlers, shared with resendVerification.
 // - confirmPasswordReset (`confirmReset`): the token first (an unknown, used or expired token, or one whose account can
 //   no longer hold a session or no longer has the token's address, answers `400 PASSWORD_RESET_TOKEN_INVALID` without
-//   saying why), then the password rules of the account (`422 PASSWORD_TOO_WEAK` on `/newPassword`; the token stays
-//   usable). The reset links of `auth.account_exists` (sign-up with a known address) are reset tokens too, so an
-//   account that still waits for verification may use one; the reset does not verify its address.
+//   saying why), then the password rules (`422 PASSWORD_TOO_WEAK` on `/newPassword`; the token stays usable). The
+//   reset links of `auth.account_exists` (sign-up with a known address) are reset tokens too, so an account that still
+//   waits for verification may use one; the reset does not verify its address.
 // - changePassword (`changePassword`, scope `portal`): the current password must match (`422
-//   CURRENT_PASSWORD_INCORRECT` on `/currentPassword`), then the rules of the account for the new one.
+//   CURRENT_PASSWORD_INCORRECT` on `/currentPassword`), then the rules for the new one.
 //
-// The rules of the account (password-policy.ts; ADR-0008 revision of 2026-11-10, PCI DSS 8.3.6): a platform admin or
-// an owner or admin of an OTA has the privileged rule (12 characters with a letter and a digit), read when the new
-// password is checked (`passwordRuleOf`), so a role granted since the account's last password applies to its next one.
+// The rule is every portal account's (password-policy.ts; ADR-0008 revision of 2026-11-11, PCI DSS 8.3.6): at least
+// 12 characters with a letter and a digit, not breached, the same as at sign-up.
 //
 // A new password, reset or changed, then takes the same steps: the OTA cut-off `staffdeny:acct:<accountId>` = now in
 // epoch milliseconds (30 days, so the OTA backend ends the account's OTA admin staff sessions) is written first, as
@@ -135,7 +134,7 @@ export class PasswordResetService {
     if (account === undefined || !mayChangePassword(account)) {
       throw new AppError("PASSWORD_RESET_TOKEN_INVALID");
     }
-    await this.checkNewPassword(account.id, request.newPassword);
+    this.passwords.check(request.newPassword, "/newPassword");
     const passwordHash = await this.passwords.hash(request.newPassword);
     const cutOff = await this.cutOffStaffSessions(account.id);
     await runInTransaction(this.db, async (trx) => {
@@ -187,7 +186,7 @@ export class PasswordResetService {
     if (knownHash === null || !(await this.passwords.verify(knownHash, request.currentPassword))) {
       throw currentPasswordIncorrect();
     }
-    await this.checkNewPassword(account.id, request.newPassword);
+    this.passwords.check(request.newPassword, "/newPassword");
     const passwordHash = await this.passwords.hash(request.newPassword);
     const cutOff = await this.cutOffStaffSessions(account.id);
     await runInTransaction(this.db, async (trx) => {
@@ -216,15 +215,6 @@ export class PasswordResetService {
         details: { revokedFamilies, staffDenyFrom: cutOff.toISOString() },
       });
     });
-  }
-
-  /**
-   * Applies the password rules of account `accountId` (`passwordRuleOf`: privileged for a platform admin or an owner
-   * or admin of an OTA) to the new password at `/newPassword`; throws `422 PASSWORD_TOO_WEAK` naming the rule.
-   */
-  private async checkNewPassword(accountId: string, newPassword: string): Promise<void> {
-    const rule = await this.accounts.passwordRuleOf(this.db, accountId);
-    this.passwords.check(newPassword, "/newPassword", rule);
   }
 
   /**

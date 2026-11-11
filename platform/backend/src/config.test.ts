@@ -1,11 +1,16 @@
-import { randomBytes } from "node:crypto";
+import { generateKeyPairSync, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseEnv } from "node:util";
 import { ConfigError } from "@velexis/config";
 import { fullFormats } from "ajv-formats/dist/formats";
 import { afterAll, describe, expect, it } from "vitest";
-import { createTestJwtKeyFile, ed25519PrivateKeyPem, writeTestKeyFile } from "../test/support/jwt-key";
+import {
+  createTestJwtKeyFile,
+  ed25519PrivateKeyPem,
+  publicKeyPemOf,
+  writeTestKeyFile,
+} from "../test/support/jwt-key";
 import { createTestMasterKeyDir, TEST_MAIL_ENV } from "../test/support/master-key";
 import { FEATURE_VARIABLES, FEATURES } from "./common/features";
 import {
@@ -496,6 +501,7 @@ describe("parseConfig", () => {
       "REDIS_URL",
       "PLATFORM_BFF_KEY",
       "JWT_PRIVATE_KEY_FILE",
+      "JWT_PREVIOUS_PUBLIC_KEY_FILE",
       "API_KEY_PEPPER_FILE",
       ...MAIL_AND_KEY_VARIABLES,
       OTA_ADMIN_URL,
@@ -525,6 +531,62 @@ describe("parseConfig", () => {
       }
     } finally {
       readable.remove();
+    }
+  });
+
+  it("[FIX-W48-PLATFORM AC2] takes JWT_PREVIOUS_PUBLIC_KEY_FILE only during a rotation: optional, the previous key's public half", () => {
+    const previous = writeTestKeyFile(publicKeyPemOf(ed25519PrivateKeyPem()));
+    try {
+      expect(parseConfig(DEVELOPMENT).JWT_PREVIOUS_PUBLIC_KEY_FILE).toBeUndefined();
+      expect(
+        parseConfig({ ...DEVELOPMENT, JWT_PREVIOUS_PUBLIC_KEY_FILE: "" }).JWT_PREVIOUS_PUBLIC_KEY_FILE,
+      ).toBe(undefined);
+      expect(
+        parseConfig({ ...DEVELOPMENT, JWT_PREVIOUS_PUBLIC_KEY_FILE: previous.path })
+          .JWT_PREVIOUS_PUBLIC_KEY_FILE,
+      ).toBe(previous.path);
+    } finally {
+      previous.remove();
+    }
+  });
+
+  it("[FIX-W48-PLATFORM AC2] refuses a previous key with the current kid, a private key, a key that is not Ed25519, a missing file and one others may read, naming the variable and never its path or a key", () => {
+    const current = writeTestKeyFile(publicKeyPemOf(jwtKey.pem));
+    const privateKey = writeTestKeyFile(ed25519PrivateKeyPem());
+    const both = writeTestKeyFile(`${publicKeyPemOf(ed25519PrivateKeyPem())}${ed25519PrivateKeyPem()}`);
+    const ec = writeTestKeyFile(
+      generateKeyPairSync("ec", {
+        namedCurve: "P-256",
+        privateKeyEncoding: { type: "pkcs8", format: "pem" },
+        publicKeyEncoding: { type: "spki", format: "pem" },
+      }).publicKey,
+    );
+    const readable = writeTestKeyFile(publicKeyPemOf(ed25519PrivateKeyPem()), 0o644);
+    try {
+      const reasons = (path: string) => {
+        const error = configError({ ...DEVELOPMENT, JWT_PREVIOUS_PUBLIC_KEY_FILE: path });
+        expect(error.message).not.toContain(path);
+        expect(error.message).not.toMatch(/MCowBQYDK2Vw|MC4CAQAwBQYDK2Vw/);
+        return error.problems.map((problem) => `${problem.variable}: ${problem.reason}`);
+      };
+      expect(reasons(current.path)).toEqual([
+        "JWT_PREVIOUS_PUBLIC_KEY_FILE: holds the public half of JWT_PRIVATE_KEY_FILE (the same kid); it must hold the key signed with before the rotation",
+      ]);
+      for (const path of [privateKey.path, both.path]) {
+        expect(reasons(path)).toEqual([
+          "JWT_PREVIOUS_PUBLIC_KEY_FILE: must hold only a public key (PEM, `-----BEGIN PUBLIC KEY-----`), never a private key",
+        ]);
+      }
+      expect(reasons(ec.path)).toEqual([
+        "JWT_PREVIOUS_PUBLIC_KEY_FILE: holds a key of type ec; platform tokens are signed with Ed25519",
+      ]);
+      for (const path of [readable.path, join(readable.path, "..", "missing.pem")]) {
+        expect(reasons(path).map((reason) => reason.split(":")[0])).toEqual(["JWT_PREVIOUS_PUBLIC_KEY_FILE"]);
+      }
+    } finally {
+      for (const file of [current, privateKey, both, ec, readable]) {
+        file.remove();
+      }
     }
   });
 

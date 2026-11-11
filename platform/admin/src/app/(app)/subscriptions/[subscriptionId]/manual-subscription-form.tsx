@@ -24,11 +24,11 @@ import {
 
 /**
  * "Edit the manual subscription" on `/subscriptions/[subscriptionId]` (README §2; subscription-billing flow §G, PF-75):
- * the plan, the day the trial ends and the status of a manual subscription, saved with the mandatory reason of
- * `ReasonDialog` and the version the page was rendered with (`If-Match`). Only what the admin changed is sent: a new
- * trial end keeps the time of day of the current one, in UTC (`2027-01-12T08:20:11Z` → `2027-02-12T08:20:11Z`). The
- * page renders this form for manual subscriptions only; Stripe-billed ones have none. The props are the fields the form
- * shows and the active plans it offers.
+ * the plan, the day the trial ends and the status (a trial, active: paid outside Stripe, or canceled) of a manual
+ * subscription, saved with the mandatory reason of `ReasonDialog` and the version the page was rendered with
+ * (`If-Match`). Only what the admin changed is sent: a new trial end keeps the time of day of the current one, in UTC
+ * (`2027-01-12T08:20:11Z` → `2027-02-12T08:20:11Z`). The page renders this form for manual subscriptions only;
+ * Stripe-billed ones have none. The props are the fields the form shows and the active plans it offers.
  */
 
 type SubscriptionStatus = components["schemas"]["SubscriptionStatus"];
@@ -51,8 +51,11 @@ export interface ManualSubscriptionFormProps {
   readonly plans: readonly PlanChoice[] | null;
 }
 
-/** The statuses an admin may set (`UpdateManualSubscriptionRequest.status`). */
-const EDITABLE_STATUSES = ["trialing", "canceled"] as const;
+/**
+ * The statuses an admin may set (`UpdateManualSubscriptionRequest.status`): `active` marks the subscription paid
+ * outside Stripe, which go-live accepts (lead decision (15g) of 2026-11-11, FIX-W48-PLATFORM).
+ */
+const EDITABLE_STATUSES = ["trialing", "active", "canceled"] as const;
 
 const STATUS_NAMES: Readonly<Record<SubscriptionStatus, string>> = STATUS_LABELS.subscription;
 

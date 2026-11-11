@@ -6,6 +6,12 @@ import { z } from "zod";
 
 import { platformApi, type ApiError } from "@/lib/api";
 import { errorMessage } from "@/lib/errors";
+import {
+  codePoints,
+  meetsPasswordRule,
+  PASSWORD_MAX_LENGTH,
+  passwordFieldMessage,
+} from "@/lib/password-rule";
 import { ERROR_MESSAGES, SIGN_UP_STRINGS } from "@/lib/strings";
 import { termsVersion } from "@/lib/terms";
 
@@ -42,14 +48,6 @@ const CHECK_EMAIL_PATH = "/sign-up/check-email";
 /** The bounds of the platform document (`SignUpRequest`, `EmailAddress`, `Password`). */
 const FULL_NAME_MAX = 200;
 const EMAIL_MAX = 254;
-/** The password rule of PF-01 AC2 that the portal can check itself; the breached list is the API's. */
-const PASSWORD_MIN = 10;
-const PASSWORD_MAX = 256;
-
-/** The length of a password as the API counts it: Unicode code points, so an emoji counts once. */
-function codePoints(value: string): number {
-  return [...value].length;
-}
 
 const SIGN_UP_FORM = z.object({
   fullName: z
@@ -65,10 +63,11 @@ const SIGN_UP_FORM = z.object({
     .max(EMAIL_MAX, SIGN_UP_STRINGS.emailInvalid)
     // The address rule after the trim (`z.email()` on its own would check the untrimmed text first).
     .check(z.email({ error: SIGN_UP_STRINGS.emailInvalid })),
+  // The password rule of every portal account (`lib/password-rule.ts`, PF-01 AC2); the breached list is the API's.
   password: z
     .string()
-    .refine((value) => codePoints(value) >= PASSWORD_MIN, SIGN_UP_STRINGS.passwordTooShort)
-    .refine((value) => codePoints(value) <= PASSWORD_MAX, SIGN_UP_STRINGS.passwordTooLong),
+    .refine(meetsPasswordRule, SIGN_UP_STRINGS.passwordRule)
+    .refine((value) => codePoints(value) <= PASSWORD_MAX_LENGTH, SIGN_UP_STRINGS.passwordTooLong),
   acceptTerms: z.literal(true, { error: SIGN_UP_STRINGS.termsRequired }),
 });
 
@@ -84,7 +83,7 @@ function text(formData: FormData, name: string): string {
   return typeof value === "string" ? value : "";
 }
 
-/** The message for an API field error of `field` (`code` is the field error's code, e.g. `too_short`). */
+/** The message for an API field error of `field` (`code` is the field error's code, e.g. `password_rule`). */
 function apiFieldMessage(field: SignUpField, code: string, envelope: PlatformErrorCode): string {
   switch (field) {
     case "fullName":
@@ -92,16 +91,10 @@ function apiFieldMessage(field: SignUpField, code: string, envelope: PlatformErr
     case "email":
       return SIGN_UP_STRINGS.emailInvalid;
     case "password":
-      if (code === "too_short" || code === "minLength") {
-        return SIGN_UP_STRINGS.passwordTooShort;
-      }
-      if (code === "breached") {
-        return SIGN_UP_STRINGS.passwordBreached;
-      }
-      if (code === "maxLength") {
-        return SIGN_UP_STRINGS.passwordTooLong;
-      }
-      return ERROR_MESSAGES[envelope === "PASSWORD_TOO_WEAK" ? "PASSWORD_TOO_WEAK" : "VALIDATION_FAILED"];
+      return (
+        passwordFieldMessage(code) ??
+        ERROR_MESSAGES[envelope === "PASSWORD_TOO_WEAK" ? "PASSWORD_TOO_WEAK" : "VALIDATION_FAILED"]
+      );
     case "acceptTerms":
       return SIGN_UP_STRINGS.termsRequired;
   }

@@ -607,7 +607,8 @@ async function makeAccount(context, index) {
   const account = {
     index,
     email: `platform-smoke-${context.runId}-${index}@example.com`,
-    password: randomBytes(18).toString("base64url"),
+    // A letter and a digit whatever the random part is: the platform's password rule (12+ characters, ADR-0008).
+    password: `Perf-${randomBytes(18).toString("base64url")}-7`,
     ip: context.nextIp(),
     tenants: 0,
   };

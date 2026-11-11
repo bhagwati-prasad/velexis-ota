@@ -10,6 +10,7 @@ import { FormField, fieldId } from "@/components/form-field";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { PASSWORD_MIN_LENGTH } from "@/lib/password-rule";
 import { SIGN_UP_STRINGS, VERIFICATION_STRINGS } from "@/lib/strings";
 
 /**
@@ -86,7 +87,7 @@ export function SignUpForm({ email }: { readonly email?: string | undefined } = 
         type="password"
         autoComplete="new-password"
         required
-        minLength={10}
+        minLength={PASSWORD_MIN_LENGTH}
         maxLength={256}
         description={SIGN_UP_STRINGS.passwordHint}
         error={state.fieldErrors.password}

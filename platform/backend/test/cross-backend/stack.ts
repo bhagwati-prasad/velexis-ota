@@ -739,7 +739,8 @@ export async function signUpOwner(
   const { http } = stack.api;
   const bff = stack.api.bffHeaders(ip);
   const email = uniqueEmail(label);
-  const password = `Xb-${randomBytes(18).toString("base64url")}`;
+  // A letter and a digit whatever the random part is: the password rule of every portal account (ADR-0008).
+  const password = `Xb-${randomBytes(18).toString("base64url")}-7`;
 
   const signUp = await http
     .post("/v1/auth/sign-up")

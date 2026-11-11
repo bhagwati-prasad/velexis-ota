@@ -312,7 +312,7 @@ describe("signUp", () => {
     expect(await auditRows("account.signed_up", existing.id)).toEqual([]);
   });
 
-  it("[PBE-013 AC2] a 9-character password and a breached password answer 422 PASSWORD_TOO_WEAK [PF-01 AC2]", async () => {
+  it("[PBE-013 AC2] a 9-character password and a breached password answer 422 PASSWORD_TOO_WEAK [PF-01 AC2, FIX-W48-PLATFORM AC1]", async () => {
     const callerIp = nextIp();
     const tooShort = uniqueEmail("signup-short");
     const breached = uniqueEmail("signup-breached");
@@ -321,7 +321,7 @@ describe("signUp", () => {
     const common = await signUp(callerIp, signUpBody(breached, "QwertyUiop"));
 
     for (const [res, code] of [
-      [short, "too_short"],
+      [short, "password_rule"],
       [common, "breached"],
     ] as const) {
       expectResponseToMatch("signUp", res, { document: "platform" });

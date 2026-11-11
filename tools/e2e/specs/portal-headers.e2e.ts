@@ -145,6 +145,15 @@ type PortalRoute = keyof typeof ROUTES;
  */
 const ARRANGE_BUDGET_MS = 240_000;
 
+/**
+ * The budget of the slowest step, the account pages and the OTA's first five pages (the lead's decision (15g) of
+ * 2026-11-11, FIX-W48-PLATFORM): ten pages, each read whole before the journey leaves it, in a browser context that
+ * routes its server actions and so has no HTTP cache, which fetches and checks every script of every page again. It
+ * took 13.4 to 14.9 s in wave 47 (14.4 s in CI run 42929326729), half of Playwright's default 30 s, so a loaded runner
+ * could fail it on time alone. Its own budget changes nothing it checks.
+ */
+const ACCOUNT_AND_OTA_PAGES_BUDGET_MS = 60_000;
+
 /** The owner's name: the inviter in the invitation e-mails' subject. */
 const OWNER_NAME = "Henrik Headers";
 
@@ -801,6 +810,8 @@ type PageVisit = readonly [PortalRoute, string, string | RegExp, number?];
 
 // The page routes are split over two steps, so no step comes near Playwright's 30 seconds on a slower runner.
 test("the account pages and the OTA's overview, set-up, API keys, domains and team answer with the portal's headers and their scripts with the nonce [PFE-028 AC1]", async () => {
+  // Ten whole pages without an HTTP cache: see ACCOUNT_AND_OTA_PAGES_BUDGET_MS.
+  test.setTimeout(ACCOUNT_AND_OTA_PAGES_BUDGET_MS);
   const pages: readonly PageVisit[] = [
     ["/dashboard", "/dashboard", "My OTAs"],
     ["/otas/new", "/otas/new", "Create an OTA"],

@@ -3,7 +3,7 @@
 // refuses `APP_ENV=production` (exit 1) before it opens a connection. It creates, each only when it is missing:
 //
 // 1. The platform admin `admin@example.com`: an `active` account with a verified address, `is_platform_admin`, a new
-//    random password that meets the privileged rule of platform admins (24 characters with a letter and a digit;
+//    random password that meets the password rule of every portal account (24 characters with a letter and a digit;
 //    Argon2id, as PasswordPolicy stores every password) and TOTP MFA on (the secret envelope-encrypted
 //    as MfaService stores it, associated data `platform.accounts.mfa_secret_ciphertext:<id>`). The password and the
 //    `otpauth://` set-up URI are printed once, on stdout, when the account is created: they exist nowhere else in
@@ -212,8 +212,8 @@ export class DevSeedService {
       return DevSeedService.existing(found);
     }
     let password = randomSecret(18);
-    // A platform admin's password meets the privileged rule (ADR-0008 revision of 2026-11-10).
-    while (this.passwords.problem(password, "privileged") !== undefined) {
+    // The password meets the rule of every portal account: 12 characters with a letter and a digit (ADR-0008).
+    while (this.passwords.problem(password) !== undefined) {
       password = randomSecret(18);
     }
     const passwordHash = await this.passwords.hash(password);

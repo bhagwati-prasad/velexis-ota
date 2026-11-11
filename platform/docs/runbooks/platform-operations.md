@@ -196,13 +196,13 @@ For the portal accounts of OTA owners and admins (and every other portal account
 
 ## 7. Rotating the JWT signing key
 
-`/etc/velexis/keys/platform/platform-jwt-ed25519.pem` (`JWT_PRIVATE_KEY_FILE`, `0400 velexis-platform`) signs the access tokens of the portal and the platform admin (EdDSA, 15 minutes); a token's `kid` is the JWK thumbprint of the key's public half. Refresh tokens are opaque rows of `account_sessions` and do not depend on the key. The OTA API's staff and customer tokens have their own key (`ota-jwt-ed25519.pem`); this runbook does not rotate it, and no OTA runbook task covers its rotation either ([§10](#10-gaps-found-while-writing-these-runbooks)).
+`/etc/velexis/keys/platform/platform-jwt-ed25519.pem` (`JWT_PRIVATE_KEY_FILE`, `0400 velexis-platform`) signs the access tokens of the portal and the platform admin (EdDSA, 15 minutes); a token's `kid` is the JWK thumbprint of the key's public half. Refresh tokens are opaque rows of `account_sessions` and do not depend on the key. The OTA API's staff and customer tokens have their own key (`ota-jwt-ed25519.pem`), which its own runbook rotates (FIX-W48-OTA, the same variable in `ota-backend.env`).
 
 **The rule** ([ADR-0010](../../../docs/mvp/adr/0010-secrets-envelope-encryption.md), "Rotation"): a new key brings a new `kid`, and the old public key stays valid for one token lifetime, so both keys are accepted for 15 minutes and nobody notices the change.
 
-**As built, the overlap is not available.** `TokenService` (`platform/backend/src/auth/token.service.ts`) reads the one key of `JWT_PRIVATE_KEY_FILE` at start-up and accepts only tokens of its own `kid`; nothing configures a second key to verify with. A rotation therefore ends every access token signed before the API's restart: such a token answers `401 UNAUTHENTICATED`, and the portal's and the admin's pages send the person to the sign-in page. Signing in again works at once, and at the latest 15 minutes after the restart, when those tokens would have expired anyway, the automatic refresh (which uses the refresh token, not the key) gets a token of the new key. The overlap needs a code change (the old public key verified for 15 more minutes); see [§10](#10-gaps-found-while-writing-these-runbooks). Until then, rotate in a quiet hour and expect people who are signed in to sign in again.
+**As built** (FIX-W48-PLATFORM, lead decision (15f) of 2026-11-11): `TokenService` (`platform/backend/src/auth/token.service.ts`) signs with `JWT_PRIVATE_KEY_FILE` only and verifies a token with the key its `kid` names: the current key, or the previous one of `JWT_PREVIOUS_PUBLIC_KEY_FILE` when that optional variable names a file (the old key's **public** half, SPKI PEM, `0400 velexis-platform`). The API, the worker and the CLI refuse to start when the file is missing, readable by others, holds a private key or a key that is not Ed25519, or holds the public half of the current key (the same `kid`). Without the variable, a token of the old `kid` answers `401 UNAUTHENTICATED`.
 
-**When.** After a suspected exposure of the key (the VM, the platform zone's user, a copy of `/etc/velexis` or of its backup): at once. The immediate end of the old tokens is then what you want, also once the overlap exists, because tokens forged with a stolen key must stop working. When someone who had root leaves, or as planned hygiene: in a quiet hour.
+**When.** After a suspected exposure of the key (the VM, the platform zone's user, a copy of `/etc/velexis` or of its backup): at once, **without the overlap** (skip steps 2 and 5 and leave `JWT_PREVIOUS_PUBLIC_KEY_FILE` unset): tokens forged with a stolen key must stop at the restart, so everyone signed in signs in again (the portal's and the admin's pages send them to the sign-in page; the automatic refresh, which uses the refresh token, also gets a token of the new key). When someone who had root leaves, or as planned hygiene: with the overlap, at any time.
 
 **Procedure.**
 
@@ -217,25 +217,49 @@ For the portal accounts of OTA owners and admins (and every other portal account
    sudo openssl pkey -in /etc/velexis/keys/platform/platform-jwt-ed25519.pem -pubout | sha256sum      # a new fingerprint
    ```
 
-2. Restart the platform units, the worker first (the API signs with the key; the worker and the CLI check the file at start-up). Two commands, because one `systemctl restart` of both units restarts them at the same time:
+2. **The overlap** (skip it after a suspected exposure): write the old key's public half into the zone's folder, `0400 velexis-platform` like every file there (`check-vm.sh`'s `key_folder`), and add it to the platform backend's env file with `sudoedit /etc/velexis/platform-backend.env` (it stays `root:root 0600`), as the one line of the second block:
+
+   ```bash
+   sudo openssl pkey -in /root/jwt-rotation/platform-jwt-ed25519.pem -pubout \
+     -out /etc/velexis/keys/platform/platform-jwt-ed25519.previous.pub.pem
+   sudo chown velexis-platform:velexis-platform /etc/velexis/keys/platform/platform-jwt-ed25519.previous.pub.pem
+   sudo chmod 0400 /etc/velexis/keys/platform/platform-jwt-ed25519.previous.pub.pem
+   sudo openssl pkey -pubin -in /etc/velexis/keys/platform/platform-jwt-ed25519.previous.pub.pem | sha256sum   # the old fingerprint
+   sudoedit /etc/velexis/platform-backend.env                                                           # add the line below
+   ```
+
+   ```bash
+   JWT_PREVIOUS_PUBLIC_KEY_FILE=/etc/velexis/keys/platform/platform-jwt-ed25519.previous.pub.pem
+   ```
+
+3. Restart the platform units, the worker first (the API signs with the key; the worker and the CLI check the files at start-up). Two commands, because one `systemctl restart` of both units restarts them at the same time; note the time of the API's restart:
 
    ```bash
    sudo systemctl restart velexis-platform-worker && sudo systemctl restart velexis-platform-api
    curl -fsS http://127.0.0.1:3100/health/ready; echo
+   systemctl show -p ActiveEnterTimestamp velexis-platform-api                                          # the restart
    ```
 
-   If a unit does not start, `sudo journalctl -u velexis-platform-worker -n 20 -o cat` (or `-u velexis-platform-api`) names the key file's problem (never its content); a worker that fails stops the command before the API restarts, so the API still runs on the old key. Put the old key back (`sudo mv /root/jwt-rotation/platform-jwt-ed25519.pem /etc/velexis/keys/platform/` after removing the new file), restart, and find the cause before you try again.
+   If a unit does not start, `sudo journalctl -u velexis-platform-worker -n 20 -o cat` (or `-u velexis-platform-api`) names the variable and the key file's problem (never its content); a worker that fails stops the command before the API restarts, so the API still runs on the old key. Put the old key back (`sudo mv /root/jwt-rotation/platform-jwt-ed25519.pem /etc/velexis/keys/platform/` after removing the new file, the `.previous.pub.pem` file and the line of step 2), restart, and find the cause before you try again.
 
-3. **Check:** signing in works at `https://admin.platform.example.com/sign-in` and at `https://platform.example.com/sign-in`, and `/audit` shows the rows `admin.sign_in` and `auth.sign_in`.
-4. Destroy the old key: `sudo shred -u /root/jwt-rotation/platform-jwt-ed25519.pem && sudo rmdir /root/jwt-rotation`. From the restart on, the API refuses every token of the old key, so its copies in older backups of `/etc/velexis` can sign nothing it accepts.
-5. Back up `/etc/velexis` and replace the offline copy: `sudo systemctl start velexis-backup` ([deployment §3](../../../docs/mvp/deployment-single-vm.md#3-provisioning-a-new-vm) step 8).
-6. Record the date, the reason, who did it and both fingerprints (hashes of public keys, not secrets).
+4. **Check:** a browser that was signed in before step 3 stays signed in at `https://platform.example.com/dashboard` and at `https://admin.platform.example.com/` (with the overlap; without it, it is sent to sign in), signing in works at `https://admin.platform.example.com/sign-in` and at `https://platform.example.com/sign-in`, and `/audit` shows the rows `admin.sign_in` and `auth.sign_in`. Then destroy the old private key at once, since only its public half is needed for the overlap: `sudo shred -u /root/jwt-rotation/platform-jwt-ed25519.pem && sudo rmdir /root/jwt-rotation`.
+5. **End the overlap** at least 15 minutes after the API's restart of step 3 (one token lifetime: every token of the old key has expired by then): remove the line of step 2 with `sudoedit`, delete the public key file and restart the units as in step 3. From then on the API refuses every token of the old `kid`, so the old key's copies in older backups of `/etc/velexis` can sign nothing it accepts.
+
+   ```bash
+   sudo grep -c '^JWT_PREVIOUS_PUBLIC_KEY_FILE=' /etc/velexis/platform-backend.env                    # 0
+   sudo rm /etc/velexis/keys/platform/platform-jwt-ed25519.previous.pub.pem
+   sudo systemctl restart velexis-platform-worker && sudo systemctl restart velexis-platform-api
+   sudo bash /srv/velexis/current/deploy/scripts/check-vm.sh --only files                               # only PASS lines
+   ```
+
+6. Back up `/etc/velexis` and replace the offline copy: `sudo systemctl start velexis-backup` ([deployment §3](../../../docs/mvp/deployment-single-vm.md#3-provisioning-a-new-vm) step 8).
+7. Record the date, the reason, who did it, whether the overlap was used (and when it ended) and both fingerprints (hashes of public keys, not secrets).
 
 After a suspected compromise also review `/audit` for the exposure window (every change made with a portal or admin token is audited with its IP address and user agent), disable any account that looks used by someone else (`/accounts/<accountId>`, which revokes its sessions) until its owner is reached, and follow the incident response plan.
 
-**Done when** the fingerprint changed, both sign-ins work, `check-vm.sh --only files` passes, the old key is shredded and the backup ran.
+**Done when** the fingerprint changed, both sign-ins work, the old private key is shredded, `JWT_PREVIOUS_PUBLIC_KEY_FILE` is gone from the env file with its key file (at least 15 minutes after the restart), `check-vm.sh --only files` passes and the backup ran.
 
-**Evidence.** `platform/backend/src/auth/token.service.ts` (`loadSigningKey`, `verify`), `platform/backend/src/auth/token.service.test.ts`; `deploy/scripts/provision-vm.sh` (`step_keys`, `new_key_file`), `deploy/scripts/check-vm.sh` (`key_folder`).
+**Evidence.** `platform/backend/src/auth/token.service.ts` (`loadSigningKey`, `loadVerifyingKey`, `verify`), `platform/backend/src/auth/jwt-keys.ts`, `platform/backend/src/config.ts` (`jwtPreviousKeyProblems`), `platform/backend/src/auth/token.service.test.ts`, `platform/backend/test/integration/auth/jwt-rotation.int.test.ts`; `deploy/scripts/provision-vm.sh` (`step_keys`, `new_key_file`), `deploy/scripts/check-vm.sh` (`key_folder`: every file of the folder `0400 velexis-platform`).
 
 ## 8. Rotating the master key
 
@@ -285,8 +309,6 @@ A rotation would need peppers with versions (each key recording its pepper's ver
 
 ## 10. Gaps found while writing these runbooks
 
-All three are questions to the lead; the sections above and the launch checklist say what to do until they are answered.
+The questions to the lead; the sections above and the launch checklist say what to do until they are answered. The lead decided them on 2026-11-11: the JWT key overlap and the manual subscription's `active` were built by FIX-W48-PLATFORM (decisions (15f) and (15g); [§7](#7-rotating-the-jwt-signing-key) and the [launch checklist §6](launch-checklist.md#6-manual-trials-before-billing)), and `secrets:rewrap` is a task of its own (decision (15m)).
 
-1. **The JWT key overlap of ADR-0010 is not built.** The platform API accepts tokens of its current key only (`platform/backend/src/auth/token.service.ts`), so a rotation signs everyone out for up to 15 minutes instead of accepting both keys for 15 minutes ([§7](#7-rotating-the-jwt-signing-key)). Building it means a verify-only previous key in the configuration and `TokenService`, and the procedure of §7 with a 15-minute wait before the old key is removed. The OTA API's `TokenService` (`ota/backend/src/identity/token.service.ts`) has the same limit, and no runbook covers the rotation of its key.
-2. **Neither backend has `secrets:rewrap`.** ADR-0010 ("Rotation" item 3) and X-040 leave each backend's re-wrap command to its plan, but neither plan has the task and neither CLI the command, so a master-key rotation cannot remove the old key ([§8](#8-rotating-the-master-key)). The shared helper `rewrapBatch` of `packages/crypto` exists. *2026-11-11 (lead decision (15m), FIX-W48-SHARED):* each plan now has the task: PBE-072 (platform) and OBE-100 (OTA), in M6.
-3. **A manual subscription cannot be made `active`.** Go-live accepts a manual subscription that is `active` (an OTA a platform admin bills outside Stripe; FIX-W40-PLATFORM, lead decision (2c) of 2026-11-03), and the subscription-billing flow and the backend README say an admin sets it, but `adminUpdateManualSubscription` takes the status `trialing` or `canceled` only (`UpdateManualSubscriptionRequest` of the platform document). Until it is answered, an OTA billed outside Stripe keeps a manual trial whose end an admin moves, and goes live only after a Checkout ([launch checklist §6](launch-checklist.md#6-manual-trials-before-billing)).
+1. **Neither backend has `secrets:rewrap`.** ADR-0010 ("Rotation" item 3) and X-040 leave each backend's re-wrap command to its plan, but neither plan has the task and neither CLI the command, so a master-key rotation cannot remove the old key ([§8](#8-rotating-the-master-key)). The shared helper `rewrapBatch` of `packages/crypto` exists. *2026-11-11 (lead decision (15m), FIX-W48-SHARED):* each plan now has the task: PBE-072 (platform) and OBE-100 (OTA), in M6.

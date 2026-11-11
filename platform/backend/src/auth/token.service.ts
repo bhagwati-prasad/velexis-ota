@@ -13,6 +13,13 @@
 //
 // Refresh tokens are opaque and live in `account_sessions` (PBE-014); this service only signs and verifies access
 // tokens. A token is never logged, and an error never quotes one.
+//
+// Key rotation (FIX-W48-PLATFORM, lead decision (15f) of 2026-11-11; ADR-0010 "Rotation": the old public key stays
+// valid for one token lifetime): besides its own key, the service verifies the tokens whose `kid` is that of the
+// optional JWT_PREVIOUS_PUBLIC_KEY_FILE, the public half of the key it signed with before the rotation, and it signs
+// with JWT_PRIVATE_KEY_FILE only. A token's `kid` picks the key it is verified with, so a token of another `kid`, or
+// one whose signature is not its `kid`'s key, is refused. Removing the variable (and restarting) ends the overlap:
+// platform/docs/runbooks/platform-operations.md §7 removes it 15 minutes after the rotation.
 import { createHash, createPrivateKey, createPublicKey, type KeyObject } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
 import { Injectable } from "@nestjs/common";
@@ -22,6 +29,7 @@ import { AppError } from "@velexis/errors";
 import { errors as joseErrors, jwtVerify, SignJWT, type JWTPayload, type JWTVerifyResult } from "jose";
 import { Clock } from "../common/clock";
 import { JWT_PRIVATE_KEY_MIN_BYTES, type PlatformBackendConfig } from "../config";
+import { isSamePublicKey, JWT_PUBLIC_KEY_MIN_BYTES, previousPublicKeyOf } from "./jwt-keys";
 
 /** The `iss` of every platform access token: the public host of the platform API (decisions.md §4). */
 export const ACCESS_TOKEN_ISSUER = "https://api.platform.example.com";
@@ -87,6 +95,13 @@ export interface SigningKey {
   readonly kid: string;
 }
 
+/** A key that only verifies: the previous key of a rotation (JWT_PREVIOUS_PUBLIC_KEY_FILE) and its `kid`. */
+export interface VerifyingKey {
+  readonly publicKey: KeyObject;
+  /** The RFC 7638 JWK thumbprint (SHA-256, base64url) of the public key. */
+  readonly kid: string;
+}
+
 /** `AccountId` of the platform document. */
 const ACCOUNT_ID = /^acc_[0-9A-HJKMNP-TV-Z]{26}$/;
 /** `SessionFamilyId` of the platform document: opaque, 1–64 characters of `[A-Za-z0-9_-]`. */
@@ -126,6 +141,22 @@ export function loadSigningKey(path: string): SigningKey {
   }
   const publicKey = createPublicKey(privateKey);
   return { privateKey, publicKey, kid: jwkThumbprint(publicKey) };
+}
+
+/**
+ * Reads and checks the previous key of a rotation (JWT_PREVIOUS_PUBLIC_KEY_FILE): the file passes `readKeyFile` (a
+ * regular file of mode 0400 or 0600 with a PEM block of at least 44 bytes) and holds an Ed25519 public key in SPKI and
+ * no private key (`previousPublicKeyOf`). Errors name the path and the reason, never a byte of the file.
+ */
+export function loadVerifyingKey(path: string): VerifyingKey {
+  const pem = readKeyFile(path, { minBytes: JWT_PUBLIC_KEY_MIN_BYTES, encoding: "pem" });
+  let publicKey: KeyObject;
+  try {
+    publicKey = previousPublicKeyOf(pem);
+  } catch (error) {
+    throw new Error(`JWT_PREVIOUS_PUBLIC_KEY_FILE ${path} ${(error as Error).message}`);
+  }
+  return { publicKey, kid: jwkThumbprint(publicKey) };
 }
 
 /** The bearer token of an `Authorization: Bearer <token>` header; `undefined` without one or with another scheme. */
@@ -191,18 +222,33 @@ function claimsOf(payload: JWTPayload, audience: TokenAudience): AccessTokenClai
 }
 
 /**
- * Signs and verifies platform access tokens with the key of JWT_PRIVATE_KEY_FILE (read once, at start-up: a missing,
- * readable-by-others or non-Ed25519 key stops the API). Times come from the injected Clock.
+ * Signs platform access tokens with the key of JWT_PRIVATE_KEY_FILE and verifies them with it or, during a rotation,
+ * with the previous public key of JWT_PREVIOUS_PUBLIC_KEY_FILE (both read once, at start-up: a missing,
+ * readable-by-others or non-Ed25519 key stops the API, and so does a previous key with the current `kid`). Times come
+ * from the injected Clock.
  */
 @Injectable()
 export class TokenService {
   private readonly key: SigningKey;
+  private readonly previous: VerifyingKey | undefined;
 
   constructor(
     config: ConfigService<PlatformBackendConfig, true>,
     private readonly clock: Clock,
   ) {
     this.key = loadSigningKey(config.get("JWT_PRIVATE_KEY_FILE", { infer: true }));
+    const previousFile = config.get("JWT_PREVIOUS_PUBLIC_KEY_FILE", { infer: true });
+    this.previous = previousFile === undefined ? undefined : loadVerifyingKey(previousFile);
+    if (this.previous !== undefined && isSamePublicKey(this.previous.publicKey, this.key.publicKey)) {
+      throw new Error(
+        `JWT_PREVIOUS_PUBLIC_KEY_FILE ${previousFile ?? ""} holds the public half of JWT_PRIVATE_KEY_FILE (the same kid)`,
+      );
+    }
+  }
+
+  /** The `kid` of the previous key whose tokens are still accepted, or `undefined` outside a rotation. */
+  get previousKid(): string | undefined {
+    return this.previous?.kid;
   }
 
   /** The `kid` of every token this service signs: the JWK thumbprint of the public key. */
@@ -255,10 +301,25 @@ export class TokenService {
   }
 
   /**
+   * The public key that verifies the tokens of `kid`: the current key's, or the previous key's during a rotation.
+   * Throws for any other `kid` (and for none), which `verify` answers with `UNAUTHENTICATED`.
+   */
+  private keyOf(kid: string | undefined): KeyObject {
+    if (kid === this.key.kid) {
+      return this.key.publicKey;
+    }
+    if (this.previous !== undefined && kid === this.previous.kid) {
+      return this.previous.publicKey;
+    }
+    throw new Error("TokenService: no key of this kid");
+  }
+
+  /**
    * The claims of `token` for `audience`. Throws `AppError("TOKEN_EXPIRED")` for a token past its `exp` and
    * `AppError("UNAUTHENTICATED")` for anything else that is not a valid token of this audience: none, malformed,
-   * another algorithm, key or `kid`, another issuer or audience (a portal token on the admin surface, and the
-   * reverse), or claims of the wrong shape.
+   * another algorithm, a `kid` that is neither the current key's nor the previous key's of a rotation, a signature that
+   * is not its `kid`'s key, another issuer or audience (a portal token on the admin surface, and the reverse), or claims
+   * of the wrong shape.
    */
   async verify(token: string | undefined, audience: TokenAudience): Promise<AccessTokenClaims> {
     if (token === undefined || token.length === 0 || token.length > MAX_ACCESS_TOKEN_LENGTH) {
@@ -266,7 +327,8 @@ export class TokenService {
     }
     let verified: JWTVerifyResult;
     try {
-      verified = await jwtVerify(token, this.key.publicKey, {
+      // The token's `kid` picks the key, before the signature and the claims are checked.
+      verified = await jwtVerify(token, (header) => this.keyOf(header.kid), {
         algorithms: [ACCESS_TOKEN_ALGORITHM],
         issuer: ACCESS_TOKEN_ISSUER,
         audience,
@@ -281,8 +343,7 @@ export class TokenService {
       }
       throw new AppError("UNAUTHENTICATED");
     }
-    const claims =
-      verified.protectedHeader.kid === this.key.kid ? claimsOf(verified.payload, audience) : undefined;
+    const claims = claimsOf(verified.payload, audience);
     if (claims === undefined) {
       throw new AppError("UNAUTHENTICATED");
     }

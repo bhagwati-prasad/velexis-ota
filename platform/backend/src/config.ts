@@ -2,6 +2,7 @@
 // (dist/worker.js) and the CLI (dist/cli.js), validated by @velexis/config before anything else starts. A missing or
 // invalid variable stops the process with one ConfigError that names every variable and never a value
 // (conventions §8). Later tasks extend the schema.
+import type { KeyObject } from "node:crypto";
 import { isIP, isIPv6 } from "node:net";
 import { resolve } from "node:path";
 import type { DynamicModule } from "@nestjs/common";
@@ -11,6 +12,7 @@ import {
   defineConfig,
   env,
   loadDevEnvFiles,
+  readKeyFile,
   type ConfigOf,
   type ConfigProblem,
   type ConfigSchema,
@@ -19,6 +21,12 @@ import {
 import { API_KEY_PEPPER_MIN_BYTES } from "@velexis/crypto";
 import { createLogger, type Logger } from "@velexis/logger";
 import type { DestinationStream } from "pino";
+import {
+  isSamePublicKey,
+  JWT_PUBLIC_KEY_MIN_BYTES,
+  previousPublicKeyOf,
+  signingPublicKeyOf,
+} from "./auth/jwt-keys";
 
 /** The `app` field of every log line, and the `application_name` of every database connection, per process. */
 export const PLATFORM_PROCESSES = {
@@ -253,6 +261,21 @@ export const PLATFORM_BACKEND_CONFIG_SCHEMA = {
    * API signs with it; the worker and the CLI validate it too, because the three read `platform-backend.env`.
    */
   JWT_PRIVATE_KEY_FILE: env.secretFile({ minBytes: JWT_PRIVATE_KEY_MIN_BYTES, encoding: "pem" }),
+  /**
+   * Optional, during a rotation of JWT_PRIVATE_KEY_FILE only (FIX-W48-PLATFORM, lead decision (15f) of 2026-11-11;
+   * ADR-0010 "Rotation"; platform/docs/runbooks/platform-operations.md §7): the public half (SPKI PEM,
+   * `openssl pkey -pubout`) of the key the API signed with before. The API also accepts the access tokens of that key's
+   * `kid` for their remaining lifetime (15 minutes at most) and signs with JWT_PRIVATE_KEY_FILE only; once the line is
+   * removed and the API restarted, they are refused. The file must exist with mode 0400 or 0600, hold an Ed25519 public
+   * key and no private key, and not the public half of JWT_PRIVATE_KEY_FILE (`jwtPreviousKeyProblems`). Unset after a
+   * suspected exposure of the old key: its tokens must stop at once. The worker and the CLI validate it too, because the
+   * three read `platform-backend.env`.
+   */
+  JWT_PREVIOUS_PUBLIC_KEY_FILE: env.secretFile({
+    minBytes: JWT_PUBLIC_KEY_MIN_BYTES,
+    encoding: "pem",
+    optional: true,
+  }),
   /**
    * The pepper of the API key hashes (PADR-0005 item 3, ADR-0010): 32 random bytes in base64, an identical copy of
    * the OTA backend's, in the platform zone's key folder on the VM. `key_hash = hex(HMAC-SHA-256(pepper, key))`. The
@@ -590,6 +613,50 @@ function publicOtaApiUrlProblems(source: EnvSource | undefined): ConfigProblem[]
 }
 
 /**
+ * The JWT_PREVIOUS_PUBLIC_KEY_FILE rules that a schema entry cannot express (FIX-W48-PLATFORM, lead decision (15f) of
+ * 2026-11-11): the file holds one Ed25519 public key and no private key, and not the public half of
+ * JWT_PRIVATE_KEY_FILE, whose `kid` the API signs with (a previous key with the current `kid` is refused). A file that
+ * is invalid on its own (missing, readable by others, no PEM block) is reported by the schema, not here; a
+ * JWT_PRIVATE_KEY_FILE that holds no Ed25519 key is TokenService's to report. The reasons never hold the path or a byte
+ * of a key.
+ */
+function jwtPreviousKeyProblems(source: EnvSource | undefined): ConfigProblem[] {
+  const files = validValues(
+    {
+      JWT_PRIVATE_KEY_FILE: PLATFORM_BACKEND_CONFIG_SCHEMA.JWT_PRIVATE_KEY_FILE,
+      JWT_PREVIOUS_PUBLIC_KEY_FILE: PLATFORM_BACKEND_CONFIG_SCHEMA.JWT_PREVIOUS_PUBLIC_KEY_FILE,
+    },
+    source,
+  );
+  if (files?.JWT_PREVIOUS_PUBLIC_KEY_FILE === undefined) {
+    return [];
+  }
+  let previous: KeyObject;
+  try {
+    previous = previousPublicKeyOf(
+      readKeyFile(files.JWT_PREVIOUS_PUBLIC_KEY_FILE, {
+        minBytes: JWT_PUBLIC_KEY_MIN_BYTES,
+        encoding: "pem",
+      }),
+    );
+  } catch (error) {
+    return [{ variable: "JWT_PREVIOUS_PUBLIC_KEY_FILE", reason: (error as Error).message }];
+  }
+  const current = signingPublicKeyOf(
+    readKeyFile(files.JWT_PRIVATE_KEY_FILE, { minBytes: JWT_PRIVATE_KEY_MIN_BYTES, encoding: "pem" }),
+  );
+  return current !== undefined && isSamePublicKey(current, previous)
+    ? [
+        {
+          variable: "JWT_PREVIOUS_PUBLIC_KEY_FILE",
+          reason:
+            "holds the public half of JWT_PRIVATE_KEY_FILE (the same kid); it must hold the key signed with before the rotation",
+        },
+      ]
+    : [];
+}
+
+/**
  * Validates the configuration in `source` (default: the process environment) and returns it deep-frozen. Throws one
  * `ConfigError` that names every invalid variable and the reason, never a value.
  */
@@ -601,6 +668,7 @@ export function parseConfig(source?: EnvSource): PlatformBackendConfig {
     ...dnsResolverProblems(source),
     ...amadeusBaseUrlProblems(source),
     ...publicOtaApiUrlProblems(source),
+    ...jwtPreviousKeyProblems(source),
   ];
   try {
     const config = defineConfig(PLATFORM_BACKEND_CONFIG_SCHEMA, source);

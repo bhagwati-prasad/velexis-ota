@@ -1133,6 +1133,21 @@ describe("/otas/[tenantId]/billing", () => {
     expect(screen.getByRole("region", { name: BILLING_STRINGS.manualTrialTitle })).toBeTruthy();
   });
 
+  it("[FIX-W48-PLATFORM AC3] shows a manual subscription an admin set active as billed outside Stripe, without the trial note", async () => {
+    // Lead decision (15g) of 2026-11-11: a platform admin marks the OTA paid outside Stripe; the trial end it kept stays
+    // shown, as Stripe's past trial end is, but the payment is no free trial and paid plans are not "coming soon".
+    routes({ [`GET ${SUBSCRIPTION_PATH}`]: () => json(subscription({ status: "active" }), 200) });
+    await openPage("billing");
+
+    const details = screen.getByRole("region", { name: BILLING_STRINGS.subscriptionTitle });
+    expect(detailIds(details)).toEqual(["plan", "status", "billingProvider", "trialEndsAt"]);
+    expect(detail(details, "status")).toBe("Active");
+    expect(detail(details, "billingProvider")).toBe(BILLING_STRINGS.paidOutsideStripe);
+    expect(BILLING_STRINGS.paidOutsideStripe).not.toBe(BILLING_STRINGS.provider.manual);
+    expect(screen.queryByRole("region", { name: BILLING_STRINGS.manualTrialTitle })).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
   it("shows a Stripe subscription's interval, period end, cancellation and banner, without the manual-trial note", async () => {
     const stripe = subscription({
       planCode: "growth",

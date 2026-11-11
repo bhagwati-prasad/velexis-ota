@@ -74,7 +74,7 @@ const VERSION = z.string().regex(/^[1-9][0-9]{0,14}$/);
  * API then refused with the same message at the same field, and which the form never writes.
  */
 const INSTANT = z.iso.datetime();
-const STATUS = z.enum(["trialing", "canceled"]);
+const STATUS = z.enum(["trialing", "active", "canceled"]);
 
 /** A text field of the submission; a file or a missing field reads as empty. */
 function text(formData: FormData, name: string): string {
@@ -145,7 +145,8 @@ function failureOf(error: ApiError): Failure {
 /**
  * Edits the manual subscription of the hidden field `subscriptionId` (`adminUpdateManualSubscription`) with the
  * changes the form carries, each only when the admin changed it: `planCode` (an active plan), `trialEndsAt` (the new
- * end of the trial, an instant in UTC) and `status` (`trialing` or `canceled`), and the mandatory `reason`. The hidden
+ * end of the trial, an instant in UTC) and `status` (`trialing`, `active`: paid outside Stripe, or `canceled`), and
+ * the mandatory `reason`. The hidden
  * `version` the page was rendered with goes into `If-Match` (`"<version>"`), so a change made in the meantime answers
  * `412` and the form asks to reload instead of overwriting it. The answer is the subscription as saved.
  */

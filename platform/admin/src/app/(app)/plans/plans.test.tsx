@@ -1573,6 +1573,38 @@ describe("subscriptions/[subscriptionId]/page.tsx: one subscription", () => {
     expect(within(done).getByText("Canceled")).toBeTruthy();
   });
 
+  it("[FIX-W48-PLATFORM AC3] marks a manual trial active (paid outside Stripe) with a reason", async () => {
+    await openSubscription();
+    const section = editSection();
+    const status = within(section).getByLabelText(
+      MANUAL_SUBSCRIPTION_STRINGS.statusLabel,
+    ) as HTMLSelectElement;
+    expect([...status.options].map((option) => option.value)).toEqual(["trialing", "active", "canceled"]);
+    expect(within(section).getByText(MANUAL_SUBSCRIPTION_STRINGS.statusHint)).toBeTruthy();
+    expect(MANUAL_SUBSCRIPTION_STRINGS.statusHint).toMatch(
+      /“Active” means the OTA pays outside Stripe, so it can go live/,
+    );
+    fireEvent.change(status, { target: { value: "active" } });
+    const dialog = await openSaveDialog();
+    expect(
+      within(dialog).getByText(MANUAL_SUBSCRIPTION_STRINGS.changeStatus("Trial", "Active")),
+    ).toBeTruthy();
+    confirmReason(dialog, REASON);
+
+    const done = await notice("done", section);
+    expect(await bodies("PATCH", `${SUBSCRIPTIONS_PATH}/${MANUAL_ID}`)).toEqual([
+      { status: "active", reason: REASON },
+    ]);
+    expect(within(done).getByText("Active")).toBeTruthy();
+    // The server action sends the status as the document has it, and refuses a status the document does not have.
+    expect(
+      await updateManualSubscription(
+        { status: "idle" },
+        formData({ subscriptionId: MANUAL_ID, version: "2", status: "paid", reason: REASON }),
+      ),
+    ).toMatchObject({ status: "failed", field: "status", message: MANUAL_SUBSCRIPTION_STRINGS.formExpired });
+  });
+
   it("shows at the status that a canceled trial cannot reopen while the OTA has another current subscription", async () => {
     const canceled = fleet.subscriptions.find((row) => row.id === MANUAL_ID);
     if (canceled !== undefined) {
@@ -1588,7 +1620,7 @@ describe("subscriptions/[subscriptionId]/page.tsx: one subscription", () => {
     const status = within(section).getByLabelText(
       MANUAL_SUBSCRIPTION_STRINGS.statusLabel,
     ) as HTMLSelectElement;
-    expect([...status.options].map((option) => option.value)).toEqual(["canceled", "trialing"]);
+    expect([...status.options].map((option) => option.value)).toEqual(["canceled", "trialing", "active"]);
     fireEvent.change(status, { target: { value: "trialing" } });
     const dialog = await openSaveDialog();
     expect(
@@ -1714,7 +1746,8 @@ describe("subscriptions/[subscriptionId]/page.tsx: one subscription", () => {
       [{ ...base, trialEndsAt: "2027-02-12T08:20:11Z", reason: "Pilo" }, REASON_STRINGS.tooShort],
       [{ ...base, reason: REASON }, MANUAL_SUBSCRIPTION_STRINGS.noChange],
       [{ ...base, trialEndsAt: "12/02/2027", reason: REASON }, MANUAL_SUBSCRIPTION_STRINGS.trialEndInvalid],
-      [{ ...base, status: "active", reason: REASON }, MANUAL_SUBSCRIPTION_STRINGS.formExpired],
+      // `active` is a status the admin sets (FIX-W48-PLATFORM); `past_due` is only the daily run's.
+      [{ ...base, status: "past_due", reason: REASON }, MANUAL_SUBSCRIPTION_STRINGS.formExpired],
       [{ ...base, planCode: "Growth!", reason: REASON }, MANUAL_SUBSCRIPTION_STRINGS.planNotActive],
       [
         { subscriptionId: "sub_1", version: "1", status: "canceled", reason: REASON },

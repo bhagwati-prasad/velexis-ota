@@ -1,53 +1,39 @@
-// The password rules of the portal (PBE-013; ADR-0008 "Passwords" and its revision of 2026-11-10, PADR-0008,
-// platform/docs/scope.md PF-01 AC2): a password has at least 10 characters and is not in the breached-password list,
-// and nothing else (no composition rules), except for the accounts of the privileged rule. It is stored only as an
+// The password rule of the portal (PBE-013; ADR-0008 "Passwords" and its revisions of 2026-11-10 and 2026-11-11,
+// PADR-0008, platform/docs/scope.md PF-01 AC2): every portal account's password has at least 12 characters with at
+// least one letter and one digit, and is not in the breached-password list, and nothing else. It is stored only as an
 // Argon2id hash with the OWASP parameters of ADR-0008 (m = 19 MiB, t = 2, p = 1).
 //
-// The privileged rule (PCI DSS 8.3.6; the owner's decision (13g) of 2026-11-10, FIX-W47-PLATFORM): platform admins and
-// the owners and admins of OTAs (an active `owner` or `admin` membership of any OTA that members may see, live or
-// test) need at least 12 characters with at least one letter and one digit, and the breached list still applies.
-// AccountsRepository.passwordRuleOf reads which rule an account has. The rule applies when such an account sets a
-// password (its change and its reset); an existing password keeps working until then, because a password is checked
-// only when it is chosen, never at sign-in. An account has no role at sign-up, accepting an invitation and
-// `admin:grant` set no password, and `dev:seed` gives its platform admin a password that meets the privileged rule.
+// The rule is PCI DSS 8.3.6 (12 characters with alphabetic and numeric characters) for every account: the owner's
+// decision (15e) of 2026-11-11 (FIX-W48-PLATFORM) replaced the rule of FIX-W47-PLATFORM, which asked it of platform
+// admins and the owners and admins of OTAs only and left every other account at 10 characters. No live account
+// existed then, so every account meets 8.3.6 from launch: sign-up (an invited person signs up first), the password
+// change and the reset check the same rule, `dev:seed` gives its platform admin a password that meets it, and no other
+// path sets a password (accepting an invitation and `admin:grant` set none). A password is checked only when it is
+// chosen, never at sign-in.
 //
 // The list is `breached-passwords.txt` next to this file: the 10 000 most common passwords of SecLists
 // (`Passwords/Common-Credentials/10k-most-common.txt` at commit c23b603128ed21e46164a0afd357f0c242135f41, MIT
 // licence, SHA-256 68782d6a4a19a4768d5f15dd66bd534e7a33055cc755411e33f16d18c50fdcce), one per line, lower-cased. It
 // is read once, when AuthModule is built (`PasswordPolicy.load()`), and a password is compared lower-cased, so
-// `QWERTYUIOP` is as breached as `qwertyuiop`. The build copies the file to `dist/auth/`.
+// `QWERTYUIOP` is as breached as `qwertyuiop`. The build copies the file to `dist/auth/`. The list is checked first,
+// so a listed password is named as such whatever its length (no password of the shipped list meets the rule).
 //
 // Sign-up (PBE-013), the password reset and change (PBE-016) call `check` before `hash`; sign-in (PBE-014) calls
-// `verify`. A refused password answers `422 PASSWORD_TOO_WEAK` with a message that names the rule the account has and
-// one field error on `/password` (or the field the caller names) whose message never contains the password: `too_short`
-// (the standard rule), `privileged_rule` (the privileged rule's length, letter or digit) or `breached`.
+// `verify`. A refused password answers `422 PASSWORD_TOO_WEAK` with a message that names the rule and one field error
+// on `/password` (or the field the caller names) whose message never contains the password: `breached`, or
+// `password_rule` (the length, the letter or the digit; FIX-W47-PLATFORM's `privileged_rule`, renamed with the change).
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AppError } from "@velexis/errors";
 import { argon2id, hash, verify } from "argon2";
 
-/** The shortest password, in characters (Unicode code points). */
-export const MIN_PASSWORD_LENGTH = 10;
-
 /**
- * The shortest password of an account of the privileged rule (platform admins, owners and admins of OTAs; PCI DSS
- * 8.3.6), which also needs at least one letter and one digit.
+ * The shortest password, in characters (Unicode code points), of every portal account (PCI DSS 8.3.6), which also
+ * needs at least one letter and one digit.
  */
-export const PRIVILEGED_MIN_PASSWORD_LENGTH = 12;
+export const MIN_PASSWORD_LENGTH = 12;
 
-/**
- * The membership roles whose accounts have the privileged rule, in an OTA of any storefront environment (the owner's
- * decision (13g) of 2026-11-10).
- */
-export const PRIVILEGED_PASSWORD_ROLES = Object.freeze(["owner", "admin"] as const);
-
-/**
- * The rule a new password of an account must meet: `privileged` for a platform admin or an owner or admin of an OTA,
- * `standard` for every other account (and at sign-up, when no account has a role yet).
- */
-export type PasswordRule = "standard" | "privileged";
-
-/** A letter of any script, and a decimal digit: what the privileged rule asks a password to hold. */
+/** A letter of any script, and a decimal digit: what the rule asks a password to hold. */
 const LETTER = /\p{L}/u;
 const DIGIT = /\p{Nd}/u;
 
@@ -63,25 +49,18 @@ export const ARGON2_OPTIONS = Object.freeze({
 });
 
 /** Why a password is refused; the `code` of the field error. */
-export type PasswordProblem = "too_short" | "privileged_rule" | "breached";
+export type PasswordProblem = "password_rule" | "breached";
 
 /** The messages of the field errors; they never quote the password. */
 const MESSAGES: Readonly<Record<PasswordProblem, string>> = Object.freeze({
-  too_short: `Use at least ${MIN_PASSWORD_LENGTH} characters.`,
-  privileged_rule:
-    `Use at least ${PRIVILEGED_MIN_PASSWORD_LENGTH} characters, with at least one letter and one digit: the rule ` +
-    "for platform admins and for owners and admins of an OTA.",
+  password_rule: `Use at least ${MIN_PASSWORD_LENGTH} characters, with at least one letter and one digit.`,
   breached: "This password is too common or has appeared in a data breach. Choose another one.",
 });
 
-/** The message of the `422 PASSWORD_TOO_WEAK` envelope, which names the rule of the account. */
-export const RULE_MESSAGES: Readonly<Record<PasswordRule, string>> = Object.freeze({
-  standard: `The password needs at least ${MIN_PASSWORD_LENGTH} characters and must not be a common or breached password.`,
-  privileged:
-    `The password needs at least ${PRIVILEGED_MIN_PASSWORD_LENGTH} characters with at least one letter and one ` +
-    "digit, and must not be a common or breached password: the rule for platform admins and for owners and admins " +
-    "of an OTA.",
-});
+/** The message of the `422 PASSWORD_TOO_WEAK` envelope, which names the rule. */
+export const RULE_MESSAGE =
+  `The password needs at least ${MIN_PASSWORD_LENGTH} characters with at least one letter and one digit, and must ` +
+  "not be a common or breached password.";
 
 /** The passwords of a list file: one per line, lower-cased and trimmed; empty lines are skipped. */
 export function parseBreachedPasswords(text: string): ReadonlySet<string> {
@@ -122,33 +101,27 @@ export class PasswordPolicy {
   }
 
   /**
-   * The first part of `rule` (default `standard`) that `password` breaks, or `undefined` when it is allowed: the
-   * length (`too_short`; for the privileged rule `privileged_rule`, which also covers its letter and digit), then
-   * the breached list (`breached`).
+   * What `password` breaks, or `undefined` when it is allowed: the breached list first (`breached`), then the length,
+   * the letter and the digit (`password_rule`).
    */
-  problem(password: string, rule: PasswordRule = "standard"): PasswordProblem | undefined {
-    const length = lengthOf(password);
-    if (
-      rule === "privileged" &&
-      (length < PRIVILEGED_MIN_PASSWORD_LENGTH || !LETTER.test(password) || !DIGIT.test(password))
-    ) {
-      return "privileged_rule";
+  problem(password: string): PasswordProblem | undefined {
+    if (this.breached.has(password.toLowerCase())) {
+      return "breached";
     }
-    if (length < MIN_PASSWORD_LENGTH) {
-      return "too_short";
-    }
-    return this.breached.has(password.toLowerCase()) ? "breached" : undefined;
+    return lengthOf(password) < MIN_PASSWORD_LENGTH || !LETTER.test(password) || !DIGIT.test(password)
+      ? "password_rule"
+      : undefined;
   }
 
   /**
-   * Throws `422 PASSWORD_TOO_WEAK` with the message of `rule` (default `standard`) and one field error at `path` (a
-   * JSON pointer into the request, default `/password`) when `password` breaks the rule.
+   * Throws `422 PASSWORD_TOO_WEAK` with the rule's message and one field error at `path` (a JSON pointer into the
+   * request, default `/password`) when `password` breaks the rule.
    */
-  check(password: string, path = "/password", rule: PasswordRule = "standard"): void {
-    const problem = this.problem(password, rule);
+  check(password: string, path = "/password"): void {
+    const problem = this.problem(password);
     if (problem !== undefined) {
       throw new AppError("PASSWORD_TOO_WEAK", {
-        message: RULE_MESSAGES[rule],
+        message: RULE_MESSAGE,
         fieldErrors: [{ path, code: problem, message: MESSAGES[problem] }],
       });
     }

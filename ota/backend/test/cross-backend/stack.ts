@@ -1029,7 +1029,8 @@ export async function signUpOwner(
 ): Promise<PortalOwner> {
   const bff = stack.bffHeaders(ip);
   const email = uniqueEmail(label);
-  const password = `Xb-${randomBytes(18).toString("base64url")}`;
+  // A letter and a digit whatever the random part is: the platform's password rule of every portal account.
+  const password = `Xb-${randomBytes(18).toString("base64url")}-7`;
   const signUp = await platformCall(stack, "POST", "/v1/auth/sign-up", {
     headers: bff,
     body: { email, password, fullName: "Ada Lovelace", acceptTerms: true, termsVersion: STACK_TERMS_VERSION },

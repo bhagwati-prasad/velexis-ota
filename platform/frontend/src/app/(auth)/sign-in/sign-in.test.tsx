@@ -778,7 +778,8 @@ describe("/reset-password: the page and the confirmPasswordReset action", () => 
         apiError("PASSWORD_TOO_WEAK", 422, { fieldErrors: [{ path: "/newPassword", code: "breached" }] }),
     });
     render(await ResetPasswordPage());
-    type(PASSWORD_RESET_STRINGS.newPasswordLabel, "qwertyuiop");
+    // The portal's own rule lets it through; the API's breached list refuses it.
+    type(PASSWORD_RESET_STRINGS.newPasswordLabel, "Qwertyuiop-123");
     submit(PASSWORD_RESET_STRINGS.resetSubmit);
 
     const password = input(PASSWORD_RESET_STRINGS.newPasswordLabel);
@@ -793,35 +794,49 @@ describe("/reset-password: the page and the confirmPasswordReset action", () => 
     submit(PASSWORD_RESET_STRINGS.resetSubmit);
     await waitFor(() =>
       expect(descriptionsOf(input(PASSWORD_RESET_STRINGS.newPasswordLabel))).toContain(
-        SIGN_UP_STRINGS.passwordTooShort,
+        SIGN_UP_STRINGS.passwordRule,
       ),
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("[FIX-W47-PLATFORM AC2] names both password rules in the hint and shows privileged_rule at the field, keeping the token", async () => {
+  it("[FIX-W48-PLATFORM AC1] names the one password rule in the hint, refuses 11 characters, no letter or no digit itself, and shows the API's password_rule at the field, keeping the token", async () => {
     const store = cookieStore({ [PASSWORD_RESET_COOKIE]: RESET_TOKEN });
     answer({
       "/v1/auth/password-reset/confirm": () =>
         apiError("PASSWORD_TOO_WEAK", 422, {
-          fieldErrors: [{ path: "/newPassword", code: "privileged_rule" }],
+          fieldErrors: [{ path: "/newPassword", code: "password_rule" }],
         }),
     });
     render(await ResetPasswordPage());
-    // The link does not say whose account it is: the hint names the 10-character rule and the 12-character one.
-    expect(descriptionsOf(input(PASSWORD_RESET_STRINGS.newPasswordLabel))).toEqual([
-      PASSWORD_RESET_STRINGS.newPasswordHint,
-    ]);
+    // Every account has the same rule, so the link need not say whose account it is.
+    const field = input(PASSWORD_RESET_STRINGS.newPasswordLabel);
+    expect(descriptionsOf(field)).toEqual([PASSWORD_RESET_STRINGS.newPasswordHint]);
     expect(PASSWORD_RESET_STRINGS.newPasswordHint).toMatch(
-      /^At least 10 characters; at least 12, with a letter/,
+      /^At least 12 characters, with at least one letter and one digit\./,
     );
-    type(PASSWORD_RESET_STRINGS.newPasswordLabel, "Fjord-Lan4!");
-    submit(PASSWORD_RESET_STRINGS.resetSubmit);
+    expect(field.getAttribute("minlength")).toBe("12");
 
+    // The portal refuses what the rule refuses, before any call.
+    for (const weak of ["Fjord-Lan4!", "Kettle-Morning!", "4815-1623-42"]) {
+      type(PASSWORD_RESET_STRINGS.newPasswordLabel, weak);
+      submit(PASSWORD_RESET_STRINGS.resetSubmit);
+      await waitFor(() =>
+        expect(descriptionsOf(input(PASSWORD_RESET_STRINGS.newPasswordLabel))).toContain(
+          SIGN_UP_STRINGS.passwordRule,
+        ),
+      );
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // The API's refusal of the rule shows at the field in the portal's words.
+    type(PASSWORD_RESET_STRINGS.newPasswordLabel, "Copper-Lan4!");
+    submit(PASSWORD_RESET_STRINGS.resetSubmit);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     const password = input(PASSWORD_RESET_STRINGS.newPasswordLabel);
-    await waitFor(() => expect(descriptionsOf(password)).toContain(SIGN_UP_STRINGS.passwordPrivilegedRule));
-    expect(SIGN_UP_STRINGS.passwordPrivilegedRule).toMatch(
-      /^Use at least 12 characters, with at least one letter/,
+    await waitFor(() => expect(descriptionsOf(password)).toContain(SIGN_UP_STRINGS.passwordRule));
+    expect(SIGN_UP_STRINGS.passwordRule).toBe(
+      "Use at least 12 characters, with at least one letter and one digit.",
     );
     expect(password.getAttribute("aria-invalid")).toBe("true");
     expect(password.value).toBe("");

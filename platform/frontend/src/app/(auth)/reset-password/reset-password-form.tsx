@@ -8,6 +8,7 @@ import { FormErrorSummary, type FormErrorItem } from "@/components/form-error-su
 import { FormField, fieldId } from "@/components/form-field";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { PASSWORD_MIN_LENGTH } from "@/lib/password-rule";
 import { PASSWORD_RESET_STRINGS } from "@/lib/strings";
 
 /** The state before the first submission. */
@@ -56,7 +57,7 @@ export function ResetPasswordForm() {
         type="password"
         autoComplete="new-password"
         required
-        minLength={10}
+        minLength={PASSWORD_MIN_LENGTH}
         maxLength={256}
         description={PASSWORD_RESET_STRINGS.newPasswordHint}
         error={state.fieldError}

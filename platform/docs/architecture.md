@@ -86,7 +86,7 @@ As [`conventions.md` §2](../../docs/mvp/conventions.md#2-nestjs-backends): `*.c
 
 ### 3.1 Tokens
 
-Platform access tokens are EdDSA JWTs signed with `platform-jwt-ed25519.pem`, 15 minutes, with a `kid` header ([ADR-0008](../../docs/mvp/adr/0008-identity-accounts-customers-sessions.md)).
+Platform access tokens are EdDSA JWTs signed with `platform-jwt-ed25519.pem`, 15 minutes, with a `kid` header ([ADR-0008](../../docs/mvp/adr/0008-identity-accounts-customers-sessions.md)). During a rotation of that key the API also verifies the tokens of the previous key's `kid` with its public half (`JWT_PREVIOUS_PUBLIC_KEY_FILE`) for their last 15 minutes and signs with the new key only ([ADR-0010](../../docs/mvp/adr/0010-secrets-envelope-encryption.md) "Rotation"; FIX-W48-PLATFORM; [`runbooks/platform-operations.md`](runbooks/platform-operations.md) §7).
 
 | Claim | Portal token | Admin token |
 |---|---|---|

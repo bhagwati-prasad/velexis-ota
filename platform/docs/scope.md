@@ -85,6 +85,7 @@ Each feature has an id used by the plans and by test names. "AC" lines are what 
 **PF-01 Sign-up.** Form: full name, e-mail, password, acceptance of the terms.
 - AC1: A new e-mail creates an account in `pending_verification` with an Argon2id hash and `terms_accepted_at`, and queues a verification e-mail. The response is `202` whether or not the e-mail exists; an existing address receives a "you already have an account" e-mail instead (no enumeration).
 - AC2: A password shorter than 10 characters or on the breached list is refused with `PASSWORD_TOO_WEAK`.
+  - *Note (2026-11-11, the owner's decision, lead decision (15e); FIX-W48-PLATFORM; [ADR-0008](../../docs/mvp/adr/0008-identity-accounts-customers-sessions.md) revision of 2026-11-11).* Read "shorter than 12 characters, without a letter or without a digit, or on the breached list" (PCI DSS 8.3.6, for every portal account; field codes `password_rule` and `breached`). The same rule applies to the password change and the reset.
 - AC3: More than 5 sign-ups per IP per hour answer `429 RATE_LIMITED`.
 
 **PF-02 E-mail verification.**

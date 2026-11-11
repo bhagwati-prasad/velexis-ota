@@ -401,7 +401,7 @@ describe("the reset link", () => {
 
   it("applies the password rules after the token, and a refused password leaves the link usable", () => {
     expect(outcomes["tooShort"]?.body).toMatchObject({
-      error: { code: "PASSWORD_TOO_WEAK", fieldErrors: [{ path: "/newPassword", code: "too_short" }] },
+      error: { code: "PASSWORD_TOO_WEAK", fieldErrors: [{ path: "/newPassword", code: "password_rule" }] },
     });
     expect(outcomes["breached"]?.body).toMatchObject({
       error: { code: "PASSWORD_TOO_WEAK", fieldErrors: [{ path: "/newPassword", code: "breached" }] },

@@ -1,5 +1,7 @@
-// The password rules and the Argon2id hashing of the portal (PBE-013; ADR-0008 "Passwords", scope PF-01 AC2), and the
-// privileged rule of platform admins and owners and admins of OTAs (FIX-W47-PLATFORM; ADR-0008 revision of 2026-11-10).
+// The password rule and the Argon2id hashing of the portal (PBE-013; ADR-0008 "Passwords", scope PF-01 AC2): since
+// the owner's decision (15e) of 2026-11-11 (FIX-W48-PLATFORM; ADR-0008 revision of 2026-11-11) every portal account's
+// password needs 12 characters with a letter and a digit (PCI DSS 8.3.6), the rule FIX-W47-PLATFORM had asked of
+// platform admins and the owners and admins of OTAs only.
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -12,27 +14,22 @@ import {
   MIN_PASSWORD_LENGTH,
   parseBreachedPasswords,
   PasswordPolicy,
-  PRIVILEGED_MIN_PASSWORD_LENGTH,
-  PRIVILEGED_PASSWORD_ROLES,
-  RULE_MESSAGES,
-  type PasswordRule,
+  RULE_MESSAGE,
 } from "./password-policy";
 
 /** The SHA-256 of the shipped list, as password-policy.ts documents its source. */
 const LIST_SHA256 = "68782d6a4a19a4768d5f15dd66bd534e7a33055cc755411e33f16d18c50fdcce";
 
-/** A password of the test, never a real one: long enough and not on the list. */
+/** A password of the test, never a real one: long enough, with a letter and a digit, and not on the list. */
 const GOOD_PASSWORD = "Fjord-Lantern-Quiet-42";
 
+/** The field error message of the rule. */
+const RULE_FIELD_MESSAGE = "Use at least 12 characters, with at least one letter and one digit.";
+
 /** The error `check` throws for `password`, or `undefined`. */
-function refusal(
-  policy: PasswordPolicy,
-  password: string,
-  path?: string,
-  rule?: PasswordRule,
-): AppError | undefined {
+function refusal(policy: PasswordPolicy, password: string, path?: string): AppError | undefined {
   try {
-    policy.check(password, path, rule);
+    policy.check(password, path);
     return undefined;
   } catch (error) {
     if (error instanceof AppError) {
@@ -52,112 +49,75 @@ beforeAll(async () => {
   goodHash = await policy.hash(GOOD_PASSWORD);
 }, 30_000);
 
-describe("password rules", () => {
-  it("[PBE-013 AC2] refuses a 9-character password and accepts one of 10 characters", () => {
-    expect(MIN_PASSWORD_LENGTH).toBe(10);
-    expect(policy.problem("Fjord-La4!")).toBeUndefined();
-    expect(policy.problem("Fjord-La4")).toBe("too_short");
-    expect(policy.problem("")).toBe("too_short");
+describe("the password rule of every portal account (PCI DSS 8.3.6)", () => {
+  it("[FIX-W48-PLATFORM AC1] asks for 12 characters: refuses 9, 10 and 11, and accepts 12, letters and digits included", () => {
+    expect(MIN_PASSWORD_LENGTH).toBe(12);
+    expect(policy.problem("Fjord-Lan4!x")).toBeUndefined();
+    // The lengths the 10-character rule took before (PBE-013) and the privileged rule refused (FIX-W47-PLATFORM).
+    expect(policy.problem("Fjord-Lan4!")).toBe("password_rule");
+    expect(policy.problem("Fjord-La4!")).toBe("password_rule");
+    expect(policy.problem("Fjord-La4")).toBe("password_rule");
+    expect(policy.problem("")).toBe("password_rule");
+  });
+
+  it("[FIX-W48-PLATFORM AC1] asks for at least one letter and one digit, of any script, and counts code points", () => {
+    expect(policy.problem("Fjord-Lantern-Quiet")).toBe("password_rule");
+    expect(policy.problem("4815-1623-4200")).toBe("password_rule");
+    expect(policy.problem("!!--__??..//")).toBe("password_rule");
+    expect(policy.problem("Fjord-Lantern-Quiet-4")).toBeUndefined();
+    expect(policy.problem("ÅÄÖ-жизнь-7-ü")).toBeUndefined();
+    expect(policy.problem("٣٤٥٦-fjord-lantern")).toBeUndefined();
   });
 
   it("counts characters as Unicode code points, not UTF-16 units", () => {
-    // Five emoji are ten UTF-16 units but five characters.
-    expect(policy.problem("🙂🙂🙂🙂🙂")).toBe("too_short");
-    expect(policy.problem("🙂🙂🙂🙂🙂-fjord")).toBeUndefined();
+    // Eleven emoji, a letter and a digit are 13 characters; eleven characters with one emoji (12 UTF-16 units) are not
+    // enough, and neither are six emoji (12 UTF-16 units) with a letter and a digit.
+    expect(policy.problem("🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂a1")).toBeUndefined();
+    expect(policy.problem("🙂abcdefgh12")).toBe("password_rule");
+    expect(policy.problem("🙂🙂🙂🙂🙂🙂a1")).toBe("password_rule");
   });
 
-  it("[PBE-013 AC2] refuses a password of the breached list, in any letter case", () => {
-    for (const password of ["1234567890", "qwertyuiop", "QwertyUiop", "BASKETBALL"]) {
+  it("[PBE-013 AC2] refuses a password of the breached list, in any letter case, and names it before the rule", () => {
+    for (const password of ["1234567890", "qwertyuiop", "QwertyUiop", "BASKETBALL", "password1"]) {
       expect(policy.problem(password)).toBe("breached");
     }
     expect(policy.problem(GOOD_PASSWORD)).toBeUndefined();
   });
 
-  it("[PBE-013 AC2] check throws 422 PASSWORD_TOO_WEAK with a field error that never quotes the password", () => {
-    const tooShort = refusal(policy, "Fjord-La4");
+  it("[FIX-W48-PLATFORM AC1] still refuses a listed password that has the length, a letter and a digit", () => {
+    // No password of the shipped list has 12 characters, a letter and a digit (the next test), so this policy has a
+    // list of its own.
+    const own = new PasswordPolicy(parseBreachedPasswords("Copper-Kettle-Morning-9\n"));
+    for (const password of ["Copper-Kettle-Morning-9", "COPPER-KETTLE-MORNING-9"]) {
+      expect(own.problem(password)).toBe("breached");
+    }
+    expect(own.problem(GOOD_PASSWORD)).toBeUndefined();
+  });
+
+  it("[FIX-W48-PLATFORM AC1] check throws 422 PASSWORD_TOO_WEAK naming the rule, with a field error that never quotes the password", () => {
+    const short = refusal(policy, "Fjord-Lan4!");
+    const noDigit = refusal(policy, "Kettle-Morning!", "/newPassword");
     const breached = refusal(policy, "qwertyuiop", "/newPassword");
 
-    expect(tooShort).toMatchObject({ code: "PASSWORD_TOO_WEAK", status: 422 });
-    expect(tooShort?.fieldErrors).toEqual([
-      { path: "/password", code: "too_short", message: "Use at least 10 characters." },
+    expect(short).toMatchObject({ code: "PASSWORD_TOO_WEAK", status: 422 });
+    expect(short?.message).toBe(RULE_MESSAGE);
+    expect(RULE_MESSAGE).toBe(
+      "The password needs at least 12 characters with at least one letter and one digit, and must not be a common or breached password.",
+    );
+    expect(short?.fieldErrors).toEqual([
+      { path: "/password", code: "password_rule", message: RULE_FIELD_MESSAGE },
     ]);
+    expect(noDigit?.fieldErrors).toEqual([
+      { path: "/newPassword", code: "password_rule", message: RULE_FIELD_MESSAGE },
+    ]);
+    expect(breached?.message).toBe(RULE_MESSAGE);
     expect(breached?.fieldErrors).toEqual([
       { path: "/newPassword", code: "breached", message: expect.any(String) as string },
     ]);
     expect(JSON.stringify([breached?.message, breached?.fieldErrors])).not.toContain("qwertyuiop");
-    expect(JSON.stringify([tooShort?.message, tooShort?.fieldErrors])).not.toContain("Fjord-La4");
+    expect(JSON.stringify([short?.message, short?.fieldErrors])).not.toContain("Fjord-Lan4!");
+    expect(JSON.stringify([noDigit?.message, noDigit?.fieldErrors])).not.toContain("Kettle-Morning!");
     expect(refusal(policy, GOOD_PASSWORD)).toBeUndefined();
-  });
-});
-
-describe("the privileged rule of platform admins and owners and admins of OTAs (PCI DSS 8.3.6)", () => {
-  it("[FIX-W47-PLATFORM AC2] asks for 12 characters: refuses 11 and accepts 12, letters and digits included", () => {
-    expect(PRIVILEGED_MIN_PASSWORD_LENGTH).toBe(12);
-    expect(PRIVILEGED_PASSWORD_ROLES).toEqual(["owner", "admin"]);
-    expect(policy.problem("Fjord-Lan4!x", "privileged")).toBeUndefined();
-    expect(policy.problem("Fjord-Lan4!", "privileged")).toBe("privileged_rule");
-    expect(policy.problem("Fjord-La4", "privileged")).toBe("privileged_rule");
-    expect(policy.problem("", "privileged")).toBe("privileged_rule");
-    // The standard rule still takes 10 and 11 characters.
-    expect(policy.problem("Fjord-Lan4!")).toBeUndefined();
-    expect(policy.problem("Fjord-Lan4!", "standard")).toBeUndefined();
-  });
-
-  it("[FIX-W47-PLATFORM AC2] asks for at least one letter and one digit, of any script, and counts code points", () => {
-    expect(policy.problem("Fjord-Lantern-Quiet", "privileged")).toBe("privileged_rule");
-    expect(policy.problem("4815-1623-4200", "privileged")).toBe("privileged_rule");
-    expect(policy.problem("!!--__??..//", "privileged")).toBe("privileged_rule");
-    expect(policy.problem("Fjord-Lantern-Quiet-4", "privileged")).toBeUndefined();
-    expect(policy.problem("ÅÄÖ-жизнь-7-ü", "privileged")).toBeUndefined();
-    // Eleven emoji, a letter and a digit are 13 characters; ten characters with one emoji are not enough.
-    expect(policy.problem("🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂🙂a1", "privileged")).toBeUndefined();
-    expect(policy.problem("🙂abcdefgh1", "privileged")).toBe("privileged_rule");
-    // The same passwords meet the standard rule, which has no composition rule.
-    expect(policy.problem("Fjord-Lantern-Quiet")).toBeUndefined();
-    expect(policy.problem("4815-1623-4200")).toBeUndefined();
-  });
-
-  it("[FIX-W47-PLATFORM AC2] still refuses a password of the breached list that has the length, a letter and a digit", () => {
-    // No password of the shipped list has 12 characters, a letter and a digit, so this policy has a list of its own.
-    const own = new PasswordPolicy(parseBreachedPasswords("Copper-Kettle-Morning-9\n"));
-    for (const password of ["Copper-Kettle-Morning-9", "COPPER-KETTLE-MORNING-9"]) {
-      expect(own.problem(password, "standard")).toBe("breached");
-      expect(own.problem(password, "privileged")).toBe("breached");
-    }
-    expect(own.problem(GOOD_PASSWORD, "privileged")).toBeUndefined();
-  });
-
-  it("[FIX-W47-PLATFORM AC2] check names the account's rule in the 422 PASSWORD_TOO_WEAK and never quotes the password", () => {
-    const privileged = refusal(policy, "Fjord-Lan4!", "/newPassword", "privileged");
-    const standard = refusal(policy, "Fjord-La4", "/newPassword", "standard");
-    const breached = refusal(policy, "qwertyuiop", "/newPassword", "standard");
-
-    expect(privileged).toMatchObject({ code: "PASSWORD_TOO_WEAK", status: 422 });
-    expect(privileged?.message).toBe(RULE_MESSAGES.privileged);
-    expect(privileged?.message).toMatch(/at least 12 characters with at least one letter and one digit/);
-    expect(privileged?.message).toMatch(/platform admins and for owners and admins of an OTA/);
-    expect(privileged?.fieldErrors).toEqual([
-      {
-        path: "/newPassword",
-        code: "privileged_rule",
-        message:
-          "Use at least 12 characters, with at least one letter and one digit: the rule for platform admins and for owners and admins of an OTA.",
-      },
-    ]);
-    expect(standard?.message).toBe(RULE_MESSAGES.standard);
-    expect(standard?.message).toMatch(/at least 10 characters/);
-    expect(standard?.fieldErrors).toEqual([
-      { path: "/newPassword", code: "too_short", message: "Use at least 10 characters." },
-    ]);
-    expect(breached?.message).toBe(RULE_MESSAGES.standard);
-    expect(breached?.fieldErrors?.map((error) => error.code)).toEqual(["breached"]);
-    expect(JSON.stringify([privileged?.message, privileged?.fieldErrors])).not.toContain("Fjord-Lan4!");
-    expect(refusal(policy, GOOD_PASSWORD, "/newPassword", "privileged")).toBeUndefined();
-  });
-
-  it("[FIX-W47-PLATFORM AC2] uses the standard rule when no rule is given, as at sign-up", () => {
-    expect(refusal(policy, "Fjord-Lan4!")).toBeUndefined();
-    expect(refusal(policy, "Fjord-La4")?.message).toBe(RULE_MESSAGES.standard);
   });
 });
 
@@ -189,6 +149,13 @@ describe("the breached-password list", () => {
       "password1",
       "dragon",
     ]);
+  });
+
+  it("[FIX-W48-PLATFORM AC1] holds no password that meets the rule, so the list is checked first to name a listed one", () => {
+    const meetsRule = (password: string) =>
+      [...password].length >= MIN_PASSWORD_LENGTH && /\p{L}/u.test(password) && /\p{Nd}/u.test(password);
+    const lines = readFileSync(BREACHED_PASSWORDS_FILE, "utf8").split("\n").slice(0, -1);
+    expect(lines.filter(meetsRule)).toEqual([]);
   });
 
   it("refuses to build a policy on an empty list", () => {

@@ -419,6 +419,45 @@ describe("goLive: the preconditions", () => {
     await invalidations([{ v: 1, type: "tenant", id: manual.tenant.id }]);
   });
 
+  it("[FIX-W48-PLATFORM AC3] lets an OTA billed outside Stripe go live once a platform admin sets its manual subscription active", async () => {
+    // The OTA's manual trial counts as no subscription until the admin marks it paid outside Stripe with
+    // adminUpdateManualSubscription (`status: active`, a reason, `If-Match`; lead decision (15g) of 2026-11-11).
+    const ota = await readyOta({
+      subscription: { billing_provider: "manual", status: "trialing", provider_subscription_id: null },
+    });
+    const refused = await goLive(ota);
+    expect([refused.status, errorOf(refused).details]).toEqual([422, { missing: ["subscription"] }]);
+
+    const admin = await insertAccount(pool, { is_platform_admin: true, mfa_enabled: true });
+    const { token } = await tokens.sign({
+      aud: "platform_admin",
+      sub: admin.id,
+      sid: FAMILY,
+      ev: true,
+      amr: ["pwd", "otp"],
+    });
+    const subscriptionId = ota.subscription?.id ?? "";
+    const marked = await t.http
+      .patch(`/v1/admin/subscriptions/${subscriptionId}`)
+      .set({
+        Authorization: `Bearer ${token}`,
+        ...t.bffHeaders(PERSON_IP),
+        "If-Match": `"${ota.subscription?.version ?? 1}"`,
+      })
+      .send({ status: "active", reason: "Billed by invoice outside Stripe, as agreed with the owner." });
+    expectResponseToMatch("adminUpdateManualSubscription", marked, { document: "platform" });
+    expect([marked.status, (marked.body as { status?: string; billingProvider?: string }).status]).toEqual([
+      200,
+      "active",
+    ]);
+
+    const switched = await goLive(ota);
+
+    expect(switched.status, JSON.stringify(switched.body)).toBe(200);
+    expect((await storedTenant(ota.tenant.id)).storefront_environment).toBe("live");
+    expect(await auditOf(ota.tenant.id, "tenant.went_live")).toHaveLength(1);
+  });
+
   it("[PBE-061 AC1] names mfa when the owner's MFA is off by the time the transaction reads it", async () => {
     // RecentMfaGuard refuses an account without MFA before the handler (`403 MFA_REQUIRED`, below); MFA turned off
     // between the guard and the transaction is read again there. The service is called as the handler calls it.

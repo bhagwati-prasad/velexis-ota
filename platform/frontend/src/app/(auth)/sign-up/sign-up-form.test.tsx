@@ -230,13 +230,13 @@ describe("/sign-up: SignUpForm and the signUp action", () => {
 
     const password = input(SIGN_UP_STRINGS.passwordLabel);
     await waitFor(
-      () => expect(descriptionsOf(password)).toContain(SIGN_UP_STRINGS.passwordTooShort),
+      () => expect(descriptionsOf(password)).toContain(SIGN_UP_STRINGS.passwordRule),
       ACTION_WAIT,
     );
     expect(password.getAttribute("aria-invalid")).toBe("true");
     const summary = screen.getByRole("alert");
     expect(
-      within(summary).getByRole("link", { name: SIGN_UP_STRINGS.passwordTooShort }).getAttribute("href"),
+      within(summary).getByRole("link", { name: SIGN_UP_STRINGS.passwordRule }).getAttribute("href"),
     ).toBe(`#${fieldId("password")}`);
     // The summary takes the focus in an effect, which may run after the render the wait above saw.
     await waitFor(() => expect(document.activeElement).toBe(summary), ACTION_WAIT);
@@ -247,10 +247,10 @@ describe("/sign-up: SignUpForm and the signUp action", () => {
     expect(password.value).toBe("");
   });
 
-  it("[PFE-005 AC1] maps the API's PASSWORD_TOO_WEAK (too_short) to the password field", async () => {
+  it("[PFE-005 AC1] [FIX-W48-PLATFORM AC1] maps the API's PASSWORD_TOO_WEAK (password_rule) to the password field", async () => {
     // The API owns the rule (PF-01 AC2): its answer is shown even for a password the portal let through.
     api.POST.mockResolvedValue(
-      apiError("PASSWORD_TOO_WEAK", 422, [{ path: "/password", code: "too_short" }]),
+      apiError("PASSWORD_TOO_WEAK", 422, [{ path: "/password", code: "password_rule" }]),
     );
     render(<SignUpForm />);
     fillSignUp({});
@@ -258,7 +258,7 @@ describe("/sign-up: SignUpForm and the signUp action", () => {
 
     const password = input(SIGN_UP_STRINGS.passwordLabel);
     await waitFor(
-      () => expect(descriptionsOf(password)).toContain(SIGN_UP_STRINGS.passwordTooShort),
+      () => expect(descriptionsOf(password)).toContain(SIGN_UP_STRINGS.passwordRule),
       ACTION_WAIT,
     );
     expect(password.getAttribute("aria-invalid")).toBe("true");
@@ -267,15 +267,39 @@ describe("/sign-up: SignUpForm and the signUp action", () => {
       within(screen.getByRole("alert"))
         .getAllByRole("listitem")
         .map((item) => item.textContent),
-    ).toEqual([SIGN_UP_STRINGS.passwordTooShort]);
+    ).toEqual([SIGN_UP_STRINGS.passwordRule]);
     expect(api.POST).toHaveBeenCalledTimes(1);
     expect(navigation.redirect).not.toHaveBeenCalled();
+  });
+
+  it("[FIX-W48-PLATFORM AC1] asks for 12 characters with a letter and a digit, as its hint says, without calling the API", async () => {
+    for (const weak of ["Fjord-Lan4!", "Kettle-Morning!", "4815-1623-42", "🙂abcdefgh12"]) {
+      cleanup();
+      render(<SignUpForm />);
+      const field = input(SIGN_UP_STRINGS.passwordLabel);
+      expect(descriptionsOf(field)).toEqual([SIGN_UP_STRINGS.passwordHint]);
+      expect(field.getAttribute("minlength")).toBe("12");
+      fillSignUp({ password: weak });
+      submit(SIGN_UP_STRINGS.submit);
+      await waitFor(
+        () =>
+          expect(descriptionsOf(input(SIGN_UP_STRINGS.passwordLabel))).toContain(
+            SIGN_UP_STRINGS.passwordRule,
+          ),
+        ACTION_WAIT,
+      );
+    }
+    expect(SIGN_UP_STRINGS.passwordHint).toMatch(
+      /^At least 12 characters, with at least one letter and one digit\./,
+    );
+    expect(api.POST).not.toHaveBeenCalled();
   });
 
   it("[PFE-005 AC1] maps the API's PASSWORD_TOO_WEAK (breached) to the password field", async () => {
     api.POST.mockResolvedValue(apiError("PASSWORD_TOO_WEAK", 422, [{ path: "/password", code: "breached" }]));
     render(<SignUpForm />);
-    fillSignUp({ password: "qwertyuiop" });
+    // The portal's own rule lets it through; the API's breached list refuses it.
+    fillSignUp({ password: "Qwertyuiop-123" });
     submit(SIGN_UP_STRINGS.submit);
 
     const password = input(SIGN_UP_STRINGS.passwordLabel);
@@ -290,7 +314,7 @@ describe("/sign-up: SignUpForm and the signUp action", () => {
       body: {
         fullName: "Anna Berg",
         email: "anna.berg@example.com",
-        password: "qwertyuiop",
+        password: "Qwertyuiop-123",
         acceptTerms: true,
         termsVersion,
       },
@@ -354,7 +378,7 @@ describe("/sign-up: SignUpForm and the signUp action", () => {
       ACTION_WAIT,
     );
     expect(descriptionsOf(input(SIGN_UP_STRINGS.emailLabel))).toContain(SIGN_UP_STRINGS.emailInvalid);
-    expect(descriptionsOf(input(SIGN_UP_STRINGS.passwordLabel))).toContain(SIGN_UP_STRINGS.passwordTooShort);
+    expect(descriptionsOf(input(SIGN_UP_STRINGS.passwordLabel))).toContain(SIGN_UP_STRINGS.passwordRule);
     const terms = screen.getByRole("checkbox");
     expect(descriptionsOf(terms)).toEqual([SIGN_UP_STRINGS.termsRequired]);
     expect(terms.getAttribute("aria-invalid")).toBe("true");
@@ -366,7 +390,7 @@ describe("/sign-up: SignUpForm and the signUp action", () => {
     ).toEqual([
       SIGN_UP_STRINGS.fullNameRequired,
       SIGN_UP_STRINGS.emailInvalid,
-      SIGN_UP_STRINGS.passwordTooShort,
+      SIGN_UP_STRINGS.passwordRule,
       SIGN_UP_STRINGS.termsRequired,
     ]);
     expect(api.POST).not.toHaveBeenCalled();

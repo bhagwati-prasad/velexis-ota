@@ -62,7 +62,7 @@ sequenceDiagram
 
 1. **Sign-up.** The portal server action validates the form with Zod and calls `signUp`. The API:
    - normalises the e-mail (trim, lower-case for the uniqueness check);
-   - checks the password (10+ characters, not in the breached top-10k list) and hashes it with Argon2id;
+   - checks the password (12+ characters with a letter and a digit since [ADR-0008](../../../docs/mvp/adr/0008-identity-accounts-customers-sessions.md)'s revision of 2026-11-11, not in the breached top-10k list) and hashes it with Argon2id;
    - if the e-mail is new, inserts `accounts` (`pending_verification`, `terms_accepted_at`, `terms_version`), an `account_tokens` row (`email_verification`, SHA-256 of a 256-bit token, 24 h) and an `email_outbox` row `auth.verify_email` whose link is in `secret_payload_ciphertext`;
    - if the e-mail exists, inserts only an `auth.account_exists` e-mail (with a sign-in and a reset link), so the answer reveals nothing;
    - writes `account.signed_up` to the audit log, commits, enqueues `email.send`, and answers `202`.

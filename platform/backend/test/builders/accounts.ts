@@ -20,7 +20,8 @@ import {
 } from "./platform-rows";
 
 /**
- * A password that meets the rules of PasswordPolicy (10+ characters, not breached), for tests that sign up or sign in.
+ * A password that meets the rule of PasswordPolicy (12+ characters with a letter and a digit, not breached), for tests
+ * that sign up or sign in.
  * A test value, never a real password.
  */
 export const TEST_PASSWORD = "Northern-Lights-Fjord-2026";

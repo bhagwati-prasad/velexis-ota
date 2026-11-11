@@ -60,7 +60,7 @@ export const ERROR_MESSAGES: Readonly<Record<PlatformErrorCode, string>> = Objec
     "The initial keys of this OTA were already shown, or the time to show them has passed.",
   PRECONDITION_FAILED: "Someone else changed this in the meantime. Reload the page and try again.",
   PASSWORD_TOO_WEAK:
-    "Choose a stronger password: platform admins need at least 12 characters, with at least one letter and one digit, and not a common or previously leaked password.",
+    "Choose a stronger password: at least 12 characters, with at least one letter and one digit, and not a common or previously leaked password.",
   CURRENT_PASSWORD_INCORRECT: "The current password is not correct.",
   PLAN_NOT_AVAILABLE: "This plan is not available with the chosen billing interval.",
   PLAN_LIMIT_REACHED: "The plan's limit is reached for this OTA.",
@@ -124,11 +124,12 @@ export const SIGN_IN_STRINGS = Object.freeze({
   enableMfa: "Turn on two-factor authentication in the portal",
   forgotPassword: "Forgot your password? Reset it in the portal.",
   /**
-   * The password rule of platform admins (ADR-0008, revision of 2026-11-10; PCI DSS 8.3.6), which the portal applies
-   * where they choose a password: its security page and its reset link. The admin has no password form of its own.
+   * The password rule of every portal account (ADR-0008, revisions of 2026-11-10 and 2026-11-11; PCI DSS 8.3.6), which
+   * the portal applies where a platform admin chooses a password: its security page and its reset link. The admin has
+   * no password form of its own.
    */
   passwordRule:
-    "Platform admins choose their password in the portal, on its security page or with a reset link: at least 12 characters, with at least one letter and one digit.",
+    "Platform admins choose their password in the portal, on its security page or with a reset link: at least 12 characters, with at least one letter and one digit, like every Velexis account.",
   signedOut: "You are signed out.",
 });
 
@@ -1124,7 +1125,7 @@ export const SUBSCRIPTION_DETAIL_STRINGS = Object.freeze({
 export const MANUAL_SUBSCRIPTION_STRINGS = Object.freeze({
   title: "Edit the manual subscription",
   intro:
-    "A manual subscription is the trial of an OTA before Stripe Billing (M5). Change its plan, the end of its trial or its status; the reason is kept in the audit log with your name.",
+    "A manual subscription is the trial of an OTA before Stripe Billing (M5), or the subscription of an OTA you bill outside Stripe. Change its plan, the end of its trial or its status; the reason is kept in the audit log with your name.",
   planLabel: "Plan",
   planHint:
     "Active plans only; plans that are not public can be chosen too. A new plan applies to the OTA at once.",
@@ -1135,7 +1136,8 @@ export const MANUAL_SUBSCRIPTION_STRINGS = Object.freeze({
   trialEndHintMidnight: "The date in UTC; the trial ends at the start of that day (00:00 UTC).",
   trialEndInvalid: "Enter a valid date for the end of the trial.",
   statusLabel: "Status",
-  statusHint: "“Canceled” ends the manual subscription; “Trial” reopens a canceled one.",
+  statusHint:
+    "“Active” means the OTA pays outside Stripe, so it can go live and gets no trial reminders; “Trial” makes it a trial again; “Canceled” ends it.",
   statusUnchanged: (label: string) => `${label} (current)`,
   noChange: "Change the plan, the end of the trial or the status first.",
   save: "Save changes…",
@@ -1153,8 +1155,7 @@ export const MANUAL_SUBSCRIPTION_STRINGS = Object.freeze({
   /** `409 CONFLICT` by `details.reason`. */
   stripeBilled:
     "Stripe bills this subscription now, so it can no longer be edited here. Reload the page to see it.",
-  currentExists:
-    "This OTA already has another current subscription, so this one cannot be reopened as a trial.",
+  currentExists: "This OTA already has another current subscription, so this one cannot be reopened.",
   /** `422 UNPROCESSABLE` (`plan_not_active`). */
   planNotActive: "This plan is retired or no longer exists. Choose an active plan.",
   /** `412 PRECONDITION_FAILED`. */

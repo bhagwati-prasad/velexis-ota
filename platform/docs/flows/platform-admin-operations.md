@@ -68,6 +68,7 @@ sequenceDiagram
 1. Only accounts with `is_platform_admin = true` **and** MFA enabled can sign in; the password step answers the same `INVALID_CREDENTIALS` to non-admins. TOTP (or a recovery code) is required on every sign-in. Sessions use `audience = 'platform_admin'`, a 12-hour absolute family lifetime and the admin's own cookies.
 2. The first admin is created with a CLI command on the VM (`node dist/cli.js admin:grant <email>`, run by the developer through the deploy user; the account must exist, be verified and have MFA). Later admins are granted in the admin UI (reason and MFA step-up).
 3. Caddy may restrict `admin.platform.example.com` to the developer's IP addresses (`PLATFORM_ADMIN_ALLOWED_IPS` in the Caddy environment, optional).
+   - *Correction (2026-11-11, the lead's decision (15g), FIX-W48-PLATFORM).* No `PLATFORM_ADMIN_ALLOWED_IPS` exists: neither Caddy's environment nor any configuration reads it. The optional allow-list is the commented `@outside_staff` block of the admin host in [`deploy/caddy/Caddyfile`](../../../deploy/caddy/Caddyfile) (`@outside_staff not remote_ip …` and `respond @outside_staff 403`). It is enabled in a release, through a reviewed change of the Caddyfile that replaces the documentation range with the staff networks and removes the comment marks, never by editing the VM's copy; the admin's own sign-in rules (MFA on every sign-in, item 1) apply either way.
 4. Sensitive actions require a TOTP step-up within 15 minutes: entering or rotating Amadeus credentials, approving and paying settlements, revealing a payout account, resetting MFA, granting and revoking admins.
 
 ### B. Tenants
@@ -88,6 +89,7 @@ sequenceDiagram
 
 - Create and edit plans (limits, features, trial days, settlement fee); link Stripe product and price ids; review price warnings ([`subscription-billing.md`](subscription-billing.md) §A).
 - Subscriptions and invoices lists with filters; resync a Stripe subscription; edit a **manual** subscription (plan, trial end, cancel) with a reason.
+  - *Note (2026-11-11, the lead's decision (15g), FIX-W48-PLATFORM).* The manual edit also sets a subscription **`active`**: an OTA a platform admin bills outside Stripe. Go-live accepts it (the go-live rule of FIX-W40-PLATFORM), the daily `billing.manual_trials` run sends it no trial notice and never moves it to `past_due`, and the trial's banner goes with the edit. From any status, with the same refusal as reopening a trial (`409 CONFLICT`, `current_exists`, while the OTA has another current subscription); `canceled_at` is cleared ([`subscription-billing.md`](subscription-billing.md) §G).
 - Stripe events: failed or ignored events with their error; reprocess after fixing the cause.
 - *Note (2026-11-04, lead decision (2l), FIX-W41-PLATFORM).* Moving the trial end of a `past_due` manual subscription to a later day reopens it: it is a trial again (`trialing`), and the OTA's banner becomes the trial's as the daily run sets it (`trial_ending` within 14 days of the new end, none otherwise), audited with the edit ([`subscription-billing.md`](subscription-billing.md) §G).
 

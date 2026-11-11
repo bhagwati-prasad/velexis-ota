@@ -16,6 +16,12 @@ import {
   type PendingMfaSetup,
 } from "@/lib/mfa-checks";
 import {
+  codePoints,
+  meetsPasswordRule,
+  PASSWORD_MAX_LENGTH,
+  passwordFieldMessage,
+} from "@/lib/password-rule";
+import {
   MFA_CHALLENGE_COOKIE,
   NEXT_PATH_COOKIE,
   clearedCookie,
@@ -68,11 +74,6 @@ function text(formData: FormData, name: string): string {
   return typeof value === "string" ? value : "";
 }
 
-/** The length of a password as the API counts it: Unicode code points. */
-function codePoints(value: string): number {
-  return [...value].length;
-}
-
 // ---- Password ---------------------------------------------------------------------------------------------------
 
 /** The fields of the password form. */
@@ -88,40 +89,24 @@ export interface PasswordState {
   readonly message?: string;
 }
 
-/**
- * The password rules of PF-01 AC2 the portal can check itself; the breached list is the API's, and so is the privileged
- * rule of platform admins and the owners and admins of OTAs (12 characters with a letter and a digit; ADR-0008,
- * revision of 2026-11-10), which the API answers with `privileged_rule`.
- */
-const PASSWORD_MIN = 10;
-const PASSWORD_MAX = 256;
+/** The longest current password the document takes (`Password.maxLength`). */
+const PASSWORD_MAX = PASSWORD_MAX_LENGTH;
 
 const PASSWORD_FORM = z.object({
   currentPassword: z
     .string()
     .min(1, SECURITY_STRINGS.currentPasswordRequired)
     .refine((value) => codePoints(value) <= PASSWORD_MAX, SECURITY_STRINGS.currentPasswordTooLong),
+  // The password rule of every portal account (`lib/password-rule.ts`); the breached list is the API's.
   newPassword: z
     .string()
-    .refine((value) => codePoints(value) >= PASSWORD_MIN, SIGN_UP_STRINGS.passwordTooShort)
-    .refine((value) => codePoints(value) <= PASSWORD_MAX, SIGN_UP_STRINGS.passwordTooLong),
+    .refine(meetsPasswordRule, SIGN_UP_STRINGS.passwordRule)
+    .refine((value) => codePoints(value) <= PASSWORD_MAX_LENGTH, SIGN_UP_STRINGS.passwordTooLong),
 });
 
 /** The message at the new-password field for the API's field error `code` on `/newPassword`. */
 function newPasswordMessage(code: string | undefined): string {
-  if (code === "too_short" || code === "minLength") {
-    return SIGN_UP_STRINGS.passwordTooShort;
-  }
-  if (code === "privileged_rule") {
-    return SIGN_UP_STRINGS.passwordPrivilegedRule;
-  }
-  if (code === "breached") {
-    return SIGN_UP_STRINGS.passwordBreached;
-  }
-  if (code === "maxLength") {
-    return SIGN_UP_STRINGS.passwordTooLong;
-  }
-  return ERROR_MESSAGES.PASSWORD_TOO_WEAK;
+  return passwordFieldMessage(code) ?? ERROR_MESSAGES.PASSWORD_TOO_WEAK;
 }
 
 /** The field error code of `error` at `pointer`, if any. */

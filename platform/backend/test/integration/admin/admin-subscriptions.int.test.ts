@@ -573,6 +573,87 @@ describe("adminUpdateManualSubscription", () => {
     ]);
   });
 
+  it("[FIX-W48-PLATFORM AC3] marks a manual trial paid outside Stripe (active): the trial's banner goes, the end stays, audited and announced", async () => {
+    const ota = await otaWith({ trial_ends_at: daysFromNow(5) });
+    await pool.query("UPDATE platform.tenants SET billing_notice = 'trial_ending' WHERE id = $1", [
+      ota.tenant.id,
+    ]);
+    const tenantBefore = await storedTenant(ota.tenant.id);
+    const from = events.length;
+
+    const res = await patchSubscription(ota.sub, 1, { status: "active", reason: REASON });
+
+    expect(res.status).toBe(200);
+    expectResponseToMatch("adminUpdateManualSubscription", res, { document: "platform" });
+    expect(res.body).toMatchObject({
+      status: "active",
+      billingProvider: "manual",
+      trialEndsAt: daysFromNow(5).toISOString(),
+      canceledAt: null,
+      version: 2,
+    });
+    expect(await storedSubscription(ota.sub)).toMatchObject({ status: "active", canceled_at: null });
+    // No trial ends any more: the banner goes, as the daily run clears it for an active manual subscription.
+    expect(await storedTenant(ota.tenant.id)).toMatchObject({
+      billing_notice: null,
+      plan_code: SEEDED_PLAN_CODE,
+      version: (tenantBefore["version"] as number) + 1,
+    });
+    expect((await auditOf(ota.sub)).map((row) => row["details"])).toEqual([
+      {
+        reason: REASON,
+        billingNotice: { before: "trial_ending", after: null },
+        before: { status: "trialing" },
+        after: { status: "active" },
+      },
+    ]);
+    const index = await eventAfter(from, isTenantEvent(ota.tenant.id));
+    expect(events[index]).toEqual({ v: 1, type: "tenant", id: ota.tenant.id });
+
+    // Another banner stays (here `past_due` of an OTA whose past-due trial is marked paid), and the plan follows.
+    const pastDue = await otaWith({ status: "past_due", trial_ends_at: daysFromNow(-3) });
+    await pool.query("UPDATE platform.tenants SET billing_notice = 'past_due' WHERE id = $1", [
+      pastDue.tenant.id,
+    ]);
+    const paid = await patchSubscription(pastDue.sub, 1, {
+      status: "active",
+      planCode: "growth",
+      reason: REASON,
+    });
+    expect(paid.status).toBe(200);
+    expect(paid.body).toMatchObject({ status: "active", planCode: "growth" });
+    expect(await storedTenant(pastDue.tenant.id)).toMatchObject({
+      billing_notice: "past_due",
+      plan_code: "growth",
+    });
+    expect((await auditOf(pastDue.sub))[0]?.["details"]).not.toHaveProperty("billingNotice");
+  });
+
+  it("[FIX-W48-PLATFORM AC3] makes a canceled manual subscription active, clearing canceled_at, and refuses it next to another current subscription (409)", async () => {
+    const ota = await otaWith({ status: "canceled", canceled_at: daysFromNow(-1) });
+    const reopened = await patchSubscription(ota.sub, 1, { status: "active", reason: REASON });
+    expect(reopened.status).toBe(200);
+    expectResponseToMatch("adminUpdateManualSubscription", reopened, { document: "platform" });
+    expect(reopened.body).toMatchObject({ status: "active", canceledAt: null, version: 2 });
+    // And back: an active manual subscription can be canceled, or made a trial again.
+    const trial = await patchSubscription(ota.sub, 2, { status: "trialing", reason: REASON });
+    expect(trial.body).toMatchObject({ status: "trialing", version: 3 });
+
+    const tenant = await insertTenant(pool);
+    const old = await insertSubscription(pool, tenant, {
+      id: testId("sub", 5100),
+      status: "canceled",
+      canceled_at: daysFromNow(-10),
+    });
+    await insertSubscription(pool, tenant, { id: testId("sub", 5101), status: "trialing" });
+    const refused = await patchSubscription(old.id, old.version, { status: "active", reason: REASON });
+    expect(refused.status).toBe(409);
+    expectResponseToMatch("adminUpdateManualSubscription", refused, { document: "platform" });
+    expect(errorOf(refused)).toMatchObject({ code: "CONFLICT", details: { reason: "current_exists" } });
+    expect(await storedSubscription(old.id)).toMatchObject({ status: "canceled", version: old.version });
+    expect(await auditOf(old.id)).toEqual([]);
+  });
+
   it("changes only the plan of a canceled subscription, and moves the tenant to it when the subscription is reopened", async () => {
     const ota = await otaWith({ status: "canceled", canceled_at: daysFromNow(-1) });
     const res = await patchSubscription(ota.sub, 1, { planCode: "growth", reason: REASON });

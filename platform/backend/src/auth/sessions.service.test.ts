@@ -184,7 +184,10 @@ class World {
   private sequence = 0;
 
   constructor() {
-    const config = { get: () => keyFile.path } as unknown as ConfigService<PlatformBackendConfig, true>;
+    // Only the signing key: no previous key of a rotation (JWT_PREVIOUS_PUBLIC_KEY_FILE unset).
+    const config = {
+      get: (key: string) => (key === "JWT_PRIVATE_KEY_FILE" ? keyFile.path : undefined),
+    } as unknown as ConfigService<PlatformBackendConfig, true>;
     this.tokens = new TokenService(config, this.clock);
     const db = {
       transaction: () => ({

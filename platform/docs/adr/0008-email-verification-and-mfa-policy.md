@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Platform tech lead. Decided during planning; revisit at the M6 security review, when the first OTA goes live, or if account-takeover attempts are seen.
-**Revisions:** 2026-11-05 (lead decision (5b) of 2026-11-05, recorded with FIX-W43-PLATFORM; the follow-up of the M6 security review, [`../security-review.md`](../security-review.md) §9): MFA is mandatory for the owners and admins of a **live** OTA, enforced when the OTA goes live and at the first portal sign-in of each such owner or admin after that, with the enrolment then and there before any other portal page (dated note under the MFA table; tasks PBE-071 and PFE-030). Test-only OTAs keep MFA optional, and so do agents, finance members and viewers.
+**Revisions:** 2026-11-05 (lead decision (5b) of 2026-11-05, recorded with FIX-W43-PLATFORM; the follow-up of the M6 security review, [`../security-review.md`](../security-review.md) §9): MFA is mandatory for the owners and admins of a **live** OTA, enforced when the OTA goes live and at the first portal sign-in of each such owner or admin after that, with the enrolment then and there before any other portal page (dated note under the MFA table; tasks PBE-071 and PFE-030). Test-only OTAs keep MFA optional, and so do agents, finance members and viewers. 2026-11-11 ([ADR-0008](../../../docs/mvp/adr/0008-identity-accounts-customers-sessions.md) revision of 2026-11-11, the owner's decision, lead decision (15e), recorded with FIX-W48-PLATFORM; PCI DSS 8.3.6): the passwords the Context names as "10+ characters" need at least 12 characters with at least one letter and one digit, for every portal account, at sign-up, a password change and a reset; the breached-list check stays.
 
 ## Context
 

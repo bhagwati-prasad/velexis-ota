@@ -50,6 +50,14 @@ export function isConfirmedSubscription(
 }
 
 /**
+ * A manual subscription a platform admin set `active`: the OTA is billed by Velexis outside Stripe (lead decision (15g)
+ * of 2026-11-11, FIX-W48-PLATFORM), so it is no trial, whatever trial end it kept.
+ */
+export function isPaidOutsideStripe(subscription: Pick<Subscription, "billingProvider" | "status">): boolean {
+  return subscription.billingProvider === "manual" && subscription.status === "active";
+}
+
+/**
  * The subscription lets an owner choose a plan through Stripe Checkout (§B step 2, PF-72): a manual trial (also once it
  * ended: `past_due`, `canceled`), a canceled Stripe subscription, or a Checkout that was never paid (`incomplete`, or
  * `incomplete_expired` after an abandoned Checkout, §H). A manual subscription an admin set `active` (billed outside
@@ -58,7 +66,7 @@ export function isConfirmedSubscription(
  */
 export function planChoiceOffered(subscription: Pick<Subscription, "billingProvider" | "status">): boolean {
   if (subscription.billingProvider === "manual") {
-    return subscription.status !== "active";
+    return !isPaidOutsideStripe(subscription);
   }
   return !CURRENT_STRIPE_STATUSES.has(subscription.status);
 }

@@ -133,15 +133,16 @@ export interface AccountInput {
   readonly email: string;
   /**
    * 25 characters, random, so never on a breached-password list, with a letter and a digit (`newPassword`): it meets
-   * the privileged rule of platform admins and the owners and admins of OTAs too (ADR-0008, revision of 2026-11-10).
+   * the password rule of every portal account (12 characters with a letter and a digit; ADR-0008, revision of
+   * 2026-11-11).
    */
   readonly password: string;
   readonly fullName: string;
 }
 
 /**
- * A random password both of the platform's rules accept: `E2e-` (a letter and a digit, as the privileged rule of
- * platform admins and the owners and admins of OTAs asks), 20 characters of letters, digits, `-` and `_`, and `!`.
+ * A random password the platform's rule accepts: `E2e-` (a letter and a digit, as the rule of every portal account
+ * asks), 20 characters of letters, digits, `-` and `_`, and `!`: 25 characters, never on a breached-password list.
  */
 export function newPassword(): string {
   return `E2e-${randomBytes(15).toString("base64url")}!`;

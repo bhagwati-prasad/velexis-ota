@@ -91,13 +91,16 @@ test("signs up in the browser and gets the verification e-mail [PFE-015 AC1, AC2
 
   await page.getByLabel("Full name").fill(account.fullName);
   await page.getByLabel("E-mail address").fill(account.email);
-  await page.getByLabel("Password").fill("too-short");
+  await page.getByLabel("Password").fill("Too-short-1");
   await page.getByLabel(/I accept the terms of service/).check();
   await page.getByRole("button", { name: "Create account" }).click();
-  // PF-01 AC2: a password under 10 characters is refused at its field; the name and the address stay.
+  // PF-01 AC2: a password under 12 characters (here 11, with a letter and a digit) is refused at its field; the name
+  // and the address stay (FIX-W48-PLATFORM: every portal account's rule is 12 characters with a letter and a digit).
   const password = page.getByLabel("Password");
   await expect(password).toHaveAttribute("aria-invalid", "true");
-  await expect(page.getByText("Use at least 10 characters.").first()).toBeVisible();
+  await expect(
+    page.getByText("Use at least 12 characters, with at least one letter and one digit.").first(),
+  ).toBeVisible();
   await expect(page.getByLabel("E-mail address")).toHaveValue(account.email);
   await expectAccessible(page, "Sign up");
 

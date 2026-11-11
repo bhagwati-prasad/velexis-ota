@@ -1,7 +1,7 @@
 // Key files for tests that build the platform backend's configuration (JWT_PRIVATE_KEY_FILE, PBE-012). Each call
 // writes a fresh key into its own temporary folder with mode 0600, as `pnpm dev:keys` writes the development key, so
 // tests never depend on `.local/keys/` or share a file. The keys are generated on the spot and are no secret.
-import { generateKeyPairSync } from "node:crypto";
+import { createPrivateKey, createPublicKey, generateKeyPairSync } from "node:crypto";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -41,4 +41,12 @@ export function writeTestKeyFile(pem: string, mode = 0o600): TestKeyFile {
 /** A new Ed25519 JWT signing key in a temporary file of mode 0600. */
 export function createTestJwtKeyFile(): TestKeyFile {
   return writeTestKeyFile(ed25519PrivateKeyPem());
+}
+
+/**
+ * The public half of the Ed25519 private key `privatePem` as SPKI PEM, like `openssl pkey -pubout`: what
+ * JWT_PREVIOUS_PUBLIC_KEY_FILE holds during a rotation (FIX-W48-PLATFORM).
+ */
+export function publicKeyPemOf(privatePem: string): string {
+  return createPublicKey(createPrivateKey(privatePem)).export({ type: "spki", format: "pem" }).toString();
 }

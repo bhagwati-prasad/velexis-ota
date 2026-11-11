@@ -1,6 +1,7 @@
 // TokenService (PBE-012): EdDSA access tokens of the portal and the platform admin with the claims of
 // platform/docs/architecture.md §3.1, signed with a fresh Ed25519 key file per test file and checked at the time of a
-// FakeClock. Every token here is made up on the spot; no value is a secret.
+// FakeClock, and the previous key of a rotation (JWT_PREVIOUS_PUBLIC_KEY_FILE, FIX-W48-PLATFORM). Every token here is
+// made up on the spot; no value is a secret.
 import { createPrivateKey, generateKeyPairSync, type KeyObject } from "node:crypto";
 import type { ConfigService } from "@nestjs/config";
 import { AppError } from "@velexis/errors";
@@ -15,7 +16,7 @@ import {
   type JWTPayload,
 } from "jose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createTestJwtKeyFile, writeTestKeyFile } from "../../test/support/jwt-key";
+import { createTestJwtKeyFile, publicKeyPemOf, writeTestKeyFile } from "../../test/support/jwt-key";
 import { PlatformOpenApi } from "../common/http/openapi-validation.interceptor";
 import type { PlatformBackendConfig } from "../config";
 import {
@@ -23,6 +24,7 @@ import {
   ACCESS_TOKEN_TTL_SECONDS,
   bearerTokenOf,
   loadSigningKey,
+  loadVerifyingKey,
   MAX_ACCESS_TOKEN_LENGTH,
   TokenService,
   type AccessTokenInput,
@@ -45,19 +47,29 @@ const ADMIN: AccessTokenInput = {
 
 const keyFile = createTestJwtKeyFile();
 const otherKeyFile = createTestJwtKeyFile();
+/** The public half of otherKeyFile's key, as JWT_PREVIOUS_PUBLIC_KEY_FILE holds it after a rotation from that key. */
+const otherPublicKeyFile = writeTestKeyFile(publicKeyPemOf(otherKeyFile.pem));
 
 afterAll(() => {
   keyFile.remove();
   otherKeyFile.remove();
+  otherPublicKeyFile.remove();
 });
 
-/** The configuration as ConfigService holds it, with only the key file (the service reads nothing else). */
-function configWith(path: string): ConfigService<PlatformBackendConfig, true> {
-  return { get: () => path } as unknown as ConfigService<PlatformBackendConfig, true>;
+/**
+ * The configuration as ConfigService holds it, with only the key files (the service reads nothing else):
+ * JWT_PRIVATE_KEY_FILE and, during a rotation, JWT_PREVIOUS_PUBLIC_KEY_FILE.
+ */
+function configWith(path: string, previousPath?: string): ConfigService<PlatformBackendConfig, true> {
+  const values: Record<string, string | undefined> = {
+    JWT_PRIVATE_KEY_FILE: path,
+    JWT_PREVIOUS_PUBLIC_KEY_FILE: previousPath,
+  };
+  return { get: (key: string) => values[key] } as unknown as ConfigService<PlatformBackendConfig, true>;
 }
 
-function service(clock = new FakeClock(START), path = keyFile.path): TokenService {
-  return new TokenService(configWith(path), clock);
+function service(clock = new FakeClock(START), path = keyFile.path, previousPath?: string): TokenService {
+  return new TokenService(configWith(path, previousPath), clock);
 }
 
 /** The AppError code a promise rejects with. */
@@ -272,6 +284,112 @@ describe("TokenService.verify", () => {
     for (const token of [undefined, "", "not-a-token", "a.b.c", "x".repeat(MAX_ACCESS_TOKEN_LENGTH + 1)]) {
       expect(await rejection(tokens.verify(token, "portal"))).toBe("UNAUTHENTICATED");
     }
+  });
+});
+
+describe("the previous key of a rotation (JWT_PREVIOUS_PUBLIC_KEY_FILE)", () => {
+  it("[FIX-W48-PLATFORM AC2] accepts the tokens of the previous key while it is configured, and signs with the current key only", async () => {
+    // Before the rotation the API signed with otherKeyFile's key; after it, keyFile's key signs and the old public key
+    // only verifies.
+    const before = service(new FakeClock(START), otherKeyFile.path);
+    const after = service(new FakeClock(START), keyFile.path, otherPublicKeyFile.path);
+    const oldToken = (await before.sign(PORTAL)).token;
+    const oldAdminToken = (await before.sign(ADMIN)).token;
+    const newToken = (await after.sign(PORTAL)).token;
+
+    expect(after.previousKid).toBe(before.kid);
+    expect(after.kid).not.toBe(before.kid);
+    expect(decodeProtectedHeader(newToken).kid).toBe(after.kid);
+    expect(await after.verify(oldToken, "portal")).toMatchObject({
+      aud: "portal",
+      sub: ACCOUNT,
+      sid: FAMILY,
+    });
+    expect(await after.verify(oldAdminToken, "platform_admin")).toMatchObject({
+      aud: "platform_admin",
+      typ: "admin",
+    });
+    expect(await after.verify(newToken, "portal")).toMatchObject({ aud: "portal", sub: ACCOUNT });
+    // The previous key's tokens keep every other rule: the audience, and the 15 minutes from their own iat.
+    expect(await rejection(after.verify(oldToken, "platform_admin"))).toBe("UNAUTHENTICATED");
+    const later = service(new FakeClock("2026-10-15T09:15:00.000Z"), keyFile.path, otherPublicKeyFile.path);
+    expect(await rejection(later.verify(oldToken, "portal"))).toBe("TOKEN_EXPIRED");
+  });
+
+  it("[FIX-W48-PLATFORM AC2] refuses the previous key's tokens once the variable is removed, and refuses an unknown kid", async () => {
+    const before = service(new FakeClock(START), otherKeyFile.path);
+    const removed = service(new FakeClock(START), keyFile.path);
+    const during = service(new FakeClock(START), keyFile.path, otherPublicKeyFile.path);
+    const oldToken = (await before.sign(PORTAL)).token;
+    const third = createTestJwtKeyFile();
+    try {
+      const unknown = (await service(new FakeClock(START), third.path).sign(PORTAL)).token;
+      expect(removed.previousKid).toBeUndefined();
+      expect(await rejection(removed.verify(oldToken, "portal"))).toBe("UNAUTHENTICATED");
+      expect(await rejection(during.verify(unknown, "portal"))).toBe("UNAUTHENTICATED");
+      // A token that names the previous kid but is signed by another key, and one of the current kid signed by the
+      // previous key: the kid picks the key, and the signature must be that key's.
+      const wrongKey = await forge(
+        portalPayload(),
+        { alg: "EdDSA", kid: before.kid },
+        createPrivateKey(third.pem),
+      );
+      const swapped = await forge(
+        portalPayload(),
+        { alg: "EdDSA", kid: during.kid },
+        createPrivateKey(otherKeyFile.pem),
+      );
+      const noKid = await forge(portalPayload(), { alg: "EdDSA" }, createPrivateKey(otherKeyFile.pem));
+      for (const token of [wrongKey, swapped, noKid]) {
+        expect(await rejection(during.verify(token, "portal")), token).toBe("UNAUTHENTICATED");
+      }
+    } finally {
+      third.remove();
+    }
+  });
+
+  it("[FIX-W48-PLATFORM AC2] refuses at start-up a previous key with the current kid, a private key, a key that is not Ed25519 and a file others may read, without its content", () => {
+    const own = writeTestKeyFile(publicKeyPemOf(keyFile.pem));
+    const readable = writeTestKeyFile(publicKeyPemOf(otherKeyFile.pem), 0o644);
+    const ec = writeTestKeyFile(
+      generateKeyPairSync("ec", {
+        namedCurve: "P-256",
+        privateKeyEncoding: { type: "pkcs8", format: "pem" },
+        publicKeyEncoding: { type: "spki", format: "pem" },
+      }).publicKey,
+    );
+    try {
+      expect(() => service(new FakeClock(START), keyFile.path, own.path)).toThrow(
+        /holds the public half of JWT_PRIVATE_KEY_FILE \(the same kid\)/,
+      );
+      expect(() => service(new FakeClock(START), keyFile.path, otherKeyFile.path)).toThrow(
+        /must hold only a public key .*never a private key/,
+      );
+      expect(() => loadVerifyingKey(ec.path)).toThrow(
+        /holds a key of type ec; platform tokens are signed with Ed25519/,
+      );
+      expect(() => loadVerifyingKey(readable.path)).toThrow(/accessible by group or others/);
+      expect(() => loadVerifyingKey(`${readable.path}.missing`)).toThrow(/does not exist/);
+      // Every refusal stops the service; none quotes a line of the key (the current key's public half is a valid key
+      // file on its own, so only the service refuses it).
+      for (const file of [own, readable, ec, otherKeyFile]) {
+        const body = file.pem.split("\n")[1] ?? "";
+        const start = () => service(new FakeClock(START), keyFile.path, file.path);
+        expect(start).toThrow();
+        expect(start).not.toThrow(body);
+        if (file !== own) {
+          expect(() => loadVerifyingKey(file.path)).not.toThrow(body);
+        }
+      }
+    } finally {
+      own.remove();
+      readable.remove();
+      ec.remove();
+    }
+  });
+
+  it("gives the previous key the kid its private key signed with", () => {
+    expect(loadVerifyingKey(otherPublicKeyFile.path).kid).toBe(loadSigningKey(otherKeyFile.path).kid);
   });
 });
 
