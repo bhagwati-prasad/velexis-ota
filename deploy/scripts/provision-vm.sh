@@ -720,6 +720,8 @@ install_deploy_key() {
     return 0
   fi
   ( umask 077; printf '%s\n' "$want" > "$home/.ssh/.authorized_keys.new" )
+  # A default ACL on the home folder overrides the umask (the file came out 0664 on GitHub's runner): set the mode.
+  chmod 0600 "$home/.ssh/.authorized_keys.new"
   chown "$DEPLOY_USER:$DEPLOY_USER" "$home/.ssh/.authorized_keys.new"
   mv -f "$home/.ssh/.authorized_keys.new" "$home/.ssh/authorized_keys"
   log "Installed the deploy key in $home/.ssh/authorized_keys"
