@@ -12,8 +12,8 @@
 //    the same way with the platform's test key (STRIPE_SECRET_KEY): the events of Stripe Billing's endpoint (the
 //    `billing` list of stripe-listen.sh) forwarded to the platform API's `/webhooks/stripe/billing`, whose signing
 //    secret becomes the platform API's STRIPE_BILLING_WEBHOOK_SECRET. The key reaches each CLI as STRIPE_API_KEY in its
-//    environment, never on its command line; its output goes to test-results/stack/stripe-cli.log (the billing one's
-//    to stripe-cli-billing.log) with every `whsec_`, `sk_` and `rk_` value redacted, and an error shows only that
+//    environment, never on its command line; its output goes to stripe-cli.log in the stack's log folder (test-results/stack/, or
+//    test-results/<E2E_RESULTS_SUBDIR>/stack/; the billing one's to stripe-cli-billing.log) with every `whsec_`, `sk_` and `rk_` value redacted, and an error shows only that
 //    redacted output.
 // 2. The card page. `fillCardForm` types a Stripe test card into the Payment Element's iframe, `completeThreeDSecure`
 //    presses "Complete" in Stripe's 3-D Secure test challenge. Only Stripe's documented test cards are used.

@@ -1,13 +1,14 @@
 // The e2e workflow as PFE-014 step 5 and PADR-0017 describe it, with the OTA projects nightly and before each deploy
 // and the summary of their launch gate (OFE-026). actionlint checks that the file is a valid workflow
-// (tools/e2e/README.md); these tests check what it does.
+// (tools/e2e/README.md); these tests check what it does. tools/ci/deploy-e2e-workflow.test.mjs checks how deploy.yml
+// calls it, its concurrency and the conditions of its Stripe steps and upload (lead decision (15c) of 2026-11-11).
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { REPO_ROOT } from "../support/stack";
+import { REPO_ROOT, resultsFolders } from "../support/stack";
 
 interface Step {
   readonly id?: string;
@@ -23,6 +24,7 @@ interface Workflow {
   readonly on: {
     readonly schedule?: readonly { readonly cron: string }[];
     readonly workflow_dispatch?: unknown;
+    readonly workflow_call?: unknown;
     readonly pull_request?: { readonly types?: readonly string[] };
     readonly push?: unknown;
   };
@@ -31,6 +33,7 @@ interface Workflow {
     string,
     {
       readonly if?: string;
+      readonly "timeout-minutes"?: number;
       readonly services: Record<string, { readonly image: string }>;
       readonly env: Record<string, string>;
       readonly steps: readonly Step[];
@@ -117,7 +120,11 @@ describe(".github/workflows/e2e.yml", () => {
 
   it("runs portal-stripe only at night and only with the Stripe test secrets (PADR-0017 item 4)", () => {
     const stripe = steps.find((step) => /--project=portal-stripe/.test(step.run ?? ""));
-    expect(stripe?.if).toBe("github.event_name == 'schedule' && env.STRIPE_CONFIGURED == 'true'");
+    // Since lead decision (15c) of 2026-11-11 also after a failed earlier Playwright step, once the set-up passed.
+    expect(stripe?.if).toBe(
+      "!cancelled() && steps.browsers.outcome == 'success' && github.event_name == 'schedule' && " +
+        "env.STRIPE_CONFIGURED == 'true'",
+    );
     expect(stripe?.env?.["E2E_STRIPE"]).toBe("1");
     expect(runs.filter((run) => /portal-stripe/.test(run))).toHaveLength(1);
   });
@@ -133,6 +140,8 @@ describe(".github/workflows/e2e.yml", () => {
       STRIPE_SECRET_KEY: "${{ secrets.E2E_STRIPE_SECRET_KEY }}",
       STRIPE_BILLING_WEBHOOK_SECRET: "${{ secrets.E2E_STRIPE_BILLING_WEBHOOK_SECRET }}",
       E2E_STRIPE_BILLING: "1",
+      // Its own results folder (lead decision (15c) of 2026-11-11).
+      E2E_RESULTS_SUBDIR: "portal-stripe",
     });
     // One pinned release for both steps, in the job's environment; neither step names another.
     expect(job?.env).toMatchObject({
@@ -167,9 +176,10 @@ describe(".github/workflows/e2e.yml", () => {
     );
     // Nightly and on demand (the run before each deploy, OFE-026; until then nightly only), never on a pull request,
     // and only when the three secrets exist: the platform's two (E2E_STRIPE=1 needs them) and the publishable key of
-    // the same test account.
+    // the same test account; since lead decision (15c) of 2026-11-11 also after a failed earlier Playwright step.
     expect(step?.if).toBe(
-      "github.event_name != 'pull_request' && env.STOREFRONT_STRIPE_CONFIGURED == 'true'",
+      "!cancelled() && steps.browsers.outcome == 'success' && github.event_name != 'pull_request' && " +
+        "env.STOREFRONT_STRIPE_CONFIGURED == 'true'",
     );
     expect(job?.env["STOREFRONT_STRIPE_CONFIGURED"]).toBe(
       "${{ secrets.E2E_STRIPE_SECRET_KEY != '' && secrets.E2E_STRIPE_BILLING_WEBHOOK_SECRET != '' && " +
@@ -246,13 +256,39 @@ describe(".github/workflows/e2e.yml", () => {
     expect(runs.filter((run) => /test:smoke/.test(run))).toHaveLength(1);
   });
 
-  it("uploads traces, screenshots, the report and the stack's logs when a step fails [PFE-014 AC2]", () => {
+  it("uploads traces, screenshots, the report and the stack's logs when a step fails or the run is cancelled [PFE-014 AC2]", () => {
     const upload = steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
-    expect(upload?.if).toBe("failure()");
+    // Also on cancellation (a newer pull-request run, the job's timeout): lead decision (15c) of 2026-11-11.
+    expect(upload?.if).toBe("failure() || cancelled()");
     const paths = String(upload?.with?.["path"] ?? "")
       .split("\n")
       .filter(Boolean);
     expect(paths).toEqual(["tools/e2e/test-results/", "tools/e2e/playwright-report/"]);
+  });
+
+  it("[FIX-W48-SHARED AC4] gives each Playwright step its own output, report and stack-log folders under the uploaded paths", () => {
+    const playwrightSteps = steps.filter((step) => /pnpm test:e2e/.test(step.run ?? ""));
+    const subdirs = playwrightSteps.map((step) => step.env?.["E2E_RESULTS_SUBDIR"]);
+    expect(subdirs).toEqual(["projects", "portal-stripe", "storefront-stripe"]);
+    // What playwright.config.ts and the global setup make of them: three folders of each kind, all different, each
+    // inside test-results/ or playwright-report/, which the upload takes; the SDK smoke step keeps its own folder.
+    const folders = subdirs.map((subdir) => resultsFolders(subdir));
+    for (const kind of ["outputDir", "reportDir", "stackLogDir"] as const) {
+      expect(new Set(folders.map((folder) => folder[kind])).size).toBe(3);
+    }
+    for (const folder of folders) {
+      expect(folder.outputDir).toMatch(/^test-results\/[a-z-]+$/);
+      expect(folder.reportDir).toMatch(/^playwright-report\/[a-z-]+$/);
+      expect(folder.stackLogDir).toBe(join(REPO_ROOT, "tools/e2e", folder.outputDir, "stack"));
+    }
+    expect(subdirs).not.toContain("sdk-smoke");
+    // The job's own environment sets none, so no step inherits another's folder.
+    expect(job?.env["E2E_RESULTS_SUBDIR"]).toBeUndefined();
+  });
+
+  it("[FIX-W48-SHARED AC4] has a timeout for the four projects and both Stripe steps, and the trigger Deploy calls", () => {
+    expect(job?.["timeout-minutes"]).toBe(45);
+    expect(workflow.on).toHaveProperty("workflow_call");
   });
 });
 
@@ -271,15 +307,17 @@ describe("the OTA projects nightly and before each deploy (OFE-026)", () => {
     // storefront and ota-admin: the step of the four projects, on every run of the job (no condition of its own).
     expect(steps[projects]?.run).toBe(PROJECTS_RUN);
     expect(steps[projects]?.if).toBeUndefined();
-    // storefront-stripe: every run but a pull request's, when the Stripe test secrets exist.
+    // storefront-stripe: every run but a pull request's, when the Stripe test secrets exist, also after a failed
+    // earlier Playwright step (lead decision (15c) of 2026-11-11).
     expect(steps[storefrontStripe]?.run?.trim()).toMatch(/ --project=storefront-stripe$/);
     expect(steps[storefrontStripe]?.if).toBe(
-      "github.event_name != 'pull_request' && env.STOREFRONT_STRIPE_CONFIGURED == 'true'",
+      "!cancelled() && steps.browsers.outcome == 'success' && github.event_name != 'pull_request' && " +
+        "env.STOREFRONT_STRIPE_CONFIGURED == 'true'",
     );
-    // A failed step's traces, screenshots, report and stack logs are uploaded after both, and nothing runs a Playwright
-    // step after the upload.
+    // A failed step's traces, screenshots, report and stack logs are uploaded after both, also when the run is
+    // cancelled (lead decision (15c) of 2026-11-11), and nothing runs a Playwright step after the upload.
     expect(upload).toBeGreaterThan(Math.max(projects, storefrontStripe));
-    expect(steps[upload]?.if).toBe("failure()");
+    expect(steps[upload]?.if).toBe("failure() || cancelled()");
     expect(steps.slice(upload).filter((step) => /pnpm test:e2e/.test(step.run ?? ""))).toEqual([]);
   });
 
@@ -328,8 +366,8 @@ describe("the OTA projects nightly and before each deploy (OFE-026)", () => {
         STOREFRONT_STRIPE_OUTCOME: "skipped",
         STOREFRONT_STRIPE_CONFIGURED: "true",
       },
-      // Not reachable while storefront-stripe runs only after the step of the four projects passed; the gate must not
-      // depend on that.
+      // storefront-stripe runs after a failed step of the four projects since lead decision (15c) of 2026-11-11: the
+      // run still does not count for the gate.
       nightlyProjectsFailedStripePassed: {
         EVENT: "schedule",
         PROJECTS_OUTCOME: "failure",

@@ -7,6 +7,8 @@ This folder holds the plain-Node checks that [`.github/workflows/ci.yml`](../../
 | `check-package-json.mjs` | Fails on version ranges, misplaced test packages, packages that depend on apps, and actions not pinned to a commit SHA (below) |
 | `check-package-json.test.mjs` | Tests of the script, on small repositories built in a temporary folder |
 | `ci-workflow.test.mjs` | Tests of `ci.yml` itself: the job layout (the `integration` job set up as `build-test` is, in parallel with it; the `check-vm` job; the lint and tests of `tools/perf` in `build-test`), the "Repository guards" step run on scratch git repositories, and the `.only` lint rule |
+| `deploy-e2e-workflow.test.mjs` | Tests of how `deploy.yml` and `e2e.yml` fit together (lead decision (15c) of 2026-11-11, approved by the owner; FIX-W48-SHARED): Deploy's `e2e` job calls `e2e.yml` for the commit being deployed with only the three Stripe test secrets, its `deploy` job needs `build` and `e2e` and refuses a release of another commit than the one tested (its "Check the release id" script run in `bash`), and its environment, SSH secrets and push are unchanged; `e2e.yml`'s `workflow_call` trigger, its concurrency group per event or caller (evaluated for a nightly, an on-demand, a deploy-called and two pull-request runs), the conditions of its Stripe steps (evaluated after a failed Playwright step, a failed set-up and a cancellation, for each event), each Playwright step's own results folder, the upload on failure or cancellation and the 45-minute limit. A small evaluator of the GitHub expressions these files use reads the conditions as GitHub would |
+| `workflow-reader.mjs` | The reader of the workflows' shape both test files use (jobs, steps and their fields, a job's or a step's own keys, top-level keys), by indentation and without a YAML package |
 
 ## Run it locally
 
@@ -41,6 +43,10 @@ git ls-remote --tags https://github.com/actions/checkout.git 'refs/tags/v4.4.0*'
 ```yaml
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 ```
+
+## The E2E and Deploy workflows
+
+`ci.yml` does not run them. [`e2e.yml`](../../.github/workflows/e2e.yml) runs nightly, on demand, on pull requests labelled `e2e` and, since lead decision (15c) of 2026-11-11 (approved by the owner), when [`deploy.yml`](../../.github/workflows/deploy.yml) calls it: Deploy's `deploy` job needs that run, so nothing is deployed before a green end-to-end run of the same commit ([`tools/e2e/README.md`](../e2e/README.md), CI; [`deployment-single-vm.md`](../../docs/mvp/deployment-single-vm.md) §8). `deploy-e2e-workflow.test.mjs` tests both files; `actionlint` validates them.
 
 ## The CI workflow
 

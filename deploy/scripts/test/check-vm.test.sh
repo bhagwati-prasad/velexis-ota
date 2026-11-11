@@ -2,7 +2,8 @@
 # =====================================================================================================
 # check-vm.test.sh — tests deploy/scripts/check-vm.sh and the env file checks of provision-vm.sh (task X-020), the
 # master-key rotation of provision-vm.sh's step keys (task X-040), the SSH second factor of its step ssh (X-037) and
-# its lockout guard, and check-vm.sh's check of AIDE's daily timer (lead decisions (13k) and (13j) of 2026-11-10).
+# its lockout guard, and check-vm.sh's check of AIDE's daily timer (lead decisions (13k) and (13j) of 2026-11-10), and
+# the guard's check of the SSH source address against SSH_ALLOW_FROM (lead decision (15d) of 2026-11-11).
 #
 #   sudo bash deploy/scripts/test/check-vm.test.sh
 #
@@ -21,7 +22,8 @@
 # Users, groups and folders the test created are removed at the end (CHECKVM_KEEP=1 keeps them for inspection). It
 # refuses to run on a provisioned Velexis VM. It prints one PASS or FAIL line per check; a check that proves an
 # acceptance criterion of X-020, X-040 or X-037 ends in [X-020 AC<n>], [X-040 AC<n>] or [X-037 AC<n>]; a check of
-# the lead's fix of 2026-11-10 (the AIDE timer, the lockout guard) in [FIX-W47-SHARED AC4] or [FIX-W47-SHARED AC5].
+# the lead's fix of 2026-11-10 (the AIDE timer, the lockout guard) in [FIX-W47-SHARED AC4] or [FIX-W47-SHARED AC5], and
+# of the fix of 2026-11-11 (the SSH source address) in [FIX-W48-SHARED AC5].
 #
 # What it proves:
 #   1. Two runs of provision-vm.sh --steps users,keys,envfiles: the second changes no key, env or secrets file
@@ -56,6 +58,13 @@
 #      and they have not enrolled (a TOTP code, or a FIDO2 key; also on a real sshd), it refuses before writing; a root
 #      session without sudo, root's own sudo, the deploy user and the admin with the factor enrolled are let through.
 #      harden, which cannot run under VELEXIS_ROOT, gets the same guard: read from provision-vm.sh.
+#      The SSH source (lead decision (15d) of 2026-11-11, [FIX-W48-SHARED AC5]): with SSH_ALLOW_FROM an IPv4 or IPv6
+#      range, a run whose SSH login comes from outside it (SSH_CONNECTION, or who -m when sudo dropped it; through sudo
+#      or as root; an IPv6 login and an IPv4 range) refuses before any step, exits 1 and changes and reloads nothing,
+#      and so does a run through sudo that cannot tell its source (no terminal, no SSH_CONNECTION; a remote host that is
+#      no address) and a malformed SSH_ALLOW_FROM; a login inside the range (IPv4, IPv6 also with a prefix that ends
+#      inside a hex digit, an IPv4-mapped IPv6 address, from who -m too), a session without an SSH login (a console terminal, a root session without one) and
+#      SSH_ALLOW_FROM=any (who is never asked) are let through.
 #   7. No output of either script, no command line of a fake and no line of provision.log holds a generated
 #      secret, a key, a TOTP secret or a value of an env file, even when caddy validate fails with a message that
 #      quotes the edge secret or caddy.env has a malformed line; provision-vm.sh substitutes no placeholder through
@@ -928,9 +937,9 @@ SSH_PATH="$FAKEBIN"
 SSH_RUNNER="$ADMIN_TEST_USER" # SUDO_USER of the step ssh: the admin runs it through sudo; empty: a root session (console)
 SSH_STEPS=ssh                 # the --steps of provision_ssh
 provision_ssh() { # log mfa [VAR=value...]: the step ssh as an operator runs it, with the fake (or a real) sshd on PATH
-  local log="$1" mfa="$2" runner=(-u SUDO_USER)
+  local log="$1" mfa="$2" runner=(-u SUDO_USER -u SSH_CONNECTION) # no SSH_CONNECTION unless a test passes one
   shift 2
-  [ -z "$SSH_RUNNER" ] || runner=(SUDO_USER="$SSH_RUNNER")
+  [ -z "$SSH_RUNNER" ] || runner=(-u SSH_CONNECTION SUDO_USER="$SSH_RUNNER")
   env "${runner[@]}" PATH="$SSH_PATH:$PATH" CHECKVM_FAKE="$FAKE" CHECKVM_PROVISION=1 VELEXIS_ROOT="$ROOT" \
     ADMIN_USER="$ADMIN_TEST_USER" ADMIN_MFA="$mfa" DEPLOY_USER="$DEPLOY_TEST_USER" "$@" \
     bash "$PROVISION" --steps "$SSH_STEPS" >"$log" 2>&1
@@ -1080,11 +1089,11 @@ lockout "the same user runs the steps users, keys and ssh (the guard comes befor
 SSH_STEPS=ssh
 # harden runs the step ssh too, but never under VELEXIS_ROOT: that the same guard covers it is read from the script.
 # shellcheck disable=SC2016 # the script's own line, $STEPS unexpanded
-if grep -qxF 'case " $STEPS " in *" harden "* | *" ssh "*) runner_in_allowusers ;; esac' "$PROVISION" &&
+if grep -qxF 'case " $STEPS " in *" harden "* | *" ssh "*) runner_in_allowusers; ssh_source_in_allow_from ;; esac' "$PROVISION" &&
   awk '/^step_harden\(\) \{$/, /^\}$/ { if ($0 == "  step_ssh") found = 1 } END { exit !found }' "$PROVISION"; then
-  pass "a run with harden, which runs the step ssh, gets the same guard before any step (read from provision-vm.sh) [FIX-W47-SHARED AC5]"
+  pass "a run with harden, which runs the step ssh, gets the same guard and SSH source check before any step (read from provision-vm.sh) [FIX-W47-SHARED AC5] [FIX-W48-SHARED AC5]"
 else
-  fail "a run with harden, which runs the step ssh, gets the same guard before any step (read from provision-vm.sh) [FIX-W47-SHARED AC5]"
+  fail "a run with harden, which runs the step ssh, gets the same guard and SSH source check before any step (read from provision-vm.sh) [FIX-W47-SHARED AC5] [FIX-W48-SHARED AC5]"
 fi
 # Allowed: a root session without sudo (the provider's console), root's own sudo, and the deploy user (in AllowUsers).
 # Each run writes the drop-in and reloads once; the drop-in is removed again for the next one.
@@ -1099,6 +1108,107 @@ for runner in "" root "$DEPLOY_TEST_USER"; do
   fi
   rm -f "$DROPIN"
 done
+
+# The SSH source (lead decision (15d) of 2026-11-11): with SSH_ALLOW_FROM a range, a run whose SSH login comes from
+# outside it refuses before any step and changes nothing; from inside it, or without an SSH login, it goes on (and,
+# the admin's FIDO2 key being enrolled, writes the drop-in and reloads once, which is undone for the next run).
+fake who <<'EOF'
+# who -m: the login of this terminal, the line of the fixture who-m; nothing without it (no terminal).
+[ "$*" = "-m" ] || refuse "$@"
+[ ! -f "$F/who-m" ] || cat "$F/who-m"
+EOF
+who_m() { if [ $# -eq 0 ]; then rm -f "$FAKE/who-m"; else printf '%s\n' "$1" >"$FAKE/who-m"; fi; } # [line]
+who_calls() { grep -c '^who ' "$FAKE/calls.log" || true; }
+source_refused() { # description pattern [VAR=value...] -> provision_ssh (fido2) exits 1 before any step with that
+  local what="$1" pattern="$2" log before rc #             message, and changes and reloads nothing
+  shift 2
+  N=$((N + 1))
+  log="$OUT/ssh-source-$N.log"
+  before="$(ssh_state; fingerprint "$ETC" "$DEPLOY_HOME/.ssh")"
+  rm -f "$FAKE/reloads"
+  if provision_ssh "$log" fido2 "$@"; then rc=0; else rc=$?; fi
+  if [ "$rc" = 1 ] && [ "$(ssh_state; fingerprint "$ETC" "$DEPLOY_HOME/.ssh")" = "$before" ] && [ "$(reloads)" = 0 ] &&
+    [ ! -e "$DROPIN" ] && grep -qE -- "^ERROR: refused, nothing changed: .*$pattern" "$log" && ! grep -q '^==> ' "$log"; then
+    pass "$what: refused before any step, nothing changed or reloaded: $(grep -m 1 '^ERROR' "$log" | cut -c 8- | sed "s#$PREFIX#<prefix>#g") [FIX-W48-SHARED AC5]"
+  else
+    indent "$log"
+    fail "$what: refused before any step, nothing changed or reloaded (exit $rc, expected: $pattern) [FIX-W48-SHARED AC5]"
+  fi
+}
+source_allowed() { # description [VAR=value...] -> provision_ssh (fido2) goes on: the drop-in written, ssh reloaded once
+  local what="$1" log
+  shift
+  N=$((N + 1))
+  log="$OUT/ssh-source-$N.log"
+  rm -f "$FAKE/reloads"
+  if provision_ssh "$log" fido2 "$@" && dropin_has fido2 && [ "$(reloads)" = 1 ]; then
+    pass "$what: the guard lets it through, and the step ssh applies the second factor [FIX-W48-SHARED AC5]"
+  else
+    indent "$log"
+    fail "$what: the guard lets it through, and the step ssh applies the second factor (reloads: $(reloads)) [FIX-W48-SHARED AC5]"
+  fi
+  rm -f "$DROPIN"
+}
+V4=198.51.100.0/24
+V6=2001:db8:1::/48
+V4_RE='198\.51\.100\.0/24'
+OUTSIDE_RE='you are logged in over SSH from 203\.0\.113\.7, which SSH_ALLOW_FROM=198\.51\.100\.0/24 does not include'
+SSH_RUNNER="$ADMIN_TEST_USER" # the admin, through sudo: in AllowUsers, with the FIDO2 key enrolled
+who_m
+source_refused "IPv4: the admin logs in over SSH from outside SSH_ALLOW_FROM ($V4)" \
+  "$OUTSIDE_RE, so its firewall rule \(the step harden\) would lock you out" \
+  SSH_ALLOW_FROM="$V4" SSH_CONNECTION="203.0.113.7 50022 192.0.2.10 22"
+source_allowed "IPv4: the admin logs in over SSH from inside SSH_ALLOW_FROM ($V4)" \
+  SSH_ALLOW_FROM="$V4" SSH_CONNECTION="198.51.100.42 50022 192.0.2.10 22"
+source_refused "IPv6: the admin logs in over SSH from outside SSH_ALLOW_FROM ($V6)" \
+  "you are logged in over SSH from 2001:db8:2::5, which SSH_ALLOW_FROM=2001:db8:1::/48 does not include" \
+  SSH_ALLOW_FROM="$V6" SSH_CONNECTION="2001:db8:2::5 50022 2001:db8:ffff::10 22"
+source_allowed "IPv6: the admin logs in over SSH from inside SSH_ALLOW_FROM ($V6)" \
+  SSH_ALLOW_FROM="$V6" SSH_CONNECTION="2001:db8:1:ffff::abcd 50022 2001:db8:ffff::10 22"
+# A prefix that ends inside a hex digit (/47: the first 3 bits of the 12th digit): 2001:db8:1:: is in, 2001:db8:2:: out.
+source_refused "IPv6: a login outside a range whose prefix ends inside a hex digit (2001:db8::/47)" \
+  "you are logged in over SSH from 2001:db8:2::5, which SSH_ALLOW_FROM=2001:db8::/47 does not include" \
+  SSH_ALLOW_FROM=2001:db8::/47 SSH_CONNECTION="2001:db8:2::5 50022 2001:db8:ffff::10 22"
+source_allowed "IPv6: a login inside a range whose prefix ends inside a hex digit (2001:db8::/47)" \
+  SSH_ALLOW_FROM=2001:db8::/47 SSH_CONNECTION="2001:db8:1::5 50022 2001:db8:ffff::10 22"
+source_refused "an IPv6 login and an IPv4 SSH_ALLOW_FROM (the firewall keeps the two families apart)" \
+  "you are logged in over SSH from 2001:db8:1::5, which SSH_ALLOW_FROM=$V4_RE does not include" \
+  SSH_ALLOW_FROM="$V4" SSH_CONNECTION="2001:db8:1::5 50022 2001:db8:ffff::10 22"
+source_allowed "an IPv4-mapped IPv6 login inside an IPv4 SSH_ALLOW_FROM" \
+  SSH_ALLOW_FROM="$V4" SSH_CONNECTION="::ffff:198.51.100.42 50022 ::ffff:192.0.2.10 22"
+# sudo dropped SSH_CONNECTION: who -m names the login of the terminal.
+who_m "$ADMIN_TEST_USER pts/1        2026-11-11 10:00 (203.0.113.7)"
+source_refused "who -m: the admin's terminal logs in from outside SSH_ALLOW_FROM" "$OUTSIDE_RE" SSH_ALLOW_FROM="$V4"
+who_m "$ADMIN_TEST_USER pts/1        2026-11-11 10:00 (198.51.100.9)"
+source_allowed "who -m: the admin's terminal logs in from inside SSH_ALLOW_FROM" SSH_ALLOW_FROM="$V4"
+who_m "$ADMIN_TEST_USER pts/1        2026-11-11 10:00 (2001:db8:1::9)"
+source_allowed "who -m: the admin's terminal logs in over IPv6 from inside SSH_ALLOW_FROM" SSH_ALLOW_FROM="$V6"
+who_m "$ADMIN_TEST_USER pts/1        2026-11-11 10:00 (tmux(4321).%0)"
+source_refused "who -m names a remote host that is no address" \
+  'the SSH login behind this run comes from tmux\?4321\?\.%0, which is no IPv4 or IPv6 address to compare with it' \
+  SSH_ALLOW_FROM="$V4"
+who_m "$ADMIN_TEST_USER tty1         2026-11-11 10:00"
+source_allowed "the admin on a console terminal (who -m names no remote host): no SSH login to keep" SSH_ALLOW_FROM="$V4"
+who_m
+source_refused "through sudo without a terminal and without SSH_CONNECTION: it cannot tell the source" \
+  "this run, through sudo as $ADMIN_TEST_USER without a terminal, cannot tell from which address you log in" \
+  SSH_ALLOW_FROM="$V4"
+source_refused "a malformed SSH_ALLOW_FROM" "SSH_ALLOW_FROM must be any, or an IPv4 or IPv6 address or range" \
+  SSH_ALLOW_FROM=198.51.100.0/33 SSH_CONNECTION="198.51.100.42 50022 192.0.2.10 22"
+# SSH_ALLOW_FROM=any: nothing to check, so who is never asked, even for a terminal that logs in from anywhere.
+who_m "$ADMIN_TEST_USER pts/1        2026-11-11 10:00 (203.0.113.7)"
+calls="$(who_calls)"
+source_allowed "SSH_ALLOW_FROM=any: no range, nothing to check" SSH_ALLOW_FROM=any
+who_m
+if [ "$(who_calls)" = "$calls" ]; then
+  pass "with SSH_ALLOW_FROM=any the guard never asks who [FIX-W48-SHARED AC5]"
+else
+  fail "with SSH_ALLOW_FROM=any the guard never asks who [FIX-W48-SHARED AC5]"
+fi
+SSH_RUNNER="" # a root session without sudo
+source_allowed "a root session without an SSH login (the provider's console)" SSH_ALLOW_FROM="$V4"
+source_refused "a root session over SSH from outside SSH_ALLOW_FROM" "$OUTSIDE_RE" \
+  SSH_ALLOW_FROM="$V4" SSH_CONNECTION="203.0.113.7 50022 192.0.2.10 22"
 SSH_RUNNER="$ADMIN_TEST_USER"
 # The second factor would ask the admin who runs it for a factor they have not enrolled (here because another drop-in
 # wins for the admin in the fake sshd -T): refused before anything is written.

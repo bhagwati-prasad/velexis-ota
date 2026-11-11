@@ -1,8 +1,13 @@
 # Manual deploy to the single VM (ADR-0007, ADR-0023, deployment-single-vm.md §8). Only the developer runs it.
-# Two jobs, so that no build or dependency code ever runs next to the root-equivalent deploy key:
+# Three jobs, so that no build, test or dependency code ever runs next to the root-equivalent deploy key:
 #   build  (no secrets, no environment): refuse any ref but main and v* tags, install, lint, typecheck, unit tests,
 #          build, pack-release.sh, then upload release-<sha>.tar as an artefact and publish its SHA-256 as a job output;
-#   deploy (environment "production": the developer's approval, the SSH secrets, branch policy main + v* tags):
+#   e2e    (no environment; only the three Stripe test secrets of e2e.yml, passed one by one): e2e.yml called for the
+#          commit being deployed (ADR-0015 "before deploy", OFE-026; lead decision (15c) of 2026-11-11, approved by the
+#          owner), in parallel with build: its four projects, storefront-stripe when the Stripe test secrets exist,
+#          and the SDK smoke tests;
+#   deploy (environment "production": the developer's approval, the SSH secrets, branch policy main + v* tags), only
+#          after both build and e2e passed, so nothing is deployed before a green end-to-end run of the same commit:
 #          download the tarball, re-check its SHA-256 and SHA256SUMS, rsync it to /srv/velexis/incoming/<sha>/ as the
 #          deploy user, then `sudo /usr/local/sbin/velexis-deploy <sha>` (migrations, switch, restarts, rollback) and
 #          `--status` as the smoke check. It checks out no code and installs nothing.
@@ -92,9 +97,25 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # The end-to-end run of the commit being deployed (lead decision (15c) of 2026-11-11, approved by the owner): e2e.yml
+  # checks out this run's commit (github.sha, the one build packs; deploy checks that below). Only the three Stripe test
+  # secrets reach it, never the production environment's; a called run counts as an on-demand run (storefront-stripe
+  # yes, portal-stripe no) in a concurrency group of its own (`caller: deploy`), so it never cancels the nightly run.
+  e2e:
+    name: End-to-end tests of this commit
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/e2e.yml
+    with:
+      caller: deploy
+    secrets:
+      E2E_STRIPE_SECRET_KEY: ${{ secrets.E2E_STRIPE_SECRET_KEY }}
+      E2E_STRIPE_BILLING_WEBHOOK_SECRET: ${{ secrets.E2E_STRIPE_BILLING_WEBHOOK_SECRET }}
+      E2E_STRIPE_PUBLISHABLE_KEY: ${{ secrets.E2E_STRIPE_PUBLISHABLE_KEY }}
+
   deploy:
     name: Upload and activate
-    needs: build
+    # Nothing is deployed before the end-to-end run of the same commit is green (lead decision (15c) of 2026-11-11).
+    needs: [build, e2e]
     # The build job already refuses other refs; the environment's branch policy refuses them a third time.
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
@@ -108,6 +129,8 @@ jobs:
       - name: Check the release id
         run: |
           [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the build job published no release sha"; exit 1; }
+          # The e2e job tested this run's commit (GITHUB_SHA): the release must be that commit.
+          [ "$SHA" = "$GITHUB_SHA" ] || { echo "::error::the build packed ${SHA}, not ${GITHUB_SHA}, which the e2e job tested"; exit 1; }
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:

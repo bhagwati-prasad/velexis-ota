@@ -10,10 +10,10 @@ Related: [`implementation-plan.md`](implementation-plan.md), [`agent-tasks.md`](
 |---|---|
 | People | One developer, no agents, five working days a week |
 | Effort per task size | S = ½ day, M = 1 day, L = 2 days, including tests, docs and self-review against the definition of done |
-| Platform work | 118 tasks = 147.5 days (M0 2.5, M1 79, M2 1.5, M3 1.5, M4 4, M5 42, M6 17, of which PBE-064's 1 day falls after the launch; M6's 17 days are the first plan's 7.5 and the security review's follow-ups, 9.5 days, in Weeks 30a and 30b since 2026-11-06, §4) |
-| Buffer | 10.5 days inside platform weeks (Weeks 1, 17, 29, 30b, 31) |
+| Platform work | 119 tasks = 148.5 days (M0 2.5, M1 79, M2 1.5, M3 1.5, M4 4, M5 42, M6 18, of which PBE-064's 1 day falls after the launch; M6's 18 days are the first plan's 7.5, the security review's follow-ups, 9.5 days, in Weeks 30a and 30b since 2026-11-06, and PBE-072, 1 day, in Week 30c since 2026-11-11, §4) |
+| Buffer | 11 days inside platform weeks (Weeks 1, 17, 29, 30b, 30c, 31) |
 | Planning-review shift | The planning review split PBE-007 into PBE-007 and PBE-066 (2 more days) and resized PBE-035 from S to M (½ day more, taken from Week 12's buffer). Every task from PBE-008 in Week 3 to PAD-010 in Week 16 therefore starts two working days later than its week shows. Week 17's buffer drops from five to three days, and the M1 exit week does not move. |
-| Length | **33 platform weeks**: Weeks 1–31 and the follow-up Weeks 30a and 30b (added 2026-11-06, §4), of which three (Weeks 18–20) are split weeks holding only 7 platform days |
+| Length | **34 platform weeks**: Weeks 1–31, the follow-up Weeks 30a and 30b (added 2026-11-06) and the follow-up Week 30c (added 2026-11-11, §4), of which four are split weeks: Weeks 18–20 hold 7 platform days and Week 30c 1.5 |
 | Start | Week 1 starts when the foundation tasks `X-001` to `X-016` are merged (the foundation's own weekly plan schedules them) |
 | Week numbers | Platform-plan weeks. The roadmap maps them to calendar weeks; between Weeks 17 and 21 it places several OTA-only weeks |
 
@@ -55,6 +55,7 @@ Related: [`implementation-plan.md`](implementation-plan.md), [`agent-tasks.md`](
 | 30 | M6 | Security review, performance, runbooks | PBE-062, PBE-063, PBE-065, PFE-028 (1/2) | **Overlap:** shared hardening (OTA M6, X-029 … X-032) |
 | 30a | M6 | Security review follow-ups: tokens, dependencies, zod | PBE-067, PBE-068, PBE-069, PFE-029, PAD-017, PBE-071 (1/2) | Shared hardening with OTA M6; PBE-069 needs OBE-094 (the root multer override) |
 | 30b | M6 | Security review follow-ups: MFA for live OTAs, test tooling | PBE-071 (2/2), PFE-030, PBE-070 | Shared hardening with OTA M6 (PBE-070 upgrades the test tooling of both groups) |
+| 30c | M6 | `secrets:rewrap` for the master-key rotation | PBE-072 | **Split week** (1.5 platform days) with OTA Week 39c and X-041 (added 2026-11-11; roadmap C78) |
 | 31 | M6 exit | E2E suites, launch | PFE-028 (2/2), PAD-016 (PBE-064 runs after the launch) | Shared launch week |
 
 ```mermaid
@@ -72,7 +73,7 @@ timeline
   section Platform-led again
     Weeks 21-29 : M5 billing : domains : Amadeus : payments : settlements : go-live
   section Shared
-    Weeks 30-31 : M6 hardening (Week 30) : security review follow-ups (Weeks 30a and 30b) : launch (Week 31)
+    Weeks 30-31 : M6 hardening (Week 30) : security review follow-ups (Weeks 30a and 30b) : secrets:rewrap (Week 30c) : launch (Week 31)
 ```
 
 ## 3. Weeks 1 and 2, day by day
@@ -320,6 +321,15 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 - **Demo:** an admin of a live OTA without MFA signs in, sees only the enrolment page, enrols and reaches the page asked for; an agent of the same OTA is never asked.
 - **Overlap:** shared hardening with OTA M6 (PBE-070 upgrades the test tooling of both groups).
 
+*Note (2026-11-11, lead decisions (15a) and (15m), FIX-W48-SHARED).* PBE-072 (M, 1 day: the platform backend's `secrets:rewrap`, ADR-0010 item 3, without which a master-key rotation can never remove the old key; [`../runbooks/platform-operations.md`](../runbooks/platform-operations.md) §8) joins M6. It takes a split Week 30c inserted after Week 30b, so that Weeks 1–31 keep their numbers (Week 31 stays the launch week), with ½ day of buffer; the roadmap's re-baseline of 2026-11-11 puts Week 30c in C78 beside the OTA's Week 39c (OBE-100, the OTA's command) and X-041 ([`../../../docs/mvp/plans/roadmap.md`](../../../docs/mvp/plans/roadmap.md) §1.3). The plan therefore holds 119 tasks of 148.5 days (M6 18) in 34 weeks, with 11 days of buffer (§1, §5).
+
+### Week 30c — M6: secrets:rewrap (added 2026-11-11, split week)
+
+- **Tasks:** PBE-072 (1 day); ½ day of buffer.
+- **Deliverables:** `node dist/cli.js secrets:rewrap` in the platform backend: every platform ciphertext moved to the current master key, with a dry run and the counts per key before and after.
+- **Demo:** a master-key rotation on the local stack, both backends' commands down to no value under the old key ([`master-key-rotation.md`](../../../docs/mvp/runbooks/master-key-rotation.md) §5).
+- **Overlap:** shares its calendar week (roadmap C78) with OTA Week 39c (OBE-100) and X-041.
+
 ### Week 31 — M6 exit: suites, switch removal and launch
 
 - **Tasks:** PFE-028 (last ½ day), PAD-016 (1 day); 3½ days of buffer for launch. PBE-064 (1 day) is not in this week: the switches stay off until their outside approvals, so it runs after the launch, in the first release after all six have been on in production for one release ([ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 4).
@@ -331,7 +341,7 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 
 | Rule | Why |
 |---|---|
-| Buffer is 10.5 days: ½ day in Week 1, 3 days in Week 17 (after absorbing the two-day shift of Weeks 3–16), 3 days in Week 29, ½ day in Week 30b (since 2026-11-06), 3½ days in Week 31 | Placed at milestone exits, where integration surprises appear |
+| Buffer is 11 days: ½ day in Week 1, 3 days in Week 17 (after absorbing the two-day shift of Weeks 3–16), 3 days in Week 29, ½ day in Week 30b (since 2026-11-06), ½ day in Week 30c (since 2026-11-11), 3½ days in Week 31 | Placed at milestone exits, where integration surprises appear |
 | A task more than one day late moves the next task of the same epic, never a task of another epic that is on time | Keeps checkpoints demonstrable |
 | When a cross-group gate (OF-11, OF-01, OF-09, OF-12) is not met, do the next task without the gate and return to the gated one; never write a fake of the OTA side outside the test doubles of PADR-0017 | Keeps the platform moving without hiding integration risk |
 | If a week slips by more than two days, re-plan on Friday: move the lowest-value task of the milestone (for example a non-critical admin page) after the exit demo, never a test or a security step | The exit criteria stay honest |

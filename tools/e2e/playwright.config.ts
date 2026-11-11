@@ -10,7 +10,13 @@
 import { defineConfig, devices, type Project } from "@playwright/test";
 import { loadDevEnvFiles } from "@velexis/config";
 import { PROJECT_TAGS } from "./support/fixtures";
-import { OTA_ADMIN_URL, PLATFORM_ADMIN_URL, PORTAL_URL, STOREFRONT_URL } from "./support/stack";
+import {
+  OTA_ADMIN_URL,
+  PLATFORM_ADMIN_URL,
+  PORTAL_URL,
+  STOREFRONT_URL,
+  resultsFolders,
+} from "./support/stack";
 
 /** Matches `name` as a whole tag: `@portal` does not match `@portal-stripe`. */
 const tag = (name: string): RegExp => new RegExp(`${name}(?![\\w-])`);
@@ -25,6 +31,13 @@ const WITH_STRIPE = isTrue(process.env["E2E_STRIPE"]);
 const WITH_OTA = isTrue(process.env["E2E_WITH_OTA"]);
 /** A Chromium binary to use instead of the revision the pinned Playwright installs (a machine image that has another). */
 const CHROMIUM = process.env["E2E_CHROMIUM_EXECUTABLE"];
+/**
+ * The run's output and report folders: test-results/ and playwright-report/, or with E2E_RESULTS_SUBDIR=<name> (each
+ * Playwright step of the e2e workflow its own, lead decision (15c) of 2026-11-11) test-results/<name>/ and
+ * playwright-report/<name>/, so that no step empties the traces of an earlier one (support/stack.ts `resultsFolders`,
+ * whose stack logs follow the same variable).
+ */
+const RESULTS = resultsFolders(process.env["E2E_RESULTS_SUBDIR"]);
 
 const desktopChrome = devices["Desktop Chrome"];
 
@@ -111,7 +124,7 @@ export function projectsFor(options: ProjectOptions): Project[] {
 export default defineConfig({
   testDir: ".",
   testMatch: "specs/**/*.e2e.ts",
-  outputDir: "test-results",
+  outputDir: RESULTS.outputDir,
   globalSetup: "./support/stack.ts",
   // Spec files run in parallel, the tests of one file in order in one worker (a journey may build on its
   // beforeAll). No test depends on another file or on the order of files: each creates its own accounts and data.
@@ -124,9 +137,9 @@ export default defineConfig({
   ...(CI ? { workers: 2 } : {}),
   // In CI also `github` (OFE-026): each failed test becomes an annotation on the run's page with its project, file and
   // line, next to the run's counts, so a nightly failure names its journey without opening the log; the HTML report
-  // goes into the artefact uploaded on failure (e2e.yml).
+  // goes into the artefact uploaded on failure or cancellation (e2e.yml).
   reporter: CI
-    ? [["list"], ["github"], ["html", { open: "never", outputFolder: "playwright-report" }]]
+    ? [["list"], ["github"], ["html", { open: "never", outputFolder: RESULTS.reportDir }]]
     : [["list"]],
   use: {
     trace: "retain-on-failure",

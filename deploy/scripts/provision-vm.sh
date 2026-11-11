@@ -35,6 +35,13 @@
 # (ADMIN_USER, DEPLOY_USER). The step ssh also refuses, before it writes anything, when the second factor it applies
 # would ask that user (sshd -T -C user=<them> of a copy of the new configuration) for a FIDO2 key or a TOTP code they
 # have not enrolled. A root session without sudo, such as the provider's console, has no such user and is not checked.
+# SSH source (lead decision (15d) of 2026-11-11): when SSH_ALLOW_FROM is a range (CIDR, or one address; IPv4 or IPv6),
+# which the step harden writes into the firewall, the same run also refuses before any step, changing nothing and
+# exiting 1, when the SSH login behind it comes from an address outside that range: SSH_CONNECTION of the session
+# (root over SSH, or sudo --preserve-env=SSH_CONNECTION), else the remote host that `who -m` names for this terminal
+# (sudo drops SSH_CONNECTION). A session without an SSH login (the provider's console, a local terminal, a root session
+# without a terminal) is let through; a run through sudo without a terminal and without SSH_CONNECTION, or with a
+# remote host that is no address, is refused, because it cannot tell. A malformed SSH_ALLOW_FROM is refused too.
 #
 # Master keys (ADR-0010): the first run creates master-v1.key (KEK local:v1). NEW_MASTER_KEY=v<N> with the step keys
 # adds master-v<N>.key for a KEK rotation (docs/mvp/runbooks/master-key-rotation.md): 32 random bytes, generated
@@ -64,7 +71,7 @@ set -euo pipefail
 : "${ADMIN_MFA:=fido2}"                   # the admin's SSH second factor: fido2 (security key) or totp (key and code)
 : "${DEPLOY_USER:=deploy}"                # GitHub Actions uploads releases and runs velexis-deploy as this user
 : "${DEPLOY_SSH_PUBKEY_FILE:=}"           # public half of the GitHub Actions deploy key (required on first run)
-: "${SSH_ALLOW_FROM:=any}"                # CIDR for SSH; "any" because GitHub-hosted runners have changing IPs
+: "${SSH_ALLOW_FROM:=any}"                # CIDR (IPv4 or IPv6) for SSH; "any" because GitHub-hosted runners have changing IPs
 : "${DB_NAME:=velexis}"
 : "${NODE_MAJOR:=22}"
 : "${PNPM_VERSION:=9.15.9}"
@@ -91,6 +98,7 @@ SSH_TMP=""                               # the private folder of the step ssh, r
 MFA_PENDING=""                           # why the step ssh did not apply the second factor; repeated by the summary
 RUNNER=""                                # who runs this through sudo (SUDO_USER); the lockout guard keeps their SSH access
 RUNNER_REASON=""                         # the factor the new SSH settings would ask of RUNNER, and why they lack it
+SSH_SOURCE=""                            # the client address of the SSH login behind this run (ssh_source_address)
 LOG_FILE=""                              # $LOGS/provision.log once the folder exists
 # The generated values: names in .provision-secrets and @@NAME@@ placeholders in deploy/env and deploy/redis.
 SECRET_NAMES="MIGRATOR_DB_PASSWORD PROVISIONER_DB_PASSWORD PLATFORM_DB_PASSWORD OTA_DB_PASSWORD REDIS_PASSWORD EDGE_SECRET OTA_ADMIN_SERVICE_KEY PLATFORM_BFF_KEY"
@@ -534,6 +542,126 @@ runner_in_allowusers() { # -> dies, before any step, when RUNNER is not one of t
   fi
   case " $ADMIN_USER $DEPLOY_USER " in *" $RUNNER "*) return 0 ;; esac
   die "refused, nothing changed: you run this through sudo as $RUNNER, but the new SSH settings let only $ADMIN_USER and $DEPLOY_USER log in (AllowUsers), so $RUNNER would lose SSH access. Run it as $ADMIN_USER, pass ADMIN_USER=$RUNNER, or run it from the provider's console (docs/mvp/runbooks/ssh-access.md §1)."
+}
+
+# ---- the SSH source check (lead decision (15d) of 2026-11-11; see the header) -------------------------------------
+ipv4_to_int() { # dotted quad -> its 32-bit value (stdout); 1 when it is no IPv4 address
+  local a="$1" o v=0
+  [[ "$a" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
+  for o in "${BASH_REMATCH[@]:1}"; do
+    o=$((10#$o))
+    [ "$o" -le 255 ] || return 1
+    v=$(((v << 8) | o))
+  done
+  echo "$v"
+}
+
+ipv6_to_hex() { # IPv6 address (a %zone is dropped) -> its 32 hex digits, lower case (stdout); 1 when it is no IPv6 address
+  local a="${1%%\%*}" g n i v4 out=""
+  local -a head=() tail=() groups=()
+  a="${a,,}"
+  [[ "$a" == *:* ]] || return 1
+  # An IPv4 address in the last 32 bits (::ffff:192.0.2.1) becomes two groups.
+  if [[ "$a" =~ ^(.*:)([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+    v4="$(ipv4_to_int "${BASH_REMATCH[2]}")" || return 1
+    a="${BASH_REMATCH[1]}$(printf '%x:%x' $((v4 >> 16)) $((v4 & 0xffff)))"
+  fi
+  [[ "$a" =~ ^[0-9a-f:]+$ ]] || return 1
+  case "$a" in *::*::* | :[!:]* | *[!:]:) return 1 ;; esac
+  if [[ "$a" == *::* ]]; then
+    [ "${a%%::*}" = "" ] || IFS=: read -r -a head <<<"${a%%::*}"
+    [ "${a#*::}" = "" ] || IFS=: read -r -a tail <<<"${a#*::}"
+    n=$((8 - ${#head[@]} - ${#tail[@]}))
+    [ "$n" -ge 1 ] || return 1
+    groups=("${head[@]}")
+    for ((i = 0; i < n; i++)); do groups+=(0); done
+    groups+=("${tail[@]}")
+  else
+    IFS=: read -r -a groups <<<"$a"
+    [ "${#groups[@]}" -eq 8 ] || return 1
+  fi
+  for g in "${groups[@]}"; do
+    [[ "$g" =~ ^[0-9a-f]{1,4}$ ]] || return 1
+    out+="$(printf '%04x' "$((16#$g))")"
+  done
+  echo "$out"
+}
+
+cidr_bits() { # range -> the prefix length (stdout), 32 or 128 for one address; 1 when it is no IPv4 or IPv6 range
+  local net="${1%/*}" bits="" max
+  if ipv4_to_int "$net" >/dev/null; then max=32; elif ipv6_to_hex "$net" >/dev/null; then max=128; else return 1; fi
+  if [[ "$1" == */* ]]; then bits="${1##*/}"; else bits="$max"; fi
+  [[ "$bits" =~ ^[0-9]{1,3}$ ]] && [ "$((10#$bits))" -le "$max" ] || return 1
+  echo "$((10#$bits))"
+}
+
+address_in_cidr() { # address range -> 0 inside, 1 outside, 2 when the address is no IPv4 or IPv6 address. An IPv4
+  local addr="$1" net="${2%/*}" bits a n ha hn full rest # range holds an IPv4-mapped IPv6 address (::ffff:a.b.c.d) of
+  bits="$(cidr_bits "$2")" || return 2                    # its addresses; an IPv6 range holds no IPv4 address (ufw keeps
+  if n="$(ipv4_to_int "$net")"; then                      # the two families apart)
+    if a="$(ipv4_to_int "$addr")"; then
+      :
+    elif ha="$(ipv6_to_hex "$addr")"; then
+      [ "${ha:0:24}" = 00000000000000000000ffff ] || return 1
+      a=$((16#${ha:24:8}))
+    else
+      return 2
+    fi
+    [ "$bits" -eq 0 ] || [ $((a >> (32 - bits))) -eq $((n >> (32 - bits))) ] || return 1
+    return 0
+  fi
+  hn="$(ipv6_to_hex "$net")"
+  if ! ha="$(ipv6_to_hex "$addr")"; then
+    if ipv4_to_int "$addr" >/dev/null; then return 1; else return 2; fi
+  fi
+  full=$((bits / 4))
+  rest=$((bits % 4))
+  [ "${ha:0:full}" = "${hn:0:full}" ] || return 1
+  [ "$rest" -eq 0 ] || [ $((16#${ha:full:1} >> (4 - rest))) -eq $((16#${hn:full:1} >> (4 - rest))) ] || return 1
+  return 0
+}
+
+ssh_source_address() { # -> SSH_SOURCE: the client address of the SSH login behind this run, "" when there is none
+  local line host #       (the provider's console, a local terminal); 1 when it cannot tell (through sudo, no terminal)
+  SSH_SOURCE=""
+  # "client-address client-port server-address server-port": a root session over SSH, or a sudo that kept it.
+  if [ -n "${SSH_CONNECTION:-}" ]; then
+    SSH_SOURCE="${SSH_CONNECTION%% *}"
+    SSH_SOURCE="${SSH_SOURCE//[^[:alnum:].:%_-]/?}" # printed in the messages: nothing but address characters
+    return 0
+  fi
+  # sudo drops SSH_CONNECTION; who -m names the login of this terminal, with its remote host in parentheses.
+  line="$(who -m 2>/dev/null | head -n 1)" || line=""
+  if [ -z "$line" ]; then
+    [ -n "$RUNNER" ] || return 0 # a root session without a terminal and without SSH (the console, a timer)
+    return 1
+  fi
+  case "$line" in
+    *"("*")") host="${line#*(}" ;;
+    *) return 0 ;; # a local login: no SSH source
+  esac
+  host="${host%)}"
+  SSH_SOURCE="${host//[^[:alnum:].:%_-]/?}"
+}
+
+ssh_source_in_allow_from() { # -> dies, before any step, when SSH_ALLOW_FROM is a range and the SSH login behind this
+  local rc=0 #                   run comes from outside it: the firewall rule of the step harden would lock it out
+  [ "$SSH_ALLOW_FROM" != any ] || return 0
+  cidr_bits "$SSH_ALLOW_FROM" >/dev/null ||
+    die "refused, nothing changed: SSH_ALLOW_FROM must be any, or an IPv4 or IPv6 address or range (CIDR such as 198.51.100.0/24 or 2001:db8::/48), not ${SSH_ALLOW_FROM//[^[:alnum:].:\/_-]/?}"
+  if ! ssh_source_address; then
+    die "refused, nothing changed: SSH_ALLOW_FROM=$SSH_ALLOW_FROM limits SSH to that range, but this run, through sudo as $RUNNER without a terminal, cannot tell from which address you log in (sudo dropped SSH_CONNECTION, and who -m names no login). Run it in a terminal (ssh -t), keep the variable (sudo --preserve-env=SSH_CONNECTION), or run it from the provider's console (docs/mvp/runbooks/ssh-access.md §1)."
+  fi
+  if [ -z "$SSH_SOURCE" ]; then
+    to_log "no SSH login behind this run (the provider's console or a local terminal): SSH_ALLOW_FROM=$SSH_ALLOW_FROM has nobody to keep"
+    return 0
+  fi
+  address_in_cidr "$SSH_SOURCE" "$SSH_ALLOW_FROM" || rc=$?
+  case "$rc" in
+    0) to_log "the SSH login behind this run comes from $SSH_SOURCE, inside SSH_ALLOW_FROM=$SSH_ALLOW_FROM" ;;
+    1) die "refused, nothing changed: you are logged in over SSH from $SSH_SOURCE, which SSH_ALLOW_FROM=$SSH_ALLOW_FROM does not include, so its firewall rule (the step harden) would lock you out. Pass an SSH_ALLOW_FROM that includes $SSH_SOURCE, run it from an address inside $SSH_ALLOW_FROM, or run it from the provider's console (docs/mvp/runbooks/ssh-access.md §1)." ;;
+    *) die "refused, nothing changed: SSH_ALLOW_FROM=$SSH_ALLOW_FROM limits SSH to that range, but the SSH login behind this run comes from $SSH_SOURCE, which is no IPv4 or IPv6 address to compare with it. Keep SSH_CONNECTION (sudo --preserve-env=SSH_CONNECTION), or run it from the provider's console (docs/mvp/runbooks/ssh-access.md §1)." ;;
+  esac
 }
 
 runner_factor_ok() { # mirror config -> 0 when RUNNER has every factor the new configuration asks of them; else RUNNER_REASON
@@ -1100,8 +1228,9 @@ Next steps (docs/mvp/deployment-single-vm.md §3):
 EOF
 }
 
-# The lockout guard, before any step changes anything: whoever runs this through sudo stays in AllowUsers.
-case " $STEPS " in *" harden "* | *" ssh "*) runner_in_allowusers ;; esac
+# The lockout guard, before any step changes anything: whoever runs this through sudo stays in AllowUsers, and the SSH
+# login behind the run (sudo or root) stays inside SSH_ALLOW_FROM (lead decision (15d) of 2026-11-11).
+case " $STEPS " in *" harden "* | *" ssh "*) runner_in_allowusers; ssh_source_in_allow_from ;; esac
 for step in $STEPS; do
   "step_${step}"
 done

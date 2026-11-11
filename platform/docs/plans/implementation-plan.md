@@ -8,8 +8,8 @@ Related: [`../scope.md`](../scope.md) (features PF-01 … PF-98), [`../architect
 
 | Item | Value |
 |---|---|
-| Agent tasks | 118: 71 backend (`PBE-`), 30 portal (`PFE-`), 17 admin (`PAD-`) |
-| Estimate | 590 agent-hours by the plan-lint sizes (S 2 h, M 4 h, L 8 h, review included); about 147.5 developer-days without agents (S ½ day, M 1 day, L 2 days) |
+| Agent tasks | 119: 72 backend (`PBE-`), 30 portal (`PFE-`), 17 admin (`PAD-`) |
+| Estimate | 594 agent-hours by the plan-lint sizes (S 2 h, M 4 h, L 8 h, review included); about 148.5 developer-days without agents (S ½ day, M 1 day, L 2 days) |
 | Foundation dependencies | `X-001` … `X-028` ([`foundation-tasks.md`](../../../docs/mvp/plans/foundation-tasks.md)); the platform never re-does them |
 | Validation | `node tools/plan-lint/plan-lint.mjs docs/mvp/plans/foundation-tasks.md platform/docs/plans/agent-tasks.md` (0 errors) |
 | Reference material reused | Baseline DDL [`platform.sql`](../../../docs/velexis-sdk/db/platform.sql) and [`reference.sql`](../../../docs/velexis-sdk/db/reference.sql) as `0001`, the exact `0002` SQL in [`../data-model-migration-0002.md`](../data-model-migration-0002.md) (parts 1–3), the OTA contract's `ConsoleApiKeyScope`, `StaffPermission`, error envelope and `consoleSignIn` grant in [`velexis-ota-booking-api.openapi.yaml`](../../../docs/velexis-sdk/openapi/velexis-ota-booking-api.openapi.yaml) |
@@ -39,7 +39,7 @@ Rules that shape the order of the tasks:
 | E11 | Domains and TLS | Sub-domain, `ask` endpoint, custom domains, DNS verification, TLS probe, re-check, admin domains | PBE-027, PBE-049 … PBE-051, PFE-022, PAD-014 |
 | E12 | Platform admin | Admin sign-in, dashboard, tenants, suspend and resume, jobs, queues, accounts, admins, audit | PBE-028 … PBE-032, PAD-002 … PAD-006, PAD-009, PAD-011 |
 | E13 | Go-live | Live preconditions, the environment switch, live keys | PBE-061, PFE-026 |
-| E14 | Quality and launch | End-to-end harness and journeys, cross-backend tests, security review and its follow-ups, performance, switch removal, runbooks | PFE-014, PFE-015, PFE-027, PFE-028, PAD-010, PAD-015, PAD-016, PBE-062 … PBE-065; the security review's follow-ups PBE-067 … PBE-071, PFE-029, PFE-030, PAD-017 |
+| E14 | Quality and launch | End-to-end harness and journeys, cross-backend tests, security review and its follow-ups, performance, switch removal, runbooks | PFE-014, PFE-015, PFE-027, PFE-028, PAD-010, PAD-015, PAD-016, PBE-062 … PBE-065; the security review's follow-ups PBE-067 … PBE-071, PFE-029, PFE-030, PAD-017; since 2026-11-11, PBE-072 (`secrets:rewrap`) |
 
 ## 3. Milestones at a glance
 
@@ -51,8 +51,8 @@ Rules that shape the order of the tasks:
 | M3 Book & pay | Card statement descriptor | 3 | 6 | 1.5 | Checkout, customer auth, Stripe and airline-card payments, orders, e-mails (OF-03 … OF-08) |
 | M4 OTA admin | Console SSO, Amadeus office settings | 5 | 16 | 4 | OTA admin, console, settings (OF-09, OF-10) |
 | M5 Monetisation & self-service | Billing, own Stripe, settlements, own Amadeus, custom domains, go-live | 33 | 168 | 42 | Gateways that follow the account mode and credential source (OF-12), Connect webhooks, live environment |
-| M6 Hardening & launch | Security review and its follow-ups (PBE-067 … PBE-071, PFE-029, PFE-030, PAD-017), performance, full end-to-end suite, runbooks; switch removal after the launch (PBE-064) | 14 | 68 | 17 | PCI controls of the airline-card flow, OTA end-to-end suite; foundation monitoring and restore drill |
-| **Total** | | **118** | **590** | **147.5** | |
+| M6 Hardening & launch | Security review and its follow-ups (PBE-067 … PBE-071, PFE-029, PFE-030, PAD-017), performance, full end-to-end suite, runbooks, `secrets:rewrap` (PBE-072); switch removal after the launch (PBE-064) | 15 | 72 | 18 | PCI controls of the airline-card flow, OTA end-to-end suite; foundation monitoring and restore drill |
+| **Total** | | **119** | **594** | **148.5** | |
 
 ```mermaid
 flowchart LR
@@ -275,6 +275,8 @@ The platform gives every row and column these features read (all created by `000
 
 *Note (2026-11-05, FIX-W44-PLATFORM, lead decision 7(f)).* The security review's follow-ups are M6 tasks too, and the milestone's count and hours in §1 and §3 include them (14 tasks, 68 agent-hours, 17 solo days): PBE-067 (the portal tokens of disabled and erased accounts refused at once), PBE-068 (nodemailer), PBE-069 (the multer override, no multipart route in the platform API), PBE-070 (the test and contract tooling), PFE-029 and PAD-017 (zod in the portal and the platform admin), and PBE-071 and PFE-030 (MFA for the owners and admins of live OTAs, the [PADR-0008](../adr/0008-email-verification-and-mfa-policy.md) revision of 2026-11-05).
 
+*Note (2026-11-11, lead decision (15m), FIX-W48-SHARED).* PBE-072 (M: the platform backend's `secrets:rewrap`, ADR-0010 "Rotation" item 3 and X-040; the OTA's command is OBE-100) joins M6, so it holds 15 tasks, 72 agent-hours and 18 solo days: without it a master-key rotation can never remove the old key ([`../runbooks/platform-operations.md`](../runbooks/platform-operations.md) §8 and §10). It belongs to E14; the [solo plan](solo-developer-plan.md) places it in Week 30c, and the roadmap's re-baseline of 2026-11-11 places that week ([`../../../docs/mvp/plans/roadmap.md`](../../../docs/mvp/plans/roadmap.md) §1.3).
+
 **Demo.** Walk through `platform/docs/security-review.md` and `platform/docs/performance.md`; show three consecutive green nightly runs of the portal and admin projects; walk through the launch checklist on the VM with the developer.
 
 **Exit criteria.**
@@ -367,7 +369,7 @@ Every feature of [`../scope.md`](../scope.md) §3, the data-model deltas and the
 | Platform OpenAPI document | M1, M3, M5 | E1 | PBE-005, PBE-006, PBE-007, PBE-066, PBE-037, PBE-041, PBE-042 |
 | Job messages and invalidation events | M1 | E1 | PBE-004 |
 | Milestone switches ([PADR-0015](../adr/0015-milestone-feature-switches.md)) | M1, M6 | E3 | PBE-012, PBE-064 |
-| Security, performance, operations | M6 | E14 | PBE-062, PBE-063, PBE-065, PFE-028, PAD-016; the security review's follow-ups (2026-11-06, FIX-W45-PLATFORM): PBE-067 … PBE-071, PFE-029, PFE-030, PAD-017 |
+| Security, performance, operations | M6 | E14 | PBE-062, PBE-063, PBE-065, PFE-028, PAD-016; the security review's follow-ups (2026-11-06, FIX-W45-PLATFORM): PBE-067 … PBE-071, PFE-029, PFE-030, PAD-017; master-key rotation (2026-11-11, FIX-W48-SHARED): PBE-072 |
 
 **Endpoint coverage.** All 150 operations of the three inventory parts appear in [`agent-tasks.md`](agent-tasks.md) in the task that implements them, and each user-facing one also in a portal or admin task. The check is mechanical: every `operationId` in the first column of the inventory tables is found in the plan, and at run time the route parity test with its pending list ([PADR-0016](../adr/0016-contract-rollout-per-milestone-and-route-parity.md)) ends empty at the M5 exit.
 

@@ -1,6 +1,8 @@
 # End-to-end tests with Playwright (ADR-0015, PADR-0017; tools/e2e/README.md). Task PFE-014 created it.
-# When: nightly, on demand (Actions > E2E > Run workflow), and on pull requests labelled `e2e`: adding the label starts
-# a run, and every push to the pull request runs again while the label is on.
+# When: nightly, on demand (Actions > E2E > Run workflow), on pull requests labelled `e2e` (adding the label starts a
+# run, and every push to the pull request runs again while the label is on), and called by deploy.yml for the commit
+# it deploys (`workflow_call`, lead decision (15c) of 2026-11-11, approved by the owner): Deploy deploys nothing before
+# this workflow is green on the same commit.
 # What: on a clean runner with PostgreSQL 16, Redis 7.4 and Mailpit as service containers (as ci.yml's build-test job),
 # build everything, let tools/e2e/support/stack.ts start the built stack on a fresh database (with E2E_WITH_OTA=1 also
 # the Amadeus stub, the OTA worker, API and admin, the storefront previews and the demo OTA), and run the `portal`,
@@ -9,15 +11,23 @@
 # E2E_STRIPE_BILLING_WEBHOOK_SECRET (PADR-0017 item 4), on a stack with Stripe Billing on and a Stripe CLI forwarder of
 # billing events to the platform API (E2E_STRIPE_BILLING=1, lead decision 5(l) of 2026-11-05, approved by the owner).
 # Nightly and on demand (never on a pull request), `storefront-stripe` (OFE-017) runs when E2E_STRIPE_PUBLISHABLE_KEY
-# exists too; both Stripe projects with the pinned Stripe CLI. Nightly and on demand, the SDK's smoke tests (SDK-014)
-# run last, against the OTA backend started as in local development. When a step fails, the traces, screenshots, HTML
-# report and the stack's logs (tools/e2e/test-results/stack/, sdk-smoke/) are uploaded as the artefact
+# exists too; both Stripe projects with the pinned Stripe CLI. A run Deploy calls is an on-demand run (the caller's
+# event): storefront-stripe runs in it, portal-stripe does not (PADR-0017 item 4 keeps that project nightly). The two
+# Stripe steps run even when an earlier Playwright step failed (`!cancelled()`, once the set-up steps passed), so a
+# failure of the four projects never hides theirs. Nightly and on demand, the SDK's smoke tests (SDK-014) run last,
+# against the OTA backend started as in local development. Each Playwright step keeps its traces, report and stack
+# logs in a folder of its own (E2E_RESULTS_SUBDIR: test-results/<step>/, playwright-report/<step>/), so no step empties
+# another's; when a step fails or the run is cancelled (a newer pull-request run, the timeout), tools/e2e/test-results/
+# (every step's folder and sdk-smoke/) and tools/e2e/playwright-report/ are uploaded as the artefact
 # e2e-<run id>-<attempt>, and the `github` reporter of playwright.config.ts names each failed test on the run's page.
-# Before each deploy (ADR-0015, OFE-026): run this workflow on demand on the ref that Deploy will use (main or the v*
-# tag) and deploy only after it is green, its storefront-stripe step included; deploy.yml does not require it, which
-# would take a job of its own there (tools/e2e/README.md, "Tests of OFE-026"). The last step writes the OTA projects'
-# results to the run's summary: OFE-026's launch gate counts a nightly run only when storefront, ota-admin and
-# storefront-stripe all ran and passed in it.
+# Before each deploy (ADR-0015, OFE-026): deploy.yml calls this workflow for the commit it deploys and its deploy job
+# needs it (tools/e2e/README.md, "Tests of OFE-026"). Concurrency: one group per event and ref (pull request), so a
+# nightly, an on-demand and a deploy-called run never cancel each other; only a newer run of the same pull request
+# cancels the one in progress. Two runs at once share the Stripe test account: each run's Stripe CLI forwarder gets the
+# account's events of both runs and passes them to its own stack, whose webhook endpoints ignore events of objects
+# they do not hold (another run's payments, OTAs and subscriptions), and every journey checks only its own objects.
+# The last step writes the OTA projects' results to the run's summary: OFE-026's launch gate counts a nightly run only
+# when storefront, ota-admin and storefront-stripe all ran and passed in it.
 # Agents never change this file to get their own change through (AGENTS.md §7). Third-party actions are pinned to full
 # commit SHAs with the tag as the last thing in the comment (tools/ci/check-package-json.mjs, ADR-0023).
 name: E2E
@@ -26,15 +36,33 @@ on:
   schedule:
     - cron: "23 2 * * *" # nightly at 02:23 UTC
   workflow_dispatch:
+  # Deploy (deploy.yml) calls it for the commit it deploys, with the caller's name (the concurrency group) and the
+  # three Stripe test secrets, passed one by one; none is required, as for the other triggers.
+  workflow_call:
+    inputs:
+      caller:
+        description: The calling workflow, which names the run's concurrency group (deploy.yml passes `deploy`)
+        type: string
+        required: true
+    secrets:
+      E2E_STRIPE_SECRET_KEY:
+        required: false
+      E2E_STRIPE_BILLING_WEBHOOK_SECRET:
+        required: false
+      E2E_STRIPE_PUBLISHABLE_KEY:
+        required: false
   pull_request:
     types: [opened, synchronize, reopened, labeled]
 
 permissions:
   contents: read
 
+# One group per event (or caller) and ref: the nightly, an on-demand and a deploy-called run of one ref never cancel
+# each other (lead decision (15c) of 2026-11-11). Only pull-request runs cancel the one in progress; a second run of
+# the same group otherwise waits.
 concurrency:
-  group: e2e-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: e2e-${{ inputs.caller || github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CI: "true"
@@ -48,7 +76,10 @@ jobs:
     # cancels the one in progress (concurrency above).
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # The four projects took 11.7 min on run 42929326729 (a warm Turborepo cache); an uncached build adds about 5 min,
+    # and each Stripe step starts a stack of its own (about 1.5 min) and drives Stripe over the network (about 3 to 5
+    # min): about 25 to 30 min for a nightly run with both Stripe steps, so 45 (lead decision (15c) of 2026-11-11).
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16
@@ -124,23 +155,30 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # The last set-up step: the Stripe steps below run after a failed Playwright step only when it passed.
       - name: Install Playwright's Chromium and its system libraries
+        id: browsers
         run: pnpm --filter @velexis/e2e exec playwright install --with-deps chromium
 
       - name: "[PFE-014 AC1] [OFE-008 AC1] [OAD-016 AC1] Playwright projects portal, platform-admin, storefront and ota-admin"
         id: projects
+        env:
+          E2E_RESULTS_SUBDIR: projects
         run: pnpm test:e2e -- --project=portal --project=platform-admin --project=storefront --project=ota-admin
 
       # PFE-027's Checkout journey (portal-checkout.e2e.ts, every test tagged @stripe): E2E_STRIPE_BILLING=1 turns Stripe
       # Billing on for this step's stack only and starts the Stripe CLI forwarder of billing events to the platform API's
       # /webhooks/stripe/billing, whose signing secret the platform API gets (tools/e2e/README.md, Tests of PFE-027).
+      # Nightly only (PADR-0017 item 4), also after a failed Playwright step: `!cancelled()` and the set-up steps passed.
       - name: Stripe journeys (nightly, project portal-stripe)
-        if: github.event_name == 'schedule' && env.STRIPE_CONFIGURED == 'true'
+        id: portal-stripe
+        if: "!cancelled() && steps.browsers.outcome == 'success' && github.event_name == 'schedule' && env.STRIPE_CONFIGURED == 'true'"
         env:
           E2E_STRIPE: "1"
           STRIPE_SECRET_KEY: ${{ secrets.E2E_STRIPE_SECRET_KEY }}
           STRIPE_BILLING_WEBHOOK_SECRET: ${{ secrets.E2E_STRIPE_BILLING_WEBHOOK_SECRET }}
           E2E_STRIPE_BILLING: "1"
+          E2E_RESULTS_SUBDIR: portal-stripe
         run: |
           curl -fsSL -o "$RUNNER_TEMP/stripe.tgz" "https://github.com/stripe/stripe-cli/releases/download/v${STRIPE_CLI_VERSION}/stripe_${STRIPE_CLI_VERSION}_linux_x86_64.tar.gz"
           echo "${STRIPE_CLI_SHA256}  $RUNNER_TEMP/stripe.tgz" | sha256sum -c -
@@ -148,12 +186,13 @@ jobs:
           tar -xzf "$RUNNER_TEMP/stripe.tgz" -C "$RUNNER_TEMP/stripe-cli" stripe
           E2E_STRIPE_CLI="$RUNNER_TEMP/stripe-cli/stripe" pnpm test:e2e -- --project=portal-stripe
 
-      # Nightly and on demand, so the on-demand run before each deploy covers it too (OFE-026); never on a pull request.
-      # Like every step, it runs only when the steps before it passed: a run stops at its first failed step, whose
-      # traces the upload below then holds.
+      # Nightly and on demand, so the run Deploy calls before each deploy covers it too (OFE-026; a called run has the
+      # caller's event, workflow_dispatch); never on a pull request. Since lead decision (15c) of 2026-11-11 it runs
+      # even when an earlier Playwright step failed (`!cancelled()`, once the set-up steps passed), so a failure of the
+      # four projects or of portal-stripe never skips it; each step's traces stay in its own folder for the upload.
       - name: "[OFE-017 AC1] [OFE-017 AC2] [OAD-017] Stripe storefront and OTA admin payment journeys (nightly and on demand, project storefront-stripe)"
         id: storefront-stripe
-        if: github.event_name != 'pull_request' && env.STOREFRONT_STRIPE_CONFIGURED == 'true'
+        if: "!cancelled() && steps.browsers.outcome == 'success' && github.event_name != 'pull_request' && env.STOREFRONT_STRIPE_CONFIGURED == 'true'"
         env:
           E2E_STRIPE: "1"
           STRIPE_SECRET_KEY: ${{ secrets.E2E_STRIPE_SECRET_KEY }}
@@ -161,6 +200,7 @@ jobs:
           # The same test account's keys for the OTA API and worker and the Stripe CLI forwarder (tools/e2e/support/stripe.ts).
           STRIPE_SECRET_KEY_TEST: ${{ secrets.E2E_STRIPE_SECRET_KEY }}
           STRIPE_PUBLISHABLE_KEY_TEST: ${{ secrets.E2E_STRIPE_PUBLISHABLE_KEY }}
+          E2E_RESULTS_SUBDIR: storefront-stripe
         run: |
           curl -fsSL -o "$RUNNER_TEMP/stripe.tgz" "https://github.com/stripe/stripe-cli/releases/download/v${STRIPE_CLI_VERSION}/stripe_${STRIPE_CLI_VERSION}_linux_x86_64.tar.gz"
           echo "${STRIPE_CLI_SHA256}  $RUNNER_TEMP/stripe.tgz" | sha256sum -c -
@@ -195,8 +235,10 @@ jobs:
             SDK_SMOKE_CONSOLE_KEY="$(printf '%s\n' "$seed" | grep -E '^  Console automation test key ' | grep -Eo 'sk_test_[A-Za-z0-9]{40}')" \
             pnpm --filter @velexis/ota-sdk test:smoke
 
+      # Also when the run is cancelled (a newer run of the same pull request, or the job's timeout), so the traces of a
+      # step that hung are kept (lead decision (15c) of 2026-11-11). Every step's folder is under these two paths.
       - name: Upload traces, screenshots, the report and the stack's logs
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: e2e-${{ github.run_id }}-${{ github.run_attempt }}

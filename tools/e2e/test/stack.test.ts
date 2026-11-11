@@ -12,6 +12,7 @@ import {
   assertPortsFree,
   childEnv,
   DEMO_STOREFRONT_HOST,
+  E2E_DIR,
   exampleEnv,
   newDatabaseName,
   nextAppsOf,
@@ -23,6 +24,7 @@ import {
   PLATFORM_SWITCHES_ON,
   PORTAL_URL,
   readStackSettings,
+  resultsFolders,
   runningStackContext,
   runSeed,
   seedCommands,
@@ -30,6 +32,7 @@ import {
   stackContext,
   stackServices,
   STACK_DNS_RESOLVERS,
+  STACK_LOG_DIR,
   STACK_PORTS,
   STOREFRONT_URL,
   stripeBillingOn,
@@ -744,6 +747,44 @@ describe("seedCommands", () => {
       "platform/backend/dist/cli.js",
       "ota/backend/dist/cli.js",
     ]);
+  });
+});
+
+describe("each run's own results folder: E2E_RESULTS_SUBDIR (lead decision (15c) of 2026-11-11, FIX-W48-SHARED)", () => {
+  it("[FIX-W48-SHARED AC4] keeps the folders of before without it", () => {
+    expect(resultsFolders()).toEqual({
+      outputDir: "test-results",
+      reportDir: "playwright-report",
+      stackLogDir: STACK_LOG_DIR,
+    });
+    expect(resultsFolders("")).toEqual(resultsFolders());
+    expect(STACK_LOG_DIR).toBe(join(E2E_DIR, "test-results", "stack"));
+    expect(settings().E2E_RESULTS_SUBDIR).toBeUndefined();
+  });
+
+  it("[FIX-W48-SHARED AC4] puts a step's traces, report and stack logs in folders of its own, inside the uploaded ones", () => {
+    expect(resultsFolders("portal-stripe")).toEqual({
+      outputDir: "test-results/portal-stripe",
+      reportDir: "playwright-report/portal-stripe",
+      stackLogDir: join(E2E_DIR, "test-results", "portal-stripe", "stack"),
+    });
+    // Two steps never share a folder, so Playwright's emptying of one step's output folder leaves the other's.
+    const a = resultsFolders("projects");
+    const b = resultsFolders("storefront-stripe");
+    for (const kind of ["outputDir", "reportDir", "stackLogDir"] as const) {
+      expect(a[kind]).not.toBe(b[kind]);
+      expect(a[kind].startsWith(`${b[kind]}/`) || b[kind].startsWith(`${a[kind]}/`)).toBe(false);
+    }
+    expect(settings({ E2E_RESULTS_SUBDIR: "storefront-stripe" }).E2E_RESULTS_SUBDIR).toBe(
+      "storefront-stripe",
+    );
+  });
+
+  it("[FIX-W48-SHARED AC4] refuses anything but one folder name, without resolving it", () => {
+    for (const bad of ["../stack", "a/b", "/tmp/x", "Projects", "-x", ".", "a b"]) {
+      expect(() => resultsFolders(bad), bad).toThrow(/E2E_RESULTS_SUBDIR must be one folder name/);
+      expect(() => settings({ E2E_RESULTS_SUBDIR: bad }), bad).toThrow(/E2E_RESULTS_SUBDIR/);
+    }
   });
 });
 

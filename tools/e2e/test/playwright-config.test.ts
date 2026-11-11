@@ -225,6 +225,10 @@ describe("the configuration's projects from the environment", () => {
   let stripeWithoutOta: (string | undefined)[] = [];
   /** The configuration as the e2e workflow's steps load it: CI set, the OTA stack and the Stripe projects. */
   let inCi: PlaywrightTestConfig = {};
+  /** The same as the workflow's storefront-stripe step loads it, with its own results folder (FIX-W48-SHARED). */
+  let inCiStep: PlaywrightTestConfig = {};
+  /** What loading it with a results folder that is a path threw. */
+  let badSubdir: unknown;
 
   // Loading the configuration four times compiles it and its support files afresh each time (a second or so idle):
   // here, once, with this budget, not inside the tests' 5 s.
@@ -233,6 +237,14 @@ describe("the configuration's projects from the environment", () => {
     withoutStripe = await loadWith({ E2E_WITH_OTA: "1", E2E_STRIPE: "0" });
     stripeWithoutOta = await loadWith({ E2E_WITH_OTA: "0", E2E_STRIPE: "1" });
     inCi = await loadConfig({ CI: "true", E2E_WITH_OTA: "1", E2E_STRIPE: "1" });
+    inCiStep = await loadConfig({
+      CI: "true",
+      E2E_WITH_OTA: "1",
+      E2E_STRIPE: "1",
+      E2E_RESULTS_SUBDIR: "storefront-stripe",
+    });
+    badSubdir = await loadConfig({ E2E_RESULTS_SUBDIR: "../stack" }).catch((error: unknown) => error);
+    vi.unstubAllEnvs();
   }, 30_000);
   afterAll(() => {
     vi.unstubAllEnvs();
@@ -267,6 +279,20 @@ describe("the configuration's projects from the environment", () => {
     expect(inCi.forbidOnly).toBe(true);
     expect(inCi.workers).toBe(2);
     expect(names(inCi.projects ?? [])).toEqual(withStripe);
+  });
+
+  it("[FIX-W48-SHARED AC4] keeps a workflow step's traces and HTML report in the folders of its E2E_RESULTS_SUBDIR", () => {
+    // Lead decision (15c) of 2026-11-11: each Playwright step of e2e.yml its own folder inside test-results/ and
+    // playwright-report/, so no step empties another's and the upload takes them all.
+    expect(inCiStep.outputDir).toBe("test-results/storefront-stripe");
+    expect(inCiStep.reporter).toEqual([
+      ["list"],
+      ["github"],
+      ["html", { open: "never", outputFolder: "playwright-report/storefront-stripe" }],
+    ]);
+    expect(names(inCiStep.projects ?? [])).toEqual(withStripe);
+    // A path is refused, never resolved outside the two folders.
+    expect(String(badSubdir)).toMatch(/E2E_RESULTS_SUBDIR must be one folder name/);
   });
 });
 

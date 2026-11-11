@@ -27,7 +27,7 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 | M3 Book & pay | PBE-037, PBE-038, PFE-016 | Owners edit the card statement descriptor of the Velexis payment connection. |
 | M4 OTA admin | PBE-039, PBE-040, PFE-017 … PFE-019 | "Open console" signs a member into the OTA admin; Amadeus office settings are editable. |
 | M5 Monetisation & self-service | PBE-041 … PBE-061, PFE-020 … PFE-027, PAD-012 … PAD-015 | Checkout and Customer Portal, own Stripe (Connect or keys), payout account and settlements, own Amadeus credentials and live office, custom domains with TLS, go-live. |
-| M6 Hardening & launch | PBE-062 … PBE-065, PBE-067 … PBE-071, PFE-028 … PFE-030, PAD-016, PAD-017 | Security review closed, performance measured, end-to-end suite green nightly, launch checklist ready. The switches are removed after the launch: PBE-064 is a named exception to "every M6 task done" ([ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 4). |
+| M6 Hardening & launch | PBE-062 … PBE-065, PBE-067 … PBE-072, PFE-028 … PFE-030, PAD-016, PAD-017 | Security review closed, performance measured, end-to-end suite green nightly, launch checklist ready; since 2026-11-11 the platform's `secrets:rewrap` (PBE-072), so a master-key rotation can remove the old key. The switches are removed after the launch: PBE-064 is a named exception to "every M6 task done" ([ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 4). |
 
 ## M0 — Foundations
 
@@ -2035,7 +2035,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   3. Add both runbooks to the platform documentation index.
 - **Acceptance:**
   - Both runbooks exist, use only the placeholder hosts of decisions §4, and every launch item has an owner and a verification step.
-- **Verify:** `node tools/plan-lint/plan-lint.mjs docs/mvp/plans/foundation-tasks.md platform/docs/plans/agent-tasks.md && grep -c "\[ \]" platform/docs/runbooks/launch-checklist.md`
+- **Verify:** `pnpm plan:lint && grep -c "\[ \]" platform/docs/runbooks/launch-checklist.md`
+- **Note (2026-11-11, lead decision (15b), FIX-W48-SHARED):** the Verify line ran `node tools/plan-lint/plan-lint.mjs docs/mvp/plans/foundation-tasks.md platform/docs/plans/agent-tasks.md`, which fails on every platform task that depends on an OTA task (OTA tasks are not in those two files); it now runs `pnpm plan:lint` (the three plans) and still counts the launch checklist's boxes.
 
 ### PFE-028 · Complete the portal end-to-end suite with accessibility and security checks
 - **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: three consecutive green nightly runs)
@@ -2204,6 +2205,24 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - Every other account never sees the enrolment page, and every journey of the e2e suite (the portal ones and those that sign in through the portal to open the console) passes as before.
 - **Verify:** `pnpm --filter @velexis/platform-frontend test && pnpm test:e2e -- --project=portal specs/portal-mfa-enrolment.e2e.ts`
 
+### PBE-072 · Add the platform backend's secrets:rewrap command
+- **Status:** todo
+- **Component:** platform-backend
+- **Milestone:** M6
+- **Depends on:** X-040, PBE-028
+- **Size:** M
+- **Read first:** docs/mvp/adr/0010-secrets-envelope-encryption.md ("Rotation", item 3); docs/mvp/runbooks/master-key-rotation.md §1 and §3 (steps 5, 7 and 8); packages/crypto/README.md ("KEK rotation", `rewrapBatch`); platform/docs/runbooks/platform-operations.md §8 (the gap and its query of the ciphertext tables) and §10 item 2; platform/backend/src/cli.ts (`CLI_COMMANDS`) and common/crypto.provider.ts; platform/docs/data-model.md (the ciphertext columns, their writers and associated data); ota/docs/plans/agent-tasks.md (OBE-100, the OTA's command, for the shared output)
+- **Files:** `platform/backend/src/cli.ts`, `platform/backend/src/cli.test.ts`, `platform/backend/src/secrets/rewrap.command.ts`, `platform/backend/src/secrets/rewrap.repository.ts`, `platform/backend/src/secrets/rewrap.command.test.ts`, `platform/backend/test/integration/secrets/rewrap.int.test.ts`, `platform/backend/README.md`, `platform/docs/runbooks/platform-operations.md`, `docs/mvp/runbooks/master-key-rotation.md`
+- **Steps:**
+  1. Added by FIX-W48-SHARED (lead decision (15m) of 2026-11-11): ADR-0010 ("Rotation", item 3) and X-040 leave each backend's re-wrap command to its plan, and without it a master-key rotation can never remove the old key (master-key-rotation.md steps 5, 7 and 8; platform-operations.md §8 and §10 item 2). `secrets:rewrap [--dry-run] [--batch-size <n>]` in `CLI_COMMANDS`: one `rewrapBatch` row source per platform ciphertext column set that §8's query lists (the accounts' MFA secrets, the Velexis Amadeus accounts, the supplier connections, the payment provider connections, the credential submissions, the payout accounts, the e-mail outbox's secret payloads, the provisioning reveals), each with the associated data its writer uses, keyset pages and the optimistic check on the old ciphertext; a row's ciphertexts that share one data key move together. The pending MFA set-ups in Redis (10 minutes) and the 60-second caches of platform rows expire by themselves (the runbook says so).
+  2. Output per table, then a total: rows re-wrapped, skipped and failed, and the count per KEK id (`remainingByKekId`) before and after; `--dry-run` reports the counts before and what would move, and writes nothing. Exit codes: 0 when nothing is left under an old KEK, 1 when a row failed or remains, 2 for a usage error, as OBE-100's. It never prints or logs a row id, a ciphertext or a plaintext (counts and KEK ids only), and refuses to start when the current KEK cannot be loaded.
+  3. Tests: unit tests of the arguments and the report; integration on a `@velexis/testing` database with values under `local:v1` and `local:v2` in every table: a run moves every value to the current KEK and a second run reports `rewrapped 0` and an empty `remainingByKekId` (idempotent); `--dry-run` changes nothing; a corrupted ciphertext counts as failed and stays, a row changed between the read and the write is skipped; every value still decrypts with its associated data afterwards; the captured output and logs hold no plaintext, ciphertext or row id.
+  4. platform-operations.md §8 (the gap closed: the command, its output, and when step 8 may follow) and §10 item 2 (dated: built by PBE-072 and OBE-100), master-key-rotation.md §1 and steps 5 and 7 (the platform command's options and output), and the backend README's CLI table.
+- **Acceptance:**
+  - `node dist/cli.js secrets:rewrap` moves every platform ciphertext to the current KEK, is idempotent, reports per table the counts per KEK before and after, and `--dry-run` writes nothing.
+  - No output, log line or error of the command holds a secret, a ciphertext or a row id.
+- **Verify:** `pnpm --filter @velexis/platform-backend test cli rewrap && pnpm --filter @velexis/platform-backend exec vitest run --config vitest.int.config.ts test/integration/secrets/rewrap.int.test.ts`
+
 ## Dependency overview
 
 The full graph is printed by `node tools/plan-lint/plan-lint.mjs --graph platform/docs/plans/agent-tasks.md docs/mvp/plans/foundation-tasks.md`. In short:
@@ -2222,7 +2241,7 @@ flowchart LR
   PFE --> M24["M2–M4<br/>PBE-036…PBE-040, PFE-016…PFE-019, PAD-011"]
   PAD --> M24
   M24 --> M5["M5<br/>PBE-041…PBE-061, PFE-020…PFE-027, PAD-012…PAD-015"]
-  M5 --> M6["M6<br/>PBE-062…PBE-065, PFE-028, PAD-016<br/>review findings PBE-067…PBE-070, PFE-029, PAD-017<br/>MFA for live OTAs PBE-071, PFE-030<br/>(PBE-064 after launch)"]
+  M5 --> M6["M6<br/>PBE-062…PBE-065, PFE-028, PAD-016<br/>review findings PBE-067…PBE-070, PFE-029, PAD-017<br/>MFA for live OTAs PBE-071, PFE-030<br/>secrets:rewrap PBE-072<br/>(PBE-064 after launch)"]
   OTA(["OTA plan gates<br/>OF-11 (M1), OF-01 (M2), OF-09 (M4)"]) -.-> LC
   OTA -.-> M24
 ```

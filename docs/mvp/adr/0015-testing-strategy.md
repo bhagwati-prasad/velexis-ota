@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Lead architect. Decided during planning; revisit when CI time on a pull request exceeds 15 minutes or flaky tests exceed 1 % of runs.
-**Revisions:** 2026-10-12 (planning review): the Amadeus stub arrives in M1 (X-026, X-027), because PBE-020 and the M1 end-to-end harness use it; recording and the fixture scan are task X-034 (M2). 2026-11-06 (lead decision (11f) of 2026-11-06, recording PBE-070 and FIX-W46-SHARED): the tools of the test-level table run on Vitest 4.1.12, happy-dom 21.0.4 and Redocly CLI 2.76.0, and the root Vitest file is the projects config `vitest.config.ts` (dated note under Test levels).
+**Revisions:** 2026-10-12 (planning review): the Amadeus stub arrives in M1 (X-026, X-027), because PBE-020 and the M1 end-to-end harness use it; recording and the fixture scan are task X-034 (M2). 2026-11-06 (lead decision (11f) of 2026-11-06, recording PBE-070 and FIX-W46-SHARED): the tools of the test-level table run on Vitest 4.1.12, happy-dom 21.0.4 and Redocly CLI 2.76.0, and the root Vitest file is the projects config `vitest.config.ts` (dated note under Test levels). 2026-11-11 (lead decision (15c) of 2026-11-11, approved by the owner, recording FIX-W48-SHARED): the end-to-end run "before deploy" is enforced: `deploy.yml` calls `e2e.yml` for the commit it deploys and deploys only after it is green; traces are also uploaded when a run is cancelled (dated note under CI).
 
 ## Context
 
@@ -74,6 +74,8 @@ Vitest 4 reads no workspace file, so the root file that lists every package's Vi
 - `ci.yml` on every PR: install, lint, typecheck, unit, integration (PostgreSQL 16 and Redis 7 service containers), contract, build, plan-lint.
 - `e2e.yml`: nightly and on demand.
 - Playwright traces and screenshots are uploaded on failure.
+
+*Note (2026-11-11, lead decision (15c), FIX-W48-SHARED).* `e2e.yml` also runs on pull requests labelled `e2e` and, called by `deploy.yml` (`workflow_call`), for the commit being deployed: Deploy's `deploy` job needs that run, so nothing is deployed before a green end-to-end run of the same commit (the "before deploy" of the test-level table). Traces, screenshots, reports and the stack's logs are uploaded on failure or cancellation, each Playwright step in a folder of its own ([`tools/e2e/README.md`](../../../tools/e2e/README.md), CI).
 
 ## Consequences
 

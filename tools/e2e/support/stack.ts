@@ -35,7 +35,9 @@
 // later task adds to an `.env.example` reaches the stack without a change here, and a developer's `.env.local` never
 // changes what the apps see. The values are the dummy development values of those files; nothing here is a secret.
 // Each process writes its output to test-results/stack/<name>.log (Playwright empties test-results/ before the
-// global setup, and CI uploads the folder on failure). Database URLs carry the development passwords: they are passed
+// global setup, and CI uploads the folder on failure); with E2E_RESULTS_SUBDIR=<name> (each Playwright step of the e2e
+// workflow its own, lead decision (15c) of 2026-11-11) to test-results/<name>/stack/, beside that run's traces in
+// test-results/<name>/ (`resultsFolders`), so no step empties another's. Database URLs carry the development passwords: they are passed
 // to the processes and never printed.
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -73,6 +75,45 @@ export const E2E_DIR = resolve(__dirname, "..");
 export const REPO_ROOT = resolve(E2E_DIR, "..", "..");
 /** Where each process of the stack writes its output (`<name>.log`), inside Playwright's output folder. */
 export const STACK_LOG_DIR = join(E2E_DIR, "test-results", "stack");
+
+/** E2E_RESULTS_SUBDIR: one folder name (lowercase letters, digits and dashes), never a path. */
+export const RESULTS_SUBDIR_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+/** Where a run keeps what it leaves behind. */
+export interface ResultsFolders {
+  /** Playwright's output folder (traces, screenshots), relative to tools/e2e; Playwright empties it when it starts. */
+  readonly outputDir: string;
+  /** The HTML report's folder (in CI), relative to tools/e2e. */
+  readonly reportDir: string;
+  /** The stack's logs (`<name>.log`), inside `outputDir`: an absolute path. */
+  readonly stackLogDir: string;
+}
+
+/**
+ * The folders of a run with E2E_RESULTS_SUBDIR = `subdir` (lead decision (15c) of 2026-11-11, FIX-W48-SHARED). Without
+ * it: test-results/, playwright-report/ and test-results/stack/, as before. With it: test-results/<subdir>/,
+ * playwright-report/<subdir>/ and test-results/<subdir>/stack/, so that every Playwright step of the e2e workflow keeps
+ * its own traces, report and stack logs: Playwright empties only the step's own output folder, and the upload, which
+ * takes test-results/ and playwright-report/, finds every step's. playwright.config.ts and the global setup read the
+ * same variable. A value that is not one folder name is refused, never resolved.
+ */
+export function resultsFolders(subdir?: string): ResultsFolders {
+  if (subdir === undefined || subdir === "") {
+    return { outputDir: "test-results", reportDir: "playwright-report", stackLogDir: STACK_LOG_DIR };
+  }
+  if (!RESULTS_SUBDIR_PATTERN.test(subdir)) {
+    throw new Error(
+      "E2E_RESULTS_SUBDIR must be one folder name of lowercase letters, digits and dashes (for example portal-stripe), " +
+        "not a path",
+    );
+  }
+  const outputDir = `test-results/${subdir}`;
+  return {
+    outputDir,
+    reportDir: `playwright-report/${subdir}`,
+    stackLogDir: join(E2E_DIR, outputDir, "stack"),
+  };
+}
 
 /** Every app of the stack listens on the loopback interface only, as on the VM. */
 export const STACK_HOST = "127.0.0.1";
@@ -216,6 +257,11 @@ export const STACK_SETTINGS_SCHEMA = {
   STRIPE_PUBLISHABLE_KEY_TEST: env.string({ optional: true }),
   /** The Stripe CLI 1.x the forwarders run (support/stripe.ts): a name on PATH or a path. */
   E2E_STRIPE_CLI: env.string({ default: "stripe" }),
+  /**
+   * The run's own results folder inside test-results/ and playwright-report/ (`resultsFolders`): each Playwright step
+   * of the e2e workflow sets its own, so no step's run empties another's traces or logs. Unset: the folders themselves.
+   */
+  E2E_RESULTS_SUBDIR: env.string({ optional: true, pattern: RESULTS_SUBDIR_PATTERN }),
 } as const;
 
 export type StackSettings = ConfigOf<typeof STACK_SETTINGS_SCHEMA>;
@@ -796,7 +842,7 @@ export function stackServices(context: StackContext): readonly ServiceSpec[] {
 
 /** A command the stack runs once it is ready (E2E_WITH_OTA=1): a built CLI of a backend. */
 export interface SeedCommand {
-  /** The log file's name in STACK_LOG_DIR. */
+  /** The log file's name in the stack's log folder (`resultsFolders`). */
   readonly name: "platform-dev-seed" | "ota-dev-seed";
   /** The built CLI, relative to the repository root. */
   readonly entry: string;
@@ -841,7 +887,7 @@ export function seedCommands(context: StackContext): readonly SeedCommand[] {
 
 /** A Stripe CLI forwarder that the stack starts before the apps (support/stripe.ts). */
 export interface StripeForwarderSpec {
-  /** Its log file's name in STACK_LOG_DIR (`<name>.log`), and its name in the stack's messages. */
+  /** Its log file's name in the stack's log folder (`<name>.log`), and its name in the stack's messages. */
   readonly name: "stripe-cli" | "stripe-cli-billing";
   /** The test key it runs with: STRIPE_API_KEY in its environment, never on its command line. */
   readonly secretKey: string;
@@ -960,8 +1006,8 @@ interface RunningService {
   exitDescription: string | undefined;
 }
 
-function startService(spec: ServiceSpec): RunningService {
-  const logFile = join(STACK_LOG_DIR, `${spec.name}.log`);
+function startService(spec: ServiceSpec, logDir: string): RunningService {
+  const logFile = join(logDir, `${spec.name}.log`);
   const fd = openSync(logFile, "w");
   let child: ChildProcess;
   const [script = spec.entry, ...args] = spec.argv;
@@ -1109,8 +1155,9 @@ async function runPnpm(
   args: readonly string[],
   values: Record<string, string>,
   logName: string,
+  logDir: string,
 ): Promise<void> {
-  await runCommand("pnpm", args, { label: `pnpm ${args.join(" ")}`, cwd: ".", env: values, logName });
+  await runCommand("pnpm", args, { label: `pnpm ${args.join(" ")}`, cwd: ".", env: values, logName, logDir });
 }
 
 /**
@@ -1220,7 +1267,8 @@ export async function startStack(settings: StackSettings): Promise<Stack> {
   const forwarderSpecs = stripeForwarders(settings);
   assertBuilt([...services, ...seeds]);
   await assertPortsFree(services);
-  await mkdir(STACK_LOG_DIR, { recursive: true });
+  const logDir = resultsFolders(settings.E2E_RESULTS_SUBDIR).stackLogDir;
+  await mkdir(logDir, { recursive: true });
 
   const running: RunningService[] = [];
   const forwarders: { readonly name: string; readonly forwarder: StripeForwarder }[] = [];
@@ -1280,11 +1328,13 @@ export async function startStack(settings: StackSettings): Promise<Stack> {
       ["db:migrate"],
       { DATABASE_MIGRATOR_URL: stackDatabaseUrl(context, "migrator") },
       "db-migrate",
+      logDir,
     );
     await runPnpm(
       ["db:seed:reference"],
       { APP_ENV: "test", DATABASE_URL: stackDatabaseUrl(context, "platform") },
       "db-seed-reference",
+      logDir,
     );
     say(`database ${context.databaseName} migrated and seeded (${seconds(step)})`);
     // Step 3b: the Stripe CLI forwarders before the apps, so the APIs start with their signing secrets.
@@ -1298,7 +1348,7 @@ export async function startStack(settings: StackSettings): Promise<Stack> {
           env: childEnv(stripeCliEnv(spec.secretKey)),
           forwardTo: spec.forwardTo,
           events: spec.events,
-          logFile: join(STACK_LOG_DIR, `${spec.name}.log`),
+          logFile: join(logDir, `${spec.name}.log`),
         });
         forwarders.push({ name: spec.name, forwarder });
         secrets[spec.signingSecret] = forwarder.webhookSecret;
@@ -1308,13 +1358,13 @@ export async function startStack(settings: StackSettings): Promise<Stack> {
     }
     await syncNextStaticAssets(nextAppsOf(services));
     for (const spec of toStart) {
-      running.push(startService(spec));
+      running.push(startService(spec, logDir));
     }
     await Promise.all(running.map((service) => waitUntilReady(service, cancelReadiness.signal)));
     // After the stub is ready: the platform's seed verifies the test Amadeus account against it.
     for (const seed of seeds) {
       const seedStarted = performance.now();
-      await runSeed(seed);
+      await runSeed(seed, logDir);
       say(`${seed.name} done (${seconds(seedStarted)})`);
     }
   } catch (error) {
