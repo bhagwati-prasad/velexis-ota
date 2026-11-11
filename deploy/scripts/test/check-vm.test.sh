@@ -1081,7 +1081,7 @@ SSH_STEPS=ssh
 # harden runs the step ssh too, but never under VELEXIS_ROOT: that the same guard covers it is read from the script.
 # shellcheck disable=SC2016 # the script's own line, $STEPS unexpanded
 if grep -qxF 'case " $STEPS " in *" harden "* | *" ssh "*) runner_in_allowusers ;; esac' "$PROVISION" &&
-  awk '/^step_harden\(\) \{$/, /^\}$/' "$PROVISION" | grep -qx '  step_ssh'; then
+  awk '/^step_harden\(\) \{$/, /^\}$/ { if ($0 == "  step_ssh") found = 1 } END { exit !found }' "$PROVISION"; then
   pass "a run with harden, which runs the step ssh, gets the same guard before any step (read from provision-vm.sh) [FIX-W47-SHARED AC5]"
 else
   fail "a run with harden, which runs the step ssh, gets the same guard before any step (read from provision-vm.sh) [FIX-W47-SHARED AC5]"
