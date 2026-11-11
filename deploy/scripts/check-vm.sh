@@ -7,8 +7,8 @@
 #   sudo bash /srv/velexis/current/deploy/scripts/check-vm.sh     # against the templates of the active release
 #
 # It prints one PASS or FAIL line per item and a total, and exits 0 when every item passes, 1 when one fails and 2
-# on a usage error. It changes nothing and writes no file: it reads files and asks systemctl, ufw, sshd, swapon,
-# sysctl, timedatectl, ss, psql (as postgres), redis-cli and caddy (as caddy). It never prints a value of an env
+# on a usage error. It changes nothing and writes no file: it reads files and asks systemctl, ufw, nft (list only), sshd,
+# swapon, sysctl, timedatectl, ss, psql (as postgres), redis-cli and caddy (as caddy). It never prints a value of an env
 # file, a key file or .provision-secrets: env files are compared with their templates by variable name only, key
 # copies with cmp, the Redis password reaches redis-cli through its environment, and caddy's messages are shown only
 # with every value of caddy.env replaced by <redacted> (bash's own errors about a malformed caddy.env line are dropped).
@@ -21,7 +21,16 @@
 #             daily check, is active and enabled (PCI DSS 11.5.2; lead decision (13j) of 2026-11-10)
 #   services  postgresql, redis-server, caddy, velexis-backup.timer and velexis-healthcheck.timer active and enabled,
 #             the cluster postgresql@16-main active; fail2ban, auditd and chrony active and enabled; Node.js 22
-#   firewall  ufw active, incoming denied by default, and only 22, 80 and 443 allowed (each of them allowed)
+#   firewall  ufw active, incoming denied by default, and only 22, 80 and 443 allowed (each of them allowed); the
+#             outbound allow-list of task X-041 (nft list table inet velexis_egress, read through egress.sh parse):
+#             outgoing denied by default (chain output, policy drop), the chain's rules exactly those of egress.sh,
+#             refusals logged (prefix VELEXIS-EGRESS-DENY), every address of the sets allow4 and allow6 on a line of
+#             /etc/velexis/egress/allowed-hosts.conf, kept by the last refresh (an extra one named), each line with an
+#             address, every env: line's URL on its line's port, each DNS_RESOLVERS item of platform-backend.env on a
+#             udp and a tcp line, both backends' AMADEUS_BASE_URL_TEST and _LIVE, when set, on a line (values compared,
+#             never printed), no emergency opening, the installed list and /usr/local/sbin/velexis-egress the release's,
+#             every apt source of the VM (egress.sh apt-hosts) on the list, the last refresh not failing,
+#             velexis-egress-refresh.timer active and enabled and its service enabled for boot
 #   ssh       sshd -T: no password and no keyboard-interactive authentication, no root login, public keys allowed,
 #             AllowUsers set. Every AllowUsers user but DEPLOY_USER is an admin, and sshd -T -C user=<admin> shows a
 #             second factor (task X-037): a FIDO2 key (publickey with sk-ssh-ed25519@openssh.com only, verify-required)
@@ -252,6 +261,7 @@ group_firewall() {
   fi
   for p in 22 80 443; do case " $seen " in *" $p "*) ;; *) missing="$missing $p" ;; esac; done
   if [ -z "$missing" ]; then pass "ufw allows 22, 80 and 443"; else fail "ufw does not allow:$missing"; fi
+  firewall_egress   # the outbound allow-list (X-041), below
 }
 
 # ---- ssh --------------------------------------------------------------------------------------------------
@@ -674,6 +684,271 @@ group_envfiles() {
   if [ "$n" = 0 ]; then fail "env templates found in $TEMPLATES"; return; fi
   same_value VELEXIS_EDGE_SECRET caddy.env ota-backend.env
   same_value OTA_ADMIN_SERVICE_KEY ota-backend.env ota-admin.env
+}
+
+# ---- firewall: the outbound allow-list (task X-041, PCI DSS 11.5.1.1; part of the group firewall) -------------------
+EGRESS="$DEPLOY_DIR/scripts/egress.sh"   # its parse and apt-hosts commands only read
+EGRESS_LIST="$ETC/egress/allowed-hosts.conf"
+EGRESS_STATE="$LIB/egress"
+EGRESS_LOG_RULE='limit rate 10/minute burst 5 packets log prefix "VELEXIS-EGRESS-DENY " flags skuid'
+# The rules of the chain output as nft prints them: the same list as RULES of egress.sh, held here on its own.
+EGRESS_RULES=(
+  'oifname "lo" accept'
+  'ct state established,related accept'
+  'ct state invalid drop'
+  'ip daddr . meta l4proto . th dport @allow4 accept'
+  'ip6 daddr . meta l4proto . th dport @allow6 accept'
+  'ip daddr . meta l4proto . th dport @emergency4 accept'
+  'ip6 daddr . meta l4proto . th dport @emergency6 accept'
+  'udp sport 68 udp dport 67 accept'
+  'udp sport 546 udp dport 547 accept'
+  'icmpv6 type { mld-listener-report, nd-router-solicit, nd-neighbor-solicit, nd-neighbor-advert, mld2-listener-report } accept'
+  "$EGRESS_LOG_RULE"
+)
+
+url_port() { # URL env-file -> the port its client connects to (stdout): the one it names, else its scheme's (smtps 465;
+  # smtp 25 for curl in alert.env, 587 for Nodemailer in the backends; https 443, http 80); nothing for another scheme.
+  # The rest of the value is never printed.
+  local u="${1#*://}" scheme=""
+  case "$1" in *://*) scheme="${1%%://*}" ;; esac
+  u="${u%%/*}"
+  u="${u##*@}"
+  case "$u" in \[*\]:*) u="${u##*\]:}" ;; \[* | *[!0-9]) u="" ;; *:*) u="${u##*:}" ;; *) u="" ;; esac
+  if [ -z "$u" ]; then
+    case "${scheme,,}" in
+      smtps) u=465 ;;
+      smtp) if [ "$2" = alert.env ]; then u=25; else u=587; fi ;;
+      https) u=443 ;;
+      http) u=80 ;;
+    esac
+  fi
+  [[ "$u" =~ ^[0-9]+$ ]] && printf '%s' "$u"
+  return 0
+}
+
+url_host() { # URL -> its host in lower case (stdout), without scheme, user info, port or path; compared, never printed
+  local u="${1#*://}"
+  u="${u%%/*}"
+  u="${u##*@}"
+  if [[ "$u" == \[*\]* ]]; then u="${u#\[}"; u="${u%%\]*}"; else u="${u%%:*}"; fi
+  printf '%s' "${u,,}"
+}
+
+resolver_items() { # DNS_RESOLVERS value -> "<address> <port>" per item (stdout), read as the platform reads them
+  # (an IPv4 address with an optional :port, an IPv6 address bare or as [address]:port; port 53 when none). Its output
+  # is compared with the allow-list's lines, never printed.
+  local item a p
+  local -a items=()
+  IFS=, read -ra items <<<"$1"
+  for item in "${items[@]}"; do
+    item="${item//[[:space:]]/}"
+    [ -n "$item" ] || continue
+    case "$item" in
+      \[*\]:*) a="${item#\[}"; a="${a%%\]*}"; p="${item##*\]:}" ;;
+      \[*\]) a="${item#\[}"; a="${a%\]}"; p=53 ;;
+      *:*:*) a="$item"; p=53 ;;
+      *:*) a="${item%%:*}"; p="${item#*:}" ;;
+      *) a="$item"; p=53 ;;
+    esac
+    printf '%s %s\n' "${a,,}" "$p"
+  done
+}
+
+firewall_egress() {
+  local out parsed policy rules r want extra="" missing="" lines host port proto elems e addr tail comment
+  local outside="" n=0 bare="" emergency="" key apt s ports state
+  local -A kept=()
+  lines="$(awk '!/^[[:space:]]*(#|$)/ { print $1, $2, $3 }' "$EGRESS_LIST" 2>/dev/null)"   # "host port proto"
+  # velexis-egress loads the table and then writes the addresses it kept, both under an exclusive lock of
+  # $EGRESS_STATE/.lock: holding that lock shared while reading both keeps a refresh from falling between the reads.
+  if [ -f "$EGRESS_STATE/.lock" ] && exec 8<"$EGRESS_STATE/.lock"; then flock -s -w 30 8 || true; fi
+  state="$(cat "$EGRESS_STATE/addresses" 2>/dev/null)"   # "<line's host> <address> <last seen>"
+  while read -r key addr _; do [ -z "$addr" ] || kept["$key $addr"]=1; done <<<"$state"
+  if ! have nft; then
+    fail "nft is installed (package nftables): it holds the outbound allow-list"
+  elif ! out="$(nft list table inet velexis_egress 2>&1)"; then
+    fail "outgoing connections are denied by default (found: no nftables table inet velexis_egress, $(first_line "$out"); provision-vm.sh --steps egress)"
+  else
+    parsed="$(printf '%s\n' "$out" | bash "$EGRESS" parse)"
+    policy="$(printf '%s\n' "$parsed" | awk '$1 == "policy" { print $2; exit }')"
+    if [ "$policy" = drop ]; then
+      pass "outgoing connections are denied by default (nftables table inet velexis_egress, chain output: policy drop)"
+    else
+      fail "outgoing connections are denied by default (found: chain output of inet velexis_egress with policy ${policy:-none})"
+    fi
+    rules="$(printf '%s\n' "$parsed" | sed -n 's/^rule //p')"
+    while IFS= read -r r; do
+      [ -n "$r" ] || continue
+      want=0
+      for e in "${EGRESS_RULES[@]}"; do [ "$r" != "$e" ] || want=1; done
+      [ "$want" = 1 ] || extra="$extra [$r]"
+    done <<<"$rules"
+    for e in "${EGRESS_RULES[@]}"; do
+      [ "$e" != "$EGRESS_LOG_RULE" ] || continue
+      printf '%s\n' "$rules" | grep -qxF -- "$e" || missing="$missing [$e]"
+    done
+    if [ -z "$extra" ] && [ -z "$missing" ]; then
+      pass "the chain output holds only the allow-list's rules (loopback, replies, the address sets, DHCP, IPv6 neighbour discovery, the refusal log)"
+    else
+      [ -z "$extra" ] || fail "the chain output of inet velexis_egress allows more than the allow-list:$extra"
+      [ -z "$missing" ] || fail "the chain output of inet velexis_egress lacks rules of the allow-list:$missing"
+    fi
+    if printf '%s\n' "$rules" | grep -qxF -- "$EGRESS_LOG_RULE"; then
+      pass "refused outbound connections are logged (prefix VELEXIS-EGRESS-DENY, at most 10 a minute, with the user)"
+    else
+      fail "refused outbound connections are logged (no rule logs them with the prefix VELEXIS-EGRESS-DENY)"
+    fi
+
+    # Every address of the allow sets belongs to a line of the list: its comment names the line's host, the line has
+    # its protocol and port, and the address is one the last refresh kept for that host. An address without a
+    # comment, one the list does not have, or one added by hand under a listed host's comment, is named.
+    elems="$(printf '%s\n' "$parsed" | awk '$1 == "elem" && ($2 == "allow4" || $2 == "allow6") { sub(/^elem [^ ]+ /, ""); print }')"
+    while IFS= read -r e; do
+      [ -n "$e" ] || continue
+      n=$((n + 1))
+      read -r addr _ proto _ port tail <<<"$e"
+      comment=""
+      case "$tail" in *'comment "'*) comment="${tail#*comment \"}"; comment="${comment%\"*}" ;; esac
+      if [ -z "$comment" ]; then
+        outside="$outside $addr $proto/$port (no comment),"
+      elif ! printf '%s\n' "$lines" | grep -qxF -- "$comment $port $proto"; then
+        outside="$outside $addr $proto/$port (comment \"$comment\"),"
+      elif [ -z "${kept["$comment $addr"]+x}" ]; then
+        outside="$outside $addr $proto/$port (comment \"$comment\", not an address the refresh kept for it),"
+      fi
+    done <<<"$elems"
+    if [ -z "$outside" ]; then
+      pass "every address of the sets allow4 and allow6 belongs to a line of $(show "$EGRESS_LIST") ($n addresses)"
+    else
+      fail "outbound destinations outside $(show "$EGRESS_LIST"):${outside%,}"
+    fi
+    # Every line has an address in the sets: one of those the last refresh kept for its host.
+    while read -r host port proto; do
+      [ -n "$host" ] || continue
+      s=0
+      while read -r key addr _; do
+        [ "$key" = "$host" ] || continue
+        if printf '%s\n' "$elems" | awk -v a="$addr" -v p="$proto" -v o="$port" '$1 == a && $3 == p && $5 == o { f = 1 } END { exit !f }'; then
+          s=1
+          break
+        fi
+      done <<<"$state"
+      [ "$s" = 1 ] || bare="$bare $host $port/$proto,"
+    done <<<"$lines"
+    if [ -z "$bare" ]; then
+      pass "every line of $(show "$EGRESS_LIST") has an address in the sets"
+    else
+      fail "lines of $(show "$EGRESS_LIST") without an address in the sets (lookups failing, or SMTP or the backup bucket not configured yet):${bare%,}"
+    fi
+    emergency="$(printf '%s\n' "$parsed" | awk '$1 == "elem" && ($2 == "emergency4" || $2 == "emergency6") { sub(/^elem [^ ]+ /, ""); printf " %s,", $0 }')"
+    if [ -z "$emergency" ]; then
+      pass "no emergency opening (the sets emergency4 and emergency6 are empty)"
+    else
+      fail "an emergency opening is in place (docs/mvp/runbooks/outbound-allow-list.md §4):${emergency%,}"
+    fi
+  fi
+  exec 8<&-   # the shared lock of the refresh (above)
+
+  # An env: line allows its URL's host on the line's port only: a URL with another port, named or its scheme's, would
+  # be refused.
+  ports=""
+  while read -r host port proto; do
+    case "$host" in env:*:*) ;; *) continue ;; esac
+    key="${host#env:}"
+    [ -f "$ETC/${key%%:*}" ] || continue
+    env_value "$ETC/${key%%:*}" "${key#*:}"
+    s="$(url_port "$ENV_VALUE" "${key%%:*}")"
+    ENV_VALUE=""
+    if [ -n "$s" ] && ! printf '%s\n' "$lines" | grep -qxF -- "$host $s $proto"; then ports="$ports $host (its line: $port/$proto),"; fi
+  done <<<"$lines"
+  if [ -z "$ports" ]; then
+    pass "the URLs of the allow-list's env: lines use the ports their lines allow"
+  else
+    fail "URLs whose port no line of the allow-list allows (their connections would be refused; change the line by pull request):${ports%,}"
+  fi
+  # The resolvers of the platform's custom domain verification (DNS_RESOLVERS of platform-backend.env, PADR-0004 item
+  # 3; its default when empty) are literal lines of the list: each item needs a udp and a tcp line on its port.
+  ports=""
+  if [ -f "$ETC/platform-backend.env" ]; then
+    env_value "$ETC/platform-backend.env" DNS_RESOLVERS
+    s=0
+    while read -r addr port; do
+      s=$((s + 1))
+      for proto in udp tcp; do
+        printf '%s\n' "$lines" | grep -qxF -- "$addr $port $proto" || ports="$ports item $s ($proto),"
+      done
+    done < <(resolver_items "${ENV_VALUE:-1.1.1.1,8.8.8.8}")
+    ENV_VALUE=""
+    if [ -z "$ports" ]; then
+      pass "every resolver of DNS_RESOLVERS in platform-backend.env has its udp and tcp lines ($s resolvers)"
+    else
+      fail "resolvers of DNS_RESOLVERS in platform-backend.env without a line of the allow-list (custom domain checks would be refused; change the lines by pull request):${ports%,}"
+    fi
+  fi
+  # AMADEUS_BASE_URL_TEST and _LIVE of both backends: empty is the official host, which has its line; another host
+  # needs its own (loopback, the stub, is always allowed).
+  ports=""
+  for e in platform-backend.env ota-backend.env; do
+    [ -f "$ETC/$e" ] || continue
+    for key in AMADEUS_BASE_URL_TEST AMADEUS_BASE_URL_LIVE; do
+      env_value "$ETC/$e" "$key"
+      if [ -n "$ENV_VALUE" ]; then
+        host="$(url_host "$ENV_VALUE")"
+        port="$(url_port "$ENV_VALUE" "$e")"
+        case "$host" in
+          127.0.0.1 | localhost | ::1) ;;
+          *) printf '%s\n' "$lines" | grep -qxF -- "$host ${port:-443} tcp" || ports="$ports $key of $e," ;;
+        esac
+      fi
+      ENV_VALUE=""
+    done
+  done
+  if [ -z "$ports" ]; then
+    pass "the Amadeus base URLs of both backends are the official hosts or have their own lines"
+  else
+    fail "Amadeus base URLs whose host and port no line of the allow-list has (their calls would be refused; add the host by pull request):${ports%,}"
+  fi
+  if [ ! -f "$EGRESS_LIST" ]; then
+    fail "$(show "$EGRESS_LIST") exists (provision-vm.sh --steps egress)"
+  elif cmp -s "$EGRESS_LIST" "$DEPLOY_DIR/egress/allowed-hosts.conf"; then
+    pass "$(show "$EGRESS_LIST") is this deploy folder's egress/allowed-hosts.conf"
+  else
+    fail "$(show "$EGRESS_LIST") is this deploy folder's egress/allowed-hosts.conf (it differs: provision-vm.sh --steps egress)"
+  fi
+  expect_mode "$SBIN/velexis-egress" "root:root 755"
+  if [ -f "$SBIN/velexis-egress" ] && ! cmp -s "$SBIN/velexis-egress" "$EGRESS"; then
+    fail "$(show "$SBIN")/velexis-egress is this deploy folder's scripts/egress.sh (it differs: provision-vm.sh --steps egress)"
+  fi
+  # unattended-upgrades and apt-get update reach every apt source of the VM only if the list allows it.
+  missing=""
+  apt="$(VELEXIS_ROOT="$R" bash "$EGRESS" apt-hosts 2>/dev/null)"
+  while read -r host port; do
+    [ -n "$host" ] || continue
+    printf '%s\n' "$lines" | grep -qxF -- "$host $port tcp" || missing="$missing $host:$port"
+  done <<<"$apt"
+  apt="$(printf '%s\n' "$apt" | awk 'NF { printf "%s%s:%s", sep, $1, $2; sep = " " }')"
+  if [ -z "$missing" ]; then
+    pass "every apt source of the VM is on the allow-list (${apt:-none})"
+  else
+    fail "apt sources outside the allow-list (unattended-upgrades cannot reach them):$missing"
+  fi
+  if [ -e "$EGRESS_STATE/failing" ]; then
+    fail "the refresh of the allow-list has been failing since $(head -c 20 "$EGRESS_STATE/failing") (journalctl -u velexis-egress-refresh)"
+  else
+    pass "the last refresh of the allow-list did not fail"
+  fi
+  s="$(unit_state velexis-egress-refresh.timer)"
+  if [ "$s" = "active enabled" ]; then
+    pass "velexis-egress-refresh.timer is active and enabled (the allow-list's addresses every 2 minutes)"
+  else
+    fail "velexis-egress-refresh.timer is active and enabled (found: $s; systemctl enable --now velexis-egress-refresh.timer)"
+  fi
+  s="$(systemctl is-enabled velexis-egress-refresh.service 2>/dev/null)"
+  if [ "$s" = enabled ]; then
+    pass "velexis-egress-refresh.service is enabled (loads the allow-list at boot)"
+  else
+    fail "velexis-egress-refresh.service is enabled (found: ${s:-unknown}; it loads the allow-list at boot)"
+  fi
 }
 
 printf 'check-vm.sh on %s (%s)\n' "$(hostname 2>/dev/null || echo unknown)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"

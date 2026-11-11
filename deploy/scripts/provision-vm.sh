@@ -20,9 +20,11 @@
 #   sudo NEW_MASTER_KEY=v2 bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps keys  # add a master key
 #   sudo ADMIN_USER=ubuntu ADMIN_MFA=fido2 bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps ssh
 #                                                         # the SSH second factor, once it is enrolled (task X-037)
+#   sudo bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps egress   # the outbound allow-list (X-041)
 #
-# Steps: packages harden users node postgres redis caddy keys database envfiles scripts caddyconf summary, and by name
-# only: ssh, the SSH part of harden alone (harden runs it too).
+# Steps: packages node harden users postgres redis caddy keys database envfiles scripts caddyconf summary, and by name
+# only: ssh, the SSH part of harden alone, and egress, the outbound allow-list (harden runs both). node comes before
+# harden because its corepack fetches pnpm from registry.npmjs.org, which the allow-list leaves out.
 #
 # Caddy (task X-039, docs/mvp/deployment-single-vm.md §6): the step caddy installs the caddy package (its unit, user and
 # folders) and the Velexis Caddy build (Caddy 2.8.4 with the Coraza web application firewall) root-owned as
@@ -72,11 +74,21 @@
 # velexis-platform-admin, velexis-ota-admin) and the group velexis, which only lets them read releases. Keys live in
 # one folder per backend zone; env files are root:root 0600 and read by systemd only.
 #
+# Outbound allow-list (task X-041, PCI DSS 11.5.1.1, docs/mvp/runbooks/outbound-allow-list.md): the step egress checks
+# deploy/egress/allowed-hosts.conf and refuses, changing nothing, when a line is malformed or an apt source of the VM
+# has no line (unattended-upgrades would stop finding security updates). It installs the list as
+# /etc/velexis/egress/allowed-hosts.conf, deploy/scripts/egress.sh as /usr/local/sbin/velexis-egress and the units
+# velexis-egress-refresh.service and .timer, each only when it changed, runs velexis-egress once (the nftables table
+# inet velexis_egress: outgoing connections denied by default, the list's hosts allowed, refusals logged with the prefix
+# VELEXIS-EGRESS-DENY; an open SSH session is a reply and stays allowed), and enables the service (boot) and the timer
+# (every 2 minutes). A second run changes nothing. ufw keeps the inbound rules and "allow outgoing" (see step_egress).
+#
 # Tests only: VELEXIS_ROOT=<absolute folder> moves every Velexis path (/etc/velexis, /srv/velexis, /var/lib/velexis,
 # /var/log/velexis, /var/backups/velexis, /usr/local/sbin and the deploy sudoers file) and /etc/ssh and /etc/pam.d/sshd
-# under that folder, and allows only the steps users, keys, envfiles and ssh (deploy/systemd/test/units-smoke.sh,
-# deploy/scripts/test/check-vm.test.sh, which also puts fake sshd and systemctl first on PATH for the step ssh).
-# The system users are real.
+# under that folder, and allows only the steps users, keys, envfiles, ssh and egress (deploy/systemd/test/units-smoke.sh,
+# deploy/scripts/test/check-vm.test.sh, which also puts fake sshd and systemctl first on PATH for the step ssh, and fake
+# nft, getent and chronyc for the step egress, which then also reads /etc/apt, /etc/systemd/system and
+# /run/systemd/resolve under that folder). The system users are real.
 # =====================================================================================================
 set -euo pipefail
 
@@ -123,8 +135,8 @@ PLATFORM_USER=velexis-platform             # velexis-platform-api, velexis-platf
 OTA_USER=velexis-ota                       # velexis-ota-api, velexis-ota-worker; keys/ota and the storage folder
 ZONE_USERS="$PLATFORM_USER $OTA_USER velexis-portal velexis-platform-admin velexis-ota-admin"
 RELEASE_GROUP=velexis                      # its only members are the zone users; it only grants reading releases
-ALL_STEPS="packages harden users node postgres redis caddy keys database envfiles scripts caddyconf summary"
-NAMED_STEPS="ssh"                          # run only when named (--steps ssh); harden runs the SSH part itself
+ALL_STEPS="packages node harden users postgres redis caddy keys database envfiles scripts caddyconf summary"
+NAMED_STEPS="ssh egress"                   # run only when named (--steps ssh,egress); harden runs both itself
 STEPS="$ALL_STEPS"
 
 to_log() { [ -z "$LOG_FILE" ] || printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$LOG_FILE"; }
@@ -177,8 +189,8 @@ if [ -n "$VELEXIS_ROOT" ]; then
   [ -d "$VELEXIS_ROOT" ] || die "VELEXIS_ROOT $VELEXIS_ROOT is not a folder"
   for step in $STEPS; do
     case "$step" in
-      users | keys | envfiles | ssh) ;;
-      *) die "with VELEXIS_ROOT only the steps users, keys, envfiles and ssh run, not $step" ;;
+      users | keys | envfiles | ssh | egress) ;;
+      *) die "with VELEXIS_ROOT only the steps users, keys, envfiles, ssh and egress run, not $step" ;;
     esac
   done
 fi
@@ -208,7 +220,8 @@ step_packages() {
   DEBIAN_FRONTEND=noninteractive apt-get upgrade "${APT_OPTS[@]}"
   # libpam-google-authenticator: the TOTP second factor of ADMIN_MFA=totp (its PAM module stays unused with fido2).
   apt_install ca-certificates curl gnupg lsb-release jq rsync zstd openssl age rclone \
-    ufw fail2ban unattended-upgrades auditd aide aide-common acl logrotate chrony iproute2 libpam-google-authenticator
+    ufw fail2ban unattended-upgrades auditd aide aide-common acl logrotate chrony iproute2 libpam-google-authenticator \
+    nftables
   install -d -m 0755 /etc/apt/keyrings
 
   # Node.js (NodeSource)
@@ -286,7 +299,8 @@ EOF
   # SSH: keys only, no root, only the admin and deploy users, and the admin's second factor (the step ssh below).
   step_ssh
 
-  # Firewall: 22, 80, 443 (TCP) and 443/udp (HTTP/3). Everything else closed.
+  # Firewall: 22, 80, 443 (TCP) and 443/udp (HTTP/3). Everything else closed. Outgoing connections are denied by the
+  # nftables table of the step egress below, so ufw keeps "allow outgoing" (step_egress says why).
   ufw default deny incoming
   ufw default allow outgoing
   if [ "$SSH_ALLOW_FROM" = "any" ]; then ufw limit 22/tcp; else ufw allow from "$SSH_ALLOW_FROM" to any port 22 proto tcp; fi
@@ -353,6 +367,9 @@ EOF
     systemctl restart systemd-journald
   fi
   install -m 0644 -o root -g root "$DEPLOY_DIR/logrotate/velexis" /etc/logrotate.d/velexis
+
+  # Outgoing connections: only those of deploy/egress/allowed-hosts.conf, every refusal logged (the step egress below).
+  step_egress
 }
 
 # ---- ssh: sshd drop-ins and the admin's second factor (inside harden; --steps ssh runs it alone) -----------------
@@ -844,6 +861,45 @@ step_ssh() {
   SSH_TMP=""
 }
 
+# ---- egress: the outbound allow-list (inside harden; --steps egress runs it alone) ----------------------------------
+# Task X-041, PCI DSS 11.5.1.1 (covert malware channels), docs/mvp/runbooks/outbound-allow-list.md. nftables, not ufw:
+# the APIs, mirrors and ACME directories the VM needs sit behind CDNs whose addresses change, so velexis-egress keeps
+# their addresses in the sets of the table inet velexis_egress and refreshes them every 2 minutes. ufw keeps "allow
+# outgoing": a packet must be accepted by every base chain on its hook, so the table's drop is final, while ufw's own
+# "deny outgoing" would also refuse what the table allows.
+EGRESS_UNITS="velexis-egress-refresh.service velexis-egress-refresh.timer"
+step_egress() {
+  log "Outbound allow-list: the nftables table inet velexis_egress from deploy/egress/allowed-hosts.conf"
+  local src="$DEPLOY_DIR/egress/allowed-hosts.conf" egress="$DEPLOY_DIR/scripts/egress.sh"
+  local units="$VELEXIS_ROOT/etc/systemd/system" u out changed=""
+  if [ ! -f "$src" ] || [ ! -f "$egress" ]; then die "$src or $egress is missing"; fi
+  command -v nft >/dev/null 2>&1 || die "nft is missing (package nftables): run the step packages first"
+  # Nothing is installed or loaded before the list is valid and every apt source of the VM is on it.
+  if ! out="$(bash "$egress" validate "$src" 2>&1)"; then
+    die "$src is not a valid allow-list, so nothing changed: $(printf '%s\n' "$out" | paste -sd';' -)"
+  fi
+  if ! out="$(bash "$egress" check-apt "$src" 2>&1)"; then
+    die "refused, nothing changed: $out. apt-get and unattended-upgrades read them, and the allow-list would refuse them: add each host by pull request (docs/mvp/runbooks/outbound-allow-list.md §2), or point the source at archive.ubuntu.com."
+  fi
+  [ -d "$ETC" ] || install -d -m 0711 -o root -g root "$ETC"
+  [ -d "$LIB" ] || install -d -m 0711 -o root -g root "$LIB"
+  install -d -m 0755 -o root -g root "$ETC/egress"
+  if install_changed 0644 root:root "$src" "$ETC/egress/allowed-hosts.conf"; then changed="$changed $ETC/egress/allowed-hosts.conf"; fi
+  if install_changed 0755 root:root "$egress" "$SBIN/velexis-egress"; then changed="$changed $SBIN/velexis-egress"; fi
+  for u in $EGRESS_UNITS; do
+    if install_changed 0644 root:root "$DEPLOY_DIR/systemd/$u" "$units/$u"; then changed="$changed $u"; fi
+  done
+  case "$changed" in *.service* | *.timer*) systemctl daemon-reload ;; esac
+  [ -z "$changed" ] || log "Installed:$changed"
+  # Loaded now; an open SSH session is a reply (established) and stays allowed. velexis-egress changes the table only
+  # when it differs from the list, so a second run changes nothing.
+  "$SBIN/velexis-egress" refresh || die "velexis-egress could not load the allow-list (its messages above); the table stays as it was"
+  [ "$(systemctl is-enabled velexis-egress-refresh.service 2>/dev/null)" = enabled ] || systemctl enable velexis-egress-refresh.service
+  if ! is_active velexis-egress-refresh.timer || [ "$(systemctl is-enabled velexis-egress-refresh.timer 2>/dev/null)" != enabled ]; then
+    systemctl enable --now velexis-egress-refresh.timer
+  fi
+}
+
 # ---- users and directories (deployment-single-vm.md §4, ADR-0026) ---------------------------------------
 # The deploy key: exactly one OpenSSH public key, with the restrict option. Rewritten only when it changes.
 install_deploy_key() {
@@ -1272,6 +1328,8 @@ Next steps (docs/mvp/deployment-single-vm.md §3):
   1. Fill the CHANGE_ME values in /etc/velexis/*.env (SMTP, Stripe when needed, real host names).
   2. Put the age PUBLIC keys in /etc/velexis/backup/data-recipients.txt and config-recipients.txt,
      and the rclone remote in /etc/velexis/backup/rclone.conf. Then: systemctl start velexis-backup
+     (the outbound allow-list takes the SMTP and bucket hosts from these files within 2 minutes:
+     sudo bash $DEPLOY_DIR/scripts/check-vm.sh --only firewall)
   3. Back up /etc/velexis NOW (master key!) to the offline password manager, encrypted.
   4. Create the DNS records (A/AAAA) for every host of decisions.md §4 and *.ota.example.com.
   5. Run the "Deploy" workflow in GitHub Actions (workflow_dispatch) for the first release.

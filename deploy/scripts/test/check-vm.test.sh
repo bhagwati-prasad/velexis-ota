@@ -9,13 +9,19 @@
 #
 # Needs root and Ubuntu 24.04 (provision-vm.sh refuses anything else), openssl, visudo and python3 (for one unix
 # socket). It needs no systemd, PostgreSQL, Redis or Caddy, and it never touches a service:
-#   - provision-vm.sh runs only its steps users, keys, envfiles and ssh, under a temporary VELEXIS_ROOT (the five zone
-#     users, the group velexis, a test deploy user and a test admin user are real, as in
-#     deploy/systemd/test/units-smoke.sh; /etc/ssh and /etc/pam.d/sshd are test copies under VELEXIS_ROOT);
-#   - check-vm.sh runs with that VELEXIS_ROOT and fake system tools first on PATH (systemctl, ufw, sshd, swapon, ss,
-#     sysctl, timedatectl, runuser, psql, redis-cli, caddy, node). Each fake answers from a fixture file that the test
-#     edits, logs its command line, and records as a violation any call that could change something. The step ssh
-#     uses the fakes sshd and systemctl too; the fake systemctl records its reloads of ssh instead of refusing them.
+#   - provision-vm.sh runs only its steps users, keys, envfiles, ssh and egress, under a temporary VELEXIS_ROOT (the
+#     five zone users, the group velexis, a test deploy user and a test admin user are real, as in
+#     deploy/systemd/test/units-smoke.sh; /etc/ssh, /etc/pam.d/sshd, /etc/apt, /etc/systemd/system and
+#     /run/systemd/resolve are test copies under VELEXIS_ROOT);
+#   - check-vm.sh runs with that VELEXIS_ROOT and fake system tools first on PATH (systemctl, ufw, nft, sshd, swapon,
+#     ss, sysctl, timedatectl, runuser, psql, redis-cli, caddy, node; getent and chronyc for velexis-egress). Each fake
+#     answers from a fixture file that the test edits, logs its command line, and records as a violation any call that
+#     could change something. The step ssh uses the fakes sshd and systemctl too; the fake systemctl records its reloads
+#     of ssh instead of refusing them, and the step egress's daemon-reload and enable of its two units; the fake nft
+#     keeps the table velexis-egress loads (nft -f) and lists it as nft 1.0.9 does.
+#   - A real nft checks the outbound allow-list in a private network namespace (unshare -n) when one works here:
+#     CHECKVM_NFT=<command>, else /usr/sbin/nft (package nftables). It never touches the host's own rules; without it
+#     the test says so and checks the table with the fake alone.
 #   - A real sshd validates the SSH drop-ins when one works here: CHECKVM_SSHD=<command>, else /usr/sbin/sshd
 #     (package openssh-server). sshd -t and sshd -T only read files; without a working sshd the test says so and
 #     checks the drop-ins with the fake alone.
@@ -69,6 +75,27 @@
 #      secret, a key, a TOTP secret or a value of an env file, even when caddy validate fails with a message that
 #      quotes the edge secret or caddy.env has a malformed line; provision-vm.sh substitutes no placeholder through
 #      sed (AC4).
+#   8. The outbound allow-list (task X-041, PCI DSS 11.5.1.1; [X-041 AC1] for its first acceptance criterion): the step
+#      egress installs deploy/egress/allowed-hosts.conf, velexis-egress and its two units, loads the table inet
+#      velexis_egress once (policy drop, loopback and replies accepted first, the list's hosts resolved through fake
+#      lookups, the tokens read from the VM's resolv.conf, chronyc, env files and rclone.conf, refusals logged) and
+#      enables the service and the timer; a second run changes no file, loads nothing and calls no systemctl; harden
+#      runs the step too, after the step node (read from provision-vm.sh). It refuses, changing nothing, a malformed list
+#      and an apt source the list leaves out. check-vm.sh --only firewall reports PASS for it (step 2) and FAIL, naming
+#      the item, for outgoing connections allowed by default, no table, a destination missing from allowed-hosts.conf
+#      (an unknown host, a listed host on another port, an address without a comment, an address added by hand under a
+#      listed host's comment that the refresh did not keep for it), refusals not logged, an extra or a
+#      missing rule, a stopped refresh timer, a service not enabled for boot, an emergency opening, a line without an
+#      address, an SMTP URL on another port than its line's (the one it names, or its scheme's when it names none),
+#      a resolver of DNS_RESOLVERS without its lines (named by its place, never its value), an Amadeus base URL
+#      whose host has no line (named by its variable, the official hosts and the loopback stub pass), an installed list or
+#      velexis-egress that is not the release's, a failing refresh and an apt source outside the list. velexis-egress
+#      keeps a host's last good addresses while its lookup fails, adds a new answer and keeps the earlier ones for 24
+#      hours, repairs a table changed by hand without touching an emergency opening, and alerts once for a run of
+#      failures. The list names every host of the step packages and the official Amadeus hosts, and no VM-side script
+#      or unit names GitHub. With a real nft, the same table loads, a second run changes nothing, and check-vm.sh
+#      passes on it and names changes made by hand. Neither the SMTP password nor the bucket key that velexis-egress
+#      reads hosts beside reaches an output (step 7).
 # =====================================================================================================
 set -euo pipefail
 umask 022
@@ -288,6 +315,23 @@ case "${1:-}" in
     [ "${CHECKVM_PROVISION:-}" = 1 ] && [ "$*" = "reload ssh" ] || refuse "$@"
     echo "reload ssh" >>"$F/reloads"
     exit 0 ;;
+  daemon-reload | enable)
+    # Only the step egress (X-041) may, and only for its two units: recorded, and the unit's state updated.
+    [ "${CHECKVM_PROVISION:-}" = 1 ] || refuse "$@"
+    case "$*" in
+      daemon-reload) ;;
+      "enable velexis-egress-refresh.service")
+        awk '$1 != "velexis-egress-refresh"' "$F/units" >"$F/units.new"
+        echo "velexis-egress-refresh inactive enabled" >>"$F/units.new"
+        mv "$F/units.new" "$F/units" ;;
+      "enable --now velexis-egress-refresh.timer")
+        awk '$1 != "velexis-egress-refresh.timer"' "$F/units" >"$F/units.new"
+        echo "velexis-egress-refresh.timer active enabled" >>"$F/units.new"
+        mv "$F/units.new" "$F/units" ;;
+      *) refuse "$@" ;;
+    esac
+    echo "$*" >>"$F/egress-systemctl"
+    exit 0 ;;
   *) refuse "$@" ;;
 esac
 u="${2%.service}"
@@ -420,6 +464,78 @@ case "${1:-}" in
   *) refuse "$@" ;;
 esac
 EOF
+# The outbound allow-list (X-041). nft keeps one table in $F/nft (exists, policy, rules, sets, set.<name>) and prints it
+# as nft 1.0.9 does; it loads (-f) only the statements velexis-egress writes, only for provision-vm.sh and velexis-egress
+# (CHECKVM_PROVISION=1), counts each load in $F/nft-applies and fails while $F/nft-fails exists. check-vm.sh may only list.
+fake nft <<'EOF'
+N="$F/nft"
+render() {
+  local s first=1 t
+  printf 'table inet velexis_egress {\n'
+  while read -r s; do
+    [ "$first" = 1 ] || printf '\n'
+    first=0
+    case "$s" in *4) t=ipv4_addr ;; *) t=ipv6_addr ;; esac
+    printf '\tset %s {\n\t\ttype %s . inet_proto . inet_service\n' "$s" "$t"
+    case "$s" in emergency*) printf '\t\tflags timeout\n' ;; esac
+    if [ -s "$N/set.$s" ]; then
+      awk 'NR == 1 { line = "\t\telements = { " $0; next } { print line ","; line = "\t\t\t     " $0 } END { print line " }" }' "$N/set.$s"
+    fi
+    printf '\t}\n'
+  done <"$N/sets"
+  printf '\n\tchain output {\n\t\ttype filter hook output priority filter; policy %s;\n' "$(cat "$N/policy")"
+  sed 's/^/\t\t/' "$N/rules"
+  printf '\t}\n}\n'
+}
+case "$*" in
+  "list table inet velexis_egress")
+    if [ -f "$N/exists" ]; then render; else echo "Error: No such file or directory; did you mean table 'velexis_egress' in family inet?" >&2; exit 1; fi ;;
+  "-f "*)
+    [ "${CHECKVM_PROVISION:-}" = 1 ] && [ $# = 2 ] || refuse "$@"
+    if [ -e "$F/nft-fails" ]; then echo "Error: Could not process rule: Operation not supported" >&2; exit 1; fi
+    echo applied >>"$F/nft-applies"
+    mkdir -p "$N"
+    [ -f "$N/sets" ] || : >"$N/sets"
+    while IFS= read -r l; do
+      case "$l" in
+        "add table inet velexis_egress") touch "$N/exists" ;;
+        "add set inet velexis_egress "*)
+          s="${l#add set inet velexis_egress }"
+          s="${s%% *}"
+          grep -qx "$s" "$N/sets" || echo "$s" >>"$N/sets"
+          [ -f "$N/set.$s" ] || : >"$N/set.$s" ;;
+        "add chain inet velexis_egress output "*) p="${l##*policy }"; echo "${p%%;*}" >"$N/policy" ;;
+        "flush chain inet velexis_egress output") : >"$N/rules" ;;
+        "add rule inet velexis_egress output "*) echo "${l#add rule inet velexis_egress output }" >>"$N/rules" ;;
+        "flush set inet velexis_egress "*) : >"$N/set.${l##* }" ;;
+        "add element inet velexis_egress "*)
+          r="${l#add element inet velexis_egress }"
+          e="${r#* \{ }"
+          echo "${e% \}}" >>"$N/set.${r%% *}" ;;
+        *) echo "fake nft: unknown statement: $l" >&2; exit 1 ;;
+      esac
+    done <"$2" ;;
+  --version) echo "nftables v1.0.9 (fake)" ;;
+  *) refuse "$@" ;;
+esac
+EOF
+# getent ahosts answers from $F/getent-hosts ("<name> <address>..."; an address is its own answer); every other
+# database is the real getent's (the users and groups of the test are real).
+fake getent <<'EOF'
+case "${1:-}" in
+  ahosts)
+    [ $# = 2 ] || refuse "$@"
+    if [[ "$2" =~ ^[0-9.]+$ ]] || [[ "$2" == *:* ]]; then printf '%s      STREAM %s\n%s      DGRAM\n' "$2" "$2" "$2"; exit 0; fi
+    a="$(awk -v n="$2" '$1 == n { $1 = ""; print }' "$F/getent-hosts")"
+    [ -n "$a" ] || exit 2
+    for x in $a; do printf '%s      STREAM %s\n%s      DGRAM\n%s      RAW\n' "$x" "$2" "$x" "$x"; done ;;
+  *) for g in /usr/bin/getent /bin/getent; do [ ! -x "$g" ] || exec "$g" "$@"; done; exit 2 ;;
+esac
+EOF
+fake chronyc <<'EOF'
+[ "$*" = "-n -c sources" ] || refuse "$@"
+cat "$F/chronyc-sources"
+EOF
 
 # The effective sshd settings of one user's login (X-037), as sshd -T -C user=<u> prints them for 01-velexis-mfa.conf.
 ALL_PUBKEY_ALGS="ssh-ed25519-cert-v01@openssh.com,ecdsa-sha2-nistp256-cert-v01@openssh.com,sk-ssh-ed25519-cert-v01@openssh.com,rsa-sha2-512-cert-v01@openssh.com,ssh-ed25519,ecdsa-sha2-nistp256,sk-ssh-ed25519@openssh.com,sk-ecdsa-sha2-nistp256@openssh.com,rsa-sha2-512,rsa-sha2-256"
@@ -456,6 +572,8 @@ fail2ban active enabled
 auditd active enabled
 chrony active enabled
 apport inactive masked
+velexis-egress-refresh.timer active enabled
+velexis-egress-refresh inactive enabled
 EOF
   cat >"$FAKE/ufw" <<'EOF'
 Status: active
@@ -508,9 +626,116 @@ EOF
   echo search_path=pg_catalog >"$FAKE/psql-search-path"
   echo 7.4.2 >"$FAKE/redis-version"
   printf '%s\n' 'maxmemory-policy noeviction' 'maxmemory 536870912' 'appendonly yes' >"$FAKE/redis-config"
-  rm -f "$FAKE/redis-open" "$FAKE/caddy-invalid"
+  rm -f "$FAKE/redis-open" "$FAKE/caddy-invalid" "$FAKE/nft-fails"
+  # The table the step egress loaded (X-041), once it has run below.
+  rm -rf "$FAKE/nft"
+  [ ! -d "$FAKE/nft.healthy" ] || cp -a "$FAKE/nft.healthy" "$FAKE/nft"
 }
 healthy
+
+# ---- the outbound allow-list (X-041): the step egress, once, as harden runs it on a new VM -------------------------
+# What the VM gives the step: its resolvers, chrony's sources, the apt sources the step packages wrote, the mail relay
+# in the env files and the bucket's endpoint in rclone.conf. Hosts answer with documentation addresses.
+EGRESS_SECRETS="$PREFIX/egress-secrets" # the SMTP password and the bucket key of the test; step 7 searches for them
+SMTP_SECRET="$(openssl rand -hex 16)"
+BUCKET_SECRET="$(openssl rand -hex 20)"
+( umask 077; printf '%s\n' "$SMTP_SECRET" "$BUCKET_SECRET" >"$EGRESS_SECRETS" )
+install -d -m 0755 "$ROOT/run/systemd/resolve" "$ROOT/etc/apt/sources.list.d"
+printf 'nameserver 192.0.2.53\nnameserver 2001:db8::53\nsearch .\n' >"$ROOT/run/systemd/resolve/resolv.conf"
+printf '^,*,192.0.2.124,2,6,377,32,0.000012,0.000010,0.001\n^,+,2001:db8::124,2,6,377,30,0.000020,0.000018,0.002\n#,-,PPS0,0,4,0,-,0,0,0\n' >"$FAKE/chronyc-sources"
+cat >"$ROOT/etc/apt/sources.list.d/ubuntu.sources" <<'EOF'
+Types: deb
+URIs: http://archive.ubuntu.com/ubuntu/
+Suites: noble noble-updates noble-backports
+Components: main restricted universe multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+Types: deb
+URIs: http://security.ubuntu.com/ubuntu/
+Suites: noble-security
+Components: main restricted universe multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+Types: deb-src
+URIs: http://mirror.example.net/ubuntu/
+Suites: noble
+Components: main
+Enabled: no
+EOF
+echo 'deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main' >"$ROOT/etc/apt/sources.list.d/nodesource.list"
+echo 'deb [signed-by=/etc/apt/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' >"$ROOT/etc/apt/sources.list.d/pgdg.list"
+echo 'deb [signed-by=/etc/apt/keyrings/redis.gpg] https://packages.redis.io/deb noble main' >"$ROOT/etc/apt/sources.list.d/redis.list"
+echo 'deb [signed-by=/etc/apt/keyrings/caddy.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main' >"$ROOT/etc/apt/sources.list.d/caddy.list"
+for f in platform-backend.env ota-backend.env; do
+  sed -i -E "s#^SMTP_URL=.*#SMTP_URL=smtps://vxmail:${SMTP_SECRET}@smtp.mail.example.net:465#" "$ETC/$f"
+done
+sed -i -E 's#^ALERT_SMTP_URL=.*#ALERT_SMTP_URL=smtps://smtp.mail.example.net:465#' "$ETC/alert.env"
+( umask 077; printf '[offsite]\ntype = s3\nprovider = Other\naccess_key_id = vxbackup\nsecret_access_key = %s\nendpoint = https://s3.backup.example.net\nregion = eu-1\nno_check_bucket = true\n' "$BUCKET_SECRET" >"$ETC/backup/rclone.conf" )
+cat >"$FAKE/getent-hosts" <<'EOF'
+ntp.ubuntu.com 192.0.2.123
+api.stripe.com 192.0.2.10 192.0.2.11 2001:db8::10
+connect.stripe.com 192.0.2.12
+test.travel.api.amadeus.com 198.51.100.20 2001:db8::20
+travel.api.amadeus.com 198.51.100.21
+smtp.mail.example.net 192.0.2.25 2001:db8::25
+s3.backup.example.net 203.0.113.30
+acme-v02.api.letsencrypt.org 198.51.100.40 2001:db8::40
+acme.zerossl.com 198.51.100.41
+api.zerossl.com 198.51.100.41
+zerossl.ocsp.sectigo.com 198.51.100.42
+archive.ubuntu.com 203.0.113.50 2001:db8::50
+security.ubuntu.com 203.0.113.51
+deb.nodesource.com 203.0.113.52
+apt.postgresql.org 203.0.113.53
+www.postgresql.org 203.0.113.54
+packages.redis.io 203.0.113.55
+dl.cloudsmith.io 203.0.113.52
+EOF
+provision_egress() { # log [VAR=value...]: provision-vm.sh --steps egress with the fakes, as root on the VM runs it
+  local log="$1"
+  shift
+  env -u SUDO_USER PATH="$FAKEBIN:$PATH" CHECKVM_FAKE="$FAKE" CHECKVM_PROVISION=1 VELEXIS_ROOT="$ROOT" "$@" \
+    bash "$PROVISION" --steps egress >"$log" 2>&1
+}
+egress_refresh() { # log [args]: the installed velexis-egress, as its unit runs it
+  local log="$1"
+  shift
+  env PATH="$FAKEBIN:$PATH" CHECKVM_FAKE="$FAKE" CHECKVM_PROVISION=1 VELEXIS_ROOT="$ROOT" \
+    bash "$ROOT/usr/local/sbin/velexis-egress" refresh "$@" >"$log" 2>&1
+}
+applies() { if [ -f "$FAKE/nft-applies" ]; then grep -c . "$FAKE/nft-applies"; else echo 0; fi; }
+egress_files() { fingerprint "$ETC/egress" "$ROOT/usr/local/sbin/velexis-egress" "$ROOT/etc/systemd/system"; }
+nft_set() { sort "$FAKE/nft/set.$1" 2>/dev/null; } # the elements of a set of the fake's table
+sed -i '/^velexis-egress-refresh/d' "$FAKE/units" # a new VM: neither unit is enabled yet
+if provision_egress "$OUT/egress-first.log"; then rc=0; else rc=$?; fi
+# The rules are pinned here too, not only compared between egress.sh and check-vm.sh (which hold the same list):
+# loopback and replies come first, so the open SSH session and the inbound rules of X-020 keep working, and the sets
+# of both address families are used.
+if [ "$rc" = 0 ] && cmp -s "$ETC/egress/allowed-hosts.conf" "$DEPLOY/egress/allowed-hosts.conf" &&
+  [ "$(stat -c '%U:%G %a' "$ETC/egress/allowed-hosts.conf")" = "root:root 644" ] &&
+  cmp -s "$ROOT/usr/local/sbin/velexis-egress" "$DEPLOY/scripts/egress.sh" &&
+  [ "$(stat -c '%U:%G %a' "$ROOT/usr/local/sbin/velexis-egress")" = "root:root 755" ] &&
+  cmp -s "$ROOT/etc/systemd/system/velexis-egress-refresh.timer" "$DEPLOY/systemd/velexis-egress-refresh.timer" &&
+  cmp -s "$ROOT/etc/systemd/system/velexis-egress-refresh.service" "$DEPLOY/systemd/velexis-egress-refresh.service" &&
+  [ "$(applies)" = 1 ] && [ "$(cat "$FAKE/nft/policy")" = drop ] &&
+  [ "$(paste -sd'|' "$FAKE/egress-systemctl")" = "daemon-reload|enable velexis-egress-refresh.service|enable --now velexis-egress-refresh.timer" ] &&
+  grep -q '^created the table inet velexis_egress' "$OUT/egress-first.log" &&
+  nft_set allow4 | grep -qxF '192.0.2.10 . tcp . 443 comment "api.stripe.com"' &&
+  nft_set allow6 | grep -qxF '2001:db8::25 . tcp . 465 comment "env:platform-backend.env:SMTP_URL"' &&
+  nft_set allow4 | grep -qxF '203.0.113.30 . tcp . 443 comment "rclone:backup.env"' &&
+  nft_set allow4 | grep -qxF '192.0.2.53 . udp . 53 comment "@system-resolvers"' &&
+  nft_set allow6 | grep -qxF '2001:db8::124 . udp . 123 comment "@chrony-sources"' &&
+  [ "$(tail -n 1 "$FAKE/nft/rules")" = 'limit rate 10/minute burst 5 packets log prefix "VELEXIS-EGRESS-DENY " flags skuid' ] &&
+  [ "$(head -n 2 "$FAKE/nft/rules" | paste -sd'|' -)" = 'oifname "lo" accept|ct state established,related accept' ] &&
+  grep -qxF 'ip daddr . meta l4proto . th dport @allow4 accept' "$FAKE/nft/rules" &&
+  grep -qxF 'ip6 daddr . meta l4proto . th dport @allow6 accept' "$FAKE/nft/rules"; then
+  pass "the step egress installs the allow-list, velexis-egress and its units, loads the table once (policy drop, loopback and replies accepted first, $(nft_set allow4 | grep -c .) IPv4 and $(nft_set allow6 | grep -c .) IPv6 destinations, tokens resolved from the VM's files, refusals logged) and enables the service and the timer [X-041 AC1]"
+else
+  indent "$OUT/egress-first.log"
+  fail "the step egress installs the allow-list and its units, loads the table once and enables both units (exit $rc, loads: $(applies)) [X-041 AC1]"
+fi
+cp -a "$FAKE/nft" "$FAKE/nft.healthy"
+cp -p "$ROOT/var/lib/velexis/egress/addresses" "$PREFIX/egress-addresses.healthy"
 
 N=0
 CHECK_PATH="$FAKEBIN" # section 6 puts a real sshd in front of the fakes for some runs
@@ -575,11 +800,26 @@ PASS every key of $ADMIN_TEST_USER is a FIDO2 key (sk-ssh-ed25519) with verify-r
 PASS sshd -T -C user=$DEPLOY_TEST_USER: public key only (authenticationmethods publickey)
 PASS sshd -T -C user=$DEPLOY_TEST_USER: no TTY and no forwarding (permittty no, disableforwarding yes)
 PASS sshd -T -C user=$DEPLOY_TEST_USER: keys only from .ssh/authorized_keys
+PASS outgoing connections are denied by default (nftables table inet velexis_egress, chain output: policy drop)
+PASS the chain output holds only the allow-list's rules
+PASS refused outbound connections are logged (prefix VELEXIS-EGRESS-DENY, at most 10 a minute, with the user)
+PASS every address of the sets allow4 and allow6 belongs to a line of /etc/velexis/egress/allowed-hosts.conf
+PASS every line of /etc/velexis/egress/allowed-hosts.conf has an address in the sets
+PASS no emergency opening
+PASS the URLs of the allow-list's env: lines use the ports their lines allow
+PASS every resolver of DNS_RESOLVERS in platform-backend.env has its udp and tcp lines (2 resolvers)
+PASS the Amadeus base URLs of both backends are the official hosts or have their own lines
+PASS /etc/velexis/egress/allowed-hosts.conf is this deploy folder's egress/allowed-hosts.conf
+PASS /usr/local/sbin/velexis-egress is root:root 755
+PASS every apt source of the VM is on the allow-list (apt.postgresql.org:443 archive.ubuntu.com:80 deb.nodesource.com:443 dl.cloudsmith.io:443 packages.redis.io:443 security.ubuntu.com:80)
+PASS the last refresh of the allow-list did not fail
+PASS velexis-egress-refresh.timer is active and enabled
+PASS velexis-egress-refresh.service is enabled (loads the allow-list at boot)
 EOF
 if [ "$covered" = 1 ]; then
-  pass "every item of the task has a PASS line, the SSH methods of both users included [X-020 AC2] [X-037 AC2]"
+  pass "every item of the task has a PASS line, the SSH methods of both users and the outbound allow-list included [X-020 AC2] [X-037 AC2] [X-041 AC1]"
 else
-  fail "every item of the task has a PASS line, the SSH methods of both users included [X-020 AC2] [X-037 AC2]"
+  fail "every item of the task has a PASS line, the SSH methods of both users and the outbound allow-list included [X-020 AC2] [X-037 AC2] [X-041 AC1]"
 fi
 if [ "$BEFORE" = "$AFTER" ] && [ ! -e "$FAKE/violations" ]; then
   pass "check-vm.sh changed no file and asked no tool to change anything (read-only) [X-020]"
@@ -1410,6 +1650,332 @@ fi
 rm -f "$TOTP_MODULE" "$TOTP_FILE"
 cp -p "$PREFIX/pam-sshd.orig" "$PAM_FILE"
 
+# ---- 6b. the outbound allow-list (X-041): the step egress, check-vm.sh --only firewall, velexis-egress -------------
+step "the outbound allow-list: the step egress again, check-vm.sh's firewall items, velexis-egress's refreshes"
+EG_STATE="$ROOT/var/lib/velexis/egress"
+EG_LIST="$ETC/egress/allowed-hosts.conf"
+egress_reset() { healthy; cp -p "$PREFIX/egress-addresses.healthy" "$EG_STATE/addresses"; rm -f "$EG_STATE/failing"; }
+egress_reset
+before="$(egress_files)"
+loads="$(applies)"
+rm -f "$FAKE/egress-systemctl"
+if provision_egress "$OUT/egress-second.log" && [ "$(egress_files)" = "$before" ] && [ "$(applies)" = "$loads" ] &&
+  [ ! -e "$FAKE/egress-systemctl" ] && grep -q '^unchanged: ' "$OUT/egress-second.log"; then
+  pass "a second run of the step egress changes nothing: no file, no load of the table, no systemctl call [X-041 AC1]"
+else
+  indent "$OUT/egress-second.log"
+  fail "a second run of the step egress changes nothing (loads: $loads, then $(applies)) [X-041 AC1]"
+fi
+
+# check-vm.sh: FAIL, naming the item, for each way the allow-list can be off.
+echo accept >"$FAKE/nft/policy"
+broken "outgoing connections allowed by default" firewall 'outgoing connections are denied by default \(found: chain output of inet velexis_egress with policy accept\)' "X-041 AC1"
+egress_reset
+rm -f "$FAKE/nft/exists"
+broken "no table (a reboot without the service, or nft flush ruleset)" firewall 'outgoing connections are denied by default \(found: no nftables table inet velexis_egress' "X-041 AC1"
+egress_reset
+echo '203.0.113.99 . tcp . 25 comment "smtp.example.org"' >>"$FAKE/nft/set.allow4"
+broken "a destination missing from allowed-hosts.conf" firewall 'outbound destinations outside /etc/velexis/egress/allowed-hosts.conf: 203\.0\.113\.99 tcp/25 \(comment "smtp\.example\.org"\)$' "X-041 AC1"
+egress_reset
+echo '192.0.2.10 . tcp . 25 comment "api.stripe.com"' >>"$FAKE/nft/set.allow4"
+echo '2001:db8::99 . udp . 53' >>"$FAKE/nft/set.allow6"
+broken "a listed host on a port its line does not have, and an address without a comment" firewall 'outside /etc/velexis/egress/allowed-hosts.conf: 192\.0\.2\.10 tcp/25 \(comment "api\.stripe\.com"\), 2001:db8::99 udp/53 \(no comment\)$' "X-041 AC1"
+egress_reset
+# An address added by hand under a listed host's comment, on that line's port, is not one the refresh kept for it.
+# (Addresses that two lines share, such as ZeroSSL's, carry the first line's comment and pass: the healthy fixture.)
+echo '203.0.113.66 . tcp . 443 comment "api.stripe.com"' >>"$FAKE/nft/set.allow4"
+broken "an address added by hand under a listed host's comment" firewall 'outside /etc/velexis/egress/allowed-hosts.conf: 203\.0\.113\.66 tcp/443 \(comment "api\.stripe\.com", not an address the refresh kept for it\)$' "X-041 AC1"
+egress_reset
+sed -i '/VELEXIS-EGRESS-DENY/d' "$FAKE/nft/rules"
+broken "refusals not logged" firewall 'refused outbound connections are logged \(no rule logs them with the prefix VELEXIS-EGRESS-DENY\)' "X-041 AC1"
+egress_reset
+sed -i '1i tcp dport 25 accept' "$FAKE/nft/rules"
+broken "an extra accept rule in the chain" firewall 'the chain output of inet velexis_egress allows more than the allow-list: \[tcp dport 25 accept\]' "X-041 AC1"
+egress_reset
+sed -i '/^ct state established,related accept$/d' "$FAKE/nft/rules"
+broken "a missing rule (replies)" firewall 'the chain output of inet velexis_egress lacks rules of the allow-list: \[ct state established,related accept\]' X-041
+egress_reset
+edit units 's/^velexis-egress-refresh.timer active enabled/velexis-egress-refresh.timer inactive enabled/'
+broken "a stopped refresh timer" firewall 'velexis-egress-refresh.timer is active and enabled \(found: inactive enabled;' "X-041 AC1"
+egress_reset
+edit units 's/^velexis-egress-refresh inactive enabled/velexis-egress-refresh inactive disabled/'
+broken "an allow-list not loaded at boot" firewall 'velexis-egress-refresh.service is enabled \(found: disabled;' X-041
+egress_reset
+echo '203.0.113.10 . tcp . 443 timeout 4h expires 3h59m comment "INC-0001 vendor X, opened by vxadmin"' >"$FAKE/nft/set.emergency4"
+broken "an emergency opening" firewall 'an emergency opening is in place \(docs/mvp/runbooks/outbound-allow-list.md §4\): 203\.0\.113\.10 \. tcp \. 443 timeout 4h expires 3h59m comment "INC-0001 vendor X, opened by vxadmin"$' X-041
+egress_reset
+sed -i '/^env:alert.env:ALERT_SMTP_URL /d' "$EG_STATE/addresses"
+broken "a line whose host has no address" firewall 'lines of /etc/velexis/egress/allowed-hosts.conf without an address in the sets .*: env:alert.env:ALERT_SMTP_URL 465/tcp$' X-041
+egress_reset
+cp -p "$EG_LIST" "$PREFIX/allowed-hosts.orig"
+echo 'example.org 443 tcp curl an edit on the VM' >>"$EG_LIST"
+broken "an installed allow-list that is not the release's" firewall "allowed-hosts.conf is this deploy folder's egress/allowed-hosts.conf \\(it differs" X-041
+cp -p "$PREFIX/allowed-hosts.orig" "$EG_LIST"
+cp -p "$ETC/alert.env" "$PREFIX/alert.env.orig"
+sed -i -E 's#^ALERT_SMTP_URL=.*#ALERT_SMTP_URL=smtp://smtp.mail.example.net:587#' "$ETC/alert.env"
+broken "an SMTP URL on a port its line does not allow" firewall 'URLs whose port no line of the allow-list allows .*: env:alert.env:ALERT_SMTP_URL \(its line: 465/tcp\)$' X-041
+cp -p "$PREFIX/alert.env.orig" "$ETC/alert.env"
+# A URL without a port connects to its scheme's: smtp:// is 587 for Nodemailer (the backends) and 25 for curl (alert.env).
+cp -p "$ETC/ota-backend.env" "$PREFIX/ota-backend.env.orig"
+sed -i -E "s#^SMTP_URL=.*#SMTP_URL=smtp://vxmail:${SMTP_SECRET}@smtp.mail.example.net#" "$ETC/ota-backend.env"
+sed -i -E 's#^ALERT_SMTP_URL=.*#ALERT_SMTP_URL=smtp://smtp.mail.example.net#' "$ETC/alert.env"
+broken "SMTP URLs without a port, whose scheme's port (587, 25) their lines do not allow" firewall 'URLs whose port no line of the allow-list allows .*: env:ota-backend.env:SMTP_URL \(its line: 465/tcp\), env:alert.env:ALERT_SMTP_URL \(its line: 465/tcp\)$' X-041
+cp -p "$PREFIX/ota-backend.env.orig" "$ETC/ota-backend.env"
+cp -p "$PREFIX/alert.env.orig" "$ETC/alert.env"
+# DNS_RESOLVERS of platform-backend.env: every item needs its udp and tcp lines (the list holds the template's two
+# literally); an empty value stands for the platform's defaults. Its values are compared, never printed.
+cp -p "$ETC/platform-backend.env" "$PREFIX/platform-backend.env.orig"
+sed -i -E 's#^DNS_RESOLVERS=.*#DNS_RESOLVERS=1.1.1.1:53,[2606:4700:4700::1111]:53,9.9.9.9#' "$ETC/platform-backend.env"
+broken "resolvers of DNS_RESOLVERS that the allow-list lacks" firewall 'resolvers of DNS_RESOLVERS in platform-backend.env without a line of the allow-list .*: item 2 \(udp\), item 2 \(tcp\), item 3 \(udp\), item 3 \(tcp\)$' X-041
+if grep -qE '2606:4700|9\.9\.9\.9' "$OUT/broken-$N-firewall.out"; then
+  fail "check-vm.sh names the resolvers of DNS_RESOLVERS by their place, never by their value [X-041]"
+else
+  pass "check-vm.sh names the resolvers of DNS_RESOLVERS by their place, never by their value [X-041]"
+fi
+sed -i -E 's#^DNS_RESOLVERS=.*#DNS_RESOLVERS=#' "$ETC/platform-backend.env"
+if run_check "$OUT/egress-dns-default.out" --only firewall &&
+  grep -qxF 'PASS every resolver of DNS_RESOLVERS in platform-backend.env has its udp and tcp lines (2 resolvers)' "$OUT/egress-dns-default.out"; then
+  pass "an empty DNS_RESOLVERS stands for the platform's two default resolvers, which the list has [X-041]"
+else
+  indent "$OUT/egress-dns-default.out"
+  fail "an empty DNS_RESOLVERS stands for the platform's two default resolvers, which the list has [X-041]"
+fi
+# Amadeus base URLs: the official hosts (with or without a trailing slash) and the stub on loopback pass; another host
+# is named by its variable and file, never by its value.
+sed -i -E 's#^AMADEUS_BASE_URL_TEST=.*#AMADEUS_BASE_URL_TEST=http://127.0.0.1:4900#; s#^AMADEUS_BASE_URL_LIVE=.*#AMADEUS_BASE_URL_LIVE=https://travel.api.amadeus.com/#' "$ETC/platform-backend.env"
+sed -i -E 's#^AMADEUS_BASE_URL_TEST=.*#AMADEUS_BASE_URL_TEST=https://amadeus-proxy.example.net:8443#' "$ETC/ota-backend.env"
+broken "an Amadeus base URL whose host the allow-list lacks" firewall 'Amadeus base URLs whose host and port no line of the allow-list has .*: AMADEUS_BASE_URL_TEST of ota-backend.env$' X-041
+if grep -qE 'amadeus-proxy|8443' "$OUT/broken-$N-firewall.out"; then
+  fail "check-vm.sh names an Amadeus base URL by its variable, never by its value [X-041]"
+else
+  pass "check-vm.sh names an Amadeus base URL by its variable, never by its value [X-041]"
+fi
+cp -p "$PREFIX/ota-backend.env.orig" "$ETC/ota-backend.env"
+cp -p "$PREFIX/platform-backend.env.orig" "$ETC/platform-backend.env"
+cp -p "$ROOT/usr/local/sbin/velexis-egress" "$PREFIX/velexis-egress.orig"
+echo '# changed on the VM' >>"$ROOT/usr/local/sbin/velexis-egress"
+broken "an installed velexis-egress that is not the release's" firewall "velexis-egress is this deploy folder's scripts/egress.sh \\(it differs" X-041
+cp -p "$PREFIX/velexis-egress.orig" "$ROOT/usr/local/sbin/velexis-egress"
+echo '2026-01-01T00:00:00Z nft refused the table' >"$EG_STATE/failing"
+broken "a refresh that keeps failing" firewall 'the refresh of the allow-list has been failing since 2026-01-01T00:00:00Z' X-041
+egress_reset
+echo 'deb http://mirror.example.net/ubuntu noble main' >"$ROOT/etc/apt/sources.list.d/mirror.list"
+broken "an apt source the allow-list leaves out" firewall 'apt sources outside the allow-list \(unattended-upgrades cannot reach them\): mirror.example.net:80$' X-041
+# ... and the step egress refuses it before anything changes: unattended-upgrades would stop finding updates.
+before="$(egress_files; fingerprint "$EG_STATE")"
+loads="$(applies)"
+if provision_egress "$OUT/egress-apt-refused.log"; then rc=0; else rc=$?; fi
+if [ "$rc" = 1 ] && [ "$(egress_files; fingerprint "$EG_STATE")" = "$before" ] && [ "$(applies)" = "$loads" ] &&
+  grep -qE '^ERROR: refused, nothing changed: apt sources without a line in .*: mirror\.example\.net:80\.' "$OUT/egress-apt-refused.log"; then
+  pass "the step egress refuses an apt source the list leaves out, naming it, and changes nothing [X-041]"
+else
+  indent "$OUT/egress-apt-refused.log"
+  fail "the step egress refuses an apt source the list leaves out and changes nothing (exit $rc) [X-041]"
+fi
+rm -f "$ROOT/etc/apt/sources.list.d/mirror.list"
+# A malformed allow-list (in a copy of the deploy folder): refused before anything changes.
+install -d -m 0755 "$PREFIX/deploy-copy"
+cp -r "$DEPLOY/scripts" "$DEPLOY/egress" "$DEPLOY/systemd" "$PREFIX/deploy-copy/"
+printf 'Example.org 443 tcp curl a host in capitals\nexample.org 0 tcp curl port zero\n' >>"$PREFIX/deploy-copy/egress/allowed-hosts.conf"
+before="$(egress_files; fingerprint "$EG_STATE")"
+loads="$(applies)"
+if env -u SUDO_USER PATH="$FAKEBIN:$PATH" CHECKVM_FAKE="$FAKE" CHECKVM_PROVISION=1 VELEXIS_ROOT="$ROOT" \
+  bash "$PREFIX/deploy-copy/scripts/provision-vm.sh" --steps egress >"$OUT/egress-invalid.log" 2>&1; then rc=0; else rc=$?; fi
+if [ "$rc" = 1 ] && [ "$(egress_files; fingerprint "$EG_STATE")" = "$before" ] && [ "$(applies)" = "$loads" ] &&
+  grep -qE '^ERROR: .*is not a valid allow-list, so nothing changed: line [0-9]+: Example.org is not a lower-case host name.*;line [0-9]+: the port 0 is not 1 to 65535' "$OUT/egress-invalid.log"; then
+  pass "the step egress refuses a malformed allow-list, naming each line, and changes nothing [X-041]"
+else
+  indent "$OUT/egress-invalid.log"
+  fail "the step egress refuses a malformed allow-list and changes nothing (exit $rc) [X-041]"
+fi
+rm -rf "$PREFIX/deploy-copy"
+
+# velexis-egress: a lookup that fails keeps the last good addresses, a new answer is added while the earlier ones stay
+# for 24 hours, an address older than that goes, a failed lookup keeps even old ones; each change is one load, logged.
+egress_reset
+cp -p "$FAKE/getent-hosts" "$PREFIX/getent-hosts.orig"
+STRIPE_V4='192.0.2.10 . tcp . 443 comment "api.stripe.com"'
+stripe_elements() { { nft_set allow4; nft_set allow6; } | grep -F 'comment "api.stripe.com"' | paste -sd'|' -; }
+was="$(stripe_elements)"
+loads="$(applies)"
+sed -i '/^api.stripe.com /d' "$FAKE/getent-hosts"
+if egress_refresh "$OUT/egress-lookup-fails.log" && [ "$(stripe_elements)" = "$was" ] && [ "$(applies)" = "$loads" ] &&
+  grep -qF 'WARNING: api.stripe.com: no address for api.stripe.com; its last good addresses stay allowed (3)' "$OUT/egress-lookup-fails.log"; then
+  pass "a lookup that fails keeps the host's last good addresses and loads nothing [X-041]"
+else
+  indent "$OUT/egress-lookup-fails.log"
+  fail "a lookup that fails keeps the host's last good addresses and loads nothing [X-041]"
+fi
+echo 'api.stripe.com 192.0.2.13' >>"$FAKE/getent-hosts"
+if egress_refresh "$OUT/egress-new-address.log" && [ "$(applies)" = "$((loads + 1))" ] &&
+  nft_set allow4 | grep -qxF '192.0.2.13 . tcp . 443 comment "api.stripe.com"' && nft_set allow4 | grep -qxF "$STRIPE_V4" &&
+  grep -qxF 'allowed: 192.0.2.13 . tcp . 443 comment "api.stripe.com"' "$OUT/egress-new-address.log" &&
+  ! grep -q '^no longer allowed' "$OUT/egress-new-address.log"; then
+  pass "a new address of a host is allowed and logged, and those of the last 24 hours stay (one load) [X-041]"
+else
+  indent "$OUT/egress-new-address.log"
+  fail "a new address of a host is allowed and logged, and those of the last 24 hours stay [X-041]"
+fi
+# The addresses that answer no more, made older than 24 hours.
+awk '$1 == "api.stripe.com" && $2 != "192.0.2.13" { $3 = 1 } { print }' "$EG_STATE/addresses" >"$PREFIX/addresses.old"
+cp "$PREFIX/addresses.old" "$EG_STATE/addresses"
+if egress_refresh "$OUT/egress-expired.log" && [ "$(stripe_elements)" = '192.0.2.13 . tcp . 443 comment "api.stripe.com"' ] &&
+  grep -qxF "no longer allowed: $STRIPE_V4" "$OUT/egress-expired.log" &&
+  grep -qxF 'no longer allowed: 2001:db8::10 . tcp . 443 comment "api.stripe.com"' "$OUT/egress-expired.log"; then
+  pass "an address no lookup returned for more than 24 hours goes, logged [X-041]"
+else
+  indent "$OUT/egress-expired.log"
+  fail "an address no lookup returned for more than 24 hours goes, logged [X-041]"
+fi
+awk '$1 == "api.stripe.com" { $3 = 1 } { print }' "$EG_STATE/addresses" >"$PREFIX/addresses.old"
+cp "$PREFIX/addresses.old" "$EG_STATE/addresses"
+sed -i '/^api.stripe.com /d' "$FAKE/getent-hosts"
+loads="$(applies)"
+if egress_refresh "$OUT/egress-old-kept.log" && [ "$(stripe_elements)" = '192.0.2.13 . tcp . 443 comment "api.stripe.com"' ] &&
+  [ "$(applies)" = "$loads" ]; then
+  pass "while a host's lookup fails, its last good addresses stay however old they are [X-041]"
+else
+  indent "$OUT/egress-old-kept.log"
+  fail "while a host's lookup fails, its last good addresses stay however old they are [X-041]"
+fi
+cp -p "$PREFIX/getent-hosts.orig" "$FAKE/getent-hosts"
+
+# The state file is root's own, but its values reach arithmetic: a line that is not "<listed host> <address> <time>" is
+# ignored, and nothing in it runs.
+egress_reset
+loads="$(applies)"
+printf '%s\n' "api.stripe.com 192.0.2.77 seen[\$(touch $PREFIX/egress-state-ran)]" "unlisted.example.net 192.0.2.78 $(date +%s)" \
+  "api.stripe.com not-an-address $(date +%s)" >>"$EG_STATE/addresses"
+if egress_refresh "$OUT/egress-bad-state.log" && [ ! -e "$PREFIX/egress-state-ran" ] && [ "$(applies)" = "$loads" ] &&
+  ! { nft_set allow4; nft_set allow6; } | grep -qE '192\.0\.2\.7[78] |not-an-address' &&
+  ! grep -qE '192\.0\.2\.7[78] |not-an-address' "$EG_STATE/addresses"; then
+  pass "velexis-egress ignores a state line that is not a listed host, an address and a time, and runs nothing in it [X-041]"
+else
+  indent "$OUT/egress-bad-state.log"
+  fail "velexis-egress ignores a state line that is not a listed host, an address and a time, and runs nothing in it (ran: $([ -e "$PREFIX/egress-state-ran" ] && echo yes || echo no)) [X-041]"
+fi
+egress_reset
+
+# A table changed by hand is repaired on the next run; an emergency opening (runbook §4) is never touched.
+egress_reset
+echo accept >"$FAKE/nft/policy"
+sed -i '1i tcp dport 25 accept' "$FAKE/nft/rules"
+echo '203.0.113.99 . tcp . 25 comment "smtp.example.org"' >>"$FAKE/nft/set.allow4"
+echo '203.0.113.10 . tcp . 443 timeout 4h expires 3h59m comment "INC-0001"' >"$FAKE/nft/set.emergency4"
+if egress_refresh "$OUT/egress-repair.log" && [ "$(cat "$FAKE/nft/policy")" = drop ] &&
+  cmp -s "$FAKE/nft/rules" "$FAKE/nft.healthy/rules" && [ "$(nft_set allow4)" = "$(sort "$FAKE/nft.healthy/set.allow4")" ] &&
+  [ "$(cat "$FAKE/nft/set.emergency4")" = '203.0.113.10 . tcp . 443 timeout 4h expires 3h59m comment "INC-0001"' ] &&
+  grep -qxF 'repaired: the policy of the chain output was not drop; the rules of the chain output differed' "$OUT/egress-repair.log" &&
+  grep -qxF 'no longer allowed: 203.0.113.99 . tcp . 25 comment "smtp.example.org"' "$OUT/egress-repair.log"; then
+  pass "a refresh repairs the policy, the rules and the allow sets changed by hand, logs it, and keeps the emergency opening [X-041]"
+else
+  indent "$OUT/egress-repair.log"
+  fail "a refresh repairs the policy, the rules and the allow sets changed by hand, and keeps the emergency opening [X-041]"
+fi
+
+# A failing run leaves the table as it was; from the unit (--alert-once) only the first of a run of failures exits 1
+# (one mail through OnFailure=), a manual run always does, and the next good run says it recovered.
+egress_reset
+echo accept >"$FAKE/nft/policy"
+touch "$FAKE/nft-fails"
+r1=0 r2=0 r3=0 r4=0
+egress_refresh "$OUT/egress-fail-1.log" --alert-once || r1=$?
+egress_refresh "$OUT/egress-fail-2.log" --alert-once || r2=$?
+egress_refresh "$OUT/egress-fail-3.log" || r3=$?
+was="$(cat "$FAKE/nft/policy")"
+rm -f "$FAKE/nft-fails"
+egress_refresh "$OUT/egress-recovered.log" --alert-once || r4=$?
+if [ "$r1/$r2/$r3/$r4" = "1/0/1/0" ] && [ "$was" = accept ] && grep -q '^FAILED: nft refused the table, which stays as it was' "$OUT/egress-fail-1.log" &&
+  grep -q '^still failing since ' "$OUT/egress-fail-2.log" && grep -q '^recovered (failing since ' "$OUT/egress-recovered.log" &&
+  [ ! -e "$EG_STATE/failing" ] && [ "$(cat "$FAKE/nft/policy")" = drop ]; then
+  pass "a failing refresh leaves the table as it was, exits 1 once from the unit (one alert) and on every manual run, and recovers [X-041]"
+else
+  for f in "$OUT"/egress-fail-?.log "$OUT/egress-recovered.log"; do indent "$f"; done
+  fail "a failing refresh leaves the table as it was, exits 1 once from the unit, and recovers (exits $r1/$r2/$r3/$r4) [X-041]"
+fi
+egress_reset
+
+# Step 1 of X-041 from the files: every host the step packages fetches from and the official Amadeus hosts of both
+# backends have a line; no script or unit of the VM names GitHub (the Deploy workflow connects in over SSH).
+missing=""
+has_line() { awk -v h="$1" -v p="$2" '$1 == h && $2 == p && $3 == "tcp" { f = 1 } END { exit !f }' "$DEPLOY/egress/allowed-hosts.conf"; }
+while read -r h; do
+  has_line "$h" 443 || missing="$missing $h"
+done < <(grep -vE '^[[:space:]]*#' "$PROVISION" | grep -oE 'https://[a-z0-9.-]+' | sed 's#^https://##' | sort -u)
+for f in "$DEPLOY/../platform/backend/src/config.ts" "$DEPLOY/../ota/backend/src/amadeus/connection-resolver.ts"; do
+  [ -f "$f" ] || continue
+  while read -r h; do
+    has_line "$h" 443 || missing="$missing $h"
+  done < <(grep -oE 'https://[a-z0-9.-]+\.amadeus\.com' "$f" | sed 's#^https://##' | sort -u)
+done
+github="$(grep -lE 'github\.com|githubusercontent\.com' "$DEPLOY"/scripts/*.sh "$DEPLOY"/systemd/*.service "$DEPLOY"/systemd/*.timer \
+  "$DEPLOY/caddy/Caddyfile" 2>/dev/null | grep -vE '/(pack-release|dev-setup)\.sh$' || true)"
+if [ -z "$missing" ] && [ -z "$github" ] && bash "$DEPLOY/scripts/egress.sh" validate "$DEPLOY/egress/allowed-hosts.conf"; then
+  pass "allowed-hosts.conf is valid, lists every host of the step packages and the official Amadeus hosts, and no VM-side script or unit names GitHub [X-041]"
+else
+  fail "allowed-hosts.conf lists every host of the step packages and Amadeus (missing:${missing:- none}), and no VM-side file names GitHub (${github:-none}) [X-041]"
+fi
+# harden runs the step egress too (step 2 of X-041), but never under VELEXIS_ROOT: read from provision-vm.sh, with the
+# step node before harden, since corepack fetches pnpm from the npm registry that the list leaves out.
+if awk '/^step_harden\(\) \{$/, /^\}$/ { if ($0 == "  step_egress") found = 1 } END { exit !found }' "$PROVISION" &&
+  grep -qE '^ALL_STEPS="packages node harden ' "$PROVISION"; then
+  pass "harden runs the step egress, and the step node runs before it (read from provision-vm.sh) [X-041]"
+else
+  fail "harden runs the step egress, and the step node runs before it (read from provision-vm.sh) [X-041]"
+fi
+
+step "the outbound allow-list with a real nft in a private network namespace (nft list, nft -f)"
+REAL_NFT="${CHECKVM_NFT:-/usr/sbin/nft}"
+if [ -x "$REAL_NFT" ] && command -v unshare >/dev/null && unshare -n "$REAL_NFT" list ruleset >"$OUT/nft-probe.out" 2>&1; then
+  install -d -m 0755 "$PREFIX/realnft"
+  ln -sf "$REAL_NFT" "$PREFIX/realnft/nft"
+  in_netns() { # script: runs in a new network namespace with the real nft first on PATH, the other fakes behind it
+    unshare -n env PATH="$PREFIX/realnft:$FAKEBIN:$PATH" CHECKVM_FAKE="$FAKE" CHECKVM_PROVISION=1 VELEXIS_ROOT="$ROOT" \
+      CHECKVM_SECRETS="$ETC/.provision-secrets" CHECKVM_CADDYFILE="$ROOT/etc/caddy/Caddyfile" DEPLOY_USER="$DEPLOY_TEST_USER" \
+      EGRESS_BIN="$ROOT/usr/local/sbin/velexis-egress" CHECK="$CHECK" OUT="$OUT" bash -c "$1"
+  }
+  egress_reset
+  # Loaded twice, then checked: the second run finds the table as nft lists it and changes nothing.
+  # shellcheck disable=SC2016 # expanded in the namespace's shell
+  in_netns 'bash "$EGRESS_BIN" refresh >"$OUT/real-nft-1.log" 2>&1; bash "$EGRESS_BIN" refresh >"$OUT/real-nft-2.log" 2>&1
+    nft list table inet velexis_egress >"$OUT/real-nft-table.out" 2>&1; bash "$CHECK" --only firewall >"$OUT/real-nft-check.out" 2>&1
+    echo "check exit $?" >>"$OUT/real-nft-check.out"' || true
+  if grep -q '^created the table inet velexis_egress' "$OUT/real-nft-1.log" && grep -q '^unchanged: ' "$OUT/real-nft-2.log" &&
+    grep -qx 'check exit 0' "$OUT/real-nft-check.out" && ! grep -q '^FAIL' "$OUT/real-nft-check.out" &&
+    grep -q '^PASS refused outbound connections are logged' "$OUT/real-nft-check.out" &&
+    grep -qF 'log prefix "VELEXIS-EGRESS-DENY " flags skuid' "$OUT/real-nft-table.out"; then
+    pass "real nft: velexis-egress loads the table, a second run changes nothing, and check-vm.sh --only firewall passes on what nft lists [X-041 AC1]"
+  else
+    for f in real-nft-1.log real-nft-2.log real-nft-check.out; do indent "$OUT/$f"; done
+    fail "real nft: velexis-egress loads the table, a second run changes nothing, and check-vm.sh --only firewall passes [X-041 AC1]"
+  fi
+  # Changed by hand: an extra destination, an extra rule, the policy accept and an emergency opening are each a FAIL;
+  # the next refresh repairs all but the opening, which stays until its timeout.
+  # shellcheck disable=SC2016 # expanded in the namespace's shell
+  in_netns 'bash "$EGRESS_BIN" refresh >/dev/null 2>&1
+    nft add element inet velexis_egress allow4 "{ 203.0.113.99 . tcp . 25 comment \"smtp.example.org\" }"
+    nft add element inet velexis_egress emergency4 "{ 203.0.113.10 . tcp . 443 timeout 1h comment \"INC-0001 vendor X, opened by vxadmin\" }"
+    nft insert rule inet velexis_egress output tcp dport 25 accept
+    nft add chain inet velexis_egress output "{ policy accept; }"
+    bash "$CHECK" --only firewall >"$OUT/real-nft-broken.out" 2>&1
+    bash "$EGRESS_BIN" refresh >"$OUT/real-nft-repair.log" 2>&1
+    bash "$CHECK" --only firewall >"$OUT/real-nft-repaired.out" 2>&1' || true
+  if grep -q '^FAIL outgoing connections are denied by default (found: chain output of inet velexis_egress with policy accept)' "$OUT/real-nft-broken.out" &&
+    grep -q '^FAIL outbound destinations outside /etc/velexis/egress/allowed-hosts.conf: 203.0.113.99 tcp/25 (comment "smtp.example.org")$' "$OUT/real-nft-broken.out" &&
+    grep -q '^FAIL the chain output of inet velexis_egress allows more than the allow-list: \[tcp dport 25 accept\]$' "$OUT/real-nft-broken.out" &&
+    grep -q '^FAIL an emergency opening is in place .*203.0.113.10 . tcp . 443 timeout 1h expires .* comment "INC-0001 vendor X, opened by vxadmin"$' "$OUT/real-nft-broken.out" &&
+    grep -q '^repaired: the policy of the chain output was not drop; the rules of the chain output differed$' "$OUT/real-nft-repair.log" &&
+    [ "$(grep -c '^FAIL' "$OUT/real-nft-repaired.out")" = 1 ] && grep -q '^FAIL an emergency opening is in place' "$OUT/real-nft-repaired.out"; then
+    pass "real nft: check-vm.sh names an extra destination, an extra rule, policy accept and an emergency opening; a refresh repairs all but the opening [X-041 AC1]"
+  else
+    for f in real-nft-broken.out real-nft-repair.log real-nft-repaired.out; do indent "$OUT/$f"; done
+    fail "real nft: check-vm.sh names each change made by hand, and a refresh repairs all but the emergency opening [X-041 AC1]"
+  fi
+  egress_reset
+else
+  echo "NOTE the real-nft checks did not run: no nft that works in a private network namespace at $REAL_NFT ($(head -n 1 "$OUT/nft-probe.out" 2>/dev/null || echo 'not installed')); install nftables or set CHECKVM_NFT=<nft command>"
+fi
+
 # ---- 7. no secret in any output ------------------------------------------------------------------------------
 step "no generated secret, key or env value in any output, command line or log"
 PATTERNS="$PREFIX/secret-patterns" # root-only, removed with the prefix
@@ -1422,6 +1988,8 @@ PATTERNS="$PREFIX/secret-patterns" # root-only, removed with the prefix
   # The admin's TOTP secret of step 6 and the test host key.
   printf '%s\n' "$TOTP_SECRET"
   grep -v -- '-----' "$ROOT/etc/ssh/ssh_host_ecdsa_key"
+  # The SMTP password and the bucket key that velexis-egress read the hosts beside (X-041).
+  cat "$EGRESS_SECRETS"
 ) | grep -E '.{8,}' | sort -u >"$PATTERNS"
 leaks="$(grep -lF -f "$PATTERNS" "$OUT"/* "$FAKE/calls.log" "$ROOT/var/log/velexis/provision.log" 2>/dev/null || true)"
 # Positive control: the same search finds a value that is there.

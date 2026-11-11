@@ -1,0 +1,13 @@
+# velexis-egress-refresh.timer — refreshes the outbound allow-list every 2 minutes (task X-041): the addresses of the
+# hosts of /etc/velexis/egress/allowed-hosts.conf, and a repair of the table inet velexis_egress if it was changed.
+# velexis-egress-refresh.service also runs at boot on its own. Enabled by provision-vm.sh --steps egress.
+[Unit]
+Description=Velexis outbound allow-list: refresh its addresses every 2 minutes
+
+[Timer]
+OnCalendar=*:0/2
+AccuracySec=10s
+Unit=velexis-egress-refresh.service
+
+[Install]
+WantedBy=timers.target

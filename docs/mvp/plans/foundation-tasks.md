@@ -1106,7 +1106,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 - **Verify:** `pnpm --filter @velexis/crypto test && shellcheck -S style deploy/scripts/provision-vm.sh`
 
 ### X-041 · Allow only the outbound connections the VM needs and log the refused ones
-- **Status:** todo
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the VM check, human step: on the throwaway VM every connection of step 1 works with the allow-list on and a host outside it is refused and logged once per rate window, then check-vm.sh on the production VM (AC2); the refusals' count in the daily review comes with X-038, which is todo (X-038's note of 2026-11-10))
 - **Component:** foundation
 - **Milestone:** M6
 - **Depends on:** X-020
