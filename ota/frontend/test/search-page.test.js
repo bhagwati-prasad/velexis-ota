@@ -727,6 +727,22 @@ describe("results page: search and address", () => {
     expect(shiftDate("2026-03-01", -1)).toBe("2026-02-28");
   });
 
+  it("[OFE-030] a 'Change search' panel opened before the page started has its form enhanced at once", async () => {
+    // Opened while storefront.get was on its way: its `toggle` event came before the page's listener.
+    /** @type {HTMLDetailsElement} */ ($("details[data-search-panel]")).open = true;
+    const { view } = open(QUERY);
+    const form = /** @type {HTMLFormElement} */ ($("form[data-search-form]"));
+    expect(form.dataset.enhanced).toBe("true");
+    expect(/** @type {HTMLInputElement} */ (form.querySelector("#search-adults")).value).toBe("2");
+    await view.done;
+  });
+
+  it("[OFE-030] a closed 'Change search' panel keeps its form unenhanced until it is opened", async () => {
+    const { view } = open(QUERY);
+    await view.done;
+    expect(/** @type {HTMLFormElement} */ ($("form[data-search-form]")).dataset.enhanced).toBeUndefined();
+  });
+
   it("[OFE-005] a page opened without a search shows the form instead of searching", async () => {
     const { view, client } = open("from=PAR");
     await view.done;

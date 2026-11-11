@@ -18,6 +18,10 @@
 // - Defaults: 1 adult, economy, return trip (`SEARCH_DEFAULTS`). `StorefrontConfig` publishes no search defaults, so
 //   these are the storefront's own; the OTA's default cabin (`storefront_settings.search_defaults`) applies on the
 //   server only to searches sent without a cabin, which this form never sends.
+// - The page mounts the form once storefront.get has answered, after the first paint. Its enhanced shape is there from
+//   the first paint in a browser with JavaScript on (`@media (scripting: enabled)` in main.css, until the form is
+//   marked `data-enhanced`), so mounting it moves nothing below it (OFE-030); without JavaScript the plain form shows.
+//   The three trip types fit one row on a 360 px phone (`gap-x-4` in partials/search-form.html).
 
 import { clone, fill } from "../lib/dom.js";
 import { clearFieldErrors, showFieldErrors } from "../lib/forms.js";
@@ -240,11 +244,30 @@ function labelInput(doc, input, label, prefix) {
 }
 
 /**
- * Mounts the search form (see the top of this file). Returns `{ destroy }`.
+ * Mounts the search form (see the top of this file) and marks it `data-enhanced="true"`: until then a browser with
+ * JavaScript on shows the form in its enhanced shape from the first paint (`main.css`, OFE-030: the passenger toggle
+ * instead of the passenger fieldset, and "Multi-city"), so that enhancing it moves nothing. Should enhancing fail, the
+ * form is marked `data-enhanced="failed"` and shows the plain form's passenger fieldset again. Returns `{ destroy }`.
  * @param {HTMLFormElement} form the `[data-search-form]` form
  * @param {SearchFormProps} props
  */
-export function mount(
+export function mount(form, props) {
+  try {
+    const view = enhance(form, props);
+    form.dataset.enhanced = "true";
+    return view;
+  } catch (error) {
+    form.dataset.enhanced = "failed";
+    throw error;
+  }
+}
+
+/**
+ * Enhances the form (see `mount`). Returns `{ destroy }`.
+ * @param {HTMLFormElement} form
+ * @param {SearchFormProps} props
+ */
+function enhance(
   form,
   {
     client,

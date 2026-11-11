@@ -496,6 +496,10 @@ export function start(context, env = {}) {
     }
   };
   el.panel?.addEventListener("toggle", onToggle);
+  // A panel the traveller opened before this module ran (storefront.get still on its way) fired its `toggle` too early
+  // for the listener: enhance its form now. Until then a browser with JavaScript on shows the form's enhanced shape with
+  // the passengers folded into a toggle that does nothing yet (main.css, OFE-030), so it must not stay unenhanced.
+  onToggle();
 
   const mirror = () =>
     replaceQuery({ ...filtersToQuery(filters), sort: sortParam(sort) }, { location, history });

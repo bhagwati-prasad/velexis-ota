@@ -748,6 +748,56 @@ describe("search form: enhancement keeps what the traveller chose", () => {
   });
 });
 
+describe("search form: its enhanced shape from the first paint (OFE-030)", () => {
+  /**
+   * The selectors of main.css's `@media (scripting: enabled)` rules: the form's shape before its module runs in a
+   * browser with JavaScript on.
+   */
+  const scriptedSelectors = () => {
+    const css = readFileSync(join(STOREFRONT_ROOT, "src", "styles", "main.css"), "utf8");
+    const block = /@media \(scripting: enabled\)\s*\{([\s\S]*?)\n {2}\}/.exec(css)?.[1] ?? "";
+    return Array.from(
+      block.matchAll(/^\s*(form\[data-search-form\][^{]*?)\s*\{/gm),
+      (match) => match[1] ?? "",
+    );
+  };
+
+  it("[OFE-030 AC1] before the module runs the rules fold the passengers and show the toggle and Multi-city; mounting marks the form enhanced", () => {
+    const selectors = scriptedSelectors();
+    expect(selectors).toEqual([
+      "form[data-search-form]:not([data-enhanced]) [data-passenger-panel]",
+      "form[data-search-form]:not([data-enhanced]) [data-passenger-toggle][hidden]",
+      "form[data-search-form]:not([data-enhanced]) [data-trip-multi][hidden]",
+    ]);
+    // The plain form: each rule finds its element (the fieldset to fold, the hidden toggle and Multi-city to show).
+    for (const selector of selectors) {
+      expect(document.querySelectorAll(selector), selector).toHaveLength(1);
+    }
+
+    mountForm();
+
+    // Enhanced: the rules no longer apply; the form's own state shows the same shape (toggle, Multi-city, folded).
+    expect(form().dataset.enhanced).toBe("true");
+    for (const selector of selectors) {
+      expect(document.querySelectorAll(selector), selector).toHaveLength(0);
+    }
+    expect(field("[data-passenger-toggle]").hidden).toBe(false);
+    expect(field("[data-passenger-panel]").hidden).toBe(true);
+    expect(form().querySelector("[data-trip-multi]")?.hasAttribute("hidden")).toBe(false);
+  });
+
+  it("[OFE-030] a mount that fails marks the form failed, so its passenger fieldset shows again, and gives the error to the page", () => {
+    form().querySelector("[data-passenger-picker]")?.remove();
+
+    expect(() => mountForm()).toThrow();
+
+    expect(form().dataset.enhanced).toBe("failed");
+    for (const selector of scriptedSelectors()) {
+      expect(document.querySelectorAll(selector), selector).toHaveLength(0);
+    }
+  });
+});
+
 describe("home page module", () => {
   it("[OFE-004] boots, then enhances the search form with the page's client and address", async () => {
     const client = fakeClient();

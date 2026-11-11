@@ -4,18 +4,23 @@
 // (OFE-027, lead decision 11n of 2026-11-06).
 //
 // Usage:  pnpm --filter @velexis/ota-frontend lighthouse [--base-url <url>] [--page home|results]... [--runs <n>]
-//                                                        [--days-ahead <n>] [--chrome <path>] [--json <file>]
+//                                                        [--width 412|360]... [--days-ahead <n>] [--chrome <path>]
+//                                                        [--json <file>]
 //
 //   --base-url    the storefront to measure (default http://127.0.0.1:4173: the end-to-end harness's preview of the
 //                 demo OTA, the production build proxied to the built OTA API on the Amadeus stub)
 //   --page        home or results, repeatable (default both)
 //   --runs        runs per page (default 3), each in a new browser with an empty profile
+//   --width       the phone's width in CSS pixels, repeatable (default 412): 412 is Lighthouse's own phone (Moto G
+//                 Power, 412 x 823), 360 a narrower phone (360 x 800, OFE-030); the same device pixel ratio, user agent
+//                 and throttling for both. Each page is measured at each width.
 //   --days-ahead  the results page's departure date, days after today in UTC (default 69)
 //   --chrome      the Chromium to run (default the CHROME_PATH variable, else /opt/pw-browsers/chromium)
 //   --json        also write the figures as JSON to this file
 //
 // Lighthouse and puppeteer-core are this package's exact devDependencies; Lighthouse's user-flow API with its default
-// configuration (mobile: Moto G Power emulation, simulated slow 4G and 4x CPU slowdown). Each run is a navigation
+// configuration (mobile: Moto G Power emulation, simulated slow 4G and 4x CPU slowdown; at 360 px only the screen's
+// width and height differ, `screenEmulation` of the flow's flags). Each run is a navigation
 // (performance score, FCP, LCP, CLS, TBT, bytes, fonts and the layout shifts with the element each moved most) and
 // then a timespan with what a traveller does first, for INP:
 //   home     "Madrid" typed into From, the first suggestion chosen with ArrowDown and Enter, One way, then Return;
@@ -36,16 +41,28 @@ export const DEFAULT_BASE_URL = "http://127.0.0.1:4173";
 export const DEFAULT_CHROME = "/opt/pw-browsers/chromium";
 export const PAGES = Object.freeze(/** @type {const} */ (["home", "results"]));
 const PAGE_TITLES = Object.freeze({ home: "Home", results: "Results" });
+/** Lighthouse's own phone width (Moto G Power), the default. */
+export const DEFAULT_WIDTH = 412;
+/**
+ * The phone screens the script emulates, by width in CSS pixels: Lighthouse's default mobile screen (412 x 823 at a
+ * device pixel ratio of 1.75) and a 360 x 800 phone with the same ratio (OFE-030). The throttling is the same for both.
+ */
+export const PHONE_SCREENS = Object.freeze({
+  412: Object.freeze({ mobile: true, width: 412, height: 823, deviceScaleFactor: 1.75, disabled: false }),
+  360: Object.freeze({ mobile: true, width: 360, height: 800, deviceScaleFactor: 1.75, disabled: false }),
+});
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 /** How long a search, a filter change or a suggestion may take on the stack (the stub answers in milliseconds). */
 const WAIT_MS = 60_000;
 
 /** @typedef {(typeof PAGES)[number]} PageName */
+/** @typedef {keyof typeof PHONE_SCREENS} PhoneWidth */
 /**
  * @typedef {object} Options
  * @property {string} baseUrl
  * @property {PageName[]} pages
  * @property {number} runs
+ * @property {PhoneWidth[]} widths
  * @property {number} daysAhead
  * @property {string} chrome
  * @property {string | null} json
@@ -59,6 +76,7 @@ const WAIT_MS = 60_000;
  * @typedef {object} RunFigures
  * @property {PageName} page
  * @property {number} run
+ * @property {PhoneWidth} [width] the phone's width (DEFAULT_WIDTH when absent)
  * @property {number | null} score
  * @property {number | null} fcp
  * @property {number | null} lcp
@@ -84,6 +102,7 @@ export function parseOptions(argv, env) {
       "base-url": { type: "string" },
       page: { type: "string", multiple: true },
       runs: { type: "string" },
+      width: { type: "string", multiple: true },
       "days-ahead": { type: "string" },
       chrome: { type: "string" },
       json: { type: "string" },
@@ -101,6 +120,12 @@ export function parseOptions(argv, env) {
       throw new Error(`--page must be one of ${PAGES.join(", ")}, not ${page}`);
     }
   }
+  const widths = (values.width ?? [String(DEFAULT_WIDTH)]).map((width) => {
+    if (!Object.hasOwn(PHONE_SCREENS, width)) {
+      throw new Error(`--width must be one of ${Object.keys(PHONE_SCREENS).join(", ")}, not ${width}`);
+    }
+    return /** @type {PhoneWidth} */ (Number(width));
+  });
   /**
    * @param {string} name
    * @param {string | undefined} value
@@ -122,6 +147,7 @@ export function parseOptions(argv, env) {
     baseUrl: baseUrl.origin,
     pages: [...new Set(/** @type {PageName[]} */ (pages))],
     runs: whole("runs", values.runs, 3, 1, 20),
+    widths: [...new Set(widths)],
     daysAhead: whole("days-ahead", values["days-ahead"], 69, 1, 330),
     chrome: values.chrome ?? (env["CHROME_PATH"] || DEFAULT_CHROME),
     json: values.json ?? null,
@@ -226,37 +252,55 @@ const score = (value) => (value === null ? "—" : value.toFixed(2));
 /** @param {number | null} bytes */
 const kilobytes = (bytes) => (bytes === null ? "—" : `${(bytes / 1024).toFixed(1)} KB`);
 
+/** @param {RunFigures} figures */
+const widthOf = (figures) => figures.width ?? DEFAULT_WIDTH;
+
 /**
- * The report: the table of storefront-accessibility.md §3 (with a median row per page), then bytes, fonts and the
- * layout shifts of every run.
+ * How the report names the runs of a page at a width: "Home" when every run is at Lighthouse's default width, else
+ * with the width ("Home, 360 px", "Home, 412 px").
+ * @param {RunFigures[]} runs
+ */
+function runTitles(runs) {
+  const withWidths = runs.some((figures) => widthOf(figures) !== DEFAULT_WIDTH);
+  return (/** @type {PageName} */ page, /** @type {number} */ width) =>
+    withWidths ? `${PAGE_TITLES[page]}, ${width} px` : PAGE_TITLES[page];
+}
+
+/**
+ * The report: the table of storefront-accessibility.md §3 (with a median row per page and width), then bytes, fonts
+ * and the layout shifts of every run.
  * @param {RunFigures[]} runs
  * @param {{ lighthouse: string, browser: string, baseUrl: string, date: string }} meta
  */
 export function formatReport(runs, meta) {
+  const title = runTitles(runs);
   const lines = [
     `Lighthouse ${meta.lighthouse} (user flow, default mobile configuration), ${meta.browser}, ${meta.baseUrl}, ${meta.date}`,
     "",
     "| Page | Run | Performance score | FCP | LCP (≤ 2.5 s) | CLS (≤ 0.1) | TBT | INP (≤ 200 ms) |",
     "|---|---|---|---|---|---|---|---|",
   ];
+  const widths = [...new Set(runs.map(widthOf))];
   for (const page of PAGES) {
-    const own = runs.filter((figures) => figures.page === page);
-    if (own.length === 0) {
-      continue;
-    }
-    for (const figures of own) {
+    for (const width of widths) {
+      const own = runs.filter((figures) => figures.page === page && widthOf(figures) === width);
+      if (own.length === 0) {
+        continue;
+      }
+      for (const figures of own) {
+        lines.push(
+          `| ${title(page, width)} | ${figures.run} | ${score(figures.score)} | ${seconds(figures.fcp)} | ` +
+            `${seconds(figures.lcp)} | ${shift(figures.cls)} | ${millis(figures.tbt)} | ${millis(figures.inp)} |`,
+        );
+      }
+      const middle = (/** @type {keyof RunFigures} */ key) =>
+        median(own.map((figures) => /** @type {number | null} */ (figures[key])));
       lines.push(
-        `| ${PAGE_TITLES[page]} | ${figures.run} | ${score(figures.score)} | ${seconds(figures.fcp)} | ` +
-          `${seconds(figures.lcp)} | ${shift(figures.cls)} | ${millis(figures.tbt)} | ${millis(figures.inp)} |`,
+        `| **${title(page, width)}, median** | | ${score(middle("score"))} | ${seconds(middle("fcp"))} | ` +
+          `**${seconds(middle("lcp"))}** | **${shift(middle("cls"))}** | ${millis(middle("tbt"))} | ` +
+          `**${millis(middle("inp"))}** |`,
       );
     }
-    const middle = (/** @type {keyof RunFigures} */ key) =>
-      median(own.map((figures) => /** @type {number | null} */ (figures[key])));
-    lines.push(
-      `| **${PAGE_TITLES[page]}, median** | | ${score(middle("score"))} | ${seconds(middle("fcp"))} | ` +
-        `**${seconds(middle("lcp"))}** | **${shift(middle("cls"))}** | ${millis(middle("tbt"))} | ` +
-        `**${millis(middle("inp"))}** |`,
-    );
   }
   lines.push("");
   for (const figures of runs) {
@@ -265,7 +309,7 @@ export function formatReport(runs, meta) {
         ? "no layout shift"
         : figures.shifts.map((entry) => `${shift(entry.score)} ${entry.element}`).join("; ");
     lines.push(
-      `- ${PAGE_TITLES[figures.page]} ${figures.run}: ${kilobytes(figures.bytes)} transferred, fonts ` +
+      `- ${title(figures.page, widthOf(figures))} ${figures.run}: ${kilobytes(figures.bytes)} transferred, fonts ` +
         `${kilobytes(figures.fontBytes)}; layout shifts: ${shifts}`,
     );
   }
@@ -325,13 +369,14 @@ const INTERACTIONS = Object.freeze({
 });
 
 /**
- * One run of one page in a new browser.
+ * One run of one page at one phone width in a new browser.
  * @param {Options} options
  * @param {PageName} name
+ * @param {PhoneWidth} width
  * @param {number} run
  * @returns {Promise<{ figures: RunFigures, browser: string, lighthouse: string }>}
  */
-async function measure(options, name, run) {
+async function measure(options, name, width, run) {
   const [{ startFlow }, puppeteer] = await Promise.all([import("lighthouse"), import("puppeteer-core")]);
   const browser = await puppeteer.default.launch({
     executablePath: options.chrome,
@@ -341,15 +386,24 @@ async function measure(options, name, run) {
   });
   try {
     const page = await browser.newPage();
-    const flow = await startFlow(page, { name: `${PAGE_TITLES[name]} ${run}` });
+    const title = `${PAGE_TITLES[name]}, ${width} px`;
+    // The flow's flags apply to each of its steps: the navigation and the timespan both run on this phone's screen.
+    const flow = await startFlow(page, {
+      name: `${title} ${run}`,
+      flags: { screenEmulation: { ...PHONE_SCREENS[width] } },
+    });
     const path = name === "home" ? "/" : resultsPath(new Date(), options.daysAhead);
-    await flow.navigate(new URL(path, options.baseUrl).href, { name: `${PAGE_TITLES[name]}: navigation` });
-    await flow.startTimespan({ name: `${PAGE_TITLES[name]}: first interactions` });
+    await flow.navigate(new URL(path, options.baseUrl).href, { name: `${title}: navigation` });
+    await flow.startTimespan({ name: `${title}: first interactions` });
     await INTERACTIONS[name](page);
     await flow.endTimespan();
     const result = await flow.createFlowResult();
     const lighthouse = String(result.steps[0]?.lhr?.lighthouseVersion ?? "unknown");
-    return { figures: figuresOf(result, name, run), browser: await browser.version(), lighthouse };
+    return {
+      figures: { ...figuresOf(result, name, run), width },
+      browser: await browser.version(),
+      lighthouse,
+    };
   } finally {
     await browser.close();
   }
@@ -369,11 +423,13 @@ async function main(options) {
   let browser = "Chromium";
   let lighthouse = "unknown";
   for (const name of options.pages) {
-    for (let run = 1; run <= options.runs; run += 1) {
-      const measured = await measure(options, name, run);
-      runs.push(measured.figures);
-      ({ browser, lighthouse } = measured);
-      console.error(`lighthouse: ${name} ${run}/${options.runs} done`);
+    for (const width of options.widths) {
+      for (let run = 1; run <= options.runs; run += 1) {
+        const measured = await measure(options, name, width, run);
+        runs.push(measured.figures);
+        ({ browser, lighthouse } = measured);
+        console.error(`lighthouse: ${name} at ${width} px ${run}/${options.runs} done`);
+      }
     }
   }
   const meta = { lighthouse, browser, baseUrl: options.baseUrl, date: new Date().toISOString() };
@@ -381,8 +437,9 @@ async function main(options) {
   if (options.json) {
     writeFileSync(resolve(options.json), `${JSON.stringify({ meta, targets: TARGETS, runs }, null, 2)}\n`);
   }
+  const title = runTitles(runs);
   const missed = runs.flatMap((figures) =>
-    missedTargets(figures).map((text) => `${PAGE_TITLES[figures.page]} ${figures.run}: ${text}`),
+    missedTargets(figures).map((text) => `${title(figures.page, widthOf(figures))} ${figures.run}: ${text}`),
   );
   for (const text of missed) {
     console.error(`lighthouse: target missed: ${text}`);

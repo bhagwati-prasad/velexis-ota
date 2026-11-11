@@ -85,4 +85,38 @@
   h3 {
     font-family: var(--font-heading);
   }
+
+  /*
+   * Every page's main content is at least one window high, so the footer starts below the window when the page
+   * appears: filling the footer from storefront.get (the OTA's legal links, content pages and support contacts) then
+   * moves nothing painted. On a page shorter than the window the footer used to sit at the bottom of the window and
+   * grow upwards as it filled (OFE-030; the results page has had this since OFE-027).
+   */
+  body > main {
+    min-height: 100svh;
+  }
+
+  /*
+   * The search form (partials/search-form.html) in its enhanced shape from the first paint (OFE-030). The page mounts
+   * components/search-form.js once storefront.get has answered, after the first paint; mounting it folds the passenger
+   * fieldset into its toggle button and shows "Multi-city", which moved the text under the form (0.04 of CLS on a
+   * 412 px phone, 0.12 on a 360 px one). A browser with JavaScript on therefore shows the toggle and "Multi-city" (still
+   * disabled) and keeps the fieldset folded until the form is marked `data-enhanced`; "failed" (enhancing threw) gives
+   * the plain form back. Without JavaScript (`scripting: none`) the plain form shows, as before. `!important` and the
+   * attribute selectors are needed to win over the `[hidden]` rule of Tailwind's preflight, which is `!important` in
+   * this same layer.
+   */
+  @media (scripting: enabled) {
+    form[data-search-form]:not([data-enhanced]) [data-passenger-panel] {
+      display: none;
+    }
+
+    form[data-search-form]:not([data-enhanced]) [data-passenger-toggle][hidden] {
+      display: inline-block !important;
+    }
+
+    form[data-search-form]:not([data-enhanced]) [data-trip-multi][hidden] {
+      display: inline-flex !important;
+    }
+  }
 }

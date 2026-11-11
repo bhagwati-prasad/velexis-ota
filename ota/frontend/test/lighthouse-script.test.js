@@ -7,6 +7,8 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_BASE_URL,
   DEFAULT_CHROME,
+  DEFAULT_WIDTH,
+  PHONE_SCREENS,
   TARGETS,
   figuresOf,
   formatReport,
@@ -70,6 +72,7 @@ describe("the Lighthouse script", () => {
       baseUrl: DEFAULT_BASE_URL,
       pages: ["home", "results"],
       runs: 3,
+      widths: [412],
       daysAhead: 69,
       chrome: DEFAULT_CHROME,
       json: null,
@@ -99,6 +102,49 @@ describe("the Lighthouse script", () => {
     expect(() => parseOptions(["--runs", "2.5"], {})).toThrow(/--runs/);
     expect(() => parseOptions(["--base-url", "file:///etc/passwd"], {})).toThrow(/http/);
     expect(() => parseOptions(["--unknown"], {})).toThrow();
+  });
+
+  it("[OFE-030 AC1] measures at Lighthouse's 412 px phone by default and at a 360 px phone on request", () => {
+    expect(DEFAULT_WIDTH).toBe(412);
+    // Lighthouse's own mobile screen (Moto G Power) and a narrower phone with the same pixel ratio.
+    expect(PHONE_SCREENS).toEqual({
+      412: { mobile: true, width: 412, height: 823, deviceScaleFactor: 1.75, disabled: false },
+      360: { mobile: true, width: 360, height: 800, deviceScaleFactor: 1.75, disabled: false },
+    });
+    expect(parseOptions(["--width", "360"], {}).widths).toEqual([360]);
+    expect(parseOptions(["--", "--width", "360", "--width", "412", "--width", "360"], {}).widths).toEqual([
+      360, 412,
+    ]);
+    expect(() => parseOptions(["--width", "320"], {})).toThrow(/--width must be one of 360, 412/);
+    expect(() => parseOptions(["--width", "412px"], {})).toThrow(/--width/);
+  });
+
+  it("[OFE-030 AC1] names each page with its width when a report has more than Lighthouse's default one", () => {
+    const at = (/** @type {360 | 412} */ width, /** @type {number} */ run, /** @type {number} */ cls) => ({
+      ...figuresOf(flowResult({ cls, shifts: [] }), "home", run),
+      width,
+    });
+    const report = formatReport([at(412, 1, 0), at(412, 2, 0.02), at(360, 1, 0.12), at(360, 2, 0)], {
+      lighthouse: "13.5.0",
+      browser: "HeadlessChrome/153.0.8010.12",
+      baseUrl: DEFAULT_BASE_URL,
+      date: "a date",
+    });
+    expect(report.split("\n").slice(4, 10)).toEqual([
+      "| Home, 412 px | 1 | 0.97 | 1.51 s | 1.90 s | 0 | 0 ms | 42 ms |",
+      "| Home, 412 px | 2 | 0.97 | 1.51 s | 1.90 s | 0.020 | 0 ms | 42 ms |",
+      "| **Home, 412 px, median** | | 0.97 | 1.51 s | **1.90 s** | **0.010** | 0 ms | **42 ms** |",
+      "| Home, 360 px | 1 | 0.97 | 1.51 s | 1.90 s | 0.120 | 0 ms | 42 ms |",
+      "| Home, 360 px | 2 | 0.97 | 1.51 s | 1.90 s | 0 | 0 ms | 42 ms |",
+      "| **Home, 360 px, median** | | 0.97 | 1.51 s | **1.90 s** | **0.060** | 0 ms | **42 ms** |",
+    ]);
+    expect(report).toContain(
+      "- Home, 360 px 1: 161.1 KB transferred, fonts 47.9 KB; layout shifts: no layout shift",
+    );
+    // Every run at the default width alone: the page names of the earlier reports.
+    expect(
+      formatReport([at(412, 1, 0)], { lighthouse: "13.5.0", browser: "x", baseUrl: "y", date: "z" }),
+    ).toContain("| **Home, median** |");
   });
 
   it("[OFE-027] searches Madrid to Paris one way for one adult, the given number of days ahead", () => {

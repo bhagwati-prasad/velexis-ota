@@ -2,10 +2,19 @@
 // selector and the account menu. The partial is static HTML that works without JavaScript; this component fills it
 // from the configuration once boot() has it. Everything is set with textContent, checked attributes and createElement.
 //
+// The partial gives the header its final shape from the first paint, whatever storefront.get brings (OFE-030): a grid
+// with the OTA's name on one line, the currency selector's place (`[data-header-currency]`) beside it, and on a phone
+// the navigation on a row of its own under both; from `sm` the three share one row, and the name's column gives way to
+// the navigation instead of pushing it onto a second row.
+//
 // - Logo: an uploaded logo (a same-origin asset path; the variant for dark backgrounds when the header colour is dark)
 //   is shown next to the name, which stays the link's text. The API's `data:` placeholder badge is not shown here.
+//   The name stays on one line, cut with an ellipsis when it is longer than its column (partials/header.html,
+//   OFE-030), so a long name never makes the header grow; the link's text and its title keep the whole name.
 // - Currency: a labelled `<select>` of `config.currencies` (only with two or more), preselected with the remembered
-//   choice or the default currency. A change calls `onCurrencyChange(code)` and changes nothing else on the page.
+//   choice or the default currency, in the header's own place for it (`[data-header-currency]`, beside the name and
+//   no higher than the name's line, so it moves nothing when it appears, OFE-030). A change calls
+//   `onCurrencyChange(code)` and changes nothing else on the page.
 // - Account menu (lib/session.js): a sign-in link when signed out; the customer's first name, the account link and
 //   "Sign out" (with the `client` given) when signed in. Hidden, with "My bookings", when the OTA has no customer
 //   accounts (`features.customerAccounts = false`).
@@ -62,17 +71,19 @@ function renderBrand(link, config) {
     image.src = logo;
     image.alt = "";
     image.height = 28;
-    image.className = "h-7 w-auto";
+    // As high as the name's line and aligned to its top, so the logo never makes the header row higher.
+    image.className = "mr-2 inline-block h-7 w-auto align-top";
     image.dataset.logo = "";
     children.push(image);
   }
   children.push(doc.createTextNode(config.name));
-  link.classList.add("inline-flex", "items-center", "gap-2");
   link.replaceChildren(...children);
+  // The whole name for a pointer when the line cuts it (the link's text is the whole name for everyone else).
+  link.title = config.name;
 }
 
 /**
- * The currency list item with its label and select, or `null` with fewer than two currencies.
+ * The currency selector with its label, or `null` with fewer than two currencies.
  * @param {Document} doc
  * @param {StorefrontConfig} config
  * @param {string} selected
@@ -83,8 +94,9 @@ function currencyItem(doc, config, selected, onChange) {
   if (currencies.length < 2) {
     return null;
   }
-  const item = doc.createElement("li");
+  const item = doc.createElement("div");
   item.dataset.slot = "currency";
+  item.className = "flex items-center";
   const label = doc.createElement("label");
   label.htmlFor = CURRENCY_SELECT_ID;
   label.className = "sr-only";
@@ -92,7 +104,8 @@ function currencyItem(doc, config, selected, onChange) {
   const select = doc.createElement("select");
   select.id = CURRENCY_SELECT_ID;
   select.name = "currency";
-  select.className = "rounded-ui border border-current bg-secondary px-2 py-1 text-on-secondary";
+  // 28 px high: the name's line height, so the selector never makes the header row higher (and a 24 px target).
+  select.className = "h-7 rounded-ui border border-current bg-secondary px-2 text-sm text-on-secondary";
   for (const currency of currencies) {
     const option = doc.createElement("option");
     option.value = currency.code;
@@ -124,7 +137,12 @@ export function mount(root, props) {
   const bookings = /** @type {HTMLElement | null} */ (
     root.querySelector('a[href="/bookings.html"]')?.closest("li") ?? null
   );
-  /** @type {HTMLLIElement | null} */
+  /**
+   * The header's place for the currency selector (partials/header.html); a header without it gets no selector. The card
+   * page removes the selector itself (`[data-slot="currency"]`, checkout-pay-card.js).
+   */
+  const currencyPlace = root.querySelector("[data-header-currency]");
+  /** @type {HTMLElement | null} */
   let currency = null;
 
   const renderBrandAndCurrency = () => {
@@ -137,10 +155,10 @@ export function mount(root, props) {
       current = { ...current, currency: code };
       current.onCurrencyChange?.(code);
     });
-    if (currency && menu) {
-      menu.before(currency);
-    } else if (currency) {
-      root.querySelector("nav ul")?.append(currency);
+    if (currency && currencyPlace) {
+      currencyPlace.append(currency);
+    } else {
+      currency = null;
     }
   };
 

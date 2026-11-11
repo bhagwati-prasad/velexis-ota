@@ -712,6 +712,30 @@ pnpm build && E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront specs/storefr
 | AC1: no serious or critical axe violation on any page; the manual pass recorded with its date | The spec above: 36 tests passed locally on 2026-11-06 (2.9 min), every axe check clean, and so does the whole `storefront` project. The manual NVDA and VoiceOver pass is a human step: its script and its record are `storefront-accessibility.md` §5 (**pending**) |
 | AC2: the Lighthouse targets met or with follow-up tasks | Not an e2e test: `storefront-accessibility.md` §3 (Lighthouse 13.5.0 mobile against this harness's preview; LCP and INP met, CLS not, with the follow-up tasks OFE-027 and OFE-028 in the OTA plan) |
 
+## Tests of OFE-030
+
+The storefront at phone width ([`ota/frontend/README.md`](../../ota/frontend/README.md) §8 and §13 journey 7, [`ota/docs/storefront-accessibility.md`](../../ota/docs/storefront-accessibility.md) §1.1, where the record is), in the `storefront` project, under the storefront guards: every test at 360 × 800 CSS pixels (touch, device pixel ratio 2), where every other journey runs at `lg` or wider.
+
+```bash
+pnpm exec turbo run build --filter=@velexis/ota-backend --filter=@velexis/ota-frontend
+E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront specs/storefront/a11y-phone.e2e.ts specs/storefront/a11y-pages.e2e.ts
+```
+
+| Part | What it proves |
+|---|---|
+| `the spec covers every page the build has` | The spec's page list equals the HTML files of `ota/frontend/dist/`, as in `a11y-pages.e2e.ts` |
+| `the states every page shares, on a phone` (one test per page) | Each of the 20 pages while storefront.get is on its way, then with storefront.get answered `403 TENANT_SUSPENDED`, `403 HOST_NOT_ALLOWED`, `503`, `429` and `500` (`page.route`, the API's error envelope): axe and no sideways scrolling (1.4.10: the document no wider than the phone's 360 px, not `window.innerWidth`, which the phone emulation widens to an overflowing page) on each |
+| `every page with a long OTA name, two currencies and a signed-in customer, on a phone` (one test per page, in order, on two browser contexts with their own end-user IPs) | For a visitor and for a signed-in customer: the whole 57-character name in the header link's text and `title`, the currency selector with both currencies (none on the card page; the airline-card page fills only its static header's name), the account menu, axe and no sideways scrolling |
+| `home and results on a phone` (in order on one browser context) | Home: the enhanced search form, its error summary, the location suggestions, the passengers and multi-city, with axe and no sideways scrolling on each; every focus stop from the top of the page to the search button has its centre in the window and nothing over it, the test banner included (2.4.11). Results: the offers and the opened "Filters" disclosure |
+
+**Arrangements.** No fixtures. The customer signs up through the OTA API (`StorefrontApi`, `auth.signUp`, as the sign-up page's SDK calls it; the demo OTA opens the session at once). Answered in the browser with `page.route`, and only that: the shared states of storefront.get (the API's error envelope; the held request is never answered with the real configuration), and storefront.get's own answer with the OTA's name and a second currency (USD) changed. Stripe.js never comes from the network: its request is aborted (the card page's "Card payment is unavailable" state).
+
+| Acceptance criterion | Proof |
+|---|---|
+| AC1: Lighthouse mobile CLS of home and results at most 0.1 in each of three runs at 360 and 412 px, LCP and INP within target | Not an e2e test: `ota/frontend/scripts/lighthouse.mjs --width 412 --width 360 --runs 3` against this harness's preview, for the demo OTA and for a long name with two currencies (`storefront-accessibility.md` §3.7); the layout rules' unit tests `[OFE-030 AC1]` in `ota/frontend/test/boot.test.js` and `search-form.test.js` |
+| AC2: no serious or critical axe violation on any storefront page at 360 px; `a11y-pages.e2e.ts`, `search.e2e.ts` and `keyboard-checkout.e2e.ts` still pass | The spec above, every test `[OFE-030 AC2]`: 44 tests, 167 axe checks of its own, passed locally on 2026-11-11 in each of three runs of the committed spec, with `a11y-pages.e2e.ts` (36), `search.e2e.ts` and `keyboard-checkout.e2e.ts` beside it; after the review's stricter reflow check (360 px, not `window.innerWidth`) twice more, with `a11y-pages.e2e.ts` and then with `search.e2e.ts` and `keyboard-checkout.e2e.ts` |
+| AC3: `boot.test.js` still proves the header's name, logo, currency selector and account menu | Not an e2e test: `ota/frontend/test/boot.test.js` (`[OFE-030 AC3]` and the earlier header tests) |
+
 ## Tests of PFE-028
 
 The portal's accessibility, keyboard, roles and headers journeys ([`platform/frontend/README.md`](../../platform/frontend/README.md) §2, §4, §6 and §7, scope §1.2, ADR-0014, conventions §3 and §12), in the `portal` project; the counterpart of the platform admin's [PAD-016](#tests-of-pad-016) and the OTA admin's [OAD-019](#tests-of-oad-019). Each sets up an OTA of its own on the OTA worker, so all four need `E2E_WITH_OTA=1` and fail at once without it:

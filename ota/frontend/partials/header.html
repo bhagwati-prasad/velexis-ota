@@ -5,10 +5,16 @@
 >
 <header class="bg-secondary text-on-secondary">
   <div
-    class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-4 py-3 max-sm:flex-col max-sm:items-start"
+    class="mx-auto grid max-w-6xl grid-cols-[minmax(0,1fr)_auto] items-center gap-4 px-4 py-3 sm:grid-cols-[minmax(8rem,1fr)_auto_auto]"
   >
-    <a href="/" class="font-heading text-lg font-semibold" data-field="brandName">Flights</a>
-    <nav aria-label="Main">
+    <a
+      href="/"
+      class="block max-w-full min-w-0 justify-self-start truncate font-heading text-lg font-semibold"
+      data-field="brandName"
+      >Flights</a
+    >
+    <div class="flex items-center" data-header-currency></div>
+    <nav aria-label="Main" class="col-span-2 sm:col-span-1">
       <ul class="flex flex-wrap gap-x-6 gap-y-2 text-sm">
         <li><a href="/lookup.html" class="underline-offset-4 hover:underline">Find a booking</a></li>
         <li><a href="/bookings.html" class="underline-offset-4 hover:underline">My bookings</a></li>

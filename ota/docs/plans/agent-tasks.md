@@ -3033,7 +3033,8 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 - **Verify:** `pnpm --filter @velexis/ota-frontend build && pnpm --filter @velexis/ota-frontend test && E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront specs/storefront/a11y-pages.e2e.ts`
 - **Note (2026-11-10, lead decision 13a, FIX-W47-SHARED):** done (2026-11-10, lead decision 13a: OFE-028's header change (c99ce87) met its targets, CLS home 0.040 and results 0.027, `storefront-accessibility.md` §3), without a change of its own. Its Verify passed on 2026-11-10: the build, `pnpm --filter @velexis/ota-frontend test` (622 tests, `boot.test.js` among them) and `a11y-pages.e2e.ts` (36 passed). The shifts left are OFE-030. This Note gives the Status above its reason.
 
-### OFE-030 · Remove the layout shifts left on phones and run axe at phone width
+### OFE-030 · Remove the layout shifts left on phones and run axe at phone width ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M6
 - **Depends on:** OFE-028

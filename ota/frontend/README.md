@@ -207,7 +207,7 @@ Branding comes from `storefront.get` (`branding.colors`, fonts, corner radius, l
 | Authentication | Paste and password managers allowed, no CAPTCHA puzzles (3.3.8); traveller data is offered for the contact step instead of retyping (3.3.7) |
 | Help | The support link sits in the same place on every page (3.2.6) |
 | Colour | Contrast checked at runtime on OTA colours (§6); status never shown by colour alone |
-| Checks | axe in every Playwright journey (no serious or critical violation), and on every page in every main state, error states included (`a11y-pages.e2e.ts`, OFE-024); a keyboard-only checkout journey; a manual screen-reader pass (NVDA, VoiceOver) before M6, its script and record in [`storefront-accessibility.md`](../docs/storefront-accessibility.md) §5 |
+| Checks | axe in every Playwright journey (no serious or critical violation), and on every page in every main state, error states included (`a11y-pages.e2e.ts`, OFE-024), and on every page at phone width, 360 × 800 px, with the header at its fullest (a long OTA name, two currencies, a signed-in customer), no sideways scrolling and the focus never hidden (`a11y-phone.e2e.ts`, OFE-030); a keyboard-only checkout journey; a manual screen-reader pass (NVDA, VoiceOver) before M6, its script and record in [`storefront-accessibility.md`](../docs/storefront-accessibility.md) §5 |
 
 ## 9. Performance budgets
 
@@ -218,7 +218,7 @@ Branding comes from `storefront.get` (`branding.colors`, fonts, corner radius, l
 | HTML per page | ≤ 20 KB | same |
 | Fonts per page: the woff2 files as served, for the worst body and heading families an OTA can choose among those the page declares, with the faces the page's weights use, and any preloaded font (OFE-024) | ≤ 2 families, woff2, ≤ 120 KB | same (a FONT row per page) |
 | API calls before first meaningful paint | 0 on cached pages, 1 (`storefront.get`) otherwise | Review |
-| LCP / CLS / INP on home and results (Lighthouse mobile profile) | ≤ 2.5 s / ≤ 0.1 / ≤ 200 ms | `pnpm --filter @velexis/ota-frontend lighthouse` (`scripts/lighthouse.mjs`, OFE-027: Lighthouse 13.5.0 and puppeteer-core 25.16.0 pinned as devDependencies), run by hand before launch against a running preview (below); the figures in [`storefront-accessibility.md`](../docs/storefront-accessibility.md) §3: 2026-11-06 LCP and INP met, CLS not (follow-up tasks OFE-027, OFE-028 and OFE-029); 2026-11-10 results 0.152 after OFE-027, of which 0.127 the header and test banner of every page; home's CLS 0.04 since OFE-028 (2026-11-10, §3.5); with both merged, home 0.040 and results 0.027 in each of three runs, every target met (2026-11-10, §3.6) |
+| LCP / CLS / INP on home and results (Lighthouse mobile profile) | ≤ 2.5 s / ≤ 0.1 / ≤ 200 ms | `pnpm --filter @velexis/ota-frontend lighthouse` (`scripts/lighthouse.mjs`, OFE-027: Lighthouse 13.5.0 and puppeteer-core 25.16.0 pinned as devDependencies), run by hand before launch against a running preview (below); the figures in [`storefront-accessibility.md`](../docs/storefront-accessibility.md) §3: 2026-11-06 LCP and INP met, CLS not (follow-up tasks OFE-027, OFE-028 and OFE-029); 2026-11-10 results 0.152 after OFE-027, of which 0.127 the header and test banner of every page; home's CLS 0.04 since OFE-028 (2026-11-10, §3.5); with both merged, home 0.040 and results 0.027 in each of three runs, every target met (2026-11-10, §3.6); with OFE-030 at Lighthouse's 412 px and at 360 px (`--width`), also for a long OTA name with two currencies: home 0, results 0.027 and 0.048 in each of three runs (2026-11-11, §3.7) |
 
 Images carry width and height, results render 20 at a time, and search shows a skeleton at once because Amadeus can take seconds.
 
@@ -226,12 +226,13 @@ The Lighthouse script measures a storefront that is already running, by default 
 
 ```bash
 CHROME_PATH=/path/to/chromium pnpm --filter @velexis/ota-frontend lighthouse -- --page results --runs 3 --json /tmp/lighthouse-results.json
-#   --base-url <url>  --page home|results (repeatable)  --runs <n>  --days-ahead <n>  --chrome <path>  --json <file>
+#   --base-url <url>  --page home|results (repeatable)  --runs <n>  --width 412|360 (repeatable, default 412)
+#   --days-ahead <n>  --chrome <path>  --json <file>
 ```
 
 Chromium comes from `--chrome`, else `CHROME_PATH`, else `/opt/pw-browsers/chromium`; puppeteer-core downloads none. As root (a container) it starts Chromium without its sandbox.
 
-On a phone the results page keeps its layout while it loads (OFE-027): the filters behind a "Filters (n)" disclosure above the results, in place from the searching state on; the heading and the summary keep two lines and the results' heading row one height; `main` is at least one screen high, so the footer never jumps.
+On a phone the results page keeps its layout while it loads (OFE-027): the filters behind a "Filters (n)" disclosure above the results, in place from the searching state on; the heading and the summary keep two lines and the results' heading row one height; `main` is at least one screen high, so the footer never jumps. Every page keeps what it painted first when the configuration and its modules arrive (OFE-030, [`storefront-accessibility.md`](../docs/storefront-accessibility.md) §3.7): the header has its final shape from the first paint (the OTA's name on one line, cut with an ellipsis, the currency selector's place beside it, on a phone the navigation on a row of its own), the search form shows its enhanced shape before its module runs in a browser with JavaScript on, and every page's `main` is at least one window high.
 
 ## 10. Security
 
@@ -362,7 +363,7 @@ Journeys (one per main flow, [ADR-0015](../../docs/mvp/adr/0015-testing-strategy
 4. **M3** sign-up → verify through the Mailpit link → sign-in → my bookings tabs → change contacts → cancel with refund preview; guest lookup; session refresh after access-token expiry (`account-bookings.e2e.ts`, OFE-019: the bookings made through the API with the airline card, so no Stripe is needed; [`tools/e2e/README.md`](../../tools/e2e/README.md#tests-of-ofe-019)).
 5. **M3** keyboard-only checkout: search, filters, fare, checkout and the airline-card form with the keyboard alone, every focus stop visible and uncovered, the error summaries focused (`keyboard-checkout.e2e.ts`, OFE-019).
 6. **M5** live mode and custom domains: an OTA that went live through the platform API (goLive) with a verified primary custom domain; on its sub-domain and its custom domain the same OTA without the test banner, a search on its live Amadeus connection, sign-in and sign-up on the sub-domain sent to the same page on the primary host before any session, and the e-mail's links on the primary host (`live-and-domains.e2e.ts`, OFE-022: in the `storefront` project; [`tools/e2e/README.md`](../../tools/e2e/README.md#tests-of-ofe-022)).
-7. **M6** the accessibility pass: axe on every page of the build in every main state, the shared states of `storefront.get` on each page included (`a11y-pages.e2e.ts`, OFE-024: in the `storefront` project; [`storefront-accessibility.md`](../docs/storefront-accessibility.md) §1).
+7. **M6** the accessibility pass: axe on every page of the build in every main state, the shared states of `storefront.get` on each page included (`a11y-pages.e2e.ts`, OFE-024: in the `storefront` project; [`storefront-accessibility.md`](../docs/storefront-accessibility.md) §1); the same at 360 × 800 px, a phone, where every other journey runs at `lg` or wider (`a11y-phone.e2e.ts`, OFE-030).
 
 Assertions in every journey: no CSP violation (a `securitypolicyviolation` listener fails the test), `document.cookie` contains only `__Host-vx_csrf` (in the storefront-stripe journeys also, from `/checkout/pay-card.html` on, the two first-party cookies of Stripe.js, `__stripe_mid` and `__stripe_sid`, which feed Stripe Radar's fraud signals and hold no session or credential: [OADR-0006](../docs/adr/0006-storefront-cookie-sessions-and-csrf.md) point 10, 2026-10-28; never another name), no request to a third-party host except Stripe on the card page and none at all on the airline-card page, and axe reports no serious or critical violation.
 

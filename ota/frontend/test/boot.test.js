@@ -901,11 +901,74 @@ describe("test banner (OFE-028)", () => {
     expect(html).toContain("scroll-padding-bottom: var(--vx-test-banner-height, 0px);");
 
     // On a phone the header has its two rows from the first paint: the OTA's name, longer than the placeholder, no
-    // longer pushes the navigation onto a new row when storefront.get answers (the shift Lighthouse measured).
+    // longer pushes the navigation onto a new row when storefront.get answers (the shift Lighthouse measured). Since
+    // OFE-030 the rows are a grid's: the name and the currency selector's place share the first row's two columns, and
+    // the navigation spans both on the second.
     const row = doc.querySelector("body > header > div");
     expect(Array.from(row?.classList ?? [])).toEqual(
-      expect.arrayContaining(["max-sm:flex-col", "max-sm:items-start"]),
+      expect.arrayContaining(["grid", "grid-cols-[minmax(0,1fr)_auto]"]),
     );
+    expect(Array.from(doc.querySelector("body > header nav")?.classList ?? [])).toEqual(
+      expect.arrayContaining(["col-span-2"]),
+    );
+  });
+});
+
+describe("the header's shape from the first paint (OFE-030)", () => {
+  it("[OFE-030 AC3] the name stays on one line, whole in the link's text and title; logo and currency selector are no higher than its line", async () => {
+    const doc = openPage();
+    // The static header: the placeholder name on one line, an empty place for the currency selector beside it.
+    const brand = /** @type {HTMLAnchorElement} */ (
+      doc.querySelector('body > header a[data-field="brandName"]')
+    );
+    expect(Array.from(brand.classList)).toEqual(expect.arrayContaining(["block", "truncate", "max-w-full"]));
+    const place = /** @type {HTMLElement} */ (doc.querySelector("body > header [data-header-currency]"));
+    expect(place.children.length).toBe(0);
+    // From sm one row: the name's column gives way to the currency selector and the navigation.
+    expect(Array.from(doc.querySelector("body > header > div")?.classList ?? [])).toContain(
+      "sm:grid-cols-[minmax(8rem,1fr)_auto_auto]",
+    );
+    expect(Array.from(doc.querySelector("body > header nav")?.classList ?? [])).toContain("sm:col-span-1");
+
+    const longName = `${"Mediterranean Sunshine Holidays and Flights International ".repeat(2)}Ltd`;
+    await boot({
+      client: fakeClient([{ ...CONFIG, name: longName }], { getSession: async () => SESSION }),
+      storage: null,
+      preferences: memoryStorage(),
+      doc,
+    });
+
+    // The whole name for everyone: the link's text (read by screen readers) and its title (a pointer's tooltip).
+    expect(text(brand)).toBe(longName);
+    expect(brand.title).toBe(longName);
+    // The logo: as high as the name's line, aligned to its top, so it never makes the row higher.
+    expect(Array.from(brand.querySelector("img[data-logo]")?.classList ?? [])).toEqual(
+      expect.arrayContaining(["h-7", "align-top"]),
+    );
+    // The currency selector in its own place beside the name, 28 px high (the name's line), not in the navigation.
+    const select = /** @type {HTMLSelectElement} */ (
+      place.querySelector('[data-slot="currency"] select#vx-currency')
+    );
+    expect(select).not.toBeNull();
+    expect(Array.from(select.classList)).toContain("h-7");
+    expect(doc.querySelector("body > header nav select")).toBeNull();
+    expect(text(place.querySelector('label[for="vx-currency"]'))).toBe("Currency");
+    // The account menu stays the navigation's last item.
+    const menu = doc.querySelector('body > header nav li[data-slot="account-menu"]');
+    expect(menu?.nextElementSibling).toBeNull();
+    expect(text(menu?.querySelector("a"))).toBe("My account");
+  });
+
+  it("[OFE-030 AC1] main.css: every page's main is a window high, and the search form has its enhanced shape before its module runs", () => {
+    const css = readFileSync(join(STOREFRONT_ROOT, "src", "styles", "main.css"), "utf8");
+    // The footer starts below the window, so filling it from storefront.get moves nothing painted.
+    expect(/body > main\s*\{\s*min-height:\s*100svh;\s*\}/.test(css)).toBe(true);
+    // Only with JavaScript on (`scripting: none` keeps the plain form), and only until the form is enhanced.
+    const scripted = /@media \(scripting: enabled\)\s*\{([\s\S]*?)\n {2}\}/.exec(css)?.[1] ?? "";
+    expect(scripted).toContain("form[data-search-form]:not([data-enhanced]) [data-passenger-panel]");
+    expect(scripted).toContain("display: none;");
+    expect(scripted).toContain("[data-passenger-toggle][hidden]");
+    expect(scripted).toContain("[data-trip-multi][hidden]");
   });
 });
 
