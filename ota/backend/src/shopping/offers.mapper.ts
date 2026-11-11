@@ -1289,8 +1289,9 @@ export function toFlightOffer(row: StoredOffer, context: OfferMappingContext): F
 /** The storefront's search defaults (`storefront_settings.search_defaults`), as far as they are well-formed. */
 export interface SearchDefaults {
   /**
-   * The storefront limit of `max` / `maxFlightOffers` (1–250): the offers a search asks Amadeus for when it names
-   * fewer or none; DEFAULT_OFFERS_PER_SEARCH when `search_defaults` sets no valid `maxResults`.
+   * The storefront limit of `max` / `maxFlightOffers` (1–250): the offers a customer-scope search asks Amadeus for
+   * when it names more or none; DEFAULT_OFFERS_PER_SEARCH when `search_defaults` sets no valid `maxResults`. Console
+   * scope is bounded by MAX_OFFERS_PER_SEARCH instead (`offersBoundOf`).
    */
   readonly maxResults: number;
   /** `nonStop` of a SIMPLE search that does not send it. */
@@ -1302,19 +1303,20 @@ export interface SearchDefaults {
 }
 
 /**
- * The most offers a search stores (OADR-0002 point 1, `maxFlightOffers` ≤ 250), and the largest storefront limit a
- * storefront's `search_defaults` can set.
+ * The most offers a search stores (OADR-0002 point 1, `maxFlightOffers` ≤ 250), the largest storefront limit a
+ * storefront's `search_defaults` can set, and the bound of a console-scope search (`offersBoundOf`).
  */
 export const MAX_OFFERS_PER_SEARCH = 250;
 
 /**
  * The storefront limit of a storefront whose `search_defaults` sets no valid `maxResults` (1–250), so the offers its
- * searches ask Amadeus for: lead decision (13d) of 2026-11-10 (OBE-096), the largest number of offers per answer that
- * met the 500 ms p95 of `flights.search` at 10 concurrent visitors in three runs of three (ota/docs/performance.md
+ * customer-scope searches ask Amadeus for: 150 since lead decision (15i) of 2026-11-11 (FIX-W48-OTA), which lowered
+ * the 175 of lead decision (13d) of 2026-11-10 (OBE-096; 175 met the 500 ms p95 of `flights.search` at 10 concurrent
+ * visitors in three runs of three on a quiet machine, 150 also kept its margin on a busy one: ota/docs/performance.md
  * §5). The API's CPU per search grows with the offers of an answer; a storefront that sets its own `maxResults` keeps
- * it, up to MAX_OFFERS_PER_SEARCH.
+ * it, up to MAX_OFFERS_PER_SEARCH. OBE-088 measures the VM's mixed traffic with it.
  */
-export const DEFAULT_OFFERS_PER_SEARCH = 175;
+export const DEFAULT_OFFERS_PER_SEARCH = 150;
 
 /**
  * `search_defaults` read leniently: `{ maxResults, nonStop, cabin, sources }` (the column's "max results, nonStop,
@@ -1335,6 +1337,17 @@ export function parseSearchDefaults(value: unknown): SearchDefaults {
     cabin: oneOf(cabin, TRAVEL_CLASSES) ? cabin : undefined,
     sources: Array.isArray(raw["sources"]) && sources.length > 0 ? sources : undefined,
   };
+}
+
+/**
+ * The most offers a search of `scope` asks Amadeus for, and what it asks for when it names none (`max` of SIMPLE,
+ * `searchCriteria.maxFlightOffers` of ADVANCED): in customer scope (the storefront, key callers) the storefront limit,
+ * `defaults.maxResults` (DEFAULT_OFFERS_PER_SEARCH unless `search_defaults` sets 1 to 250); in console scope (the OTA
+ * admin, a `console:automation` key) MAX_OFFERS_PER_SEARCH, whatever the storefront limit (lead decision (15i) of
+ * 2026-11-11, FIX-W48-OTA: console searches keep 250 as their bound).
+ */
+export function offersBoundOf(defaults: SearchDefaults, scope: OfferScope): number {
+  return scope === "console" ? MAX_OFFERS_PER_SEARCH : defaults.maxResults;
 }
 
 /** The Amadeus request of a search: the GET query (SIMPLE) or the POST body (ADVANCED), defaults applied. */
@@ -1362,9 +1375,9 @@ const NEGOTIATED_FARE_TYPES: ReadonlySet<string> = new Set(["NEGOTIATED", "CORPO
 
 /**
  * The Amadeus request of `request` in `currency`, or the first problem: SIMPLE checks the traveller counts, the
- * airline lists and the dates; ADVANCED fills `currencyCode`, intersects `sources` with the storefront's, caps
- * `maxFlightOffers` and defaults the three `additionalInformation` flags to `true`; customer scope may not send
- * corporate codes or negotiated fare types.
+ * airline lists and the dates; ADVANCED fills `currencyCode`, intersects `sources` with the storefront's, and defaults
+ * the three `additionalInformation` flags to `true`; customer scope may not send corporate codes or negotiated fare
+ * types. Both modes cap `max` / `maxFlightOffers` by the scope's bound and fill it when absent (`offersBoundOf`).
  */
 export function buildAmadeusSearch(
   request: FlightSearchCreateRequest,
@@ -1373,7 +1386,7 @@ export function buildAmadeusSearch(
   scope: OfferScope,
 ): AmadeusSearchRequest | SearchRequestProblem {
   if (request.mode === "simple") {
-    return simpleQuery(request, currency, defaults);
+    return simpleQuery(request, currency, defaults, scope);
   }
   return advancedBody(request.query, currency, defaults, scope);
 }
@@ -1386,6 +1399,7 @@ function simpleQuery(
   request: FlightSearchSimpleRequest,
   currency: string,
   defaults: SearchDefaults,
+  scope: OfferScope,
 ): AmadeusSearchRequest | SearchRequestProblem {
   const children = request.children ?? 0;
   const infants = request.infants ?? 0;
@@ -1442,7 +1456,8 @@ function simpleQuery(
   if (request.maxPrice !== undefined) {
     query["maxPrice"] = request.maxPrice;
   }
-  query["max"] = Math.min(request.max ?? defaults.maxResults, defaults.maxResults);
+  const bound = offersBoundOf(defaults, scope);
+  query["max"] = Math.min(request.max ?? bound, bound);
   return { operationId: "getFlightOffers", query };
 }
 
@@ -1508,6 +1523,7 @@ function advancedBody(
     };
   }
   const information = criteria.additionalInformation ?? {};
+  const bound = offersBoundOf(defaults, scope);
   return {
     operationId: "searchFlightOffers",
     body: {
@@ -1516,7 +1532,7 @@ function advancedBody(
       sources,
       searchCriteria: {
         ...criteria,
-        maxFlightOffers: Math.min(criteria.maxFlightOffers ?? defaults.maxResults, defaults.maxResults),
+        maxFlightOffers: Math.min(criteria.maxFlightOffers ?? bound, bound),
         additionalInformation: {
           ...information,
           brandedFares: information.brandedFares ?? true,

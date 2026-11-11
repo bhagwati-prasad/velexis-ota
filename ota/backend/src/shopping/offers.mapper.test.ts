@@ -14,6 +14,7 @@ import {
   MAX_OFFERS_PER_SEARCH,
   netTotalOf,
   offerColumns,
+  offersBoundOf,
   parseIsoDuration,
   parseOffer,
   parseSearchDefaults,
@@ -27,6 +28,7 @@ import {
   type FlightSearchSimpleRequest,
   type LocationInfo,
   type OfferMappingContext,
+  type OfferScope,
   type ParsedOffer,
   type SearchDefaults,
   type StoredOffer,
@@ -821,18 +823,18 @@ describe("buildAmadeusSearch", () => {
     );
   });
 
-  it("asks for 175 offers by default and keeps a storefront's own maxResults of 1 to 250 [OBE-096 AC2]", () => {
-    // Lead decision (13d) of 2026-11-10: the default is the largest number of offers measured within the search
-    // budget (ota/docs/performance.md §5); what a search stores stays bounded by 250 (OADR-0002 point 1).
-    expect(DEFAULT_OFFERS_PER_SEARCH).toBe(175);
+  it("asks for 150 offers by default and keeps a storefront's own maxResults of 1 to 250 [OBE-096 AC2] [FIX-W48-OTA AC2]", () => {
+    // Lead decision (15i) of 2026-11-11 lowered the default of lead decision (13d) of 2026-11-10 from 175 to 150
+    // (ota/docs/performance.md §5); what a search stores stays bounded by 250 (OADR-0002 point 1).
+    expect(DEFAULT_OFFERS_PER_SEARCH).toBe(150);
     expect(MAX_OFFERS_PER_SEARCH).toBe(250);
     for (const unset of [null, undefined, {}, { maxResults: null }, { nonStop: true }]) {
-      expect(parseSearchDefaults(unset).maxResults).toBe(175);
+      expect(parseSearchDefaults(unset).maxResults).toBe(150);
     }
-    for (const invalid of [0, -1, 251, 1000, 1.5, 174.5, "250", "100", true, Number.NaN]) {
-      expect(parseSearchDefaults({ maxResults: invalid }).maxResults).toBe(175);
+    for (const invalid of [0, -1, 251, 1000, 1.5, 149.5, "250", "100", true, Number.NaN]) {
+      expect(parseSearchDefaults({ maxResults: invalid }).maxResults).toBe(150);
     }
-    for (const own of [1, 20, 150, 174, 175, 176, 200, 249, 250]) {
+    for (const own of [1, 20, 149, 150, 151, 175, 200, 249, 250]) {
       expect(parseSearchDefaults({ maxResults: own }).maxResults).toBe(own);
     }
     expect(parseSearchDefaults({ maxResults: 250, nonStop: true, cabin: "BUSINESS" })).toEqual({
@@ -843,11 +845,11 @@ describe("buildAmadeusSearch", () => {
     });
   });
 
-  it("bounds a search's max and maxFlightOffers by the storefront's limit, the default or its own [OBE-096 AC2]", () => {
+  describe("the offers a search asks for, per scope [OBE-096 AC2] [FIX-W48-OTA AC2]", () => {
     const { max: _max, ...withoutMax } = SIMPLE;
-    const simpleMax = (request: FlightSearchCreateRequest, defaults: SearchDefaults) =>
-      (buildAmadeusSearch(request, "EUR", defaults, "customer") as { query?: { max?: number } }).query?.max;
-    const advancedMax = (asked: number | undefined, defaults: SearchDefaults) => {
+    const simpleMax = (request: FlightSearchCreateRequest, defaults: SearchDefaults, scope: OfferScope) =>
+      (buildAmadeusSearch(request, "EUR", defaults, scope) as { query?: { max?: number } }).query?.max;
+    const advancedMax = (asked: number | undefined, defaults: SearchDefaults, scope: OfferScope) => {
       const criteria = { additionalInformation: { fareRules: false } };
       const request: FlightSearchCreateRequest = {
         mode: "advanced",
@@ -856,7 +858,7 @@ describe("buildAmadeusSearch", () => {
           searchCriteria: asked === undefined ? criteria : { ...criteria, maxFlightOffers: asked },
         },
       };
-      const built = buildAmadeusSearch(request, "EUR", defaults, "console") as {
+      const built = buildAmadeusSearch(request, "EUR", defaults, scope) as {
         body?: { searchCriteria?: { maxFlightOffers?: number } };
       };
       return built.body?.searchCriteria?.maxFlightOffers;
@@ -865,24 +867,41 @@ describe("buildAmadeusSearch", () => {
     const own250 = parseSearchDefaults({ maxResults: 250 });
     const own40 = parseSearchDefaults({ maxResults: 40 });
 
-    // No storefront limit of its own: 175, and a search may ask for fewer, never for more.
-    expect(simpleMax(withoutMax, byDefault)).toBe(175);
-    expect(simpleMax({ ...SIMPLE, max: 250 }, byDefault)).toBe(175);
-    expect(simpleMax({ ...SIMPLE, max: 60 }, byDefault)).toBe(60);
-    expect(advancedMax(undefined, byDefault)).toBe(175);
-    expect(advancedMax(250, byDefault)).toBe(175);
-    expect(advancedMax(60, byDefault)).toBe(60);
-    // A storefront that sets 250 keeps it: 250 by default and at most.
-    expect(simpleMax(withoutMax, own250)).toBe(250);
-    expect(simpleMax({ ...SIMPLE, max: 300 }, own250)).toBe(250);
-    expect(simpleMax({ ...SIMPLE, max: 200 }, own250)).toBe(200);
-    expect(advancedMax(undefined, own250)).toBe(250);
-    expect(advancedMax(400, own250)).toBe(250);
-    // A lower limit of its own bounds both modes as before.
-    expect(simpleMax(withoutMax, own40)).toBe(40);
-    expect(simpleMax({ ...SIMPLE, max: 150 }, own40)).toBe(40);
-    expect(advancedMax(undefined, own40)).toBe(40);
-    expect(advancedMax(150, own40)).toBe(40);
+    it("[FIX-W48-OTA AC2] bounds a customer-scope search by the storefront's limit, the default of 150 or its own", () => {
+      expect(offersBoundOf(byDefault, "customer")).toBe(150);
+      // No storefront limit of its own: 150, and a search may ask for fewer, never for more.
+      expect(simpleMax(withoutMax, byDefault, "customer")).toBe(150);
+      expect(simpleMax({ ...SIMPLE, max: 250 }, byDefault, "customer")).toBe(150);
+      expect(simpleMax({ ...SIMPLE, max: 60 }, byDefault, "customer")).toBe(60);
+      expect(advancedMax(undefined, byDefault, "customer")).toBe(150);
+      expect(advancedMax(250, byDefault, "customer")).toBe(150);
+      expect(advancedMax(60, byDefault, "customer")).toBe(60);
+      // A storefront that sets 250 keeps it: 250 by default and at most.
+      expect(simpleMax(withoutMax, own250, "customer")).toBe(250);
+      expect(simpleMax({ ...SIMPLE, max: 300 }, own250, "customer")).toBe(250);
+      expect(simpleMax({ ...SIMPLE, max: 200 }, own250, "customer")).toBe(200);
+      expect(advancedMax(undefined, own250, "customer")).toBe(250);
+      expect(advancedMax(400, own250, "customer")).toBe(250);
+      // A lower limit of its own bounds both modes as before.
+      expect(simpleMax(withoutMax, own40, "customer")).toBe(40);
+      expect(simpleMax({ ...SIMPLE, max: 150 }, own40, "customer")).toBe(40);
+      expect(advancedMax(undefined, own40, "customer")).toBe(40);
+      expect(advancedMax(150, own40, "customer")).toBe(40);
+    });
+
+    it("[FIX-W48-OTA AC2] bounds a console-scope search by 250 whatever the storefront's limit, and asks for 250 when it names none", () => {
+      for (const defaults of [byDefault, own250, own40]) {
+        expect(offersBoundOf(defaults, "console")).toBe(MAX_OFFERS_PER_SEARCH);
+        expect(simpleMax(withoutMax, defaults, "console")).toBe(250);
+        expect(simpleMax({ ...SIMPLE, max: 300 }, defaults, "console")).toBe(250);
+        expect(simpleMax({ ...SIMPLE, max: 200 }, defaults, "console")).toBe(200);
+        // The OTA admin's shopping page asks for 50.
+        expect(simpleMax({ ...SIMPLE, max: 50 }, defaults, "console")).toBe(50);
+        expect(advancedMax(undefined, defaults, "console")).toBe(250);
+        expect(advancedMax(400, defaults, "console")).toBe(250);
+        expect(advancedMax(175, defaults, "console")).toBe(175);
+      }
+    });
   });
 
   it("describes the trip and the criteria of both modes", () => {

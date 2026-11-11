@@ -1,14 +1,18 @@
 // Staff sign-in, refresh, sign-out and me (OBE-059; OADR-0011 points 1–3 and 5, PADR-0007), without a database or
 // Redis: the pure rules of staff-sessions.ts (portal token values, refresh tokens, cut-offs, family and membership
-// checks, the cached membership), the role matrix of scope §1.3, StaffTokens over the test process's key file and a
-// FakeClock, StaffSessions over an in-memory Redis (its keys, TTLs and arguments; the Lua scripts of the rotation run
+// checks, the cached membership), the role matrix of scope §1.3, StaffTokens over the test process's key file (and the
+// previous key of a rotation, FIX-W48-OTA) and a FakeClock, StaffSessions over an in-memory Redis (its keys, TTLs and arguments; the Lua scripts of the rotation run
 // against Redis in test/integration/console/staff-auth.int.test.ts), and StaffAuthService over in-memory sessions,
 // caches and a recording transaction. Every id and token here is made up on the spot; no value is a secret.
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createPublicKey, generateKeyPairSync, randomBytes } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ConfigService } from "@nestjs/config";
 import { sha256Hex } from "@velexis/crypto";
 import { isAppError } from "@velexis/errors";
 import { FakeClock } from "@velexis/testing";
+import { decodeProtectedHeader } from "jose";
 import type { PinoLogger } from "nestjs-pino";
 import { describe, expect, it } from "vitest";
 import { testApiCredentials } from "../../../test/helpers/api-env";
@@ -26,7 +30,7 @@ import type {
 import type { PlatformTenant } from "../../tenancy/platform-read.types";
 import type { RequestTenant, TenantContext } from "../../tenancy/tenant-context";
 import type { TenantTx } from "../../tenancy/tenant-tx";
-import { TokenService } from "../token.service";
+import { PreviousSigningKey, TokenService } from "../token.service";
 import {
   ConsoleSignInIdempotencyHooks,
   environmentsOf,
@@ -483,6 +487,53 @@ describe("StaffTokens", () => {
     await expect(tokens.sign({ ...input, sid: "ses_01JA2Z9W5K7Q3M8N4P6R2T0V1S" })).rejects.toThrow(
       /sid must be an asn_ id/,
     );
+  });
+
+  it("[FIX-W48-OTA AC1] accepts the previous key's staff tokens during a rotation only, signs with the new key, and refuses an unknown kid", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "velexis-ota-staff-rotation-"));
+    try {
+      const clock = new FakeClock(START);
+      const nextKey = generateKeyPairSync("ed25519", {
+        privateKeyEncoding: { type: "pkcs8", format: "pem" },
+        publicKeyEncoding: { type: "spki", format: "pem" },
+      });
+      const nextPath = join(folder, "next.pem");
+      writeFileSync(nextPath, nextKey.privateKey, { mode: 0o600 });
+      const previousPath = join(folder, "previous.pub.pem");
+      writeFileSync(
+        previousPath,
+        createPublicKey(readFileSync(testApiCredentials().jwtKeyFile, "utf8")).export({
+          type: "spki",
+          format: "pem",
+        }),
+        { mode: 0o600 },
+      );
+      const previous = (path: string | undefined) =>
+        new PreviousSigningKey({ get: () => path } as unknown as ConfigService<ApiConfig, true>);
+      const old = staffTokensAt(clock);
+      const rotating = new StaffTokens(
+        configWith(nextPath),
+        clock as unknown as Clock,
+        previous(previousPath),
+      );
+      const after = new StaffTokens(configWith(nextPath), clock as unknown as Clock, previous(undefined));
+      const { token: oldToken } = await old.sign(input);
+      const { token: newToken } = await rotating.sign(input);
+      const unknownKid = `${Buffer.from(JSON.stringify({ alg: "EdDSA", kid: "an-unknown-kid" })).toString("base64url")}.${oldToken.split(".").slice(1).join(".")}`;
+
+      expect(decodeProtectedHeader(newToken).kid).not.toBe(decodeProtectedHeader(oldToken).kid);
+      expect((await rotating.verify(oldToken, TENANT_ID)).ok).toBe(true);
+      expect((await rotating.verify(newToken, TENANT_ID)).ok).toBe(true);
+      expect(await rotating.tenantOf(oldToken)).toBe(TENANT_ID);
+      expect(await after.verify(oldToken, TENANT_ID)).toEqual({ ok: false, reason: "signature" });
+      expect(await after.tenantOf(oldToken)).toBeUndefined();
+      expect((await after.verify(newToken, TENANT_ID)).ok).toBe(true);
+      for (const tokens of [rotating, after]) {
+        expect(await tokens.verify(unknownKid, TENANT_ID)).toEqual({ ok: false, reason: "signature" });
+      }
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
   });
 });
 

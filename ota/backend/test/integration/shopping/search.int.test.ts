@@ -319,13 +319,13 @@ describe("flights.search", () => {
       departureDate: "2027-01-15",
       adults: "1",
       currencyCode: "EUR",
-      max: "175",
+      max: "150",
     });
-    // One Amadeus call, the GET of SIMPLE mode, with the default currency and the storefront's limit: 175 offers for a
-    // storefront that sets no maxResults of its own (DEFAULT_OFFERS_PER_SEARCH, OBE-096).
+    // One Amadeus call, the GET of SIMPLE mode, with the default currency and the storefront's limit: 150 offers for a
+    // storefront that sets no maxResults of its own (DEFAULT_OFFERS_PER_SEARCH, OBE-096; 150 since FIX-W48-OTA).
     const calls = getFlightOffersCalls();
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.query).toMatchObject({ currencyCode: "EUR", max: "175", originLocationCode: "MAD" });
+    expect(calls[0]?.query).toMatchObject({ currencyCode: "EUR", max: "150", originLocationCode: "MAD" });
 
     // Sorted by price, every total is net + 10 %, inside `amadeus` too.
     const offers = offersOf(res.body);
@@ -430,7 +430,7 @@ describe("flights.search", () => {
     expect(body.criteria.amadeusBody).toMatchObject({
       currencyCode: "EUR",
       searchCriteria: {
-        maxFlightOffers: 175,
+        maxFlightOffers: 150,
         additionalInformation: { brandedFares: true, chargeableCheckedBags: true, fareRules: true },
       },
     });
@@ -441,7 +441,7 @@ describe("flights.search", () => {
 
   it("keeps a storefront's own maxResults of search_defaults, up to 250, and bounds max and maxFlightOffers by it [OBE-096 AC2]", async () => {
     // Beta's settings row with a limit of its own, read from the jsonb column as a search reads it. Afterwards `{}`
-    // again, the provisioned value (the default of 175 offers), and none of these searches: the other tests expect
+    // again, the provisioned value (the default of 150 offers), and none of these searches: the other tests expect
     // beta's seeded settings and no searches of beta.
     const setSearchDefaults = (value: Readonly<Record<string, unknown>>) =>
       tenantTx(tenantDb, "tenant_beta", (trx) =>
@@ -680,7 +680,7 @@ describe("flights.search", () => {
     expect(netKeys(res.body)).toEqual([]);
   });
 
-  it("gives console scope the verbatim Amadeus offer, the net price and the markup", async () => {
+  it("gives console scope the verbatim Amadeus offer, the net price and the markup, bounded by 250 offers [FIX-W48-OTA AC2]", async () => {
     const res = await search(
       alphaConsole,
       { ...SIMPLE, resultOptions: { limit: 5, sort: "price", view: "full" } },
@@ -691,6 +691,9 @@ describe("flights.search", () => {
 
     expect(res.status).toBe(201);
     expectResponseToMatch("createFlightSearch", res);
+    // Lead decision (15i) of 2026-11-11: a console-scope search keeps 250 as its bound, and asks for it when it names
+    // none, while alpha's storefront searches ask for its storefront limit, the default of 150.
+    expect(res.body).toHaveProperty("criteria.amadeusQuery.max", "250");
     const [cheapest] = offersOf(res.body);
     expect(cheapest?.netPrice).toEqual({ amount: "92.15", currency: "EUR" });
     expect(cheapest?.markup?.amount).toEqual({ amount: "9.22", currency: "EUR" });

@@ -20,12 +20,14 @@
 // 5. Cancel (`canCancel`, which the API already denies when the OTA turned self-service cancellation off):
 //    components/cancel-dialog.js. When it is not allowed for a reason the traveller cannot change (flown, too close to
 //    departure, turned off), the page says "This booking can no longer be cancelled online" with the support contact.
-// 6. Fare rules: `bookings.getFareRules` when the "Changes and refunds" disclosure is first opened. A `429
-//    RATE_LIMITED` (after the SDK's own retries) whose `Retry-After` is at most 10 s waits it, with the loading state
-//    shown, and asks once more; a longer `Retry-After`, or none, asks nothing more and says that the fare rules are
-//    available in about a minute (its seconds rounded up to whole minutes above 90 s), as does a second `429`; any other
-//    failure shows the error at once (lead decision (13e) of 2026-11-10). Timeline: `bookings.listEvents`
-//    (components/booking-timeline.js).
+// 6. Fare rules: `bookings.getFareRules` when the "Changes and refunds" disclosure is first opened, through a client
+//    without the SDK's automatic retries (`rulesClientOf`: the page's client with `maxRetries: 0`, lead decision (15k)
+//    of 2026-11-11), so every `429` reaches the page at once and only the page decides about one more call. A `429
+//    RATE_LIMITED` whose `Retry-After` is at most 10 s waits it, with the loading state shown, and asks once more; a
+//    longer `Retry-After`, or none, asks nothing more and says that the fare rules are available in about a minute (its
+//    seconds rounded up to whole minutes above 90 s), as does a second `429`; any other failure shows the error at once
+//    (lead decision (13e) of 2026-11-10). So the API gets one call for a `429` with a `Retry-After` above 10 s or
+//    without one, and two for one of 10 s or less. Timeline: `bookings.listEvents` (components/booking-timeline.js).
 //
 // Every control follows `allowedActions` exactly (`ACTION_CONTROLS`); the actions the MVP does not offer
 // (`canModifyTravelerDocuments`, `canModifyLoyaltyPrograms`, `canAddRemarks`, `canAddAncillaries`) have none.
@@ -65,7 +67,7 @@ import { safeUrl } from "../lib/url.js";
 /** @typedef {import("../lib/errors.js").PageState} PageState */
 /** @typedef {import("../lib/config.js").StorefrontConfig} StorefrontConfig */
 /** @typedef {import("../lib/session.js").SessionInfo} SessionInfo */
-/** @typedef {Pick<VelexisClient, "bookings">} PageClient */
+/** @typedef {Pick<VelexisClient, "bookings" | "withOptions">} PageClient */
 
 /** A booking id as the API writes it. */
 export const BOOKING_ID = /^bkg_[0-9A-Za-z]{16,40}$/;
@@ -405,6 +407,17 @@ export function fareRulesWaitMessage(retryAfterSeconds) {
   }
   return t("rules.availableInMinutes", { count: Math.ceil(retryAfterSeconds / 60) });
 }
+
+/**
+ * The client the page asks for the fare rules with: `client` with the SDK's automatic retries off (`maxRetries: 0`)
+ * and every other option kept (the storefront's same-origin `/api`, cookie session, `fetch` and the visitor's
+ * currency). The SDK would otherwise wait out a `429` itself, up to a `Retry-After` of 30 s and twice, before the page
+ * sees it, so the page could neither say at once when the rules are available nor keep to one more call of its own
+ * (lead decisions (13e) of 2026-11-10 and (15k) of 2026-11-11).
+ * @param {PageClient} client
+ * @returns {PageClient}
+ */
+export const rulesClientOf = (client) => client.withOptions({ maxRetries: 0 });
 
 /**
  * Runs the booking page (see the top of this file) in `doc`, with what boot() returned. Returns `null` when the page
@@ -978,16 +991,25 @@ export function start(context, env = {}) {
     });
 
   /**
-   * `bookings.getFareRules`; a `429 RATE_LIMITED` whose `Retry-After` is at most RULES_RETRY_MAX_SECONDS waits it (the
-   * loading state still shown) and asks once more, whose failure is the caller's to show. Any other failure, a `429`
-   * with a longer `Retry-After` or without one included, is the caller's to show at once.
+   * The client of the fare rules (`rulesClientOf`), made when they are first asked for.
+   * @type {PageClient | undefined}
+   */
+  let rulesClient;
+
+  /**
+   * `bookings.getFareRules` through the client without SDK retries (`rulesClientOf`); a `429 RATE_LIMITED` whose
+   * `Retry-After` is at most RULES_RETRY_MAX_SECONDS waits it (the loading state still shown) and asks once more, whose
+   * failure is the caller's to show. Any other failure, a `429` with a longer `Retry-After` or without one included, is
+   * the caller's to show at once.
    * @param {string} id
    * @param {AbortSignal} signal
    * @returns {Promise<BookingFareRules | null>} `null` when the page was destroyed during the wait
    */
   const fareRules = async (id, signal) => {
+    rulesClient ??= rulesClientOf(client);
+    const rules = rulesClient;
     try {
-      return await client.bookings.getFareRules({ bookingId: id }, { signal });
+      return await rules.bookings.getFareRules({ bookingId: id }, { signal });
     } catch (error) {
       const state = pageStateFor(error);
       const seconds = state.retryAfterSeconds;
@@ -998,7 +1020,7 @@ export function start(context, env = {}) {
       if (destroyed || signal.aborted) {
         return null;
       }
-      return await client.bookings.getFareRules({ bookingId: id }, { signal });
+      return await rules.bookings.getFareRules({ bookingId: id }, { signal });
     }
   };
 

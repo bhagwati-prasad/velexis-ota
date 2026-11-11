@@ -22,8 +22,9 @@
 //      --offers n makes the proxy answer with n (the stub's repeated, each with its own id), since Amadeus answers up
 //      to 250. As Amadeus does, the proxy never answers more offers than the search asked for: `max` of a GET search,
 //      `searchCriteria.maxFlightOffers` of a POST search, 250 when it names none. The API asks for the storefront's
-//      `maxResults`, 175 by default since OBE-096 (ota/docs/performance.md §5), so `--offers 250` gives answers of 175
-//      offers at a storefront without its own `maxResults`, which is every tenant of the run;
+//      `maxResults`, 150 by default since lead decision (15i) of 2026-11-11 (175 since OBE-096 before it;
+//      ota/docs/performance.md §5), so `--offers 250` gives answers of 150 offers at a storefront without its own
+//      `maxResults`, which is every tenant of the run;
 //   3. the built API (`ota/backend/dist/main.js`) in a child process on a free port, started as the VM starts it
 //      (APP_ENV and NODE_ENV production, `--enable-source-maps`, `--max-old-space-size=640 --max-semi-space-size=32`,
 //      the NODE_OPTIONS of deploy/systemd/velexis-ota-api.service; --app-env test turns on the development checks such

@@ -10,7 +10,8 @@
 // - Staff access tokens (`StaffTokens`): EdDSA JWTs with the OTA backend's own key (JWT_PRIVATE_KEY_FILE, the key of
 //   the customer tokens, read once at start-up), 15 minutes, claims `typ: staff`, `sub` (`stf_…`, the membership),
 //   `tid` (`ten_…`), `roles` (the membership's one role), `sid` (`asn_…`, the family), `iat`, `exp`. A customer token
-//   never verifies as a staff token, or the other way round (`typ`).
+//   never verifies as a staff token, or the other way round (`typ`). During a rotation of the key, the tokens of the
+//   previous key's `kid` (JWT_PREVIOUS_PUBLIC_KEY_FILE) still verify for their last 15 minutes (FIX-W48-OTA).
 // - Refresh families (`staffsess:<asn_…>`, absolute lifetime 12 hours, `SET … EX NX`, rotations `KEEPTTL`): JSON
 //   `{v: 1, id, staffId, accountId, tenantId, role, createdAt, expiresAt, userAgent, current, rotated}` where `current`
 //   is the SHA-256 of the newest refresh token and `rotated` those of the tokens it replaced (the last 100). A refresh
@@ -33,14 +34,7 @@ import { ConfigService } from "@nestjs/config";
 import { generateToken, sha256Hex } from "@velexis/crypto";
 import { AppError } from "@velexis/errors";
 import type { Redis } from "ioredis";
-import {
-  decodeJwt,
-  decodeProtectedHeader,
-  errors as joseErrors,
-  jwtVerify,
-  SignJWT,
-  type JWTPayload,
-} from "jose";
+import { decodeJwt, errors as joseErrors, jwtVerify, SignJWT, type JWTPayload } from "jose";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { Clock } from "../../common/clock";
 import { IdGenerator } from "../../common/ids";
@@ -64,6 +58,9 @@ import {
   CLOCK_SKEW_SECONDS,
   loadSigningKey,
   MAX_ACCESS_TOKEN_LENGTH,
+  PreviousSigningKey,
+  VerificationKeys,
+  verifierOf,
   type SignedAccessToken,
   type SigningKey,
   type TokenRefusal,
@@ -457,18 +454,22 @@ function staffClaimsOf(payload: JWTPayload): StaffTokenClaims | undefined {
 
 /**
  * Signs and verifies staff access tokens with the OTA backend's key (JWT_PRIVATE_KEY_FILE, the one TokenService signs
- * customer tokens with, read once at start-up) and the same rules: EdDSA with this key's `kid` only, 30 s of clock
- * skew, a reason instead of an exception. Times come from the injected Clock.
+ * customer tokens with, read once at start-up) and the same rules: EdDSA with this key's `kid`, or during a rotation
+ * the previous key's (JWT_PREVIOUS_PUBLIC_KEY_FILE, `PreviousSigningKey`, FIX-W48-OTA), 30 s of clock skew, a reason
+ * instead of an exception. Only the current key signs. Times come from the injected Clock.
  */
 @Injectable()
 export class StaffTokens {
   private readonly key: SigningKey;
+  private readonly keys: VerificationKeys;
 
   constructor(
     config: ConfigService<ApiConfig, true>,
     private readonly clock: Clock,
+    @Inject(PreviousSigningKey) previous?: PreviousSigningKey,
   ) {
     this.key = loadSigningKey(config.get("JWT_PRIVATE_KEY_FILE", { infer: true }));
+    this.keys = new VerificationKeys(this.key, previous);
   }
 
   /** A new staff access token for 15 minutes from now; a claim of the wrong shape is a `TypeError` (never its value). */
@@ -502,11 +503,11 @@ export class StaffTokens {
   }
 
   /**
-   * The tenant (`tid`) of a staff access token signed with this key, also when it has expired; `undefined` for anything
-   * else (not a token, another key, a customer token). The tenant guard locates the tenant of an OTA admin request with
-   * it (OBE-060, OADR-0009 point 2: the service caller's tenant is its staff token's `tid`); the staff guard then
-   * verifies the token against that tenant as for any caller. The unverified `tid` only picks the tenant `verify`
-   * checks the token for.
+   * The tenant (`tid`) of a staff access token signed with one of this service's keys, also when it has expired;
+   * `undefined` for anything else (not a token, another key, a customer token). The tenant guard locates the tenant of
+   * an OTA admin request with it (OBE-060, OADR-0009 point 2: the service caller's tenant is its staff token's `tid`);
+   * the staff guard then verifies the token against that tenant as for any caller. The unverified `tid` only picks the
+   * tenant `verify` checks the token for.
    */
   async tenantOf(token: string): Promise<string | undefined> {
     if (token.length === 0 || token.length > MAX_ACCESS_TOKEN_LENGTH) {
@@ -536,18 +537,14 @@ export class StaffTokens {
     if (token.length > MAX_ACCESS_TOKEN_LENGTH) {
       return { ok: false, reason: "malformed" };
     }
-    let header: ReturnType<typeof decodeProtectedHeader>;
-    try {
-      header = decodeProtectedHeader(token);
-    } catch {
-      return { ok: false, reason: "malformed" };
-    }
-    if (header.alg !== ACCESS_TOKEN_ALGORITHM || header.kid !== this.key.kid) {
-      return { ok: false, reason: "signature" };
+    // The token's `kid` picks the key: this service's, or the previous key's during a rotation.
+    const verifier = verifierOf(token, this.keys);
+    if (typeof verifier === "string") {
+      return { ok: false, reason: verifier };
     }
     let payload: JWTPayload;
     try {
-      ({ payload } = await jwtVerify(token, this.key.publicKey, {
+      ({ payload } = await jwtVerify(token, verifier, {
         algorithms: [ACCESS_TOKEN_ALGORITHM],
         currentDate: this.clock.now(),
         clockTolerance: CLOCK_SKEW_SECONDS,
@@ -565,7 +562,10 @@ export class StaffTokens {
   }
 }
 
-/** Why jose refused a token; the payload of a claim error is this key's own (jose checks the signature first). */
+/**
+ * Why jose refused a token; the payload of a claim error is signed by one of StaffTokens' keys (jose checks the
+ * signature first).
+ */
 function refusalOf(error: unknown, tenantId: string): TokenRefusal {
   if (error instanceof joseErrors.JWTExpired) {
     const claims = staffClaimsOf(error.payload);

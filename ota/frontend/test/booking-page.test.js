@@ -23,6 +23,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 
 import { includePartials } from "../scripts/vite-plugins.js";
 import { cancellationKey } from "../src/components/cancel-dialog.js";
+import { client as storefrontClient } from "../src/lib/client.js";
 import { formatMoney } from "../src/lib/format.js";
 import {
   ACTION_CONTROLS,
@@ -32,6 +33,7 @@ import {
   retriesFareRules,
   RULES_ABOUT_A_MINUTE_SECONDS,
   RULES_RETRY_MAX_SECONDS,
+  rulesClientOf,
   start,
 } from "../src/pages/booking.js";
 import { STOREFRONT_ROOT } from "./helpers/storefront.js";
@@ -446,7 +448,11 @@ function fakeApi(answers = {}) {
       inTurn(/** @type {unknown[]} */ (list)),
     ]),
   );
-  return { client: { bookings } };
+  // `withOptions` answers a client with the same fake methods: the fare rules' client without SDK retries
+  // (`rulesClientOf`), whose calls the counts below include.
+  /** @type {{ bookings: typeof bookings, withOptions: import("vitest").Mock }} */
+  const client = { bookings, withOptions: vi.fn(() => client) };
+  return { client };
 }
 
 /** @type {Browser | undefined} */
@@ -842,6 +848,16 @@ describe("booking page: the booking", () => {
     expect(client.bookings.getFareRules).toHaveBeenCalledTimes(1);
   });
 
+  it("[FIX-W48-OTA AC3] asks for the fare rules through the page's client with maxRetries 0 only", async () => {
+    vi.useFakeTimers();
+    const { client } = await openBooking();
+    expect(client.withOptions).not.toHaveBeenCalled();
+    await openRules();
+    expect(client.withOptions.mock.calls).toEqual([[{ maxRetries: 0 }]]);
+    expect(client.bookings.getFareRules).toHaveBeenCalledTimes(1);
+    expect(rulesClientOf(/** @type {never} */ (client))).toBe(client);
+  });
+
   it("[OFE-015] a cancelled booking shows its cancellation and refund; a requested one says so in its status", async () => {
     const cancelled = await openBooking({ fake: fakeApi({ get: [cancelledBooking()] }) });
     expect(text($("[data-booking-status]"))).toBe("Cancelled");
@@ -878,6 +894,185 @@ describe("booking page: the booking", () => {
     expect(text($("[data-cancellation-refund]"))).toBe(`Estimated refund: ${money("400.00")}.`);
     expect(action("cancel").hidden).toBe(true);
     expect($("[data-cancel-unavailable]").hidden).toBe(true);
+  });
+});
+
+describe("booking page: the fare rules through the storefront's SDK client [FIX-W48-OTA AC3]", () => {
+  // Lead decision (15k) of 2026-11-11: the page asks for the fare rules through the storefront's own client (lib/client.js:
+  // same-origin `/api`, cookie session, its `fetch`) with `maxRetries: 0`, so decision (13e) holds end to end: what
+  // reaches the API is counted here at the browser's `fetch`, under the real SDK's retry rules (a `429` with a
+  // `Retry-After` of at most 30 s would otherwise be waited out and asked again by the SDK itself, twice).
+  const FARE_RULES_PATH = `/api/v1/bookings/${BOOKING_ID}/fare-rules`;
+
+  /**
+   * An answer of the fake API, JSON with the request id header.
+   * @param {number} status
+   * @param {unknown} body
+   * @param {Record<string, string>} [headers]
+   */
+  const answer = (status, body, headers = {}) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "content-type": "application/json", "x-request-id": "req_booking_sdk", ...headers },
+    });
+
+  /**
+   * The API's `429 RATE_LIMITED` of the fare rules, with `Retry-After: <seconds>` or without the header.
+   * @param {number | undefined} seconds
+   */
+  const tooMany = (seconds) => () =>
+    answer(
+      429,
+      {
+        error: {
+          code: "RATE_LIMITED",
+          message: "Too many requests",
+          status: 429,
+          requestId: "req_booking_sdk",
+        },
+      },
+      seconds === undefined ? {} : { "retry-after": String(seconds) },
+    );
+
+  /**
+   * Stubs the browser's `fetch` with the API of one booking: its reads, and the fare rules answered by `rulesAnswers`
+   * in turn (the last one again and again). The page gets the storefront's own client.
+   * @param {Array<() => Response>} rulesAnswers
+   */
+  function stubApi(rulesAnswers) {
+    let rulesCalls = 0;
+    const base = `/api/v1/bookings/${BOOKING_ID}`;
+    const fetch = vi.fn(async (/** @type {RequestInfo | URL} */ input) => {
+      const path = new URL(String(input), location.origin).pathname;
+      if (path === base) {
+        return answer(200, booking());
+      }
+      if (path === `${base}/documents`) {
+        return answer(200, { data: DOCUMENTS, page: { nextCursor: null, limit: 20 } });
+      }
+      if (path === `${base}/events`) {
+        return answer(200, { data: [event(1, "Booking confirmed")], page: { nextCursor: null, limit: 20 } });
+      }
+      if (path === FARE_RULES_PATH) {
+        const next = rulesAnswers[Math.min(rulesCalls, rulesAnswers.length - 1)] ?? tooMany(undefined);
+        rulesCalls += 1;
+        return next();
+      }
+      return answer(404, { error: { code: "NOT_FOUND", message: "Not found", status: 404 } });
+    });
+    vi.stubGlobal("fetch", fetch);
+    /** The fare-rules requests that reached the API. */
+    const rulesRequests = () =>
+      fetch.mock.calls.filter(
+        ([input]) => new URL(String(input), location.origin).pathname === FARE_RULES_PATH,
+      ).length;
+    return { rulesRequests };
+  }
+
+  /**
+   * Lets the SDK's `fetch` answers be read: real I/O turns (the timers the page and the SDK wait with are fake). The
+   * budget is a few event-loop turns per call; it never advances the fake clock.
+   */
+  const settleIo = async () => {
+    for (let turn = 0; turn < 20; turn += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  };
+
+  /** Opens the booking page with the storefront's client and lets the first load arrive. */
+  async function openWithStorefrontClient() {
+    showPage(`/booking.html?id=${BOOKING_ID}`);
+    const view = start(
+      {
+        config: /** @type {never} */ (CONFIG),
+        client: /** @type {never} */ (storefrontClient),
+        session: /** @type {never} */ (SESSION),
+      },
+      { navigate: vi.fn() },
+    );
+    if (!view) {
+      throw new Error("the booking page did not start");
+    }
+    views.push(view);
+    await settleIo();
+    await view.done;
+    return view;
+  }
+
+  /** Opens "Changes and refunds" and lets the first answer arrive. */
+  const openRules = async () => {
+    const rules = /** @type {HTMLDetailsElement} */ ($("details[data-fare-rules]"));
+    rules.open = true;
+    rules.dispatchEvent(new Event("toggle"));
+    await settleIo();
+  };
+
+  // Only the clocks the page and the SDK wait with are fake; the I/O turns that read an answer stay real.
+  const fakeClocks = () =>
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+
+  it.each([
+    ["11 s", 11, "The fare rules will be available in about a minute"],
+    ["30 s", 30, "The fare rules will be available in about a minute"],
+    ["no", undefined, "The fare rules will be available in about a minute"],
+  ])(
+    "[FIX-W48-OTA AC3] a 429 with %s Retry-After reaches the API once, and the page says when the rules are available",
+    async (_label, seconds, message) => {
+      fakeClocks();
+      const api = stubApi([tooMany(seconds), () => answer(200, fareRules())]);
+      await openWithStorefrontClient();
+      await openRules();
+
+      expect(api.rulesRequests()).toBe(1);
+      expect($("[data-rules-loading]").hidden).toBe(true);
+      expect(text($("[data-rules-state] [data-field='title']"))).toBe(message);
+      // Neither the SDK nor the page asks again by itself, however long the page stays open.
+      await vi.advanceTimersByTimeAsync(180_000);
+      await settleIo();
+      expect(api.rulesRequests()).toBe(1);
+    },
+  );
+
+  it("[FIX-W48-OTA AC3] a 429 with a Retry-After of 10 s reaches the API twice: the page's one retry, then the rules", async () => {
+    fakeClocks();
+    const api = stubApi([tooMany(RULES_RETRY_MAX_SECONDS), () => answer(200, fareRules())]);
+    await openWithStorefrontClient();
+    await openRules();
+
+    expect(api.rulesRequests()).toBe(1);
+    expect($("[data-rules-loading]").hidden).toBe(false);
+    await vi.advanceTimersByTimeAsync(RULES_RETRY_MAX_SECONDS * 1000 - 1);
+    await settleIo();
+    expect(api.rulesRequests()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await settleIo();
+    expect(api.rulesRequests()).toBe(2);
+    expect($("[data-rules-loading]").hidden).toBe(true);
+    expect(items("[data-rules-summary]")).toEqual([
+      `Refund: Allowed for a fee of up to ${money("50.00")} per traveller`,
+      "Change: Not allowed",
+    ]);
+    await vi.advanceTimersByTimeAsync(180_000);
+    await settleIo();
+    expect(api.rulesRequests()).toBe(2);
+  });
+
+  it("[FIX-W48-OTA AC3] two 429s with a Retry-After of 10 s or less reach the API twice, and the page says when the rules are available", async () => {
+    fakeClocks();
+    const api = stubApi([tooMany(4), tooMany(10)]);
+    await openWithStorefrontClient();
+    await openRules();
+    await vi.advanceTimersByTimeAsync(4_000);
+    await settleIo();
+
+    expect(api.rulesRequests()).toBe(2);
+    expect($("[data-rules-loading]").hidden).toBe(true);
+    expect(text($("[data-rules-state] [data-field='title']"))).toBe(
+      "The fare rules will be available in about a minute",
+    );
+    await vi.advanceTimersByTimeAsync(180_000);
+    await settleIo();
+    expect(api.rulesRequests()).toBe(2);
   });
 });
 

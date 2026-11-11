@@ -381,7 +381,7 @@ The RSS after start was 295–309 MiB in every run.
 
 - **The cap.** A search's `max` (SIMPLE) and `maxFlightOffers` (ADVANCED) are capped by that limit as before, and `MAX_OFFERS_PER_SEARCH` (250) stays the bound of what a search stores.
 - **The hosted storefront.** It sends no `max`, so it now gets up to 175 offers per search, nine results pages of 20.
-- **The console.** Its searches read the same settings row, so a console-scope search of an OTA without its own `maxResults` asks for at most 175 offers too, also when it sends a larger `max` or `maxFlightOffers`. The OTA admin's shopping page asks for 50.
+- **The console.** Its searches read the same settings row, so a console-scope search of an OTA without its own `maxResults` asks for at most 175 offers too, also when it sends a larger `max` or `maxFlightOffers`. The OTA admin's shopping page asks for 50. (Since lead decision (15i) of 2026-11-11 a console-scope search is bounded by 250 instead: see the last part of this section.)
 - **More offers.** An OTA that wants more sets `maxResults`, up to 250, in `storefront_settings.search_defaults`. No console screen or operation writes that column yet.
 - **The contract.** The OpenAPI document did not change: it says that the storefront limit caps `max` and `maxFlightOffers`. It still names 250 as their default when a search omits them, the value the storefront limit then caps to 175.
 
@@ -410,6 +410,16 @@ The p95 without the stub delay was 470, 440 and 444 ms: within the budget in thr
 | RW3 | 175 | 22:41:30 | 1.05 → 0.88 | 188 / 12 | 394 / 713 | **413** | 374 | 76 | 180 | 17.7 | 94 | 308 / 339 | 20 / 55 |
 
 RV1 missed the budget at 526 ms, and RV3 met it by 1 ms. The other runs were within it, RW1 to RW3 in three runs of three. So 175 offers met the budget in 8 of the 9 Verify runs, with a margin from 87 ms (RW3) down to 1 ms (RV3). RV1 spent no more CPU per journey than the others (95 ms) and its p90 was 269 ms: as in item 3 above, its p95 came from the bursts after a `429`, which a machine that has just been busy serves more slowly.
+
+### Lead decision (15i) of 2026-11-11: 150 offers by default, 250 for the console
+
+Lead decision (15i) of 2026-11-11, which the owner approved, changed two things of Step 4 (FIX-W48-OTA, no new runs):
+
+- **The default is 150.** `DEFAULT_OFFERS_PER_SEARCH` ([`offers.mapper.ts`](../backend/src/shopping/offers.mapper.ts)) is 150 instead of 175, so a storefront without a `maxResults` of its own asks Amadeus for at most 150 offers per search, eight results pages of 20. The runs above are the reason: 175 met the budget in three runs of three on the quiet machine (Q, V) but by 1 ms in RV3 and not at all in RV1, after a busy quarter of an hour, while 150 met it in three runs of three on the quiet machine (Q1-150 to Q3-150, 413–465 ms) and in two of three on the busy one (R1-150 to R3-150, 430–527 ms), and spends 94–99 ms of CPU per journey against 97–103 ms. A storefront can still set 1 to 250 in its search defaults.
+- **The console keeps 250.** A console-scope search (the OTA admin, a `console:automation` key) is bounded by `MAX_OFFERS_PER_SEARCH`, 250, and asks for 250 when it names no `max` or `maxFlightOffers`; the storefront limit no longer applies to it (`offersBoundOf`). The OTA admin's shopping page still asks for 50. Customer-scope searches (the hosted storefront and API keys) keep the storefront limit, as Step 4 describes.
+- **The contract.** `FlightSearchSimpleRequest.max` and `FlightSearchAdvancedCriteria.maxFlightOffers` name the storefront default (150 unless the search defaults set 1 to 250) and the console's bound of 250 instead of "Default 250" ([change log](../backend/openapi/README.md#6-change-log), FIX-W48-OTA).
+
+OBE-088 measures the VM's mixed traffic with the default of 150; this section's figures stay those of OBE-096.
 
 ## 6. Follow-ups
 

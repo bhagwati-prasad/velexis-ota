@@ -1,3 +1,4 @@
+import { createPublicKey, generateKeyPairSync } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
@@ -12,7 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseEnv } from "node:util";
 import { ConfigError } from "@velexis/config";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { testApiCredentials, testApiVariables, testWorkerVariables } from "../test/helpers/api-env";
 import {
   apiConfigSchema,
@@ -50,6 +51,7 @@ const API_ONLY_NAMES = [
   "OTA_ADMIN_SERVICE_KEY",
   "API_KEY_PEPPER_FILE",
   "JWT_PRIVATE_KEY_FILE",
+  "JWT_PREVIOUS_PUBLIC_KEY_FILE",
   "DOCUMENT_URL_KEY_FILE",
   "PUBLIC_OTA_API_URL",
 ];
@@ -141,6 +143,7 @@ describe("the privileged DSNs", () => {
       "APP_ENV",
       "DATABASE_URL",
       "DOCUMENT_URL_KEY_FILE",
+      "JWT_PREVIOUS_PUBLIC_KEY_FILE",
       "JWT_PRIVATE_KEY_FILE",
       "LOG_LEVEL",
       "MASTER_KEY_CURRENT",
@@ -924,6 +927,94 @@ describe("the document URL key of the API (OBE-054)", () => {
   });
 });
 
+describe("the previous signing key of a rotation (FIX-W48-OTA, lead decision (15f) of 2026-11-11)", () => {
+  /** A folder of key files made up for these tests; no value is a secret. */
+  let folder = "";
+
+  /** Writes `pem` to a new file of the folder with `mode`, as an operator installs a key (0400 or 0600). */
+  function keyFile(name: string, pem: string, mode = 0o600): string {
+    const path = join(folder, name);
+    writeFileSync(path, pem, { mode });
+    // The umask may have removed bits from `mode`; set exactly what the test asked for.
+    chmodSync(path, mode);
+    return path;
+  }
+
+  const ed25519 = () =>
+    generateKeyPairSync("ed25519", {
+      privateKeyEncoding: { type: "pkcs8", format: "pem" },
+      publicKeyEncoding: { type: "spki", format: "pem" },
+    });
+
+  /** The reasons of a refused JWT_PREVIOUS_PUBLIC_KEY_FILE, after checking that no message names the path or a key. */
+  function reasons(path: string): string[] {
+    const error = configErrorOf(() => loadApiConfig({ ...API_ENV, JWT_PREVIOUS_PUBLIC_KEY_FILE: path }));
+    expect(error.message).not.toContain(path);
+    // The DER prefixes of an Ed25519 SPKI and PKCS#8 block in base64: no line of a key file is quoted.
+    expect(error.message).not.toMatch(/MCowBQYDK2Vw|MC4CAQAwBQYDK2Vw/);
+    return error.problems.map((problem) => `${problem.variable}: ${problem.reason}`);
+  }
+
+  beforeAll(() => {
+    folder = mkdtempSync(join(tmpdir(), "velexis-ota-previous-key-"));
+  });
+
+  afterAll(() => {
+    rmSync(folder, { recursive: true, force: true });
+  });
+
+  it("[FIX-W48-OTA AC1] is optional and the API's only: unset or empty outside a rotation, the previous key's public half during one", () => {
+    const previous = keyFile("previous.pub.pem", ed25519().publicKey);
+
+    expect(loadApiConfig(API_ENV).JWT_PREVIOUS_PUBLIC_KEY_FILE).toBeUndefined();
+    expect(
+      loadApiConfig({ ...API_ENV, JWT_PREVIOUS_PUBLIC_KEY_FILE: "" }).JWT_PREVIOUS_PUBLIC_KEY_FILE,
+    ).toBeUndefined();
+    expect(
+      loadApiConfig({ ...API_ENV, JWT_PREVIOUS_PUBLIC_KEY_FILE: previous }).JWT_PREVIOUS_PUBLIC_KEY_FILE,
+    ).toBe(previous);
+    expect(
+      loadWorkerConfig({ ...WORKER_ENV, ...API_ONLY, JWT_PREVIOUS_PUBLIC_KEY_FILE: previous }),
+    ).not.toHaveProperty("JWT_PREVIOUS_PUBLIC_KEY_FILE");
+  });
+
+  it("[FIX-W48-OTA AC1] refuses the current key's public half, a private key, a key that is not Ed25519, a missing file and one others may read, naming the variable and never its path or a key", () => {
+    const current = keyFile(
+      "current.pub.pem",
+      createPublicKey(readFileSync(testApiCredentials().jwtKeyFile, "utf8")).export({
+        type: "spki",
+        format: "pem",
+      }) as string,
+    );
+    const privateKey = keyFile("private.pem", ed25519().privateKey);
+    const both = keyFile("both.pem", `${ed25519().publicKey}${ed25519().privateKey}`);
+    const ec = keyFile(
+      "ec.pub.pem",
+      generateKeyPairSync("ec", {
+        namedCurve: "P-256",
+        privateKeyEncoding: { type: "pkcs8", format: "pem" },
+        publicKeyEncoding: { type: "spki", format: "pem" },
+      }).publicKey,
+    );
+    const readable = keyFile("readable.pub.pem", ed25519().publicKey, 0o644);
+
+    expect(reasons(current)).toEqual([
+      "JWT_PREVIOUS_PUBLIC_KEY_FILE: holds the public half of JWT_PRIVATE_KEY_FILE (the same kid); it must hold the key signed with before the rotation",
+    ]);
+    for (const path of [privateKey, both]) {
+      expect(reasons(path)).toEqual([
+        "JWT_PREVIOUS_PUBLIC_KEY_FILE: must hold only a public key (PEM, `-----BEGIN PUBLIC KEY-----`), never a private key",
+      ]);
+    }
+    expect(reasons(ec)).toEqual([
+      "JWT_PREVIOUS_PUBLIC_KEY_FILE: holds a key of type ec; OTA tokens are signed with Ed25519",
+    ]);
+    for (const path of [readable, join(folder, "missing.pub.pem")]) {
+      expect(reasons(path).map((reason) => reason.split(":")[0])).toEqual(["JWT_PREVIOUS_PUBLIC_KEY_FILE"]);
+    }
+  });
+});
+
 describe("the airline card's kill switch", () => {
   it("is off by default and in the deploy template, on in development, and only for true, false, 1 or 0 [OBE-050 AC1]", () => {
     expect(loadApiConfig(API_ENV).AIRLINE_CARD_ENABLED).toBe(false);
@@ -1054,8 +1145,15 @@ describe("example and template files", () => {
         STORAGE_DIR: WORKER_VARIABLES["STORAGE_DIR"] ?? "missing",
       }).APP_ENV,
     ).toBe("production");
-    // PORT and HEALTH_PORT are set by the velexis-ota-api and velexis-ota-worker units.
-    for (const name of Object.keys(apiConfigSchema).filter((variable) => variable !== "PORT")) {
+    // PORT and HEALTH_PORT are set by the velexis-ota-api and velexis-ota-worker units. The previous signing key of a
+    // rotation is optional and only a comment of the template (FIX-W48-OTA), so velexis-deploy requires no line.
+    expect(shared).not.toHaveProperty("JWT_PREVIOUS_PUBLIC_KEY_FILE");
+    expect(readFileSync(join(REPO_ROOT, "deploy/env/ota-backend.env.example"), "utf8")).toContain(
+      "#   JWT_PREVIOUS_PUBLIC_KEY_FILE=/etc/velexis/keys/ota/ota-jwt-ed25519.previous.pub.pem",
+    );
+    for (const name of Object.keys(apiConfigSchema).filter(
+      (variable) => variable !== "PORT" && variable !== "JWT_PREVIOUS_PUBLIC_KEY_FILE",
+    )) {
       expect(shared).toHaveProperty(name);
     }
     for (const name of Object.keys(workerConfigSchema).filter((variable) => variable !== "HEALTH_PORT")) {

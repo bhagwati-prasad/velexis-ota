@@ -8,13 +8,22 @@
 //   sid   the session, `ses_…`: the refresh family in `customer_sessions` (`AuthSessionDetails.id`)
 //   iat, exp
 //
-// Verification accepts EdDSA with this key's `kid` only, allows 30 s of clock skew between the API's processes and
-// the client, and answers why a token is refused instead of throwing, so the guard maps the reason to the error code
-// (`TOKEN_EXPIRED` for an expired token of the request's tenant, `UNAUTHENTICATED` for anything else) and logs it.
+// Verification accepts EdDSA with this key's `kid` (or the previous key's during a rotation, below), allows 30 s of
+// clock skew between the API's processes and the client, and answers why a token is refused instead of throwing, so the
+// guard maps the reason to the error code (`TOKEN_EXPIRED` for an expired token of the request's tenant,
+// `UNAUTHENTICATED` for anything else) and logs it.
 // Refresh tokens are opaque and live in `customer_sessions` (sessions.service.ts); this service only signs and
 // verifies access tokens. A token is never logged, and no error or reason quotes one.
+//
+// Key rotation (FIX-W48-OTA, lead decision (15f) of 2026-11-11; ADR-0010 "Rotation": the old public key stays valid
+// for one token lifetime): besides its own key, the service verifies the tokens whose `kid` is that of the optional
+// JWT_PREVIOUS_PUBLIC_KEY_FILE (`PreviousSigningKey`), the public half of the key it signed with before the rotation,
+// and it signs with JWT_PRIVATE_KEY_FILE only. A token's `kid` picks the key it is verified with, so a token of another
+// `kid`, or one whose signature is not its `kid`'s key, is refused (`signature`). Removing the variable (and
+// restarting) ends the overlap: ota/docs/runbooks/jwt-key-rotation.md removes it 15 minutes after the rotation.
+// StaffTokens (staff/staff-sessions.ts) verifies staff tokens with the same keys.
 import { createHash, createPrivateKey, createPublicKey, type KeyObject } from "node:crypto";
-import { Injectable } from "@nestjs/common";
+import { Inject, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { readKeyFile } from "@velexis/config";
 import {
@@ -27,6 +36,7 @@ import {
 } from "jose";
 import { Clock } from "../common/clock";
 import { JWT_PRIVATE_KEY_MIN_BYTES, type ApiConfig } from "../config";
+import { isSamePublicKey, JWT_PUBLIC_KEY_MIN_BYTES, previousPublicKeyOf } from "./jwt-keys";
 
 /** Access tokens live 15 minutes (ADR-0008, architecture §3.2). */
 export const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
@@ -78,7 +88,8 @@ export interface SignedAccessToken {
 
 /**
  * Why a presented token is refused: none was sent; it is not a JWT this service could have signed (malformed, too
- * long, another algorithm or `kid`, a bad signature); its claims are not those of a customer token (another `typ`, a
+ * long, another algorithm, a `kid` that is neither the current key's nor the previous key's of a rotation, a signature
+ * that is not its `kid`'s key); its claims are not those of a customer token (another `typ`, a
  * malformed id, a missing or inconsistent time); it expired; or it belongs to another tenant than the request's.
  */
 export type TokenRefusal = "missing" | "malformed" | "signature" | "claims" | "expired" | "other_tenant";
@@ -91,6 +102,13 @@ export type CustomerTokenVerdict =
 /** The signing key of the OTA backend: an Ed25519 key pair and its `kid`. */
 export interface SigningKey {
   readonly privateKey: KeyObject;
+  readonly publicKey: KeyObject;
+  /** The RFC 7638 JWK thumbprint (SHA-256, base64url) of the public key. */
+  readonly kid: string;
+}
+
+/** A key that only verifies: the previous key of a rotation (JWT_PREVIOUS_PUBLIC_KEY_FILE) and its `kid`. */
+export interface VerifyingKey {
   readonly publicKey: KeyObject;
   /** The RFC 7638 JWK thumbprint (SHA-256, base64url) of the public key. */
   readonly kid: string;
@@ -126,6 +144,72 @@ export function loadSigningKey(path: string): SigningKey {
   }
   const publicKey = createPublicKey(privateKey);
   return { privateKey, publicKey, kid: jwkThumbprint(publicKey) };
+}
+
+/**
+ * Reads and checks the previous key of a rotation (JWT_PREVIOUS_PUBLIC_KEY_FILE): the file passes `readKeyFile` (a
+ * regular file of mode 0400 or 0600 with a PEM block of at least 44 bytes) and holds an Ed25519 public key in SPKI and
+ * no private key (`previousPublicKeyOf`). Errors name the path and the reason, never a byte of the file.
+ */
+export function loadVerifyingKey(path: string): VerifyingKey {
+  const pem = readKeyFile(path, { minBytes: JWT_PUBLIC_KEY_MIN_BYTES, encoding: "pem" });
+  let publicKey: KeyObject;
+  try {
+    publicKey = previousPublicKeyOf(pem);
+  } catch (error) {
+    throw new Error(`JWT_PREVIOUS_PUBLIC_KEY_FILE ${path} ${(error as Error).message}`);
+  }
+  return { publicKey, kid: jwkThumbprint(publicKey) };
+}
+
+/**
+ * The previous key of a rotation of JWT_PRIVATE_KEY_FILE, read once at start-up from the optional
+ * JWT_PREVIOUS_PUBLIC_KEY_FILE (`loadVerifyingKey`; a missing, readable-by-others, private or non-Ed25519 key stops the
+ * API); `key` is `undefined` outside a rotation. IdentityModule provides it to TokenService and StaffTokens, which also
+ * verify the tokens of its `kid`; one read serves both.
+ */
+@Injectable()
+export class PreviousSigningKey {
+  readonly key: VerifyingKey | undefined;
+
+  constructor(config: ConfigService<ApiConfig, true>) {
+    const path = config.get("JWT_PREVIOUS_PUBLIC_KEY_FILE", { infer: true });
+    this.key = path === undefined ? undefined : loadVerifyingKey(path);
+  }
+}
+
+/**
+ * The keys that verify the tokens of a service signing with `signing`: its own and, during a rotation, `previous`'s.
+ * Throws when the previous key is the signing key's public half (the same `kid`), which configuration also refuses.
+ */
+export class VerificationKeys {
+  readonly previous: VerifyingKey | undefined;
+
+  constructor(
+    private readonly signing: SigningKey,
+    previous: PreviousSigningKey | undefined,
+  ) {
+    this.previous = previous?.key;
+    if (this.previous !== undefined && isSamePublicKey(this.previous.publicKey, signing.publicKey)) {
+      throw new Error(
+        "JWT_PREVIOUS_PUBLIC_KEY_FILE holds the public half of JWT_PRIVATE_KEY_FILE (the same kid)",
+      );
+    }
+  }
+
+  /**
+   * The public key that verifies the tokens of `kid`: the signing key's, or the previous key's during a rotation;
+   * `undefined` for any other `kid` (and for none).
+   */
+  of(kid: unknown): KeyObject | undefined {
+    if (kid === this.signing.kid) {
+      return this.signing.publicKey;
+    }
+    if (this.previous !== undefined && kid === this.previous.kid) {
+      return this.previous.publicKey;
+    }
+    return undefined;
+  }
 }
 
 /** The token of an `Authorization: Bearer <token>` header; `undefined` without one or with another scheme. */
@@ -164,23 +248,34 @@ function claimsOf(payload: JWTPayload): CustomerTokenClaims | undefined {
 }
 
 /**
- * Signs and verifies the OTA backend's access tokens with the key of JWT_PRIVATE_KEY_FILE (read once, at start-up: a
- * missing, readable-by-others or non-Ed25519 key stops the API). Times come from the injected Clock.
+ * Signs the OTA backend's customer access tokens with the key of JWT_PRIVATE_KEY_FILE and verifies them with it or,
+ * during a rotation, with the previous public key of JWT_PREVIOUS_PUBLIC_KEY_FILE (`PreviousSigningKey`; both read
+ * once, at start-up: a missing, readable-by-others or non-Ed25519 key stops the API, and so does a previous key with
+ * the current `kid`). A service built without `previous` (a test's) verifies with its own key only. Times come from
+ * the injected Clock.
  */
 @Injectable()
 export class TokenService {
   private readonly key: SigningKey;
+  private readonly keys: VerificationKeys;
 
   constructor(
     config: ConfigService<ApiConfig, true>,
     private readonly clock: Clock,
+    @Inject(PreviousSigningKey) previous?: PreviousSigningKey,
   ) {
     this.key = loadSigningKey(config.get("JWT_PRIVATE_KEY_FILE", { infer: true }));
+    this.keys = new VerificationKeys(this.key, previous);
   }
 
   /** The `kid` of every token this service signs: the JWK thumbprint of the public key. */
   get kid(): string {
     return this.key.kid;
+  }
+
+  /** The `kid` of the previous key whose tokens are still accepted, or `undefined` outside a rotation. */
+  get previousKid(): string | undefined {
+    return this.keys.previous?.kid;
   }
 
   /** The public key, for tests and a later JWKS. */
@@ -214,9 +309,10 @@ export class TokenService {
   }
 
   /**
-   * The verdict on `token` presented to tenant `tenantId`. The signature is checked first, so the claims of a refused
-   * token are trusted only when they were signed with this key: an expired token is `expired` only when it is a
-   * customer token of `tenantId`; one of another tenant is `other_tenant`, expired or not.
+   * The verdict on `token` presented to tenant `tenantId`. The signature is checked first, with the key of the token's
+   * `kid` (this service's, or the previous key's during a rotation), so the claims of a refused token are trusted only
+   * when they were signed with one of these keys: an expired token is `expired` only when it is a customer token of
+   * `tenantId`; one of another tenant is `other_tenant`, expired or not.
    */
   async verifyCustomerToken(token: string | undefined, tenantId: string): Promise<CustomerTokenVerdict> {
     if (token === undefined || token.length === 0) {
@@ -225,13 +321,13 @@ export class TokenService {
     if (token.length > MAX_ACCESS_TOKEN_LENGTH) {
       return { ok: false, reason: "malformed" };
     }
-    const headerProblem = this.headerProblem(token);
-    if (headerProblem !== undefined) {
-      return { ok: false, reason: headerProblem };
+    const verifier = verifierOf(token, this.keys);
+    if (typeof verifier === "string") {
+      return { ok: false, reason: verifier };
     }
     let verified: JWTVerifyResult;
     try {
-      verified = await jwtVerify(token, this.key.publicKey, {
+      verified = await jwtVerify(token, verifier, {
         algorithms: [ACCESS_TOKEN_ALGORITHM],
         currentDate: this.clock.now(),
         clockTolerance: CLOCK_SKEW_SECONDS,
@@ -250,25 +346,28 @@ export class TokenService {
     }
     return { ok: true, claims };
   }
-
-  /**
-   * Why the token's protected header rules it out before any signature check: `malformed` when there is no JWS header,
-   * `signature` when it names another algorithm or key (`alg` must be EdDSA and `kid` this key's).
-   */
-  private headerProblem(token: string): TokenRefusal | undefined {
-    let header: ReturnType<typeof decodeProtectedHeader>;
-    try {
-      header = decodeProtectedHeader(token);
-    } catch {
-      return "malformed";
-    }
-    return header.alg === ACCESS_TOKEN_ALGORITHM && header.kid === this.key.kid ? undefined : "signature";
-  }
 }
 
 /**
- * Why jose refused a token. jose checks the signature before any claim, so the payload of a claim error is this key's
- * own: an expired token is reported as such only when it is a well-formed customer token of `tenantId`.
+ * The public key that verifies `token`, picked by its protected header before any signature check, or why the header
+ * rules the token out: `malformed` when there is no JWS header, `signature` when it names another algorithm or a key
+ * that is not one of `keys` (`alg` must be EdDSA, `kid` the signing key's or the previous key's of a rotation).
+ * StaffTokens picks the key of a staff token with it too.
+ */
+export function verifierOf(token: string, keys: VerificationKeys): KeyObject | TokenRefusal {
+  let header: ReturnType<typeof decodeProtectedHeader>;
+  try {
+    header = decodeProtectedHeader(token);
+  } catch {
+    return "malformed";
+  }
+  return (header.alg === ACCESS_TOKEN_ALGORITHM ? keys.of(header.kid) : undefined) ?? "signature";
+}
+
+/**
+ * Why jose refused a token. jose checks the signature before any claim, so the payload of a claim error is signed by
+ * one of this service's keys: an expired token is reported as such only when it is a well-formed customer token of
+ * `tenantId`.
  */
 function refusalOf(error: unknown, tenantId: string): TokenRefusal {
   if (error instanceof joseErrors.JWTExpired) {

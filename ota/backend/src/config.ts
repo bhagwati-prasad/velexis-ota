@@ -7,6 +7,7 @@
 // configuration has no such entry even when the variable is set. DATABASE_MIGRATOR_URL belongs to deploys and the
 // local migration commands only and is in neither schema (ADR-0004, configuration matrix of
 // docs/mvp/architecture.md §6). Later tasks extend the schemas.
+import type { KeyObject } from "node:crypto";
 import { isIP } from "node:net";
 import { resolve } from "node:path";
 import {
@@ -14,6 +15,7 @@ import {
   defineConfig,
   env,
   loadDevEnvFiles,
+  readKeyFile,
   type ConfigOf,
   type ConfigProblem,
   type EnvSource,
@@ -21,6 +23,12 @@ import {
 } from "@velexis/config";
 import { API_KEY_PEPPER_MIN_BYTES, SIGNED_URL_KEY_MIN_BYTES } from "@velexis/crypto";
 import { STORAGE_DRIVERS } from "@velexis/db/storage";
+import {
+  isSamePublicKey,
+  JWT_PUBLIC_KEY_MIN_BYTES,
+  previousPublicKeyOf,
+  signingPublicKeyOf,
+} from "./identity/jwt-keys";
 
 /** The package folder (`ota/backend`, or `ota-backend` in a release): `src/` and `dist/` are one level down. */
 export const APP_DIR = resolve(__dirname, "..");
@@ -305,6 +313,19 @@ export const apiConfigSchema = {
   // folder, never the platform's key. Checked here and read once by the identity module's TokenService, which refuses
   // a key that is not Ed25519. Only the API signs and verifies tokens; the worker does not read it.
   JWT_PRIVATE_KEY_FILE: env.secretFile({ minBytes: JWT_PRIVATE_KEY_MIN_BYTES, encoding: "pem" }),
+  // Optional, during a rotation of JWT_PRIVATE_KEY_FILE only (FIX-W48-OTA, lead decision (15f) of 2026-11-11; ADR-0010
+  // "Rotation"; ota/docs/runbooks/jwt-key-rotation.md): the public half (SPKI PEM, `openssl pkey -pubout`) of the key
+  // the API signed with before. The API also accepts the customer and staff access tokens of that key's `kid` for their
+  // remaining lifetime (15 minutes at most) and signs with JWT_PRIVATE_KEY_FILE only; once the line is removed and the
+  // API restarted, they are refused. The file must exist with mode 0400 or 0600, hold an Ed25519 public key and no
+  // private key, and not the public half of JWT_PRIVATE_KEY_FILE (`jwtPreviousKeyProblems`). Unset after a suspected
+  // exposure of the old key: its tokens must stop at once. The same name as the platform backend's (FIX-W48-PLATFORM).
+  // Only the API reads it; the worker signs and verifies no token.
+  JWT_PREVIOUS_PUBLIC_KEY_FILE: env.secretFile({
+    minBytes: JWT_PUBLIC_KEY_MIN_BYTES,
+    encoding: "pem",
+    optional: true,
+  }),
   // The HMAC key of the signed document URLs (ADR-0010, ADR-0017, OADR-0013 item 9; OBE-054): `document-url.key` of
   // the OTA zone's key folder only (the platform never has it), 32 random bytes in base64, mode 0400 or 0600. Checked at
   // start-up and read once by the documents module, which signs `GET /v1/files/<storageKey>?exp=…&sig=…` with it for
@@ -387,6 +408,58 @@ function publicOtaApiUrlProblems(source: EnvSource | undefined): ConfigProblem[]
 }
 
 /**
+ * The JWT_PREVIOUS_PUBLIC_KEY_FILE rules that a schema entry cannot express (FIX-W48-OTA, lead decision (15f) of
+ * 2026-11-11, as the platform backend's rule of FIX-W48-PLATFORM): the file holds one Ed25519 public key and no private
+ * key, and not the public half of JWT_PRIVATE_KEY_FILE, whose `kid` the API signs with (a previous key with the current
+ * `kid` is refused). A file that is invalid on its own (missing, readable by others, no PEM block) is reported by the
+ * schema, not here; a JWT_PRIVATE_KEY_FILE that holds no Ed25519 key is TokenService's to report. The reasons never
+ * hold the path or a byte of a key.
+ */
+function jwtPreviousKeyProblems(source: EnvSource | undefined): ConfigProblem[] {
+  let files;
+  try {
+    files = defineConfig(
+      {
+        JWT_PRIVATE_KEY_FILE: apiConfigSchema.JWT_PRIVATE_KEY_FILE,
+        JWT_PREVIOUS_PUBLIC_KEY_FILE: apiConfigSchema.JWT_PREVIOUS_PUBLIC_KEY_FILE,
+      },
+      source,
+    );
+  } catch (error) {
+    if (error instanceof ConfigError) {
+      return [];
+    }
+    throw error;
+  }
+  if (files.JWT_PREVIOUS_PUBLIC_KEY_FILE === undefined) {
+    return [];
+  }
+  let previous: KeyObject;
+  try {
+    previous = previousPublicKeyOf(
+      readKeyFile(files.JWT_PREVIOUS_PUBLIC_KEY_FILE, {
+        minBytes: JWT_PUBLIC_KEY_MIN_BYTES,
+        encoding: "pem",
+      }),
+    );
+  } catch (error) {
+    return [{ variable: "JWT_PREVIOUS_PUBLIC_KEY_FILE", reason: (error as Error).message }];
+  }
+  const current = signingPublicKeyOf(
+    readKeyFile(files.JWT_PRIVATE_KEY_FILE, { minBytes: JWT_PRIVATE_KEY_MIN_BYTES, encoding: "pem" }),
+  );
+  return current !== undefined && isSamePublicKey(current, previous)
+    ? [
+        {
+          variable: "JWT_PREVIOUS_PUBLIC_KEY_FILE",
+          reason:
+            "holds the public half of JWT_PRIVATE_KEY_FILE (the same kid); it must hold the key signed with before the rotation",
+        },
+      ]
+    : [];
+}
+
+/**
  * Validates `source` against the schema and the process's rules between variables (`check`). Without a source it
  * validates the process environment, after filling unset variables from `ota/backend/.env.local` and the root
  * `.env.local` in development and tests (never when `APP_ENV` or `NODE_ENV` is `production`: on the VM systemd provides
@@ -417,9 +490,15 @@ function load<S extends typeof apiConfigSchema | typeof workerConfigSchema>(
   throw new ConfigError(problems);
 }
 
-/** The API's configuration (see `load`), with the production rule of PUBLIC_OTA_API_URL (`publicOtaApiUrlProblems`). */
+/**
+ * The API's configuration (see `load`), with the production rule of PUBLIC_OTA_API_URL (`publicOtaApiUrlProblems`) and
+ * the rules of the previous signing key of a rotation (`jwtPreviousKeyProblems`).
+ */
 export function loadApiConfig(source?: EnvSource): ApiConfig {
-  return load(apiConfigSchema, source, publicOtaApiUrlProblems);
+  return load(apiConfigSchema, source, (checked) => [
+    ...publicOtaApiUrlProblems(checked),
+    ...jwtPreviousKeyProblems(checked),
+  ]);
 }
 
 /** The worker's configuration (see `load`). */

@@ -4495,7 +4495,8 @@ paths:
         **Defaults applied by NestJS** (from `storefront_settings` and `platform.supplier_connections`): currency = body
         `currencyCode` → `X-Currency` → storefront default currency; in advanced mode `sources` is intersected with the
         sources enabled on the tenant's Amadeus connection (an empty intersection is `403 FEATURE_DISABLED`),
-        `maxFlightOffers` is capped by the storefront limit, and `additionalInformation.brandedFares` /
+        `maxFlightOffers` is capped by the storefront limit in customer scope (by 250 in console scope; see
+        `FlightSearchSimpleRequest.max`), and `additionalInformation.brandedFares` /
         `chargeableCheckedBags` / `fareRules` default to `true` when omitted so that facets for branded fares, bags and
         refundability are available. In customer scope `pricingOptions.corporateCodes` and `fareType:
         ["NEGOTIATED"|"CORPORATE"]` are accepted only when the storefront enables negotiated fares, otherwise `403
@@ -32596,8 +32597,10 @@ components:
           minimum: 1
           maximum: 250
           description: >-
-            Maximum number of offers Amadeus returns and Velexis stores (Amadeus `max`). Capped by the storefront limit.
-            Default 250.
+            Maximum number of offers Amadeus returns and Velexis stores (Amadeus `max`). In customer scope (the hosted
+            storefront and API keys) the storefront limit caps it and is its default when it is omitted: 150, unless the
+            storefront's search defaults set `maxResults` from 1 to 250. In console scope the bound is 250, also the
+            default when it is omitted; the storefront limit does not apply.
         resultOptions:
           $ref: '#/components/schemas/FlightSearchResultOptions'
           description: Options for the first page of offers embedded in the response (not sent to Amadeus).
@@ -32708,8 +32711,10 @@ components:
             - true
         maxFlightOffers:
           description: >-
-            Maximum number of flight offers returned (max 250). Default 250 when omitted; NestJS caps it by the
-            storefront limit.
+            Maximum number of flight offers returned (max 250). In customer scope (the hosted storefront and API keys)
+            NestJS caps it by the storefront limit, which is also its default when it is omitted: 150, unless the
+            storefront's search defaults set `maxResults` from 1 to 250. In console scope the bound is 250, also the
+            default when it is omitted; the storefront limit does not apply.
           type: number
           examples:
             - 250

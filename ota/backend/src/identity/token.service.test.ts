@@ -1,9 +1,9 @@
 // TokenService (OBE-031 step 1): the OTA backend's customer access tokens, EdDSA JWTs with `kid`, `typ: customer`,
 // `sub`, `tid` and `sid`, valid 15 minutes, verified with 30 s of clock skew, against the key file of this test
-// process (test/helpers/api-env.ts) and the times of a FakeClock. Every token here is made up on the spot; no value is a
-// secret.
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { generateKeyPairSync, createPrivateKey, type KeyObject } from "node:crypto";
+// process (test/helpers/api-env.ts) and the times of a FakeClock, and the previous key of a rotation
+// (JWT_PREVIOUS_PUBLIC_KEY_FILE, FIX-W48-OTA). Every token here is made up on the spot; no value is a secret.
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { generateKeyPairSync, createPrivateKey, createPublicKey, type KeyObject } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ConfigService } from "@nestjs/config";
@@ -25,7 +25,9 @@ import {
   bearerTokenOf,
   CLOCK_SKEW_SECONDS,
   loadSigningKey,
+  loadVerifyingKey,
   MAX_ACCESS_TOKEN_LENGTH,
+  PreviousSigningKey,
   TokenService,
   type CustomerTokenInput,
 } from "./token.service";
@@ -252,6 +254,130 @@ describe("TokenService.verifyCustomerToken", () => {
       ok: false,
       reason: "claims",
     });
+  });
+});
+
+/** The public half of a private key's PEM, as JWT_PREVIOUS_PUBLIC_KEY_FILE holds it (`openssl pkey -pubout`). */
+const publicPemOf = (privatePem: string): string =>
+  createPublicKey(privatePem).export({ type: "spki", format: "pem" }) as string;
+
+/**
+ * The previous key of a rotation as IdentityModule provides it: read from the public key file at `path`, or none when
+ * JWT_PREVIOUS_PUBLIC_KEY_FILE is unset (`undefined`).
+ */
+const previousKeyAt = (path: string | undefined): PreviousSigningKey =>
+  new PreviousSigningKey({ get: () => path } as unknown as ConfigService<ApiConfig, true>);
+
+/** Numbers the key files of the rotations, so that each rotation has new files. */
+let rotations = 0;
+
+/**
+ * A rotation: the API signed with `old` (the test process's key) and now signs with `next`, whose service also holds
+ * the public half of `old` as the previous key.
+ */
+function rotation(clock = new FakeClock(START)) {
+  rotations += 1;
+  const nextPath = keyFile(`next-${rotations}.pem`, ed25519Pem());
+  const previousPath = keyFile(
+    `previous-${rotations}.pub.pem`,
+    publicPemOf(readFileSync(testApiCredentials().jwtKeyFile, "utf8")),
+  );
+  return {
+    old: service(clock),
+    rotating: new TokenService(configWith(nextPath), clock, previousKeyAt(previousPath)),
+    // The overlap is over: the variable is removed and the API restarted with the new key alone.
+    after: new TokenService(configWith(nextPath), clock, previousKeyAt(undefined)),
+  };
+}
+
+describe("the previous key of a rotation (JWT_PREVIOUS_PUBLIC_KEY_FILE) [FIX-W48-OTA AC1]", () => {
+  it("[FIX-W48-OTA AC1] accepts the old key's tokens while the previous key is configured, and signs with the new key only", async () => {
+    const { old, rotating } = rotation();
+    const { token: oldToken } = await old.signCustomerToken(INPUT);
+    const { token: newToken } = await rotating.signCustomerToken(INPUT);
+
+    expect(rotating.previousKid).toBe(old.kid);
+    expect(rotating.kid).not.toBe(old.kid);
+    expect(decodeProtectedHeader(newToken)).toEqual({ alg: "EdDSA", kid: rotating.kid });
+    for (const token of [oldToken, newToken]) {
+      expect(await rotating.verifyCustomerToken(token, TENANT_A)).toEqual({
+        ok: true,
+        claims: {
+          typ: "customer",
+          sub: CUSTOMER,
+          tid: TENANT_A,
+          sid: SESSION,
+          iat: START_SECONDS,
+          exp: START_SECONDS + 900,
+        },
+      });
+    }
+    // The old key's tokens keep every other rule: another tenant, and expiry after their 15 minutes and the skew.
+    expect(await rotating.verifyCustomerToken(oldToken, TENANT_B)).toEqual({
+      ok: false,
+      reason: "other_tenant",
+    });
+    const later = rotation(
+      new FakeClock(Date.parse(START) + (ACCESS_TOKEN_TTL_SECONDS + 31) * 1000),
+    ).rotating;
+    expect(await later.verifyCustomerToken(oldToken, TENANT_A)).toEqual({ ok: false, reason: "expired" });
+  });
+
+  it("[FIX-W48-OTA AC1] refuses the old key's tokens once the previous key is removed, and a token of an unknown kid", async () => {
+    const { old, rotating, after } = rotation();
+    const { token: oldToken } = await old.signCustomerToken(INPUT);
+    const unknownKey = createPrivateKey(ed25519Pem());
+    const unknownKid = await forge(payload(), { alg: "EdDSA", kid: "an-unknown-kid" }, unknownKey);
+    // A token of another key that claims the previous key's kid: the kid picks the key, the signature fails.
+    const previousKidOtherKey = await forge(payload(), { alg: "EdDSA", kid: old.kid }, unknownKey);
+
+    expect(after.previousKid).toBeUndefined();
+    expect(await after.verifyCustomerToken(oldToken, TENANT_A)).toEqual({ ok: false, reason: "signature" });
+    expect(
+      await after.verifyCustomerToken((await after.signCustomerToken(INPUT)).token, TENANT_A),
+    ).toMatchObject({
+      ok: true,
+    });
+    for (const tokens of [rotating, after]) {
+      expect(await tokens.verifyCustomerToken(unknownKid, TENANT_A)).toEqual({
+        ok: false,
+        reason: "signature",
+      });
+      expect(await tokens.verifyCustomerToken(previousKidOtherKey, TENANT_A)).toEqual({
+        ok: false,
+        reason: "signature",
+      });
+    }
+  });
+
+  it("[FIX-W48-OTA AC1] refuses to start with the current key's public half as the previous key", () => {
+    const own = keyFile("own.pub.pem", publicPemOf(readFileSync(testApiCredentials().jwtKeyFile, "utf8")));
+
+    expect(
+      () =>
+        new TokenService(
+          configWith(testApiCredentials().jwtKeyFile),
+          new FakeClock(START),
+          previousKeyAt(own),
+        ),
+    ).toThrow(/holds the public half of JWT_PRIVATE_KEY_FILE \(the same kid\)/);
+  });
+
+  it("[FIX-W48-OTA AC1] reads only an Ed25519 public key, naming the path but no byte of the file", () => {
+    const privatePem = ed25519Pem();
+    const privateFile = keyFile("previous-private.pem", privatePem);
+    const readable = keyFile("previous-readable.pub.pem", publicPemOf(ed25519Pem()), 0o644);
+    const valid = keyFile("previous-valid.pub.pem", publicPemOf(privatePem));
+
+    expect(() => loadVerifyingKey(privateFile)).toThrow(/never a private key/);
+    try {
+      loadVerifyingKey(privateFile);
+    } catch (error) {
+      expect(String(error)).toContain(privateFile);
+      expect(String(error)).not.toContain(privatePem.split("\n")[1] ?? "unreachable");
+    }
+    expect(() => loadVerifyingKey(readable)).toThrow(/0400 or 0600/);
+    expect(loadVerifyingKey(valid).kid).toBe(loadSigningKey(privateFile).kid);
   });
 });
 

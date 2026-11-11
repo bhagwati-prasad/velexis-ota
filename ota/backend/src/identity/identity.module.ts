@@ -31,13 +31,16 @@ import { SignUpIdempotencyHooks, SignUpService } from "./sign-up.service";
 import { StaffAuthController } from "./staff/staff-auth.controller";
 import { ConsoleSignInIdempotencyHooks, StaffAuthService } from "./staff/staff-auth.service";
 import { StaffSessions, StaffTokens } from "./staff/staff-sessions";
-import { TokenService } from "./token.service";
+import { PreviousSigningKey, TokenService } from "./token.service";
 import { VerificationService } from "./verification.service";
 
 @Module({
   imports: [TenancyModule.forApi()],
   controllers: [AuthController, StaffAuthController],
   providers: [
+    // The previous key of a rotation (JWT_PREVIOUS_PUBLIC_KEY_FILE, FIX-W48-OTA), read once for TokenService and
+    // StaffTokens, which also verify the tokens of its `kid`.
+    PreviousSigningKey,
     TokenService,
     SessionsRepository,
     SessionsService,
