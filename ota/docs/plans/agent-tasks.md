@@ -26,7 +26,7 @@ Common commands: backend `pnpm --filter @velexis/ota-backend test` and `test:int
 | M3 Book & pay | OBE-029 … OBE-057, SDK-008 … SDK-010, OFE-009 … OFE-019 | Guest and customer bookings paid by Stripe (3-D Secure) or by airline card (test), tickets, e-mails and PDFs, my bookings, guest lookup, change contacts, cancel with refund (OF-03 … OF-08). |
 | M4 OTA admin | OBE-058 … OBE-075, OBE-090, OBE-091, SDK-011 … SDK-014, OAD-002 … OAD-017, OFE-020 | "Open console" in the portal lands in the OTA admin; staff issue, cancel, import a PNR, read queues, capture and refund, change markups, branding, pages and templates (OF-09, OF-10). |
 | M5 Monetisation & self-service | OBE-076 … OBE-083, OAD-018, OFE-021, OFE-022 | The same code serves an OTA on its own Stripe (Connect or keys) and its own Amadeus credentials, a custom domain, and the live environment after go-live (OF-12). |
-| M6 Hardening & launch | OBE-084 … OBE-089, OBE-092 … OBE-096, OFE-023 … OFE-030, OAD-019, OAD-020, SDK-015 | Security review and PCI evidence closed, airline card live-ready, erasure job, performance measured, nightly suites green, SDK 1.0.0 published. |
+| M6 Hardening & launch | OBE-084 … OBE-089, OBE-092 … OBE-097, OFE-023 … OFE-030, OAD-019, OAD-020, SDK-015 | Security review and PCI evidence closed, airline card live-ready, erasure job, performance measured, nightly suites green, SDK 1.0.0 published. |
 
 ## M0 — Foundations
 
@@ -2783,6 +2783,24 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - A storefront whose `search_defaults` sets `maxResults` (1–250) keeps it, a search's `max` and `maxFlightOffers` are still bounded by it, and the search and price integration tests pass.
   - The load test's proxy never answers more offers than the API asked for.
 - **Verify:** `pnpm --filter @velexis/ota-backend test offers.mapper && node ota/backend/test/load/search-load.mjs --visitors 10 --searches 200 --offers 250`
+
+### OBE-097 · Answer CORS for browsers that call the API with a publishable key
+- **Status:** todo
+- **Component:** ota-backend
+- **Milestone:** M6
+- **Depends on:** OBE-084
+- **Size:** M
+- **Read first:** docs/mvp/decisions.md §4 and §5 (third-party frontends use publishable keys plus bearer tokens); ota/backend/src/tenancy/api-key.verifier.ts (the publishable key's allowed origins, `ORIGIN_NOT_ALLOWED`); ota/frontend/docs/build-your-own-frontend.md §2.2 to §2.4 (the dated CORS note and its stand-in); the OTA OpenAPI document's `info.description` and its README §6; the SDK's transport (`ota/sdk`: the headers it sends); deploy/caddy/Caddyfile (the `api.ota` site block) and deploy/caddy/test/caddy-smoke.sh
+- **Files:** `ota/backend/src/main.ts`, `ota/backend/src/common/http/cors.ts`, `ota/backend/src/common/http/cors.test.ts`, `ota/backend/test/integration/m6/cors.int.test.ts`, `ota/backend/openapi/velexis-ota-booking-api.openapi.yaml`, `ota/backend/openapi/README.md`, `deploy/caddy/Caddyfile`, `deploy/caddy/test/caddy-smoke.sh`, `ota/frontend/docs/build-your-own-frontend.md`, `ota/backend/README.md`
+- **Steps:**
+  1. Added by the lead (decision (15h) of 2026-11-11, from OFE-025): the OTA API answers no CORS today (preflight `OPTIONS` gets 404 without `Access-Control-*`), so a browser on another origin cannot call `api.ota.example.com` with a `pk_` key, although decisions §5 and the guide assume it can. Contract first: `info.description` says how the API answers CORS; change-log row.
+  2. A preflight `OPTIONS` on any path answers 204 with `Access-Control-Allow-Origin` echoing the `Origin`, `Access-Control-Allow-Methods` GET, POST, PUT, PATCH, DELETE, `Access-Control-Allow-Headers` with every header the SDK sends (at least `X-Api-Key`, `Authorization`, `X-Booking-Token`, `Idempotency-Key`, `If-Match`, `Content-Type`, `Accept-Language`, `X-Currency`), `Access-Control-Max-Age` and `Vary: Origin`; never `Access-Control-Allow-Credentials`. A preflight carries no key, so it reveals nothing.
+  3. An actual answer to a caller whose publishable key lists the request's `Origin` carries `Access-Control-Allow-Origin` with that origin, `Access-Control-Expose-Headers` `X-Request-Id`, `Retry-After` and `ETag`, and `Vary: Origin`; secret keys, requests without an `Origin`, and origins the key does not list get none (an unlisted origin still answers `403 ORIGIN_NOT_ALLOWED`). The hosted storefront's same-origin `/api/*` answers do not change.
+  4. Caddy passes `OPTIONS` on `api.ota` through to the API (smoke test). Run the guide's browser samples again without the stand-in, remove the guide's dated CORS note and its pointers, and say so in the backend README.
+- **Acceptance:**
+  - Integration tests prove the preflight answer, the headers on an allowed origin, none on an unlisted origin (403 kept), a secret key and a request without `Origin`, and no `Access-Control-Allow-Credentials` anywhere.
+  - The guide's browser samples run from another origin against the local stack without a stand-in.
+- **Verify:** `pnpm --filter @velexis/ota-backend test cors && pnpm --filter @velexis/ota-backend test:int cors`
 
 ### OFE-024 · Run the accessibility and performance pass on the storefront
 - **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the manual NVDA and VoiceOver pass through search and checkout, recorded with its date, human step)
