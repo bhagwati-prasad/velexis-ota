@@ -2871,8 +2871,8 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - Staff with `bookings:cancel` close a booking in Reconciliation review from its page with either outcome and see the result on the page and in the view; every refusal shows without a change; other staff do not see the action.
 - **Verify:** `pnpm --filter @velexis/ota-admin test && pnpm --filter @velexis/ota-admin build && E2E_WITH_OTA=1 pnpm test:e2e -- --project=ota-admin specs/ota-admin/reconciliation-review.e2e.ts`
 
-### OBE-100 · Add the OTA backend's secrets:rewrap command
-- **Status:** todo
+### OBE-100 · Add the OTA backend's secrets:rewrap command ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M6
 - **Depends on:** X-040, OBE-007, OBE-036

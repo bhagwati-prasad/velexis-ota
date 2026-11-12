@@ -24,6 +24,7 @@ describe("runCli", () => {
       import("./dev/dev-seed.command.js"),
       import("./provisioning/report-migrations.command.js"),
       import("./payments/airline-card/scrub-card-copies.command.js"),
+      import("./secrets/rewrap.command.js"),
     ]);
   }, 60_000);
 
@@ -92,6 +93,28 @@ describe("runCli", () => {
       expect(stderr).toBe(
         "tenants:scrub-card-copies: name one tenant or --all.\n" +
           "Usage: node dist/cli.js tenants:scrub-card-copies (--tenant <key> | --all) [--batch-size <n>]\n",
+      );
+    }
+  });
+
+  it("[OBE-100 AC1] lists secrets:rewrap and refuses invalid arguments with exit code 2, before reading any configuration", async () => {
+    const { stdout } = await run(["help"]);
+    expect(CLI_COMMANDS).toContain("secrets:rewrap");
+    expect(stdout).toContain(
+      "secrets:rewrap             [--tenant <key> | --all] [--dry-run] [--batch-size <n>]",
+    );
+
+    for (const argv of [
+      ["secrets:rewrap", "--all", "--tenant", "alpha"],
+      ["secrets:rewrap", "--batch-size", "0"],
+      ["secrets:rewrap", "--now"],
+    ]) {
+      // No variable is given: a command that went on would fail on the missing configuration, not with the usage.
+      const { code, stdout: out, stderr } = await run(argv, {});
+      expect(code).toBe(2);
+      expect(out).toBe("");
+      expect(stderr).toMatch(
+        /^secrets:rewrap: invalid arguments; nothing was re-wrapped\.\nUsage: node dist\/cli\.js secrets:rewrap \[--tenant <key> \| --all\] \[--dry-run\] \[--batch-size <n>\]\n/,
       );
     }
   });

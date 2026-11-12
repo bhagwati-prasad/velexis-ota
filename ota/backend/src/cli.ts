@@ -4,13 +4,16 @@
 // (dev/dev-seed.command.ts, development only); FIX-W30-OTA adds `tenants:scrub-card-copies`
 // (payments/airline-card/scrub-card-copies.command.ts, the one-off scrub of the card copies stored before
 // FIX-W29-SECURITY); OBE-025 adds `amadeus:ping` (amadeus/amadeus-ping.command.ts, the support check of one OTA's
-// Amadeus connection). A command's module is loaded only when it runs, so `help` needs neither a configuration nor a
-// connection. Exit codes: 0 success, 1 error or unknown command.
+// Amadeus connection); OBE-100 adds `secrets:rewrap` (secrets/rewrap.command.ts, the re-wrap of every tenant ciphertext
+// under the current master key, master-key-rotation.md steps 5 and 7). A command's module is loaded only when it runs,
+// so `help` needs neither a configuration nor a connection. Exit codes: 0 success, 1 error or unknown command;
+// `secrets:rewrap` also exits 1 while a value remains under an old master key and 2 on invalid arguments.
 import type { EnvSource } from "@velexis/config";
 import type * as AmadeusPingCommand from "./amadeus/amadeus-ping.command";
 import type * as DevSeedCommand from "./dev/dev-seed.command";
 import type * as ScrubCardCopiesCommand from "./payments/airline-card/scrub-card-copies.command";
 import type * as ReportMigrationsCommand from "./provisioning/report-migrations.command";
+import type * as SecretsRewrapCommand from "./secrets/rewrap.command";
 
 /** Where the CLI writes: `process.stdout` and `process.stderr`, or a test's buffers. */
 export interface TextSink {
@@ -68,6 +71,11 @@ function amadeusPingCommand(): Promise<typeof AmadeusPingCommand> {
   return import("./amadeus/amadeus-ping.command.js");
 }
 
+/** The re-wrap of the tenant ciphertexts under the current master key, loaded when it runs (secrets/rewrap.command.ts). */
+function secretsRewrapCommand(): Promise<typeof SecretsRewrapCommand> {
+  return import("./secrets/rewrap.command.js");
+}
+
 const COMMANDS: ReadonlyMap<string, CliCommand> = new Map<string, CliCommand>([
   [
     "help",
@@ -115,6 +123,16 @@ const COMMANDS: ReadonlyMap<string, CliCommand> = new Map<string, CliCommand>([
         "--tenant <key> --env <test|live>: resolve an OTA's Amadeus connection, get a token and run one cheap read",
       async run(args, io) {
         return (await amadeusPingCommand()).runAmadeusPing(args, io);
+      },
+    },
+  ],
+  [
+    "secrets:rewrap",
+    {
+      summary:
+        "[--tenant <key> | --all] [--dry-run] [--batch-size <n>]: re-wrap every tenant ciphertext under MASTER_KEY_CURRENT",
+      async run(args, io) {
+        return (await secretsRewrapCommand()).runSecretsRewrap(args, io);
       },
     },
   ],
