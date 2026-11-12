@@ -417,7 +417,7 @@ Everyday commands: `journalctl -u velexis-ota-api -f -o cat | jq`, `journalctl -
 
 | Check | Tool | Alert |
 |---|---|---|
-| Public liveness: `https://api.platform.example.com/health/live`, `https://api.ota.example.com/health/live`, the portal, one demo storefront | External uptime monitor (any free HTTP checker), every minute | E-mail and push to the developer |
+| Public liveness: `https://api.platform.example.com/health/live`, `https://api.ota.example.com/health/live`, the portal's landing page `https://platform.example.com/`, the demo storefront `https://demo.ota.example.com/` | External uptime monitor (an HTTP checker service outside the VM, task X-029, [below](#the-external-uptime-monitor)), every minute from at least two locations | One down notice and one recovery notice per monitor, by e-mail to the operations mailbox and by push to the developer's phone |
 | A unit enters `failed`: with `RestartMode=direct`, only when its start limit (10 starts in 5 minutes) gives up; single crashes restart silently and stay in the journal | systemd `OnFailure=velexis-alert@%n.service` → `velexis-alert` (proven by `deploy/systemd/test/units-smoke.sh`) | One e-mail with the unit's status and last 40 log lines |
 | Every enabled unit's `/health/ready`, more than 20 failed BullMQ jobs in the last hour and a job waiting more than 10 minutes (both workers' queues), disk > 80 %, Redis memory > 70 % of `maxmemory`, last backup > 26 h, TLS expiry < 14 days for the five named hosts, and daily the integrity of both payment pages (the HTML, its scripts in order, every first-party script's and stylesheet's SHA-256 and every header per path, against the release's inventory) | `velexis-healthcheck.timer` every 5 minutes (`velexis-healthcheck`, task X-030, below) | One e-mail when a check fails, one when it recovers |
 | Security log review: failed and accepted SSH logins, sudo use, auditd hits on keys and units, AIDE changes, WAF blocks, airline-card route error spikes, refused outbound connections by destination and user (X-041's `VELEXIS-EGRESS-DENY` lines), a failed log shipment | `velexis-log-review.timer` daily (task X-038, M6) | E-mail (critical events, a burst of refusals among them, at once) |
@@ -426,9 +426,60 @@ Everyday commands: `journalctl -u velexis-ota-api -f -o cat | jq`, `journalctl -
 
 Business visibility (provisioning jobs, failed jobs, per-tenant counts, `supplier_requests` errors) comes from the platform admin and OTA admin, not from a metrics store ([ADR-0016](adr/0016-observability.md)).
 
+### The external uptime monitor
+
+An HTTP checker service outside the VM asks for four public URLs once a minute, sends a down notice when one stops answering `200` and a recovery notice when it answers again: the "External uptime monitor" of [ADR-0016](adr/0016-observability.md), task X-029. It covers what the on-VM check cannot see from inside: a VM, network or DNS record that is down altogether, the public route through Caddy to each app (the on-VM check asks the apps on their loopback ports), and an alert path that is broken on the VM (SMTP, the outbound allow-list of [§2](#2-os-hardening)), because its notices leave from the service, not from the VM.
+
+**The monitors.** The service holds the real host names; the repository keeps the placeholders of [`decisions.md`](decisions.md) §4.
+
+| Monitor | URL | Up when | Down means | Behind it |
+|---|---|---|---|---|
+| Platform API | `https://api.platform.example.com/health/live` | `200` within 10 s, and the body holds `"status":"ok"` | The platform API does not answer through Caddy: no sign-in to the portal or the platform admin, and no certificate for a new storefront host (the `ask` endpoint, [architecture §7](architecture.md#7-failure-domains-on-a-single-vm)) | `velexis-platform-api` (3100), Caddy, the VM |
+| OTA API | `https://api.ota.example.com/health/live` | `200` within 10 s, and the body holds `"status":"ok"` | The OTA API does not answer: storefronts show their pages but cannot search or book, and the OTA admin and SDK users get errors | `velexis-ota-api` (4000), Caddy and its blocking WAF, the VM |
+| Portal | `https://platform.example.com/` (the landing page, which the portal renders without any API call) | `200` within 10 s | The portal process is down or keeps restarting: Caddy answers with the maintenance page and `503` | `velexis-portal` (3000), Caddy, the VM |
+| Demo storefront | `https://demo.ota.example.com/` (the demo OTA's storefront: the host of the on-VM check's `HEALTHCHECK_STOREFRONT_HOST`, `demo.<STOREFRONT_BASE_DOMAIN>` by default, so both checks watch the same storefront) | `200` within 10 s | Caddy cannot serve a storefront: its on-demand certificate, or the current release's files in `/srv/velexis/current/storefront` | Caddy and the VM only: a storefront's pages are static files, so this monitor stays up while the OTA API is down (the OTA API's monitor covers that) |
+
+Every monitor: HTTPS, `GET` (the two API monitors need the body for their keyword; `HEAD` is enough for the portal and the storefront), every minute, a timeout of 10 s, from at least two locations, and down only when a second check confirms the failure, so that one lost request does not page anyone but an outage alerts within 3 minutes. A plan that checks every 3 or 5 minutes, as some free plans do, cannot meet that: choose a service whose plan checks every minute (a free plan is fine). The workers (no public port) and the two admin hosts are left to the on-VM check (`ready-<unit>`, below), and so are PostgreSQL and Redis, because `/health/live` checks no dependency; Amadeus, Stripe and SMTP are the runbooks' signals.
+
+**Their requests at the edge.** A monitor's request has no query and no body, so it matches no rule of the web application firewall ([§6](#the-velexis-caddy-build-and-the-web-application-firewall)), which blocks on `api.ota.example.com`, and leaves no WAF log line on any host; neither API counts `/health/live` against a rate limit. A service whose user agent is on the Core Rule Set's scanner list (rule 913100; among monitoring services, Hexometer's) gets `403` from the OTA API host and cannot be used. Each check is one access log line in journald, about 1,440 a day per monitor and location. [`caddy-smoke.sh`](../../deploy/caddy/test/caddy-smoke.sh) proves this with the production Caddyfile (CI's `deploy-files` job): in step 6f the four URLs answer `200` to `GET` and `HEAD` with curl's user agent, a checker's or none and without `Accept`, and no WAF rule matches them; in step 9, with the apps stopped, the monitors of both APIs and the portal see `503` and the storefront's `200`.
+
+**Who receives the alerts.**
+
+| Recipient | Channel | Receives |
+|---|---|---|
+| The developer, Velexis's first responder ([`platform-operations.md`](../../platform/docs/runbooks/platform-operations.md) §1, level 2 of the OTA runbooks' [escalation](../../ota/docs/runbooks/README.md#3-escalation)) | Push notifications of the service's phone app, signed in to the service's account | Every down and recovery notice of the four monitors |
+| The operations mailbox: the address of `ALERT_TO` in `/etc/velexis/alert.env`, which is also `OPS_ALERT_EMAIL` ([`platform/docs/runbooks/launch-checklist.md`](../../platform/docs/runbooks/launch-checklist.md) §3) | E-mail from the service | The same notices |
+
+The repository keeps no address, account name, password or key of the service: the account, with a second factor, is in the developer's password manager.
+
+**The test outage (human step of X-029).** In a quiet hour, on the VM; for these 3 minutes the storefronts cannot search or book, and their pages stay up:
+
+1. Note the time (UTC) and run `sudo systemctl stop velexis-ota-api`.
+2. From outside the VM, `curl -sS -o /dev/null -w '%{http_code}\n' https://api.ota.example.com/health/live` prints `503` (Caddy's `SERVICE_UNAVAILABLE` envelope). Within 3 minutes of the stop the OTA API monitor's down notice arrives by e-mail and by push; the other three monitors stay up.
+3. After 3 minutes run `sudo systemctl start velexis-ota-api`; within 2 minutes the recovery notice arrives by both channels.
+4. A stopped unit is not `failed`, so no `velexis-alert@` e-mail comes. When a run of the on-VM check (every 5 minutes) falls into the 3 minutes, it also e-mails `velexis-ota-api readiness` and `velexis-ota-admin readiness` (the OTA admin's readiness asks the OTA API's liveness), then their recoveries.
+5. Record the result in the table below, without real host names or addresses.
+
+| Record | Value |
+|---|---|
+| Service and plan; check interval and locations | not yet (X-029, human step) |
+| The four monitors created and green (date) | not yet (X-029, human step) |
+| Test outage: date, stop and start (UTC) | not yet (X-029, human step) |
+| Down notice: e-mail and push (UTC), minutes after the stop | not yet (X-029, human step) |
+| Recovery notice: e-mail and push (UTC), minutes after the start | not yet (X-029, human step) |
+
+**Checking it by hand** (X-029's Verify command), from outside the VM with the real API hosts; it prints `{"status":"ok"}{"status":"ok"}` and exits 0:
+
+```bash
+export REAL_PLATFORM_API_HOST=api.<platform domain> REAL_OTA_API_HOST=api.<storefront domain>
+curl -fsS "https://${REAL_PLATFORM_API_HOST:?}/health/live" && curl -fsS "https://${REAL_OTA_API_HOST:?}/health/live"
+```
+
+**Planned work.** A deploy needs no pause: it restarts one app at a time for a few seconds ([§8](#8-release-artefact-deploy-and-rollback)), which the second check's confirmation absorbs. Work that stops an app or the VM for longer (a reboot, a resize, `velexis-restore db --replace-live` of [§11](#11-restore-and-the-restore-drill), the cut-over of [§15](#15-moving-to-managed-postgresql-and-redis)) starts a maintenance window in the service first and ends it after the checks of that work; the restore drill needs none, as it restores beside the live database and stops no app.
+
 ### The on-VM health check
 
-[`deploy/scripts/healthcheck.sh`](../../deploy/scripts/healthcheck.sh), root-owned as `/usr/local/sbin/velexis-healthcheck`, runs every 5 minutes from `velexis-healthcheck.timer` (`OnCalendar=*:0/5`) as the oneshot `velexis-healthcheck.service`. It is the "On-VM check" of [ADR-0016](adr/0016-observability.md); the external uptime monitor (X-029) covers a VM that is down altogether. Each check keeps its own state:
+[`deploy/scripts/healthcheck.sh`](../../deploy/scripts/healthcheck.sh), root-owned as `/usr/local/sbin/velexis-healthcheck`, runs every 5 minutes from `velexis-healthcheck.timer` (`OnCalendar=*:0/5`) as the oneshot `velexis-healthcheck.service`. It is the "On-VM check" of [ADR-0016](adr/0016-observability.md); the [external uptime monitor](#the-external-uptime-monitor) (X-029) covers a VM that is down altogether. Each check keeps its own state:
 
 | Check (state file) | Fails when | Notes |
 |---|---|---|
@@ -505,6 +556,7 @@ The code reaches every service through configuration only ([`decisions.md`](deci
 | Symptom | First checks | Fix |
 |---|---|---|
 | Everything public is down | `systemctl status caddy`, uptime monitor, provider status page | `systemctl restart caddy`; if the VM is gone, [§11](#11-restore-and-the-restore-drill) |
+| A down notice of the uptime monitor (one monitor) | From outside the VM, `curl -sS -o /dev/null -w '%{http_code}\n' <the monitor's URL>`: `503` means Caddy answers and the app behind it does not (`systemctl status` and `journalctl -u` of the monitor's unit, [§13](#the-external-uptime-monitor)); no answer or a TLS error, Caddy, the certificate or the network (the row above, `sudo velexis-healthcheck --status` for `tls-<host>`) | Restart or fix the unit, as for a `health check failed` e-mail; the recovery notice follows within 2 minutes. A notice during planned work means its maintenance window was not set |
 | One app shows the maintenance page | `systemctl status velexis-<unit>`, `journalctl -u velexis-<unit> -n 100` | `systemctl restart`; if a deploy caused it, `velexis-deploy --rollback` |
 | APIs answer 503 | `/health/ready` on 3100 and 4000, `systemctl status postgresql redis-server` | Restart the failed service; check disk space |
 | New storefront host gets no certificate | `journalctl -u caddy --grep ask`, `curl '127.0.0.1:3100/internal/tls/ask?domain=<host>'` | Platform API up? Tenant active? Domain verified? |

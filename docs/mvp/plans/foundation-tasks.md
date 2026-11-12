@@ -935,7 +935,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 ## M6 Hardening & launch
 
 ### X-029 · Set up external uptime monitoring
-- **Status:** todo
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the uptime service's account, the four monitors with their e-mail and push alerts and their first green checks, the test outage and its record in §13, human steps)
 - **Component:** foundation
 - **Milestone:** M6
 - **Depends on:** X-024

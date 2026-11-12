@@ -85,6 +85,11 @@
 #     VELEXIS_WAF_ENGINE=DetectionOnly (the detection week) a reload makes the blocking paths detect only, and
 #     without it they block again; path traversals that answered 404 before now meet the WAF first on the blocking
 #     hosts (403) and still never reach the upstream;
+#   - the external uptime monitor (X-029, deployment-single-vm.md §13; each line ends with [X-029 AC1] or [X-029 AC2]):
+#     its four URLs (/health/live on both API hosts, the portal's / and a storefront's /) answer 200 to a checker's GET
+#     and HEAD, with curl's user agent, a checker's or none and without Accept, and match no WAF rule, while a user
+#     agent on the Core Rule Set's scanner list is refused on api.ota.localhost; with the upstream stopped, the monitors
+#     of both APIs and the portal see 503 and the storefront's 200;
 #   - on every host (FIX-W29-SECURITY), a request whose query, `Referer` and redirect `Location` carry the values of
 #     the Caddyfile's `(log_query_filter)` (signatures and tokens, Stripe's client secrets of the 3-D Secure return,
 #     the OAuth code and state of Stripe Connect's return to the portal, and the e-mail addresses, names, searches
@@ -1129,6 +1134,58 @@ check "caddy reload without VELEXIS_WAF_ENGINE succeeds [X-039 AC2]" waf_reload
 fetch "$TENANT" "/api/x?$SQLI"
 refused_json "$TENANT/api/x with an SQL injection after the switch back to blocking"
 
+# ---- 6f. the external uptime monitor's requests (X-029) ----------------------------------------------------------
+# deployment-single-vm.md §13 (The external uptime monitor): a checker outside the VM asks for these four URLs once a
+# minute and alerts on any answer but 200. Checkers send GET or HEAD, with a user agent of their own, curl's (the X-029
+# Verify command) or none, and often without Accept. The WAF blocks on api.ota, so a monitor's request must match no
+# rule there, and the detection hosts must not fill the WAF log with a line a minute. Each request carries a marker in
+# its query (?monitor=…; the real monitors send none) that finds its WAF lines, as in 6e. The last request, from a user
+# agent on the Core Rule Set's scanner list (CRS 913100), is refused and logged: its line shows that the log was
+# written up to the monitors' requests, so their absence from it means no rule matched them.
+step "Uptime monitors (X-029): the four monitored URLs answer 200 to a checker's GET and HEAD, and no WAF rule matches"
+MONITOR_UA="Mozilla/5.0 (compatible; UptimeChecker/2.0; +https://uptime.example.org/bot)"
+LISTED_UA="Mozilla/5.0 (compatible; hexometer)" # a monitoring service whose name is on CRS 913100's scanner list
+# host path app: the app port the URL reaches, or `storefront` for a page that Caddy serves from the release itself.
+MONITORS=("api.$PLATFORM /health/live 3100" "api.$STOREFRONT /health/live 4000" "$PLATFORM / 3000"
+  "$TENANT / storefront")
+MONITOR_MARKS=()
+n=0
+for monitor in "${MONITORS[@]}"; do
+  read -r host path app <<<"$monitor"
+  for style in curl bare checker head; do
+    n=$((n + 1))
+    printf -v mark 'smkmon%s-m%02d' "$WAF_MARK" "$n" # two digits: no marker is the start of another (m1, m10)
+    MONITOR_MARKS+=("$mark $host$path ($style)")
+    method=GET
+    case "$style" in
+      # curl's own user agent and Accept: */*, as the Verify command sends them
+      curl) fetch "$host" "$path?monitor=$mark" ;;
+      bare) fetch "$host" "$path?monitor=$mark" -H "User-Agent:" -H "Accept:" ;;
+      checker) fetch "$host" "$path?monitor=$mark" -H "User-Agent: $MONITOR_UA" -H "Accept:" ;;
+      head)
+        method=HEAD
+        fetch "$host" "$path?monitor=$mark" --head -H "User-Agent: $MONITOR_UA" ;;
+    esac
+    label="the monitor's $method of https://$host$path ($style)"
+    if [ "$method" = HEAD ]; then
+      same "$label answers 200 [X-029 AC1]" "$STATUS" 200
+    elif [ "$app" = storefront ]; then
+      same "$label answers 200 [X-029 AC1]" "$STATUS" 200
+      check "$label serves the storefront's index.html [X-029 AC1]" cmp -s "$BODY" "$RELEASE/storefront/index.html"
+    else
+      same "$label answers 200 from its app on $app [X-029 AC1]" "$STATUS $(json port) $(json method)" "200 $app GET"
+    fi
+  done
+done
+fetch "api.$STOREFRONT" "/health/live?monitor=smkmon$WAF_MARK-listed" -H "User-Agent: $LISTED_UA"
+same "api.$STOREFRONT/health/live from a user agent on the scanner list is refused, 403 FORBIDDEN [X-029 AC1]" \
+  "$STATUS $(json error.code) $(json port)" "403 FORBIDDEN "
+check "that refusal is in the WAF log with CRS 913100 [X-029 AC1]" retry 20 waf_logged "smkmon$WAF_MARK-listed" 913100
+for entry in "${MONITOR_MARKS[@]}"; do
+  read -r mark what <<<"$entry"
+  check "no WAF rule matched the monitor's request to $what [X-029 AC1]" no_waf_line "$mark"
+done
+
 # ---- 7. hosts without a certificate ---------------------------------------------------------------------------
 step "On-demand TLS: only hosts the ask endpoint allows get a certificate"
 stored() { find "$TMP/data/caddy/certificates" -name "$1.crt" | grep -q .; }
@@ -1213,6 +1270,15 @@ fetch "$TENANT" /api/x
 envelope_checks "the storefront /api on $TENANT"
 fetch "$TENANT" /
 same "the storefront's static files are still served (200)" "$STATUS" 200
+# X-029: what the uptime monitors see now. Any answer but 200 alerts, so the monitors of the two APIs and the portal
+# see 503, while the storefront page, which Caddy serves itself, stays 200 (the OTA API's monitor covers its /api).
+for monitor in "${MONITORS[@]}"; do
+  read -r host path app <<<"$monitor"
+  want=503
+  if [ "$app" = storefront ]; then want=200; fi
+  fetch "$host" "$path" -H "User-Agent: $MONITOR_UA"
+  same "with its app stopped, the monitor of https://$host$path sees $want [X-029 AC2]" "$STATUS" "$want"
+done
 
 # ---- 10. logs -----------------------------------------------------------------------------------------------------
 step "Caddy's log"
