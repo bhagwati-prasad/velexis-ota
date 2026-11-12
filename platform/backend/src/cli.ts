@@ -2,8 +2,9 @@
 // `sudo velexis-run platform node dist/cli.js <command>` and locally with `node dist/cli.js <command>`. This file is
 // the command dispatcher; each command is one entry of CLI_COMMANDS. PBE-028 adds `admin:grant` and
 // `admin:reset-mfa` (admin/admin-cli.commands.ts, loaded only when one of them runs), PBE-034 adds `dev:seed`
-// (dev/dev-seed.command.ts, loaded the same way; development only). A command that needs the database or Redis loads
-// the configuration itself (`loadConfig`), so `help` works without any.
+// (dev/dev-seed.command.ts, loaded the same way; development only), PBE-072 adds `secrets:rewrap`
+// (secrets/rewrap.command.ts, loaded the same way: the master-key rotation's re-wrap). A command that needs the database
+// or Redis loads the configuration itself, so `help` works without any.
 //
 // Exit codes: 0 done, 1 the command failed, 2 usage error (no or unknown command, or wrong arguments).
 import type { EnvSource } from "@velexis/config";
@@ -11,6 +12,7 @@ import { createLogger } from "@velexis/logger";
 import type * as AdminCliCommands from "./admin/admin-cli.commands";
 import { PLATFORM_PROCESSES } from "./config";
 import type * as DevSeedCommand from "./dev/dev-seed.command";
+import type * as SecretsRewrapCommand from "./secrets/rewrap.command";
 
 /** Where the CLI writes (the process's stdout and stderr; tests pass buffers). */
 export interface CliOutput {
@@ -112,12 +114,32 @@ const devSeedCommand: CliCommand = {
   },
 };
 
+/** The master-key rotation's re-wrap, loaded when it runs (PBE-072; secrets/rewrap.command.ts). */
+function secretsRewrapCommands(): Promise<typeof SecretsRewrapCommand> {
+  return import("./secrets/rewrap.command.js");
+}
+
+/**
+ * `secrets:rewrap [--dry-run] [--batch-size <n>]`: moves the data key of every platform ciphertext to the current
+ * master key (ADR-0010 "Rotation" item 3; docs/mvp/runbooks/master-key-rotation.md steps 5 and 7). The arguments are
+ * repeated here so that `help` does not load the command's module.
+ */
+const secretsRewrapCommand: CliCommand = {
+  name: "secrets:rewrap",
+  args: "[--dry-run] [--batch-size <n>]",
+  summary: "Re-wrap every platform secret under MASTER_KEY_CURRENT (key rotation); --dry-run writes nothing.",
+  async run(args, context) {
+    return (await secretsRewrapCommands()).runSecretsRewrap(args, context);
+  },
+};
+
 /** Every command of the CLI. Later tasks append theirs. */
 export const CLI_COMMANDS: readonly CliCommand[] = [
   helpCommand,
   adminGrantCommand,
   adminResetMfaCommand,
   devSeedCommand,
+  secretsRewrapCommand,
 ];
 
 /** `-h` and `--help` are spellings of `help`. */

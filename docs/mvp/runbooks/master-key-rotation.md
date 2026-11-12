@@ -15,11 +15,11 @@ It is a human procedure on the VM. AI agents never run it ([`AGENTS.md`](../../.
 
   | Command | Run as | Covers |
   |---|---|---|
-  | platform backend `secrets:rewrap` | `sudo velexis-run platform node dist/cli.js secrets:rewrap` | The platform ciphertext columns (Amadeus and Stripe credentials, credential submissions, MFA secrets, payout details, the e-mail outbox and the provisioning reveal) |
+  | platform backend `secrets:rewrap` | `sudo velexis-run platform node dist/cli.js secrets:rewrap [--dry-run] [--batch-size <n>]` | The platform ciphertext columns, eight tables (PBE-072): the MFA secrets of `accounts`, the Velexis Amadeus accounts, the OTAs' own Amadeus and Stripe credentials (`supplier_connections`, `payment_provider_connections`, `credential_submissions`), the payout details (`tenant_payout_accounts`), the e-mail outbox's secret links and the provisioning reveal (`provisioning_jobs`) |
   | OTA backend `secrets:rewrap` | `sudo velexis-run ota node dist/cli.js secrets:rewrap [--tenant <key> \| --all] [--dry-run] [--batch-size <n>]` | The ciphertext columns of every tenant schema (`--all`, the default: every `tenant_<key>` schema, whatever the OTA's status; `--tenant` one): the travellers' documents and discount cards of checkouts, bookings and saved travellers, the notifications' secret payloads and the idempotent replays |
   | (none) | | The Redis cache of Amadeus access tokens `amadeus:token:*` is flushed instead (step 6) |
 
-  Both commands call `rewrapBatch` and print, per table, how many rows they re-wrapped, skipped (changed meanwhile) and failed (did not authenticate), and how many rows remain under each old KEK id (`remainingByKekId`). Both commands are tasks of the platform and OTA plans: PBE-072 and OBE-100 (M6, planned on 2026-11-11 by lead decision (15m); OBE-100 built the OTA command on 2026-11-11). Check that the active release has them (`node dist/cli.js help` in each backend) before you start; until both exist, follow [`platform-operations.md`](../../../platform/docs/runbooks/platform-operations.md) §8: steps 1 to 4 only, and never step 8.
+  Both commands call `rewrapBatch` and print, per table, how many rows they re-wrapped, skipped (changed meanwhile) and failed (did not authenticate), and how many rows remain under each old KEK id (`remainingByKekId`). Both commands are tasks of the platform and OTA plans: PBE-072 and OBE-100 (M6, planned on 2026-11-11 by lead decision (15m); PBE-072 built the platform command and OBE-100 the OTA command on 2026-11-11). Check that the active release has them (`node dist/cli.js help` in each backend) before you start; until both exist, follow [`platform-operations.md`](../../../platform/docs/runbooks/platform-operations.md) §8: steps 1 to 4 only, and never step 8.
 
   The OTA command prints one line per tenant schema and table, then a total and a verdict, for example:
 
@@ -32,6 +32,18 @@ It is a human procedure on the VM. AI agents never run it ([`AGENTS.md`](../../.
   ```
 
   `before` and `after` count the rows that hold a ciphertext and are not under the current KEK, by KEK id. The lines hold counts, schema and table names and KEK ids only, never a row id, a ciphertext or a value. `--dry-run` checks every value at its place and prints what would move and what would fail (`dry run: would re-wrap N, would fail N`), and writes nothing. Exit codes: `0` when nothing is left under an old KEK (a dry run: when nothing was), `1` when a row failed or remains, a table stopped or the command could not start, `2` for invalid arguments or a `--tenant` without a schema. It refuses to start, and connects to nothing, when the key folder or the current KEK cannot be loaded.
+
+  The platform command (PBE-072, built on 2026-11-11) prints one line per platform table, then a total and a verdict, for example:
+
+  ```text
+  secrets:rewrap: current KEK local:v2 (loaded: local:v1, local:v2); 8 platform table(s).
+  secrets:rewrap: platform.accounts: rewrapped 3, skipped 0, failed 0; remainingByKekId before {"local:v1":3} after {}
+  …
+  secrets:rewrap: total of 8 table(s): rewrapped 9, skipped 0, failed 0; remainingByKekId before {"local:v1":9} after {}
+  secrets:rewrap: nothing is left under an old KEK: every value is under local:v2.
+  ```
+
+  `before` and `after` count the rows that hold a ciphertext and are not under the current KEK, by KEK id (`(none)` for a value without a key id). The lines hold counts, table names and KEK ids only, never a row id, a ciphertext or a value; an error shows as its class and code. `--dry-run` checks every value at its place and prints what would move and what would fail (`dry run: would re-wrap N, would fail N`), and writes nothing; `--batch-size` sets the rows per page (500 by default, at most 10 000). Exit codes: `0` when nothing is left under an old KEK (a dry run: when nothing was), `1` when a row failed or remains, a table stopped or the command could not start, `2` for invalid arguments. It needs PostgreSQL only, and refuses to start, and connects to nothing, when the key folder or the current KEK cannot be loaded. What it means for the platform's rows, and what it leaves to expire, is in [`platform-operations.md`](../../../platform/docs/runbooks/platform-operations.md) §8.
 
 **When to rotate.** After a suspected compromise of the VM, of a backend zone's user or of a copy of `/etc/velexis` (follow [section 4](#4-after-a-suspected-compromise)); when someone who had root on the VM or access to the `/etc/velexis` backups leaves; and as planned key hygiene when the developer decides. A KEK does not wear out: a random 96-bit IV per wrap keeps it safe for far more data keys than the MVP creates ([`packages/crypto` README](../../../packages/crypto/README.md#kek-rotation)).
 
@@ -89,10 +101,13 @@ Do the steps in this order. Each one is safe to repeat.
 5. **Re-wrap the existing values: both commands.** The platform command first, then the OTA command (it walks every tenant schema). Keep both outputs: they hold counts and KEK ids only, never a value.
 
    ```bash
+   sudo velexis-run platform node dist/cli.js secrets:rewrap --dry-run # optional: what would move and what would fail
    sudo velexis-run platform node dist/cli.js secrets:rewrap | tee ~/rewrap-platform-$(date -u +%F).txt
    sudo velexis-run ota node dist/cli.js secrets:rewrap --dry-run      # optional: what would move and what would fail
    sudo velexis-run ota node dist/cli.js secrets:rewrap | tee ~/rewrap-ota-$(date -u +%F).txt
    ```
+
+   The platform command goes through its eight tables one after the other and goes on past a table that stops: that table's line says `stopped (<error class and code>)`, and the next run continues with what is left. It changes only the ciphertexts and the key id of the rows it moves (not `version`, not `updated_at`), and publishes no cache invalidation (the caches expire, step 8).
 
    The OTA command walks every tenant schema, one table after the other, and goes on past a table that stops: that table's line says `stopped (<error class and code>)`, and the next run continues with what is left. `--tenant <key>` re-runs one OTA's schema only.
 
@@ -115,13 +130,15 @@ Do the steps in this order. Each one is safe to repeat.
 7. **Check that nothing is left under the old key.** Run both commands again. Each must report `rewrapped 0` and an empty `remainingByKekId` (no entry for `local:v1`) for every table. If one still lists `local:v1`, repeat steps 5 to 7; never remove a key that still wraps a value.
 
    ```bash
-   sudo velexis-run platform node dist/cli.js secrets:rewrap
+   sudo velexis-run platform node dist/cli.js secrets:rewrap; echo "exit $?"
    sudo velexis-run ota node dist/cli.js secrets:rewrap; echo "exit $?"
    ```
 
+   The platform command must print `rewrapped 0, skipped 0, failed 0; remainingByKekId before {} after {}` for each of its eight tables, end with `nothing is left under an old KEK: every value is under local:v2.`, and exit `0`.
+
    The OTA command must print `rewrapped 0, skipped 0, failed 0; remainingByKekId before {} after {}` for every tenant schema and table, end with `nothing is left under an old KEK: every value is under local:v2.`, and exit `0`.
 
-8. **Remove the old key from both folders, in one command**, then restart once more: the running processes forget `v1`, and the restart proves that nothing needs it any more. Start this step at least one minute after the platform command of step 5 finished, so that no 60-second cache in Redis still holds a platform row under `v1`.
+8. **Remove the old key from both folders, in one command**, then restart once more: the running processes forget `v1`, and the restart proves that nothing needs it any more. Start this step at least one minute after the platform command of step 5 finished, so that no 60-second cache in Redis still holds a platform row under `v1`, and at least ten minutes after the restart of step 4, so that no pending MFA set-up in Redis (10 minutes) is still wrapped under `v1`.
 
    ```bash
    sudo rm /etc/velexis/keys/platform/master-v1.key /etc/velexis/keys/ota/master-v1.key
@@ -160,4 +177,4 @@ Backup sets taken before the compromise still hold the stolen key and the old se
 
 ## 5. Development
 
-Locally the keys are in `.local/keys/` (`pnpm dev:keys`, mode `0600`). To try a rotation: write a new key with `(umask 077; openssl rand -base64 32 > .local/keys/master-v2.key)`, set `MASTER_KEY_CURRENT=local:v2` in `.env`, restart the backends and run `node dist/cli.js secrets:rewrap` in `platform/backend` and in `ota/backend` after `pnpm build`. The OTA command's runs over two tenant schemas with values under `local:v1` and `local:v2` in every ciphertext column set (a dry run, `--tenant`, every schema, a second run, a corrupted value, a row changed meanwhile, a table that stops and the run that continues) are proven by `pnpm --filter @velexis/ota-backend exec vitest run --config vitest.int.config.ts test/integration/secrets/rewrap.int.test.ts`. The helper's behaviour (mixed KEK ids, a concurrent update, a second run) is proven by `pnpm --filter @velexis/crypto test`, and the key step of `provision-vm.sh` by `sudo bash deploy/scripts/test/check-vm.test.sh` (step 5).
+Locally the keys are in `.local/keys/` (`pnpm dev:keys`, mode `0600`). To try a rotation: write a new key with `(umask 077; openssl rand -base64 32 > .local/keys/master-v2.key)`, set `MASTER_KEY_CURRENT=local:v2` in `.env`, restart the backends and run `node dist/cli.js secrets:rewrap` in `platform/backend` and in `ota/backend` after `pnpm build`. The platform command's runs with values under `local:v1` and `local:v2` in every platform table (a dry run, a run, a second run, a row changed meanwhile, a corrupted and a copied value, a table that stops and the run that continues) are proven by `pnpm --filter @velexis/platform-backend exec vitest run --config vitest.int.config.ts test/integration/secrets/rewrap.int.test.ts`. The OTA command's runs over two tenant schemas with values under `local:v1` and `local:v2` in every ciphertext column set (a dry run, `--tenant`, every schema, a second run, a corrupted value, a row changed meanwhile, a table that stops and the run that continues) are proven by `pnpm --filter @velexis/ota-backend exec vitest run --config vitest.int.config.ts test/integration/secrets/rewrap.int.test.ts`. The helper's behaviour (mixed KEK ids, a concurrent update, a second run) is proven by `pnpm --filter @velexis/crypto test`, and the key step of `provision-vm.sh` by `sudo bash deploy/scripts/test/check-vm.test.sh` (step 5).

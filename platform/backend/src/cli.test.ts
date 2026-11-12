@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { CLI_COMMANDS, EXIT_FAILED, EXIT_OK, EXIT_USAGE, runCli, usage, type CliCommand } from "./cli";
+import { REWRAP_ARGUMENTS, REWRAP_COMMAND } from "./secrets/rewrap.command";
 
 /** stdout and stderr as strings. */
 function buffers(): {
@@ -100,12 +101,13 @@ describe("the admin commands (PBE-028)", () => {
   }, 60_000);
 
   it("[PBE-028] registers admin:grant and admin:reset-mfa, which take an e-mail address and an operator", () => {
-    // dev:seed (PBE-034) follows them and takes no argument.
+    // dev:seed (PBE-034) follows them and takes no argument; secrets:rewrap (PBE-072) comes last.
     expect(CLI_COMMANDS.map((command) => `${command.name} ${command.args}`.trim())).toEqual([
       "help",
       "admin:grant <email> [--operator <name>]",
       "admin:reset-mfa <email> [--operator <name>]",
       "dev:seed",
+      "secrets:rewrap [--dry-run] [--batch-size <n>]",
     ]);
   });
 
@@ -133,6 +135,36 @@ describe("dev:seed (PBE-034)", () => {
     expect(withArgument.code).toBe(EXIT_USAGE);
     expect(withArgument.stderr).toBe(
       "dev:seed: the command takes no arguments.\nUsage: node dist/cli.js dev:seed\n",
+    );
+    expect(withArgument.stdout).toBe("");
+  });
+});
+
+describe("secrets:rewrap (PBE-072)", () => {
+  let withArgument: { code: number; stdout: string; stderr: string };
+
+  beforeAll(async () => {
+    // The run goes through cli.ts's dispatcher and its lazy import of secrets/rewrap.command.ts (already loaded by this
+    // file's import of its constants): well under a second, bounded here for a loaded CI runner.
+    const output = buffers();
+    const code = await runCli(["secrets:rewrap", "--batch-size", "Secret-Value 1!"], output);
+    withArgument = { code, stdout: output.stdout.text, stderr: output.stderr.text };
+  }, 60_000);
+
+  it("lists the command with the arguments of its module [PBE-072 AC1]", () => {
+    const command = CLI_COMMANDS.find((candidate) => candidate.name === REWRAP_COMMAND);
+
+    expect(command?.args).toBe(REWRAP_ARGUMENTS);
+    expect(usage(CLI_COMMANDS)).toMatch(/^ {2}secrets:rewrap \[--dry-run\] \[--batch-size <n>\] +Re-wrap /m);
+  });
+
+  it("answers a usage error for a wrong argument before any configuration is read, without echoing it [PBE-072 AC2]", () => {
+    expect(withArgument.code).toBe(EXIT_USAGE);
+    expect(withArgument.stderr).toBe(
+      "secrets:rewrap: invalid arguments; nothing was re-wrapped.\n" +
+        "Usage: node dist/cli.js secrets:rewrap [--dry-run] [--batch-size <n>]\n" +
+        "  --dry-run         count and check only: nothing is written\n" +
+        "  --batch-size <n>  rows per page, 1 to 10000 (default 500)\n",
     );
     expect(withArgument.stdout).toBe("");
   });

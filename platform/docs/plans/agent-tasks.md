@@ -2205,8 +2205,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - Every other account never sees the enrolment page, and every journey of the e2e suite (the portal ones and those that sign in through the portal to open the console) passes as before.
 - **Verify:** `pnpm --filter @velexis/platform-frontend test && pnpm test:e2e -- --project=portal specs/portal-mfa-enrolment.e2e.ts`
 
-### PBE-072 · Add the platform backend's secrets:rewrap command
-- **Status:** todo
+### PBE-072 · Add the platform backend's secrets:rewrap command ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M6
 - **Depends on:** X-040, PBE-028

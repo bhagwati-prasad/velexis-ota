@@ -40,7 +40,7 @@ platform/backend/
 │   ├── main.ts                     HTTP entry (helmet, cookie-parser, trust proxy loopback, Nest's body parser off)
 │   ├── worker.ts                   BullMQ processors and schedulers, health server on HEALTH_PORT
 │   ├── cli.ts                      the command dispatcher: admin:grant, admin:reset-mfa (loaded only when one runs,
-│   │                               PBE-028), dev:seed (PBE-034)
+│   │                               PBE-028), dev:seed (PBE-034), secrets:rewrap (PBE-072)
 │   ├── app.module.ts, worker.module.ts
 │   ├── config.ts                   @velexis/config schema of every variable below
 │   ├── common/
@@ -151,6 +151,8 @@ platform/backend/
 │   │                               admin-billing.controller.ts (plans and subscriptions, PBE-033; Stripe prices, resync,
 │   │                               invoices, PBE-048) and admin-stripe-events.service.ts (the Stripe inbox, PBE-048)
 │   ├── dev/                        dev-seed.command.ts: `dev:seed`, development data, refused in production (PBE-034)
+│   ├── secrets/                    rewrap.command.ts: `secrets:rewrap`, the master-key rotation's re-wrap of every
+│   │                               platform ciphertext; rewrap.repository.ts: its row sources (PBE-072)
 │   └── health/
 └── test/
     ├── support/app.ts              createTestApp(): the API on a test database clone and Redis, for Supertest (PBE-008)
@@ -530,6 +532,7 @@ Run from the repository root (`pnpm --filter @velexis/platform-backend <script>`
 | `node dist/cli.js help` | List the CLI commands. Exit codes: `0` done (or nothing to do), `1` the command failed or refused, `2` no or unknown command, or wrong arguments (never echoed) |
 | `node dist/cli.js admin:grant <email> [--operator <name>]` | Grant platform admin to an existing `active` account with a verified address and MFA (exit `1` with the reason otherwise; exit `0` without a change for an admin already); one audit row `admin.granted` with `actor_type = 'system'` and the operator. `--operator` defaults to the user of the process: on the VM (`sudo velexis-run platform node dist/cli.js admin:grant <email> --operator <your name>`) pass it, as the command runs as `velexis-platform` |
 | `node dist/cli.js admin:reset-mfa <email> [--operator <name>]` | Emergency MFA reset of a platform admin who lost the authenticator and the recovery codes: MFA off, recovery codes deleted, every session revoked, `staffdeny` written, the account e-mailed; one audit row `account.mfa_reset` (`system`, the operator). Refuses accounts that are not admins (exit `1`) |
+| `node dist/cli.js secrets:rewrap [--dry-run] [--batch-size <n>]` | The master-key rotation's re-wrap (PBE-072; [ADR-0010](../../docs/mvp/adr/0010-secrets-envelope-encryption.md) "Rotation" item 3; [`master-key-rotation.md`](../../docs/mvp/runbooks/master-key-rotation.md) steps 5 and 7, as `sudo velexis-run platform node dist/cli.js secrets:rewrap` on the VM): moves the data key of every platform ciphertext to the KEK of `MASTER_KEY_CURRENT` with `rewrapBatch` of `@velexis/crypto`, table by table (`src/secrets/rewrap.repository.ts`: `accounts`, `amadeus_accounts`, `supplier_connections`, `payment_provider_connections`, `credential_submissions`, `tenant_payout_accounts`, `email_outbox`, `provisioning_jobs`), in keyset pages of `--batch-size` rows (500 by default, at most 10 000). Each value must first authenticate at its place (`platform.<table>.<column>:<row id>`); a row's values move together with its key id column, under an optimistic check on the old values, and nothing else of the row changes (not `version`, not `updated_at`). A row changed meanwhile is skipped, a value that does not authenticate is left as it is and counted as failed. It prints one line per table (`rewrapped`, `skipped`, `failed`, and `remainingByKekId` before and after: the rows not under the current KEK, by KEK id), a total and a verdict: counts, table names and KEK ids only, never a row id, a ciphertext or a value; an error shows as its class and code. `--dry-run` checks every value the same way and prints what would move and what would fail, and writes nothing. Reads `APP_ENV`, `LOG_LEVEL`, `DATABASE_URL`, `MASTER_KEY_DIR` and `MASTER_KEY_CURRENT` only (no Redis), and refuses to start, before it connects, when the current KEK cannot be loaded. Exit `0` when nothing is left under an old KEK (a dry run: when nothing was), `1` when a row failed or remains, a table stopped or it could not start, `2` for invalid arguments (never echoed). The pending MFA set-ups in Redis and the OTA backend's 60-second caches of platform rows expire by themselves ([platform-operations.md](../docs/runbooks/platform-operations.md) §8) |
 | `stripe listen --forward-to localhost:3100/webhooks/stripe/billing` | Forward test billing events |
 | `stripe listen --forward-connect-to localhost:3100/webhooks/stripe/connect-accounts --events account.updated,account.application.deauthorized` | Forward test Connect account events |
 
