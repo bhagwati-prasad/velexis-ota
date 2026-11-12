@@ -913,7 +913,9 @@ describe("amadeus/accounts/page.tsx: the Velexis Amadeus accounts", () => {
 
     await waitFor(() => expect(within(form).getByText(F.baseUrlInvalid)).toBeTruthy(), UI_WAIT);
     expect(within(form).getByLabelText(F.baseUrlLabel).getAttribute("aria-invalid")).toBe("true");
-    expect(secretField.value).toBe("");
+    // The form empties the secret in an effect after the answer's render (useClearedAfterAnswer), which can run after
+    // the refusal is on the page.
+    await waitFor(() => expect(secretField.value).toBe(""), UI_WAIT);
     expect((within(form).getByLabelText(F.clientIdLabel) as HTMLInputElement).value).toBe(CLIENT_ID);
     expect(document.body.innerHTML).not.toContain(CLIENT_SECRET);
     expect(document.body.textContent).not.toContain("The API's own text");
@@ -953,7 +955,8 @@ describe("amadeus/accounts/page.tsx: the Velexis Amadeus accounts", () => {
       within(form).getByText(F.baseUrlNotOfficial).getAttribute("id"),
     );
     expect(within(form).queryByText(F.baseUrlInvalid)).toBeNull();
-    expect(secretField.value).toBe("");
+    // Emptied in an effect after the answer's render, as above.
+    await waitFor(() => expect(secretField.value).toBe(""), UI_WAIT);
     expect(await bodies("POST", ACCOUNTS_PATH)).toEqual([
       {
         environment: "live",
