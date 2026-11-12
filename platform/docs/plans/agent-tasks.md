@@ -2223,8 +2223,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - No output, log line or error of the command holds a secret, a ciphertext or a row id.
 - **Verify:** `pnpm --filter @velexis/platform-backend test cli rewrap && pnpm --filter @velexis/platform-backend exec vitest run --config vitest.int.config.ts test/integration/secrets/rewrap.int.test.ts`
 
-### PBE-073 · Check portal passwords against the rule-meeting entries of a public list of a million breached passwords
-- **Status:** todo
+### PBE-073 · Check portal passwords against the rule-meeting entries of a public list of a million breached passwords ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M6
 - **Depends on:** PBE-013, PBE-016

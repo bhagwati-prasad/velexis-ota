@@ -312,17 +312,27 @@ describe("signUp", () => {
     expect(await auditRows("account.signed_up", existing.id)).toEqual([]);
   });
 
-  it("[PBE-013 AC2] a 9-character password and a breached password answer 422 PASSWORD_TOO_WEAK [PF-01 AC2, FIX-W48-PLATFORM AC1]", async () => {
+  it("[PBE-013 AC2] a 9-character password and a breached password answer 422 PASSWORD_TOO_WEAK [PF-01 AC2, FIX-W48-PLATFORM AC1, PBE-073 AC2]", async () => {
     const callerIp = nextIp();
     const tooShort = uniqueEmail("signup-short");
     const breached = uniqueEmail("signup-breached");
+    const breachedAsListed = uniqueEmail("signup-breached-listed");
+    const notListed = uniqueEmail("signup-not-listed");
 
     const short = await signUp(callerIp, signUpBody(tooShort, "Fjord-La4"));
-    const common = await signUp(callerIp, signUpBody(breached, "QwertyUiop"));
+    // A rule-meeting entry of the breached list (PBE-073: `password1234`), in another letter case and as listed.
+    const common = await signUp(callerIp, signUpBody(breached, "PassWord1234"));
+    const commonAsListed = await signUp(callerIp, signUpBody(breachedAsListed, "password1234"));
+    // The same with more after it: not on the list, so the rule lets it through (one Argon2id hash).
+    const accepted = await signUp(callerIp, signUpBody(notListed, "PassWord1234-Fjord"));
 
+    expectResponseToMatch("signUp", accepted, { document: "platform" });
+    expect(accepted.status).toBe(202);
+    expect((await accountByEmail(pool, notListed))?.password_hash).toMatch(/^\$argon2id\$/);
     for (const [res, code] of [
       [short, "password_rule"],
       [common, "breached"],
+      [commonAsListed, "breached"],
     ] as const) {
       expectResponseToMatch("signUp", res, { document: "platform" });
       expect(res.status).toBe(422);
@@ -335,10 +345,16 @@ describe("signUp", () => {
       });
     }
     expect(short.text).not.toContain("Fjord-La4");
-    expect(common.text.toLowerCase()).not.toContain("qwertyuiop");
+    expect(common.text.toLowerCase()).not.toContain("password1234");
+    expect(commonAsListed.text.toLowerCase()).not.toContain("password1234");
     expect(await accountByEmail(pool, tooShort)).toBeUndefined();
     expect(await accountByEmail(pool, breached)).toBeUndefined();
-    expect([...(await outboxTo(tooShort)), ...(await outboxTo(breached))]).toEqual([]);
+    expect(await accountByEmail(pool, breachedAsListed)).toBeUndefined();
+    expect([
+      ...(await outboxTo(tooShort)),
+      ...(await outboxTo(breached)),
+      ...(await outboxTo(breachedAsListed)),
+    ]).toEqual([]);
   });
 
   it("refuses a blank full name with 400 VALIDATION_FAILED on /fullName", async () => {

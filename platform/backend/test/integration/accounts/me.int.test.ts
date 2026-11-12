@@ -503,9 +503,14 @@ describe("changePassword", () => {
       currentPassword: "Not-The-Password-2026",
       newPassword: NEW_PASSWORD,
     });
+    // A rule-meeting entry of the breached list (PBE-073: `iloveyou1234`), in another letter case and as listed.
     answers["weak"] = await change(current.accessToken, {
       currentPassword: TEST_PASSWORD,
-      newPassword: "qwertyuiop",
+      newPassword: "ILoveYou1234",
+    });
+    answers["weakAsListed"] = await change(current.accessToken, {
+      currentPassword: TEST_PASSWORD,
+      newPassword: "iloveyou1234",
     });
     const { rows: revoked } = await pool.query<{ n: number }>(
       "SELECT count(*)::int AS n FROM platform.account_sessions WHERE account_id = $1 AND revoked_at IS NOT NULL",
@@ -524,7 +529,7 @@ describe("changePassword", () => {
     });
   }, GROUP_SETUP_TIMEOUT_MS);
 
-  it("refuses an unverified account, a wrong current password and a weak new password, changing nothing", async () => {
+  it("refuses an unverified account, a wrong current password and a weak new password, changing nothing [PBE-073 AC2]", async () => {
     for (const res of Object.values(answers)) {
       expectResponseToMatch("changePassword", res, { document: "platform" });
     }
@@ -536,12 +541,15 @@ describe("changePassword", () => {
         fieldErrors: [{ path: "/currentPassword", code: "incorrect" }],
       },
     });
-    expect(answers["weak"]?.body).toMatchObject({
-      error: { code: "PASSWORD_TOO_WEAK", fieldErrors: [{ path: "/newPassword", code: "breached" }] },
-    });
-    expect(JSON.stringify([answers["wrongCurrent"]?.body, answers["weak"]?.body])).not.toMatch(
-      /Not-The-Password|qwertyuiop/,
-    );
+    for (const answer of [answers["weak"], answers["weakAsListed"]]) {
+      expect(answer?.status).toBe(422);
+      expect(answer?.body).toMatchObject({
+        error: { code: "PASSWORD_TOO_WEAK", fieldErrors: [{ path: "/newPassword", code: "breached" }] },
+      });
+    }
+    expect(
+      JSON.stringify([answers["wrongCurrent"]?.body, answers["weak"]?.body, answers["weakAsListed"]?.body]),
+    ).not.toMatch(/Not-The-Password|iloveyou1234/i);
     // Until the accepted change: the same hash, no session revoked and no OTA cut-off.
     expect(afterRefusals).toEqual({ passwordHash, revokedRows: 0, staffDeny: null });
     expect(await auditRows("account.password_changed", account.id)).toHaveLength(1);

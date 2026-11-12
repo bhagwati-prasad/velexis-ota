@@ -11,12 +11,27 @@
 // path sets a password (accepting an invitation and `admin:grant` set none). A password is checked only when it is
 // chosen, never at sign-in.
 //
-// The list is `breached-passwords.txt` next to this file: the 10 000 most common passwords of SecLists
-// (`Passwords/Common-Credentials/10k-most-common.txt` at commit c23b603128ed21e46164a0afd357f0c242135f41, MIT
-// licence, SHA-256 68782d6a4a19a4768d5f15dd66bd534e7a33055cc755411e33f16d18c50fdcce), one per line, lower-cased. It
-// is read once, when AuthModule is built (`PasswordPolicy.load()`), and a password is compared lower-cased, so
-// `QWERTYUIOP` is as breached as `qwertyuiop`. The build copies the file to `dist/auth/`. The list is checked first,
-// so a listed password is named as such whatever its length (no password of the shipped list meets the rule).
+// The list is `breached-passwords.txt` next to this file (PBE-073; lead decision (17b) of 2026-11-11, ADR-0008's note
+// of that day): the entries that meet the rule above of a public list of about a million breached passwords, SecLists
+// `Passwords/Common-Credentials/xato-net-10-million-passwords-1000000.txt` (MIT licence) at commit
+// c23b603128ed21e46164a0afd357f0c242135f41 (999 999 non-empty lines, SHA-256
+// 424a3e03a17df0a2bc2b3ca749d81b04e79d59cb7aeec8876a5a3f308d0caf51), whose URL is
+//   https://raw.githubusercontent.com/danielmiessler/SecLists/c23b603128ed21e46164a0afd357f0c242135f41/Passwords/Common-Credentials/xato-net-10-million-passwords-1000000.txt
+// On 2026-11-12 `scripts/breached-passwords.mjs` kept its 28 968 lines with at least 12 code points, a letter and a
+// digit, lower-cased and trimmed them, dropped the duplicates and sorted them by code point: 28 897 entries, one per
+// line, 421 156 bytes, SHA-256 df67d6b895d1c029308223dd82298bbde1b2f776fd9ae5d5b9ac3bbe17e31faf. The file is generated
+// from a copy of the source fetched by hand (never by CI, a build or a deploy) and never edited by hand;
+// `breached-passwords.mjs --check` checks it offline (password-policy.test.ts runs it). It replaced the 10 000 most
+// common passwords of SecLists (`10k-most-common.txt`, 73 026 bytes), none of which meets the rule, so the file adds
+// 348 130 bytes (about 340 KiB) to the repository, `dist/` and each release, and the set about 1.3 MiB to the API's
+// heap (1.91 MiB instead of 0.62 MiB, measured with `node --expose-gc`). The OTA backend keeps that top-10 000 list
+// for customer passwords (ota/backend/src/identity/password-policy.ts).
+//
+// The list is read once, when AuthModule is built (`PasswordPolicy.load()`), and a password is compared lower-cased,
+// so a listed password is refused in any letter case. The build copies the file to `dist/auth/`. The list is checked
+// first (lead decision (16b)), so a listed password is named `breached` whatever else it breaks; every entry of the
+// shipped list meets the rule, so a short common password such as `QwertyUiop` is refused by the rule
+// (`password_rule`).
 //
 // Sign-up (PBE-013), the password reset and change (PBE-016) call `check` before `hash`; sign-in (PBE-014) calls
 // `verify`. A refused password answers `422 PASSWORD_TOO_WEAK` with a message that names the rule and one field error

@@ -56,6 +56,9 @@ const CHANGED_SUBJECT = "Your Velexis password was changed";
 const PORTAL = "http://localhost:3000";
 /** A new password that meets the rules; a test value, never a real password. */
 const NEW_PASSWORD = "Silver-Fjord-Morning-7";
+/** A rule-meeting entry of the breached-password list (PBE-073), as listed and in another letter case. */
+const BREACHED_AS_LISTED = "qwertyuiop123";
+const BREACHED_OTHER_CASE = "QWERTYUIOP123";
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
 
@@ -362,7 +365,9 @@ describe("the reset link", () => {
     t.clock.advance(59 * MINUTE_MS);
     confirmedAt = t.clock.now();
     outcomes["tooShort"] = await confirmReset(tokens.weak, "Fjord-9ch", ip);
-    outcomes["breached"] = await confirmReset(tokens.weak, "QWERTYUIOP", ip);
+    // A rule-meeting entry of the breached list (PBE-073: `qwertyuiop123`), in another letter case and as listed.
+    outcomes["breached"] = await confirmReset(tokens.weak, BREACHED_OTHER_CASE, ip);
+    outcomes["breachedAsListed"] = await confirmReset(tokens.weak, BREACHED_AS_LISTED, ip);
     afterRefusals = {
       passwordHash: (await accountRow(accounts.weak.id)).password_hash,
       staffDeny: await t.redis.client.get(redisKeys.staffDenyAccount(accounts.weak.id).key),
@@ -399,14 +404,17 @@ describe("the reset link", () => {
     expect((await accountRow(accounts.late.id)).password_changed_at).toBeNull();
   });
 
-  it("applies the password rules after the token, and a refused password leaves the link usable", () => {
+  it("applies the password rules after the token, and a refused password leaves the link usable [PBE-073 AC2]", () => {
     expect(outcomes["tooShort"]?.body).toMatchObject({
       error: { code: "PASSWORD_TOO_WEAK", fieldErrors: [{ path: "/newPassword", code: "password_rule" }] },
     });
-    expect(outcomes["breached"]?.body).toMatchObject({
-      error: { code: "PASSWORD_TOO_WEAK", fieldErrors: [{ path: "/newPassword", code: "breached" }] },
-    });
-    expect(JSON.stringify(outcomes["breached"]?.body)).not.toContain("QWERTYUIOP");
+    for (const outcome of [outcomes["breached"], outcomes["breachedAsListed"]]) {
+      expect(outcome?.status).toBe(422);
+      expect(outcome?.body).toMatchObject({
+        error: { code: "PASSWORD_TOO_WEAK", fieldErrors: [{ path: "/newPassword", code: "breached" }] },
+      });
+      expect(JSON.stringify(outcome?.body).toLowerCase()).not.toContain(BREACHED_AS_LISTED);
+    }
     // A refused password changes nothing: the same hash, and no OTA cut-off.
     expect(afterRefusals).toEqual({ passwordHash, staffDeny: null });
     expect(outcomeOf(outcomes["weakThenStrong"] as Response)).toBe("204");

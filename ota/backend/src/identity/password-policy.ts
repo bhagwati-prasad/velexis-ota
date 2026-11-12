@@ -4,12 +4,17 @@
 // (Unicode code points) and is not in the breached-password list, and nothing else; it is stored only as an Argon2id
 // hash with the OWASP parameters of ADR-0008 (`hashCustomerPassword` of sign-in.service.ts).
 //
-// The list is `breached-passwords.txt` next to this file, the same list the platform backend checks portal passwords
-// against (platform/backend/src/auth/password-policy.ts): the 10 000 most common passwords of SecLists
+// The list is `breached-passwords.txt` next to this file: the 10 000 most common passwords of SecLists
 // (`Passwords/Common-Credentials/10k-most-common.txt` at commit c23b603128ed21e46164a0afd357f0c242135f41, MIT
 // licence, SHA-256 68782d6a4a19a4768d5f15dd66bd534e7a33055cc755411e33f16d18c50fdcce), one per line, lower-cased. It
 // is read once, when the identity module is built (`CustomerPasswordPolicy.load()`), and a password is compared
-// lower-cased, so `QWERTYUIOP` is as breached as `qwertyuiop`. The build copies the file to `dist/identity/`.
+// lower-cased, so `QWERTYUIOP` is as breached as `qwertyuiop`. The build copies the file to `dist/identity/`. It is
+// no longer the platform's list: since PBE-073 (lead decisions (17b) of 2026-11-11 and (18a) of 2026-11-12, ADR-0008
+// "Passwords") portal passwords are checked against the rule-meeting entries of a public list of about a million
+// breached passwords (platform/backend/src/auth/password-policy.ts), because none of these 10 000 meets the portal's
+// 12-character letter-and-digit rule. A customer password needs only 10 characters and no letter or digit, so this
+// list still refuses passwords the customer rule lets through, and it stays byte for byte at launch; checking
+// customer passwords against the entries of 10 or more characters of the larger list is a later follow-up.
 //
 // Sign-up (OBE-032) calls `check` before hashing; the password reset and change (OBE-034) do the same. A refused
 // password answers `422 PASSWORD_TOO_WEAK` with `details.violations` (the rules it breaks, `minLength` and
