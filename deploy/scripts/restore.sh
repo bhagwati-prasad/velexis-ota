@@ -2,7 +2,8 @@
 # =====================================================================================================
 # restore.sh — fetch, decrypt and restore Velexis backups made by backup.sh (ADR-0007).
 # Root-owned copy: /usr/local/sbin/velexis-restore. Runbook: docs/mvp/deployment-single-vm.md §10–§11.
-# Tested by deploy/scripts/test/backup-restore.test.sh (X-024); the restore drill on a scratch VM is X-031.
+# Tested by deploy/scripts/test/backup-restore.test.sh (X-024); the restore drill on a scratch VM, with the
+# single-tenant restore, is docs/mvp/runbooks/restore-drill.md (X-031).
 # The age PRIVATE keys are brought to the VM only for the restore (e.g. /root/restore/data.key), then deleted with
 # `shred -u`.
 #
@@ -19,7 +20,10 @@
 #                                                                (old one kept as <folder>.before-restore-<stamp>)
 #   velexis-restore redis <dir> --identity <key>                 replace Redis data (stops Redis briefly)
 #   velexis-restore config <dir> --identity <config-key>         unpack /etc/velexis into /root/velexis-config.restore
-#   velexis-restore drill <dir> --identity <key>                 restore into a scratch db, run checks, drop it
+#   velexis-restore drill <dir> --identity <key>                 restore into a scratch db, run checks, drop it;
+#                                                                appends the set, the figures (also the live
+#                                                                database's), the duration and the result to
+#                                                                $LOG_DIR/restore-drill-<date>.log
 #
 # Every command but list and fetch first checks the set's files against the SHA-256 lines of its MANIFEST.txt, and
 # age refuses a file that was changed or encrypted to another key. pg_restore reads the dump straight from age, so no
@@ -89,9 +93,15 @@ CREATED_DB=""
 CREATED_DIR=""
 STAGE=""
 APPS_STOPPED=0
+DRILL_LOG="" # `drill`: the day's log, which keeps every drill of that day, failed ones included
+if [ "$CMD" = drill ]; then DRILL_LOG="$LOG_DIR/restore-drill-$(date -u +%F).log"; fi
 on_exit() {
   local rc=$?
   if [ "$rc" -ne 0 ]; then
+    if [ -n "$DRILL_LOG" ]; then
+      { mkdir -p "$LOG_DIR" && log "drill of ${DIR:-?} FAILED (exit $rc; the messages are in the output of the run)" >>"$DRILL_LOG"; } \
+        2>/dev/null || true
+    fi
     if [ -n "$CREATED_DB" ]; then
       log "dropping $CREATED_DB, which this failed run created"
       drop_db "$CREATED_DB" >/dev/null 2>&1 || log "WARNING: could not drop $CREATED_DB; drop it by hand"
@@ -277,19 +287,33 @@ SQL
     decrypt "$DIR/config.tar.zst.age" | zstd -dq | tar -C "$CONFIG_RESTORE_DIR" -xf -
     log "config unpacked into $CONFIG_RESTORE_DIR (compare, then copy what you need into /etc/velexis)" ;;
   drill)
+    # The day's log keeps every drill of that day (appended, never replaced): the set it restored, the figures, the
+    # live database's figures beside them, the duration and the result; a failed drill leaves a FAILED line (on_exit).
     db="${PG_DATABASE}_drill_$(date -u +%Y%m%d)"
-    drill_log="$LOG_DIR/restore-drill-$(date -u +%F).log"
     mkdir -p "$LOG_DIR"
+    started=$SECONDS
+    printf '== drill %s on %s of %s: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(hostname)" "$DIR" \
+      "$(grep -E '^(created_at|host|release|database)=' "$DIR/MANIFEST.txt" | paste -sd ' ' -)" | tee -a "$DRILL_LOG"
     restore_db "$db"
     figures="$(check_db "$db")"
-    printf '%s\n' "$figures" | tee "$drill_log"
+    took=$((SECONDS - started))
+    printf '%s\n' "$figures" | tee -a "$DRILL_LOG"
     drop_db "$db"
     CREATED_DB=""
-    if [ "$figures" = "$(grep -E '^(tenants|tenant_schemas|reference_airports|last_audit_at)=' "$DIR/MANIFEST.txt")" ]; then
-      log "drill OK: the figures above match the set's MANIFEST.txt; compare them with the live database too" | tee -a "$drill_log"
+    # The live database's figures, to compare with: they differ by what was written since the backup. A database
+    # without the platform tables (a new VM before its first deploy) has none.
+    if live="$(check_db "$PG_DATABASE" 2>/dev/null)"; then
+      printf 'live %s: %s\n' "$PG_DATABASE" "$(printf '%s\n' "$live" | paste -sd ' ' -)" | tee -a "$DRILL_LOG"
     else
-      log "drill restored, but the figures differ from the set's MANIFEST.txt (a write during the backup?):" | tee -a "$drill_log"
-      grep -E '^(tenants|tenant_schemas|reference_airports|last_audit_at)=' "$DIR/MANIFEST.txt" | tee -a "$drill_log"
+      printf 'live %s: no figures (no such database, or not migrated yet)\n' "$PG_DATABASE" | tee -a "$DRILL_LOG"
+    fi
+    if [ "$figures" = "$(grep -E '^(tenants|tenant_schemas|reference_airports|last_audit_at)=' "$DIR/MANIFEST.txt")" ]; then
+      log "drill OK in ${took}s (restore and checks): the figures above match the set's MANIFEST.txt" | tee -a "$DRILL_LOG"
+    else
+      log "drill restored in ${took}s, but the figures differ from the set's MANIFEST.txt (a write during the backup?):" \
+        | tee -a "$DRILL_LOG"
+      grep -E '^(tenants|tenant_schemas|reference_airports|last_audit_at)=' "$DIR/MANIFEST.txt" | sed 's/^/manifest /' \
+        | tee -a "$DRILL_LOG"
     fi ;;
   *) usage ;;
 esac

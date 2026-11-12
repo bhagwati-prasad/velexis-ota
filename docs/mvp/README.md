@@ -32,6 +32,7 @@ Every plan uses exactly these ids and meanings.
 | [`runbooks/second-agent-review.md`](runbooks/second-agent-review.md) | Second-agent review of a pull request: when it is required (the M3 deep-review PRs), how the developer runs a fresh read-only session without secrets, its one-comment output, and what happens to each finding before the merge. |
 | [`runbooks/second-agent-review-prompt.md`](runbooks/second-agent-review-prompt.md) | The reviewing session's prompt: limits, checks for card data, idempotent writes, webhooks, timeout paths, tenant isolation and tokens, severities, comment format. |
 | [`runbooks/master-key-rotation.md`](runbooks/master-key-rotation.md) | Master-key (KEK) rotation on the VM: the new key in both zone folders, the switch, both backends' `secrets:rewrap`, the Amadeus token flush, removing the old key, and the order after a suspected compromise. |
+| [`runbooks/restore-drill.md`](runbooks/restore-drill.md) | The restore drill on a scratch VM (M6, then quarterly): its isolation from Amadeus, Stripe and the backup bucket, the timed steps and the RTO, a failed `db --replace-live`, the restore of one tenant, the outbound evidence, the drill log. |
 | [`adr/README.md`](adr/README.md) | Index of the cross-cutting architecture decision records. |
 | [`plans/`](plans/README.md) | The plans index, the master roadmap and the foundation agent tasks (§5). |
 

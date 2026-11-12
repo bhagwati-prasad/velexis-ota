@@ -29,7 +29,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 | **M1** Platform core | X-024 to X-027, X-035 | Nightly encrypted backups reach the off-site bucket. Integration tests assert e-mails through Mailpit. `pnpm stub:amadeus` serves token and flight-offers search, and tests start the stub in-process (PBE-020 and the M1 end-to-end harness use it). plan-lint reports the remaining work. |
 | **M2** Search & price | X-034, X-036 | Fixtures are recorded from the Amadeus test environment with scrubbing, and a scan keeps personal data out of them. The second-agent review procedure is ready for M3. |
 | **M3** Book & pay | X-028 | Signed Stripe webhook fixtures in tests; Stripe CLI forwarding for manual checks. |
-| **M6** Hardening & launch | X-029 to X-032, X-037 to X-042 | Uptime monitor and on-VM health checks alert. The restore drill is documented with a measured RTO and cannot reach live services. The move to managed services is proven to be configuration only; the VM's own checks and scripts follow it after the launch (X-042, since 2026-11-11; placed after the launch, as PBE-064 is, by lead decision (19h) of 2026-11-12). SSH needs a second factor, security logs are kept 12 months off the VM with a daily review, the WAF protects the public hosts, the master key can be rotated, and the VM reaches only the outside hosts it needs, with every refused attempt logged (X-041, since 2026-11-10). |
+| **M6** Hardening & launch | X-029 to X-032, X-037 to X-043 | Uptime monitor and on-VM health checks alert. The restore drill is documented with a measured RTO and cannot reach live services, and `systemctl mask` stops a unit on the VM (X-043, found by the drill's rehearsal on 2026-11-12). The move to managed services is proven to be configuration only; the VM's own checks and scripts follow it after the launch (X-042, since 2026-11-11; placed after the launch, as PBE-064 is, by lead decision (19h) of 2026-11-12). SSH needs a second factor, security logs are kept 12 months off the VM with a daily review, the WAF protects the public hosts, the master key can be rotated, and the VM reaches only the outside hosts it needs, with every refused attempt logged (X-041, since 2026-11-10). |
 
 ## What the component plans can depend on
 
@@ -980,7 +980,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 - **Verify:** `bash deploy/scripts/test/healthcheck.test.sh && shellcheck -S style deploy/scripts/healthcheck.sh`
 
 ### X-031 · Run and document the restore drill
-- **Status:** todo
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the drill on a scratch VM with its step times and RTO, the figures of `velexis-restore drill` against the MANIFEST, the single-tenant restore of a demo tenant, the outbound evidence and the failed `db --replace-live` there, human step)
 - **Component:** foundation
 - **Milestone:** M6
 - **Depends on:** X-024
@@ -1004,6 +1004,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - No Amadeus or Stripe live call was made from the scratch VM during the drill: the journal shows refused outbound connections only, and the restored `supplier_requests` have no row newer than the backup.
   - A deliberately failed `db --replace-live` (corrupt file) on the scratch VM left its live database intact (`deployment-single-vm.md` §11).
 - **Verify:** `sudo /usr/local/sbin/velexis-restore drill /root/restore/set --identity /root/restore/velexis-data.key` (human step: run by the developer on the scratch VM)
+- **Note (2026-11-12, X-031's rehearsal, [`../runbooks/restore-drill.md`](../runbooks/restore-drill.md) §8):** three points of step 1 do not work as written, and §11 of the guide and the runbook do instead: with `APP_ENV=production` the platform backend accepts only the official Amadeus hosts and live Stripe keys, and the OTA backend's `_LIVE` variables only live keys, so only the OTA backend's Amadeus URLs point at the black hole and every Stripe key and webhook secret is emptied (the platform's Stripe switches off) instead of replaced by test-mode values; `systemctl mask` refuses the VM's unit files, so the workers are masked with `/dev/null` links in `/etc/systemd/system.control` (X-043 makes `systemctl mask` work); and the outbound allow-list of X-041 has no address for the bucket on a scratch VM, so the drill opens the bucket's addresses in its emergency sets for the day, besides ufw's rules. This Note changes no Status.
 
 ### X-032 · Prove that the move to managed services is configuration only ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1151,6 +1152,26 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 - **Verify:** `shellcheck -S style deploy/scripts/*.sh deploy/scripts/test/*.sh && sudo bash deploy/scripts/test/check-vm.test.sh && bash deploy/scripts/test/healthcheck.test.sh`
 - **Note (2026-11-12, lead decision (19h), approved by the owner, FIX-W50-SHARED):** X-042 runs after the launch, as PBE-064 does, and keeps its M6 tag: a named exception to the M6 go criterion "every task done" ([roadmap](roadmap.md) §2.0 and the M6 go/no-go, [ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md) item 4). The launch keeps PostgreSQL and Redis on the VM, so nothing before it needs these changes: pick the task once the move to managed services is planned, and merge it before that move's step 6 (`systemctl mask --now postgresql redis-server`, [`deployment-single-vm.md`](../deployment-single-vm.md#15-moving-to-managed-postgresql-and-redis) §15). The roadmap's re-baseline of 2026-11-12 places it after the launch in both calendars (§1.3 and the M6 batches of §2).
 
+### X-043 · Let `systemctl mask` stop a Velexis unit on the VM
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M6
+- **Depends on:** X-031
+- **Size:** S
+- **Read first:** docs/mvp/runbooks/restore-drill.md step 2 and §7 (found by X-031 on 2026-11-12); docs/mvp/deployment-single-vm.md §4 and §11 (A scratch VM must never act as production, step 4); deploy/scripts/deploy.sh (install_if_changed, restart_units); deploy/scripts/provision-vm.sh (step scripts); deploy/scripts/test/fake-systemctl.sh; deploy/systemd/test/units-smoke.sh
+- **Files:** `deploy/scripts/deploy.sh`, `deploy/scripts/provision-vm.sh`, `deploy/scripts/test/fake-systemctl.sh`, `deploy/scripts/test/deploy.test.sh`, `deploy/systemd/test/units-smoke.sh`, `docs/mvp/runbooks/restore-drill.md`, `docs/mvp/deployment-single-vm.md`
+- **Steps:**
+  1. Found by X-031: `provision-vm.sh` and `velexis-deploy` install the unit files as regular files in `/etc/systemd/system`, so `systemctl mask velexis-ota-worker` fails there ("already exists", systemd 255), a runtime mask in `/run/systemd/system` is shadowed by the file (`is-enabled` says `disabled`), and `velexis-deploy`'s `install_if_changed` replaces a `/dev/null` link at that path with the unit file (GNU `install` replaces a link), so the "skip a masked unit" of `restart_units` works only through the `/etc/systemd/system.control` link that the restore drill uses meanwhile. Make a mask a supported step: either install the unit files where a mask in `/etc/systemd/system` shadows them (`/usr/local/lib/systemd/system`, with `check-vm.sh`'s file checks and the rollback snapshot following), or keep a `/dev/null` link in `/etc/systemd/system` in place in `velexis-deploy` and `provision-vm.sh` (logged, never replaced) and name the command that makes one. Record the choice and why.
+  2. `fake-systemctl.sh` refuses `mask` of a unit whose file is a regular file in the units folder, as systemd does, so `deploy.test.sh` cannot pass on a mask the VM refuses; `deploy.test.sh` masks the way the runbook says.
+  3. `units-smoke.sh`, under systemd: both workers masked as the runbook says, `velexis-deploy` skips them, leaves them masked and does not start them, the health check skips them, and a `daemon-reload` keeps them masked.
+  4. `restore-drill.md` step 2 and `deployment-single-vm.md` §11 name the supported mask instead of the `system.control` link.
+- **Acceptance:**
+  - Under systemd (`units-smoke.sh`), the documented mask of both workers succeeds, `systemctl is-enabled` says `masked`, and a `velexis-deploy` run leaves both masked and stopped.
+  - `fake-systemctl.sh` refuses a mask that systemd refuses, and `deploy.test.sh` still proves that a masked worker is skipped.
+  - The runbook and §11 name one mask command, the one the tests use.
+  - `shellcheck -S style` is clean.
+- **Verify:** `shellcheck -S style deploy/scripts/deploy.sh deploy/scripts/provision-vm.sh deploy/scripts/test/fake-systemctl.sh deploy/scripts/test/deploy.test.sh && bash deploy/scripts/test/deploy.test.sh`
+
 ## Dependency graph
 
 Generated with `node tools/plan-lint/plan-lint.mjs --graph docs/mvp/plans/foundation-tasks.md`.
@@ -1208,6 +1229,7 @@ flowchart LR
     X_040["X-040"]
     X_041["X-041"]
     X_042["X-042"]
+    X_043["X-043"]
   end
   X_001 --> X_002
   X_001 --> X_003
@@ -1268,6 +1290,7 @@ flowchart LR
   X_032 --> X_042
   X_030 --> X_042
   X_041 --> X_042
+  X_031 --> X_043
 ```
 
 The critical path printed by plan-lint runs through the database work (X-002 → X-010 → X-011 → X-012 → X-013 → X-015). Start X-016, X-003, X-004, X-006, X-017, X-019 and X-021 in parallel on day one; they do not share files. The VM chain (X-021 → X-033 → X-020 → X-023, 24 agent-hours) also carries the human steps on the VM: start X-033 as soon as X-021 is merged.

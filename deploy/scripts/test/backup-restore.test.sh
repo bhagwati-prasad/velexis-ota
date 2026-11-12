@@ -37,8 +37,11 @@
 #       the MANIFEST's checksums, sizes and figures; globals without passwords; the marker file; local retention
 #       prunes only old set folders;
 #    2. restore.sh list, fetch and drill: the fetched set restores into a scratch database whose figures equal the
-#       source database's and the MANIFEST's, and the drill database is dropped;
-#    3. a flipped byte in an .age file is refused, by the MANIFEST check and, with the MANIFEST "fixed", by age;
+#       source database's and the MANIFEST's, and the drill database is dropped; the day's drill log names the set,
+#       the live database's figures, the duration and the result (X-031);
+#    3. a flipped byte in an .age file is refused, by the MANIFEST check and, with the MANIFEST "fixed", by age; each
+#       refused drill appends a FAILED line to the day's drill log, which keeps the earlier drill's lines, and a drill
+#       of a set whose MANIFEST figures differ says so, with the MANIFEST's figures beside the restored ones (X-031);
 #    4. no delete on the remote: neither script contains a deleting rclone command, the wrapper refuses one (a
 #       self-check before the first run), and a second run on the same day (SKIP_REDIS=1) puts its set beside the
 #       first one, leaving every uploaded object (and an old set that only the bucket may expire) as it was; two
@@ -484,9 +487,21 @@ check "restore.sh fetch daily/$DAY1 downloads the set and checks it against its 
 PG_DATABASE="$SRC" run drill "$RESTORE_SH" drill "$FETCHED" --identity "$OFFLINE/data.key"
 drill_ok() { rc_is 0 && [ "$(grep -E "$FIGURE_LINES" "$LAST_LOG")" = "$SRC_FIGURES" ]; }
 check "restore.sh drill of the fetched set prints the source database's figures [X-024 AC1]" drill_ok
-check "the drill reports that its figures match the MANIFEST [X-024 AC1]" output_has "drill OK: the figures above match the set's MANIFEST.txt"
+drill_reports_match() { grep -qE "\] drill OK in [0-9]+s \(restore and checks\): the figures above match the set's MANIFEST\.txt\$" "$LAST_LOG"; }
+check "the drill reports that its figures match the MANIFEST [X-024 AC1]" drill_reports_match
 drill_log_ok() { [ "$(grep -hE "$FIGURE_LINES" "$PREFIX"/var/log/velexis/restore-drill-*.log)" = "$SRC_FIGURES" ]; }
 check "the drill log holds the figures [X-024 AC1]" drill_log_ok
+drill_logs() { cat "$PREFIX"/var/log/velexis/restore-drill-*.log; }
+drill_log_names_set() { # the header line: UTC time, host, the set's folder and its MANIFEST's created_at, host, release, database
+  drill_logs | grep -E '^== drill [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z on ' |
+    grep -F " of $FETCHED: created_at=$SET1 host=" | grep -qE " release=[^ ]+ database=${SRC}\$"
+}
+check "the drill log names the drill's UTC time, the set's folder and its MANIFEST's created_at and database [X-031 AC1]" \
+  drill_log_names_set
+drill_log_result() { drill_logs | grep -qE '\] drill OK in [0-9]+s \(restore and checks\): the figures above match'; }
+check "the drill log records the duration and the result [X-031 AC1]" drill_log_result
+drill_log_live() { drill_logs | grep -qxF "live $SRC: $(paste -sd ' ' - <<<"$SRC_FIGURES")"; }
+check "the drill log puts the live database's figures beside the restored ones [X-031 AC2]" drill_log_live
 check "the drill database is dropped afterwards [X-024 AC1]" test "$(db_list)" = "$SRC "
 
 # ---- 3. A flipped byte --------------------------------------------------------------------------------------------
@@ -505,6 +520,27 @@ resealed_refused() {
 }
 check "with the MANIFEST fixed to match, age refuses the flipped byte and the drill database is dropped [X-024 AC1]" \
   resealed_refused
+drill_failures_logged() { # one FAILED line per refused drill, and the first drill's lines are still there (appended)
+  [ "$(drill_logs | grep -cF "drill of $SETS/flipped FAILED")" = 1 ] &&
+    [ "$(drill_logs | grep -cF "drill of $SETS/resealed FAILED")" = 1 ] &&
+    [ "$(drill_logs | grep -cE 'drill OK in [0-9]+s')" = 1 ] && [ "$(drill_logs | grep -hE "$FIGURE_LINES")" = "$SRC_FIGURES" ]
+}
+check "each refused drill appends a FAILED line to the day's log, which keeps the earlier drill's lines [X-031 AC1]" \
+  drill_failures_logged
+# A set whose MANIFEST figures differ from what it restores (a write made during the backup): the drill still succeeds,
+# says so, and puts the MANIFEST's figures beside the restored ones, on the screen and in the day's log. Only the
+# SHA-256 lines of a MANIFEST are checked, so a changed figure line passes that check.
+copy_set "$FETCHED" "$SETS/figures-differ"
+sed -i 's/^tenants=.*/tenants=99/' "$SETS/figures-differ/MANIFEST.txt"
+PG_DATABASE="$SRC" run drill-differ "$RESTORE_SH" drill "$SETS/figures-differ" --identity "$OFFLINE/data.key"
+drill_differ_reported() {
+  rc_is 0 && [ "$(grep -E "$FIGURE_LINES" "$LAST_LOG")" = "$SRC_FIGURES" ] &&
+    grep -qE "\] drill restored in [0-9]+s, but the figures differ from the set's MANIFEST\.txt" "$LAST_LOG" &&
+    [ "$(grep -E '^manifest ' "$LAST_LOG")" = "$(grep -E "$FIGURE_LINES" "$SETS/figures-differ/MANIFEST.txt" | sed 's/^/manifest /')" ] &&
+    [ "$(drill_logs | grep -cxF 'manifest tenants=99')" = 1 ] && not output_has "drill OK" && [ "$(db_list)" = "$SRC " ]
+}
+check "a drill whose figures differ from the MANIFEST says so, with the MANIFEST's figures beside them in the day's log, and drops its database [X-031 AC2]" \
+  drill_differ_reported
 
 # ---- 4. No delete on the remote -------------------------------------------------------------------------------------
 step "4. backup.sh never deletes anything on the remote"
