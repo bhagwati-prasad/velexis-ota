@@ -28,7 +28,10 @@
 // not only once the last one landed, which `canIssue` keeps. `cancellationMode` is what that cancellation would ask
 // Amadeus for now (`consoleCancellationModeOf`: cancellation-mode.ts `supplierModeOf` over the stored tickets in the
 // OTA's `storefront_settings.time_zone`, lead decision (2a) of 2026-10-30, FIX-W35-OTA), `null` when canCancel's rule
-// refuses the booking whoever asks (`staffCancelRefusalOf`). The list cursor is opaque base64url JSON: the sort key
+// refuses the booking whoever asks (`staffCancelRefusalOf`). Since OBE-099, `canCloseReview` offers
+// console.bookings.closeReview (`bookings:cancel`) for a booking in Reconciliation review only (`pending` with
+// `reconcile_outcome = manual_review`, `reviewClosureRefusalOf`), else reason `not_in_review`; it is always answered,
+// though not in the document's `required` list. The list cursor is opaque base64url JSON: the sort key
 // (an instant in UTC with microseconds, a total, or `null` for a booking without a ticketing deadline), the id and a
 // fingerprint of the environment, filters and sort, so a cursor of other filters is refused (`400 VALIDATION_FAILED`).
 import type { components } from "@velexis/api-types";
@@ -590,6 +593,11 @@ export interface ConsoleActionsInput {
    */
   readonly cancellationPending?: boolean;
   readonly now: Date;
+  /**
+   * `bookings.reconcile_outcome` (OBE-099): `manual_review` with `pending` is the Reconciliation review that
+   * canCloseReview offers to close. Absent or `null`: not in review.
+   */
+  readonly reconcileOutcome?: string | null;
   /** Whether the caller holds a permission (the staff member's role, or a key-only call's scopes). */
   readonly can: (permission: StaffPermission) => boolean;
 }
@@ -633,6 +641,19 @@ export function staffCancelRefusalOf(input: StaffCancelInput): ActionReason | un
       ? undefined
       : "flown")
   );
+}
+
+/**
+ * Why console.bookings.closeReview refuses the booking now, whoever asks (canCloseReview's reason without
+ * `no_permission`; OBE-099): `not_in_review` unless it is `pending` with `reconcile_outcome = manual_review`, the
+ * booking the reconciliation handed to the staff (OADR-0003 point 5); `undefined` when the review can be closed.
+ */
+export function reviewClosureRefusalOf(
+  input: Pick<ConsoleActionsInput, "status" | "reconcileOutcome">,
+): ActionReason | undefined {
+  return input.status === "pending" && input.reconcileOutcome === "manual_review"
+    ? undefined
+    : "not_in_review";
 }
 
 /** What `consoleCancellationModeOf` weighs: the cancellation's refusal and the stored tickets. */
@@ -700,6 +721,8 @@ export function consoleActionsOf(input: ConsoleActionsInput): ConsoleBookingActi
     canResync: decide("canResync", "bookings:write", withoutOrder() ?? (throttled ? "throttled" : undefined)),
     canRetrieve: decide("canRetrieve", "bookings:read", withoutOrder()),
     canAddNote: decide("canAddNote", "bookings:write", undefined),
+    // OBE-099: the staff who cancel bookings and release their payments close a review.
+    canCloseReview: decide("canCloseReview", "bookings:cancel", reviewClosureRefusalOf(input)),
     reasons,
   };
 }

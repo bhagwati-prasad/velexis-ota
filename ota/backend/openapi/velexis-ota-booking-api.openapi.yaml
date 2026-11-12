@@ -13408,6 +13408,189 @@ paths:
           $ref: '#/components/responses/ServiceUnavailable'
         '504':
           $ref: '#/components/responses/SupplierTimeout'
+  /v1/console/bookings/{bookingId}/review-closure:
+    post:
+      operationId: consoleCloseBookingReview
+      summary: Close a booking in Reconciliation review
+      description: >-
+        Settles a booking that the reconciliation of a lost Flight Create Orders answer handed to the staff (OADR-0003
+        point 5: `pending`, `reconcile_outcome = manual_review`, its checkout locked and its Stripe authorisation or
+        airline-card payment held), with what the staff found in the queuing office: the order (`order_found`) or no
+        order (`not_booked`).
+        `consoleActions.canCloseReview` says when the action is offered (2026-11-11, lead decision (15l), OBE-099).
+
+
+        **`order_found`** (`recordLocator` required). Before Amadeus is called, a booking of the environment that holds
+        this record locator answers `409 ORDER_ALREADY_IMPORTED` (as console.bookings.import answers it). Then **Get
+        Flight Order By Record Locator** (getFlightOrder by reference, `originSystemCode` `GDS`) for the booking's
+        queuing office, with no transaction open during the call; orders of offices other than the OTA's own are left
+        out as console.bookings.findByRecordLocator leaves them out (none left: `403 OFFICE_NOT_ALLOWED`), and the
+        order is accepted only when it carries the general remark `VELEXIS {reference}` of sub-type `BACKOFFICE` of
+        this booking, the proof the reconciliation itself asks for (`409 CONFLICT` with `details.reason =
+        remark_mismatch` otherwise; Amadeus without an order for the record locator answers `404 NOT_FOUND` with
+        `error.supplier`; an order with the remark that cannot be recorded `422 UNPROCESSABLE` with `details.reason =
+        order_not_recordable`). The order is then recorded through the reconciliation's found path: the order, its
+        travellers, segments, remarks and tickets, the booking `confirmed` (or `ticketed`, `partially_ticketed` when
+        the order came back issued), `reconcile_outcome = found`, the checkout `completed` (its lock released), the
+        traveller's `booking.confirmed` e-mail; another booking that holds the order by then answers `409
+        ORDER_ALREADY_IMPORTED`. The money follows as after an automatic find: a Stripe authorisation is captured by the
+        payments job (`payment.capture_retry`, queued for now, the booking's total within the authorisation; nothing for
+        the `manual_review` ticketing policy without tickets), which then makes the issuance due for the
+        `issue_after_payment` policy, so the ticketing job issues the tickets; an airline-card order is settled as
+        checkout.completeWithAirlineCard settles it (every ticket back: the payment `captured`, the airline charged the
+        card; otherwise the booking's ticketing goes to `manual_review`). Flight Create Orders is never sent.
+
+
+        **`not_booked`** (`note` required). The booking becomes `failed` (`failure_code = SUPPLIER_TIMEOUT`,
+        `reconcile_outcome = not_found`, `checkout_id` cleared) as in the reconciliation's not-found decision, and the
+        checkout is reopened (`open`, or `expired` past its expiry). A Stripe authorisation is voided by the payments
+        job (`payment.void`, on the account that created it) and the traveller gets the `booking.not_confirmed` e-mail.
+        An airline-card booking has nothing to void: Velexis never charged the card, so its payment becomes `failed`
+        and the traveller gets no e-mail that would say nothing was charged; the booking's `booking.reconcile_closed`
+        event records that the agent asks the airline whether it charged the card and has any charge refunded (never a
+        card value). A Stripe payment already captured is not refunded here: refund it from the payment
+        (console.payments.refund). Flight Create Orders is never sent and nothing is asked of Amadeus.
+
+
+        **Both.** `If-Match` (the booking's version: `412 PRECONDITION_FAILED` when stale). A booking that is not in
+        review (any other status or outcome, a review already closed) answers `409 CONFLICT` with `details.reason =
+        not_in_review` and changes nothing. A `note` (up to 2000 characters) becomes a staff-only note on the booking
+        (`staff.note`); a note that holds a card number answers `400 VALIDATION_FAILED` at `/body/note`. The booking
+        gets the staff event `booking.reconcile_closed` (the outcome, the record locator of a found order and the staff
+        member; no other personal data) and the `staff_actions` row `booking.reconcile_close` (before and after, the
+        note as its reason). The transactions lock the checkout, then the booking, then its payments (OADR-0003 point
+        11). The answer is the booking with its new `ETag`; the payment shows the capture or the void once the payments
+        job ran. Permission `bookings:cancel` (the staff who cancel bookings and release their payments).
+
+
+        **Idempotency.** Required; a retry with the same key answers the first answer, and a new key after the closure
+        `409 CONFLICT` (`not_in_review`).
+
+
+        **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
+        operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
+        (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
+        key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+      tags:
+        - Console bookings
+      security:
+        - apiKey: []
+          staffAuth: []
+        - apiKey: []
+      x-sdk-method: console.bookings.closeReview
+      x-amadeus:
+        - api: GetFlightOrderByRecordLocator
+          operationId: getFlightOrder
+          method: GET
+          path: /v1/booking/flight-orders/by-reference
+      x-tenant-tables:
+        - bookings
+        - booking_associated_records
+        - booking_travelers
+        - booking_contacts
+        - booking_segments
+        - booking_remarks
+        - booking_tickets
+        - booking_events
+        - checkouts
+        - payments
+        - payment_events
+        - notifications
+        - supplier_requests
+        - staff_actions
+        - idempotency_keys
+      x-error-codes:
+        - VALIDATION_FAILED
+        - INVALID_REQUEST
+        - UNAUTHENTICATED
+        - INVALID_API_KEY
+        - TOKEN_EXPIRED
+        - FORBIDDEN
+        - SCOPE_NOT_ALLOWED
+        - ORIGIN_NOT_ALLOWED
+        - TENANT_SUSPENDED
+        - HOST_NOT_ALLOWED
+        - STAFF_MEMBERSHIP_INACTIVE
+        - ENVIRONMENT_NOT_ALLOWED
+        - OFFICE_NOT_ALLOWED
+        - NOT_FOUND
+        - CONFLICT
+        - IDEMPOTENCY_KEY_REUSED
+        - ORDER_ALREADY_IMPORTED
+        - PRECONDITION_FAILED
+        - UNPROCESSABLE
+        - SUPPLIER_REJECTED
+        - SUPPLIER_NOT_CONFIGURED
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+        - SUPPLIER_ERROR
+        - SERVICE_UNAVAILABLE
+        - SUPPLIER_UNAVAILABLE
+        - SUPPLIER_TIMEOUT
+      x-scope: console
+      x-permission: bookings:cancel
+      x-milestone: M6
+      parameters:
+        - name: bookingId
+          in: path
+          required: true
+          description: Booking id (`bkg_…`) of this OTA.
+          schema:
+            type: string
+            pattern: ^bkg_[0-9A-Za-z]{16,40}$
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/VelexisEnvironment'
+        - $ref: '#/components/parameters/CustomerEndUserIp'
+        - $ref: '#/components/parameters/CustomerEndUserAgent'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConsoleBookingReviewClosureRequest'
+            examples:
+              orderFound:
+                summary: The order was found in the queuing office
+                value:
+                  outcome: order_found
+                  recordLocator: L2P9XC
+                  note: Found on queue 50 with the remark VELEXIS VX7K2Q.
+              notBooked:
+                summary: No order after a complete look
+                value:
+                  outcome: not_booked
+                  note: Queue 50 and the Selling Platform checked for SAMPLE around 10:05; no order.
+      responses:
+        '200':
+          $ref: '#/components/responses/ConsoleBookingOk'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ConsoleForbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/ConsoleReviewClosureConflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/ConsoleUnprocessable'
+        '424':
+          $ref: '#/components/responses/FailedDependency'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          $ref: '#/components/responses/SupplierError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '504':
+          $ref: '#/components/responses/SupplierTimeout'
   /v1/console/bookings/{bookingId}/resync:
     post:
       operationId: consoleResyncBooking
@@ -25052,6 +25235,64 @@ components:
                     status: 400
                     code: 38034
                     title: TICKETS NOT VOIDABLE
+    ConsoleReviewClosureConflict:
+      description: >-
+        The review closure conflicts with the booking or the order (consoleCloseBookingReview). Possible codes: CONFLICT
+        (`details.reason`: `not_in_review` when the booking is not `pending` in Reconciliation review, a review already
+        closed included, with `details.status` and `details.reconcileOutcome`; `remark_mismatch` when no order read by
+        the record locator carries the remark `VELEXIS {reference}` of sub-type BACKOFFICE of this booking;
+        `idempotency_key_in_use` while a request with the same key is under way), ORDER_ALREADY_IMPORTED (another
+        booking of the environment holds the order or its record locator; `details.bookingId`, `details.reference`),
+        IDEMPOTENCY_KEY_REUSED. Nothing was changed.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            NOT_IN_REVIEW:
+              summary: CONFLICT (the booking is not in Reconciliation review)
+              value:
+                error:
+                  code: CONFLICT
+                  message: This booking is not in Reconciliation review.
+                  status: 409
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: not_in_review
+                    status: confirmed
+                    reconcileOutcome: found
+            REMARK_MISMATCH:
+              summary: CONFLICT (the order does not carry this booking's remark)
+              value:
+                error:
+                  code: CONFLICT
+                  message: No order with this record locator carries the remark VELEXIS VX7K2Q of this booking.
+                  status: 409
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    reason: remark_mismatch
+            ORDER_ALREADY_IMPORTED:
+              summary: ORDER_ALREADY_IMPORTED
+              value:
+                error:
+                  code: ORDER_ALREADY_IMPORTED
+                  message: This order is already booking VX7K2Q.
+                  status: 409
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
+                  details:
+                    bookingId: bkg_01JA4CG3S8W1Z4C7F0H3L6P9T2
+                    reference: VX7K2Q
+            IDEMPOTENCY_KEY_REUSED:
+              summary: IDEMPOTENCY_KEY_REUSED
+              value:
+                error:
+                  code: IDEMPOTENCY_KEY_REUSED
+                  message: The Idempotency-Key was already used with a different request body.
+                  status: 409
+                  requestId: req_01JA2Z9W5K7Q3M8N4P6R2T0V1X
     ConsoleBookingOk:
       description: The booking with console detail.
       headers:
@@ -41221,6 +41462,12 @@ components:
         canAddNote:
           type: boolean
           description: console.bookings.addNote.
+        canCloseReview:
+          type: boolean
+          description: >-
+            console.bookings.closeReview (OBE-099; `bookings:cancel`, a booking in Reconciliation review: `pending` with
+            `reconcile_outcome = manual_review`, else reason `not_in_review`). Always answered since OBE-099; not in
+            `required`, so a reader written before it stays valid.
         reasons:
           type: object
           additionalProperties:
@@ -41235,7 +41482,8 @@ components:
               - flown
               - deadline_passed
               - throttled
-          description: Why an action is false, keyed by action name.
+              - not_in_review
+          description: Why an action is false, keyed by action name (`not_in_review` for canCloseReview only).
     ConsoleCancellationMode:
       type: object
       required:
@@ -41660,6 +41908,38 @@ components:
         notifyCustomer:
           type: boolean
           description: 'Send the cancellation e-mail. Default: `true`.'
+    ConsoleBookingReviewClosureRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - outcome
+      description: >-
+        Body of console.bookings.closeReview (OBE-099): what the staff found for a booking in Reconciliation review.
+        `order_found` needs `recordLocator` and takes an optional `note`; `not_booked` needs `note` and takes no
+        `recordLocator` (`400 VALIDATION_FAILED` at `/body/recordLocator` or `/body/note` otherwise).
+      properties:
+        outcome:
+          type: string
+          enum:
+            - order_found
+            - not_booked
+          description: >-
+            `order_found`: the order with the remark `VELEXIS {reference}` of this booking exists; it is read by
+            `recordLocator` and recorded on the booking. `not_booked`: a complete look found no order; the booking
+            fails and its payment is released.
+        recordLocator:
+          type: string
+          pattern: ^[A-Z0-9]{5,8}$
+          description: >-
+            `order_found` only, required there: the order's record locator (originating system `GDS`), which the API
+            reads and checks against the booking's remark.
+        note:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: >-
+            What the staff found and did, kept as a staff-only note on the booking and as the reason of the staff
+            action. Required with `not_booked`. Never a card number (`400 VALIDATION_FAILED`).
     ConsoleBookingResyncRequest:
       type: object
       additionalProperties: false
@@ -48136,8 +48416,10 @@ components:
           canResync: true
           canRetrieve: true
           canAddNote: true
+          canCloseReview: false
           reasons:
             canIssue: already_ticketed
+            canCloseReview: not_in_review
         cancellationMode:
           mode: void
           voidDeadlineAt: '2026-10-10T22:00:00Z'
@@ -48530,7 +48812,9 @@ components:
           canResync: true
           canRetrieve: true
           canAddNote: true
-          reasons: {}
+          canCloseReview: false
+          reasons:
+            canCloseReview: not_in_review
         failure: null
         tags:
           - corporate
@@ -48880,7 +49164,9 @@ components:
           canResync: true
           canRetrieve: true
           canAddNote: true
-          reasons: {}
+          canCloseReview: false
+          reasons:
+            canCloseReview: not_in_review
         failure: null
         tags:
           - terminal
@@ -49514,8 +49800,10 @@ components:
             canResync: true
             canRetrieve: true
             canAddNote: true
+            canCloseReview: false
             reasons:
               canIssue: already_ticketed
+              canCloseReview: not_in_review
           failure: null
           tags:
             - vip

@@ -370,6 +370,8 @@ export class ConsoleBookingsService {
           segments: children.segments,
           lastRefreshAt: stored.lastRefreshAt,
           cancellationPending: staffCancellationPending,
+          // console.bookings.closeReview's state (OBE-099).
+          reconcileOutcome: details.reconcileOutcome,
           now,
           can: (permission) => this.can(permission),
         }),

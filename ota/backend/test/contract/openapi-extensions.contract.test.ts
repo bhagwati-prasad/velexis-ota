@@ -47,8 +47,11 @@ const DOCUMENT_TIMEOUT_MS = 60_000;
 
 const HTTP_METHODS = ["get", "put", "post", "delete", "options", "head", "patch", "trace"] as const;
 const STATE_CHANGING = new Set(["post", "put", "patch", "delete"]);
-/** The values of `x-milestone` the OTA document uses (api-changes §1; health is M0, the M5 webhooks M5). */
-const MILESTONE_PATTERN = /^(M[0-5]|deferred)$/;
+/**
+ * The values of `x-milestone` the OTA document uses (api-changes §1: `M0` to `M6`; health is M0, the M5 webhooks M5,
+ * OBE-099's review closure M6).
+ */
+const MILESTONE_PATTERN = /^(M[0-6]|deferred)$/;
 
 type Milestone = "M2" | "M3" | "M4" | "deferred";
 
@@ -307,7 +310,7 @@ function responseExample(operationId: string, status: string): unknown {
 }
 
 describe("x-milestone (scope §3)", () => {
-  it("gives every operation of the document an x-milestone, M0 … M5 or deferred, and the index the same [OBE-009 AC2]", () => {
+  it("gives every operation of the document an x-milestone, M0 … M6 or deferred, and the index the same [OBE-009 AC2]", () => {
     expect(workingOperations.length).toBeGreaterThanOrEqual(96);
     for (const { operationId, spec } of workingOperations) {
       expect([operationId, spec["x-milestone"]]).toEqual([
@@ -1620,7 +1623,8 @@ type AddedGroup =
   | "console payments"
   | "public pages"
   | "public asset, file download"
-  | "health, webhooks";
+  | "health, webhooks"
+  | "console booking review closure";
 
 /** The group of §6's table an added operation belongs to, by its `x-sdk-method` (or the extension that replaces it). */
 function addedGroup(spec: Json): AddedGroup | "unknown" {
@@ -1639,19 +1643,21 @@ function addedGroup(spec: Json): AddedGroup | "unknown" {
     [/^console\.settings\.templates\./, "templates"],
     [/^console\.payments\./, "console payments"],
     [/^storefront\.(listPages|getPage)$/, "public pages"],
+    [/^console\.bookings\.closeReview$/, "console booking review closure"],
   ];
   return groups.find(([pattern]) => pattern.test(method))?.[1] ?? "unknown";
 }
 
 describe("the M4 totals (api-changes-console-and-internal §6)", () => {
-  it("[OBE-075 AC2] counts 135 operations, 128 of them with an x-sdk-method: the 96 of the design and the 39 the MVP adds", () => {
+  it("[OBE-075 AC2] [OBE-099] counts 136 operations, 129 of them with an x-sdk-method: the 96 of the design and the 40 the MVP adds", () => {
     const hasSdkMethod = ({ spec }: Operation): boolean => typeof spec["x-sdk-method"] === "string";
     const original = new Set(frozenOperations.map(({ operationId }) => operationId));
     const added = workingOperations.filter(({ operationId }) => !original.has(operationId));
 
-    expect(workingOperations).toHaveLength(135);
-    expect(workingOperations.filter(hasSdkMethod)).toHaveLength(128);
-    // 96 + 39 operations, 96 + 32 SDK methods: every original operation is still there with its SDK method.
+    // 135 at the M4 exit; OBE-099 (M6) adds console.bookings.closeReview.
+    expect(workingOperations).toHaveLength(136);
+    expect(workingOperations.filter(hasSdkMethod)).toHaveLength(129);
+    // 96 + 40 operations, 96 + 33 SDK methods: every original operation is still there with its SDK method.
     expect(frozenOperations.filter(hasSdkMethod)).toHaveLength(96);
     for (const { operationId, spec } of frozenOperations) {
       expect([operationId, operation(operationId).spec["x-sdk-method"]]).toEqual([
@@ -1659,11 +1665,11 @@ describe("the M4 totals (api-changes-console-and-internal §6)", () => {
         spec["x-sdk-method"],
       ]);
     }
-    expect(added).toHaveLength(39);
-    expect(added.filter(hasSdkMethod)).toHaveLength(32);
+    expect(added).toHaveLength(40);
+    expect(added.filter(hasSdkMethod)).toHaveLength(33);
     // Each SDK method names one operation (the SDK's parity check maps one method to one operation).
     const methods = workingOperations.filter(hasSdkMethod).map(({ spec }) => String(spec["x-sdk-method"]));
-    expect(new Set(methods).size).toBe(128);
+    expect(new Set(methods).size).toBe(129);
     // The seven without one: the two public plain URLs (x-sdk-exclude) and the five internal endpoints (x-internal).
     const withoutMethod = workingOperations.filter((op) => !hasSdkMethod(op));
     expect(
@@ -1685,11 +1691,11 @@ describe("the M4 totals (api-changes-console-and-internal §6)", () => {
       ].sort(),
     );
     // The operations index that route parity and the SDK's checks read has the same totals.
-    expect(otaOperations).toHaveLength(135);
-    expect(otaOperations.filter(({ sdkMethod }) => sdkMethod !== null)).toHaveLength(128);
+    expect(otaOperations).toHaveLength(136);
+    expect(otaOperations.filter(({ sdkMethod }) => sdkMethod !== null)).toHaveLength(129);
   });
 
-  it("[OBE-075 AC2] groups the 39 added operations as §6's table does, by milestone, and keeps 19 operations deferred", () => {
+  it("[OBE-075 AC2] [OBE-099] groups the 40 added operations as §6's table does, by milestone, and keeps 19 operations deferred", () => {
     const original = new Set(frozenOperations.map(({ operationId }) => operationId));
     const added = workingOperations.filter(({ operationId }) => !original.has(operationId));
     const groups: Record<string, number> = {};
@@ -1710,10 +1716,12 @@ describe("the M4 totals (api-changes-console-and-internal §6)", () => {
       "public pages": 2,
       "public asset, file download": 2,
       "health, webhooks": 5,
+      "console booking review closure": 1,
     });
     // M3: the airline card, the Velexis webhook and the file download; M4: the 25 settings operations, the 4 console
-    // payments and the 3 public ones; M0: health; M5: the two webhooks OBE-090 documented ahead of their handler.
-    expect(milestones).toEqual({ M0: 2, M3: 3, M4: 32, M5: 2 });
+    // payments and the 3 public ones; M0: health; M5: the two webhooks OBE-090 documented ahead of their handler; M6:
+    // OBE-099's review closure.
+    expect(milestones).toEqual({ M0: 2, M3: 3, M4: 32, M5: 2, M6: 1 });
     const deferred = workingOperations.filter(({ spec }) => spec["x-milestone"] === "deferred");
     expect(deferred).toHaveLength(19);
     // Every deferred operation is one of the design's: the MVP adds none.

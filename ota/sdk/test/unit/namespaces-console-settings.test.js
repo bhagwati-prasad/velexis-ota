@@ -128,6 +128,9 @@ const CONSOLE_ADDITION_TYPES = [
   "ConsoleSettingsAssetsApi",
   "ConsoleSettingsTemplatesApi",
   "ConsolePaymentsApi",
+  // OBE-099: the types of console.bookings.closeReview, after those of SDK-012 (extensions.md §3.4).
+  "ConsoleBookingReviewClosureRequest",
+  "ConsoleCloseBookingReviewParams",
 ];
 
 /** @typedef {import("../../src/index.js").VelexisClient} VelexisClient */

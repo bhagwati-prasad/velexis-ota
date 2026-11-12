@@ -6,7 +6,9 @@
 // require `ifMatch`; the record-locator lookups default `originSystemCode` to `"GDS"`; the long staff actions get 60 s;
 // a `sessionKind: "staff"` client refreshes through `console.auth.refresh`; the five deferred methods surface
 // `501 NOT_IMPLEMENTED` as a `ServerError`; and console.js declares the type names of console.d.ts in the contract's
-// order. The contract project (test/contract/) checks the 32 methods' types against the contract (AC1). The canned
+// order. The contract project (test/contract/) checks the 32 methods' types against the contract (AC1). OBE-099 adds
+// `bookings.closeReview` after the contract's bookings methods (an addition, extensions.md §3.4): its request, its
+// `ifMatch`, its 60 s and its types are checked here too. The canned
 // responses are the examples of the working OpenAPI document, checked with the Ajv helper of @velexis/testing, so the
 // fake answers cannot drift from the contract. Requests go to the fake fetch only.
 import { readFileSync } from "node:fs";
@@ -100,6 +102,12 @@ const ADDED_METHODS = [
   ...["list", "get", "capture", "refund"].map((method) => `payments.${method}`),
 ];
 
+/**
+ * The addition to the contract's bookings sub-namespace (OBE-099, ota/sdk/docs/extensions.md §3.4), after its eleven
+ * methods.
+ */
+const BOOKINGS_ADDITIONS = ["closeReview"];
+
 /** The methods that are deferred until after the MVP (scope.md §3.4, pending-operations.ts of the OTA backend). */
 const DEFERRED = [
   "bookings.create",
@@ -111,6 +119,9 @@ const DEFERRED = [
 
 /** The methods with the reviewed 60 s timeout of scripts/operation-overrides.json. */
 const LONG_ACTIONS = ["bookings.issue", "bookings.cancel", "bookings.import", "bookings.retrieve"];
+
+/** The additions with the reviewed 60 s timeout (OBE-099). */
+const LONG_ADDITIONS = ["bookings.closeReview"];
 
 /** @typedef {import("../../src/index.js").VelexisClient} VelexisClient */
 /** @typedef {import("../helpers/fake-fetch.js").RecordedRequest} RecordedRequest */
@@ -295,7 +306,10 @@ describe("the console namespace", () => {
       const api = /** @type {Record<string, unknown>} */ (
         client.console[/** @type {keyof VelexisClient["console"]} */ (namespace)]
       );
-      expect(Object.keys(api), namespace).toEqual(methods);
+      // The contract's methods first; OBE-099's closeReview closes the bookings sub-namespace.
+      expect(Object.keys(api), namespace).toEqual(
+        namespace === "bookings" ? [...methods, ...BOOKINGS_ADDITIONS] : methods,
+      );
     }
     expect(ALL_METHODS).toHaveLength(32);
     expect(ADDED_METHODS).toHaveLength(29);
@@ -933,7 +947,7 @@ describe("the environment header", () => {
     const consoleMethods = methods.filter(({ name }) => name.startsWith("console."));
     const customerMethods = methods.filter(({ entry }) => !entry.environment);
     expect(consoleMethods.map(({ name }) => name.slice("console.".length)).sort()).toEqual(
-      [...ALL_METHODS, ...ADDED_METHODS].sort(),
+      [...ALL_METHODS, ...ADDED_METHODS, ...BOOKINGS_ADDITIONS.map((name) => `bookings.${name}`)].sort(),
     );
     // Besides console.*, only the console's availability search (x-scope: console) takes the header.
     expect(
@@ -1430,6 +1444,141 @@ describe("the fetch cache mode", () => {
   });
 });
 
+describe("bookings.closeReview (OBE-099, an addition: extensions.md §3.4)", () => {
+  /** The documented 200 of consoleCloseBookingReview: the console booking (ConsoleBookingOk's example). */
+  const CLOSED_PROBLEMS = /** @type {unknown[][]} */ ([]);
+
+  // The response validator of the operation compiles on its first check: here, once, with the setup hook's budget.
+  beforeAll(() => {
+    const checker = responseChecker("ota");
+    CLOSED_PROBLEMS.push(
+      checker.check("consoleCloseBookingReview", { status: 200, body: example("bookings.get").body }),
+    );
+  }, SETUP_TIMEOUT_MS);
+
+  it("sends POST …/review-closure with If-Match, a generated Idempotency-Key, the environment and the outcome as JSON [OBE-099]", async () => {
+    const fake = createFakeFetch([answerOf("bookings.get"), answerOf("bookings.get")]);
+    const client = staffClient(fake.fetch);
+
+    const found = await client.console.bookings.closeReview({
+      bookingId: BOOKING_ID,
+      ifMatch: 7,
+      outcome: "order_found",
+      recordLocator: "L2P9XC",
+      note: "Found on queue 50.",
+    });
+    await client.console.bookings.closeReview({
+      bookingId: BOOKING_ID,
+      ifMatch: '"7"',
+      outcome: "not_booked",
+      note: "No order after a complete look.",
+    });
+
+    expect(CLOSED_PROBLEMS).toEqual([[]]);
+    expect(found).toEqual(example("bookings.get").body);
+    const entry = entryOf("bookings.closeReview");
+    expect([entry.method, entry.path, entry.idempotency, entry.environment, entry.timeoutMs]).toEqual([
+      "POST",
+      "/v1/console/bookings/{bookingId}/review-closure",
+      "required",
+      true,
+      60_000,
+    ]);
+    expect(fake.requests.map((request) => [request.method, request.url])).toEqual([
+      ["POST", `${BASE_URL}/v1/console/bookings/${BOOKING_ID}/review-closure`],
+      ["POST", `${BASE_URL}/v1/console/bookings/${BOOKING_ID}/review-closure`],
+    ]);
+    expect(fake.requests.map((request) => request.json)).toEqual([
+      { outcome: "order_found", recordLocator: "L2P9XC", note: "Found on queue 50." },
+      { outcome: "not_booked", note: "No order after a complete look." },
+    ]);
+    for (const request of fake.requests) {
+      expect(request.headers).toMatchObject({
+        "x-api-key": SK,
+        authorization: `Bearer ${STAFF_AT}`,
+        "x-velexis-environment": "live",
+        "content-type": "application/json",
+        "if-match": '"7"',
+      });
+      expect(request.headers["idempotency-key"]).toMatch(UUID_V4);
+      expect(request.init.cache).toBe("no-store");
+    }
+    // One key per call: a second closure is a new request, never the first one's replay.
+    expect(fake.requests[0]?.headers["idempotency-key"]).not.toBe(
+      fake.requests[1]?.headers["idempotency-key"],
+    );
+  });
+
+  it("refuses a call without a valid ifMatch with a TypeError before any request [OBE-099]", async () => {
+    const fake = createFakeFetch();
+    const client = staffClient(fake.fetch);
+
+    for (const ifMatch of [undefined, "", -1, { version: 3 }]) {
+      const error = await client.console.bookings
+        .closeReview(
+          /** @type {never} */ ({ bookingId: BOOKING_ID, ifMatch, outcome: "not_booked", note: "None." }),
+        )
+        .catch((/** @type {unknown} */ caught) => caught);
+      expect(error).toBeInstanceOf(TypeError);
+      expect(/** @type {TypeError} */ (error).message).toBe(
+        'Velexis SDK: POST /v1/console/bookings/{bookingId}/review-closure needs "ifMatch", the booking version (a whole number) or its ETag (a string)',
+      );
+    }
+    expect(fake.requests).toHaveLength(0);
+  });
+
+  it.each(LONG_ADDITIONS)(
+    "console.%s waits 60 s before it times out (the reviewed long action) [OBE-099]",
+    async (method) => {
+      vi.useFakeTimers();
+      const fake = createFakeFetch([{ delayMs: Number.POSITIVE_INFINITY }]);
+      const client = staffClient(fake.fetch, { maxRetries: 0 });
+      expect(entryOf(method).timeoutMs).toBe(60_000);
+
+      const pending = client.console.bookings
+        .closeReview({ bookingId: BOOKING_ID, ifMatch: 1, outcome: "not_booked", note: "None." })
+        .catch((/** @type {unknown} */ caught) => caught);
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(fake.requests[0]?.signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(await pending).toMatchObject({ code: "TIMEOUT", status: 0 });
+      expect(fake.requests).toHaveLength(1);
+    },
+  );
+
+  it("surfaces the API's refusals as their classes: not_in_review and remark_mismatch as ConflictError [OBE-099]", async () => {
+    const fake = createFakeFetch([
+      errorResponse(409, "CONFLICT", { details: { reason: "not_in_review" } }),
+      errorResponse(409, "CONFLICT", { details: { reason: "remark_mismatch" } }),
+      errorResponse(409, "ORDER_ALREADY_IMPORTED"),
+    ]);
+    const client = staffClient(fake.fetch, { maxRetries: 2 });
+    const close = () =>
+      client.console.bookings
+        .closeReview({ bookingId: BOOKING_ID, ifMatch: 1, outcome: "order_found", recordLocator: "L2P9XC" })
+        .catch((/** @type {unknown} */ caught) => caught);
+
+    const notInReview = await close();
+    const mismatch = await close();
+    const imported = await close();
+
+    expect(notInReview).toMatchObject({
+      code: "CONFLICT",
+      status: 409,
+      details: { reason: "not_in_review" },
+    });
+    expect(mismatch).toMatchObject({ code: "CONFLICT", details: { reason: "remark_mismatch" } });
+    expect(imported).toMatchObject({ code: "ORDER_ALREADY_IMPORTED", status: 409 });
+    for (const error of [notInReview, mismatch, imported]) {
+      expect(error).toBeInstanceOf(VelexisError);
+      expect(error).toMatchObject({ name: "ConflictError", retryable: false });
+    }
+    // A 409 is final: none of them was sent twice.
+    expect(fake.requests).toHaveLength(3);
+  });
+});
+
 describe("the console types", () => {
   const NAMESPACE_FILE = join(SDK_ROOT, "src", "namespaces", "console.js");
   const PUBLIC_FILES = ["console.js", "index.js"].map((name) => join(SDK_ROOT, "src", name));
@@ -1544,9 +1693,9 @@ describe("the console types", () => {
   });
 
   it("give every method typed params, options and an awaited result, never any or unknown [SDK-011]", () => {
-    // The 32 of the contract and, since SDK-012, the 29 additions of settings and payments.
+    // The 32 of the contract and, since SDK-012, the 29 additions of settings and payments; since OBE-099 closeReview.
     expect(signatures.map((signature) => signature.name).sort()).toEqual(
-      [...ALL_METHODS, ...ADDED_METHODS].sort(),
+      [...ALL_METHODS, ...ADDED_METHODS, ...BOOKINGS_ADDITIONS.map((name) => `bookings.${name}`)].sort(),
     );
     expect(signatures.filter((signature) => signature.loose)).toEqual([]);
     const byName = Object.fromEntries(signatures.map((signature) => [signature.name, signature]));
@@ -1564,6 +1713,10 @@ describe("the console types", () => {
     expect(byName["bookings.get"]?.resultMembers).toEqual(
       expect.arrayContaining(["id", "version", "pricing", "consoleActions", "supplierSync"]),
     );
+    expect(byName["bookings.closeReview"]?.resultMembers).toEqual(
+      expect.arrayContaining(["id", "version", "status", "consoleActions"]),
+    );
+    expect(byName["bookings.closeReview"]?.types[0]).toBe("ConsoleCloseBookingReviewParams");
   });
 
   it("declare no any and suppress no check in namespaces/console.js [SDK-011]", () => {

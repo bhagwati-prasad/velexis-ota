@@ -2046,6 +2046,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/console/bookings/{bookingId}/review-closure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Close a booking in Reconciliation review
+         * @description Settles a booking that the reconciliation of a lost Flight Create Orders answer handed to the staff (OADR-0003 point 5: `pending`, `reconcile_outcome = manual_review`, its checkout locked and its Stripe authorisation or airline-card payment held), with what the staff found in the queuing office: the order (`order_found`) or no order (`not_booked`). `consoleActions.canCloseReview` says when the action is offered (2026-11-11, lead decision (15l), OBE-099).
+         *
+         *     **`order_found`** (`recordLocator` required). Before Amadeus is called, a booking of the environment that holds this record locator answers `409 ORDER_ALREADY_IMPORTED` (as console.bookings.import answers it). Then **Get Flight Order By Record Locator** (getFlightOrder by reference, `originSystemCode` `GDS`) for the booking's queuing office, with no transaction open during the call; orders of offices other than the OTA's own are left out as console.bookings.findByRecordLocator leaves them out (none left: `403 OFFICE_NOT_ALLOWED`), and the order is accepted only when it carries the general remark `VELEXIS {reference}` of sub-type `BACKOFFICE` of this booking, the proof the reconciliation itself asks for (`409 CONFLICT` with `details.reason = remark_mismatch` otherwise; Amadeus without an order for the record locator answers `404 NOT_FOUND` with `error.supplier`; an order with the remark that cannot be recorded `422 UNPROCESSABLE` with `details.reason = order_not_recordable`). The order is then recorded through the reconciliation's found path: the order, its travellers, segments, remarks and tickets, the booking `confirmed` (or `ticketed`, `partially_ticketed` when the order came back issued), `reconcile_outcome = found`, the checkout `completed` (its lock released), the traveller's `booking.confirmed` e-mail; another booking that holds the order by then answers `409 ORDER_ALREADY_IMPORTED`. The money follows as after an automatic find: a Stripe authorisation is captured by the payments job (`payment.capture_retry`, queued for now, the booking's total within the authorisation; nothing for the `manual_review` ticketing policy without tickets), which then makes the issuance due for the `issue_after_payment` policy, so the ticketing job issues the tickets; an airline-card order is settled as checkout.completeWithAirlineCard settles it (every ticket back: the payment `captured`, the airline charged the card; otherwise the booking's ticketing goes to `manual_review`). Flight Create Orders is never sent.
+         *
+         *     **`not_booked`** (`note` required). The booking becomes `failed` (`failure_code = SUPPLIER_TIMEOUT`, `reconcile_outcome = not_found`, `checkout_id` cleared) as in the reconciliation's not-found decision, and the checkout is reopened (`open`, or `expired` past its expiry). A Stripe authorisation is voided by the payments job (`payment.void`, on the account that created it) and the traveller gets the `booking.not_confirmed` e-mail. An airline-card booking has nothing to void: Velexis never charged the card, so its payment becomes `failed` and the traveller gets no e-mail that would say nothing was charged; the booking's `booking.reconcile_closed` event records that the agent asks the airline whether it charged the card and has any charge refunded (never a card value). A Stripe payment already captured is not refunded here: refund it from the payment (console.payments.refund). Flight Create Orders is never sent and nothing is asked of Amadeus.
+         *
+         *     **Both.** `If-Match` (the booking's version: `412 PRECONDITION_FAILED` when stale). A booking that is not in review (any other status or outcome, a review already closed) answers `409 CONFLICT` with `details.reason = not_in_review` and changes nothing. A `note` (up to 2000 characters) becomes a staff-only note on the booking (`staff.note`); a note that holds a card number answers `400 VALIDATION_FAILED` at `/body/note`. The booking gets the staff event `booking.reconcile_closed` (the outcome, the record locator of a found order and the staff member; no other personal data) and the `staff_actions` row `booking.reconcile_close` (before and after, the note as its reason). The transactions lock the checkout, then the booking, then its payments (OADR-0003 point 11). The answer is the booking with its new `ETag`; the payment shows the capture or the void once the payments job ran. Permission `bookings:cancel` (the staff who cancel bookings and release their payments).
+         *
+         *     **Idempotency.** Required; a retry with the same key answers the first answer, and a new key after the closure `409 CONFLICT` (`not_in_review`).
+         *
+         *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+         */
+        post: operations["consoleCloseBookingReview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/console/bookings/{bookingId}/resync": {
         parameters: {
             query?: never;
@@ -11357,9 +11387,11 @@ export interface components {
             canRetrieve: boolean;
             /** @description console.bookings.addNote. */
             canAddNote: boolean;
-            /** @description Why an action is false, keyed by action name. */
+            /** @description console.bookings.closeReview (OBE-099; `bookings:cancel`, a booking in Reconciliation review: `pending` with `reconcile_outcome = manual_review`, else reason `not_in_review`). Always answered since OBE-099; not in `required`, so a reader written before it stays valid. */
+            canCloseReview?: boolean;
+            /** @description Why an action is false, keyed by action name (`not_in_review` for canCloseReview only). */
             reasons: {
-                [key: string]: "no_permission" | "cancelled" | "failed" | "pending" | "no_amadeus_order" | "already_ticketed" | "flown" | "deadline_passed" | "throttled";
+                [key: string]: "no_permission" | "cancelled" | "failed" | "pending" | "no_amadeus_order" | "already_ticketed" | "flown" | "deadline_passed" | "throttled" | "not_in_review";
             };
         };
         /** @description The cancellation mode of a booking in console scope (`ConsoleBookingDetails.cancellationMode`): what console.bookings.cancel does to the booking's tickets now, by the rule of bookings.quoteCancellation's `mode` without the customer's refusals (no self-service switch, no 3-hour window); console.bookings.cancel decides its step by the same rule (2026-10-30, lead decision (2c), third batch). The OTA admin's cancel dialog shows it instead of deciding the step itself. */
@@ -11529,6 +11561,18 @@ export interface components {
             };
             /** @description Send the cancellation e-mail. Default: `true`. */
             notifyCustomer?: boolean;
+        };
+        /** @description Body of console.bookings.closeReview (OBE-099): what the staff found for a booking in Reconciliation review. `order_found` needs `recordLocator` and takes an optional `note`; `not_booked` needs `note` and takes no `recordLocator` (`400 VALIDATION_FAILED` at `/body/recordLocator` or `/body/note` otherwise). */
+        ConsoleBookingReviewClosureRequest: {
+            /**
+             * @description `order_found`: the order with the remark `VELEXIS {reference}` of this booking exists; it is read by `recordLocator` and recorded on the booking. `not_booked`: a complete look found no order; the booking fails and its payment is released.
+             * @enum {string}
+             */
+            outcome: "order_found" | "not_booked";
+            /** @description `order_found` only, required there: the order's record locator (originating system `GDS`), which the API reads and checks against the booking's remark. */
+            recordLocator?: string;
+            /** @description What the staff found and did, kept as a staff-only note on the booking and as the reason of the staff action. Required with `not_booked`. Never a card number (`400 VALIDATION_FAILED`). */
+            note?: string;
         };
         /** @description Options of console.bookings.resync (Amadeus GET query parameters). */
         ConsoleBookingResyncRequest: {
@@ -15724,6 +15768,16 @@ export interface components {
         };
         /** @description The cancellation's refund or the cancellation itself was refused (consoleCancelBooking). Possible codes: UNPROCESSABLE (`details.reason`: `refund_not_available` when the step decided after the order's refresh is `request_only` and `refund.mode` is `full` or `amount`: the airline is asked first and the refund is made from the payment once it answered, so send `refund.mode` `none` or no `refund` (since 2026-10-31); nothing was written or sent; `amount_exceeds_captured` with `details.refundable`; `amount_exceeds_authorized` with `details.authorized`; `refund_via_airline` for an airline card; `currency_mismatch` with `details.currency`), SUPPLIER_REJECTED (the airline refused the DELETE; `error.supplier`). */
         ConsoleCancelUnprocessable: {
+            headers: {
+                "X-Request-Id": components["headers"]["X-Request-Id"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description The review closure conflicts with the booking or the order (consoleCloseBookingReview). Possible codes: CONFLICT (`details.reason`: `not_in_review` when the booking is not `pending` in Reconciliation review, a review already closed included, with `details.status` and `details.reconcileOutcome`; `remark_mismatch` when no order read by the record locator carries the remark `VELEXIS {reference}` of sub-type BACKOFFICE of this booking; `idempotency_key_in_use` while a request with the same key is under way), ORDER_ALREADY_IMPORTED (another booking of the environment holds the order or its record locator; `details.bookingId`, `details.reference`), IDEMPOTENCY_KEY_REUSED. Nothing was changed. */
+        ConsoleReviewClosureConflict: {
             headers: {
                 "X-Request-Id": components["headers"]["X-Request-Id"];
                 [name: string]: unknown;
@@ -22612,6 +22666,59 @@ export interface operations {
             409: components["responses"]["ConsoleCancelConflict"];
             412: components["responses"]["PreconditionFailed"];
             422: components["responses"]["ConsoleCancelUnprocessable"];
+            424: components["responses"]["FailedDependency"];
+            429: components["responses"]["RateLimited"];
+            500: components["responses"]["InternalError"];
+            502: components["responses"]["SupplierError"];
+            503: components["responses"]["ServiceUnavailable"];
+            504: components["responses"]["SupplierTimeout"];
+        };
+    };
+    consoleCloseBookingReview: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Client-generated unique key (UUID v4) that makes the request safe to retry for 24 hours. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                /** @description ETag of the version being modified. */
+                "If-Match": components["parameters"]["IfMatch"];
+                /** @description BCP 47 locale for messages and display texts. */
+                "Accept-Language"?: components["parameters"]["AcceptLanguage"];
+                /** @description Environment of a console call made with the OTA admin's first-party service key, `test` or `live`. Required with the service key (missing: `400 VALIDATION_FAILED`) and refused with any other credential, whose environment is the key's. `live` needs an OTA that is live and a role other than `viewer`, otherwise `403 ENVIRONMENT_NOT_ALLOWED`; ConsoleStaffSession.environments lists the environments the staff member may open. */
+                "X-Velexis-Environment"?: components["parameters"]["VelexisEnvironment"];
+                /**
+                 * @description IP address (IPv4 or IPv6) of the visitor on whose behalf your **server** makes this call: Next.js server components, server actions, route handlers and middleware calling with a secret key (`sk_…`) or hosting key (`hk_…`). Honoured **only** for secret and hosting keys (the key holder is the trusted server), and for the OTA admin's service key on console operations (below); ignored for publishable keys, whose calls come from the visitor's browser and are attributed to the connection IP. The API uses it instead of the connection IP for per-IP rate limits (sign-up, sign-in, verification and password-reset emails, reference autocomplete, guest booking lookup), sign-in failure counters and lockouts, the IP country of new sessions (`AuthSessionDetails.ipCountry`) and the hashed IP stored in `customer_consents`. Without it every secret-key call counts against your server's own IP, so one abusive visitor could lock out all visitors. An invalid value is ignored (the connection IP is used). SDK: `options.endUser.ip` or the client option `endUser`.
+                 *
+                 *     **Console operations.** Honoured for secret keys as above and for the OTA admin's first-party service key, which must send it: the staff member's address (the right-most `X-Forwarded-For` entry Caddy gave the admin). With the service key a missing or malformed value answers `400 VALIDATION_FAILED`; the value drives the console sign-in throttle (10 per minute per end-user IP), the lockout and the staff audit log (`staff_actions`). Other callers' values are ignored.
+                 */
+                "X-Velexis-End-User-IP"?: components["parameters"]["CustomerEndUserIp"];
+                /**
+                 * @description User-Agent of the visitor's browser for calls your server makes on their behalf with a secret or hosting key (longer values are truncated to 512 characters). Honoured only for secret and hosting keys, and for the OTA admin's service key on console operations; publishable-key calls use the request's own `User-Agent`. Recorded as session metadata (`AuthSessionDetails.userAgent`, new-sign-in security emails) and used by abuse heuristics. SDK: `options.endUser.userAgent` or the client option `endUser`.
+                 *
+                 *     **Console operations.** The OTA admin's first-party service key must send the staff member's user agent (missing: `400 VALIDATION_FAILED`); it is recorded in the staff audit log (`staff_actions`).
+                 */
+                "X-Velexis-End-User-Agent"?: components["parameters"]["CustomerEndUserAgent"];
+            };
+            path: {
+                /** @description Booking id (`bkg_…`) of this OTA. */
+                bookingId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConsoleBookingReviewClosureRequest"];
+            };
+        };
+        responses: {
+            200: components["responses"]["ConsoleBookingOk"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ConsoleForbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["ConsoleReviewClosureConflict"];
+            412: components["responses"]["PreconditionFailed"];
+            422: components["responses"]["ConsoleUnprocessable"];
             424: components["responses"]["FailedDependency"];
             429: components["responses"]["RateLimited"];
             500: components["responses"]["InternalError"];

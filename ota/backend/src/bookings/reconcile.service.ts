@@ -86,11 +86,17 @@
 //    `booking.reconcile_manual_review` (`reason: airline_card_not_found`) and a staff alert; the scan stops. Before
 //    OBE-051 such a booking stayed `pending` without an outcome and every attempt answered `pending` (`airline_card`).
 //
+// The staff close a booking of the review (OBE-099, lead decision (15l) of 2026-11-11; OADR-0003's follow-up): the
+// writes of the found and not-found decisions are functions of their own (`readFoundOrderInput`, `recordFoundOrder`,
+// `capturablePaymentOf`, `failNotFoundBooking`, below), in the caller's transaction after its locks, which this
+// service and console.bookings.closeReview (console/review-closure.service.ts) both call; each caller keeps its own
+// event, staff alerts (the console's closure raises none: the staff decided) and jobs.
+//
 // Log lines carry ids, attempt numbers, counts and codes, never a name, a record locator of another booking or a body.
 import { Inject, Injectable } from "@nestjs/common";
 import { InjectQueue } from "@nestjs/bullmq";
 import { ConfigService } from "@nestjs/config";
-import { sql } from "@velexis/db";
+import { sql, type TenantSchema } from "@velexis/db";
 import { AppError } from "@velexis/errors";
 import type { Queue } from "bullmq";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
@@ -100,6 +106,8 @@ import { AmadeusCallError } from "../amadeus/error-mapper";
 import {
   CheckoutRepository,
   type CheckoutContactRow,
+  type CheckoutRemarkRow,
+  type CheckoutRow,
   type CheckoutTravelerRow,
 } from "../checkout/checkout.repository";
 import { TravelerDocuments } from "../checkout/traveler-documents";
@@ -109,7 +117,6 @@ import { OTA_QUEUE } from "../common/queues/queue-names";
 import type { WorkerConfig } from "../config";
 import { InvalidNotificationError, OutboxService } from "../notifications/outbox.service";
 import { storefrontUrl } from "../notifications/renderer";
-import type { TemplateKey } from "../notifications/templates/registry";
 import {
   PAYMENT_GATEWAY,
   recordedPaymentAccount,
@@ -130,10 +137,12 @@ import { Money } from "../pricing/pricing.types";
 import { parseOffer, type ParsedOffer } from "../shopping/offers.mapper";
 import { readPricingReply } from "../shopping/priced-offers.mapper";
 import type { PlatformTenant } from "../tenancy/platform-read.types";
+import type { ContextActor } from "../tenancy/tenant-context";
 import { afterCommit, TenantTx, type TenantTransaction } from "../tenancy/tenant-tx";
 import { velexisRemarkText } from "./booking-reference";
-import { BookingsRepository, type BookingSettingsRow } from "./bookings.repository";
+import { BookingsRepository, type BookingRow, type BookingSettingsRow } from "./bookings.repository";
 import {
+  eventActorOf,
   OrderRecorder,
   readCreatedOrder,
   segmentPlansOf,
@@ -248,6 +257,9 @@ const ORIGIN_SYSTEM_CODE = "GDS";
 
 /** The booking events and payment events the reconciliation writes, all as the system. */
 const SYSTEM_ACTOR = Object.freeze({ type: "system" as const, id: null });
+
+/** The customer-visible `booking.not_confirmed` of a Stripe booking that failed as not found: its authorisation is voided. */
+export const NOT_CONFIRMED_SUMMARY = "The airline did not confirm your booking. You have not been charged.";
 
 /** A BCP 47 locale as the outbox accepts it. */
 const LOCALE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$/;
@@ -912,6 +924,361 @@ export async function settleAirlineCardOrder(
   return { paymentId: payment.id, captured: true };
 }
 
+// ---- The decisions, shared with the console's review closure (OBE-099) ----------------------------------------------
+//
+// The found and not-found decisions write the same rows whoever decides: the reconciliation here, or the staff who
+// close a booking it handed to them (console.bookings.closeReview, console/review-closure.service.ts; OADR-0003's
+// follow-up, lead decision (15l) of 2026-11-11). Each runs in its caller's transaction, after the caller locked the
+// checkout, the booking and, for the not-found decision, its payments (OADR-0003 point 11) and checked that the booking
+// is still `pending` in that checkout; the caller writes its own staff alerts and queues its own jobs.
+
+/** What the decisions write with: the reconciliation's providers in the worker, or the console's in the API. */
+export interface ReconcileDecisionDeps extends AirlineCardSettlementDeps {
+  readonly checkouts: CheckoutRepository;
+}
+
+/** What the record step of a found order needs, read (and its documents decrypted) before the decision's transaction. */
+export interface FoundOrderInput {
+  readonly settings: BookingSettingsRow;
+  readonly checkout: CheckoutRow;
+  readonly contacts: readonly CheckoutContactRow[];
+  readonly remarks: readonly CheckoutRemarkRow[];
+  readonly travelers: readonly CheckoutTravelerView[];
+  readonly policy: TicketingPolicy;
+}
+
+/**
+ * Reads what the record step of a found order needs: the OTA's settings, the booking's checkout and its children, in a
+ * short transaction, then the checkout travellers' documents decrypted outside it. Throws when the settings or the
+ * checkout are missing (a `pending` booking always has both).
+ */
+export async function readFoundOrderInput(
+  tx: TenantTx,
+  deps: {
+    readonly bookings: BookingsRepository;
+    readonly checkouts: CheckoutRepository;
+    readonly documents: TravelerDocuments;
+  },
+  schema: TenantSchema,
+  checkoutId: string,
+): Promise<FoundOrderInput> {
+  const read = await tx.run(async (trx) => {
+    const settings = await deps.bookings.settings(trx);
+    const checkout = await deps.checkouts.checkout(trx, checkoutId);
+    const children = await deps.checkouts.children(trx, checkoutId);
+    return { settings, checkout, children };
+  });
+  if (read.settings === undefined || read.checkout === undefined) {
+    throw new Error("the settings or the checkout of a pending booking are missing");
+  }
+  const { settings, checkout, children } = read;
+  const travelers: CheckoutTravelerView[] = [];
+  for (const row of children.travelers) {
+    const opened = await deps.documents.open(schema, row.id, row);
+    travelers.push({ row, documents: opened.documents, discounts: opened.discounts });
+  }
+  return {
+    settings,
+    checkout,
+    contacts: children.contacts,
+    remarks: children.remarks,
+    travelers,
+    policy: POLICIES.find((entry) => entry === settings.ticketingPolicy) ?? "issue_after_payment",
+  };
+}
+
+/** The decision's own staff-only event: `booking.reconciled` of the reconciliation, `booking.reconcile_closed` of the staff. */
+export interface DecisionEvent {
+  readonly type: string;
+  readonly summary: string;
+  readonly data: Record<string, unknown>;
+}
+
+/** What the found decision recorded. */
+export interface FoundOrderRecord {
+  readonly result: RecordedOrder;
+  /** The airline-card payment's settlement (OBE-051); `undefined` for a booking paid otherwise. */
+  readonly airline: AirlineCardSettlement | undefined;
+  /**
+   * The Stripe payment the money step captures, not captured yet; `undefined` for an airline card, for the
+   * `manual_review` policy without a ticket (`mustCaptureOrder`), or without one.
+   */
+  readonly capture: PaymentRow | undefined;
+}
+
+/**
+ * The found decision (see the file header), in the caller's transaction: the order recorded as checkout.complete
+ * records it (order-recorder.ts: its children, `confirmed`, `ticketed` or `partially_ticketed`, its events and the
+ * `booking.confirmed` e-mail, by `actor`), `reconcile_outcome = found`, the checkout `completed` (which releases its
+ * lock), the decision's `event` one millisecond later, and an airline-card payment settled as the airline charged it
+ * (`settleAirlineCardOrder`). Answers what the caller's money step needs.
+ */
+export async function recordFoundOrder(
+  trx: TenantTransaction,
+  deps: ReconcileDecisionDeps,
+  input: {
+    readonly schema: TenantSchema;
+    readonly tenantKey: string;
+    /** The booking, locked by the caller after its checkout, still `pending` in `found.checkout`. */
+    readonly booking: BookingRow;
+    readonly order: CreatedOrder;
+    readonly found: FoundOrderInput;
+    readonly actor: ContextActor;
+    readonly event: DecisionEvent;
+    /** `payment_events.source` of an airline card's charge: the API's request or the worker's job. */
+    readonly source: "api" | "system";
+    readonly requestId: string;
+    readonly supplierRequestId: string | null;
+    readonly now: Date;
+  },
+): Promise<FoundOrderRecord> {
+  const { booking, found, now, requestId, supplierRequestId } = input;
+  const result = await deps.recorder.record(trx, {
+    schema: input.schema,
+    tenantKey: input.tenantKey,
+    booking,
+    order: input.order,
+    travelers: found.travelers,
+    contacts: found.contacts,
+    remarks: found.remarks,
+    settings: found.settings,
+    policy: found.policy,
+    issueRequested: booking.issueRequested,
+    locale: found.checkout.locale ?? found.settings.defaultLocale,
+    actor: input.actor,
+    requestId,
+    supplierRequestId,
+    now,
+  });
+  await deps.bookings.updateBooking(trx, booking.id, { reconcile_outcome: "found", updated_at: now });
+  await deps.bookings.updateCheckout(trx, found.checkout.id, {
+    status: "completed",
+    completed_at: now,
+    updated_at: now,
+  });
+  const actor = eventActorOf(input.actor);
+  await deps.recorder.event(trx, booking.id, {
+    type: input.event.type,
+    actor,
+    statusFrom: "pending",
+    statusTo: result.status,
+    summary: input.event.summary,
+    data: input.event.data,
+    visibleToCustomer: false,
+    supplierRequestId,
+    requestId,
+    // One millisecond after the record step's events: the timeline orders by time, then by the random id.
+    now: new Date(now.getTime() + 1),
+  });
+  // An airline-card booking: the airline charged the card with the order (OBE-051), nothing to capture.
+  const airline = await settleAirlineCardOrder(trx, deps, {
+    bookingId: booking.id,
+    coverage: result.coverage,
+    actor,
+    source: input.source,
+    requestId,
+    now: new Date(now.getTime() + 2),
+  });
+  const payment =
+    airline === undefined && mustCaptureOrder(found.policy, result)
+      ? await capturablePaymentOf(trx, deps, booking.id)
+      : undefined;
+  return { result, airline, capture: payment?.status === "captured" ? undefined : payment };
+}
+
+/** The booking's Stripe payment with a PaymentIntent (the last one), or `undefined` (an airline-card booking). */
+export async function capturablePaymentOf(
+  trx: TenantTransaction,
+  deps: { readonly bookings: BookingsRepository; readonly payments: PaymentsRepository },
+  bookingId: string,
+): Promise<PaymentRow | undefined> {
+  let payment: PaymentRow | undefined;
+  for (const paymentId of await deps.bookings.paymentIdsOf(trx, bookingId)) {
+    const row = await deps.payments.payment(trx, paymentId);
+    if (row?.provider === "stripe" && row.providerPaymentId !== null) {
+      payment = row;
+    }
+  }
+  return payment;
+}
+
+/** The payment statuses of a Stripe payment whose authorisation the not-found decision voids (`payment.void`). */
+const VOIDABLE_STATUSES: readonly string[] = [
+  "requires_payment_method",
+  "requires_action",
+  "processing",
+  "authorized",
+];
+
+/** What the not-found decision's e-mail needs besides the decision's providers. */
+export interface NotConfirmedEmailDeps {
+  readonly outbox: OutboxService;
+  readonly reconcile: ReconcileRepository;
+  /** STOREFRONT_BASE_DOMAIN: the booking page's link. */
+  readonly baseDomain: string;
+  /** Called for an e-mail the outbox refuses (InvalidNotificationError): the caller logs it, the decision stands. */
+  readonly onEmailRefused: (bookingId: string) => void;
+}
+
+/**
+ * The not-found decision (see the file header), in the caller's transaction, which locked the checkout, the booking
+ * (`booking`, still `pending` in that checkout) and its payments: the booking `failed` (`failure_code =
+ * SUPPLIER_TIMEOUT`, `reconcile_outcome = not_found`, `checkout_id` cleared) with the staff-only `booking.failed`
+ * (`failed`, by `actor`) and the customer-visible `booking.not_confirmed` (`traveller.summary`), the checkout reopened
+ * (`open`, or `expired` past its expiry) and, with `traveller.email`, the traveller's `booking.not_confirmed` e-mail.
+ * Answers the Stripe payments whose authorisation the caller voids after the commit (`payment.void`); an airline-card
+ * payment is never one of them.
+ */
+export async function failNotFoundBooking(
+  trx: TenantTransaction,
+  deps: ReconcileDecisionDeps & NotConfirmedEmailDeps,
+  input: {
+    readonly tenant: { readonly key: string; readonly defaultLocale: string };
+    readonly booking: ReconcileBookingRow;
+    readonly checkout: CheckoutRow | undefined;
+    readonly payments: readonly ReconcilePaymentRow[];
+    readonly settings: BookingSettingsRow | undefined;
+    readonly actor: { readonly type: string; readonly id: string | null };
+    readonly failureMessage: string;
+    /** `booking.failed`: its summary and data (`paymentVoidQueued` is added). */
+    readonly failed: { readonly summary: string; readonly data: Record<string, unknown> };
+    /** The traveller's side: the customer-visible event's summary, and whether the e-mail goes. */
+    readonly traveller: { readonly summary: string; readonly email: boolean };
+    readonly requestId: string;
+    readonly now: Date;
+  },
+): Promise<{ readonly voidable: readonly ReconcilePaymentRow[] }> {
+  const { booking, checkout, now } = input;
+  await deps.bookings.updateBooking(trx, booking.id, {
+    status: "failed",
+    ticketing_status: "not_applicable",
+    checkout_id: null,
+    failure_code: "SUPPLIER_TIMEOUT",
+    failure_message: input.failureMessage,
+    reconcile_outcome: "not_found",
+    updated_at: now,
+  });
+  const voidable = input.payments.filter(
+    (payment) =>
+      payment.provider === "stripe" &&
+      payment.providerPaymentId !== null &&
+      VOIDABLE_STATUSES.includes(payment.status),
+  );
+  await deps.recorder.event(trx, booking.id, {
+    type: "booking.failed",
+    actor: input.actor,
+    statusFrom: "pending",
+    statusTo: "failed",
+    summary: input.failed.summary,
+    data: { ...input.failed.data, paymentVoidQueued: voidable.length > 0 },
+    visibleToCustomer: false,
+    requestId: input.requestId,
+    now,
+  });
+  await deps.recorder.event(trx, booking.id, {
+    type: "booking.not_confirmed",
+    actor: input.actor,
+    statusFrom: "pending",
+    statusTo: "failed",
+    summary: input.traveller.summary,
+    visibleToCustomer: true,
+    requestId: input.requestId,
+    now: new Date(now.getTime() + 1),
+  });
+  if (checkout !== undefined && (checkout.status === "open" || checkout.status === "payment_pending")) {
+    // The checkout can be completed again (with a new payment) while it has not expired.
+    await deps.bookings.updateCheckout(trx, checkout.id, {
+      status: checkout.expiresAt.getTime() > now.getTime() ? "open" : "expired",
+      updated_at: now,
+    });
+  }
+  if (input.traveller.email) {
+    const children = checkout === undefined ? undefined : await deps.checkouts.children(trx, checkout.id);
+    await queueNotConfirmedEmail(trx, deps, {
+      tenant: input.tenant,
+      booking,
+      locale: checkout?.locale ?? null,
+      contacts: children?.contacts ?? [],
+      travelers: children?.travelers ?? [],
+      settings: input.settings,
+    });
+  }
+  return { voidable };
+}
+
+/** The e-mail `booking.not_confirmed` to the traveller (the checkout's primary contact, else the booking's e-mail). */
+async function queueNotConfirmedEmail(
+  trx: TenantTransaction,
+  deps: NotConfirmedEmailDeps,
+  input: {
+    readonly tenant: { readonly key: string; readonly defaultLocale: string };
+    readonly booking: ReconcileBookingRow;
+    readonly locale: string | null;
+    readonly contacts: readonly CheckoutContactRow[];
+    readonly travelers: readonly CheckoutTravelerRow[];
+    readonly settings: BookingSettingsRow | undefined;
+  },
+): Promise<void> {
+  const { booking, contacts, travelers, settings, tenant } = input;
+  const primary = contacts.find((contact) => contact.isPrimary) ?? contacts[0];
+  const offers = await offersOfPricedOffer(trx, deps.reconcile, booking.pricedOfferId);
+  const language = primary?.language ?? null;
+  const locale = [language, input.locale, settings?.defaultLocale ?? null].find(
+    (value): value is string => value !== null && LOCALE.test(value),
+  );
+  try {
+    await deps.outbox.enqueue(trx, {
+      templateKey: "booking.not_confirmed",
+      to: primary?.email ?? booking.contactEmail,
+      locale: locale ?? tenant.defaultLocale,
+      customerId: booking.customerId,
+      bookingId: booking.id,
+      dedupeKey: `booking.not_confirmed:${booking.id}`,
+      data: {
+        booking: {
+          reference: booking.reference,
+          recordLocator: "",
+          url: `${storefrontUrl(tenant.key, deps.baseDomain)}/booking.html?id=${booking.id}`,
+          total: { amount: booking.totalAmount, currency: booking.currency },
+          contact: { firstName: primary?.firstName ?? "", lastName: primary?.lastName ?? "" },
+          travellers: travelers.map((traveler) => ({
+            firstName: traveler.firstName ?? "",
+            lastName: traveler.lastName ?? "",
+          })),
+          segments: segmentPlansOf(offers).map((segment) => ({
+            origin: segment.departureIata,
+            destination: segment.arrivalIata,
+            departureAt: segment.departureLocal,
+            arrivalAt: segment.arrivalLocal,
+            carrierCode: segment.carrierCode,
+            flightNumber: segment.flightNumber,
+          })),
+        },
+      },
+    });
+  } catch (error) {
+    // A call the outbox refuses (InvalidNotificationError, raised before any SQL) is reported and skipped, so the
+    // booking's state is recorded all the same.
+    if (!(error instanceof InvalidNotificationError)) {
+      throw error;
+    }
+    deps.onEmailRefused(booking.id);
+  }
+}
+
+/** The Amadeus offers of a priced offer, for the e-mail's flights; none when they cannot be read. */
+async function offersOfPricedOffer(
+  trx: TenantTransaction,
+  repository: ReconcileRepository,
+  pricedOfferId: string | null,
+): Promise<ParsedOffer[]> {
+  if (pricedOfferId === null) {
+    return [];
+  }
+  const response = await repository.pricedOfferResponse(trx, pricedOfferId);
+  return readPricingReply(response).flightOffers.flatMap((offer) => parseOffer(offer) ?? []);
+}
+
 // ---- The service ----------------------------------------------------------------------------------------------------
 
 /** Why an attempt did nothing. */
@@ -1389,30 +1756,14 @@ export class ReconcileService {
       throw new Error("a pending booking without its checkout");
     }
     // What the record step needs, read (and decrypted) before the decision's transaction.
-    const read = await this.tx.run(async (trx) => {
-      const settings = await this.bookings.settings(trx);
-      const checkout = await this.checkouts.checkout(trx, checkoutId);
-      const children = await this.checkouts.children(trx, checkoutId);
-      return { settings, checkout, children };
-    });
-    if (read.settings === undefined || read.checkout === undefined) {
-      throw new Error("the settings or the checkout of a pending booking are missing");
-    }
-    const { settings, checkout, children } = read;
-    const travelers: CheckoutTravelerView[] = [];
-    for (const row of children.travelers) {
-      const opened = await this.documents.open(tenant.schemaName, row.id, row);
-      travelers.push({ row, documents: opened.documents, discounts: opened.discounts });
-    }
-    const policy = POLICIES.find((entry) => entry === settings.ticketingPolicy) ?? "issue_after_payment";
-    let recorded:
-      | {
-          readonly result: RecordedOrder;
-          readonly issueRequested: boolean;
-          /** The airline-card payment's settlement (OBE-051); `undefined` for a booking paid otherwise. */
-          readonly airline: AirlineCardSettlement | undefined;
-        }
-      | undefined;
+    const found = await readFoundOrderInput(
+      this.tx,
+      { bookings: this.bookings, checkouts: this.checkouts, documents: this.documents },
+      tenant.schemaName,
+      checkoutId,
+    );
+    const { settings, policy } = found;
+    let recorded: (FoundOrderRecord & { readonly issueRequested: boolean }) | undefined;
     try {
       recorded = await this.tx.run(async (trx) => {
         const now = this.clock.now();
@@ -1430,59 +1781,28 @@ export class ReconcileService {
         if (booking === undefined) {
           return undefined;
         }
-        const result = await this.recorder.record(trx, {
+        const decided = await recordFoundOrder(trx, this.decisionDeps(), {
           schema: tenant.schemaName,
           tenantKey: tenant.key,
           booking,
           order,
-          travelers,
-          contacts: children.contacts,
-          remarks: children.remarks,
-          settings,
-          policy,
-          issueRequested: booking.issueRequested,
-          locale: checkout.locale ?? settings.defaultLocale,
+          found,
           actor: SYSTEM_ACTOR,
+          event: {
+            type: "booking.reconciled",
+            summary: `The order of booking ${booking.reference} was found at the airline after a timeout and recorded.`,
+            data: {
+              outcome: "found",
+              attempt: claim.attempts,
+              recordLocator: order.records[0]?.reference ?? null,
+            },
+          },
+          source: "system",
           requestId,
           supplierRequestId,
           now,
         });
-        await this.bookings.updateBooking(trx, id, { reconcile_outcome: "found", updated_at: now });
-        await this.bookings.updateCheckout(trx, checkoutId, {
-          status: "completed",
-          completed_at: now,
-          updated_at: now,
-        });
-        await this.recorder.event(trx, id, {
-          type: "booking.reconciled",
-          actor: SYSTEM_ACTOR,
-          statusFrom: "pending",
-          statusTo: result.status,
-          summary: `The order of booking ${booking.reference} was found at the airline after a timeout and recorded.`,
-          data: {
-            outcome: "found",
-            attempt: claim.attempts,
-            recordLocator: order.records[0]?.reference ?? null,
-          },
-          visibleToCustomer: false,
-          supplierRequestId,
-          requestId,
-          // One millisecond after the record step's events: the timeline orders by time, then by the random id.
-          now: new Date(now.getTime() + 1),
-        });
-        // An airline-card booking: the airline charged the card with the order (OBE-051), nothing to capture.
-        const airline = await settleAirlineCardOrder(
-          trx,
-          { bookings: this.bookings, payments: this.payments, recorder: this.recorder, ids: this.ids },
-          {
-            bookingId: id,
-            coverage: result.coverage,
-            actor: SYSTEM_ACTOR,
-            source: "system",
-            requestId,
-            now: new Date(now.getTime() + 2),
-          },
-        );
+        const { airline } = decided;
         if (airline?.captured === false) {
           await this.staffAlert(trx, tenant, booking, settings, AIRLINE_CARD_NOT_TICKETED, {
             reason:
@@ -1491,14 +1811,11 @@ export class ReconcileService {
               "with another form of payment or cancel the booking from the console.",
           });
         }
-        if (airline === undefined && mustCaptureOrder(policy, result)) {
+        if (decided.capture !== undefined) {
           // The capture below runs after this commit: its safety net is added before it (FIX-W29-OTA).
-          const payment = await this.capturablePayment(trx, id);
-          if (payment !== undefined && payment.status !== "captured") {
-            await this.queueCaptureSafetyNet(tenant, id, payment.id);
-          }
+          await this.queueCaptureSafetyNet(tenant, id, decided.capture.id);
         }
-        return { result, issueRequested: booking.issueRequested, airline };
+        return { ...decided, issueRequested: booking.issueRequested };
       });
     } catch (error) {
       // The order exists at Amadeus but T2 rolled back: the booking stays pending, and the next attempt finds it again.
@@ -1583,7 +1900,11 @@ export class ReconcileService {
     const id = claim.booking.id;
     const read = await this.tx.run(async (trx) => {
       const booking = await this.bookings.booking(trx, id);
-      const payment = await this.capturablePayment(trx, id);
+      const payment = await capturablePaymentOf(
+        trx,
+        { bookings: this.bookings, payments: this.payments },
+        id,
+      );
       const minorUnits =
         booking === undefined ? 2 : ((await this.payments.currencyMinorUnits(trx, booking.currency)) ?? 2);
       return { booking, payment, minorUnits };
@@ -1671,19 +1992,24 @@ export class ReconcileService {
     return true;
   }
 
-  /** The booking's Stripe payment with a PaymentIntent (the last one), or `undefined` (an airline-card booking). */
-  private async capturablePayment(
-    trx: TenantTransaction,
-    bookingId: string,
-  ): Promise<PaymentRow | undefined> {
-    let payment: PaymentRow | undefined;
-    for (const paymentId of await this.bookings.paymentIdsOf(trx, bookingId)) {
-      const row = await this.payments.payment(trx, paymentId);
-      if (row?.provider === "stripe" && row.providerPaymentId !== null) {
-        payment = row;
-      }
-    }
-    return payment;
+  /** The providers the decisions shared with the console's review closure write with (OBE-099). */
+  private decisionDeps(): ReconcileDecisionDeps & NotConfirmedEmailDeps {
+    return {
+      bookings: this.bookings,
+      checkouts: this.checkouts,
+      payments: this.payments,
+      recorder: this.recorder,
+      ids: this.ids,
+      outbox: this.outbox,
+      reconcile: this.repository,
+      baseDomain: this.baseDomain,
+      onEmailRefused: (bookingId) => {
+        this.logger.error(
+          { bookingId, template: "booking.not_confirmed" },
+          "bookings.reconcile_email_invalid",
+        );
+      },
+    };
   }
 
   /**
@@ -1794,63 +2120,31 @@ export class ReconcileService {
         // The airline may have charged the card: never an automatic failure, the staff decide (OADR-0004 point 7).
         return await this.airlineCardReview(trx, tenant, claim, current, settings, noQueue, requestId, now);
       }
-      await this.bookings.updateBooking(trx, id, {
-        status: "failed",
-        ticketing_status: "not_applicable",
-        checkout_id: null,
-        failure_code: "SUPPLIER_TIMEOUT",
-        failure_message: noQueue
+      const { voidable } = await failNotFoundBooking(trx, this.decisionDeps(), {
+        tenant,
+        booking: current,
+        checkout,
+        payments,
+        settings,
+        actor: SYSTEM_ACTOR,
+        failureMessage: noQueue
           ? "booking.reconcile: no booking queue to look for the order in; not confirmed after 15 minutes"
           : "booking.reconcile: the order was not found in the booking queue within 15 minutes",
-        reconcile_outcome: "not_found",
-        updated_at: now,
-      });
-      const voidable = payments.filter(
-        (payment) =>
-          payment.provider === "stripe" &&
-          payment.providerPaymentId !== null &&
-          ["requires_payment_method", "requires_action", "processing", "authorized"].includes(payment.status),
-      );
-      await this.recorder.event(trx, id, {
-        type: "booking.failed",
-        actor: SYSTEM_ACTOR,
-        statusFrom: "pending",
-        statusTo: "failed",
-        summary: `Booking ${current.reference} not confirmed: the order was not found after the timeout.`,
-        data: {
-          code: "SUPPLIER_TIMEOUT",
-          reconcileOutcome: "not_found",
-          attempt: claim.attempts,
-          bookingQueue: !noQueue,
-          paymentVoidQueued: voidable.length > 0,
+        failed: {
+          summary: `Booking ${current.reference} not confirmed: the order was not found after the timeout.`,
+          data: {
+            code: "SUPPLIER_TIMEOUT",
+            reconcileOutcome: "not_found",
+            attempt: claim.attempts,
+            bookingQueue: !noQueue,
+          },
         },
-        visibleToCustomer: false,
+        traveller: {
+          summary: NOT_CONFIRMED_SUMMARY,
+          email: true,
+        },
         requestId,
         now,
-      });
-      await this.recorder.event(trx, id, {
-        type: "booking.not_confirmed",
-        actor: SYSTEM_ACTOR,
-        statusFrom: "pending",
-        statusTo: "failed",
-        summary: "The airline did not confirm your booking. You have not been charged.",
-        visibleToCustomer: true,
-        requestId,
-        now: new Date(now.getTime() + 1),
-      });
-      if (checkout !== undefined && (checkout.status === "open" || checkout.status === "payment_pending")) {
-        // The checkout can be completed again (with a new payment) while it has not expired.
-        await this.bookings.updateCheckout(trx, checkout.id, {
-          status: checkout.expiresAt.getTime() > now.getTime() ? "open" : "expired",
-          updated_at: now,
-        });
-      }
-      const children = checkout === undefined ? undefined : await this.checkouts.children(trx, checkout.id);
-      await this.notConfirmedEmail(trx, tenant, current, {
-        locale: checkout?.locale ?? null,
-        contacts: children?.contacts ?? [],
-        travelers: children?.travelers ?? [],
-        settings,
       });
       await this.staffAlert(trx, tenant, current, settings, "reconcile_not_found", {
         reason: noQueue
@@ -2082,65 +2376,6 @@ export class ReconcileService {
     return decided;
   }
 
-  /** The e-mail `booking.not_confirmed` to the traveller (the checkout's primary contact, else the booking's e-mail). */
-  private async notConfirmedEmail(
-    trx: TenantTransaction,
-    tenant: PlatformTenant,
-    booking: ReconcileBookingRow,
-    checkout: {
-      readonly locale: string | null;
-      readonly contacts: readonly CheckoutContactRow[];
-      readonly travelers: readonly CheckoutTravelerRow[];
-      readonly settings: BookingSettingsRow | undefined;
-    },
-  ): Promise<void> {
-    const { contacts, travelers, settings } = checkout;
-    const primary = contacts.find((contact) => contact.isPrimary) ?? contacts[0];
-    const offers = await this.offersOf(trx, booking.pricedOfferId);
-    const language = primary?.language ?? null;
-    const locale = [language, checkout.locale, settings?.defaultLocale ?? null].find(
-      (value): value is string => value !== null && LOCALE.test(value),
-    );
-    await this.enqueue(trx, booking.id, "booking.not_confirmed", {
-      templateKey: "booking.not_confirmed",
-      to: primary?.email ?? booking.contactEmail,
-      locale: locale ?? tenant.defaultLocale,
-      customerId: booking.customerId,
-      bookingId: booking.id,
-      dedupeKey: `booking.not_confirmed:${booking.id}`,
-      data: {
-        booking: {
-          reference: booking.reference,
-          recordLocator: "",
-          url: `${storefrontUrl(tenant.key, this.baseDomain)}/booking.html?id=${booking.id}`,
-          total: { amount: booking.totalAmount, currency: booking.currency },
-          contact: { firstName: primary?.firstName ?? "", lastName: primary?.lastName ?? "" },
-          travellers: travelers.map((traveler) => ({
-            firstName: traveler.firstName ?? "",
-            lastName: traveler.lastName ?? "",
-          })),
-          segments: segmentPlansOf(offers).map((segment) => ({
-            origin: segment.departureIata,
-            destination: segment.arrivalIata,
-            departureAt: segment.departureLocal,
-            arrivalAt: segment.arrivalLocal,
-            carrierCode: segment.carrierCode,
-            flightNumber: segment.flightNumber,
-          })),
-        },
-      },
-    });
-  }
-
-  /** The Amadeus offers of the booking's priced offer, for the e-mail's flights; none when they cannot be read. */
-  private async offersOf(trx: TenantTransaction, pricedOfferId: string | null): Promise<ParsedOffer[]> {
-    if (pricedOfferId === null) {
-      return [];
-    }
-    const response = await this.repository.pricedOfferResponse(trx, pricedOfferId);
-    return readPricingReply(response).flightOffers.flatMap((offer) => parseOffer(offer) ?? []);
-  }
-
   // ---- Shared ------------------------------------------------------------------------------------------------------
 
   /**
@@ -2213,26 +2448,6 @@ export class ReconcileService {
         { tenantId: tenant.id, bookingId: claim.booking.id, err: error },
         "bookings.booking_queue_alert_failed",
       );
-    }
-  }
-
-  /**
-   * Queues one e-mail; a call the outbox refuses (InvalidNotificationError, raised before any SQL: a recipient that is
-   * not one address, say) is logged and skipped, so the booking's state is recorded all the same.
-   */
-  private async enqueue(
-    trx: TenantTransaction,
-    bookingId: string,
-    key: TemplateKey,
-    input: Parameters<OutboxService["enqueue"]>[1],
-  ): Promise<void> {
-    try {
-      await this.outbox.enqueue(trx, input);
-    } catch (error) {
-      if (!(error instanceof InvalidNotificationError)) {
-        throw error;
-      }
-      this.logger.error({ bookingId, template: key }, "bookings.reconcile_email_invalid");
     }
   }
 

@@ -4,7 +4,8 @@
 // so each method is documented once, there. SDK-011 writes the 32 methods of the contract (`console.auth`,
 // `.bookings`, `.queues`, `.customers`, `.supplierRequests`, `.amadeus`); SDK-012 adds the MVP additions
 // `console.settings.*` and `console.payments.*` (ota/sdk/docs/extensions.md §3.2 and §3.3) with their types, which
-// close the file after the contract's names (the contract has no counterpart for them).
+// close the file after the contract's names (the contract has no counterpart for them), and OBE-099 the types of
+// `console.bookings.closeReview` after them (extensions.md §3.4).
 //
 // console.d.ts also augments `VelexisClientOptions` of shared.d.ts with `sessionKind` (`"customer"` | `"staff"`) and
 // `onStaffSessionRefreshed`. JavaScript cannot augment a typedef, so both options are members of
@@ -555,3 +556,10 @@ export { createConsoleApi } from "./namespaces/console.js";
 /** `client.console.settings.assets`: list, upload, delete. @typedef {ConsoleSettingsApi["assets"]} ConsoleSettingsAssetsApi */
 /** `client.console.settings.templates`: list, get, put, preview, reset. @typedef {ConsoleSettingsApi["templates"]} ConsoleSettingsTemplatesApi */
 /** `client.console.payments`: list, get, capture, refund. @typedef {ConsoleApi["payments"]} ConsolePaymentsApi */
+
+/* ------------------------------------------------------------------------------------------------------------ */
+/* Addition to the bookings of the contract (OBE-099, ota/sdk/docs/extensions.md §3.4)                           */
+/* ------------------------------------------------------------------------------------------------------------ */
+
+/** Body of `ConsoleBookingsApi.closeReview`: `outcome` (`order_found` with `recordLocator`, or `not_booked` with `note`). @typedef {import("./types.js").Schemas["ConsoleBookingReviewClosureRequest"]} ConsoleBookingReviewClosureRequest */
+/** Params of `ConsoleBookingsApi.closeReview`: the booking, `ifMatch` (its version or ETag) and the closure (`outcome`, `recordLocator?`, `note?`). @typedef {ConsoleBookingRefParams & { ifMatch: ConsoleIfMatch } & ConsoleBookingReviewClosureRequest} ConsoleCloseBookingReviewParams */

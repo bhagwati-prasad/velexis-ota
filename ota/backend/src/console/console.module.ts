@@ -32,7 +32,13 @@
 // `console.amadeus.*` (raw-amadeus.controller.ts, raw-amadeus.service.ts), which call AmadeusModule's client with the
 // connection's offices, keep another office's orders out of the answer and of the tenant's supplier log (OBE-064's
 // office rule), link order reads to bookings with PnrImportRepository and keep Queue List reads as `queue_snapshots`
-// rows (QueueSnapshotsRepository); the four raw writes stay deferred (501).
+// rows (QueueSnapshotsRepository); the four raw writes stay deferred (501). Since OBE-099: console.bookings.closeReview
+// (review-closure.service.ts, on the bookings controller), which closes a booking in Reconciliation review through the
+// reconciliation's found and not-found decisions (bookings/reconcile.service.ts): it reads the order by record locator
+// with AmadeusModule's client and ConnectionResolver, records it with BookingsModule's OrderRecorder, reads the
+// checkout with CheckoutRepository and TravelerDocuments and the reconciliation's rows with ReconcileRepository (plain
+// providers without state, provided here again with the checkout's key provider), checks the known orders with
+// PnrImportRepository and queues the capture or the void on `ota-payments` (QueuesModule).
 import { Global, Module } from "@nestjs/common";
 import { AmadeusModule } from "../amadeus/amadeus.module";
 import { BookingsModule } from "../bookings/bookings.module";
@@ -45,6 +51,9 @@ import { PricingModule } from "../pricing/pricing.module";
 import { RefundsRepository } from "../payments/refunds.repository";
 import { TenancyModule } from "../tenancy/tenancy.module";
 import { TicketingRepository } from "../bookings/ticketing.service";
+import { ReconcileRepository } from "../bookings/reconcile.service";
+import { CheckoutRepository } from "../checkout/checkout.repository";
+import { checkoutKeyProvider, TravelerDocuments } from "../checkout/traveler-documents";
 import {
   ConsoleBookingActionsService,
   ConsoleCancelBookingIdempotencyHooks,
@@ -63,6 +72,7 @@ import { QueuesController } from "./queues.controller";
 import { QueuesService } from "./queues.service";
 import { RawAmadeusController } from "./raw-amadeus.controller";
 import { RawAmadeusRepository, RawAmadeusService } from "./raw-amadeus.service";
+import { ReviewClosureRepository, ReviewClosureService } from "./review-closure.service";
 import { StaffActionsWriter } from "./staff-actions.writer";
 import { ConsoleSupplierLogController } from "./supplier-log.controller";
 import { SupplierLogRepository } from "./supplier-log.repository";
@@ -110,6 +120,13 @@ import { SupplierLogRepository } from "./supplier-log.repository";
     SupplierLogRepository,
     RawAmadeusService,
     RawAmadeusRepository,
+    // console.bookings.closeReview (OBE-099).
+    ReviewClosureService,
+    ReviewClosureRepository,
+    ReconcileRepository,
+    CheckoutRepository,
+    checkoutKeyProvider,
+    TravelerDocuments,
   ],
   exports: [StaffActionsWriter, StaffRefusalAudit],
 })

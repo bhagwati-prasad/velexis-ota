@@ -3,10 +3,12 @@
 // sub-namespaces, each one line through the generated route table (internal/operations.js): `auth` (4), `bookings`
 // (11, `create` deferred), `queues` (2), `customers` (2), `supplierRequests` (1) and the raw Amadeus pass-through
 // `amadeus` (12; `createFlightOrders`, `issueFlightOrder`, `patchFlightOrder` and `cancelFlightOrder` deferred). The
-// table gives the long staff actions their 60 s timeout (`bookings.issue`, `.cancel`, `.import`, `.retrieve`), every
-// state-changing POST its generated `Idempotency-Key`, and every method its `X-Velexis-Environment` flag; `ConsoleApi`
-// in console.js is inferred from this factory. SDK-012 adds the MVP additions (ota/sdk/docs/extensions.md §3.2 and
-// §3.3): `settings` (25: `markupRules`, `feeRules`, `storefront`, `pages`, `assets`, `templates`) and `payments` (4).
+// table gives the long staff actions their 60 s timeout (`bookings.issue`, `.cancel`, `.import`, `.retrieve`,
+// `.closeReview`), every state-changing POST its generated `Idempotency-Key`, and every method its
+// `X-Velexis-Environment` flag; `ConsoleApi` in console.js is inferred from this factory. SDK-012 adds the MVP additions
+// (ota/sdk/docs/extensions.md §3.2 and §3.3): `settings` (25: `markupRules`, `feeRules`, `storefront`, `pages`,
+// `assets`, `templates`) and `payments` (4); OBE-099 adds `bookings.closeReview` after the contract's eleven
+// (extensions.md §3.4), which closes a booking in Reconciliation review and requires `ifMatch`.
 // The lists (`bookings.list`, `queues.list`, `queues.listSnapshots`, `customers.list`, `supplierRequests.list` and the
 // settings and payments lists) resolve with a `Page` (`next()`, `for await` across pages) that keeps the response's
 // extra fields (`totalCount`, `snapshot`, `warnings`). Deferred methods surface the API's `501 NOT_IMPLEMENTED` as a
@@ -23,10 +25,10 @@
 //   (`403 ENVIRONMENT_NOT_ALLOWED`, ota/sdk/docs/extensions.md §1).
 // - Staff sessions: a client with `sessionKind: "staff"` and a `refreshToken` refreshes an expired staff token through
 //   `console.auth.refresh` and retries the call once (internal/session.js, README §4.3).
-// - `If-Match`: `bookings.patch`, `.issue` and `.cancel` require `ifMatch`, the booking `version` (a number, sent as its
-//   ETag `"<version>"`) or the ETag itself (a string, sent as it is), and so do the updates and deletes of
-//   `settings.markupRules`, `.feeRules`, `.storefront` and `.pages` and `payments.capture`, with the version of their
-//   resource. A missing or malformed `ifMatch` is a `TypeError` before any request, like a missing path parameter,
+// - `If-Match`: `bookings.patch`, `.issue`, `.cancel` and `.closeReview` require `ifMatch`, the booking `version` (a
+//   number, sent as its ETag `"<version>"`) or the ETag itself (a string, sent as it is), and so do the updates and
+//   deletes of `settings.markupRules`, `.feeRules`, `.storefront` and `.pages` and `payments.capture`, with the version
+//   of their resource. A missing or malformed `ifMatch` is a `TypeError` before any request, like a missing path parameter,
 //   also in a call without params (the check of internal/if-match.js, shared with `account` and `bookings`).
 //   `settings.templates.put` takes it only when the OTA already has its own template (a malformed one is a
 //   `TypeError` too); `settings.assets.delete` has none (assets never change).
@@ -69,6 +71,7 @@ import { op } from "../internal/operations.js";
 /** @typedef {import("../console.js").ConsolePatchBookingParams} ConsolePatchBookingParams */
 /** @typedef {import("../console.js").ConsoleIssueBookingParams} ConsoleIssueBookingParams */
 /** @typedef {import("../console.js").ConsoleCancelBookingParams} ConsoleCancelBookingParams */
+/** @typedef {import("../console.js").ConsoleCloseBookingReviewParams} ConsoleCloseBookingReviewParams */
 /** @typedef {import("../console.js").ConsoleResyncBookingParams} ConsoleResyncBookingParams */
 /** @typedef {import("../console.js").ConsoleAddBookingNoteParams} ConsoleAddBookingNoteParams */
 /** @typedef {import("../console.js").ConsoleListQueueParams} ConsoleListQueueParams */
@@ -582,6 +585,33 @@ function createConsoleBookingsApi(core) {
      * @throws {ServerError} `INTERNAL_ERROR` (500)
      */
     addNote: (params, options) => core.call(op.console_bookings_addNote, params, live(options)),
+
+    /**
+     * Closes a booking in Reconciliation review (`pending`, `reconcile_outcome = manual_review`: the reconciliation
+     * of a lost Flight Create Orders answer could not decide it) with what the staff found: `order_found` with the
+     * order's `recordLocator`, which the API reads by record locator and accepts only with the remark
+     * `VELEXIS {reference}` of this booking, then records (the payments job captures a Stripe authorisation and the
+     * ticketing follows); or `not_booked` with a `note` (the booking fails, a Stripe authorisation is voided and the
+     * traveller told). `consoleActions.canCloseReview` says when it is offered. Requires `ifMatch`; a same-key retry
+     * answers the first answer, a new key after the closure `409 CONFLICT` (`not_in_review`). An addition to the
+     * contract (OBE-099, ota/sdk/docs/extensions.md §3.4). `POST /v1/console/bookings/{bookingId}/review-closure` with
+     * `If-Match` and `Idempotency-Key`; 60 s timeout; `bookings:cancel`.
+     * @param {ConsoleCloseBookingReviewParams} params
+     * @param {RequestOptions} [options]
+     * @returns {Promise<ConsoleBooking>}
+     * @throws {TypeError} without a valid `ifMatch`, before any request
+     * @throws {ValidationError} `VALIDATION_FAILED`, `INVALID_REQUEST` (400), `UNPROCESSABLE` (422: an order with the remark that cannot be recorded), `SUPPLIER_REJECTED` (422)
+     * @throws {AuthenticationError} `UNAUTHENTICATED`, `INVALID_API_KEY`, `TOKEN_EXPIRED` (401)
+     * @throws {PermissionError} `FORBIDDEN`, `SCOPE_NOT_ALLOWED`, `TENANT_SUSPENDED`, `STAFF_MEMBERSHIP_INACTIVE`, `ORIGIN_NOT_ALLOWED`, `HOST_NOT_ALLOWED`, `ENVIRONMENT_NOT_ALLOWED`, `OFFICE_NOT_ALLOWED` (403)
+     * @throws {NotFoundError} `NOT_FOUND` (404: the booking, or no order with this record locator)
+     * @throws {ConflictError} `CONFLICT` (409: `not_in_review`, `remark_mismatch`), `ORDER_ALREADY_IMPORTED`, `IDEMPOTENCY_KEY_REUSED` (409)
+     * @throws {VelexisError} `PRECONDITION_FAILED` (412)
+     * @throws {RateLimitError} `RATE_LIMITED` (429)
+     * @throws {SupplierError} `SUPPLIER_NOT_CONFIGURED` (424), `SUPPLIER_ERROR` (502), `SUPPLIER_UNAVAILABLE` (503), `SUPPLIER_TIMEOUT` (504)
+     * @throws {ServerError} `INTERNAL_ERROR` (500), `SERVICE_UNAVAILABLE` (503)
+     */
+    closeReview: (params, options) =>
+      withIfMatch(core, op.console_bookings_closeReview, "booking", params, options),
   };
 }
 

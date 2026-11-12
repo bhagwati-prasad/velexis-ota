@@ -38,6 +38,10 @@
     "console.bookings.retrieve": {
       "timeoutMs": 60000,
       "reason": "Live Amadeus order retrieval, optionally with fare rules."
+    },
+    "console.bookings.closeReview": {
+      "timeoutMs": 60000,
+      "reason": "Amadeus order retrieval by record locator plus recording the order of a staff action (OBE-099)."
     }
   }
 }

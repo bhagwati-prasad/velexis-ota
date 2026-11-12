@@ -490,9 +490,10 @@ beforeAll(async () => {
 }, MATRIX_TIMEOUT_MS);
 
 describe("the operations of the matrix", () => {
-  it("[OBE-075 AC1] covers every console operation of the document: 52 guarded, 4 session and 6 deferred ones", () => {
-    expect(CONSOLE).toHaveLength(62);
-    expect(GUARDED).toHaveLength(52);
+  it("[OBE-075 AC1] [OBE-099] covers every console operation of the document: 53 guarded, 4 session and 6 deferred ones", () => {
+    // 62 and 52 at the M5 exit; OBE-099 (M6) adds console.bookings.closeReview (`bookings:cancel`).
+    expect(CONSOLE).toHaveLength(63);
+    expect(GUARDED).toHaveLength(53);
     expect(SESSION.map((operation) => operation.operationId).sort()).toEqual(
       ["consoleGetMe", "consoleRefreshSession", "consoleSignIn", "consoleSignOut"].sort(),
     );

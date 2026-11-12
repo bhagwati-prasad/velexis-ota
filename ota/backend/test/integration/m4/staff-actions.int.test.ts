@@ -371,6 +371,44 @@ async function newStubOrder(): Promise<StubOrder> {
 }
 
 /**
+ * A booking the reconciliation handed to the staff's review (OBE-099): `pending`, `reconcile_outcome = manual_review`,
+ * no order, checkout or payment (a fixture: only the worker's reconciliation reaches this state).
+ */
+async function seedReviewBooking(): Promise<string> {
+  const id = newId("bkg");
+  const now = Date.now();
+  await inTenant((trx) =>
+    trx
+      .insertInto("bookings")
+      .values({
+        id,
+        environment: "test",
+        reference: newBookingReference(),
+        channel: "storefront",
+        status: "pending",
+        ticketing_status: "manual_review",
+        reconcile_outcome: "manual_review",
+        trip_type: "one_way",
+        origin_iata: "MAD",
+        destination_iata: "ORY",
+        first_departure_at: new Date(now + 10 * DAY),
+        last_arrival_at: new Date(now + 10 * DAY + 125 * MINUTE),
+        travelers_count: 1,
+        currency: "EUR",
+        net_amount: "98.47",
+        markup_amount: "12.00",
+        taxes_amount: "42.47",
+        total_amount: "110.47",
+        contact_email: "review.traveller@example.com",
+        lead_last_name: "SAMPLE",
+        created_at: new Date(now - HOUR),
+      })
+      .execute(),
+  );
+  return id;
+}
+
+/**
  * A booking of `order` as the record step writes it: the bookings row (net 98.47 + markup 12.00 = 110.47 EUR), the
  * order's flight, the adult with the order's passport sealed, the order's contact and its record; confirmed, its
  * issuance left to the staff (`manual_review`), unpaid.
@@ -1179,6 +1217,87 @@ beforeAll(async () => {
     { headers: { ...newKey(), "If-Match": String(cancelled.headers["etag"]) }, body: cancelBody },
     [403, "FORBIDDEN"],
     denied("bookings.cancel"),
+  );
+
+  // ---- console.bookings.closeReview (OBE-099) ----
+  // A booking the reconciliation handed to the staff (`pending`, `reconcile_outcome = manual_review`), closed as not
+  // booked: a fixture without a checkout or a payment, which no API reaches without the worker (the closure's money
+  // and Amadeus paths are test/integration/console/review-closure.int.test.ts's).
+  const reviewBooking = await seedReviewBooking();
+  const reviewKey = newKey();
+  const reviewBody = { outcome: "not_booked", note: "Queue 50 checked around the request; no order." };
+  const reviewClosed = await call(
+    "success",
+    "consoleCloseBookingReview",
+    owner,
+    "post",
+    `${BOOKINGS}/${reviewBooking}/review-closure`,
+    { headers: { ...reviewKey, "If-Match": '"1"' }, body: reviewBody },
+    ok(200),
+    succeeded("booking.reconcile_close"),
+  );
+  await call(
+    "replay",
+    "consoleCloseBookingReview",
+    owner,
+    "post",
+    `${BOOKINGS}/${reviewBooking}/review-closure`,
+    { headers: { ...reviewKey, "If-Match": '"1"' }, body: reviewBody },
+    ok(200),
+    succeeded("bookings.closeReview"),
+  );
+  await call(
+    "reused key",
+    "consoleCloseBookingReview",
+    owner,
+    "post",
+    `${BOOKINGS}/${reviewBooking}/review-closure`,
+    { headers: { ...reviewKey, "If-Match": '"1"' }, body: { ...reviewBody, note: "Another note." } },
+    [409, "IDEMPOTENCY_KEY_REUSED"],
+    failed("bookings.closeReview"),
+  );
+  await call(
+    "missing key",
+    "consoleCloseBookingReview",
+    owner,
+    "post",
+    `${BOOKINGS}/${reviewBooking}/review-closure`,
+    { headers: { "If-Match": String(reviewClosed.headers["etag"]) }, body: reviewBody },
+    [400, "VALIDATION_FAILED"],
+    failed("bookings.closeReview"),
+  );
+  await call(
+    "failure",
+    "consoleCloseBookingReview",
+    owner,
+    "post",
+    `${BOOKINGS}/${reviewBooking}/review-closure`,
+    { headers: { ...newKey(), "If-Match": String(reviewClosed.headers["etag"]) }, body: reviewBody },
+    [409, "CONFLICT"],
+    failed("bookings.closeReview"),
+  );
+  await call(
+    "validation",
+    "consoleCloseBookingReview",
+    owner,
+    "post",
+    `${BOOKINGS}/${reviewBooking}/review-closure`,
+    {
+      headers: { ...newKey(), "If-Match": String(reviewClosed.headers["etag"]) },
+      body: { outcome: "found_elsewhere" },
+    },
+    [400, "VALIDATION_FAILED"],
+    failed("bookings.closeReview"),
+  );
+  await call(
+    "denied",
+    "consoleCloseBookingReview",
+    viewer,
+    "post",
+    `${BOOKINGS}/${reviewBooking}/review-closure`,
+    { headers: { ...newKey(), "If-Match": String(reviewClosed.headers["etag"]) }, body: reviewBody },
+    [403, "FORBIDDEN"],
+    denied("bookings.closeReview"),
   );
 
   // ---- console.bookings.import ----
@@ -2370,7 +2489,8 @@ beforeAll(async () => {
 
 describe("the calls of the audit table", () => {
   it("[OBE-075 AC1] covers every state-changing console operation: success, failure, refusals and, with a key, its replay", () => {
-    expect(CHANGES).toHaveLength(22);
+    // 22 at the M5 exit; OBE-099 adds console.bookings.closeReview.
+    expect(CHANGES).toHaveLength(23);
     for (const operation of CHANGES) {
       const kinds = new Set(
         calls
@@ -2395,6 +2515,7 @@ describe("the calls of the audit table", () => {
         "consoleAddBookingNote",
         "consoleCancelBooking",
         "consoleCapturePayment",
+        "consoleCloseBookingReview",
         "consoleCreateFeeRule",
         "consoleCreateMarkupRule",
         "consoleCreateStorefrontPage",

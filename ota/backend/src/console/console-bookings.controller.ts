@@ -25,6 +25,11 @@
 // target. The import answers `201` with the console booking, `Location` and `ETag`; the idempotency interceptor stores
 // it for the key's replays.
 //
+// Since OBE-099: console.bookings.closeReview (`bookings:cancel`, `If-Match` and `Idempotency-Key`) over
+// ReviewClosureService (review-closure.service.ts): it closes a booking in Reconciliation review with the order the
+// staff found or as not booked, and answers the booking with its new `ETag`; its use case writes the
+// `booking.reconcile_close` staff action, and the idempotency interceptor replays the first answer for the same key.
+//
 // Nest registers a controller's routes in the order of its methods, and Express tries them in that order: the literal
 // `GET by-record-locator` must be declared before `GET :bookingId`, or the get handler answers it (the route-parity
 // test reads the router's order and fails then).
@@ -50,6 +55,7 @@ import {
 } from "./console-bookings.mapper";
 import { ConsoleBookingsService } from "./console-bookings.service";
 import { PnrImportService, type PnrLookupResult } from "./pnr-import.service";
+import { ReviewClosureService } from "./review-closure.service";
 import { AuditedRead } from "./staff-actions.writer";
 
 /** Runs a use case; its `503` of a booking another claim holds gets `Retry-After` (the same key can come again). */
@@ -79,6 +85,7 @@ export class ConsoleBookingsController {
     private readonly bookings: ConsoleBookingsService,
     private readonly actions: ConsoleBookingActionsService,
     private readonly pnr: PnrImportService,
+    private readonly reviews: ReviewClosureService,
   ) {}
 
   @Get()
@@ -176,6 +183,23 @@ export class ConsoleBookingsController {
         input.headers["If-Match"],
         bodyOf("consoleCancelBooking", input.body),
       ),
+    );
+    res.setHeader("ETag", bookingEtagOf(booking.version));
+    res.setHeader("Cache-Control", CONSOLE_BOOKING_CACHE_CONTROL);
+    return booking;
+  }
+
+  @Post(":bookingId/review-closure")
+  @HttpCode(200)
+  @OpenApiOperation("consoleCloseBookingReview")
+  async closeReview(
+    @OpenApiInput() input: ValidatedInput<"consoleCloseBookingReview">,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<ConsoleBooking> {
+    const booking = await this.reviews.close(
+      input.path.bookingId,
+      input.headers["If-Match"],
+      bodyOf("consoleCloseBookingReview", input.body),
     );
     res.setHeader("ETag", bookingEtagOf(booking.version));
     res.setHeader("Cache-Control", CONSOLE_BOOKING_CACHE_CONTROL);

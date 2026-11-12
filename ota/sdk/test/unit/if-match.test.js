@@ -36,6 +36,7 @@ const REQUIRED = {
   "console.bookings.patch": "booking",
   "console.bookings.issue": "booking",
   "console.bookings.cancel": "booking",
+  "console.bookings.closeReview": "booking",
   "console.payments.capture": "payment",
   "console.settings.markupRules.update": "markup rule",
   "console.settings.markupRules.delete": "markup rule",

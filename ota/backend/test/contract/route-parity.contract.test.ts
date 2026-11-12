@@ -564,8 +564,8 @@ describe("pending operations", () => {
       expect([operationId, operation?.milestone, operation?.internal]).toEqual([operationId, "M5", true]);
       expect([operationId, Object.hasOwn(PENDING_OPERATIONS, operationId)]).toEqual([operationId, false]);
     }
-    // No operation of M0 to M5 is pending: each has a handler of its own on its route.
-    const served = otaOperations.filter((operation) => /^M[0-5]$/.test(operation.milestone ?? ""));
+    // No operation of M0 to M6 is pending: each has a handler of its own on its route (M6: OBE-099's review closure).
+    const served = otaOperations.filter((operation) => /^M[0-6]$/.test(operation.milestone ?? ""));
     expect(served).toHaveLength(otaOperations.length - 19);
     expect(served.map((operation) => operation.operationId)).toEqual(expect.arrayContaining(m5Webhooks));
     expect(served.filter((operation) => Object.hasOwn(PENDING_OPERATIONS, operation.operationId))).toEqual(

@@ -2836,8 +2836,8 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - An owner or admin sets and clears a storefront's offers per search in the OTA admin and the storefront's next search follows it; a viewer sees the value read-only.
 - **Verify:** `pnpm --filter @velexis/ota-admin test && pnpm --filter @velexis/ota-admin build && E2E_WITH_OTA=1 pnpm test:e2e -- --project=ota-admin specs/ota-admin/settings-effects.e2e.ts`
 
-### OBE-099 · Close a booking in Reconciliation review from the console
-- **Status:** todo
+### OBE-099 · Close a booking in Reconciliation review from the console ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M6
 - **Depends on:** OBE-043, OBE-063, OBE-064

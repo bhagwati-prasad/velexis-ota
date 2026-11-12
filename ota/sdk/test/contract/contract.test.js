@@ -359,11 +359,12 @@ describe("the SDK against the frozen contract", () => {
 
   it("checks every console method, of the contract and added, once the pending list is empty [SDK-012]", () => {
     // SDK-012 removed `console` from pending-namespaces.js: an empty `console` namespace fails at the assertion of
-    // each of its 32 contract methods and 29 additions (console.settings.*, console.payments.*) and at the
-    // client-wide check, each time because the method is missing and not pending.
+    // each of its 32 contract methods and 30 additions (console.settings.*, console.payments.*, and since OBE-099
+    // console.bookings.closeReview) and at the client-wide check, each time because the method is missing and not
+    // pending.
     const { contract, additions } = consoleAssertions();
     expect(contract).toHaveLength(32);
-    expect(additions).toHaveLength(29);
+    expect(additions).toHaveLength(30);
     expect(locations(consoleEmptied).sort(), format(consoleEmptied)).toEqual(
       [
         ...contract,
@@ -372,7 +373,7 @@ describe("the SDK against the frozen contract", () => {
       ].sort(),
     );
     const perMethod = consoleEmptied.filter((diagnostic) => diagnostic.file?.fileName === METHODS);
-    expect(perMethod).toHaveLength(61);
+    expect(perMethod).toHaveLength(62);
     for (const diagnostic of perMethod) {
       expect(ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")).toContain(
         "missing from the SDK client and not listed in pending-namespaces.js",

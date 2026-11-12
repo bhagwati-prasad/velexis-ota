@@ -1746,12 +1746,15 @@ describe("console.bookings.get", () => {
       canResync: false,
       canRetrieve: true,
       canAddNote: false,
+      // OBE-099: console.bookings.closeReview needs bookings:cancel, which a viewer does not hold.
+      canCloseReview: false,
       reasons: {
         canIssue: "no_permission",
         canPatch: "no_permission",
         canCancel: "no_permission",
         canResync: "no_permission",
         canAddNote: "no_permission",
+        canCloseReview: "no_permission",
       },
     });
     expect(financed["consoleActions"]).toMatchObject({ canIssue: false, canRetrieve: true });

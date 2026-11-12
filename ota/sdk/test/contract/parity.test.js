@@ -1,7 +1,8 @@
 // Runtime parity of the SDK with the working OpenAPI document (OADR-0016 point 4, ota/sdk/docs/types-and-builds.md §4
 // point 5, ota/sdk/README.md §6 point 5, tasks SDK-006 and SDK-013): the set of `x-sdk-method` names of the document
-// (without `x-internal` and `x-sdk-exclude` operations) equals the set of methods of a client instance, all 128 of them;
-// `withOptions` and `request` are the only other members.
+// (without `x-internal` and `x-sdk-exclude` operations) equals the set of methods of a client instance, all 129 of them
+// since OBE-099 added `console.bookings.closeReview` (128 at the M4 exit); `withOptions` and `request` are the only
+// other members.
 //
 // Until the M4 exit the document grew ahead of the SDK, and an entry of pending-namespaces.js could cover what an SDK
 // task had not written yet (`parity` below, with the rules the list followed: every entry names an SDK task, covers at
@@ -35,9 +36,11 @@ const PK = "pk_test_sdk006_fake";
 /**
  * The client's methods at the M4 exit (OADR-0016, SDK-013): one per `x-sdk-method` of the completed document, whose 135
  * operations include five `x-internal` ones and two `x-sdk-exclude` ones (implementation-plan.md §8, "Contract
- * rollout"). A change that adds an `x-sdk-method` to the document writes its SDK method and raises this count.
+ * rollout"). A change that adds an `x-sdk-method` to the document writes its SDK method and raises this count: 129
+ * since OBE-099 (M6) added `console.bookings.closeReview` (its 136th operation), listed in ota/sdk/docs/extensions.md
+ * because the contract files are never edited (ADR-0019).
  */
-const SDK_METHOD_COUNT = 128;
+const SDK_METHOD_COUNT = 129;
 /** Why the strict check refuses an entry of pending-namespaces.js since SDK-013. */
 const CLOSED =
   "pending-namespaces.js is closed since SDK-013 (the M4 exit); the change that adds an x-sdk-method writes its SDK method";
@@ -171,7 +174,7 @@ beforeAll(() => {
 }, PARSE_TIMEOUT_MS);
 
 describe("the client and the working document", () => {
-  it("have the same 128 methods, with nothing pending [SDK-006 AC2] [SDK-013 AC1]", () => {
+  it("have the same 129 methods, with nothing pending [SDK-006 AC2] [SDK-013 AC1] [OBE-099]", () => {
     const { methods } = membersOf(createVelexisClient({ publishableKey: PK }));
     expect(strictParity({ documentMethods, clientMethods: methods, pending: PENDING })).toEqual({
       missing: [],

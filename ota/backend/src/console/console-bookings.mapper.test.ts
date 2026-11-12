@@ -7,12 +7,17 @@
 // FIX-W35-OTA): what console.bookings.cancel would ask Amadeus for, decided from the stored tickets in the OTA's
 // `storefront_settings.time_zone`, the API's own clock, per mode and per zone; `null` where the cancellation refuses
 // the booking whoever asks. Instants are built from the OTA's day around `now`, never a fixed calendar date.
+//
+// canCloseReview (OBE-099): console.bookings.closeReview is offered for a booking in Reconciliation review only, a
+// `pending` booking with `reconcile_outcome = manual_review`, to the staff who hold `bookings:cancel`; every other
+// booking answers `not_in_review`, and a caller without the permission `no_permission` first.
 import { describe, expect, it } from "vitest";
 import { CANCEL_CUTOFF_MS } from "../bookings/allowed-actions";
 import { localDayOf, type ModeTicket } from "../bookings/cancellation-mode";
 import {
   consoleActionsOf,
   consoleCancellationModeOf,
+  reviewClosureRefusalOf,
   type ConsoleActionsInput,
   type ConsoleCancellationModeInput,
 } from "./console-bookings.mapper";
@@ -221,5 +226,73 @@ describe("consoleCancellationModeOf: the API's clock for a same-day void (FIX-W3
       mode: "release",
       voidDeadlineAt: null,
     });
+  });
+});
+
+describe("consoleActionsOf: canCloseReview (OBE-099)", () => {
+  /** A booking the reconciliation handed to the staff: pending, no order, `reconcile_outcome = manual_review`. */
+  const inReview = (overrides: Partial<ConsoleActionsInput> = {}): ConsoleActionsInput =>
+    input({
+      status: "pending",
+      ticketingStatus: "manual_review",
+      amadeusOrderId: null,
+      ticketingDeadlineAt: null,
+      reconcileOutcome: "manual_review",
+      ...overrides,
+    });
+
+  it("[OBE-099 AC1] offers the closure of a booking in Reconciliation review to a caller with bookings:cancel", () => {
+    const actions = consoleActionsOf(inReview());
+    expect(actions.canCloseReview).toBe(true);
+    expect(actions.reasons).not.toHaveProperty("canCloseReview");
+    // The other actions still refuse a pending booking: the closure is its only way out.
+    expect(actions).toMatchObject({
+      canIssue: false,
+      canCancel: false,
+      canResync: false,
+      reasons: { canIssue: "pending", canCancel: "pending", canResync: "pending" },
+    });
+    expect(reviewClosureRefusalOf({ status: "pending", reconcileOutcome: "manual_review" })).toBeUndefined();
+  });
+
+  it("[OBE-099 AC2] refuses every booking that is not in review with not_in_review, a review already closed included", () => {
+    for (const state of [
+      // Reconciling: the reconciliation still decides.
+      { status: "pending", reconcileOutcome: null },
+      // A pending booking without its reconciliation (a claim in flight).
+      { status: "pending" },
+      // A review closed as found, or as not booked.
+      { status: "confirmed", reconcileOutcome: "found", amadeusOrderId: "eJzTd9f3NjIJdgMADeQCtg" },
+      { status: "failed", reconcileOutcome: "not_found" },
+      // Any other booking, whatever its outcome says.
+      { status: "confirmed", reconcileOutcome: null },
+      { status: "ticketed", reconcileOutcome: "manual_review" },
+      { status: "cancelled", reconcileOutcome: "manual_review" },
+    ] satisfies Partial<ConsoleActionsInput>[]) {
+      const booking = input({ amadeusOrderId: null, ...state });
+      const actions = consoleActionsOf(booking);
+      expect([state, actions.canCloseReview, actions.reasons["canCloseReview"]]).toEqual([
+        state,
+        false,
+        "not_in_review",
+      ]);
+      expect(reviewClosureRefusalOf(booking)).toBe("not_in_review");
+    }
+  });
+
+  it("[OBE-099 AC2] names no_permission first for a caller without bookings:cancel (finance, viewer, a key without it)", () => {
+    for (const booking of [inReview(), input({ status: "confirmed" })]) {
+      const actions = consoleActionsOf({
+        ...booking,
+        can: (permission) => permission !== "bookings:cancel",
+      });
+      expect([actions.canCloseReview, actions.reasons["canCloseReview"]]).toEqual([false, "no_permission"]);
+    }
+    // bookings:write or bookings:issue alone do not open it.
+    const writer = consoleActionsOf(
+      inReview({ can: (permission) => permission === "bookings:write" || permission === "bookings:issue" }),
+    );
+    expect(writer.reasons["canCloseReview"]).toBe("no_permission");
+    expect(writer.canAddNote).toBe(true);
   });
 });
