@@ -104,7 +104,7 @@ Only when every row of §2 is signed off in §5 through a reviewed pull request.
 
 4. **Check before anyone takes a card.**
    - `sudo velexis-healthcheck --payment-pages` shows only `ok` lines.
-   - The demo OTA's admin, **Settings → Storefront → Airline card**, now says "The platform has turned the airline card on: tick to offer it in live too." (`airlineCard.liveAvailable: true`).
+   - The OTA admin of the demo OTA (the production demo OTA on `demo.ota.example.com`, Velexis's own, which the [platform launch checklist](../../../platform/docs/runbooks/launch-checklist.md#6-manual-trials-before-billing) §6 creates), **Settings → Storefront → Airline card**, now says "The platform has turned the airline card on: tick to offer it in live too." (`airlineCard.liveAvailable: true`).
    - With the demo OTA's test flag on, its test storefront offers the airline card; one booking there with a test card of Amadeus's test environment (never a real card) completes. Every OTA whose test flag is on now offers the method in its test storefront too: test cards go to Amadeus's test system, but they still cross the VM, which the controls above cover.
 5. **Then, and only then, may OTAs set `airlineCard.enabledLive`.** Tell the OTAs whose agreement holds the acknowledgement of P23. An owner or admin ticks **Offer the airline card in the live environment** (`PATCH /v1/console/settings/storefront`, `console.settings.storefront.update`; the change is a `settings.storefront.update` row of the OTA's `staff_actions`). The OTA admin warns when markup or fee rules are active: airline-card bookings are sold at the airline's price (OADR-0004 point 4).
 6. **Record** the change in the switch history of §5.

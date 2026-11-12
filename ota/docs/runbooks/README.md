@@ -33,7 +33,7 @@ Other runbooks the OTA group relies on:
 
 The same few places answer most questions. Each runbook says which of them to read first.
 
-**Health of the processes (on the VM).** Caddy answers `404` to `/health/*` from outside except `/health/live`, so readiness is read on the VM itself:
+**Health of the processes (on the VM).** Caddy answers `404` to `/health/*` from outside except `/health/live` of the API hosts (on the portal and both admin hosts to every `/health/*`, lead decision (19i) of 2026-11-12), so readiness is read on the VM itself:
 
 ```bash
 curl -s http://127.0.0.1:4000/health/ready | jq            # OTA API: {"status":"ok","checks":{"postgres":"ok","redis":"ok"}}

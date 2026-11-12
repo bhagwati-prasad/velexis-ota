@@ -355,6 +355,16 @@
 	import api_unavailable
 }
 
+# The health endpoints of the Next.js hosts (the portal and both admin sites) are never public (ADR-0016: from the
+# internet only /health/live of the API hosts; lead decision (19i) of 2026-11-12): their /health/live and /health/ready
+# are for the on-VM check and velexis-deploy, which ask each app on its loopback port, never through Caddy, and the
+# external uptime monitor asks the portal's landing page instead (X-029, deployment-single-vm.md §13). `respond` runs
+# before `reverse_proxy` in Caddy's directive order, as @private_health of (api_common) does.
+(next_private_health) {
+	@private_health path /health/*
+	respond @private_health 404
+}
+
 # ---- Platform hosts ----------------------------------------------------------------------------------
 
 # Portal (platform/frontend, Next.js).
@@ -362,6 +372,7 @@
 	import access_log
 	import security_headers
 	import request_id
+	import next_private_health
 	encode zstd gzip
 	# The WAF reads up to 5 MiB of a body, just above the 5MB below.
 	import waf * DetectionOnly 5242880
@@ -377,6 +388,7 @@ admin.{$PLATFORM_BASE_DOMAIN:platform.example.com} {
 	import access_log
 	import security_headers
 	import request_id
+	import next_private_health
 	encode zstd gzip
 	# Optional: allow Velexis staff networks only. Replace the documentation range and uncomment.
 	# @outside_staff not remote_ip 203.0.113.0/24
@@ -406,6 +418,7 @@ admin.{$STOREFRONT_BASE_DOMAIN:ota.example.com} {
 	import access_log
 	import security_headers
 	import request_id
+	import next_private_health
 	encode zstd gzip
 	import waf * DetectionOnly 10485760
 	request_body {

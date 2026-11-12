@@ -111,6 +111,6 @@ Known gap: in `deploy.yml` the `pnpm/action-setup` comment has text after the ta
 
 ## Human steps (the developer)
 
-- **Protect `main`** (Settings → Branches, or Rules → Rulesets): require a pull request with one approval, require the status checks **Plan lint**, **Deploy files**, **Build and test** and **Integration tests** (since lead decision (5o) of 2026-11-05) to pass, allow squash merging only, require linear history, and block force pushes. Record it in the X-019 pull request ([ADR-0020](../../docs/mvp/adr/0020-ai-agent-development-workflow.md); [roadmap](../../docs/mvp/plans/roadmap.md) M0 human steps).
+- **Protect `main`** (Settings → Branches, or Rules → Rulesets): require a pull request with one approval, require the status checks **Plan lint**, **Deploy files**, **Build and test**, **Integration tests** (since lead decision (5o) of 2026-11-05), **VM check test** (the `check-vm` job, lead decision (13l) of 2026-11-10) and **Integration tests on other hosts and ports** (the `alt-hosts` job of X-032, lead decision (19k) of 2026-11-12) to pass, allow squash merging only, require linear history, and block force pushes. Record it in the X-019 pull request ([ADR-0020](../../docs/mvp/adr/0020-ai-agent-development-workflow.md); [roadmap](../../docs/mvp/plans/roadmap.md) M0 human steps).
 - Turn on Dependabot alerts and security updates, and secret scanning with push protection, in the repository's security settings.
 - After the first merge, re-run the CI of a commit on `main` and check its log for Turborepo cache hits.

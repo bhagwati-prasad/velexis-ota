@@ -60,7 +60,9 @@
 #     storefront's /api keeps its 256KB;
 #   - an unknown host (evil.localhost) and a storefront key the `ask` endpoint refuses get no certificate: the
 #     TLS handshake fails after Caddy asked, and nothing is stored;
-#   - the portal and both admin hosts reach their app (3000, 3001, 3002) with the security headers;
+#   - the portal and both admin hosts reach their app (3000, 3001, 3002) with the security headers, while /health/*
+#     on them (/health/live included, and the variants //, upper case, %2F and ../) answers 404 without reaching the
+#     app, as on the API hosts (ADR-0016; lead decision (19i) of 2026-11-12, each line ends with [FIX-W50-SHARED 19i]);
 #   - with the upstream stopped, platform.localhost and both admin hosts serve the maintenance page with 503, and
 #     the API hosts (and the storefront /api) the JSON SERVICE_UNAVAILABLE envelope with the request id;
 #   - the admin API answers only on the unix socket: `caddy reload --config <test copy>` succeeds through it
@@ -731,6 +733,13 @@ same "$TENANT: POST /api$UPLOAD with 300000 bytes answers 413 (the storefront's 
 
 # The Next.js hosts: portal, platform admin, OTA admin.
 NEXT_HOSTS=("$PLATFORM 3000" "admin.$PLATFORM 3001" "admin.$STOREFRONT 3002")
+# Lead decision (19i) of 2026-11-12: Caddy answers 404 to /health/* on these hosts, /health/live included, as it does on
+# the API hosts (ADR-0016: from the internet only /health/live of the API hosts). The on-VM check and velexis-deploy ask
+# each app's /health/ready on its loopback port, and the uptime monitor asks the portal's / (X-029, step 6f). The same
+# variants as on the API hosts (sent as they are with --path-as-is), and a dot segment that leads into /health/: the
+# WAF of these hosts only detects, so each answers Caddy's 404 and never reaches the app.
+NEXT_PRIVATE=(/health/live /health/ready /health/ready/ /health/ //health/live /Health/Live /health%2Flive
+  /health/x/../live /x/../health/ready)
 for app in "${NEXT_HOSTS[@]}"; do
   read -r host port <<<"$app"
   step "Next.js host $host (upstream $port)"
@@ -739,6 +748,19 @@ for app in "${NEXT_HOSTS[@]}"; do
   same "$host has HSTS (ADR-0027)" "$(header Strict-Transport-Security)" "max-age=31536000"
   same "$host sends X-Frame-Options DENY" "$(header X-Frame-Options)" DENY
   same "$host hides the Server header" "$(header_count Server)" 0
+  for path in "${NEXT_PRIVATE[@]}"; do
+    fetch "$host" "$path" --path-as-is
+    same "$host$path answers 404 [FIX-W50-SHARED 19i]" "$STATUS" 404
+    same "$host$path never reaches the app on $port [FIX-W50-SHARED 19i]" "$(json port)" ""
+  done
+  fetch "$host" /health/live
+  same "the 404 of $host/health/live has HSTS and X-Frame-Options DENY and hides the Server header [FIX-W50-SHARED 19i]" \
+    "$(header Strict-Transport-Security) $(header X-Frame-Options) $(header_count Server)" "max-age=31536000 DENY 0"
+  for path in / /healthy "/sign-in?next=/health/live"; do
+    fetch "$host" "$path"
+    same "$host$path still reaches the app on $port [FIX-W50-SHARED 19i]" "$STATUS $(json port) $(json url)" \
+      "200 $port $path"
+  done
 done
 
 # ---- 6b. what the access log keeps of a URL (FIX-W29-SECURITY) ------------------------------------------------
@@ -1247,6 +1269,9 @@ for app in "${NEXT_HOSTS[@]}"; do
   same "$host: the maintenance page sends Retry-After 30" "$(header Retry-After)" 30
   same "$host: the maintenance page has HSTS (ADR-0027)" "$(header Strict-Transport-Security)" "max-age=31536000"
   same "$host: the maintenance page hides the Server header" "$(header_count Server)" 0
+  fetch "$host" /health/live
+  same "with its app stopped, $host/health/live still answers Caddy's own 404, not the maintenance page [FIX-W50-SHARED 19i]" \
+    "$STATUS" 404
 done
 
 REQUEST_ID="smoke-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
