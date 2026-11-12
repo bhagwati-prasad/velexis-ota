@@ -1005,8 +1005,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - A deliberately failed `db --replace-live` (corrupt file) on the scratch VM left its live database intact (`deployment-single-vm.md` §11).
 - **Verify:** `sudo /usr/local/sbin/velexis-restore drill /root/restore/set --identity /root/restore/velexis-data.key` (human step: run by the developer on the scratch VM)
 
-### X-032 · Prove that the move to managed services is configuration only
-- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the first green run of the CI job alt-hosts on GitHub (AC2), which only the integrator's push starts; its local stand-in, the same settings in a network namespace, passed)
+### X-032 · Prove that the move to managed services is configuration only ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M6
 - **Depends on:** X-023, X-015
