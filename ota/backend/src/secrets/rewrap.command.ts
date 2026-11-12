@@ -334,7 +334,10 @@ export function summaryOf(
           `remainingByKekId before ${formatKekCounts(totals.before)}`,
         ...stopped,
         pending === 0
-          ? `${REWRAP_COMMAND}: dry run: nothing was written; nothing is under an old KEK.`
+          ? totals.stopped === 0
+            ? `${REWRAP_COMMAND}: dry run: nothing was written; nothing is under an old KEK.`
+            : `${REWRAP_COMMAND}: dry run: nothing was written; nothing is under an old KEK in the tables that ran ` +
+              "to the end."
           : `${REWRAP_COMMAND}: dry run: nothing was written; ${totals.rewrapped} row(s) would move to ` +
             `${currentKekId} and ${totals.failed} would fail.`,
       ],

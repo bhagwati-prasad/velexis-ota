@@ -491,6 +491,23 @@ describe("the report", () => {
       ],
       code: REWRAP_EXIT.done,
     });
+    // A table that stopped was not counted: the verdict speaks of the others only, as the platform command's does.
+    const stopped = summaryOf(
+      totalsOf(
+        [
+          nothing,
+          { kind: "stopped", schema: SCHEMA, table: "idempotency_keys", reason: "DatabaseError 57P01" },
+        ],
+        1,
+      ),
+      true,
+      "local:v2",
+    );
+    expect(stopped.code).toBe(REWRAP_EXIT.remains);
+    expect(stopped.lines.slice(1)).toEqual([
+      "secrets:rewrap: 1 table(s) stopped before the end: run the command again.",
+      "secrets:rewrap: dry run: nothing was written; nothing is under an old KEK in the tables that ran to the end.",
+    ]);
   });
 });
 
