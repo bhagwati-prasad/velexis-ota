@@ -92,7 +92,6 @@ let smokeRun;
 const SMOKE_RUN_TIMEOUT_MS = 60_000;
 
 beforeAll(async () => {
-  down = await closedUrl();
   // Accepts connections and never answers: a host that hangs.
   silent = await listen(createTcpServer(() => undefined));
   notTheApi = await listen(
@@ -106,6 +105,10 @@ beforeAll(async () => {
       response.writeHead(200, { "Content-Type": "application/json" }).end('{"status":"ok"}');
     }),
   );
+  // The closed port last, while the three servers above hold theirs: a port released before them could be handed to
+  // one of them (the kernel reuses a released port for a later `listen(0)`), and `notTheApi`'s 503 would then answer
+  // where the tests expect a refused connection.
+  down = await closedUrl();
   // The smoke configuration against the closed port, as `pnpm --filter @velexis/ota-sdk test:smoke` runs it, with keys
   // that are well-formed: the run must fail on the API, not on a setting.
   smokeRun = await new Promise((resolve) => {
