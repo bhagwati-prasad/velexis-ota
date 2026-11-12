@@ -1,8 +1,11 @@
 // console.settings.storefront.get and update without PostgreSQL or Redis (OBE-070): the settings row ↔
 // StorefrontSettings mapping (checked against the OTA document with the checker of the integration tests, and read
 // back by storefront.get's own mapper), the rules of an update, and the service's order of checks, warnings, audit row
-// and cache deletion, with an in-memory repository that keeps the row as PostgreSQL would. The SQL, the pipeline and
-// storefront.get after a change are test/integration/settings/storefront-settings.int.test.ts.
+// and cache deletion, with an in-memory repository that keeps the row as PostgreSQL would. The `search` section
+// (OBE-098) is read as flights.search reads `search_defaults` (`parseSearchDefaults`) and written keeping the column's
+// other keys. The SQL, the pipeline and storefront.get after a change are
+// test/integration/settings/storefront-settings.int.test.ts; the searches after a change are
+// test/integration/shopping/search.int.test.ts.
 import { readFileSync } from "node:fs";
 import type { ConfigService } from "@nestjs/config";
 import type { TenantSchema } from "@velexis/db";
@@ -16,6 +19,11 @@ import type { Clock } from "../common/clock";
 import { OTA_OPENAPI_DOCUMENT } from "../common/http/openapi-validation.interceptor";
 import { newId } from "../common/ids";
 import type { ApiConfig } from "../config";
+import {
+  DEFAULT_OFFERS_PER_SEARCH,
+  MAX_OFFERS_PER_SEARCH,
+  parseSearchDefaults,
+} from "../shopping/offers.mapper";
 import type { StaffActionEntry, StaffActionsWriter } from "../console/staff-actions.writer";
 import { storefrontFor, toCachedStorefront } from "../storefront/storefront.mapper";
 import type {
@@ -115,6 +123,7 @@ function seededRow(overrides: Partial<StorefrontSettingsEditRow> = {}): Storefro
     bookingQueueNumber: 50,
     bookingQueueCategory: 0,
     opsAlertEmail: null,
+    searchDefaults: {},
     ...overrides,
   };
 }
@@ -128,6 +137,7 @@ const JSON_COLUMNS: ReadonlySet<string> = new Set([
   "support_details",
   "seo",
   "consent",
+  "search_defaults",
 ]);
 
 /** The row after `changes`, as PostgreSQL stores them (snake_case column → camelCase field, jsonb parsed). */
@@ -241,6 +251,7 @@ function fullUpdate(assets: {
       ],
     },
     operations: { opsAlertEmail: "ops@acmetravel.example", bookingQueue: { number: 42, category: 7 } },
+    search: { maxResults: 200 },
   };
 }
 
@@ -295,6 +306,7 @@ describe("the settings row as StorefrontSettings", () => {
       legal: { termsVersion: null, privacyVersion: null, links: [] },
       consent: { regime: "gdpr", bannerRequired: true, policyVersion: null, categories: [] },
       operations: { opsAlertEmail: null, bookingQueue: { number: 50, category: 0 } },
+      search: { maxResults: null },
       version: 1,
       updatedAt: UPDATED.toISOString(),
     });
@@ -319,6 +331,7 @@ describe("the settings row as StorefrontSettings", () => {
         consent: { categories: [{ id: "analytics", required: false, defaultEnabled: false, title: "" }] },
         acceptedCardBrands: ["NOT_A_BRAND"],
         bookingQueueNumber: 120,
+        searchDefaults: { maxResults: 251 },
       }),
     );
 
@@ -338,6 +351,7 @@ describe("the settings row as StorefrontSettings", () => {
     expect(settings.consent.categories).toEqual([]);
     expect(settings.policies.acceptedCardBrands).toEqual(["VISA", "MASTERCARD", "AMERICAN_EXPRESS"]);
     expect(settings.operations.bookingQueue.number).toBeNull();
+    expect(settings.search).toEqual({ maxResults: null });
   });
 
   it("knows the document's AmadeusPaymentBrand values", () => {
@@ -485,6 +499,97 @@ describe("an update of the row", () => {
     expect(merged.currencies).toEqual(update.currencies);
     expect(merged.brand).toBe(before.brand);
     expect(sectionsOf({ seo: update.seo, brand: update.brand })).toEqual(["brand", "seo"]);
+  });
+});
+
+describe("the search section (search_defaults)", () => {
+  /** `search.maxResults` of a row whose `search_defaults` is `stored`. */
+  const maxResultsOf = (stored: unknown): number | null =>
+    toStorefrontSettings(seededRow({ searchDefaults: stored })).search?.maxResults ?? null;
+  /** The JSON text of `search_defaults` that `update` writes over `row`, parsed. */
+  const written = (update: StorefrontSettingsUpdate, row: StorefrontSettingsEditRow): unknown =>
+    JSON.parse(String(toSettingsChanges(update, row).search_defaults));
+
+  it("[OBE-098 AC1] answers a stored maxResults from 1 to 250, valid against the document", () => {
+    for (const value of [1, 40, 150, 250]) {
+      const settings = toStorefrontSettings(
+        seededRow({ searchDefaults: { maxResults: value, nonStop: true } }),
+      );
+      expect(settings.search).toEqual({ maxResults: value });
+      expectValidSettings(settings);
+    }
+    expect(maxResultsOf({})).toBeNull();
+  });
+
+  it("[OBE-098 AC1] answers a malformed stored value as null, as the searches read it: the API's default", () => {
+    const malformed: unknown[] = [
+      { maxResults: 0 },
+      { maxResults: 251 },
+      { maxResults: -5 },
+      { maxResults: 40.5 },
+      { maxResults: "40" },
+      { maxResults: null },
+      { maxResults: true },
+      [{ maxResults: 40 }],
+      "maxResults",
+      null,
+    ];
+    for (const stored of malformed) {
+      expect([stored, maxResultsOf(stored)]).toEqual([stored, null]);
+      expectValidSettings(toStorefrontSettings(seededRow({ searchDefaults: stored })));
+    }
+    // Whatever is stored, the console answers what a customer-scope search asks Amadeus for (null: the default).
+    for (const stored of [...malformed, {}, { maxResults: 1 }, { maxResults: 77 }, { maxResults: 250 }]) {
+      expect([stored, maxResultsOf(stored) ?? DEFAULT_OFFERS_PER_SEARCH]).toEqual([
+        stored,
+        parseSearchDefaults(stored).maxResults,
+      ]);
+    }
+    expect(MAX_OFFERS_PER_SEARCH).toBe(250);
+  });
+
+  it("[OBE-098 AC1] writes maxResults into search_defaults keeping its other keys, and null removes it", () => {
+    const row = seededRow({
+      searchDefaults: { maxResults: 120, nonStop: true, cabin: "BUSINESS", sources: ["GDS"] },
+    });
+    const set = toSettingsChanges({ search: { maxResults: 40 } }, row);
+    const cleared = toSettingsChanges({ search: { maxResults: null } }, row);
+
+    // Only the column of the section sent, as JSON text (a jsonb write, conventions §1).
+    expect(Object.keys(set)).toEqual(["search_defaults"]);
+    expect(typeof set.search_defaults).toBe("string");
+    expect(written({ search: { maxResults: 40 } }, row)).toEqual({
+      maxResults: 40,
+      nonStop: true,
+      cabin: "BUSINESS",
+      sources: ["GDS"],
+    });
+    expect(written({ search: { maxResults: null } }, row)).toEqual({
+      nonStop: true,
+      cabin: "BUSINESS",
+      sources: ["GDS"],
+    });
+    // What the searches read afterwards: the new limit, then the default, with the other defaults kept.
+    expect(parseSearchDefaults(applied(row, set).searchDefaults)).toMatchObject({
+      maxResults: 40,
+      nonStop: true,
+      cabin: "BUSINESS",
+      sources: ["GDS"],
+    });
+    expect(parseSearchDefaults(applied(row, cleared).searchDefaults)).toMatchObject({
+      maxResults: DEFAULT_OFFERS_PER_SEARCH,
+      nonStop: true,
+    });
+    expect(toStorefrontSettings(applied(row, cleared)).search).toEqual({ maxResults: null });
+    // A column that holds no object (written by hand) is replaced by the section's object.
+    expect(written({ search: { maxResults: 7 } }, seededRow({ searchDefaults: [1] }))).toEqual({
+      maxResults: 7,
+    });
+    expect(written({ search: { maxResults: null } }, seededRow())).toEqual({});
+    // Other sections leave the column alone.
+    expect(
+      toSettingsChanges({ brand: { name: "Alpha", legalName: null, timeZone: "UTC" } }, row),
+    ).not.toHaveProperty("search_defaults");
   });
 });
 
@@ -996,6 +1101,39 @@ describe("StorefrontSettingsService", () => {
     expect(checker.check("consoleUpdateStorefrontSettings", { status: 200, body: both })).toEqual([]);
     // The rules are read only when a flag is turned on.
     expect(h.repository.calls.filter((call) => call === "hasAmountAddingRules")).toHaveLength(1);
+  });
+
+  it("[OBE-098 AC1] sets and clears search.maxResults keeping the other search defaults, audits it, and get answers it", async () => {
+    h.repository.row = seededRow({ searchDefaults: { nonStop: true, cabin: "PREMIUM_ECONOMY" } });
+
+    const set = await h.service.update({ search: { maxResults: 250 } }, '"1"');
+    const got = await h.service.get();
+    const cleared = await h.service.update({ search: { maxResults: null } }, '"2"');
+
+    expect(checker.check("consoleUpdateStorefrontSettings", { status: 200, body: set })).toEqual([]);
+    expect([set.search, set.version, set.warnings]).toEqual([{ maxResults: 250 }, 2, []]);
+    expect(got.search).toEqual({ maxResults: 250 });
+    expect(cleared.search).toEqual({ maxResults: null });
+    expect(h.repository.row?.searchDefaults).toEqual({ nonStop: true, cabin: "PREMIUM_ECONOMY" });
+    expect(h.repository.calls).toEqual([
+      "editableSettings:forUpdate",
+      "updateSettings",
+      "editableSettings",
+      "editableSettings:forUpdate",
+      "updateSettings",
+    ]);
+    // Audited as every settings change: the section before and after, and the versions.
+    expect(h.records).toEqual([
+      expect.objectContaining({
+        action: "settings.storefront.update",
+        before: { version: 1, search: { maxResults: null } },
+        after: { version: 2, search: { maxResults: 250 } },
+      }),
+      expect.objectContaining({
+        before: { version: 2, search: { maxResults: 250 } },
+        after: { version: 3, search: { maxResults: null } },
+      }),
+    ]);
   });
 
   it("answers the saved change when Redis cannot delete the entries, and logs it without the keys", async () => {

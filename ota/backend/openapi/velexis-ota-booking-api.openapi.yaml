@@ -18382,7 +18382,8 @@ paths:
         Returns the OTA's storefront settings as staff edit them (`storefront_settings`, one row per OTA shared by the
         test and live environments): brand, branding (asset ids of `storefront_assets`, colours, fonts from the bundled
         list, corner radius), locales, currencies, markets, features, policies, the airline card per environment,
-        legal versions and links, support, SEO, consent and operations. storefront.get derives the public
+        legal versions and links, support, SEO, consent, operations and search (`search.maxResults`, the offers per
+        search of the storefront, `null` for the API's default of 150). storefront.get derives the public
         configuration from them. `airlineCard.liveAvailable` (read-only) is the API's global `AIRLINE_CARD_ENABLED`
         switch: the live airline card can be turned on only while it is true, so the OTA admin offers that switch only
         then (lead decision (2d) of 2026-10-30, FIX-W35-OTA).
@@ -18463,7 +18464,9 @@ paths:
         (`brand`, `branding`, `locales`, …) replaces that section as a whole, sections not sent keep their value.
 
 
-        **Validation.** Beyond the schema (a font outside the bundled list fails it: `400 VALIDATION_FAILED`):
+        **Validation.** Beyond the schema (a font outside the bundled list, or a `search.maxResults` that is not
+        `null` or a whole number from 1 to 250, fails it: `400 VALIDATION_FAILED`, `path` the field's pointer into the
+        body, such as `/search/maxResults`):
         currencies must be active currencies of `reference.currencies` with at most 2 minor units (the precision of
         stored amounts, as flights.search requires) and the time zone must exist in `reference.time_zones`; every
         `supported` list contains its `default`; markets use supported currencies and locales; asset ids must name an
@@ -18494,9 +18497,11 @@ paths:
 
 
         **Effect.** `version` + 1 and a new `ETag`; the storefront.get caches of both environments are deleted, so the
-        hosted storefront shows the change within 5 minutes (its `sessionStorage` copy). `If-Match` required (`412
-        PRECONDITION_FAILED` when stale). No Amadeus call. Permission `settings:write`; `staff_actions` records the
-        settings before and after (redacted).
+        hosted storefront shows the change within 5 minutes (its `sessionStorage` copy). `search` is written into
+        `storefront_settings.search_defaults` keeping the stored object's other keys (`maxResults: null` removes the
+        key), and the storefront's next flights.search asks Amadeus for the offers it sets: searches read the row
+        itself, which no cache holds. `If-Match` required (`412 PRECONDITION_FAILED` when stale). No Amadeus call.
+        Permission `settings:write`; `staff_actions` records the settings before and after (redacted).
 
 
         **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this
@@ -18580,6 +18585,16 @@ paths:
                   airlineCard:
                     enabledTest: true
                     enabledLive: false
+              search:
+                summary: Ask Amadeus for 40 offers per search
+                value:
+                  search:
+                    maxResults: 40
+              searchDefault:
+                summary: Go back to the API's default number of offers per search
+                value:
+                  search:
+                    maxResults: null
       responses:
         '200':
           description: The updated storefront settings, with warnings.
@@ -32676,8 +32691,9 @@ components:
           description: >-
             Maximum number of offers Amadeus returns and Velexis stores (Amadeus `max`). In customer scope (the hosted
             storefront and API keys) the storefront limit caps it and is its default when it is omitted: 150, unless the
-            storefront's search defaults set `maxResults` from 1 to 250. In console scope the bound is 250, also the
-            default when it is omitted; the storefront limit does not apply.
+            storefront's search defaults set `maxResults` from 1 to 250 (`StorefrontSettings.search.maxResults`, which
+            console.settings.storefront.update sets). In console scope the bound is 250, also the default when it is
+            omitted; the storefront limit does not apply.
         resultOptions:
           $ref: '#/components/schemas/FlightSearchResultOptions'
           description: Options for the first page of offers embedded in the response (not sent to Amadeus).
@@ -32790,8 +32806,9 @@ components:
           description: >-
             Maximum number of flight offers returned (max 250). In customer scope (the hosted storefront and API keys)
             NestJS caps it by the storefront limit, which is also its default when it is omitted: 150, unless the
-            storefront's search defaults set `maxResults` from 1 to 250. In console scope the bound is 250, also the
-            default when it is omitted; the storefront limit does not apply.
+            storefront's search defaults set `maxResults` from 1 to 250 (`StorefrontSettings.search.maxResults`, which
+            console.settings.storefront.update sets). In console scope the bound is 250, also the default when it is
+            omitted; the storefront limit does not apply.
           type: number
           examples:
             - 250
@@ -44725,6 +44742,29 @@ components:
               minimum: 0
               maximum: 255
               description: Queue category.
+    StorefrontSettingsSearch:
+      type: object
+      additionalProperties: false
+      required:
+        - maxResults
+      description: >-
+        How the storefront searches (`storefront_settings.search_defaults`). The stored object's other keys, which the
+        console does not edit, are kept when this section is saved.
+      properties:
+        maxResults:
+          type:
+            - integer
+            - 'null'
+          minimum: 1
+          maximum: 250
+          description: >-
+            Offers per search: the most offers a customer-scope flights.search of the storefront (the hosted storefront
+            and API keys) asks Amadeus for, and what it asks for when it names none (`max` of SIMPLE mode,
+            `searchCriteria.maxFlightOffers` of ADVANCED mode), from 1 to 250 (the most a search stores). `null` uses
+            the API's default of 150 offers per search. More offers make every search of the storefront slower for its
+            visitors. Console-scope searches are bounded by 250 whatever this says. A stored value that is not a whole
+            number from 1 to 250 is answered as `null`, as searches read it. The storefront's next search uses a saved
+            value.
     StorefrontSettings:
       type: object
       required:
@@ -44745,7 +44785,8 @@ components:
         - updatedAt
       description: >-
         The OTA's storefront settings as staff edit them (the single `storefront_settings` row, shared by the test and
-        live environments; OADR-0012). storefront.get derives the public StorefrontConfig from them.
+        live environments; OADR-0012). storefront.get derives the public StorefrontConfig from them. `search` is always
+        answered; it is not in `required` so that clients written before it was added still read the settings.
       properties:
         brand:
           $ref: '#/components/schemas/StorefrontSettingsBrand'
@@ -44773,6 +44814,8 @@ components:
           $ref: '#/components/schemas/StorefrontSettingsConsent'
         operations:
           $ref: '#/components/schemas/StorefrontSettingsOperations'
+        search:
+          $ref: '#/components/schemas/StorefrontSettingsSearch'
         version:
           type: integer
           minimum: 1
@@ -44815,6 +44858,8 @@ components:
           $ref: '#/components/schemas/StorefrontSettingsConsent'
         operations:
           $ref: '#/components/schemas/StorefrontSettingsOperations'
+        search:
+          $ref: '#/components/schemas/StorefrontSettingsSearch'
     StorefrontSettingsUpdateResult:
       description: >-
         Answer of console.settings.storefront.update: the saved settings and the warnings about them (empty when there
@@ -50045,6 +50090,8 @@ components:
           bookingQueue:
             number: 50
             category: 0
+        search:
+          maxResults: null
         version: 7
         updatedAt: '2026-10-14T08:12:00Z'
     StorefrontSettingsUpdateResultExample:
@@ -50132,6 +50179,8 @@ components:
           bookingQueue:
             number: 50
             category: 0
+        search:
+          maxResults: 200
         version: 8
         updatedAt: '2026-10-15T10:02:00Z'
         warnings:

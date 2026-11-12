@@ -3,6 +3,9 @@
 // settings row with its 0002 columns, If-Match and ETag, the rules that need the database (reference currencies, time
 // zones and countries, assets by kind, content pages), the airline-card switch and warning, the staff_actions row, and
 // storefront.get after a change: its cache entries of both environments are deleted, so the next call reads the row.
+// The offers per search (`search.maxResults`, OBE-098) are written into `search_defaults` next to keys no operation
+// writes, which the tests store directly as fixtures; the searches that follow a change are
+// test/integration/shopping/search.int.test.ts.
 //
 // The file clones the @velexis/testing template (tenant_alpha and tenant_beta provisioned) and writes the platform rows
 // as the platform does: alpha and beta in test, accounts and memberships of the roles used, a secret test key of alpha
@@ -789,5 +792,139 @@ describe("console.settings.storefront.update", () => {
       trx.selectFrom("storefront_settings").select(["brand_name", "version"]).executeTakeFirstOrThrow(),
     );
     expect(beta).toEqual({ brand_name: "Beta Trips", version: 1 });
+  });
+});
+
+describe("console.settings.storefront.update: offers per search (search.maxResults)", () => {
+  /** Alpha's stored `search_defaults`, as flights.search reads it. */
+  const searchDefaults = async (): Promise<unknown> =>
+    (
+      await tenantTx(tenantDb, "tenant_alpha", (trx) =>
+        trx.selectFrom("storefront_settings").select("search_defaults").executeTakeFirstOrThrow(),
+      )
+    ).search_defaults;
+  /** Writes alpha's `search_defaults` as a fixture: no operation writes its keys but `maxResults`. */
+  const storeSearchDefaults = (value: Json) =>
+    tenantTx(tenantDb, "tenant_alpha", (trx) =>
+      trx
+        .updateTable("storefront_settings")
+        .set({ search_defaults: JSON.stringify(value) })
+        .execute(),
+    );
+  /** The search defaults the console does not edit. */
+  const OTHER_KEYS = Object.freeze({ nonStop: true, cabin: "BUSINESS", sources: ["GDS"] });
+
+  it("[OBE-098 AC1] sets 250, then 40, and clears offers per search, keeping the other search defaults; get answers each, and each is audited", async () => {
+    const owner = await signIn(alphaId, "owner");
+    const viewer = await signIn(alphaId, "viewer");
+    await storeSearchDefaults(OTHER_KEYS);
+    try {
+      const before = await current(owner);
+      expect(before.settings["search"]).toEqual({ maxResults: null });
+
+      const most = await owner.patch({ search: { maxResults: 250 } }, before.etag);
+      expect(answer(most)).toEqual([200, undefined]);
+      expectResponseToMatch("consoleUpdateStorefrontSettings", most);
+      expect([most.body.search, most.body.version]).toEqual([
+        { maxResults: 250 },
+        Number(before.settings["version"]) + 1,
+      ]);
+      expect(await searchDefaults()).toEqual({ ...OTHER_KEYS, maxResults: 250 });
+      // A viewer reads the value too (settings:read).
+      const read = await viewer.get();
+      expect(answer(read)).toEqual([200, undefined]);
+      expectResponseToMatch("consoleGetStorefrontSettings", read);
+      expect(read.body.search).toEqual({ maxResults: 250 });
+
+      const fewer = await owner.patch({ search: { maxResults: 40 } }, most.headers["etag"] as string);
+      expect([...answer(fewer), fewer.body.search]).toEqual([200, undefined, { maxResults: 40 }]);
+      expect(await searchDefaults()).toEqual({ ...OTHER_KEYS, maxResults: 40 });
+      expect((await viewer.get()).body.search).toEqual({ maxResults: 40 });
+
+      const cleared = await owner.patch({ search: { maxResults: null } }, fewer.headers["etag"] as string);
+      expect([...answer(cleared), cleared.body.search]).toEqual([200, undefined, { maxResults: null }]);
+      expectResponseToMatch("consoleUpdateStorefrontSettings", cleared);
+      // null removes the key: the searches ask for the API's default again; the other keys stay.
+      expect(await searchDefaults()).toEqual(OTHER_KEYS);
+      expect((await current(owner)).settings["search"]).toEqual({ maxResults: null });
+
+      const version = Number(before.settings["version"]);
+      const rows = (await staffActions("tenant_alpha", owner.member.staffId)).filter(
+        (row) => row["action"] === "settings.storefront.update",
+      );
+      expect(rows).toEqual([
+        expect.objectContaining({
+          outcome: "succeeded",
+          target_type: "storefront_settings",
+          target_id: "sfs_default",
+          before: { version, search: { maxResults: null } },
+          after: { version: version + 1, search: { maxResults: 250 } },
+        }),
+        expect.objectContaining({
+          outcome: "succeeded",
+          before: { version: version + 1, search: { maxResults: 250 } },
+          after: { version: version + 2, search: { maxResults: 40 } },
+        }),
+        expect.objectContaining({
+          outcome: "succeeded",
+          before: { version: version + 2, search: { maxResults: 40 } },
+          after: { version: version + 3, search: { maxResults: null } },
+        }),
+      ]);
+    } finally {
+      await storeSearchDefaults({});
+    }
+  });
+
+  it("[OBE-098 AC1] answers a value outside 1 to 250 400 VALIDATION_FAILED at /search/maxResults and saves nothing", async () => {
+    const owner = await signIn(alphaId, "owner");
+    await storeSearchDefaults({ ...OTHER_KEYS, maxResults: 120 });
+    try {
+      const { settings, etag } = await current(owner);
+      expect(settings["search"]).toEqual({ maxResults: 120 });
+      const refused: Array<[unknown, string]> = [
+        [0, "minimum"],
+        [251, "maximum"],
+        [-1, "minimum"],
+        [2.5, "type"],
+        ["40", "type"],
+      ];
+
+      for (const [maxResults, keyword] of refused) {
+        const res = await owner.patch({ search: { maxResults } }, etag);
+        expect([maxResults, ...answer(res)]).toEqual([maxResults, 400, "VALIDATION_FAILED"]);
+        expect(res.body.error.fieldErrors).toEqual([
+          expect.objectContaining({ path: "/search/maxResults", code: keyword }),
+        ]);
+        expectResponseToMatch("consoleUpdateStorefrontSettings", res);
+      }
+      const missing = await owner.patch({ search: {} }, etag);
+      expect(answer(missing)).toEqual([400, "VALIDATION_FAILED"]);
+      expect(missing.body.error.fieldErrors).toEqual([
+        expect.objectContaining({ path: "/search/maxResults", code: "required" }),
+      ]);
+
+      const after = await current(owner);
+      expect([after.etag, after.settings["search"]]).toEqual([etag, { maxResults: 120 }]);
+      expect(await searchDefaults()).toEqual({ ...OTHER_KEYS, maxResults: 120 });
+    } finally {
+      await storeSearchDefaults({});
+    }
+  });
+
+  it("[OBE-098 AC1] answers a malformed stored value as null, the API's default, and a save of another section keeps it", async () => {
+    const owner = await signIn(alphaId, "owner");
+    await storeSearchDefaults({ ...OTHER_KEYS, maxResults: 999 });
+    try {
+      const { settings, etag } = await current(owner);
+      expect(settings["search"]).toEqual({ maxResults: null });
+
+      const other = await owner.patch({ features: settings["features"] }, etag);
+
+      expect(answer(other)).toEqual([200, undefined]);
+      expect(await searchDefaults()).toEqual({ ...OTHER_KEYS, maxResults: 999 });
+    } finally {
+      await storeSearchDefaults({});
+    }
   });
 });

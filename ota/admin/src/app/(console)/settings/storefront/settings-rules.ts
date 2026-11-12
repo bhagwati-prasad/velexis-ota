@@ -2,9 +2,9 @@
 // 6, OADR-0004): what the page (page.tsx), its sections (sections.tsx, theme-editor.tsx) and the server actions
 // (actions.ts) share. A `"use server"` module may export only async functions, and server code cannot read the
 // constants of a `"use client"` module (they reach it as client references), so the choices and their labels, the Zod
-// mirrors of the thirteen sections of `StorefrontSettingsUpdate`, the form-to-body rules and the texts of the API's
-// refusals live here, in a module without a directive that imports no server-only module and of the SDK only types
-// (OADR-0018 point 1), as pricing-rules.ts does for the markup and fee rules.
+// mirrors of the thirteen sections of `StorefrontSettingsUpdate` the page edits (`SettingsSection`), the form-to-body
+// rules and the texts of the API's refusals live here, in a module without a directive that imports no server-only
+// module and of the SDK only types (OADR-0018 point 1), as pricing-rules.ts does for the markup and fee rules.
 //
 // Every section is its own form and its own `PATCH` (each section sent replaces that section as a whole, the others
 // keep their value), with `ifMatch` = the version the page displayed. The forms post flat fields named after the
@@ -25,8 +25,11 @@ import type { ActionState } from "@/lib/action-state";
 
 // ---- Sections ---------------------------------------------------------------------------------------------------
 
-/** A top-level section of the settings, which an update replaces as a whole. */
-export type SettingsSection = keyof StorefrontSettingsUpdate & keyof StorefrontSettings;
+/**
+ * A top-level section of the settings, which an update replaces as a whole. `search` (the offers per search, OBE-098)
+ * is not edited on this page until OAD-021 adds its form: no action sends it, so the API keeps its value.
+ */
+export type SettingsSection = Exclude<keyof StorefrontSettingsUpdate & keyof StorefrontSettings, "search">;
 
 /** The sections in the document's order. */
 export const SETTINGS_SECTIONS = Object.freeze([

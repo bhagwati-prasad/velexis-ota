@@ -2683,7 +2683,7 @@ export interface paths {
         };
         /**
          * Get the storefront settings
-         * @description Returns the OTA's storefront settings as staff edit them (`storefront_settings`, one row per OTA shared by the test and live environments): brand, branding (asset ids of `storefront_assets`, colours, fonts from the bundled list, corner radius), locales, currencies, markets, features, policies, the airline card per environment, legal versions and links, support, SEO, consent and operations. storefront.get derives the public configuration from them. `airlineCard.liveAvailable` (read-only) is the API's global `AIRLINE_CARD_ENABLED` switch: the live airline card can be turned on only while it is true, so the OTA admin offers that switch only then (lead decision (2d) of 2026-10-30, FIX-W35-OTA).
+         * @description Returns the OTA's storefront settings as staff edit them (`storefront_settings`, one row per OTA shared by the test and live environments): brand, branding (asset ids of `storefront_assets`, colours, fonts from the bundled list, corner radius), locales, currencies, markets, features, policies, the airline card per environment, legal versions and links, support, SEO, consent, operations and search (`search.maxResults`, the offers per search of the storefront, `null` for the API's default of 150). storefront.get derives the public configuration from them. `airlineCard.liveAvailable` (read-only) is the API's global `AIRLINE_CARD_ENABLED` switch: the live airline card can be turned on only while it is true, so the OTA admin offers that switch only then (lead decision (2d) of 2026-10-30, FIX-W35-OTA).
          *
          *     `ETag` = `"<version>"`: pass it as `If-Match` to console.settings.storefront.update. No Amadeus call. Permission `settings:read`. Not audited per call.
          *
@@ -2699,11 +2699,11 @@ export interface paths {
          * Update the storefront settings
          * @description Changes the storefront settings section by section (`StorefrontSettingsUpdate`): each top-level section sent (`brand`, `branding`, `locales`, …) replaces that section as a whole, sections not sent keep their value.
          *
-         *     **Validation.** Beyond the schema (a font outside the bundled list fails it: `400 VALIDATION_FAILED`): currencies must be active currencies of `reference.currencies` with at most 2 minor units (the precision of stored amounts, as flights.search requires) and the time zone must exist in `reference.time_zones`; every `supported` list contains its `default`; markets use supported currencies and locales; asset ids must name an asset of the right kind (`logo`, `logo_dark`, `logo_square`, `favicon`, `og_image`); a legal link's `pageSlug` must name a page of `storefront_pages`; `policies.paymentTiming` other than `authorize_before_booking` is refused in the MVP. These answer `422 UNPROCESSABLE` with `details.reason` and `details.path` (the JSON pointer of the refused field). Turning `airlineCard.enabledLive` on (from a stored `false` to `true`) answers `403 FEATURE_DISABLED` (`details.feature = "airlineCard"`) while the global `AIRLINE_CARD_ENABLED` switch is off; a save that keeps a stored `true` or sends `false` passes, so an OTA whose live airline card was on when the switch went off can still save its other sections, and turn it off (lead decision (2e) of 2026-10-30, FIX-W35-OTA). `airlineCard.liveAvailable` is read-only: the answer carries the switch, and a value sent is ignored. The rules are checked for the sections sent, against the saved settings with those sections replaced (so a market is checked against the currencies and locales it will have), and the first refused field is answered. `details.reason` is one of `unknown_time_zone`, `asset_not_found`, `asset_kind`, `default_not_supported` (a `supported` list without its `default`), `unknown_currency` (not an active currency of `reference.currencies`), `currency_not_supported` (a currency with more than 2 minor units, such as KWD), `unknown_country`, `duplicate_market`, `market_not_listed` (`markets.default`), `market_currency_not_supported`, `market_locale_not_supported`, `page_not_found`, `payment_timing_not_supported`, `duplicate_consent_category` and `consent_category_required` (only `necessary` may be required).
+         *     **Validation.** Beyond the schema (a font outside the bundled list, or a `search.maxResults` that is not `null` or a whole number from 1 to 250, fails it: `400 VALIDATION_FAILED`, `path` the field's pointer into the body, such as `/search/maxResults`): currencies must be active currencies of `reference.currencies` with at most 2 minor units (the precision of stored amounts, as flights.search requires) and the time zone must exist in `reference.time_zones`; every `supported` list contains its `default`; markets use supported currencies and locales; asset ids must name an asset of the right kind (`logo`, `logo_dark`, `logo_square`, `favicon`, `og_image`); a legal link's `pageSlug` must name a page of `storefront_pages`; `policies.paymentTiming` other than `authorize_before_booking` is refused in the MVP. These answer `422 UNPROCESSABLE` with `details.reason` and `details.path` (the JSON pointer of the refused field). Turning `airlineCard.enabledLive` on (from a stored `false` to `true`) answers `403 FEATURE_DISABLED` (`details.feature = "airlineCard"`) while the global `AIRLINE_CARD_ENABLED` switch is off; a save that keeps a stored `true` or sends `false` passes, so an OTA whose live airline card was on when the switch went off can still save its other sections, and turn it off (lead decision (2e) of 2026-10-30, FIX-W35-OTA). `airlineCard.liveAvailable` is read-only: the answer carries the switch, and a value sent is ignored. The rules are checked for the sections sent, against the saved settings with those sections replaced (so a market is checked against the currencies and locales it will have), and the first refused field is answered. `details.reason` is one of `unknown_time_zone`, `asset_not_found`, `asset_kind`, `default_not_supported` (a `supported` list without its `default`), `unknown_currency` (not an active currency of `reference.currencies`), `currency_not_supported` (a currency with more than 2 minor units, such as KWD), `unknown_country`, `duplicate_market`, `market_not_listed` (`markets.default`), `market_currency_not_supported`, `market_locale_not_supported`, `page_not_found`, `payment_timing_not_supported`, `duplicate_consent_category` and `consent_category_required` (only `necessary` may be required).
          *
          *     **Warnings.** Turning the airline card on (in either environment) while active markup or fee rules that add an amount exist answers `200` with a `warnings` entry (`airline_card_net_price`, `path` the flag turned on): airline-card bookings are sold at the airline's price, without markup or fees (OADR-0004). A rule adds an amount when it is active, has not ended (`activeUntil`) and has a percentage, a fixed amount or a minimum other than zero, so the default rule at 0 % alone gives no warning.
          *
-         *     **Effect.** `version` + 1 and a new `ETag`; the storefront.get caches of both environments are deleted, so the hosted storefront shows the change within 5 minutes (its `sessionStorage` copy). `If-Match` required (`412 PRECONDITION_FAILED` when stale). No Amadeus call. Permission `settings:write`; `staff_actions` records the settings before and after (redacted).
+         *     **Effect.** `version` + 1 and a new `ETag`; the storefront.get caches of both environments are deleted, so the hosted storefront shows the change within 5 minutes (its `sessionStorage` copy). `search` is written into `storefront_settings.search_defaults` keeping the stored object's other keys (`maxResults: null` removes the key), and the storefront's next flights.search asks Amadeus for the offers it sets: searches read the row itself, which no cache holds. `If-Match` required (`412 PRECONDITION_FAILED` when stale). No Amadeus call. Permission `settings:write`; `staff_actions` records the settings before and after (redacted).
          *
          *     **Key-only calls.** Without a staff token the secret key must carry the `console:automation` scope and this operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED` (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
          */
@@ -7408,7 +7408,7 @@ export interface components {
             currencyCode?: string;
             /** @description Maximum price per traveller in whole units of the currency, no decimals (Amadeus `maxPrice`). Applied by Amadeus to the net fare; Velexis additionally drops offers whose selling price per traveller exceeds it. */
             maxPrice?: number;
-            /** @description Maximum number of offers Amadeus returns and Velexis stores (Amadeus `max`). In customer scope (the hosted storefront and API keys) the storefront limit caps it and is its default when it is omitted: 150, unless the storefront's search defaults set `maxResults` from 1 to 250. In console scope the bound is 250, also the default when it is omitted; the storefront limit does not apply. */
+            /** @description Maximum number of offers Amadeus returns and Velexis stores (Amadeus `max`). In customer scope (the hosted storefront and API keys) the storefront limit caps it and is its default when it is omitted: 150, unless the storefront's search defaults set `maxResults` from 1 to 250 (`StorefrontSettings.search.maxResults`, which console.settings.storefront.update sets). In console scope the bound is 250, also the default when it is omitted; the storefront limit does not apply. */
             max?: number;
             /** @description Options for the first page of offers embedded in the response (not sent to Amadeus). */
             resultOptions?: components["schemas"]["FlightSearchResultOptions"];
@@ -7473,7 +7473,7 @@ export interface components {
              */
             addOneWayOffers?: boolean;
             /**
-             * @description Maximum number of flight offers returned (max 250). In customer scope (the hosted storefront and API keys) NestJS caps it by the storefront limit, which is also its default when it is omitted: 150, unless the storefront's search defaults set `maxResults` from 1 to 250. In console scope the bound is 250, also the default when it is omitted; the storefront limit does not apply.
+             * @description Maximum number of flight offers returned (max 250). In customer scope (the hosted storefront and API keys) NestJS caps it by the storefront limit, which is also its default when it is omitted: 150, unless the storefront's search defaults set `maxResults` from 1 to 250 (`StorefrontSettings.search.maxResults`, which console.settings.storefront.update sets). In console scope the bound is 250, also the default when it is omitted; the storefront limit does not apply.
              * @example 250
              */
             maxFlightOffers?: number;
@@ -12938,7 +12938,12 @@ export interface components {
                 category: number;
             };
         };
-        /** @description The OTA's storefront settings as staff edit them (the single `storefront_settings` row, shared by the test and live environments; OADR-0012). storefront.get derives the public StorefrontConfig from them. */
+        /** @description How the storefront searches (`storefront_settings.search_defaults`). The stored object's other keys, which the console does not edit, are kept when this section is saved. */
+        StorefrontSettingsSearch: {
+            /** @description Offers per search: the most offers a customer-scope flights.search of the storefront (the hosted storefront and API keys) asks Amadeus for, and what it asks for when it names none (`max` of SIMPLE mode, `searchCriteria.maxFlightOffers` of ADVANCED mode), from 1 to 250 (the most a search stores). `null` uses the API's default of 150 offers per search. More offers make every search of the storefront slower for its visitors. Console-scope searches are bounded by 250 whatever this says. A stored value that is not a whole number from 1 to 250 is answered as `null`, as searches read it. The storefront's next search uses a saved value. */
+            maxResults: number | null;
+        };
+        /** @description The OTA's storefront settings as staff edit them (the single `storefront_settings` row, shared by the test and live environments; OADR-0012). storefront.get derives the public StorefrontConfig from them. `search` is always answered; it is not in `required` so that clients written before it was added still read the settings. */
         StorefrontSettings: {
             brand: components["schemas"]["StorefrontSettingsBrand"];
             branding: components["schemas"]["StorefrontSettingsBranding"];
@@ -12953,6 +12958,7 @@ export interface components {
             seo: components["schemas"]["StorefrontSettingsSeo"];
             consent: components["schemas"]["StorefrontSettingsConsent"];
             operations: components["schemas"]["StorefrontSettingsOperations"];
+            search?: components["schemas"]["StorefrontSettingsSearch"];
             /** @description Optimistic-locking counter; the `ETag` is `"<version>"`. */
             version: number;
             /**
@@ -12976,6 +12982,7 @@ export interface components {
             seo?: components["schemas"]["StorefrontSettingsSeo"];
             consent?: components["schemas"]["StorefrontSettingsConsent"];
             operations?: components["schemas"]["StorefrontSettingsOperations"];
+            search?: components["schemas"]["StorefrontSettingsSearch"];
         };
         /** @description Answer of console.settings.storefront.update: the saved settings and the warnings about them (empty when there are none). */
         StorefrontSettingsUpdateResult: components["schemas"]["StorefrontSettings"] & {

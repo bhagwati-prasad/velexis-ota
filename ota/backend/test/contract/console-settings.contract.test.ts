@@ -1066,6 +1066,11 @@ describe("storefront settings (api-changes part 2 §2.3; OADR-0012, OADR-0015)",
     "consent",
     "operations",
   ];
+  /**
+   * The sections added after §2.3's sketch, answered always but not in `StorefrontSettings`' `required` list, so that
+   * clients and typed fixtures written before them stay valid: `search` (the offers per search, OBE-098).
+   */
+  const LATER_SECTIONS = ["search"];
   const sectionSchema = (section: string): Json =>
     schemaOf(
       String(objectAt(schemaOf("StorefrontSettings"), "properties", section)["$ref"]).replace(
@@ -1077,7 +1082,12 @@ describe("storefront settings (api-changes part 2 §2.3; OADR-0012, OADR-0015)",
 
   it("defines StorefrontSettings with the sections of §2.3, and an update that replaces whole sections [OBE-058 AC1]", () => {
     const settings = schemaOf("StorefrontSettings");
-    expect(Object.keys(objectAt(settings, "properties"))).toEqual([...SECTIONS, "version", "updatedAt"]);
+    expect(Object.keys(objectAt(settings, "properties"))).toEqual([
+      ...SECTIONS,
+      ...LATER_SECTIONS,
+      "version",
+      "updatedAt",
+    ]);
     expect(settings["required"]).toEqual([...SECTIONS, "version", "updatedAt"]);
     const fields: Record<string, string[]> = {
       brand: ["name", "legalName", "timeZone"],
@@ -1115,13 +1125,14 @@ describe("storefront settings (api-changes part 2 §2.3; OADR-0012, OADR-0015)",
       seo: ["titleTemplate", "defaultTitle", "defaultDescription", "ogImageAssetId", "robots"],
       consent: ["regime", "bannerRequired", "policyVersion", "categories"],
       operations: ["opsAlertEmail", "bookingQueue"],
+      search: ["maxResults"],
     };
     // Read-only fields a section answers besides the ones it is saved with (lead decision (2d) of 2026-10-30, second
     // batch, FIX-W35-OTA): optional, so the PATCH body stays complete without them, and ignored when sent.
     const readOnly: Readonly<Record<string, readonly string[]>> = {
       airlineCard: ["liveAvailable"],
     };
-    for (const section of SECTIONS) {
+    for (const section of [...SECTIONS, ...LATER_SECTIONS]) {
       const schema = sectionSchema(section);
       expect([section, Object.keys(objectAt(schema, "properties"))]).toEqual([
         section,
@@ -1185,7 +1196,7 @@ describe("storefront settings (api-changes part 2 §2.3; OADR-0012, OADR-0015)",
       }),
     ]);
 
-    for (const name of ["branding", "airlineCard"]) {
+    for (const name of ["branding", "airlineCard", "search", "searchDefault"]) {
       expect([name, update(requestExample("consoleUpdateStorefrontSettings", name))]).toEqual([name, []]);
     }
     const settingsExample = componentExample("StorefrontSettingsExample");
@@ -1196,6 +1207,17 @@ describe("storefront settings (api-changes part 2 §2.3; OADR-0012, OADR-0015)",
     expect(update({ airlineCard: { enabledTest: true } })).toEqual(["/airlineCard/enabledLive required"]);
     expect(update({ policies: { ...objectAt(settingsExample, "policies"), offerTtlMinutes: 300 } })).toEqual([
       "/policies/offerTtlMinutes maximum",
+    ]);
+    // The offers per search (OBE-098): 1 to 250, or null for the API's default; anything else fails the schema.
+    for (const maxResults of [1, 40, 250, null]) {
+      expect([maxResults, update({ search: { maxResults } })]).toEqual([maxResults, []]);
+    }
+    expect(update({ search: { maxResults: 0 } })).toEqual(["/search/maxResults minimum"]);
+    expect(update({ search: { maxResults: 251 } })).toEqual(["/search/maxResults maximum"]);
+    expect(update({ search: { maxResults: 2.5 } })).toEqual(["/search/maxResults type"]);
+    expect(update({ search: {} })).toEqual(["/search/maxResults required"]);
+    expect(update({ search: { maxResults: 40, nonStop: true } })).toEqual([
+      "/search/nonStop additionalProperties",
     ]);
     expect(
       update({

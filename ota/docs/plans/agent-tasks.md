@@ -2803,8 +2803,8 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - The guide's browser samples run from another origin against the local stack without a stand-in.
 - **Verify:** `pnpm --filter @velexis/ota-backend test cors && pnpm --filter @velexis/ota-backend test:int cors`
 
-### OBE-098 · Let the console set a storefront's offers per search
-- **Status:** todo
+### OBE-098 · Let the console set a storefront's offers per search ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M6
 - **Depends on:** OBE-070, OBE-096

@@ -3,8 +3,10 @@
 // template (tenant_alpha and tenant_beta provisioned), writes the platform rows of two tenants on the Velexis test
 // Amadeus account as the platform does (tenants, their connections with an office each, API keys), seeds their
 // settings and default markup rule as provisioning does, gives alpha a 10 % markup rule, and calls the API in-process
-// with secret keys, a console:automation key and the hosted storefront's edge headers. The stub answers its five-offer
-// Madrid–Paris fixture (net 92.15, 98.47, 109.32, 131.86 and 558.94 EUR) for every search, and none for `ZZZ`.
+// with secret keys, a console:automation key and the hosted storefront's edge headers. Beta's offers per search are set
+// through console.settings.storefront.update with a console:automation key of beta's (OBE-098). The stub answers its
+// five-offer Madrid–Paris fixture (net 92.15, 98.47, 109.32, 131.86 and 558.94 EUR) for every search, and none for
+// `ZZZ`.
 //
 // Every answer is checked against the OTA document (`expectResponseToMatch`).
 import { randomBytes } from "node:crypto";
@@ -31,6 +33,7 @@ import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { newId } from "../../../src/common/ids";
 import { Money } from "../../../src/pricing/pricing.types";
+import { DEFAULT_OFFERS_PER_SEARCH } from "../../../src/shopping/offers.mapper";
 import { seedDefaultMarkupRule } from "../../../src/provisioning/seeds/markup-rules.seed";
 import { seedStorefrontSettings } from "../../../src/provisioning/seeds/storefront-settings.seed";
 import type { OtaPool } from "../../../src/tenancy/tenancy.module";
@@ -67,6 +70,8 @@ let accountId: string;
 let alphaSk: string;
 let alphaConsole: string;
 let betaSk: string;
+/** Beta's console:automation key that may read and write the storefront settings (OBE-098). */
+let betaSettings: string;
 
 /** Inserts the Velexis test Amadeus account with `secret` encrypted as the platform encrypts it. */
 async function insertAccount(clientId: string, secret: string): Promise<string> {
@@ -256,6 +261,7 @@ beforeAll(async () => {
   alphaSk = await issueKey(alphaId);
   alphaConsole = await issueKey(alphaId, ["console:automation", "queues:read"]);
   betaSk = await issueKey(betaId);
+  betaSettings = await issueKey(betaId, ["console:automation", "settings:read", "settings:write"]);
   await seedTenant("tenant_alpha", "Alpha Travel");
   await seedTenant("tenant_beta", "Beta Trips");
   await tenantTx(tenantDb, "tenant_alpha", async (trx) => {
@@ -506,6 +512,92 @@ describe("flights.search", () => {
     // POST body the API sent).
     expect(getFlightOffersCalls().map((entry) => entry.query["max"])).toEqual(["250", "120", "40"]);
     expect(stub.requests().filter((entry) => entry.operation === "searchFlightOffers")).toHaveLength(2);
+  });
+
+  it("[OBE-098 AC2] asks Amadeus for the offers per search the console sets, 250 and then 40, and for the default after the clear", async () => {
+    // Beta's offers per search through console.settings.storefront.update, by beta's console:automation key; beta's
+    // own searches (customer scope, a secret key) follow it. Afterwards `{}` again and none of these searches, as the
+    // OBE-096 test above leaves beta.
+    const settingsPath = "/v1/console/settings/storefront";
+    const setOffersPerSearch = async (maxResults: number | null): Promise<void> => {
+      const current = await request(api.server).get(settingsPath).set("X-Api-Key", betaSettings);
+      expect(current.status).toBe(200);
+      const res = await request(api.server)
+        .patch(settingsPath)
+        .set({ "X-Api-Key": betaSettings, "If-Match": current.headers["etag"] as string })
+        .send({ search: { maxResults } });
+      expect([res.status, res.body.search]).toEqual([200, { maxResults }]);
+    };
+    const advanced = (date: string) => ({
+      mode: "advanced",
+      query: {
+        originDestinations: [
+          {
+            id: "1",
+            originLocationCode: "MAD",
+            destinationLocationCode: "PAR",
+            departureDateTimeRange: { date },
+          },
+        ],
+        travelers: [{ id: "1", travelerType: "ADULT" }],
+        sources: ["GDS"],
+      },
+      resultOptions: { limit: 1 },
+    });
+    /**
+     * The offers beta's next SIMPLE and ADVANCED searches on `date` ask Amadeus for: `max` of the GET query the stub
+     * received, and `maxFlightOffers` of the POST body the API sent, as its supplier call recorded it (the stub records
+     * no bodies). Each round searches another day, so that no search joins an identical one of an earlier round for
+     * the 30 s of its single flight (OADR-0002 point 2).
+     */
+    const askedFor = async (date: string): Promise<[unknown, unknown]> => {
+      stub.clearRequests();
+      const simple = await search(betaSk, { ...SIMPLE, departureDate: date });
+      const post = await search(betaSk, advanced(date));
+      expect([simple.status, post.status]).toEqual([201, 201]);
+      const calls = getFlightOffersCalls();
+      expect(calls).toHaveLength(1);
+      const recorded = await tenantTx(tenantDb, "tenant_beta", (trx) =>
+        trx
+          .selectFrom("supplier_requests")
+          .select("request_body")
+          .where("search_id", "=", (post.body as { id: string }).id)
+          .where("amadeus_operation_id", "=", "searchFlightOffers")
+          .execute(),
+      );
+      expect(recorded).toHaveLength(1);
+      const body = recorded[0]?.request_body as { searchCriteria?: { maxFlightOffers?: unknown } };
+      return [calls[0]?.query["max"], body.searchCriteria?.maxFlightOffers];
+    };
+
+    try {
+      expect(await askedFor("2027-02-01")).toEqual([
+        String(DEFAULT_OFFERS_PER_SEARCH),
+        DEFAULT_OFFERS_PER_SEARCH,
+      ]);
+      await setOffersPerSearch(250);
+      expect(await askedFor("2027-02-02")).toEqual(["250", 250]);
+      await setOffersPerSearch(40);
+      expect(await askedFor("2027-02-03")).toEqual(["40", 40]);
+      await setOffersPerSearch(null);
+      expect(await askedFor("2027-02-04")).toEqual([
+        String(DEFAULT_OFFERS_PER_SEARCH),
+        DEFAULT_OFFERS_PER_SEARCH,
+      ]);
+      // The clear removed the key: the column is what provisioning wrote.
+      const stored = await tenantTx(tenantDb, "tenant_beta", (trx) =>
+        trx.selectFrom("storefront_settings").select("search_defaults").executeTakeFirstOrThrow(),
+      );
+      expect(stored.search_defaults).toEqual({});
+    } finally {
+      await tenantTx(tenantDb, "tenant_beta", async (trx) => {
+        await trx
+          .updateTable("storefront_settings")
+          .set({ search_defaults: JSON.stringify({}) })
+          .execute();
+        await trx.deleteFrom("flight_searches").execute();
+      });
+    }
   });
 
   it("answers 201 with zero offers for the destination ZZZ [OBE-021 AC2]", async () => {

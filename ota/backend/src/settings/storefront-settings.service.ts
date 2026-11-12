@@ -16,7 +16,8 @@
 //      any time (storefront.get offers the method only while the switch is on, whatever is stored).
 //   3. The sections sent replace their saved values, and the rules below are checked (`422 UNPROCESSABLE`,
 //      `details.reason` and `details.path`, the first refused field in the document's order). The schema already
-//      refused fonts outside the bundled list, colours that are not `#RRGGBB`, TTLs out of range and unknown enum values
+//      refused fonts outside the bundled list, colours that are not `#RRGGBB`, TTLs out of range, a `search.maxResults`
+//      that is not null or a whole number from 1 to 250 (`path` `/search/maxResults`, OBE-098) and unknown enum values
 //      (`400 VALIDATION_FAILED`).
 //   4. The warnings: turning the airline card on (either flag from false to true) while an active markup or fee rule
 //      adds an amount gives `airline_card_net_price` (OADR-0004 point 4: airline-card bookings are sold at the
@@ -31,6 +32,8 @@
 //      5 minutes, as the hosted storefront's own `sessionStorage` copy does. The content pages' caches of the same
 //      locales and environments, `t:<tenantId>:<env>:pages:<locale>` (OBE-072, storefront/public-pages.service.ts
 //      `pageCacheKeys`), go in the same deletion: which page a locale serves follows the default and supported locales.
+//      `search` (`search_defaults`, OBE-098) has no cache to delete: flights.search reads the row on every search
+//      (shopping/searches.repository.ts `settings`), so the storefront's next search asks Amadeus for the saved number.
 //
 // The rules of step 3 (`details.reason` in brackets), each checked when a section it reads is sent, on the settings
 // with the sent sections replaced:
@@ -53,6 +56,7 @@
 //   seo          `ogImageAssetId` names an asset of kind og_image [asset_not_found, asset_kind]
 //   consent      each category once [duplicate_consent_category]; only `necessary` may be required
 //                [consent_category_required]
+//   search       none beyond the schema: 1 to 250 offers per search, or null for the API's default (OBE-098)
 //
 // get answers the row (missing → `403 TENANT_SUSPENDED`). Both answer `ETag: "<version>"` and `Cache-Control:
 // private, no-store` (the controller), and `airlineCard.liveAvailable`, the switch itself (read-only: not stored, not

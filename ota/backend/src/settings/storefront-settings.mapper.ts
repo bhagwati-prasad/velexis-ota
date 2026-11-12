@@ -20,6 +20,11 @@
 //   seo          seo {titleTemplate, defaultTitle, defaultDescription, robots: {index, follow}}, og_image_asset_id
 //   consent      consent {regime, bannerRequired, policyVersion, categories}
 //   operations   ops_alert_email, booking_queue_number, booking_queue_category
+//   search       search_defaults {maxResults} (OBE-098): the storefront limit of flights.search, read as
+//                shopping/offers.mapper.ts `parseSearchDefaults` reads it (anything but a whole number from 1 to 250
+//                is null, the API's default); writing it keeps the object's other keys (`nonStop`, `cabin`,
+//                `sources`), and null removes `maxResults`. Searches read the column itself, never a cache, so the
+//                storefront's next search uses a saved value.
 //
 // The jsonb shapes are those storefront.get reads (storefront.repository.ts header), so a saved change is what the next
 // uncached storefront.get answers. Writing a jsonb section keeps the keys of the stored object that the document does
@@ -41,6 +46,7 @@ import {
   DEFAULT_FONT,
   NEUTRAL_COLORS,
 } from "../storefront/storefront.mapper";
+import { MAX_OFFERS_PER_SEARCH } from "../shopping/offers.mapper";
 import type {
   StorefrontSettingsChanges,
   StorefrontSettingsEditRow,
@@ -59,6 +65,7 @@ type LegalLinkKind = Schemas["StorefrontLegalLinkKind"];
 type Consent = Schemas["StorefrontSettingsConsent"];
 type ConsentCategory = Schemas["StorefrontSettingsConsentCategory"];
 type PaymentBrand = Schemas["AmadeusPaymentBrand"];
+type Search = Schemas["StorefrontSettingsSearch"];
 
 /** A top-level section of the settings, which an update replaces as a whole. */
 export type SettingsSection = keyof StorefrontSettingsUpdate;
@@ -78,6 +85,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = Object.freeze([
   "seo",
   "consent",
   "operations",
+  "search",
 ]);
 
 /** `Cache-Control` of both answers: the OTA's own configuration, for one staff member. */
@@ -375,6 +383,21 @@ function consentOf(row: StorefrontSettingsEditRow): Consent {
   };
 }
 
+/**
+ * `search_defaults` as the `search` section: `maxResults` when it is a whole number from 1 to MAX_OFFERS_PER_SEARCH,
+ * as `parseSearchDefaults` keeps it, otherwise null (the search then asks for DEFAULT_OFFERS_PER_SEARCH).
+ */
+function searchOf(row: StorefrontSettingsEditRow): Search {
+  const defaults = isRecord(row.searchDefaults) ? row.searchDefaults : {};
+  const max = defaults["maxResults"];
+  return {
+    maxResults:
+      typeof max === "number" && Number.isInteger(max) && max >= 1 && max <= MAX_OFFERS_PER_SEARCH
+        ? max
+        : null,
+  };
+}
+
 /** The settings row as the console edits it (see the file header). */
 export function toStorefrontSettings(row: StorefrontSettingsEditRow): StorefrontSettings {
   const queue = row.bookingQueueNumber;
@@ -406,6 +429,7 @@ export function toStorefrontSettings(row: StorefrontSettingsEditRow): Storefront
         category: row.bookingQueueCategory,
       },
     },
+    search: searchOf(row),
     version: row.version,
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -475,7 +499,7 @@ export function toSettingsChanges(
     Object.assign(changes, part);
   };
   const { brand, branding, locales, currencies, markets, features, policies } = update;
-  const { airlineCard, legal, support, seo, consent, operations } = update;
+  const { airlineCard, legal, support, seo, consent, operations, search } = update;
   if (brand !== undefined) {
     set({ brand_name: brand.name, legal_name: brand.legalName, time_zone: brand.timeZone });
   }
@@ -620,6 +644,14 @@ export function toSettingsChanges(
       ops_alert_email: operations.opsAlertEmail,
       booking_queue_number: operations.bookingQueue.number,
       booking_queue_category: operations.bookingQueue.category,
+    });
+  }
+  if (search !== undefined) {
+    set({
+      search_defaults: json({
+        ...kept(current.searchDefaults, ["maxResults"]),
+        ...(search.maxResults === null ? {} : { maxResults: search.maxResults }),
+      }),
     });
   }
   return changes;

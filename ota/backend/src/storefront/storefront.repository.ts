@@ -13,7 +13,9 @@
 // a row type of their own (`StorefrontSettingsEditRow`) that only the settings mapper reads, write it with
 // `updateSettings`, and check what an update refers to: active currencies (with their minor units), time zones and
 // countries of `reference`, assets by id, content-page slugs, and whether markup or fee rules that add an amount are
-// active (the airline-card warning). `search_defaults`, `logo_url` and `favicon_url` are never read by either.
+// active (the airline-card warning). The operational columns include `search_defaults` since OBE-098 (the console's
+// `search.maxResults`; flights.search reads the column itself, shopping/searches.repository.ts). `logo_url` and
+// `favicon_url` are never read by either.
 //
 // The jsonb columns are written by console.settings.storefront.update (OBE-070) in these shapes, which the mapper
 // reads defensively (anything else falls back to the defaults of storefront.mapper.ts):
@@ -27,6 +29,8 @@
 //   seo              {titleTemplate, defaultTitle, defaultDescription, robots: {index, follow}}
 //   consent          {regime, bannerRequired, policyVersion, categories: [{id, required, defaultEnabled, title,
 //                     description}]}
+//   search_defaults  {maxResults, nonStop?, cabin?, sources?}   (the console writes `maxResults` only, OBE-098; the
+//                     other keys are kept, and shopping/offers.mapper.ts `parseSearchDefaults` reads them all)
 //
 // The five `*_asset_id` columns reference `storefront_assets` (RESTRICT); the response carries URLs built from the
 // asset id and its file extension (OADR-0012 point 3), so `assetsByIds` reads those two columns and the kind.
@@ -190,6 +194,7 @@ const EDIT_COLUMNS = [
   "booking_queue_number as bookingQueueNumber",
   "booking_queue_category as bookingQueueCategory",
   "ops_alert_email as opsAlertEmail",
+  "search_defaults as searchDefaults",
 ] as const;
 
 /**
@@ -204,22 +209,18 @@ export interface StorefrontSettingsEditRow extends StorefrontSettingsRow {
   readonly bookingQueueNumber: number | null;
   readonly bookingQueueCategory: number;
   readonly opsAlertEmail: string | null;
+  /** jsonb, read defensively by the settings mapper (`search.maxResults`, OBE-098); see the file header. */
+  readonly searchDefaults: unknown;
 }
 
 /**
  * The columns an update of the console may write (jsonb as JSON text, conventions §1): never the id, the version, the
- * timestamps, the generated `auto_issue`, `search_defaults` or the legacy `logo_url` and `favicon_url`.
+ * timestamps, the generated `auto_issue` or the legacy `logo_url` and `favicon_url`. `search_defaults` is written
+ * since OBE-098 (the `search` section, keeping the keys the console does not edit).
  */
 export type StorefrontSettingsChanges = Omit<
   Updateable<TenantDatabase["storefront_settings"]>,
-  | "id"
-  | "version"
-  | "created_at"
-  | "updated_at"
-  | "auto_issue"
-  | "search_defaults"
-  | "logo_url"
-  | "favicon_url"
+  "id" | "version" | "created_at" | "updated_at" | "auto_issue" | "logo_url" | "favicon_url"
 >;
 
 @Injectable()
