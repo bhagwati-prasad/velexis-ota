@@ -431,8 +431,11 @@ json() { # dotted path -> the JSON text of that value in the response body ('' i
 }
 uuid_id() { grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' <<<"$(json error.requestId)"; }
 handshake_ok() { fetch "$1" / && [ "$CURL_RC" -eq 0 ]; }
+# Up to 100 s per host: Caddy cleans its new, empty storage while it obtains the first certificates, and the cleaning
+# can delete a site's folder that is still empty before the key is saved there ("saving assets: open .../<host>.key: no
+# such file or directory", seen in CI run 43314299874). Caddy then obtains that certificate again 60 s later.
 for host in "$PLATFORM" "admin.$PLATFORM" "api.$PLATFORM" "admin.$STOREFRONT" "api.$STOREFRONT"; do
-  retry 60 handshake_ok "$host" || die "no TLS for $host after 30 s (curl: $(cat "$TMP/curl.err"))"
+  retry 200 handshake_ok "$host" || die "no TLS for $host after 100 s (curl: $(cat "$TMP/curl.err"))"
 done
 pass "Caddy serves the five named hosts with certificates of its local CA"
 
