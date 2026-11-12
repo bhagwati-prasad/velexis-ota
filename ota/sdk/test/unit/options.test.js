@@ -1,7 +1,8 @@
 // Client and request options (ota/sdk/README.md §5.1, docs/velexis-sdk/sdk/src/shared.d.ts, task SDK-003):
 // createVelexisClient validates its options with the contract's defaults and throws a TypeError before any request,
-// naming the option but never its value; withOptions makes a new client that shares nothing mutable; the per-call
-// options are validated the same way.
+// naming the option but never its value; withOptions makes a new client whose options are its own and that shares
+// nothing mutable in token and server mode (in cookie mode it shares the refresh state of the session cookies,
+// session-cookie.test.js, task SDK-016); the per-call options are validated the same way.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { VERSION, createVelexisClient } from "../../src/index.js";
@@ -290,6 +291,57 @@ describe("withOptions", () => {
     );
     expect(() => client.withOptions({ publishableKey: undefined, secretKey: SK })).not.toThrow();
   });
+
+  it.each([
+    ["token", { publishableKey: PK }],
+    ["server", { secretKey: SK }],
+  ])(
+    "keeps a refresh state per client in %s mode: derived clients with their own tokens refresh on their own [SDK-016]",
+    async (_mode, key) => {
+      // Two visitors' clients derived from one server client (OADR-0018, the build-your-own-frontend guide §8.2):
+      // each refreshes its own session, at the same time, and neither waits for nor reuses the other's refresh.
+      /** @type {string[]} */
+      const presented = [];
+      /** @type {import("../helpers/fake-fetch.js").Answer} */
+      const api = (request) => {
+        if (request.path === "/v1/auth/refresh") {
+          const { refreshToken } = /** @type {{ refreshToken: string }} */ (request.json);
+          presented.push(refreshToken);
+          const user = refreshToken.replace(/^rt_sdk016_(\w)_old$/, "$1");
+          return {
+            body: {
+              session: { accessToken: `at_sdk016_${user}_new`, refreshToken: `rt_sdk016_${user}_new` },
+              customer: { id: `cus_${user}` },
+            },
+          };
+        }
+        const user = /^Bearer at_sdk016_(\w)_new$/.exec(request.headers["authorization"] ?? "")?.[1];
+        return user === undefined ? errorResponse(401, "TOKEN_EXPIRED") : { body: { user } };
+      };
+      const fake = createFakeFetch(Array.from({ length: 6 }, () => api));
+      const shared = createVelexisClient({ ...key, fetch: fake.fetch, maxRetries: 0 });
+      const refreshedA = vi.fn();
+      const refreshedB = vi.fn();
+      const visitorA = shared.withOptions({
+        accessToken: "at_sdk016_a_old",
+        refreshToken: "rt_sdk016_a_old",
+        onSessionRefreshed: refreshedA,
+      });
+      const visitorB = shared.withOptions({
+        accessToken: "at_sdk016_b_old",
+        refreshToken: "rt_sdk016_b_old",
+        onSessionRefreshed: refreshedB,
+      });
+
+      const results = await Promise.all([visitorA.account.get(), visitorB.account.get()]);
+
+      expect(results).toEqual([{ user: "a" }, { user: "b" }]);
+      expect(presented.sort()).toEqual(["rt_sdk016_a_old", "rt_sdk016_b_old"]);
+      expect(refreshedA).toHaveBeenCalledWith(expect.objectContaining({ refreshToken: "rt_sdk016_a_new" }));
+      expect(refreshedB).toHaveBeenCalledWith(expect.objectContaining({ refreshToken: "rt_sdk016_b_new" }));
+      expect(fake.requests).toHaveLength(6);
+    },
+  );
 });
 
 describe("request options", () => {

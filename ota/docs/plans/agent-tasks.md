@@ -2988,8 +2988,8 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - The 1.0.0 release exists with provenance (human step recorded in the PR).
 - **Verify:** `pnpm --filter @velexis/ota-sdk build && cd ota/sdk && npm pack --dry-run`
 
-### SDK-016 · Share one refresh between the clients derived from one cookie-mode client
-- **Status:** todo
+### SDK-016 · Share one refresh between the clients derived from one cookie-mode client ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-sdk
 - **Milestone:** M6
 - **Depends on:** SDK-004

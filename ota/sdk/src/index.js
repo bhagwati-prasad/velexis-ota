@@ -44,7 +44,10 @@ export { VERSION } from "./version.js";
  *   with a staff token; server-side only): all bookings, PNR lookup and import, order management, issuance, queues,
  *   customers, the Amadeus call log, raw Amadeus access, the OTA's settings and its payments
  * @property {(overrides: Partial<VelexisClientOptions>) => VelexisClient} withOptions a new client with some options
- *   replaced (for example a per-request access token on the server); it shares nothing mutable with this one
+ *   replaced (for example a per-request access token on the server); its options, tokens and hooks are its own. In
+ *   cookie mode it shares one thing with this client, the refresh state of the session cookies both send (the refresh
+ *   in flight, the count of finished refreshes and the CSRF re-fetch in flight), so the clients derived from one
+ *   cookie-mode client send one refresh at a time; in token and server mode it shares nothing mutable with this one
  * @property {<T = unknown>(method: HttpMethod, path: string, init?: { query?: Record<string, string | number | boolean | string[] | undefined>, body?: unknown, options?: RequestOptions }) => Promise<T>} request
  *   low-level escape hatch for endpoints that are not wrapped yet; applies keys, tokens, retries and error mapping
  */
@@ -56,7 +59,16 @@ export { VERSION } from "./version.js";
  * @throws {TypeError} when an option is unknown or invalid, before any request
  */
 export function createVelexisClient(options) {
-  const core = createCore(options);
+  return clientOf(createCore(options));
+}
+
+/**
+ * The client of a request core. `withOptions` builds the new client's core from this one's options with the overrides
+ * applied and, in cookie mode, joins it to this core's refresh state (internal/client.js `sharedState`, SDK-016).
+ * @param {import("./internal/client.js").Core} core
+ * @returns {VelexisClient}
+ */
+function clientOf(core) {
   return {
     storefront: createStorefrontApi(core),
     auth: createAuthApi(core),
@@ -66,7 +78,7 @@ export function createVelexisClient(options) {
     checkout: createCheckoutApi(core),
     bookings: createBookingsApi(core),
     console: createConsoleApi(core),
-    withOptions: (overrides) => createVelexisClient(core.derive(overrides)),
+    withOptions: (overrides) => clientOf(createCore(core.derive(overrides), core.sharedState)),
     request: (method, path, init) => core.request(method, path, init),
   };
 }

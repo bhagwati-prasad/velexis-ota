@@ -13,7 +13,9 @@
 // the options its mode does not allow, at construction and per call, decides the credentials of every request and
 // handles CSRF and the automatic refresh; internal/http.js sends the requests. `environment` adds
 // `X-Velexis-Environment` to console operations (the route table's `environment` flag; `/v1/console/…` paths for
-// `request`).
+// `request`). `withOptions` (src/index.js) builds the derived client's core from `derive(overrides)` and this core's
+// `sharedState`: in cookie mode the derived client's session joins this one's refresh state (SDK-016), so the clients
+// derived from one cookie-mode client send one refresh at a time; token and server mode give it a state of its own.
 
 import { isPageBody, Page } from "./pagination.js";
 import { createSession } from "./session.js";
@@ -56,6 +58,9 @@ const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
  * @property {(overrides: unknown) => VelexisClientOptions} derive the options of `withOptions(overrides)`: these
  *   options with the overrides applied (validated when the new client is created); a cookie-mode client cannot be
  *   switched to another mode
+ * @property {import("./session.js").RefreshState | undefined} sharedState cookie mode: the refresh state the core of
+ *   a client derived with `withOptions` joins (`createCore`'s second argument, SDK-016); `undefined` in token and
+ *   server mode
  * @property {<T = unknown>(operation: Operation, params?: object, options?: RequestOptions) => Promise<T>} call
  *   one SDK method: params split by the route-table entry; list operations resolve with a `Page`
  * @property {<T = unknown>(method: HttpMethod, path: string, init?: RawRequestInit) => Promise<T>} request
@@ -444,25 +449,31 @@ function formOf(entries) {
 
 /**
  * Builds the request core of a client.
- * @param {unknown} options the options of `createVelexisClient`
+ * @param {unknown} options the options of `createVelexisClient`, or `derive(overrides)` of the parent for `withOptions`
+ * @param {import("./session.js").RefreshState} [sharedState] for `withOptions`: the parent core's `sharedState`, which
+ *   the new session joins in cookie mode
  * @returns {Core}
  * @throws {TypeError} on an invalid option
  */
-export function createCore(options) {
+export function createCore(options, sharedState) {
   const validated = validateClientOptions(options);
   const defaultBaseUrl = validated.session === "cookie" ? COOKIE_BASE_URL : DEFAULT_BASE_URL;
-  const session = createSession(validated, {
-    baseUrl: (validated.baseUrl ?? defaultBaseUrl).replace(/\/+$/, ""),
-    timeoutMs: validated.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    maxRetries: validated.maxRetries ?? DEFAULT_MAX_RETRIES,
-    fetch: validated.fetch,
-    locale: validated.locale,
-    currency: validated.currency,
-    host: validated.host,
-    endUser: validated.endUser,
-    headers: Object.freeze({ ...validated.headers }),
-    onResponse: validated.onResponse,
-  });
+  const session = createSession(
+    validated,
+    {
+      baseUrl: (validated.baseUrl ?? defaultBaseUrl).replace(/\/+$/, ""),
+      timeoutMs: validated.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      maxRetries: validated.maxRetries ?? DEFAULT_MAX_RETRIES,
+      fetch: validated.fetch,
+      locale: validated.locale,
+      currency: validated.currency,
+      host: validated.host,
+      endUser: validated.endUser,
+      headers: Object.freeze({ ...validated.headers }),
+      onResponse: validated.onResponse,
+    },
+    sharedState,
+  );
 
   /**
    * One SDK method: the params split by the operation's route-table entry.
@@ -606,6 +617,7 @@ export function createCore(options) {
     },
     mode: session.mode,
     derive,
+    sharedState: session.sharedState,
     call,
     request,
     adoptSession: (result, presentedRefreshToken, requestOptions) =>

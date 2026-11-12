@@ -9,7 +9,13 @@
 //   (`POST`, `PUT`, `PATCH`, `DELETE`) copy the `__Host-vx_csrf` cookie into `X-CSRF-Token`; without the cookie the
 //   session first calls `GET /v1/storefront` (which issues it; with `cache: "no-store"`, since a cached copy sets no
 //   cookie), and after `403 CSRF_TOKEN_INVALID` it calls it once more and sends the call once more. `401 TOKEN_EXPIRED` → one `POST /v1/auth/refresh` with an empty body (the
-//   refresh token is the `__Host-vx_rt` cookie), then the call once more.
+//   refresh token is the `__Host-vx_rt` cookie), then the call once more. The clients derived from one cookie-mode
+//   client with `withOptions` share its refresh state (`RefreshState`: the refresh in flight, the number of finished
+//   refreshes and the CSRF re-fetch in flight, SDK-016): they all send the same cookies, and a refresh cookie the API
+//   has rotated is refused as reused, which revokes the session's family (OADR-0006), so one family of clients sends
+//   one refresh at a time. Everything else (`maxRetries`, `timeoutMs`, `currency`, headers, hooks) stays each
+//   client's own: the refresh and the CSRF fetch go out with the options of the client whose call started them, and
+//   a refused refresh calls that client's `onSessionExpired`, once, and rejects every call waiting for it.
 // - Token mode (a publishable key, or no key): `X-Api-Key`, `Authorization: Bearer` and `X-Booking-Token` from the
 //   options (token sources are called before every request); `fetch` runs with `credentials: "omit"`.
 // - Server mode (a secret or hosting key): the same headers; `fetch` keeps its default `credentials` (a server has no
@@ -17,8 +23,10 @@
 //   `environment` sends `X-Velexis-Environment` on console operations (in any mode; internal/client.js adds it).
 //
 // Automatic refresh (token and server mode with `refreshToken`, always in cookie mode): a call refused with `401
-// TOKEN_EXPIRED` waits for one refresh and is sent once more. Concurrent calls share one refresh (single flight); a call
-// whose attempt went out before a refresh that has finished since is sent again without another one. Token and server
+// TOKEN_EXPIRED` waits for one refresh and is sent once more. Concurrent calls share one refresh (single flight: those
+// of one client, and in cookie mode those of every client derived from it); a call whose attempt went out before a
+// refresh that has finished since is sent again without another one. Token and server mode keep a refresh state per
+// client, derived ones included (their tokens are their own, often another user's). Token and server
 // mode refresh through `auth.refresh`, or `console.auth.refresh` with `sessionKind: "staff"`, report the new tokens to
 // `onSessionRefreshed` (and the whole staff session to `onStaffSessionRefreshed`), and keep them: from then on the
 // session sends the new tokens wherever a token source still gives a rotated one (a string source always does), so a
@@ -75,9 +83,23 @@ import { op } from "./operations.js";
  */
 
 /**
+ * The refresh state of a session: what its calls share so that they send one refresh at a time (single flight). Each
+ * session has its own, except in cookie mode, where a client derived with `withOptions` joins its parent's (see the
+ * file header, SDK-016).
+ * @typedef {object} RefreshState
+ * @property {number} generation the number of refreshes that have finished (and, in token and server mode, of
+ *   session results adopted)
+ * @property {Promise<boolean> | undefined} refreshing the refresh in flight
+ * @property {Promise<void> | undefined} fetchingCsrf the `GET /v1/storefront` in flight that issues the CSRF cookie
+ */
+
+/**
  * The session of a client.
  * @typedef {object} Session
  * @property {SessionMode} mode the mode chosen from the options
+ * @property {RefreshState | undefined} sharedState cookie mode: the refresh state that a client derived from this one
+ *   with `withOptions` joins (`createSession`'s third argument); `undefined` in token and server mode, whose derived
+ *   clients start their own
  * @property {() => Readonly<VelexisClientOptions>} options the client's options, with string tokens the session has
  *   rotated replaced by the current ones (what `withOptions` starts from)
  * @property {(options: Readonly<RequestOptions>) => void} checkCall throws a `TypeError` on a per-call option the mode
@@ -364,20 +386,21 @@ function tokensOf(result) {
  * Creates the session of a client from its validated options.
  * @param {Readonly<VelexisClientOptions>} options
  * @param {TransportConfig} transport
+ * @param {RefreshState} [sharedState] the parent's `sharedState` for a client derived with `withOptions`: joined in
+ *   cookie mode, ignored in token and server mode
  * @returns {Session}
  * @throws {TypeError} when the options do not fit their mode (see `sessionModeOf`)
  */
-export function createSession(options, transport) {
+export function createSession(options, transport, sharedState) {
   const mode = sessionModeOf(options);
   const fetchInit = FETCH_INIT[mode];
   const key = options.secretKey ?? options.publishableKey ?? options.hostingKey;
   const refreshOperation = options.sessionKind === "staff" ? op.console_auth_refresh : op.auth_refresh;
-  /** The number of refreshes that have finished. */
-  let generation = 0;
-  /** @type {Promise<boolean> | undefined} the refresh in flight */
-  let refreshing;
-  /** @type {Promise<void> | undefined} the `GET /v1/storefront` in flight that issues the CSRF cookie */
-  let fetchingCsrf;
+  /** @type {RefreshState} */
+  const state =
+    mode === "cookie" && sharedState !== undefined
+      ? sharedState
+      : { generation: 0, refreshing: undefined, fetchingCsrf: undefined };
   /** @type {{ accessToken: string, refreshToken: string } | undefined} the tokens of the latest refresh */
   let latest;
   /**
@@ -441,7 +464,7 @@ export function createSession(options, transport) {
         headers["X-CSRF-Token"] = csrf;
       }
       if (attempt !== null) {
-        attempt.generation = generation;
+        attempt.generation = state.generation;
       }
       return headers;
     }
@@ -453,7 +476,7 @@ export function createSession(options, transport) {
     }
     const accessToken =
       requestOptions.accessToken ?? current("accessToken", await tokenOf(options.accessToken, "accessToken"));
-    attempt.generation = generation;
+    attempt.generation = state.generation;
     attempt.accessToken = accessToken;
     if (accessToken !== undefined) {
       headers["Authorization"] = `Bearer ${accessToken}`;
@@ -529,31 +552,34 @@ export function createSession(options, transport) {
   }
 
   /**
-   * Gets the CSRF cookie with `GET /v1/storefront`; concurrent calls share one request. The request bypasses the
-   * browser's HTTP cache (`cache: "no-store"`): storefront.get is cacheable (`Cache-Control: public, max-age=60`), and
-   * a copy from the cache carries no `Set-Cookie`, so only the API can issue the cookie.
+   * Gets the CSRF cookie with `GET /v1/storefront`; concurrent calls share one request (in cookie mode those of every
+   * client sharing the refresh state too). The request bypasses the browser's HTTP cache (`cache: "no-store"`):
+   * storefront.get is cacheable (`Cache-Control: public, max-age=60`), and a copy from the cache carries no
+   * `Set-Cookie`, so only the API can issue the cookie.
    * @param {HttpRequest} request the call that needs the cookie
    * @returns {Promise<void>}
    */
   function fetchCsrf(request) {
-    if (fetchingCsrf === undefined) {
+    if (state.fetchingCsrf === undefined) {
       /** @type {Readonly<RequestOptions>} */
       const requestOptions = Object.freeze({ ...forwardedOptionsOf(request.options), cache: "no-store" });
       const started = sendOwn(op.storefront_get, {}, requestOptions).then(() => {});
-      fetchingCsrf = started;
+      state.fetchingCsrf = started;
       const done = () => {
-        if (fetchingCsrf === started) {
-          fetchingCsrf = undefined;
+        if (state.fetchingCsrf === started) {
+          state.fetchingCsrf = undefined;
         }
       };
       started.then(done, done);
     }
-    return untilSettled(fetchingCsrf, request);
+    return untilSettled(state.fetchingCsrf, request);
   }
 
   /**
    * One refresh of the session. Resolves `true` once the session has new tokens, `false` when there is no refresh
-   * token to present; throws the API's error, after calling `onSessionExpired` when it is a 401.
+   * token to present; throws the API's error, after calling `onSessionExpired` when it is a 401. In cookie mode the
+   * refresh is the one of every client sharing the refresh state: it goes out with this client's options and calls
+   * this client's hook.
    * @param {HttpRequest} request the call that started the refresh
    * @param {Attempt} attempt what that call sent
    * @returns {Promise<boolean>}
@@ -564,7 +590,7 @@ export function createSession(options, transport) {
       if (mode === "cookie") {
         // The refresh token is the __Host-vx_rt cookie; a token in the body is refused (OADR-0006 point 5).
         await sendOwn(op.auth_refresh, {}, requestOptions);
-        generation += 1;
+        state.generation += 1;
         return true;
       }
       const refreshToken = current("refreshToken", await tokenOf(options.refreshToken, "refreshToken"));
@@ -574,7 +600,7 @@ export function createSession(options, transport) {
       const result = await sendOwn(refreshOperation, { refreshToken }, requestOptions);
       const tokens = tokensOf(result);
       rotate({ accessToken: [attempt.accessToken], refreshToken: [refreshToken] }, tokens);
-      generation += 1;
+      state.generation += 1;
       await callHook(options.onSessionRefreshed, tokens);
       if (refreshOperation === op.console_auth_refresh) {
         await callHook(
@@ -594,25 +620,26 @@ export function createSession(options, transport) {
   /**
    * The refresh after a call failed with `TOKEN_EXPIRED`: joins the refresh in flight, skips it when one has finished
    * since the call's attempt went out, or starts one. Resolves whether the call has a session to be sent again with.
+   * In cookie mode the refresh in flight and the finished ones are those of every client sharing the refresh state.
    * @param {HttpRequest} request
    * @param {Attempt} attempt
    * @returns {Promise<boolean>}
    */
   function refresh(request, attempt) {
-    if (refreshing === undefined) {
-      if (attempt.generation !== generation) {
+    if (state.refreshing === undefined) {
+      if (attempt.generation !== state.generation) {
         return Promise.resolve(true);
       }
       const started = runRefresh(request, attempt);
-      refreshing = started;
+      state.refreshing = started;
       const done = () => {
-        if (refreshing === started) {
-          refreshing = undefined;
+        if (state.refreshing === started) {
+          state.refreshing = undefined;
         }
       };
       started.then(done, done);
     }
-    return untilSettled(refreshing, request);
+    return untilSettled(state.refreshing, request);
   }
 
   /**
@@ -677,7 +704,7 @@ export function createSession(options, transport) {
       const accessToken = await held("accessToken");
       const refreshToken = await held("refreshToken");
       rotate({ accessToken: [accessToken], refreshToken: [refreshToken, presentedRefreshToken] }, tokens);
-      generation += 1;
+      state.generation += 1;
     }
     await callHook(options.onSessionRefreshed, tokens);
   }
@@ -695,6 +722,7 @@ export function createSession(options, transport) {
 
   return {
     mode,
+    sharedState: mode === "cookie" ? state : undefined,
     options() {
       if (latest === undefined) {
         return options;
@@ -725,7 +753,7 @@ export function createSession(options, transport) {
     async send(request) {
       const call = withFixedIdempotencyKey(request);
       /** @type {Attempt} */
-      const attempt = { generation, accessToken: undefined };
+      const attempt = { generation: state.generation, accessToken: undefined };
       const config = configOf(call, attempt);
       try {
         return await sendWithCsrf(config, call);

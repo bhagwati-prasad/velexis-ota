@@ -5,13 +5,22 @@
 // when it is missing and once more after 403 CSRF_TOKEN_INVALID; 401 TOKEN_EXPIRED refreshes through POST
 // /v1/auth/refresh with an empty body, once for concurrent calls. `document.cookie` is a jar the fake API writes to,
 // as the browser would apply its Set-Cookie (only the CSRF cookie is readable by scripts; the others are httpOnly).
+// The clients derived from one cookie-mode client with `withOptions` share its refresh state (task SDK-016): their
+// calls answered 401 TOKEN_EXPIRED together send one refresh, and their writes one CSRF fetch, while every other
+// option stays each client's own.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createVelexisClient } from "../../src/index.js";
 import { COOKIE_BASE_URL, createCore } from "../../src/internal/client.js";
 import { op } from "../../src/internal/operations.js";
 import { CSRF_COOKIE, readCsrfCookie } from "../../src/internal/session.js";
-import { AuthenticationError, ConnectionError, PermissionError, ServerError } from "../../src/shared.js";
+import {
+  AuthenticationError,
+  ConnectionError,
+  PermissionError,
+  RateLimitError,
+  ServerError,
+} from "../../src/shared.js";
 import { createFakeFetch, errorResponse } from "../helpers/fake-fetch.js";
 
 /** Fake values with the right shapes; none of them works anywhere. */
@@ -62,6 +71,61 @@ const storefrontIssuing = (/** @type {string} */ value) => () => {
   globalThis.document.cookie = `${CSRF_COOKIE}=${value}; Path=/; Secure; SameSite=Lax`;
   return { body: { id: "sf_1" } };
 };
+
+/**
+ * A fake API for calls in flight together (SDK-016): the first `count` calls that are not a refresh are answered with
+ * `refusal` together, once every one of them has been sent, as the API answers calls that went out at once when the
+ * access cookie has expired; `POST /v1/auth/refresh` is answered with `refreshAnswer` the first time and with `401
+ * REFRESH_TOKEN_REUSED` after that, as the API answers a refresh cookie presented twice (OADR-0006); every later call
+ * is answered by `later` (by default with its path and `X-Currency`). Queue `api.answer` once per expected request.
+ * @param {number} count
+ * @param {{ refusal?: import("../helpers/fake-fetch.js").CannedResponse, refreshAnswer?: import("../helpers/fake-fetch.js").CannedResponse, later?: (request: import("../helpers/fake-fetch.js").RecordedRequest) => import("../helpers/fake-fetch.js").CannedResponse | Promise<import("../helpers/fake-fetch.js").CannedResponse> }} [behaviour]
+ */
+function apiForCallsInFlight(count, behaviour = {}) {
+  const {
+    refusal = errorResponse(401, "TOKEN_EXPIRED"),
+    refreshAnswer = { body: { customer: { id: "cus_1" } } },
+    later = (request) => ({ body: { path: request.path, currency: request.headers["x-currency"] ?? null } }),
+  } = behaviour;
+  let sent = 0;
+  /** @type {() => void} */
+  let release = () => {};
+  const allSent = new Promise((resolve) => {
+    release = () => resolve(undefined);
+  });
+  const api = {
+    /** The refreshes the API received. */
+    refreshes: 0,
+    /** @type {import("../helpers/fake-fetch.js").Answer} */
+    answer: async (request) => {
+      if (request.path === "/api/v1/auth/refresh") {
+        api.refreshes += 1;
+        return api.refreshes === 1 ? refreshAnswer : errorResponse(401, "REFRESH_TOKEN_REUSED");
+      }
+      if (sent < count) {
+        sent += 1;
+        if (sent === count) {
+          release();
+        }
+        await allSent;
+        return refusal;
+      }
+      return later(request);
+    },
+  };
+  return api;
+}
+
+/**
+ * How many requests went to each path, by method and path.
+ * @param {import("../helpers/fake-fetch.js").FakeFetch} fake
+ */
+const countsByPath = (fake) =>
+  fake.requests.reduce((counts, request) => {
+    const key = `${request.method} ${request.path}`;
+    counts[key] = (counts[key] ?? 0) + 1;
+    return counts;
+  }, /** @type {Record<string, number>} */ ({}));
 
 /**
  * The TypeError a call or a construction throws, checked to never contain the refused value.
@@ -528,6 +592,244 @@ describe("cookie mode: refresh", () => {
       "/api/v1/auth/refresh",
       "/api/v1/account",
     ]);
+  });
+});
+
+describe("cookie mode: the clients derived with withOptions share the refresh state", () => {
+  it("sends one refresh for two derived clients' calls answered 401 TOKEN_EXPIRED together, then each call once more [SDK-016 AC1]", async () => {
+    useCookies({ [CSRF_COOKIE]: CSRF });
+    const api = apiForCallsInFlight(2);
+    const { fake, client } = setup(
+      Array.from({ length: 5 }, () => api.answer),
+      { maxRetries: 2 },
+    );
+    // The storefront's two derived clients: the currency client (boot.js `clientFor`) and the fare-rules client
+    // without the SDK's retries (booking.js `rulesClientOf`).
+    const currencyClient = client.withOptions({ currency: "EUR" });
+    const rulesClient = client.withOptions({ maxRetries: 0 });
+
+    const results = await Promise.all([
+      currencyClient.bookings.get({ bookingId: "bkg_1" }),
+      rulesClient.bookings.getFareRules({ bookingId: "bkg_1" }),
+    ]);
+
+    expect(results).toEqual([
+      { path: "/api/v1/bookings/bkg_1", currency: "EUR" },
+      { path: "/api/v1/bookings/bkg_1/fare-rules", currency: null },
+    ]);
+    expect(api.refreshes).toBe(1);
+    expect(countsByPath(fake)).toEqual({
+      "GET /api/v1/bookings/bkg_1": 2,
+      "GET /api/v1/bookings/bkg_1/fare-rules": 2,
+      "POST /api/v1/auth/refresh": 1,
+    });
+    expect(fake.remaining).toBe(0);
+  });
+
+  it("sends one refresh for a client's, its derived client's and that one's derived client's calls answered together [SDK-016 AC1]", async () => {
+    useCookies({ [CSRF_COOKIE]: CSRF });
+    const api = apiForCallsInFlight(4);
+    const { fake, client } = setup(
+      Array.from({ length: 9 }, () => api.answer),
+      { maxRetries: 2 },
+    );
+    // As the booking page derives its fare-rules client from the page's currency client.
+    const pageClient = client.withOptions({ currency: "EUR" });
+    const rulesClient = pageClient.withOptions({ maxRetries: 0 });
+
+    const results = await Promise.all([
+      client.account.get(),
+      pageClient.bookings.get({ bookingId: "bkg_1" }),
+      pageClient.request("GET", "/v1/bookings/bkg_1/events"),
+      rulesClient.bookings.getFareRules({ bookingId: "bkg_1" }),
+    ]);
+
+    expect(results).toEqual([
+      { path: "/api/v1/account", currency: null },
+      { path: "/api/v1/bookings/bkg_1", currency: "EUR" },
+      { path: "/api/v1/bookings/bkg_1/events", currency: "EUR" },
+      { path: "/api/v1/bookings/bkg_1/fare-rules", currency: "EUR" },
+    ]);
+    expect(api.refreshes).toBe(1);
+    expect(fake.requests.filter((request) => request.path === "/api/v1/auth/refresh")).toHaveLength(1);
+    expect(fake.requests).toHaveLength(9);
+    expect(fake.remaining).toBe(0);
+  });
+
+  it("sends a derived client's call again without another refresh when its parent's refresh finished after the call went out [SDK-016 AC1]", async () => {
+    useCookies({ [CSRF_COOKIE]: CSRF });
+    let refreshes = 0;
+    /** @type {Map<string, number>} */
+    const answered = new Map();
+    /** @type {import("../helpers/fake-fetch.js").Answer} */
+    const api = (request) => {
+      if (request.path === "/api/v1/auth/refresh") {
+        refreshes += 1;
+        return { body: { customer: { id: "cus_1" } } };
+      }
+      const times = (answered.get(request.path) ?? 0) + 1;
+      answered.set(request.path, times);
+      if (times > 1) {
+        return { body: { path: request.path } };
+      }
+      // The derived client's first attempt is answered late: the parent's refresh has finished by then.
+      return request.path === "/api/v1/bookings/bkg_1/fare-rules"
+        ? { ...errorResponse(401, "TOKEN_EXPIRED"), delayMs: 50 }
+        : errorResponse(401, "TOKEN_EXPIRED");
+    };
+    const { fake, client } = setup(Array.from({ length: 5 }, () => api));
+    const rulesClient = client.withOptions({ maxRetries: 0 });
+    vi.useFakeTimers();
+
+    const slow = rulesClient.bookings.getFareRules({ bookingId: "bkg_1" });
+    const quick = client.account.get();
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(quick).resolves.toEqual({ path: "/api/v1/account" });
+    await vi.advanceTimersByTimeAsync(50);
+
+    await expect(slow).resolves.toEqual({ path: "/api/v1/bookings/bkg_1/fare-rules" });
+    expect(refreshes).toBe(1);
+    expect(fake.requests.map((request) => request.path)).toEqual([
+      "/api/v1/bookings/bkg_1/fare-rules",
+      "/api/v1/account",
+      "/api/v1/auth/refresh",
+      "/api/v1/account",
+      "/api/v1/bookings/bkg_1/fare-rules",
+    ]);
+  });
+
+  it("rejects every waiting call with the AuthenticationError of a refresh refused REFRESH_TOKEN_REUSED and calls onSessionExpired once, the starting client's [SDK-016 AC1]", async () => {
+    useCookies({ [CSRF_COOKIE]: CSRF });
+    const api = apiForCallsInFlight(3, { refreshAnswer: errorResponse(401, "REFRESH_TOKEN_REUSED") });
+    const parentExpired = vi.fn();
+    const ownExpired = vi.fn();
+    const { fake, client } = setup(
+      Array.from({ length: 4 }, () => api.answer),
+      {
+        onSessionExpired: parentExpired,
+        headers: { "X-Client": "parent" },
+      },
+    );
+    // One derived client keeps the parent's hook and headers; the other sets its own.
+    const inheriting = client.withOptions({ currency: "EUR" });
+    const own = client.withOptions({ onSessionExpired: ownExpired, headers: { "X-Client": "own" } });
+
+    const errors = await Promise.all([
+      client.account.get().catch((caught) => caught),
+      inheriting.bookings.get({ bookingId: "bkg_1" }).catch((caught) => caught),
+      own.bookings.getFareRules({ bookingId: "bkg_1" }).catch((caught) => caught),
+    ]);
+
+    expect(errors[0]).toBeInstanceOf(AuthenticationError);
+    expect(errors[0].code).toBe("REFRESH_TOKEN_REUSED");
+    expect(errors[1]).toBe(errors[0]);
+    expect(errors[2]).toBe(errors[0]);
+    expect(api.refreshes).toBe(1);
+    expect(fake.requests).toHaveLength(4);
+    // The refresh went out with the options of the client whose call started it, and calls that client's hook only.
+    const refresh = fake.requests.find((request) => request.path === "/api/v1/auth/refresh");
+    const [starterHook, otherHook] =
+      refresh?.headers["x-client"] === "own" ? [ownExpired, parentExpired] : [parentExpired, ownExpired];
+    expect(starterHook).toHaveBeenCalledTimes(1);
+    expect(otherHook).not.toHaveBeenCalled();
+  });
+
+  it("keeps a derived client's maxRetries: 0 to its own calls: after the shared refresh only the parent's call is retried on 429 [SDK-016 AC1]", async () => {
+    useCookies({ [CSRF_COOKIE]: CSRF });
+    /** @type {Map<string, number>} */
+    const answered = new Map();
+    const api = apiForCallsInFlight(2, {
+      later: (request) => {
+        const times = (answered.get(request.path) ?? 0) + 1;
+        answered.set(request.path, times);
+        return times === 1
+          ? errorResponse(429, "RATE_LIMITED", { headers: { "retry-after": "0" } })
+          : { body: { path: request.path } };
+      },
+    });
+    const { fake, client } = setup(
+      Array.from({ length: 6 }, () => api.answer),
+      { maxRetries: 2 },
+    );
+    const rulesClient = client.withOptions({ maxRetries: 0 });
+
+    const [parentResult, rulesError] = await Promise.all([
+      client.account.get(),
+      rulesClient.bookings.getFareRules({ bookingId: "bkg_1" }).catch((caught) => caught),
+    ]);
+
+    expect(parentResult).toEqual({ path: "/api/v1/account" });
+    expect(rulesError).toBeInstanceOf(RateLimitError);
+    expect(rulesError.code).toBe("RATE_LIMITED");
+    expect(api.refreshes).toBe(1);
+    expect(countsByPath(fake)).toEqual({
+      "GET /api/v1/account": 3,
+      "GET /api/v1/bookings/bkg_1/fare-rules": 2,
+      "POST /api/v1/auth/refresh": 1,
+    });
+  });
+
+  it("sends one GET /v1/storefront for the writes of a client and its derived clients without the CSRF cookie [SDK-016 AC1]", async () => {
+    useCookies();
+    const { fake, client } = setup([
+      storefrontIssuing(CSRF),
+      { status: 201, body: { id: "srch_1" } },
+      { status: 201, body: { id: "srch_2" } },
+      { status: 201, body: { id: "srch_3" } },
+    ]);
+    const clients = [client, client.withOptions({ currency: "EUR" }), client.withOptions({ maxRetries: 0 })];
+
+    await Promise.all(
+      clients.map((each) =>
+        each.request("POST", "/v1/flight-searches", { body: { originLocationCode: "MAD" } }),
+      ),
+    );
+
+    expect(fake.requests.map((request) => `${request.method} ${request.path}`)).toEqual([
+      "GET /api/v1/storefront",
+      "POST /api/v1/flight-searches",
+      "POST /api/v1/flight-searches",
+      "POST /api/v1/flight-searches",
+    ]);
+    expect(fake.requests.slice(1).map((request) => request.headers["x-csrf-token"])).toEqual([
+      CSRF,
+      CSRF,
+      CSRF,
+    ]);
+  });
+
+  it("re-fetches the CSRF cookie once for derived clients' writes refused 403 CSRF_TOKEN_INVALID together, then sends each once more [SDK-016 AC1]", async () => {
+    useCookies({ [CSRF_COOKIE]: CSRF });
+    const api = apiForCallsInFlight(2, {
+      refusal: errorResponse(403, "CSRF_TOKEN_INVALID"),
+      later: async (request) => {
+        if (request.path === "/api/v1/storefront") {
+          // The cookie arrives 50 ms later, so a second fetch would start while this one is in flight.
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          globalThis.document.cookie = `${CSRF_COOKIE}=${CSRF_NEW}; Path=/; Secure; SameSite=Lax`;
+          return { body: { id: "sf_1" } };
+        }
+        return { status: 201, body: { csrf: request.headers["x-csrf-token"] } };
+      },
+    });
+    const { fake, client } = setup(Array.from({ length: 5 }, () => api.answer));
+    const derived = client.withOptions({ currency: "EUR" });
+    vi.useFakeTimers();
+
+    const writes = Promise.all([
+      client.request("POST", "/v1/flight-searches", { body: {} }),
+      derived.request("PUT", "/v1/anything", { body: {} }),
+    ]);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(countsByPath(fake)["GET /api/v1/storefront"]).toBe(1);
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(await writes).toEqual([{ csrf: CSRF_NEW }, { csrf: CSRF_NEW }]);
+    expect(countsByPath(fake)).toEqual({
+      "POST /api/v1/flight-searches": 2,
+      "PUT /api/v1/anything": 2,
+      "GET /api/v1/storefront": 1,
+    });
   });
 });
 
