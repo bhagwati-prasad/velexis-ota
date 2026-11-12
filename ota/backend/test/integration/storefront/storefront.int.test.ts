@@ -386,7 +386,8 @@ describe("the response cache", () => {
     expect(french.body.currencies[0]).toMatchObject({ code: "EUR", name: "euro" });
     expect(german.body.currencies[0]).toMatchObject({ code: "EUR", name: "Euro" });
     expect(english.body).toEqual(german.body);
-    expect(french.headers["vary"]).toBe("Accept-Language, X-Api-Key");
+    // Origin first: every answer but the edge's varies by it (lead decision (17e) of 2026-11-11, FIX-W49-OTA).
+    expect(french.headers["vary"]).toBe("Origin, Accept-Language, X-Api-Key");
     expect(await cacheKeys(alphaId)).toEqual([`t:${alphaId}:test:sf:fr-FR`, `t:${alphaId}:test:sf:und`]);
     expect(settingsReads).toHaveBeenCalledTimes(1);
   });

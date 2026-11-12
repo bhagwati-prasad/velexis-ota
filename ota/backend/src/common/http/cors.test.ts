@@ -1,10 +1,11 @@
-// CORS of the OTA API (OBE-097, cors.ts) in the API's own pipeline, in process with dummy services: probe controllers
-// stand for operations, and the platform repository is spied on, so a key row or a tenant is whatever a test sets (an
-// edge request or a preflight never reaches it). The lists of allowed and exposed headers are checked against the OTA
+// CORS of the OTA API (OBE-097, cors.ts; Vary: Origin on every answer but the edge's, lead decision (17e) of
+// 2026-11-11, FIX-W49-OTA) in the API's own pipeline, in process with dummy services: probe controllers stand for
+// operations, and the platform repository is spied on, so a key row or a tenant is whatever a test sets (an edge
+// request or a preflight never reaches it). The lists of allowed and exposed headers are checked against the OTA
 // document and the SDK's source. The same answers against PostgreSQL and Redis: test/integration/m6/cors.int.test.ts.
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { Body, Controller, Get, Header, Patch } from "@nestjs/common";
+import { Body, Controller, Get, Header, Patch, Post } from "@nestjs/common";
 import { hashApiKey } from "@velexis/crypto";
 import request, { type Response } from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -24,8 +25,10 @@ import {
   CORS_ALLOWED_METHODS,
   CORS_EXPOSED_HEADERS,
   CORS_MAX_AGE_SECONDS,
+  isEdgeRequest,
   isSerializedOrigin,
   preflightOrigin,
+  varyByOrigin,
 } from "./cors";
 import { loadOpenApiDocument } from "./openapi-validation.interceptor";
 import { OpenApiOperation } from "./openapi-operation.decorator";
@@ -74,6 +77,13 @@ class CorsProbe {
   @Get("public")
   @PublicRoute()
   public(): { ok: true } {
+    return { ok: true };
+  }
+
+  /** A route whose body the parsers read: a body they refuse is answered before the caller guard. */
+  @Post("body")
+  @PublicRoute()
+  body(@Body() _body: unknown): { ok: true } {
     return { ok: true };
   }
 }
@@ -173,8 +183,14 @@ function expectOpenedTo(res: Response, origin: string): void {
   expect(varyOf(res)).toContain("origin");
 }
 
-/** An answer without any CORS header. */
+/** An answer of the API that is not opened to any page: no CORS header, but it still varies by Origin (17e). */
 function expectClosed(res: Response): void {
+  expect(corsOf(res)).toEqual({});
+  expect(varyOf(res)).toContain("origin");
+}
+
+/** An answer of the hosted storefront's edge: no CORS header and, as before OBE-097, not varying by Origin. */
+function expectEdgeAnswer(res: Response): void {
   expect(corsOf(res)).toEqual({});
   expect(varyOf(res)).not.toContain("origin");
 }
@@ -254,6 +270,11 @@ describe("preflights", () => {
     for (const res of answers) {
       // As before OBE-097: the router has no OPTIONS route, so the error envelope's 404.
       expect([res.status, codeOf(res)]).toEqual([404, "NOT_FOUND"]);
+    }
+    const edge = answers.pop();
+    expect(edge).toBeDefined();
+    expectEdgeAnswer(edge as Response);
+    for (const res of answers) {
       expectClosed(res);
     }
   });
@@ -279,7 +300,7 @@ describe("actual answers", () => {
     }
   });
 
-  it("[OBE-097 AC1] keeps Origin in Vary when a handler sets Vary anew, and adds nothing to an answer it does not open", async () => {
+  it("[OBE-097 AC1] [FIX-W49-OTA AC1] keeps Origin in Vary when a handler sets Vary anew, on an answer it opens and on one it does not", async () => {
     platform(PUBLISHABLE_KEY);
 
     const opened = await request(api.server)
@@ -293,7 +314,7 @@ describe("actual answers", () => {
     expectOpenedTo(opened, SHOP);
     expect(varyOf(opened)).toEqual(["accept-language", "origin"]);
     expectClosed(serverCall);
-    expect(varyOf(serverCall)).toEqual(["accept-language"]);
+    expect(varyOf(serverCall)).toEqual(["accept-language", "origin"]);
   });
 
   it("[OBE-097 AC1] gives none to an origin the key does not list (403 ORIGIN_NOT_ALLOWED kept), a refused key, or a publishable key without Origin", async () => {
@@ -330,8 +351,92 @@ describe("actual answers", () => {
 
     expect([secret.status, edge.status, anonymous.status]).toEqual([200, 200, 200]);
     expect([noCredential.status, codeOf(noCredential)]).toEqual([401, "INVALID_API_KEY"]);
-    for (const res of [secret, edge, anonymous, noCredential]) {
+    for (const res of [secret, anonymous, noCredential]) {
       expectClosed(res);
+    }
+    expectEdgeAnswer(edge);
+  });
+});
+
+describe("Vary: Origin", () => {
+  it("[FIX-W49-OTA AC1] varies every answer but the edge's by Origin, with or without an Origin, whatever the key", async () => {
+    // Each caller, from a server (no Origin) and from a page, on a route that needs a key, a public route and a path
+    // that is no operation: the status each answers, by caller.
+    const callers = [
+      { label: "secret key", key: SECRET_KEY, statuses: [200, 200, 404] },
+      { label: "anonymous", key: undefined, statuses: [401, 200, 404] },
+      { label: "unknown key", key: newApiKey("pk"), statuses: [401, 401, 404] },
+    ] as const;
+
+    const answers: Array<readonly [string, number, Response]> = [];
+    for (const { label, key, statuses } of callers) {
+      // The unknown key is not in platform.api_keys.
+      platform(label === "secret key" ? SECRET_KEY : undefined);
+      for (const origin of [undefined, SHOP]) {
+        const sent = {
+          ...(key === undefined ? {} : { "X-Api-Key": key }),
+          ...(origin === undefined ? {} : { Origin: origin }),
+        };
+        const paths = ["/__cors/key", "/__cors/public", "/v1/no-such-path"] as const;
+        for (const [index, path] of paths.entries()) {
+          const res = await request(api.server).get(path).set(sent);
+          answers.push([`${label} ${origin ?? "without Origin"} ${path}`, statuses[index] ?? 0, res]);
+        }
+      }
+    }
+
+    expect(answers).toHaveLength(18);
+    for (const [label, status, res] of answers) {
+      expect([label, res.status, corsOf(res), varyOf(res)]).toEqual([label, status, {}, ["origin"]]);
+    }
+  });
+
+  it("[FIX-W49-OTA AC1] varies by Origin the answers given before any guard, a body the parsers refuse, or before any middleware, a path Express cannot decode", async () => {
+    platform();
+    const malformed = await request(api.server)
+      .post("/__cors/body")
+      .set({ Origin: SHOP, "Content-Type": "application/json" })
+      .send("{not json");
+    const tooLarge = await request(api.server)
+      .post("/__cors/body")
+      .set({ Origin: SHOP, "Content-Type": "application/json" })
+      .send(JSON.stringify({ text: "x".repeat(300 * 1024) }));
+    // The router fails before any middleware ran, the CORS middleware included: the error filter adds `Origin`.
+    const undecodable = await request(api.server).get("/v1/%E0%A4%A").set({ Origin: SHOP });
+    const undecodableNoOrigin = await request(api.server).get("/__cors/%E0%A4%A");
+    const edgeUndecodable = await request(api.server)
+      .get("/v1/%E0%A4%A")
+      .set({ ...edgeHeaders(), Origin: "https://demo.ota.example.com" });
+
+    expect([malformed.status, codeOf(malformed)]).toEqual([400, "INVALID_REQUEST"]);
+    expect([tooLarge.status, codeOf(tooLarge)]).toEqual([400, "INVALID_REQUEST"]);
+    for (const res of [undecodable, undecodableNoOrigin, edgeUndecodable]) {
+      expect([res.status, codeOf(res)]).toEqual([400, "INVALID_REQUEST"]);
+    }
+    for (const res of [malformed, tooLarge, undecodable, undecodableNoOrigin]) {
+      expect([corsOf(res), varyOf(res)]).toEqual([{}, ["origin"]]);
+    }
+    expectEdgeAnswer(edgeUndecodable);
+    expect(edgeUndecodable.headers["vary"]).toBeUndefined();
+  });
+
+  it("[FIX-W49-OTA AC1] leaves the storefront edge's answers as they were, an Origin and a handler's own Vary included", async () => {
+    platform();
+
+    const plain = await request(api.server)
+      .get("/__cors/key")
+      .set({ ...edgeHeaders(), Origin: "https://demo.ota.example.com" });
+    const cacheable = await request(api.server)
+      .get("/__cors/cacheable")
+      .set({ ...edgeHeaders(), Origin: "https://demo.ota.example.com" });
+    const noOperation = await request(api.server).get("/v1/no-such-path").set(edgeHeaders());
+
+    expect([plain.status, cacheable.status, noOperation.status]).toEqual([200, 200, 404]);
+    expect(plain.headers["vary"]).toBeUndefined();
+    expect(cacheable.headers["vary"]).toBe("Accept-Language");
+    expect(noOperation.headers["vary"]).toBeUndefined();
+    for (const res of [plain, cacheable, noOperation]) {
+      expectEdgeAnswer(res);
     }
   });
 });
@@ -411,6 +516,32 @@ describe("the CORS decisions", () => {
     // Once more as the headers are written, whatever set Vary in between.
     (res as unknown as { writeHead: (status: number) => void }).writeHead(200);
     expect(varied).toEqual(["Origin", "Origin"]);
+  });
+
+  it("[FIX-W49-OTA AC1] adds Origin to Vary now and once as the headers are written, however often it is asked", () => {
+    const varied: string[] = [];
+    const written: unknown[][] = [];
+    const res = {
+      setHeader: () => undefined,
+      vary: (field: string) => varied.push(field),
+      writeHead: (...args: unknown[]) => written.push(args),
+    } as unknown as Parameters<typeof varyByOrigin>[0];
+
+    // The middleware, then the caller guard for an opened answer.
+    varyByOrigin(res);
+    varyByOrigin(res);
+    expect(varied).toEqual(["Origin", "Origin"]);
+    (res as unknown as { writeHead: (status: number, message: string) => void }).writeHead(204, "No Content");
+
+    expect(varied).toEqual(["Origin", "Origin", "Origin"]);
+    expect(written).toEqual([[204, "No Content"]]);
+  });
+
+  it("[FIX-W49-OTA AC1] takes a request with the edge credential, whatever its value, for the storefront edge's", () => {
+    expect(isEdgeRequest({ "x-velexis-edge": "anything" })).toBe(true);
+    expect(isEdgeRequest({ "x-velexis-edge": "" })).toBe(true);
+    expect(isEdgeRequest({ origin: SHOP, "x-api-key": PUBLISHABLE_KEY })).toBe(false);
+    expect(isEdgeRequest({})).toBe(false);
   });
 });
 

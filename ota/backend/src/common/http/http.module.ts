@@ -1,14 +1,15 @@
 // The HTTP pipeline of the API (architecture §3, steps 1–3, 6 and 13), around the request context that app.module.ts
 // mounts (pino-http, then nestjs-cls):
 //
-//   helmet → CORS preflights → cookie-parser → body parsers → guards → OpenAPI validation → idempotency → handler
-//   → error filter
+//   helmet → CORS (Vary: Origin, preflights) → cookie-parser → body parsers → guards → OpenAPI validation
+//   → idempotency → handler → error filter
 //
 // - helmet: the security headers of a JSON API, aligned with Caddy's `security_headers` so the answer is the same
 //   with or without the proxy; Caddy replaces them on the public hosts anyway.
-// - CORS preflights (cors.ts, OBE-097): an `OPTIONS` preflight of a browser on another origin answers `204` here, with
-//   helmet's headers and the request id, before any body or guard; the caller guard opens the actual answers of a
-//   publishable key to the origins it lists.
+// - CORS (cors.ts `corsMiddleware`, OBE-097 and lead decision (17e) of 2026-11-11): every answer but the hosted
+//   storefront edge's varies by `Origin`, whatever answers it later; an `OPTIONS` preflight of a browser on another
+//   origin answers `204` here, with helmet's headers and the request id, before any body or guard; the caller guard
+//   opens the actual answers of a publishable key to the origins it lists.
 // - cookie-parser: `req.cookies`, unsigned (the storefront session cookies are opaque, OADR-0006).
 // - body parsers (body-parsers.ts): raw on `/webhooks/*`, multipart on the routes of main.ts (the asset upload), JSON
 //   with 256 KB elsewhere, the per-route limits of main.ts.
@@ -34,7 +35,7 @@ import cookieParser from "cookie-parser";
 import helmet, { type HelmetOptions } from "helmet";
 import { TenancyModule } from "../../tenancy/tenancy.module";
 import { BodyParsersMiddleware, HTTP_PIPELINE_OPTIONS, type HttpPipelineOptions } from "./body-parsers";
-import { corsPreflight } from "./cors";
+import { corsMiddleware } from "./cors";
 import { ErrorFilter } from "./error.filter";
 import { IdempotencyInterceptor } from "./idempotency.interceptor";
 import { IdempotencyRepository } from "./idempotency.repository";
@@ -94,7 +95,7 @@ export class HttpModule implements NestModule {
 
   configure(consumer: MiddlewareConsumer): void {
     consumer
-      .apply(helmet(HELMET_OPTIONS), corsPreflight, cookieParser(), BodyParsersMiddleware)
+      .apply(helmet(HELMET_OPTIONS), corsMiddleware, cookieParser(), BodyParsersMiddleware)
       .forRoutes(ALL_ROUTES);
   }
 }

@@ -92,7 +92,7 @@ Every request passes the same chain. The order matters: tenant and caller are kn
 |---|---|---|
 | 1 | Request context (`nestjs-cls`) | Reads or creates `X-Request-Id`, starts the per-request context |
 | 2 | Body parsing | Raw body on `/webhooks/*`; JSON limit 256 KB elsewhere (10 KB on the airline-card route); multipart only on asset upload |
-| 3 | `helmet`, CORS preflights, `cookie-parser`, `trust proxy loopback` | Security headers; a browser's CORS preflight (`OPTIONS` with `Origin` and `Access-Control-Request-Method`, any path, not through the edge) answers `204` here (`common/http/cors.ts`, OBE-097); cookies, client IP from Caddy |
+| 3 | `helmet`, CORS (`Vary: Origin`, preflights), `cookie-parser`, `trust proxy loopback` | Security headers; every answer but the edge's varies by `Origin`, whatever answers it (FIX-W49-OTA, lead decision (17e) of 2026-11-11), and a browser's CORS preflight (`OPTIONS` with `Origin` and `Access-Control-Request-Method`, any path, not through the edge) answers `204` here (`common/http/cors.ts`, OBE-097); cookies, client IP from Caddy |
 | 4 | `CallerGuard` (tenancy) | Classifies the caller (table below), verifies the credential in constant time; opens the answer to the request's `Origin` (CORS headers) for a publishable key that lists it (OBE-097) |
 | 5 | `TenantGuard` (tenancy) | Loads the tenant from Redis or the platform tables; only `active` is served (`403 TENANT_SUSPENDED`), except the worker paths of [PADR-0014](../../platform/docs/adr/0014-tenant-suspension-and-resume.md) |
 | 6 | OpenAPI validation interceptor | Ajv on path, query, headers, body; `400 VALIDATION_FAILED` with field paths, never values |

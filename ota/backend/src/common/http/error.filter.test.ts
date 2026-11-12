@@ -272,11 +272,13 @@ describe("ErrorFilter without a request context", () => {
   const context = { requestId: () => undefined, isConsoleScope: () => false } as unknown as RequestContext;
   const logger = { setContext: vi.fn(), error: vi.fn(), warn: vi.fn() } as unknown as PinoLogger;
 
-  it("takes the request id of pino-http from the request", () => {
+  it("takes the request id of pino-http from the request, and varies the answer by Origin (FIX-W49-OTA)", () => {
     const res = {
       headersSent: false,
       getHeader: vi.fn(),
       setHeader: vi.fn(),
+      vary: vi.fn(),
+      writeHead: vi.fn(),
       status: vi.fn(),
       json: vi.fn(),
     };
@@ -292,6 +294,7 @@ describe("ErrorFilter without a request context", () => {
       error: expect.objectContaining({ code: "NOT_FOUND", requestId: "req-from-pino" }),
     });
     expect(res.setHeader).toHaveBeenCalledWith("X-Request-Id", "req-from-pino");
+    expect(res.vary).toHaveBeenCalledWith("Origin");
   });
 
   it("cuts the connection when the response has already started", () => {

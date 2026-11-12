@@ -9,6 +9,8 @@
 // - Anything else is `500 INTERNAL_ERROR` with the generic message and the `requestId`; the error and its stack go to
 //   the log, never to the client.
 // - A `429 RATE_LIMITED` with `details.retryAfterSeconds` (the Amadeus buckets, OBE-018) is sent with `Retry-After`.
+// - Every error but the storefront edge's varies by `Origin` (cors.ts `varyByOrigin`, lead decision (17e) of
+//   2026-11-11), also one raised before the CORS middleware ran (a path Express cannot decode).
 //
 // The filter is global (`APP_FILTER` in http.module.ts), so it also answers errors of middleware (body parsing) and
 // of Express' router.
@@ -16,6 +18,7 @@ import { Catch, HttpException, type ArgumentsHost, type ExceptionFilter } from "
 import { AppError, isAppError, toErrorEnvelope, type OtaErrorCode } from "@velexis/errors";
 import type { Request, Response } from "express";
 import { PinoLogger } from "nestjs-pino";
+import { isEdgeRequest, varyByOrigin } from "./cors";
 import { RequestContext, requestIdOf } from "./request-context";
 
 /**
@@ -78,6 +81,11 @@ export class ErrorFilter implements ExceptionFilter {
     // pino-http sets X-Request-Id; an error raised before it ran (a path Express cannot decode) gets it here.
     if (res.getHeader("X-Request-Id") === undefined) {
       res.setHeader("X-Request-Id", requestId);
+    }
+    // Likewise `Vary: Origin` (17e), which the CORS middleware has set on every other answer but the edge's; it is
+    // added once only.
+    if (!isEdgeRequest(req.headers)) {
+      varyByOrigin(res);
     }
     // A `429` raised below the guards (the Amadeus token buckets, OBE-018) carries its wait in
     // `details.retryAfterSeconds`; the rate-limit guard sets `Retry-After` itself before it throws.

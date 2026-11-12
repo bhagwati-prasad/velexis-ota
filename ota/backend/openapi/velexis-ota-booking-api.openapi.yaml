@@ -37,8 +37,12 @@ info:
     too. Secret keys, requests without an `Origin`, the refusals of the key itself (`401 INVALID_API_KEY`,
     `403 ORIGIN_NOT_ALLOWED` for an origin the key does not list, the `503` of a lookup that fails), answers given
     before the key is checked (a body that cannot be parsed or is too large, a path that is no operation) and
-    the hosted storefront's edge get none; the edge's preflights are not answered. The API never sends
-    `Access-Control-Allow-Credentials`: cookies never travel cross-origin, and the SDK calls with `credentials: "omit"`.
+    the hosted storefront's edge get none; the edge's preflights are not answered. Every answer but the edge's carries
+    `Vary: Origin`, whatever the key and whether or not the request has an `Origin`: the answers that get no CORS
+    header too, and a cacheable answer whose own `Vary` names other headers (`Accept-Language`, `X-Api-Key`) as well,
+    so that no cache between a page and the API reuses an answer given to one origin, or to a server without one, for
+    another. The edge's answers do not vary by `Origin`. The API never sends `Access-Control-Allow-Credentials`:
+    cookies never travel cross-origin, and the SDK calls with `credentials: "omit"`.
 
 
     **Users.** Customers authenticate with `/v1/auth/*` (bearer access token + rotating refresh token). Staff (portal
@@ -18722,6 +18726,20 @@ paths:
         operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
         (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
         key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+
+
+        **Long bodies through `api.ota.example.com`.** The edge's web application firewall answers `413` without a body,
+        before the API sees the request, when the request's arguments (the body's JSON fields, names and values
+        together, and the query) exceed 128 KiB, which it does not inspect (rule 200008 of
+        `deploy/caddy/waf/coraza.conf`, blocking on that host unless `VELEXIS_WAF_ENGINE` sets it to detect only;
+        `docs/mvp/deployment-single-vm.md` §6). A page this schema accepts can exceed that limit: `bodyMarkdown` takes
+        50,000 characters (StorefrontPageMarkdown), and a character outside ASCII takes two to four bytes, so a body of
+        more than about 43,000 characters in a script of three-byte characters (Chinese, Japanese, Korean, Thai,
+        Devanagari, ...), or of about 33,000 four-byte ones (emoji), reaches it. A call by API key through that host (a
+        `console:automation` key, or a secret key with a staff token) then gets the `413` and nothing is saved. The OTA
+        admin is not affected (`deploy/caddy/Caddyfile`): its staff's browsers reach `admin.ota.example.com`, whose
+        firewall only detects (`DetectionOnly`, with a body limit of 10 MB), and its server calls this API on the
+        loopback (`127.0.0.1:4000`) with its service key, never through Caddy.
       tags:
         - Console settings
       security:
@@ -18926,6 +18944,20 @@ paths:
         operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
         (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
         key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+
+
+        **Long bodies through `api.ota.example.com`.** The edge's web application firewall answers `413` without a body,
+        before the API sees the request, when the request's arguments (the body's JSON fields, names and values
+        together, and the query) exceed 128 KiB, which it does not inspect (rule 200008 of
+        `deploy/caddy/waf/coraza.conf`, blocking on that host unless `VELEXIS_WAF_ENGINE` sets it to detect only;
+        `docs/mvp/deployment-single-vm.md` §6). A change this schema accepts can exceed that limit: `bodyMarkdown` takes
+        50,000 characters (StorefrontPageMarkdown), and a character outside ASCII takes two to four bytes, so a body of
+        more than about 43,000 characters in a script of three-byte characters (Chinese, Japanese, Korean, Thai,
+        Devanagari, ...), or of about 33,000 four-byte ones (emoji), reaches it. A call by API key through that host (a
+        `console:automation` key, or a secret key with a staff token) then gets the `413` and nothing is saved. The OTA
+        admin is not affected (`deploy/caddy/Caddyfile`): its staff's browsers reach `admin.ota.example.com`, whose
+        firewall only detects (`DetectionOnly`, with a body limit of 10 MB), and its server calls this API on the
+        loopback (`127.0.0.1:4000`) with its service key, never through Caddy.
       tags:
         - Console settings
       security:
@@ -19574,6 +19606,19 @@ paths:
         operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
         (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
         key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+
+
+        **Long bodies through `api.ota.example.com`.** The edge's web application firewall answers `413` without a body,
+        before the API sees the request, when the request's arguments (the body's JSON fields, names and values
+        together, and the query) exceed 128 KiB, which it does not inspect (rule 200008 of
+        `deploy/caddy/waf/coraza.conf`, blocking on that host unless `VELEXIS_WAF_ENGINE` sets it to detect only;
+        `docs/mvp/deployment-single-vm.md` §6). A template this schema accepts can exceed that limit: `bodyHtml` takes
+        100,000 characters and `bodyText` 50,000, and a character outside ASCII takes two to four bytes. A call by API
+        key through that host (a `console:automation` key, or a secret key with a staff token) then gets the `413` and
+        nothing is saved: keep `subject`, `bodyHtml` and `bodyText` below 128 KiB together. The OTA admin is not
+        affected (`deploy/caddy/Caddyfile`): its staff's browsers reach `admin.ota.example.com`, whose firewall only
+        detects (`DetectionOnly`, with a body limit of 10 MB), and its server calls this API on the loopback
+        (`127.0.0.1:4000`) with its service key, never through Caddy.
       tags:
         - Console settings
       security:
@@ -19690,6 +19735,19 @@ paths:
         operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
         (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
         key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+
+
+        **Long bodies through `api.ota.example.com`.** The edge's web application firewall answers `413` without a body,
+        before the API sees the request, when the request's arguments (the body's JSON fields, names and values
+        together, and the query) exceed 128 KiB, which it does not inspect (rule 200008 of
+        `deploy/caddy/waf/coraza.conf`, blocking on that host unless `VELEXIS_WAF_ENGINE` sets it to detect only;
+        `docs/mvp/deployment-single-vm.md` §6). A draft this schema accepts can exceed that limit: `bodyHtml` takes
+        100,000 characters and `bodyText` 50,000, a character outside ASCII takes two to four bytes, and the names and
+        values of `variables` count too. A call by API key through that host (a `console:automation` key, or a secret
+        key with a staff token) then gets the `413` and nothing is rendered: keep the draft and its `variables` below
+        128 KiB together. The OTA admin is not affected (`deploy/caddy/Caddyfile`): its staff's browsers reach
+        `admin.ota.example.com`, whose firewall only detects (`DetectionOnly`, with a body limit of 10 MB), and its
+        server calls this API on the loopback (`127.0.0.1:4000`) with its service key, never through Caddy.
       tags:
         - Console settings
       security:
