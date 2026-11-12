@@ -3,9 +3,11 @@
 # (deploy/caddy/build/build-caddy.sh, checked against its pinned SHA-256; task X-039), Caddyfile validation and its
 # end-to-end smoke test, the velexis-deploy test with a fake systemctl, the velexis-healthcheck test with fake
 # endpoints, systemd units and their sandbox exposure), systemd-units (the real units run a stand-in app under systemd;
-# a failure alert reaches Mailpit), check-vm (check-vm.test.sh as root with a real sshd; lead decision (13l) of
-# 2026-11-10, approved by the owner), dev-setup (docs/mvp/local-development.md §2 on a clean runner: PostgreSQL 16 and
-# Redis 7.4 from apt, dev-setup.sh and dev-keys.mjs twice), build-test (repository guards and
+# a failure alert reaches Mailpit, and velexis-egress-refresh.service loads the outbound allow-list in a network
+# namespace of its own; lead decision (17a) of 2026-11-11), check-vm (check-vm.test.sh as root with a real sshd and a
+# real nft; lead decisions (13l) of 2026-11-10 and (17a) of 2026-11-11, approved by the owner), dev-setup
+# (docs/mvp/local-development.md §2 on a clean runner: PostgreSQL 16 and Redis 7.4 from apt, dev-setup.sh and
+# dev-keys.mjs twice), build-test (repository guards and
 # tools/ci/check-package-json.mjs before the install, then install, the tools/ci and tools/perf tests, format, lint,
 # typecheck, unit, contracts up to date, build, the cross-backend tests, release dry run with the Caddy build),
 # integration (in parallel with build-test: the integration tests with PostgreSQL 16 + Redis 7.4 + Mailpit and the
@@ -106,11 +108,13 @@ jobs:
           if echo "$out" | grep -v -E "Command /usr/(bin/node|local/sbin/velexis-[a-z]+) is not executable|velexis-alert@|caddy.service" | grep -q .; then
             exit 1
           fi
-      - name: Unit sandboxing (every app unit, velexis-alert@ and velexis-healthcheck at exposure 2.0 or lower)
+      - name: Unit sandboxing (every app unit, velexis-alert@, velexis-healthcheck and velexis-egress-refresh at exposure 2.0 or lower)
         run: |
           # --threshold counts in tenths: 20 is 2.0 ("OK"); systemd-analyze exits non-zero above it.
+          # velexis-egress-refresh since lead decision (17a) of 2026-11-11 (approved by the owner).
           for unit in deploy/systemd/velexis-{platform-api,platform-worker,portal,platform-admin,ota-api,ota-worker,ota-admin}.service \
-                      deploy/systemd/velexis-alert@.service deploy/systemd/velexis-healthcheck.service; do
+                      deploy/systemd/velexis-alert@.service deploy/systemd/velexis-healthcheck.service \
+                      deploy/systemd/velexis-egress-refresh.service; do
             if ! out="$(systemd-analyze security --offline=true --threshold=20 --no-pager "$unit" 2>&1)"; then
               echo "$out"
               echo "::error::$unit is above exposure 2.0"
@@ -150,14 +154,26 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
+      - name: Install nftables if the runner image lacks it (velexis-egress-refresh.service's nft in the units smoke test)
+        # Lead decision (17a) of 2026-11-11, approved by the owner. The package's nftables.service stays disabled: it
+        # loads nothing into the runner's own rules.
+        run: |
+          if [ ! -x /usr/sbin/nft ]; then
+            sudo apt-get update -y
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nftables
+          fi
+          dpkg-query -W nftables
       - name: Run the real units with a stand-in app, kill one into failed, check the alert in Mailpit
-        # X-021: the production sandboxing against what the apps need; see the header of units-smoke.sh.
+        # X-021: the production sandboxing against what the apps need; see the header of units-smoke.sh. Since lead
+        # decision (17a) of 2026-11-11 also velexis-egress-refresh.service, in a network namespace of its own.
         run: sudo env SMOKE_NODE="$(command -v node)" bash deploy/systemd/test/units-smoke.sh
 
   # Lead decision (13l) of 2026-11-10, approved by the owner: check-vm.test.sh (check-vm.sh, and the steps users, keys,
-  # envfiles and ssh of provision-vm.sh under a temporary VELEXIS_ROOT with fake system tools: X-020, X-037, X-040 and
-  # the SSH lockout guard) as root on a clean Ubuntu 24.04 runner, with the real sshd of openssh-server validating the
-  # SSH drop-ins. The runner is never a provisioned VM (the test refuses a host with /etc/velexis).
+  # envfiles, ssh and egress of provision-vm.sh under a temporary VELEXIS_ROOT with fake system tools: X-020, X-037,
+  # X-040, X-041 and the SSH lockout guard) as root on a clean Ubuntu 24.04 runner, with the real sshd of
+  # openssh-server validating the SSH drop-ins and, since lead decision (17a) of 2026-11-11 (approved by the owner), the
+  # real nft of nftables loading the outbound allow-list in a private network namespace: the test fails without it.
+  # The runner is never a provisioned VM (the test refuses a host with /etc/velexis).
   check-vm:
     name: VM check test
     runs-on: ubuntu-24.04
@@ -176,8 +192,18 @@ jobs:
           fi
           dpkg-query -W openssh-server
           sudo install -d -m 0755 -o root -g root /run/sshd
-      - name: check-vm.test.sh as root (temporary VELEXIS_ROOT, fake system tools, the real sshd)
-        # Every check must pass, the real-sshd ones included: the test's last line says when those did not run.
+      - name: Install nftables if the runner image lacks it (the real nft of the test's outbound allow-list part)
+        # Lead decision (17a) of 2026-11-11, approved by the owner: without a working nft check-vm.test.sh fails. The
+        # package's nftables.service stays disabled; the test loads its table only in a private network namespace.
+        run: |
+          if [ ! -x /usr/sbin/nft ]; then
+            sudo apt-get update -y
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nftables
+          fi
+          dpkg-query -W nftables
+      - name: check-vm.test.sh as root (temporary VELEXIS_ROOT, fake system tools, the real sshd and nft)
+        # Every check must pass, the real-sshd and real-nft ones included: the test fails when the real-nft checks did
+        # not run, and its last line says when the real-sshd ones did not.
         run: |
           set -o pipefail
           sudo bash deploy/scripts/test/check-vm.test.sh 2>&1 | tee "$RUNNER_TEMP/check-vm.log"

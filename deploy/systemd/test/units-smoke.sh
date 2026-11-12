@@ -5,16 +5,17 @@
 #
 #   sudo env SMOKE_NODE="$(command -v node)" bash deploy/systemd/test/units-smoke.sh
 #
-# Needs root, systemd as PID 1, Node 22 (SMOKE_NODE; the units run a root-owned copy of it), openssl, PostgreSQL and
-# Redis on loopback, outbound DNS and HTTPS, and a Mailpit. CI runs it in the "systemd-units" job of
-# .github/workflows/ci.yml (ubuntu-24.04 runner, PostgreSQL, Redis and Mailpit service containers). On a
-# throwaway VM, start Mailpit first (mailpit --smtp 127.0.0.1:1025 --listen 127.0.0.1:8025). Never run it on
-# the production VM: it stops nothing there, but it creates and removes test units, users and folders. Without
-# systemd as PID 1 it runs steps 1 to 3 and then fails.
+# Needs root, systemd as PID 1, Node 22 (SMOKE_NODE; the units run a root-owned copy of it), openssl, nft (package
+# nftables) and ip (iproute2), PostgreSQL and Redis on loopback, outbound DNS and HTTPS, and a Mailpit. CI runs it in
+# the "systemd-units" job of .github/workflows/ci.yml (ubuntu-24.04 runner, PostgreSQL, Redis and Mailpit service
+# containers). On a throwaway VM, start Mailpit first (mailpit --smtp 127.0.0.1:1025 --listen 127.0.0.1:8025). Never
+# run it on the production VM: it stops nothing there, but it creates and removes test units, users and folders.
+# Without systemd as PID 1 it runs steps 1 to 3 and then fails.
 #
 # What it proves (docs/mvp/plans/foundation-tasks.md; a check that proves an acceptance criterion ends in
 # [<task> AC<n>]):
-#   1. `systemd-analyze security --offline=true` rates every app unit and velexis-alert@ 2.0 or lower (X-021).
+#   1. `systemd-analyze security --offline=true` rates every app unit, velexis-alert@ and (since lead decision (17a) of
+#      2026-11-11) velexis-egress-refresh 2.0 or lower (X-021).
 #   2. provision-vm.sh --steps users,keys,envfiles, run twice with VELEXIS_ROOT=<temporary prefix>, creates the five
 #      zone users of ADR-0026 (no shell, locked password) and the group velexis with exactly those members, the
 #      folders of deployment-single-vm.md §4, both key folders (0500, files 0400 owned by the zone's user) with
@@ -50,7 +51,14 @@
 #  10. Killing the OTA API unit (at most 11 times within 300 s) puts it in failed through StartLimitBurst=10, and
 #      velexis-alert@ mails Mailpit the unit name, its status and its last log lines, exactly once
 #      (RestartMode=direct keeps the crashes before the start limit from triggering OnFailure=) (X-021).
-#  11. A random canary value sits in every env file. Neither it nor any value of .provision-secrets appears in the
+#  11. velexis-egress-refresh.service (X-041; lead decision (17a) of 2026-11-11, owner-approved) starts with the real
+#      velexis-egress (deploy/scripts/egress.sh) under its production sandbox: a test copy whose [Service] gains only
+#      NetworkNamespacePath= (a network namespace made for this test, so the table's "policy drop" never touches this
+#      machine's own traffic) and VELEXIS_ROOT=<prefix> (the release's allow-list and the env files under the prefix),
+#      and whose StateDirectory= gets a test name. The run loads the table inet velexis_egress there (policy drop, the
+#      VELEXIS-EGRESS-DENY log rule), finishes with Result=success, writes its addresses file (root 0600), a second run
+#      changes nothing, and this machine's own rules get no such table ([FIX-W49-SHARED AC4]).
+#  12. A random canary value sits in every env file. Neither it nor any value of .provision-secrets appears in the
 #      journal, the mail or the outputs of the one-off commands (X-021, X-033).
 #
 # Settings (environment), with defaults: SMOKE_NODE (node on PATH), SMOKE_PG (127.0.0.1:5432), SMOKE_REDIS
@@ -73,7 +81,8 @@ SMTP_URL="${SMOKE_SMTP_URL:-smtp://127.0.0.1:1025}"
 MAILPIT="${MAILPIT_API_URL:-http://127.0.0.1:8025}"
 APP_UNITS=(velexis-platform-api velexis-platform-worker velexis-portal velexis-platform-admin
   velexis-ota-api velexis-ota-worker velexis-ota-admin)
-SANDBOXED_UNITS=("${APP_UNITS[@]}" velexis-alert@) # the alert unit is held to the same limit
+# The alert unit and, since lead decision (17a) of 2026-11-11, the outbound allow-list's unit are held to the same limit.
+SANDBOXED_UNITS=("${APP_UNITS[@]}" velexis-alert@ velexis-egress-refresh)
 # The users of ADR-0026, and the zone of every app unit. The unit files must say the same.
 ZONE_USERS=(velexis-platform velexis-ota velexis-portal velexis-platform-admin velexis-ota-admin)
 declare -A ZONE_OF=(
@@ -124,14 +133,16 @@ for tool in curl runuser setpriv nsenter useradd getent openssl visudo mkfifo sy
 done
 
 # ---- 1. sandbox exposure ------------------------------------------------------------------------------------
-step "systemd-analyze security --offline=true: every app unit and velexis-alert@ must be 2.0 or lower"
+step "systemd-analyze security --offline=true: every app unit, velexis-alert@ and velexis-egress-refresh must be 2.0 or lower"
 for u in "${SANDBOXED_UNITS[@]}"; do
+  tag="X-021 AC1"
+  [ "$u" != velexis-egress-refresh ] || tag="FIX-W49-SHARED AC4"
   if out="$(systemd-analyze security --offline=true --threshold="$MAX_EXPOSURE" --no-pager \
               "$UNITS/$u.service" 2>&1)"; then
-    pass "$(printf '%s\n' "$out" | grep 'Overall exposure level' | sed 's/^→ //') [X-021 AC1]"
+    pass "$(printf '%s\n' "$out" | grep 'Overall exposure level' | sed 's/^→ //') [$tag]"
   else
     printf '%s\n' "$out" | grep -E '✗|Overall' || true
-    fail "$u.service is above 2.0 [X-021 AC1]"
+    fail "$u.service is above 2.0 [$tag]"
   fi
 done
 
@@ -156,6 +167,10 @@ F_UNIT="velexis-smoke-${FRONTEND#velexis-}.service"
 P_UNIT="velexis-smoke-${PLATFORM#velexis-}.service"
 A_TEMPLATE=velexis-smoke-alert@.service
 A_UNIT="velexis-smoke-alert@$B_UNIT.service"
+E_UNIT=velexis-smoke-egress-refresh.service # step 11: the test copy of velexis-egress-refresh.service
+E_STATE="velexis-smoke-egress.$RUN_ID"      # its StateDirectory= (velexis/egress on the VM)
+NETNS="velexis-smoke-$RUN_ID_LC"             # the network namespace it runs in
+NETNS_MADE=0
 SMOKE_UNITS=()
 CREATED_USERS=()
 CREATED_GROUPS=()
@@ -168,16 +183,19 @@ cleanup() {
   [ -z "$ONEOFF_PID" ] || kill "$ONEOFF_PID" >/dev/null 2>&1 || true
   if [ "${SMOKE_KEEP:-0}" = 1 ]; then
     echo "SMOKE_KEEP=1: kept $PREFIX, /etc/systemd/system/velexis-smoke-*, /var/cache/$CACHE_BASE," \
-      "/var/lib/$STATE_NAME and the users ${CREATED_USERS[*]:-(none created)}"
+      "/var/lib/$STATE_NAME, /var/lib/$E_STATE, the network namespace $NETNS and the users" \
+      "${CREATED_USERS[*]:-(none created)}"
     exit "$rc"
   fi
   if [ -d /run/systemd/system ]; then
-    systemctl stop "${SMOKE_UNITS[@]}" "$A_UNIT" >/dev/null 2>&1 || true
-    systemctl reset-failed "${SMOKE_UNITS[@]}" "$A_UNIT" >/dev/null 2>&1 || true
-    for u in "${SMOKE_UNITS[@]}" "$A_TEMPLATE"; do rm -f "/etc/systemd/system/$u"; done
+    systemctl stop "${SMOKE_UNITS[@]}" "$A_UNIT" "$E_UNIT" >/dev/null 2>&1 || true
+    systemctl reset-failed "${SMOKE_UNITS[@]}" "$A_UNIT" "$E_UNIT" >/dev/null 2>&1 || true
+    for u in "${SMOKE_UNITS[@]}" "$A_TEMPLATE" "$E_UNIT"; do rm -f "/etc/systemd/system/$u"; done
     systemctl daemon-reload || true
   fi
-  rm -rf --one-file-system "$PREFIX" "/var/cache/$CACHE_BASE" "/var/lib/$STATE_NAME" "/var/lib/private/$STATE_NAME"
+  [ "$NETNS_MADE" = 0 ] || ip netns delete "$NETNS" >/dev/null 2>&1 || true
+  rm -rf --one-file-system "$PREFIX" "/var/cache/$CACHE_BASE" "/var/lib/$STATE_NAME" "/var/lib/private/$STATE_NAME" \
+    "/var/lib/$E_STATE"
   for u in "${CREATED_USERS[@]}"; do userdel -r "$u" >/dev/null 2>&1 || true; done
   for g in "${CREATED_GROUPS[@]}"; do ! getent group "$g" >/dev/null || groupdel "$g" >/dev/null 2>&1 || true; done
   exit "$rc"
@@ -931,13 +949,97 @@ check "$A_UNIT finished with Result=success [X-021 AC3]" test "$(systemctl show 
 check "exactly one alert mail for $kills kills (RestartMode=direct: no mail per crash) [X-021 AC3]" \
   test "$(search | messages count)" = 1
 
-# ---- 11. no value leaks ----------------------------------------------------------------------------------------
+# ---- 11. velexis-egress-refresh.service, in a network namespace of its own ---------------------------------------
+# Lead decision (17a) of 2026-11-11 (approved by the owner): the unit that loads the outbound allow-list (X-041) runs
+# with the real velexis-egress under its production sandbox. Its test copy gains two lines in [Service] and nothing
+# else: NetworkNamespacePath= of a namespace made here, so the table's "policy drop" never reaches this machine's own
+# traffic (the lookups fail in it, and velexis-egress loads the table all the same), and VELEXIS_ROOT=<prefix>, so
+# velexis-egress reads the release's allow-list and the test env files under the prefix. StateDirectory= gets a test
+# name, which <prefix>/var/lib/velexis/egress links to: ProtectSystem=strict leaves only that folder writable.
+step "velexis-egress-refresh.service: the real velexis-egress in the unit's sandbox, in the network namespace $NETNS"
+for tool in nft ip; do # checked here, so that steps 1 to 3 still run on a machine without them
+  command -v "$tool" >/dev/null || die "$tool is missing (packages nftables and iproute2): step 11 needs it"
+done
+install -m 0755 "$DEPLOY/scripts/egress.sh" "$SBIN/velexis-egress"
+install -d -m 0755 "$ETC/egress"
+[ -d "$LIB" ] || install -d -m 0755 "$LIB" # the step users made it; its owner and mode stay as they are
+install -m 0644 "$DEPLOY/egress/allowed-hosts.conf" "$ETC/egress/allowed-hosts.conf"
+ln -sfn "/var/lib/$E_STATE" "$LIB/egress"
+E_FILE="/etc/systemd/system/$E_UNIT"
+render_unit "$UNITS/velexis-egress-refresh.service" "$E_UNIT"
+grep -qx 'StateDirectory=velexis/egress' "$E_FILE" || die "velexis-egress-refresh.service: StateDirectory=velexis/egress not found"
+cp "$E_FILE" "$PREFIX/egress-unit.rendered"
+awk -v state="StateDirectory=$E_STATE" -v ns="NetworkNamespacePath=/run/netns/$NETNS" \
+  -v root="Environment=VELEXIS_ROOT=$PREFIX" '
+  $0 == "StateDirectory=velexis/egress" { print state; next }
+  { print }
+  $0 == "[Service]" { print ns; print root }' "$PREFIX/egress-unit.rendered" >"$E_FILE"
+# Never start it without its own namespace: the table would then drop this machine's outgoing connections.
+grep -qx "NetworkNamespacePath=/run/netns/$NETNS" "$E_FILE" || die "$E_UNIT has no NetworkNamespacePath="
+egress_extra() { # the lines of the test copy that the rendered template does not have, sorted
+  diff <(sort "$PREFIX/egress-unit.rendered") <(sort "$E_FILE") | sed -n 's/^> //p' | sort
+}
+check "the test copy changes only StateDirectory= and adds NetworkNamespacePath= and VELEXIS_ROOT= [FIX-W49-SHARED AC4]" \
+  test "$(egress_extra | paste -sd'|' -)" = \
+  "$(printf '%s\n' "Environment=VELEXIS_ROOT=$PREFIX" "NetworkNamespacePath=/run/netns/$NETNS" "StateDirectory=$E_STATE" | sort | paste -sd'|' -)"
+host_had_table=0
+nft list table inet velexis_egress >/dev/null 2>&1 && host_had_table=1
+ip netns add "$NETNS"
+NETNS_MADE=1
+systemctl daemon-reload
+if out="$(systemd-analyze verify --man=no "$E_FILE" 2>&1)" && [ -z "$out" ]; then
+  pass "systemd-analyze verify is clean for $E_UNIT"
+else
+  printf '%s\n' "$out"
+  fail "systemd-analyze verify reported problems for $E_UNIT"
+fi
+egress_log_has() { # since log-file pattern: the unit's journal since then, into log-file, has a line matching pattern
+  journalctl -u "$E_UNIT" --since "@$1" --no-pager -o cat >"$2" 2>&1 || true
+  grep -q -- "$3" "$2"
+}
+egress_run() { # log-file pattern: starts the oneshot unit (systemctl waits for its end) and reads the run's journal
+  # into log-file until it has a line matching pattern: journald may still be writing the run's last lines
+  local since rc=0
+  since="$(date +%s)"
+  systemctl start "$E_UNIT" || rc=$?
+  retry 20 egress_log_has "$since" "$1" "$2" || true
+  return "$rc"
+}
+rc=0
+egress_run "$PREFIX/egress-1.log" '^created the table inet velexis_egress' || rc=$?
+e_result="$(systemctl show -P Result "$E_UNIT")"
+if [ "$rc" = 0 ] && [ "$e_result" = success ] && grep -q '^created the table inet velexis_egress' "$PREFIX/egress-1.log"; then
+  pass "$E_UNIT ran velexis-egress under its sandbox: the table inet velexis_egress was created, Result=success [FIX-W49-SHARED AC4]"
+else
+  diagnose "$E_UNIT"
+  fail "$E_UNIT did not load the allow-list under its sandbox (exit $rc, Result=$e_result) [FIX-W49-SHARED AC4]"
+fi
+ns_table="$(ip netns exec "$NETNS" nft list table inet velexis_egress 2>&1 || true)"
+ns_table_ok() {
+  grep -q 'policy drop;' <<<"$ns_table" &&
+    grep -qF 'log prefix "VELEXIS-EGRESS-DENY " flags skuid' <<<"$ns_table"
+}
+check "in $NETNS the table drops by default and logs refusals with VELEXIS-EGRESS-DENY [FIX-W49-SHARED AC4]" ns_table_ok
+check "velexis-egress wrote its addresses into the unit's state folder, root 0600 [FIX-W49-SHARED AC4]" \
+  mode_is "/var/lib/$E_STATE/addresses" "root:root 600"
+rc=0
+egress_run "$PREFIX/egress-2.log" '^unchanged: ' || rc=$?
+second_unchanged() { [ "$rc" = 0 ] && grep -q '^unchanged: ' "$PREFIX/egress-2.log"; }
+check "a second run of $E_UNIT changes nothing [FIX-W49-SHARED AC4]" second_unchanged
+if [ "$host_had_table" = 0 ]; then
+  host_clean() { ! nft list table inet velexis_egress >/dev/null 2>&1; }
+  check "this machine's own rules have no table inet velexis_egress [FIX-W49-SHARED AC4]" host_clean
+else
+  echo "NOTE this machine had a table inet velexis_egress before the test (a provisioned throwaway VM); its own check is skipped"
+fi
+
+# ---- 12. no value leaks ----------------------------------------------------------------------------------------
 step "No env value reaches the journal, the mail or the one-off outputs"
 # The canary and every generated secret, as fixed strings in a root-only file (never on a command line).
 PATTERNS="$PREFIX/values.txt"
 (umask 077 && { echo "$CANARY"; sed -n 's/^[A-Z0-9_]*=//p' "$ETC/.provision-secrets"; } | sed '/^$/d' >"$PATTERNS")
 JOURNAL_UNITS=()
-for s in "${SMOKE_UNITS[@]}" "$A_UNIT"; do JOURNAL_UNITS+=(-u "$s"); done
+for s in "${SMOKE_UNITS[@]}" "$A_UNIT" "$E_UNIT"; do JOURNAL_UNITS+=(-u "$s"); done
 journal_leaks() { journalctl "${JOURNAL_UNITS[@]}" --no-pager -o cat | grep -F -f "$PATTERNS" >/dev/null; }
 mail_leaks() { printf '%s\n' "$mail" | grep -F -f "$PATTERNS" >/dev/null; }
 outputs_leak() { cat "$PREFIX"/oneoff-*.out | grep -F -f "$PATTERNS" >/dev/null; }

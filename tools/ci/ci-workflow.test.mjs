@@ -251,15 +251,18 @@ describe("workflow shape", () => {
       "ota-worker",
       "ota-admin",
     ];
+    // velexis-egress-refresh since lead decision (17a) of 2026-11-11 (FIX-W49-SHARED AC4).
     assert.deepEqual(units, [
       ...apps.map((app) => `deploy/systemd/velexis-${app}.service`),
       "deploy/systemd/velexis-alert@.service",
       "deploy/systemd/velexis-healthcheck.service",
+      "deploy/systemd/velexis-egress-refresh.service",
     ]);
     for (const unit of units) {
       assert.ok(readFileSync(join(ROOT, unit), "utf8").includes("[Service]"), `${unit} exists`);
     }
     assert.match(sandbox.name, /velexis-healthcheck/);
+    assert.match(sandbox.name, /velexis-egress-refresh/);
   });
 
   it("[FIX-W47-SHARED AC6] build-test lints and tests tools/perf with the CI checks, before the tests", () => {
@@ -338,6 +341,77 @@ describe("workflow shape", () => {
       ),
       "check-vm.test.sh prints that line",
     );
+  });
+
+  it("[FIX-W49-SHARED AC4] the VM check job installs nftables when the image lacks it, and the test needs the real nft", () => {
+    // Lead decision (17a) of 2026-11-11, approved by the owner: the real-nftables part of check-vm.test.sh always runs.
+    const steps = JOBS.get("check-vm").steps;
+    const nft = steps.findIndex((s) =>
+      /apt-get install -y --no-install-recommends nftables$/m.test(s.run ?? ""),
+    );
+    const test = steps.findIndex((s) =>
+      /^sudo bash deploy\/scripts\/test\/check-vm\.test\.sh\b/m.test(s.run ?? ""),
+    );
+    assert.ok(nft >= 0, "it installs nftables");
+    assert.match(steps[nft].run, /^if \[ ! -x \/usr\/sbin\/nft \]; then$/m, "only when the image lacks it");
+    assert.match(steps[nft].run, /^dpkg-query -W nftables$/m, "and fails the step when it is not installed");
+    assert.equal(steps[nft].if, undefined, "the install always runs");
+    assert.ok(test > nft, "before check-vm.test.sh");
+    assert.match(steps[test].run, /grep -qx 'check-vm\.test: all checks passed'/);
+    // The test fails when its real-nft part cannot run, and its last line names it, as the sshd case's does.
+    const script = readFileSync(join(ROOT, "deploy/scripts/test/check-vm.test.sh"), "utf8");
+    assert.match(script, /^REAL_NFT_RAN=0$/m);
+    assert.match(
+      script,
+      /^ {2}REAL_NFT_RAN=1$/m,
+      "set only where the real nft works in a private network namespace",
+    );
+    assert.match(
+      script,
+      /^ {2}fail "the real-nft checks of step 6b did not run: .*\[FIX-W49-SHARED AC4\]"$/m,
+      "a FAIL line, which sets FAILED, when it cannot run",
+    );
+    assert.doesNotMatch(script, /NOTE the real-nft checks did not run/, "no longer a NOTE");
+    const end = script.slice(script.lastIndexOf("\necho\n"));
+    assert.match(
+      end,
+      /^if \[ "\$REAL_NFT_RAN" != 1 \]; then\n {2}echo "check-vm\.test: FAILED \(the real-nft checks of step 6b did not run: /m,
+      "its last line names the real-nft checks first",
+    );
+    assert.match(end, /\[ "\$FAILED" = 0 \]\s*$/, "and the test exits 1");
+  });
+
+  it("[FIX-W49-SHARED AC4] the units smoke test rates and starts velexis-egress-refresh.service, with nftables on the runner", () => {
+    // Lead decision (17a) of 2026-11-11, approved by the owner.
+    const steps = JOBS.get("systemd-units").steps;
+    const nft = steps.findIndex((s) =>
+      /apt-get install -y --no-install-recommends nftables$/m.test(s.run ?? ""),
+    );
+    const smoke = steps.findIndex((s) => /deploy\/systemd\/test\/units-smoke\.sh/.test(s.run ?? ""));
+    assert.ok(nft >= 0 && smoke > nft, "nftables is installed before the units smoke test");
+    assert.match(steps[nft].run, /^if \[ ! -x \/usr\/sbin\/nft \]; then$/m);
+    assert.equal(steps[nft].if, undefined);
+    const script = readFileSync(join(ROOT, "deploy/systemd/test/units-smoke.sh"), "utf8");
+    const rated = script.match(/^SANDBOXED_UNITS=\(([^)]*)\)$/m)?.[1] ?? "";
+    assert.ok(rated.split(/\s+/).includes("velexis-egress-refresh"), "rated with the other units (step 1)");
+    assert.match(
+      script,
+      /render_unit "\$UNITS\/velexis-egress-refresh\.service" "\$E_UNIT"/,
+      "a test copy of the unit",
+    );
+    assert.match(script, /egress\.sh" "\$SBIN\/velexis-egress"/, "running the real velexis-egress");
+    // It never starts without a network namespace of its own: the table's policy drop would cut the runner off.
+    const guard = script.indexOf('grep -qx "NetworkNamespacePath=/run/netns/$NETNS" "$E_FILE" || die');
+    const netns = script.indexOf('ip netns add "$NETNS"');
+    const start = script.indexOf('systemctl start "$E_UNIT"');
+    assert.ok(
+      guard > 0 && netns > guard && start > netns,
+      "the namespace is checked and made before the start",
+    );
+    assert.match(script, /^for tool in nft ip; do /m, "it needs nft and ip");
+    for (const unit of ["velexis-egress-refresh.service", "velexis-egress-refresh.timer"]) {
+      assert.ok(readFileSync(join(ROOT, "deploy/systemd", unit), "utf8").length > 0, `${unit} exists`);
+    }
   });
 
   it("[X-019 AC5] every uses: in .github/workflows is pinned to a 40-character commit SHA", () => {

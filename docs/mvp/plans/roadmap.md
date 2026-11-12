@@ -1,6 +1,6 @@
 # Velexis MVP roadmap
 
-This is the master plan for the whole Velexis MVP: the shared foundation and both component groups (platform and OTA). It turns the 328 agent tasks of the three task plans into a calendar for one developer, with AI coding agents (31 working weeks since the re-baseline of 2026-11-11) and without them (81 working weeks since the re-baselines of 2026-11-06 and 2026-11-11). For every milestone it gives the ordered batches of tasks that can run in parallel, the human review gates, the demo and the go/no-go criteria. It explains the critical path and the biggest risks, with the earliest task that retires each one. It ends with a first-week checklist, the rules for keeping the plans current, and a summary of tasks and hours per component. It does not redefine any task: ids, dependencies and sizes come from the task plans, scope and exit criteria come from the two implementation plans, and everything follows [`decisions.md`](../decisions.md).
+This is the master plan for the whole Velexis MVP: the shared foundation and both component groups (platform and OTA). It turns the 333 agent tasks of the three task plans into a calendar for one developer, with AI coding agents (31 working weeks since the re-baseline of 2026-11-11) and without them (82 working weeks since the re-baselines of 2026-11-06 and 2026-11-11, the second of 2026-11-11 included). For every milestone it gives the ordered batches of tasks that can run in parallel, the human review gates, the demo and the go/no-go criteria. It explains the critical path and the biggest risks, with the earliest task that retires each one. It ends with a first-week checklist, the rules for keeping the plans current, and a summary of tasks and hours per component. It does not redefine any task: ids, dependencies and sizes come from the task plans, scope and exit criteria come from the two implementation plans, and everything follows [`decisions.md`](../decisions.md).
 
 Related: [`README.md`](README.md) (index of all plans), [`foundation-tasks.md`](foundation-tasks.md), the platform [implementation plan](../../../platform/docs/plans/implementation-plan.md), [agent tasks](../../../platform/docs/plans/agent-tasks.md) and [solo plan](../../../platform/docs/plans/solo-developer-plan.md), the OTA [implementation plan](../../../ota/docs/plans/implementation-plan.md), [agent tasks](../../../ota/docs/plans/agent-tasks.md) and [solo plan](../../../ota/docs/plans/solo-developer-plan.md), [`../README.md`](../README.md#1-shared-milestones) (milestone definitions), [`AGENTS.md`](../../../AGENTS.md), [ADR-0020](../adr/0020-ai-agent-development-workflow.md) (agent workflow) and [ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md) (the scheduling rules decided while writing this roadmap).
 
@@ -9,6 +9,8 @@ Related: [`README.md`](README.md) (index of all plans), [`foundation-tasks.md`](
 **Re-baseline (2026-11-06, [ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md) item 6, the owner's decision (11g) of 2026-11-06).** `node tools/plan-lint/plan-lint.mjs` prints `tasks: 317  estimated hours: 1466`, `ERRORS: 0`, and the same critical path of 162 h over 29 tasks. The 16 tasks added since the baseline are all M6 work that the milestone's own reviews found: the platform security review's follow-ups PBE-067 … PBE-071, PFE-029, PFE-030 and PAD-017 (the platform solo plan's Weeks 30a and 30b), and the OTA follow-ups OBE-092 … OBE-096, OAD-020, OFE-027 and OFE-028 (the OTA solo plan's Week 39a and one day of its Week 40). The calendar without agents grows from 76 to 79 weeks, because the three follow-up weeks get calendar weeks of their own before the launch block (§1.3); the calendar with agents keeps its 30 weeks, because M6's buffer absorbs their 28 developer-hours (§1.2). No earlier milestone changes ([§4.5](#45-change-log)). Since 2026-11-10 the plans also hold OFE-029 (S, 2 h, ½ solo day), which OFE-027 added on 2026-11-10 when its measurement found the header's shift: plan-lint prints `tasks: 318  estimated hours: 1468`; M6's buffer and OTA Week 39a's ½ day of buffer absorb it, so neither calendar changes (§4.5). Since the same day the plans also hold X-041 (M, 4 h, 1 solo day: the VM's outbound allow-list for PCI DSS 11.5.1.1, lead decision (13h)) and OFE-030 (M, 4 h, 1 solo day: the layout shifts left on phones and axe at phone width, lead decision (13a), which closed OFE-029 as met by OFE-028): plan-lint prints `tasks: 320  estimated hours: 1476`; M6's buffer (8 h to 5 h), a buffer day of C69 and the buffer day of OTA Week 40 absorb them, so neither calendar changes (§4.5).
 
 **Re-baseline (2026-11-11, [ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md) item 6, lead decision (15a) of 2026-11-11, approved by the owner; FIX-W48-SHARED).** `node tools/plan-lint/plan-lint.mjs` prints `tasks: 327  estimated hours: 1504`, `ERRORS: 0`, and the same critical path of 162 h over 29 tasks. Seven M6 tasks of 28 agent-hours, about 13 developer-hours and 7 solo days join the plans: OBE-097 (M; CORS answers for browsers that call the OTA API with a publishable key, planned by the lead in ad5e666, decision (15h)), OBE-098 and OAD-021 (S each; a storefront's offers per search in the console, decision (15j)), OBE-099 (L) and OAD-022 (M) (a booking in Reconciliation review closed in the console, OADR-0003's follow-up, decision (15l)), and PBE-072 and OBE-100 (M each; each backend's `secrets:rewrap`, ADR-0010 item 3, decision (15m)). M6's 5 h of buffer cannot hold them, so both calendars grow: with agents from 30 to 31 weeks (M6 gets a fourth week, W31, and 22 h of buffer, §1.2); without agents from 79 to 81 weeks: the OTA's Week 39b (C77) and a calendar week C78 that holds the OTA's Week 39c, the platform's Week 30c and X-041 come before the launch block, now C79–C81 (§1.3). X-041 and OFE-030, which since 2026-11-10 used a buffer day of C69 and the buffer day of OTA Week 40, get days of their own in C78, and those buffer days return. M0–M5 keep their weeks ([§4.5](#45-change-log)). Since the same day the plans also hold OBE-101 (M, 4 h, 1 solo day), which OBE-088 added when its measurement found that the completed jobs Redis keeps for a day grow with the active tenants: plan-lint prints `tasks: 328  estimated hours: 1508`; M6's buffer (22 h, now 20 h) and OTA Week 40's day of buffer absorb it, so neither calendar changes (§4.5).
+
+**Re-baseline (2026-11-11, second set; [ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md) item 6, lead decisions (17b), (17d), (17g), (17k) and (17l) of 2026-11-11, approved by the owner; FIX-W49-SHARED).** `node tools/plan-lint/plan-lint.mjs` prints `tasks: 333  estimated hours: 1532`, `ERRORS: 0`, and a critical path of **166 h over 30 tasks** (162 h over 29 before). Five M6 tasks of 24 agent-hours, about 11 developer-hours and 6 solo days join the plans: PBE-073 (M; portal passwords checked against the rule-meeting entries of a public list of about a million breached passwords, decision (17b)), PBE-074 (M; no Velexis Amadeus account outside the official Amadeus hosts in production, (17k)), SDK-016 (M; one refresh shared by the SDK clients derived from one cookie-mode client, (17d)), OBE-102 (M; a share of the Amadeus buckets kept free for shopping while the booking sync runs, (17g)) and OFE-031 (L; a signed-in customer's phone page kept still, the search form's fallback and the OTA's full name in the footer, (17l)). With agents the calendar stays at 31 weeks: M6's 20 h of buffer hold their 11 developer-hours with 8 h to spare (§1.2). Without agents it grows from 81 to 82 weeks: the OTA's new Week 39d and the platform's new Week 30d share a calendar week C79 before the launch block, now C80–C82, and PBE-073 takes the day that Weeks 39c and 30c kept as buffer in C78 (§1.3). OFE-031 makes the storefront chain of the critical path 4 h longer than the console chain it replaces; no batch or week moves, and the remaining critical path is unchanged (§3.1). M0–M5 keep their weeks ([§4.5](#45-change-log)).
 
 ## Contents
 
@@ -29,9 +31,9 @@ Related: [`README.md`](README.md) (index of all plans), [`foundation-tasks.md`](
 | Developer time per task | **S 0.75 h, M 1.5 h, L 3 h**: about 10 minutes of hand-off, review of the PR against the acceptance criteria and the [security checklist](../conventions.md#12-security-checklist-every-pr), one fix-up round, merge. **Plus 25 %** for re-runs and second rounds. | S ½ day, M 1 day, L 2 days, as in both solo plans |
 | Agent time per task | S about 1 h, M about 2 h, L about 4 h of wall-clock including CI. It is not on the developer's clock. | — |
 | Agents in parallel | **3**. Review is the bottleneck, so a fourth agent adds a review queue, not speed. | — |
-| Work to do | 566 h of review plus 141 h of rework = **707 developer-hours**, or 23.6 weeks at 30 h (659 h before the re-baseline of 2026-11-06, 687 h before OFE-029 and 688 h before X-041 and OFE-030, all of 2026-11-10, 692 h before the re-baseline of 2026-11-11 and 705 h before OBE-101 of the same day) | 377 task days, or 75.4 weeks (351.5 before the re-baseline of 2026-11-06, 366.5 before OFE-029, 367 before X-041 and OFE-030, 369 before the re-baseline of 2026-11-11, 376 before OBE-101 of the same day) |
-| Buffer | About 20 % per milestone, rounded up to whole weeks, plus account set-up in M0 and the launch in M6: **7.4 weeks** in all since OBE-101 of 2026-11-11, which left M6 20 h of the 22 h that the re-baseline of the same day gave it with a fourth week (7.5 weeks between the two; 8.0 weeks before the re-baseline of 2026-11-06, which left 9 of M6's 38 h; 8 h since OFE-029 and 5 h since X-041 and OFE-030, all of 2026-11-10: 6.9 weeks) | The solo plans' buffers (11.5 platform days and 17 OTA days at the baseline; the solo plans hold 11 and 15.5 since 2026-11-11) plus what is left of the foundation, M1 and launch buffers: **28 days** (about 7 %). The re-baseline of 2026-11-06 kept the sum of 28.5 days: it added the ½ day of platform Week 30b and the ½ day of OTA Week 39a, and OBE-096 took a day of the launch block; on 2026-11-10 OFE-029 took Week 39a's ½ day, X-041 a buffer day of C69 and OFE-030 the buffer day of OTA Week 40 (26 days). The re-baseline of 2026-11-11 gives those two days back (X-041 and OFE-030 move into C78) and adds ½ day each in OTA Week 39c and platform Week 30c (29 days); OBE-101, added the same day, takes OTA Week 40's day of buffer (28 days). |
-| Milestone order | Strictly M0 → M6: a milestone's batches start after the previous go/no-go, with one exception ([§2.0](#20-how-to-read-and-run-the-batches)) | The weeks of both solo plans, mapped to calendar weeks in [§1.3](#13-calendar-without-agents-81-working-weeks) |
+| Work to do | 574 h of review plus 144 h of rework = **718 developer-hours**, or 23.9 weeks at 30 h (659 h before the re-baseline of 2026-11-06, 687 h before OFE-029 and 688 h before X-041 and OFE-030, all of 2026-11-10, 692 h before the re-baseline of 2026-11-11, 705 h before OBE-101 of the same day and 707 h before the second re-baseline of that day) | 383 task days, or 76.6 weeks (351.5 before the re-baseline of 2026-11-06, 366.5 before OFE-029, 367 before X-041 and OFE-030, 369 before the re-baseline of 2026-11-11, 376 before OBE-101 of the same day, 377 before the second re-baseline of that day) |
+| Buffer | About 20 % per milestone, rounded up to whole weeks, plus account set-up in M0 and the launch in M6: **7.0 weeks** in all since the second re-baseline of 2026-11-11, which left M6 8 h (7.4 weeks between OBE-101 and it, with M6's 20 h; OBE-101 of 2026-11-11 left M6 20 h of the 22 h that the re-baseline of the same day gave it with a fourth week, and 7.5 weeks were between the two; 8.0 weeks before the re-baseline of 2026-11-06, which left 9 of M6's 38 h; 8 h since OFE-029 and 5 h since X-041 and OFE-030, all of 2026-11-10: 6.9 weeks) | The solo plans' buffers (11.5 platform days and 17 OTA days at the baseline; the solo plans hold 11 and 15.5 since 2026-11-11) plus what is left of the foundation, M1 and launch buffers: **28 days** (about 7 %). The re-baseline of 2026-11-06 kept the sum of 28.5 days: it added the ½ day of platform Week 30b and the ½ day of OTA Week 39a, and OBE-096 took a day of the launch block; on 2026-11-10 OFE-029 took Week 39a's ½ day, X-041 a buffer day of C69 and OFE-030 the buffer day of OTA Week 40 (26 days). The re-baseline of 2026-11-11 gives those two days back (X-041 and OFE-030 move into C78) and adds ½ day each in OTA Week 39c and platform Week 30c (29 days); OBE-101, added the same day, takes OTA Week 40's day of buffer (28 days), and the second re-baseline of that day gives those two half days to PBE-073 in C78 (**27 days**). |
+| Milestone order | Strictly M0 → M6: a milestone's batches start after the previous go/no-go, with one exception ([§2.0](#20-how-to-read-and-run-the-batches)) | The weeks of both solo plans, mapped to calendar weeks in [§1.3](#13-calendar-without-agents-82-working-weeks) |
 | Example dates | Start on Monday 19 October 2026, with a two-week break at the year end | Start on Monday 19 October 2026, with two-week breaks at the 2026 and 2027 year ends and in August 2027 |
 
 The plan-lint sizes (S 2 h, M 4 h, L 8 h of agent and review time) are kept below as **agent-hours**, so that the figures match the group plans. They are not the developer's time.
@@ -48,8 +50,8 @@ A small simulation of this model (3 agents, 6 review hours a day, critical-path 
 | M3 Book & pay | W15–W19 | 5 | 8 Feb – 12 Mar 2027 | 47 | 232 | 109 | 41 h |
 | M4 OTA admin | W20–W23 | 4 | 15 Mar – 9 Apr 2027 | 46 | 196 | 92 | 28 h |
 | M5 Monetisation & self-service | W24–W27 | 4 | 12 Apr – 7 May 2027 | 44 | 206 | 97 | 23 h |
-| M6 Hardening & launch | W28–W31 | 4 | 10 May – 4 Jun 2027 | 53 | 214 | 100 | 20 h: three green nightly runs, human steps (SSH second factor, WAF week, restore drill, outbound allow-list), launch (since OBE-101 of 2026-11-11; 22 h after the re-baseline of the same day, which gave M6 a fourth week; 38 h before the re-baseline of 2026-11-06; 9 h before OFE-029, 8 h before X-041 and OFE-030, all of 2026-11-10, and 5 h before 2026-11-11) |
-| **Total** | | **31** | | **328** | **1,508** | **707** | **222 h** |
+| M6 Hardening & launch | W28–W31 | 4 | 10 May – 4 Jun 2027 | 58 | 238 | 112 | 8 h: three green nightly runs, human steps (SSH second factor, WAF week, restore drill, outbound allow-list), launch (since the second re-baseline of 2026-11-11; 20 h after OBE-101 of the same day and 22 h after the first re-baseline of that day, which gave M6 a fourth week; 38 h before the re-baseline of 2026-11-06; 9 h before OFE-029, 8 h before X-041 and OFE-030, all of 2026-11-10, and 5 h before 2026-11-11) |
+| **Total** | | **31** | | **333** | **1,532** | **718** | **210 h** |
 
 Why these lengths:
 
@@ -59,6 +61,7 @@ Why these lengths:
 - **M6** has little code but needs three consecutive green nightly runs, a restore drill and the launch itself.
 - **M6** grew from 26 to 42 tasks in the re-baseline of 2026-11-06: the follow-ups of its security reviews, its load test and its Lighthouse pass (16 tasks, 60 agent-hours, about 28 developer-hours). Its 38 h of buffer hold them with 9 h to spare, so it keeps its three weeks. With 9 h of buffer left, a further slip of M6 is a re-baseline of its own ([§4.3](#43-keeping-the-plans-current)). OFE-029 (S, 2 h, ½ solo day), which OFE-027 added on 2026-11-10 when its measurement found the header's shift, makes it 43 tasks and leaves 8 h. X-041 and OFE-030 (M each; lead decisions (13h) and (13a) of 2026-11-10) make it 45 tasks and leave 5 h: any further work in M6 is a re-baseline of its own.
 - **M6** gets a fourth week in the re-baseline of 2026-11-11: OBE-097 … OBE-100, OAD-021, OAD-022 and PBE-072 (7 tasks, 28 agent-hours, about 13 developer-hours) make it 52 tasks and 98 developer-hours, more than three weeks of 30 h hold; four weeks leave 22 h of buffer. OBE-101 (M; the completed jobs Redis keeps, which OBE-088 added the same day) makes it 53 tasks and 100 developer-hours and leaves 20 h.
+- **M6** keeps its four weeks in the second re-baseline of 2026-11-11: PBE-073, PBE-074, SDK-016, OBE-102 (M each) and OFE-031 (L) (5 tasks, 24 agent-hours, about 11 developer-hours) make it 58 tasks and 112 developer-hours and leave 8 h of buffer. Any further work in M6 is a re-baseline of its own: a fifth week.
 
 ```mermaid
 gantt
@@ -77,7 +80,7 @@ gantt
   Year-end break          :2026-12-21, 2027-01-02
 ```
 
-### 1.3 Calendar without agents: 81 working weeks
+### 1.3 Calendar without agents: 82 working weeks
 
 | Milestone | Calendar weeks | Length | Example dates | Plan weeks inside |
 |---|---|---|---|---|
@@ -87,8 +90,8 @@ gantt
 | M3 Book & pay | C37–C48 | 12 | 12 Jul – 15 Oct 2027 | OTA W13–W24, platform W19 |
 | M4 OTA admin | C49 – Monday of C59 | 10 | 18 Oct 2027 – 10 Jan 2028 | OTA W25–W34 and the first day of W35, platform W20 |
 | M5 Monetisation & self-service | C59–C70 | 12 | 10 Jan – 31 Mar 2028 | OTA W35–W37, platform W21–W29 |
-| M6 Hardening & launch | C71–C81 | 11 | 3 Apr – 16 Jun 2028 | Platform W30, W30a, W30b, W30c and W31, OTA W38, W39, W39a, W39b, W39c and W40, foundation X-029 … X-032, X-038, X-039 and (since 2026-11-11) X-041 (X-037 and X-040 use earlier buffer days, below). C71–C76 and 6 weeks until the re-baseline of 2026-11-06, C71–C79 and 9 weeks until the re-baseline of 2026-11-11 |
-| **Total** | | **81** | | |
+| M6 Hardening & launch | C71–C82 | 12 | 3 Apr – 23 Jun 2028 | Platform W30, W30a, W30b, W30c, W30d and W31, OTA W38, W39, W39a, W39b, W39c, W39d and W40, foundation X-029 … X-032, X-038, X-039 and (since 2026-11-11) X-041 (X-037 and X-040 use earlier buffer days, below). C71–C76 and 6 weeks until the re-baseline of 2026-11-06, C71–C79 and 9 weeks until the re-baseline of 2026-11-11, C71–C81 and 11 weeks until the second re-baseline of that day |
+| **Total** | | **82** | | |
 
 Both solo plans ask the roadmap to map their week numbers to calendar weeks. This is that map, in order. A calendar week is five working days.
 
@@ -120,8 +123,9 @@ Both solo plans ask the roadmap to map their week numbers to calendar weeks. Thi
 | C74 | OTA W39a (since 2026-11-06) | The OTA reviews' follow-ups: OBE-092 … OBE-095, OAD-020, OFE-027, OFE-028 and, since 2026-11-10, OFE-029 (5 days; OFE-029 took the week's ½ day of buffer). Before platform W30a: PBE-069 needs OBE-094. |
 | C75–C76 | Platform W30a–W30b (since 2026-11-06) | The platform security review's follow-ups: PBE-067 … PBE-071, PFE-029, PFE-030, PAD-017 (9.5 days), ½ day of buffer |
 | C77 | OTA W39b (since 2026-11-11) | The follow-ups of lead decisions (15h), (15j) and (15l) of 2026-11-11: OBE-097 (CORS), OBE-098 and OAD-021 (a storefront's offers per search), OBE-099 and OAD-022 (closing a booking in Reconciliation review) (5 days) |
-| C78 | OTA W39c + platform W30c + X-041 (since 2026-11-11) | OBE-100 (the OTA's `secrets:rewrap`, decision (15m)) and OFE-030 (moved from OTA W40's buffer day) with ½ day of buffer; PBE-072 (the platform's `secrets:rewrap`) with ½ day of buffer; X-041 (1 day, M6 tag, moved from C69's buffer day) |
-| C79–C81 | Platform W31 + OTA W40 + X-029 … X-032, X-038, X-039 | 13.5 task days (OBE-096 since 2026-11-06, OBE-101 since 2026-11-11 in OTA W40's buffer day), 1 launch day, ½ day of buffer (also ½ day from 2026-11-10 to 2026-11-11, while OFE-030 took OTA W40's buffer day, and 1½ days between OFE-030's move to C78 and OBE-101). Start X-039 first: its WAF needs a week in detection mode. **M6 exit and launch.** C74–C76 until the re-baseline of 2026-11-06, C77–C79 until the re-baseline of 2026-11-11. |
+| C78 | OTA W39c + platform W30c + X-041 (since 2026-11-11) | OBE-100 (the OTA's `secrets:rewrap`, decision (15m)) and OFE-030 (moved from OTA W40's buffer day); PBE-072 (the platform's `secrets:rewrap`) and, since the second re-baseline of 2026-11-11, PBE-073 (the breached-password list, decision (17b)) in the two half days that W39c and W30c kept as buffer until then; X-041 (1 day, M6 tag, moved from C69's buffer day) |
+| C79 | OTA W39d + platform W30d (since the second re-baseline of 2026-11-11) | SDK-016 (the shared refresh, decision (17d)), OBE-102 (the Amadeus buckets kept for shopping, (17g)) and OFE-031 (the phone page of a signed-in customer, (17l)): 4 days; PBE-074 (the official Amadeus hosts, (17k)): 1 day |
+| C80–C82 | Platform W31 + OTA W40 + X-029 … X-032, X-038, X-039 | 13.5 task days (OBE-096 since 2026-11-06, OBE-101 since 2026-11-11 in OTA W40's buffer day), 1 launch day, ½ day of buffer (also ½ day from 2026-11-10 to 2026-11-11, while OFE-030 took OTA W40's buffer day, and 1½ days between OFE-030's move to C78 and OBE-101). Start X-039 first: its WAF needs a week in detection mode. **M6 exit and launch.** C74–C76 until the re-baseline of 2026-11-06, C77–C79 until the re-baseline of 2026-11-11, C79–C81 until the second re-baseline of that day. |
 
 Five changes to the solo plans' order make this calendar work. [ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md) records them:
 
@@ -135,9 +139,11 @@ Five changes to the solo plans' order make this calendar work. [ADR-0025](../adr
 
 **Re-baseline (2026-11-11; [ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md) item 6, lead decision (15a) of 2026-11-11, approved by the owner; FIX-W48-SHARED).** Seven M6 tasks of 7 solo days join the plans (OBE-097 … OBE-100, OAD-021, OAD-022, PBE-072; header note), and the solo plans place them in follow-up weeks numbered as before so that their other weeks keep the numbers this map uses: the OTA's Week 39b (OBE-097, OBE-098, OAD-021, OBE-099, OAD-022: 5 days) and Week 39c (OBE-100 and OFE-030, moved from Week 40's buffer day: 2 days and ½ day of buffer; [OTA solo plan](../../../ota/docs/plans/solo-developer-plan.md), note of 2026-11-11 under Week 39), and the platform's Week 30c (PBE-072: 1 day and ½ day of buffer; [platform solo plan](../../../platform/docs/plans/solo-developer-plan.md), note of 2026-11-11 under Week 30). Week 39b takes C77; Weeks 39c and 30c share C78 with X-041, moved from C69's buffer day; the launch block follows in C79–C81. M6 grows from nine to eleven calendar weeks and ends on 16 June 2028 instead of 2 June 2028; M0–M5 keep their weeks, and the two buffer days X-041 and OFE-030 had taken return.
 
+**Re-baseline (2026-11-11, second set; [ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md) item 6, lead decisions (17b), (17d), (17g), (17k) and (17l) of 2026-11-11, approved by the owner; FIX-W49-SHARED).** Five M6 tasks of 6 solo days join the plans (PBE-073, PBE-074, SDK-016, OBE-102, OFE-031; header note), more than the 1.5 days of buffer left before the launch block. The solo plans place them as before, in follow-up weeks numbered so that their other weeks keep the numbers this map uses: PBE-073 joins the platform's Week 30c in C78 (Weeks 39c and 30c give it their two half days of buffer), and a calendar week C79 holds the OTA's new Week 39d (SDK-016, OBE-102, OFE-031: 4 days) and the platform's new Week 30d (PBE-074: 1 day) ([OTA solo plan](../../../ota/docs/plans/solo-developer-plan.md) and [platform solo plan](../../../platform/docs/plans/solo-developer-plan.md), notes of 2026-11-11 under Weeks 39 and 30). The launch block follows in C80–C82. M6 grows from eleven to twelve calendar weeks and ends on 23 June 2028 instead of 16 June 2028; M0–M5 keep their weeks.
+
 ```mermaid
 gantt
-  title Without agents - 81 working weeks (example start 19 Oct 2026)
+  title Without agents - 82 working weeks (example start 19 Oct 2026)
   dateFormat YYYY-MM-DD
   axisFormat %b %Y
   section Milestones
@@ -147,7 +153,7 @@ gantt
   M3 Book and pay         :n3, 2027-07-12, 2027-10-16
   M4 OTA admin            :n4, 2027-10-18, 2028-01-11
   M5 Monetisation         :n5, 2028-01-10, 2028-04-01
-  M6 Hardening and launch :n6, 2028-04-03, 2028-06-17
+  M6 Hardening and launch :n6, 2028-04-03, 2028-06-24
   section Breaks
   Year-end 2026           :2026-12-21, 2027-01-02
   August 2027             :2027-08-09, 2027-08-21
@@ -156,10 +162,10 @@ gantt
 
 ### 1.4 How the two calendars compare
 
-- Agents shorten the calendar from 81 to 31 working weeks, about 2.6 times (76 to 30 before the re-baseline of 2026-11-06, 79 to 30 before the re-baseline of 2026-11-11). The gain is largest where many tasks are independent (M1, M4 and M6 have batches of 9 to 16 tasks). It is smallest where one chain is long (M2).
+- Agents shorten the calendar from 82 to 31 working weeks, about 2.6 times (76 to 30 before the re-baseline of 2026-11-06, 79 to 30 before the re-baseline of 2026-11-11, 81 to 31 before the second re-baseline of that day). The gain is largest where many tasks are independent (M1, M4 and M6 have batches of 9 to 16 tasks). It is smallest where one chain is long (M2).
 - In both calendars the limit is the developer's own hours: review hours with agents, build days without. Above three agents the calendar does not get shorter.
 - Outside lead times (Amadeus, Stripe, the penetration test) are the same in both calendars, so they matter more in the shorter one ([§3.3](#33-biggest-risks)).
-- The calendar without agents carries less buffer (about 7 % against about 24 % since the re-baseline of 2026-11-11; 7 % and 23 % after the re-baseline of 2026-11-06, 8 % and 27 % before it), because it keeps the solo plans' own buffers. If M0 and M1 overrun by more than 10 %, plan for about 90 weeks.
+- The calendar without agents carries less buffer (about 7 % against about 23 % since the second re-baseline of 2026-11-11; 7 % and 24 % after the first re-baseline of that day, 7 % and 23 % after the re-baseline of 2026-11-06, 8 % and 27 % before it), because it keeps the solo plans' own buffers. If M0 and M1 overrun by more than 10 %, plan for about 90 weeks.
 
 ## 2. Milestones in detail
 
@@ -409,21 +415,21 @@ Within each batch, follow the platform plan's order (billing, custom domains, Am
 
 | Batch | Target week | Tasks |
 |---|---|---|
-| B1 | W28–W29 | **OAD-019**, PBE-062, OBE-084, PBE-063, OBE-088, PFE-028, PAD-016, OBE-087, OFE-023, OFE-024, OFE-025, X-029\*, X-030\*, X-031\*, X-032, X-039\*, X-037\*, X-040, OBE-092; since 2026-11-10: X-041\*; since 2026-11-11: OBE-099 |
-| B2 | W29–W30 | **OFE-026**, OBE-085, PBE-065, OBE-089, SDK-015\*, X-038\*; since 2026-11-06: PBE-071, PBE-070, PBE-067, PFE-029, PBE-068, PAD-017, OBE-093, OBE-094, OBE-095, OAD-020, OFE-027, OFE-028, OBE-096\*; since 2026-11-11: OBE-097, OBE-100, PBE-072, OAD-022, OBE-101 |
-| B3 | W30–W31, or after launch | OBE-086\*; since 2026-11-06: PFE-030, PBE-069 (W30); since 2026-11-10: OFE-029 (W30, after OFE-027 and OFE-028), OFE-030 (W30, after OFE-028); since 2026-11-11: OBE-098 (W30, after OBE-096) |
-| B4 | W31 | Since 2026-11-11: OAD-021 (after OBE-098) |
+| B1 | W28–W29 | **OFE-024**, OAD-019, PBE-062, OBE-084, PBE-063, OBE-088, PFE-028, PAD-016, OBE-087, OFE-023, OFE-025, X-029\*, X-030\*, X-031\*, X-032, X-039\*, X-037\*, X-040, OBE-092; since 2026-11-10: X-041\*; since 2026-11-11: OBE-099; since the second re-baseline of 2026-11-11: PBE-073, PBE-074, SDK-016 |
+| B2 | W29–W30 | OFE-026, OBE-085, PBE-065, OBE-089, SDK-015\*, X-038\*; since 2026-11-06: PBE-071, PBE-070, PBE-067, PFE-029, PBE-068, PAD-017, OBE-093, OBE-094, OBE-095, OAD-020, OFE-027, **OFE-028**, OBE-096\*; since 2026-11-11: OBE-097, OBE-100, PBE-072, OAD-022, OBE-101; since the second re-baseline of 2026-11-11: OBE-102 (after OBE-088) |
+| B3 | W30–W31, or after launch | OBE-086\*; since 2026-11-06: PFE-030, PBE-069 (W30); since 2026-11-10: OFE-029 (W30, after OFE-027 and OFE-028), **OFE-030** (W30, after OFE-028); since 2026-11-11: OBE-098 (W30, after OBE-096) |
+| B4 | W31 | Since 2026-11-11: OAD-021 (after OBE-098); since the second re-baseline of 2026-11-11: **OFE-031** (after OFE-030) |
 | After launch | First release after the switches have been on for one release | PBE-064^ |
 
-The 16 tasks of the re-baseline of 2026-11-06 (§1.1) joined the batches by the rule of §2.0: OBE-092 depends on OBE-028 (M2) only; the security review follow-ups depend on PBE-062 or OBE-084 (B1); PFE-030 needs PBE-071, PBE-069 needs OBE-094, and OBE-096 needs OBE-092. The longest of them, PBE-062 → PBE-071 → PFE-030, is now M6's longest chain ([§3.2](#32-longest-chain-inside-each-milestone)), so start PBE-071 first in B2. The seven tasks of the re-baseline of 2026-11-11 joined the same way: OBE-099 depends on M3 and M4 tasks only (B1); OBE-097 needs OBE-084, OBE-100 and PBE-072 need X-040, and OAD-022 needs OBE-099 (B2); OBE-098 needs OBE-096 (B3), and OAD-021 needs OBE-098 (B4, a fourth batch that M6 did not have before). OBE-101, which OBE-088 added the same day, needs OBE-088 (B2). The longest chain stays PBE-062 → PBE-071 → PFE-030 (24 h); the deepest is OBE-092 → OBE-096 → OBE-098 → OAD-021 (12 h over four batches).
+The 16 tasks of the re-baseline of 2026-11-06 (§1.1) joined the batches by the rule of §2.0: OBE-092 depends on OBE-028 (M2) only; the security review follow-ups depend on PBE-062 or OBE-084 (B1); PFE-030 needs PBE-071, PBE-069 needs OBE-094, and OBE-096 needs OBE-092. The longest of them, PBE-062 → PBE-071 → PFE-030, is now M6's longest chain ([§3.2](#32-longest-chain-inside-each-milestone)), so start PBE-071 first in B2. The seven tasks of the re-baseline of 2026-11-11 joined the same way: OBE-099 depends on M3 and M4 tasks only (B1); OBE-097 needs OBE-084, OBE-100 and PBE-072 need X-040, and OAD-022 needs OBE-099 (B2); OBE-098 needs OBE-096 (B3), and OAD-021 needs OBE-098 (B4, a fourth batch that M6 did not have before). OBE-101, which OBE-088 added the same day, needs OBE-088 (B2). The longest chain stays PBE-062 → PBE-071 → PFE-030 (24 h); the deepest is OBE-092 → OBE-096 → OBE-098 → OAD-021 (12 h over four batches). The five tasks of the second re-baseline of 2026-11-11 joined by the same rule: PBE-073, PBE-074 and SDK-016 depend on tasks of earlier milestones only (B1), OBE-102 needs OBE-088 (B2), and OFE-031 needs OFE-030 (B4). OFE-024 → OFE-028 → OFE-030 → OFE-031 (18 h over four batches) is now the deepest chain with the most hours, and since OFE-031 the plan-lint critical path runs through it (§3.1), so its tasks are bold here instead of OAD-019 and OFE-026.
 
 **Human review gates.**
 
-- Human steps: X-029 (uptime monitors), X-030 (stop a worker on the VM and receive the alert), X-031 (restore drill with a measured RTO, on a scratch VM that cannot reach live Amadeus or Stripe), X-037 (enrol the SSH second factor), X-038 (bucket rule for `logs/`, check a shipped login), X-039 (start it first: one week of WAF detection, then blocking), X-041 (the outbound allow-list on the throwaway VM, then the production VM; since 2026-11-10), OBE-086 (penetration test and ASV scan, with results in `ota/docs/pci/README.md`), SDK-015 (npm organisation, automation token, tag), OBE-096 (the owner picks the default number of offers a storefront asks Amadeus for, or a worker thread or a second API process; since 2026-11-06). The tasks of 2026-11-11 add no human step. Before the deploy, add this milestone's new variables to `/etc/velexis`. Walk through both launch checklists (PBE-065, OBE-089) on the VM.
-- Deep review: PBE-062 and OBE-084 (security reviews), OBE-085 (PCI evidence pack, against the controls of [ADR-0027](../adr/0027-pci-scope-and-vm-controls.md)), X-037 to X-039 and X-041 (SSH, logs, WAF, outbound allow-list).
+- Human steps: X-029 (uptime monitors), X-030 (stop a worker on the VM and receive the alert), X-031 (restore drill with a measured RTO, on a scratch VM that cannot reach live Amadeus or Stripe), X-037 (enrol the SSH second factor), X-038 (bucket rule for `logs/`, check a shipped login), X-039 (start it first: one week of WAF detection, then blocking), X-041 (the outbound allow-list on the throwaway VM, then the production VM; since 2026-11-10), OBE-086 (penetration test and ASV scan, with results in `ota/docs/pci/README.md`), SDK-015 (npm organisation, automation token, tag), OBE-096 (the owner picks the default number of offers a storefront asks Amadeus for, or a worker thread or a second API process; since 2026-11-06). The tasks of 2026-11-11, those of its second re-baseline included, add no human step. Before the deploy, add this milestone's new variables to `/etc/velexis`. Walk through both launch checklists (PBE-065, OBE-089) on the VM.
+- Deep review: PBE-062 and OBE-084 (security reviews), OBE-085 (PCI evidence pack, against the controls of [ADR-0027](../adr/0027-pci-scope-and-vm-controls.md)), X-037 to X-039 and X-041 (SSH, logs, WAF, outbound allow-list); since the second re-baseline of 2026-11-11 also PBE-073 (the password list), SDK-016 (the refresh of cookie mode, which a second refresh with the same cookie revokes) and OBE-102 (the Amadeus buckets).
 - Gate: PBE-064 runs only when all six switches have been on in production for one release. The developer confirms it in the PR.
 
-**Demo.** Walk through `platform/docs/security-review.md`, `ota/docs/security-review.md`, the PCI pack and both performance documents. Show three consecutive green nightly runs of the `portal`, `platform-admin`, `storefront`, `storefront-stripe` and `ota-admin` projects. Install `@velexis/ota-sdk@1.0.0` in an empty project and run the guide's sample. Walk through the launch checklists. Since 2026-11-11 also: a third-party page on another origin calls the OTA API with a publishable key (OBE-097); a storefront's offers per search changed in the OTA admin; a booking in Reconciliation review closed in the OTA admin; a master-key rotation on the local stack with both `secrets:rewrap` commands down to no value under the old key.
+**Demo.** Walk through `platform/docs/security-review.md`, `ota/docs/security-review.md`, the PCI pack and both performance documents. Show three consecutive green nightly runs of the `portal`, `platform-admin`, `storefront`, `storefront-stripe` and `ota-admin` projects. Install `@velexis/ota-sdk@1.0.0` in an empty project and run the guide's sample. Walk through the launch checklists. Since 2026-11-11 also: a third-party page on another origin calls the OTA API with a publishable key (OBE-097); a storefront's offers per search changed in the OTA admin; a booking in Reconciliation review closed in the OTA admin; a master-key rotation on the local stack with both `secrets:rewrap` commands down to no value under the old key. Since the second re-baseline of 2026-11-11 also: a rule-meeting breached password refused at sign-up (PBE-073); a Velexis Amadeus account on another host refused with `APP_ENV=production` (PBE-074); a signed-in customer's phone page that does not move, with the account menu opened (OFE-031); the booking load test's storefront `429`s in the sync bursts next to OBE-088's (OBE-102).
 
 **Go/no-go (launch).**
 
@@ -436,7 +442,7 @@ The 16 tasks of the re-baseline of 2026-11-06 (§1.1) joined the batches by the 
 
 ### 3.1 The critical path
 
-plan-lint finds the longest chain of dependencies in agent-hours: **162 h over 29 tasks**. It is the life of one booking, built from the bottom up.
+plan-lint finds the longest chain of dependencies in agent-hours: **166 h over 30 tasks** since the second re-baseline of 2026-11-11 (162 h over 29 tasks before; see the note under the graph). It is the life of one booking, built from the bottom up, and the storefront that sells it.
 
 | Stage | Tasks | Agent-hours | What it builds |
 |---|---|---|---|
@@ -446,8 +452,8 @@ plan-lint finds the longest chain of dependencies in agent-hours: **162 h over 2
 | Shopping (M2) | OBE-021 → OBE-022 → OBE-023 | 20 | Search, offer and upsell, price |
 | Checkout and payment (M3) | OBE-036 → OBE-038 → OBE-042 | 24 | Checkout aggregate, Stripe gateway, booking orchestrator |
 | After-sales (M3) | OBE-046 → OBE-047 → OBE-048 → OBE-049 | 20 | My bookings, guest access, change, cancel with the money step |
-| Console (M4) | OBE-063 → OAD-008 | 16 | Console issue and cancel, then the OTA admin's booking actions |
-| Journeys (M4–M6) | OAD-016 → OAD-017 → OAD-019 → OFE-026 | 14 | SSO and bookings journeys, the full OTA admin suite, stable nightly suites |
+| Storefront journeys (M3) | OFE-015 → OFE-017 → OFE-019 | 16 | My bookings and the booking page, the guest Stripe checkout journey, the account, bookings and keyboard-only journeys |
+| Storefront quality (M6) | OFE-024 → OFE-028 → OFE-030 → OFE-031 | 18 | The accessibility and performance pass, the test banner without a shift, the phone layout, a signed-in customer's phone page |
 
 ```mermaid
 flowchart LR
@@ -461,28 +467,26 @@ flowchart LR
     OBE011[OBE-011] --> OBE012[OBE-012] --> OBE017[OBE-017] --> OBE018[OBE-018] --> OBE021[OBE-021] --> OBE022[OBE-022] --> OBE023[OBE-023]
   end
   subgraph M3
-    OBE036[OBE-036] --> OBE038[OBE-038] --> OBE042[OBE-042] --> OBE046[OBE-046] --> OBE047[OBE-047] --> OBE048[OBE-048] --> OBE049[OBE-049]
-  end
-  subgraph M4
-    OBE063[OBE-063] --> OAD008[OAD-008] --> OAD016[OAD-016] --> OAD017[OAD-017]
+    OBE036[OBE-036] --> OBE038[OBE-038] --> OBE042[OBE-042] --> OBE046[OBE-046] --> OBE047[OBE-047] --> OBE048[OBE-048] --> OBE049[OBE-049] --> OFE015[OFE-015] --> OFE017[OFE-017] --> OFE019[OFE-019]
   end
   subgraph M6
-    OAD019[OAD-019] --> OFE026[OFE-026]
+    OFE024[OFE-024] --> OFE028[OFE-028] --> OFE030[OFE-030] --> OFE031[OFE-031]
   end
   X015 --> PBE002
   OBE003 --> OBE011
   OBE023 --> OBE036
-  OBE049 --> OBE063
-  OAD017 --> OAD019
+  OFE019 --> OFE024
 ```
+
+*Note (2026-11-11, second re-baseline, FIX-W49-SHARED).* Until OFE-031 (L) joined the plans, the path was 162 h over 29 tasks and ended with the console and its journeys: OBE-049 → OBE-063 → OAD-008 → OAD-016 → OAD-017 → OAD-019 → OFE-026 (M4–M6, 30 h after OBE-049). OFE-031 makes the storefront chain after OBE-049 34 h: OFE-015 → OFE-017 → OFE-019 → OFE-024 → OFE-028 → OFE-030 → OFE-031. Every task of both chains is done but OFE-017 (its nightly Stripe run), OFE-024 (the screen-reader pass, a human step), OFE-026 (three green nightly runs) and OFE-031, so the change moves no batch and no week; plan-lint's remaining critical path (its second block, X-021 → X-020 → X-023 → X-024 → X-030 → X-038, 32 h) is unchanged.
 
 What it means in practice:
 
-1. **It is an OTA-backend spine.** 16 of the 29 tasks are OTA backend tasks. The platform feeds it only through PBE-002, the platform `0002` migration.
-2. **It sets the order, not the length, of the agent calendar.** 162 agent-hours are about 29 review cycles, roughly 6 working weeks if nothing else ran. The 707 review hours (659 before the re-baseline of 2026-11-06, 687 before OFE-029 and 688 before X-041 and OFE-030 of 2026-11-10, 692 before the re-baseline of 2026-11-11, 705 before OBE-101 of the same day) set the 31 weeks. In every batch, start critical tasks first and review them the same day.
+1. **It is an OTA-backend spine.** 15 of the 30 tasks are OTA backend tasks (16 of 29 before the second re-baseline of 2026-11-11), and the storefront's tasks end it. The platform feeds it only through PBE-002, the platform `0002` migration.
+2. **It sets the order, not the length, of the agent calendar.** 166 agent-hours are about 30 review cycles, roughly 6 working weeks if nothing else ran. The 718 review hours (659 before the re-baseline of 2026-11-06, 687 before OFE-029 and 688 before X-041 and OFE-030 of 2026-11-10, 692 before the re-baseline of 2026-11-11, 705 before OBE-101 of the same day, 707 before its second re-baseline) set the 31 weeks. In every batch, start critical tasks first and review them the same day.
 3. **Milestone gates make the per-milestone chains matter.** Because each milestone waits for the previous go/no-go, the chain that counts is the sum of each milestone's longest chain ([§3.2](#32-longest-chain-inside-each-milestone)): 408 agent-hours over 68 tasks since the re-baseline of 2026-11-06. That is still well inside the calendar, but M1 and M2 hold the deepest chains.
-4. **The L tasks on the path need fast reviews.** OBE-012, OBE-018, OBE-021, OBE-023, OBE-036, OBE-038, OBE-042, OBE-049, OBE-063 and OAD-008 are L tasks with heavy reviews. Review them first thing in the day, so that their successors start the same day.
-5. **Without agents** the path is 40.5 developer-days, done in sequence anyway. The total of 377 days (351.5 before the re-baseline of 2026-11-06, 366.5 before OFE-029 and 367 before X-041 and OFE-030 of 2026-11-10, 369 before the re-baseline of 2026-11-11, 376 before OBE-101 of the same day) sets that calendar.
+4. **The L tasks on the path need fast reviews.** OBE-012, OBE-018, OBE-021, OBE-023, OBE-036, OBE-038, OBE-042, OBE-049, OFE-015 and OFE-031 are L tasks with heavy reviews (OBE-063 and OAD-008 instead of OFE-015 and OFE-031 before the second re-baseline of 2026-11-11). Review them first thing in the day, so that their successors start the same day.
+5. **Without agents** the path is 41.5 developer-days (40.5 before the second re-baseline of 2026-11-11), done in sequence anyway. The total of 383 days (351.5 before the re-baseline of 2026-11-06, 366.5 before OFE-029 and 367 before X-041 and OFE-030 of 2026-11-10, 369 before the re-baseline of 2026-11-11, 376 before OBE-101 of the same day, 377 before its second re-baseline) sets that calendar.
 
 ### 3.2 Longest chain inside each milestone
 
@@ -494,7 +498,7 @@ What it means in practice:
 | M3 | OBE-031 → OBE-036 → OBE-038 → OBE-042 → OBE-046 → OBE-047 → OBE-048 → OBE-049 → OFE-015 → OFE-017 → OFE-018 | 64 | 11 |
 | M4 | OBE-058 → OBE-059 → OBE-060 → OBE-061 → OBE-062 → OBE-063 → OAD-008 → OAD-016 → PFE-019 | 52 | 10 |
 | M5 | PBE-041 → PBE-042 → PBE-043 → PBE-044 → PBE-045 → PBE-046 → PBE-048 → PAD-012 → PAD-015 | 52 | 9 |
-| M6 | PBE-062 → PBE-071 → PFE-030 (since 2026-11-06; also X-039 → X-038, PBE-062 → PBE-070, OBE-084 → OBE-094 → PBE-069; the deepest since 2026-11-11, OBE-092 → OBE-096 → OBE-098 → OAD-021, holds 12 h) | 24 | 4 (3 until 2026-11-11) |
+| M6 | PBE-062 → PBE-071 → PFE-030 (since 2026-11-06; also X-039 → X-038, PBE-062 → PBE-070, OBE-084 → OBE-094 → PBE-069; the deepest since 2026-11-11, OBE-092 → OBE-096 → OBE-098 → OAD-021, holds 12 h, and since the second re-baseline of that day OFE-024 → OFE-028 → OFE-030 → OFE-031, 18 h) | 24 | 4 (3 until 2026-11-11) |
 | **Sum** | | **408** | |
 
 The chains count the gates of §2.0 as dependencies (PAD-011 and PFE-019 end their chains for that reason).
@@ -574,7 +578,7 @@ Without agents: day 1 is the same, then work through the foundation block in bat
 | M3 | W19, 12 Mar 2027 | C48, 15 Oct 2027 | — | — | |
 | M4 | W23, 9 Apr 2027 | C59, 10 Jan 2028 | — | — | |
 | M5 | W27, 7 May 2027 | C70, 31 Mar 2028 | — | — | |
-| M6 | W31, 4 Jun 2027 | C81, 16 Jun 2028 | — | — | Re-baselined 2026-11-06 (C76, 12 May 2028 before) and 2026-11-11 (W30, 28 May 2027 and C79, 2 Jun 2028 before) (§4.5) |
+| M6 | W31, 4 Jun 2027 | C82, 23 Jun 2028 | — | — | Re-baselined 2026-11-06 (C76, 12 May 2028 before) and twice on 2026-11-11 (W30, 28 May 2027 and C79, 2 Jun 2028 before the first; C81, 16 Jun 2028 before the second) (§4.5) |
 
 | Outside step | Needed for | Latest useful point (with agents) | Status |
 |---|---|---|---|
@@ -597,33 +601,34 @@ Without agents: day 1 is the same, then work through the foundation block in bat
 | 2026-11-10 | Lead decisions (13a) and (13h) of 2026-11-10 (FIX-W47-SHARED): OFE-029 is closed as met by OFE-028's header change, and two M6 tasks join the plans: X-041 (M, 4 h, 1 solo day; the VM's outbound allow-list with every refused attempt logged and reviewed daily, PCI DSS 11.5.1.1; M6 B1 with a human step) and OFE-030 (M, 4 h, 1 solo day; the layout shifts left on phones and axe at phone width; M6 B3 after OFE-028). 320 tasks, 1,476 agent-hours, 692 developer-hours; critical path unchanged. Not a re-baseline: M6 keeps its 3 weeks with agents (its buffer falls from 8 h to 5 h); without agents X-041 takes one of C69's 1.5 buffer days and OFE-030 the buffer day of OTA Week 40 (the launch block keeps ½ day), so the calendar stays at 79 weeks (26 buffer days instead of 28). |
 | 2026-11-11 | Re-baseline under [ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md) item 6 (lead decision (15a) of 2026-11-11, approved by the owner; FIX-W48-SHARED). Cause: seven M6 tasks of 28 agent-hours, about 13 developer-hours and 7 solo days that M6's 5 h of buffer cannot hold: OBE-097 (CORS, planned by the lead in ad5e666, decision (15h)), OBE-098 and OAD-021 (a storefront's offers per search in the console, (15j)), OBE-099 and OAD-022 (closing a booking in Reconciliation review, OADR-0003's follow-up, (15l)), PBE-072 and OBE-100 (each backend's `secrets:rewrap`, ADR-0010 item 3, (15m)). 327 tasks, 1,504 agent-hours, 705 developer-hours; critical path unchanged. Calendar with agents 31 weeks instead of 30: M6 W28–W31 with 22 h of buffer, ending on 4 June 2027. Calendar without agents 81 weeks instead of 79: the OTA's Week 39b (C77) and C78 (the OTA's Week 39c, the platform's Week 30c and X-041) before the launch block, now C79–C81; X-041 and OFE-030 leave the buffer days of C69 and OTA Week 40 they had taken on 2026-11-10 (29 buffer days instead of 26); M6 ends on 16 June 2028; M0–M5 unchanged. The M6 batches (a fourth batch, B4) and chains (§2, §3.2) and the totals (§5) follow. |
 | 2026-11-11 | OBE-101 (M, 4 h, 1 solo day), which OBE-088 added on 2026-11-11 when its measurement found that the completed jobs Redis keeps for a day grow with the active tenants (about 7 MiB a day per tenant, so the 512 MiB of Redis hold about 60; wave 48). 328 tasks, 1,508 agent-hours, 707 developer-hours; critical path unchanged. Not a re-baseline: M6 keeps its 4 weeks with agents (B2, after OBE-088; its buffer falls from 22 h to 20 h), and the OTA solo plan places OBE-101 in Week 40's day of buffer, so the calendar without agents stays at 81 weeks (28 buffer days instead of 29). Whether OBE-101 blocks the launch or becomes an after-launch exception is a question to the lead (OBE-088). |
+| 2026-11-11 | Second re-baseline of the day under [ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md) item 6 (lead decisions (17b), (17d), (17g), (17k) and (17l) of 2026-11-11, approved by the owner; FIX-W49-SHARED). Cause: five M6 tasks of 24 agent-hours, about 11 developer-hours and 6 solo days: PBE-073 (portal passwords against the rule-meeting entries of a public list of about a million breached passwords, (17b), with a dated note of ADR-0008), PBE-074 (no Velexis Amadeus account outside the official Amadeus hosts in production, (17k)), SDK-016 (one refresh shared by the SDK clients derived from one cookie-mode client, (17d)), OBE-102 (a share of the Amadeus buckets kept free for shopping during the booking sync, (17g)) and OFE-031 (a signed-in customer's phone page kept still, the search form's fallback, the OTA's full name in the footer, (17l)). 333 tasks, 1,532 agent-hours, 718 developer-hours, 383 solo days. The critical path is 166 h over 30 tasks (162 h over 29 before): OFE-031 (L) makes the storefront chain OBE-049 → OFE-015 → OFE-017 → OFE-019 → OFE-024 → OFE-028 → OFE-030 → OFE-031 4 h longer than the console chain it replaces; no batch or week moves, and the remaining critical path is unchanged (§3.1). Calendar with agents unchanged at 31 weeks: M6 holds 58 tasks and 112 developer-hours, its buffer falls from 20 h to 8 h (B1: PBE-073, PBE-074, SDK-016; B2: OBE-102; B4: OFE-031). Calendar without agents 82 weeks instead of 81: PBE-073 joins the platform's Week 30c in C78 (the two half days of buffer of Weeks 39c and 30c), and a calendar week C79 holds the OTA's new Week 39d (SDK-016, OBE-102, OFE-031) and the platform's new Week 30d (PBE-074); the launch block is C80–C82, M6 ends on 23 June 2028; 27 buffer days instead of 28; M0–M5 unchanged. The M6 batches and chains (§2, §3.2) and the totals (§5) follow. |
 
 ## 5. Summary
 
 ### 5.1 Tasks and agent-hours per component and milestone
 
-Each cell reads tasks / agent-hours (plan-lint sizes). Developer hours are the agent calendar's review time with the 25 % rework allowance; solo days are the calendar without agents. The figures are those of the re-baseline of 2026-11-11 with OBE-101 of the same day (§4.5).
+Each cell reads tasks / agent-hours (plan-lint sizes). Developer hours are the agent calendar's review time with the 25 % rework allowance; solo days are the calendar without agents. The figures are those of the second re-baseline of 2026-11-11 (§4.5).
 
 | Component | M0 | M1 | M2 | M3 | M4 | M5 | M6 | Tasks | Agent-hours | Developer hours | Solo days |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | Foundation (`X-`) | 24 / 106 | 5 / 18 | 2 / 6 | 1 / 4 | — | — | 9 / 40 | 41 | 174 | 82 | 43.5 |
-| Platform backend (`PBE-`) | 1 / 4 | 35 / 206 | 1 / 4 | 2 / 4 | 2 / 6 | 21 / 112 | 10 / 46 | 72 | 382 | 179 | 95.5 |
+| Platform backend (`PBE-`) | 1 / 4 | 35 / 206 | 1 / 4 | 2 / 4 | 2 / 6 | 21 / 112 | 12 / 54 | 74 | 390 | 183 | 97.5 |
 | Portal (`PFE-`) | 1 / 4 | 14 / 66 | — | 1 / 2 | 3 / 10 | 8 / 36 | 3 / 20 | 30 | 138 | 65 | 34.5 |
 | Platform admin (`PAD-`) | 1 / 2 | 9 / 44 | 1 / 2 | — | — | 4 / 20 | 2 / 6 | 17 | 74 | 35 | 18.5 |
-| OTA backend (`OBE-`) | 1 / 4 | 6 / 26 | 21 / 98 | 29 / 160 | 20 / 92 | 8 / 28 | 16 / 62 | 101 | 470 | 220 | 117.5 |
-| Storefront (`OFE-`) | 1 / 4 | — | 7 / 32 | 11 / 50 | 1 / 4 | 2 / 6 | 8 / 24 | 30 | 120 | 56 | 30 |
+| OTA backend (`OBE-`) | 1 / 4 | 6 / 26 | 21 / 98 | 29 / 160 | 20 / 92 | 8 / 28 | 17 / 66 | 102 | 474 | 222 | 118.5 |
+| Storefront (`OFE-`) | 1 / 4 | — | 7 / 32 | 11 / 50 | 1 / 4 | 2 / 6 | 9 / 32 | 31 | 128 | 60 | 32 |
 | OTA admin (`OAD-`) | 1 / 4 | — | — | — | 16 / 70 | 1 / 4 | 4 / 12 | 22 | 90 | 42 | 22.5 |
-| JS SDK (`SDK-`) | 1 / 2 | — | 6 / 28 | 3 / 12 | 4 / 14 | — | 1 / 4 | 15 | 60 | 28 | 15 |
-| **Total** | **31 / 130** | **69 / 360** | **38 / 170** | **47 / 232** | **46 / 196** | **44 / 206** | **53 / 214** | **328** | **1,508** | **707** | **377** |
+| JS SDK (`SDK-`) | 1 / 2 | — | 6 / 28 | 3 / 12 | 4 / 14 | — | 2 / 8 | 16 | 64 | 30 | 16 |
+| **Total** | **31 / 130** | **69 / 360** | **38 / 170** | **47 / 232** | **46 / 196** | **44 / 206** | **58 / 238** | **333** | **1,532** | **718** | **383** |
 | Calendar with agents | W1–W3 | W4–W10 | W11–W14 | W15–W19 | W20–W23 | W24–W27 | W28–W31 | 31 weeks | | | |
-| Calendar without agents | C1–C9 | C10–C27 | C28–C36 | C37–C48 | C49–C59 | C59–C70 | C71–C81 | 81 weeks | | | |
+| Calendar without agents | C1–C9 | C10–C27 | C28–C36 | C37–C48 | C49–C59 | C59–C70 | C71–C82 | 82 weeks | | | |
 
 ### 5.2 Plan files per group
 
 | Group | Tasks | Agent-hours | Implementation plan | Agent tasks | Solo developer plan |
 |---|---|---|---|---|---|
-| Foundation | 41 | 174 | Milestone outcomes in [`foundation-tasks.md`](foundation-tasks.md#milestone-outcomes) | [`foundation-tasks.md`](foundation-tasks.md) | The foundation and launch blocks and the buffer days of [§1.3](#13-calendar-without-agents-81-working-weeks) |
-| Platform | 119 | 594 | [`implementation-plan.md`](../../../platform/docs/plans/implementation-plan.md) | [`agent-tasks.md`](../../../platform/docs/plans/agent-tasks.md) | [`solo-developer-plan.md`](../../../platform/docs/plans/solo-developer-plan.md) |
-| OTA | 168 | 740 | [`implementation-plan.md`](../../../ota/docs/plans/implementation-plan.md) | [`agent-tasks.md`](../../../ota/docs/plans/agent-tasks.md) | [`solo-developer-plan.md`](../../../ota/docs/plans/solo-developer-plan.md) |
+| Foundation | 41 | 174 | Milestone outcomes in [`foundation-tasks.md`](foundation-tasks.md#milestone-outcomes) | [`foundation-tasks.md`](foundation-tasks.md) | The foundation and launch blocks and the buffer days of [§1.3](#13-calendar-without-agents-82-working-weeks) |
+| Platform | 121 | 602 | [`implementation-plan.md`](../../../platform/docs/plans/implementation-plan.md) | [`agent-tasks.md`](../../../platform/docs/plans/agent-tasks.md) | [`solo-developer-plan.md`](../../../platform/docs/plans/solo-developer-plan.md) |
+| OTA | 171 | 756 | [`implementation-plan.md`](../../../ota/docs/plans/implementation-plan.md) | [`agent-tasks.md`](../../../ota/docs/plans/agent-tasks.md) | [`solo-developer-plan.md`](../../../ota/docs/plans/solo-developer-plan.md) |
 
 The validation tool is [`tools/plan-lint/plan-lint.mjs`](../../../tools/plan-lint/plan-lint.mjs). The index of all plan files and how they relate is [`README.md`](README.md).

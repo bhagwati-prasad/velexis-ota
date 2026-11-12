@@ -19,17 +19,19 @@
 #     could change something. The step ssh uses the fakes sshd and systemctl too; the fake systemctl records its reloads
 #     of ssh instead of refusing them, and the step egress's daemon-reload and enable of its two units; the fake nft
 #     keeps the table velexis-egress loads (nft -f) and lists it as nft 1.0.9 does.
-#   - A real nft checks the outbound allow-list in a private network namespace (unshare -n) when one works here:
-#     CHECKVM_NFT=<command>, else /usr/sbin/nft (package nftables). It never touches the host's own rules; without it
-#     the test says so and checks the table with the fake alone.
+#   - A real nft checks the outbound allow-list in a private network namespace (unshare -n): CHECKVM_NFT=<command>,
+#     else /usr/sbin/nft (package nftables). It never touches the host's own rules. Without one that works here the
+#     test fails (lead decision (17a) of 2026-11-11, owner-approved): a FAIL line and the last line name the real-nft
+#     checks that did not run, so no run can pass on the fake alone.
 #   - A real sshd validates the SSH drop-ins when one works here: CHECKVM_SSHD=<command>, else /usr/sbin/sshd
 #     (package openssh-server). sshd -t and sshd -T only read files; without a working sshd the test says so and
 #     checks the drop-ins with the fake alone.
 # Users, groups and folders the test created are removed at the end (CHECKVM_KEEP=1 keeps them for inspection). It
 # refuses to run on a provisioned Velexis VM. It prints one PASS or FAIL line per check; a check that proves an
 # acceptance criterion of X-020, X-040 or X-037 ends in [X-020 AC<n>], [X-040 AC<n>] or [X-037 AC<n>]; a check of
-# the lead's fix of 2026-11-10 (the AIDE timer, the lockout guard) in [FIX-W47-SHARED AC4] or [FIX-W47-SHARED AC5], and
-# of the fix of 2026-11-11 (the SSH source address) in [FIX-W48-SHARED AC5].
+# the lead's fix of 2026-11-10 (the AIDE timer, the lockout guard) in [FIX-W47-SHARED AC4] or [FIX-W47-SHARED AC5], of
+# the fix of 2026-11-11 (the SSH source address) in [FIX-W48-SHARED AC5], and the real-nft part that must run (lead
+# decision (17a) of 2026-11-11) in [FIX-W49-SHARED AC4].
 #
 # What it proves:
 #   1. Two runs of provision-vm.sh --steps users,keys,envfiles: the second changes no key, env or secrets file
@@ -94,8 +96,8 @@
 #      hours, repairs a table changed by hand without touching an emergency opening, and alerts once for a run of
 #      failures. The list names every host of the step packages and the official Amadeus hosts, and no VM-side script
 #      or unit names GitHub. With a real nft, the same table loads, a second run changes nothing, and check-vm.sh
-#      passes on it and names changes made by hand. Neither the SMTP password nor the bucket key that velexis-egress
-#      reads hosts beside reaches an output (step 7).
+#      passes on it and names changes made by hand; without a working nft the test fails ([FIX-W49-SHARED AC4]).
+#      Neither the SMTP password nor the bucket key that velexis-egress reads hosts beside reaches an output (step 7).
 # =====================================================================================================
 set -euo pipefail
 umask 022
@@ -1926,7 +1928,9 @@ fi
 
 step "the outbound allow-list with a real nft in a private network namespace (nft list, nft -f)"
 REAL_NFT="${CHECKVM_NFT:-/usr/sbin/nft}"
+REAL_NFT_RAN=0
 if [ -x "$REAL_NFT" ] && command -v unshare >/dev/null && unshare -n "$REAL_NFT" list ruleset >"$OUT/nft-probe.out" 2>&1; then
+  REAL_NFT_RAN=1
   install -d -m 0755 "$PREFIX/realnft"
   ln -sf "$REAL_NFT" "$PREFIX/realnft/nft"
   in_netns() { # script: runs in a new network namespace with the real nft first on PATH, the other fakes behind it
@@ -1973,7 +1977,9 @@ if [ -x "$REAL_NFT" ] && command -v unshare >/dev/null && unshare -n "$REAL_NFT"
   fi
   egress_reset
 else
-  echo "NOTE the real-nft checks did not run: no nft that works in a private network namespace at $REAL_NFT ($(head -n 1 "$OUT/nft-probe.out" 2>/dev/null || echo 'not installed')); install nftables or set CHECKVM_NFT=<nft command>"
+  # Lead decision (17a) of 2026-11-11 (owner-approved): without a working nft the allow-list's table is never loaded by
+  # the kernel, so the test fails, and its last line says why (the real-sshd part only says so, below).
+  fail "the real-nft checks of step 6b did not run: no nft that works in a private network namespace at $REAL_NFT ($(head -n 1 "$OUT/nft-probe.out" 2>/dev/null || echo 'not installed')); install nftables or set CHECKVM_NFT=<nft command> [FIX-W49-SHARED AC4]"
 fi
 
 # ---- 7. no secret in any output ------------------------------------------------------------------------------
@@ -2014,7 +2020,9 @@ else
 fi
 
 echo
-if [ "$FAILED" != 0 ]; then
+if [ "$REAL_NFT_RAN" != 1 ]; then
+  echo "check-vm.test: FAILED (the real-nft checks of step 6b did not run: see the FAIL line above; install nftables or set CHECKVM_NFT=<nft command>)"
+elif [ "$FAILED" != 0 ]; then
   echo "check-vm.test: FAILED"
 elif [ "$REAL_SSHD_RAN" = 1 ]; then
   echo "check-vm.test: all checks passed"
