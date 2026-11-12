@@ -14,8 +14,8 @@
 #   application firewall's rule files, the Caddy build and the maintenance page root-owned under
 #   /var/lib/velexis/system/<sha>/ -> from the snapshot, stage a changed Caddy build, rule files and Caddyfile and
 #   validate the Caddyfile with the binary the caddy service will run, install the units, then install the root-owned
-#   scripts (velexis-deploy, -backup, -restore, -alert,
-#   -run and -healthcheck; the health check skips its unit checks while this script holds its lock) -> move to
+#   scripts (velexis-deploy, -backup, -restore, -alert, -run, -healthcheck, -shiplogs and -logreview;
+#   the health check skips its unit checks while this script holds its lock) -> move to
 #   releases/<sha> (root:velexis,
 #   read-only) -> migrations (platform, reference, tenant fan-out; expand-phase files) -> reference data, both as
 #   transient units with a dynamic user (run_transient), and between them the fan-out report published as the OTA
@@ -488,6 +488,13 @@ if [ ! -d "$REL" ]; then
   # The on-VM health check (X-030). Its units come with the snapshot above; provision-vm.sh enables the timer.
   if [ -f "$SRC/deploy/scripts/healthcheck.sh" ]; then
     install_if_changed "$SRC/deploy/scripts/healthcheck.sh" "$SBIN/velexis-healthcheck" 0755 || true
+  fi
+  # The security logs' shipment and review (X-038), likewise; provision-vm.sh --steps scripts enables their timers.
+  if [ -f "$SRC/deploy/scripts/ship-logs.sh" ]; then
+    install_if_changed "$SRC/deploy/scripts/ship-logs.sh" "$SBIN/velexis-shiplogs" 0755 || true
+  fi
+  if [ -f "$SRC/deploy/scripts/log-review.sh" ]; then
+    install_if_changed "$SRC/deploy/scripts/log-review.sh" "$SBIN/velexis-logreview" 0755 || true
   fi
 
   mv -T "$SRC" "$REL"

@@ -1243,6 +1243,12 @@ step_envfiles() {
 }
 
 # ---- scripts: root-owned scripts, systemd units, timers ---------------------------------------------------
+# Security logs (task X-038, docs/mvp/deployment-single-vm.md §12): this step also installs deploy/scripts/ship-logs.sh
+# as /usr/local/sbin/velexis-shiplogs and log-review.sh as /usr/local/sbin/velexis-logreview, enables their timers
+# (every hour: the shipment to the backup bucket's logs/ prefix at :05, the review at :20, its summary once a day),
+# creates /var/log/velexis/security (root 0700, the daily files) and turns on auditd's syslog plugin
+# (/etc/audit/plugins.d/syslog.conf), so that auditd's records reach the journal. A VM provisioned before X-038 runs
+# --steps scripts once.
 step_scripts() {
   log "Root-owned scripts and systemd units"
   install -m 0755 -o root -g root "$DEPLOY_DIR/scripts/deploy.sh" /usr/local/sbin/velexis-deploy
@@ -1251,6 +1257,8 @@ step_scripts() {
   install -m 0755 -o root -g root "$DEPLOY_DIR/scripts/alert.sh" /usr/local/sbin/velexis-alert
   install -m 0755 -o root -g root "$DEPLOY_DIR/scripts/run-as.sh" /usr/local/sbin/velexis-run
   install -m 0755 -o root -g root "$DEPLOY_DIR/scripts/healthcheck.sh" /usr/local/sbin/velexis-healthcheck
+  install -m 0755 -o root -g root "$DEPLOY_DIR/scripts/ship-logs.sh" /usr/local/sbin/velexis-shiplogs
+  install -m 0755 -o root -g root "$DEPLOY_DIR/scripts/log-review.sh" /usr/local/sbin/velexis-logreview
   install -m 0644 -o root -g root "$DEPLOY_DIR"/systemd/*.service "$DEPLOY_DIR"/systemd/*.timer /etc/systemd/system/
   install -d -m 0755 /etc/systemd/system/caddy.service.d
   local dropin_changed=0
@@ -1266,6 +1274,40 @@ step_scripts() {
   # The on-VM health check (X-030), every 5 minutes. Until alert.env has the SMTP settings its alerts cannot be sent
   # and each run retries them; until the first backup and the certificates exist it reports them as failing.
   systemctl enable --now velexis-healthcheck.timer
+  # The security logs (X-038): auditd's records into the journal, shipped off the VM every hour (velexis-ship-logs, to
+  # the backup bucket's logs/ prefix, so it needs backup.env and rclone.conf like the backups) and reviewed every hour,
+  # with a daily summary (velexis-log-review, through velexis-alert).
+  audit_records_to_journal
+  install -d -m 0700 -o root -g root "$LOGS/security"
+  systemctl enable --now velexis-ship-logs.timer velexis-log-review.timer
+}
+
+# auditd's own records reach the journal only through its syslog plugin (audisp-syslog, in the auditd package), which
+# the package ships switched off: on, velexis-ship-logs ships them and velexis-log-review reads them (task X-038). The
+# plugin's settings take effect when auditd reconfigures (SIGHUP, sent by auditctl), without a restart of auditd.
+AUDIT_SYSLOG_PLUGIN=/etc/audit/plugins.d/syslog.conf
+audit_records_to_journal() {
+  local tmp
+  if [ ! -d /etc/audit/plugins.d ] || { [ ! -x /usr/sbin/audisp-syslog ] && [ ! -x /sbin/audisp-syslog ]; }; then
+    warn "auditd's syslog plugin (audisp-syslog) is missing: run the step packages; until then auditd's records are not shipped"
+    return 0
+  fi
+  tmp="$(mktemp)"
+  cat >"$tmp" <<'PLUGIN'
+# auditd's syslog plugin, on (deploy/scripts/provision-vm.sh, task X-038): every audit record also goes to the journal
+# (identifier audisp-syslog), where velexis-ship-logs ships it off the VM and velexis-log-review reads it.
+active = yes
+direction = out
+path = /sbin/audisp-syslog
+type = always
+args = LOG_INFO
+format = string
+PLUGIN
+  if install_changed 0640 root:root "$tmp" "$AUDIT_SYSLOG_PLUGIN"; then
+    auditctl --signal reload >/dev/null 2>&1 \
+      || warn "could not reload auditd (auditctl --signal reload): its syslog plugin starts with auditd's next start"
+  fi
+  rm -f "$tmp"
 }
 
 # ---- caddyconf: Caddyfile and the firewall's rule files, validated together with the real environment ----------------
@@ -1329,7 +1371,9 @@ Next steps (docs/mvp/deployment-single-vm.md §3):
   2. Put the age PUBLIC keys in /etc/velexis/backup/data-recipients.txt and config-recipients.txt,
      and the rclone remote in /etc/velexis/backup/rclone.conf. Then: systemctl start velexis-backup
      (the outbound allow-list takes the SMTP and bucket hosts from these files within 2 minutes:
-     sudo bash $DEPLOY_DIR/scripts/check-vm.sh --only firewall)
+     sudo bash $DEPLOY_DIR/scripts/check-vm.sh --only firewall). The security logs go to the same bucket's
+     logs/ every hour: give it the lifecycle rule and object lock of deployment-single-vm.md §12, then
+     systemctl start velexis-ship-logs && velexis-shiplogs --status
   3. Back up /etc/velexis NOW (master key!) to the offline password manager, encrypted.
   4. Create the DNS records (A/AAAA) for every host of decisions.md §4 and *.ota.example.com.
   5. Run the "Deploy" workflow in GitHub Actions (workflow_dispatch) for the first release.

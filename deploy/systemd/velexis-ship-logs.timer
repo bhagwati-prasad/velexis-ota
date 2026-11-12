@@ -1,0 +1,13 @@
+# velexis-ship-logs.timer — ships the security logs off the VM every hour, at :05 (task X-038). velexis-log-review.timer
+# runs at :20, after it. Enabled by provision-vm.sh (step scripts); deploy.sh re-installs it with the release's units.
+[Unit]
+Description=Velexis security logs: ship them off the VM every hour
+
+[Timer]
+OnCalendar=*-*-* *:05:00
+RandomizedDelaySec=2min
+Persistent=true
+Unit=velexis-ship-logs.service
+
+[Install]
+WantedBy=timers.target

@@ -1045,7 +1045,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 - **Verify:** `shellcheck -S style deploy/scripts/provision-vm.sh deploy/scripts/check-vm.sh`
 
 ### X-038 · Ship security logs off the VM with 12-month retention and a daily review
-- **Status:** todo
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: step 2, the bucket's lifecycle rule for logs/ and its 12-month object lock, and the VM check of AC4, an SSH login's line in the bucket within the hour and in the next daily summary, human steps)
 - **Component:** foundation
 - **Milestone:** M6
 - **Depends on:** X-024, X-030, X-037, X-039

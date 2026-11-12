@@ -1,0 +1,14 @@
+# velexis-log-review.timer — runs the security log review every hour at :20, after the hour's shipment at :05 (task
+# X-038): immediate alerts each run, the daily summary on the first run at or after 06:00 UTC (after AIDE's daily check,
+# 01:50 to 03:50 UTC). Enabled by provision-vm.sh (step scripts); deploy.sh re-installs it with the release's units.
+[Unit]
+Description=Velexis security log review every hour
+
+[Timer]
+OnCalendar=*-*-* *:20:00
+RandomizedDelaySec=2min
+Persistent=true
+Unit=velexis-log-review.service
+
+[Install]
+WantedBy=timers.target

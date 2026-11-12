@@ -1,0 +1,61 @@
+# velexis-ship-logs.service — ships the VM's security logs off the VM (task X-038; PCI DSS 10.3.3, 10.5.1), started every
+# hour by velexis-ship-logs.timer. Runs the root-owned copy of deploy/scripts/ship-logs.sh installed as
+# /usr/local/sbin/velexis-shiplogs: the security entries of the journal since its saved cursor, with the WAF's query
+# values blanked, encrypted with age to the backups' data key and uploaded with `rclone copy --immutable` to
+# <RCLONE_REMOTE>/logs/<yyyy>/<mm>/<dd>/; the cursor moves and the daily file in /var/log/velexis/security/ (90 days)
+# grows only after `rclone check` confirmed the upload. A failed upload exits 1, and OnFailure= mails it; the next run
+# ships the missed entries. Docs: docs/mvp/deployment-single-vm.md §12. Test: deploy/scripts/test/ship-logs.test.sh.
+[Unit]
+Description=Velexis security logs: ship the new entries off the VM (encrypted, to the object-locked bucket)
+Wants=network-online.target
+After=network-online.target
+OnFailure=velexis-alert@%n.service
+
+[Service]
+Type=oneshot
+User=root
+# RCLONE_CONFIG, RCLONE_REMOTE and AGE_RECIPIENTS_FILE of the backups (and the optional SECURITY_LOG_LOCK_DAYS).
+EnvironmentFile=/etc/velexis/backup.env
+ExecStart=/usr/local/sbin/velexis-shiplogs
+# The first run reads the last 24 hours of the journal; later runs about one hour of it.
+TimeoutStartSec=30min
+SyslogIdentifier=velexis-ship-logs
+LimitCORE=0
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+# The cursor, the last success and failure, the lock and the run's work folder (the chunk before and after encryption).
+StateDirectory=velexis/ship-logs
+StateDirectoryMode=0700
+# /var/log/velexis/security: the daily files.
+LogsDirectory=velexis/security
+LogsDirectoryMode=0700
+
+# Sandboxing. Root without any capability: it reads root-owned files only (the journal, backup.env, the recipients file,
+# rclone.conf). The file system is read-only but the two folders above (home folders too, as for velexis-backup, whose
+# rclone it shares); the network is used for the bucket.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+UMask=0077
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM
