@@ -5,12 +5,20 @@
 // `run:` script, inside small git repositories whose last commit plays the pull request's merge commit.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { after, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { jobKeyOf, parseWorkflow, withOf } from "./workflow-reader.mjs";
+import { jobKeyOf, mapOf, parseWorkflow, withOf } from "./workflow-reader.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CI_YML = readFileSync(join(ROOT, ".github/workflows/ci.yml"), "utf8");
@@ -412,6 +420,128 @@ describe("workflow shape", () => {
     for (const unit of ["velexis-egress-refresh.service", "velexis-egress-refresh.timer"]) {
       assert.ok(readFileSync(join(ROOT, "deploy/systemd", unit), "utf8").length > 0, `${unit} exists`);
     }
+  });
+
+  it("[X-032 AC2] alt-hosts runs the integration tests with PostgreSQL and Redis on other hosts and ports, over TLS", () => {
+    const job = JOBS.get("alt-hosts");
+    assert.ok(job, "ci.yml has an alt-hosts job");
+    assert.deepEqual(jobKey("alt-hosts", "name"), ["    name: Integration tests on other hosts and ports"]);
+    assert.deepEqual(jobKey("alt-hosts", "runs-on"), jobKey("integration", "runs-on"));
+    assert.deepEqual(jobKey("alt-hosts", "timeout-minutes"), ["    timeout-minutes: 45"]);
+    assert.deepEqual(jobKey("alt-hosts", "needs"), [], "in parallel with the other jobs");
+    const code = job.lines.filter((line) => !/^\s*#/.test(line)).join("\n");
+    assert.doesNotMatch(
+      code,
+      /^\s*(?:if|continue-on-error):/m,
+      "no condition and no continue-on-error anywhere",
+    );
+
+    // The services of the integration job, published on 6543 and 6380 instead of the default ports.
+    const services = jobKey("alt-hosts", "services").join("\n");
+    assert.equal(
+      services
+        .replace('ports: ["6543:5432"]', 'ports: ["5432:5432"]')
+        .replace('ports: ["6380:6379"]', 'ports: ["6379:6379"]'),
+      jobKey("integration", "services").join("\n"),
+      "the integration job's services, on other host ports",
+    );
+    assert.match(services, /ports: \["6543:5432"\]/);
+    assert.match(services, /ports: \["6380:6379"\]/);
+
+    // The integration job's variables; the DSNs name other hosts and ports and carry the TLS parameters.
+    const env = mapOf(jobKey("alt-hosts", "env"));
+    const integrationEnv = mapOf(jobKey("integration", "env"));
+    assert.deepEqual(Object.keys(env).sort(), Object.keys(integrationEnv).sort(), "the same variables");
+    const dsns = [
+      "DATABASE_URL",
+      "DATABASE_MIGRATOR_URL",
+      "DATABASE_PROVISIONER_URL",
+      "TEST_DATABASE_ADMIN_URL",
+    ];
+    for (const name of dsns) {
+      const url = new URL(env[name]);
+      const original = new URL(integrationEnv[name]);
+      assert.equal(url.host, "pg.internal.test:6543", name);
+      assert.equal(
+        `${url.username}:${url.password}${url.pathname}`,
+        `${original.username}:${original.password}${original.pathname}`,
+      );
+      assert.equal(url.search, "?sslmode=verify-full&sslrootcert=/tmp/pg-tls/ca.crt", name);
+    }
+    assert.equal(env.REDIS_URL, "redis://redis.internal.test:6380/0");
+    for (const [name, value] of Object.entries(env)) {
+      if (![...dsns, "REDIS_URL"].includes(name)) {
+        assert.equal(value, integrationEnv[name], name);
+      }
+    }
+    assert.doesNotMatch(
+      code,
+      /127\.0\.0\.1:(?:5432|6379)|localhost|-h 127\.0\.0\.1/,
+      "no default host or port",
+    );
+
+    // Its steps, in this order and nothing else: the host names, PostgreSQL's TLS, the integration job's setup with
+    // check-no-hardcoded-hosts.mjs after the install, then the tests.
+    const steps = job.steps;
+    const integration = JOBS.get("integration").steps;
+    const uses = (list, action) => list.find((s) => (s.uses ?? "").startsWith(`${action}@`));
+    const same = (list, run) => list.find((s) => s.run === run);
+    const hosts = steps.find((s) => /sudo tee -a \/etc\/hosts/.test(s.run ?? ""));
+    const tls = steps.find((s) => /ALTER SYSTEM SET ssl = on/.test(s.run ?? ""));
+    const bootstrap = steps.find((s) => /deploy\/postgres\/bootstrap\.sql/.test(s.run ?? ""));
+    const order = [
+      uses(steps, "actions/checkout"),
+      hosts,
+      tls,
+      uses(steps, "pnpm/action-setup"),
+      uses(steps, "actions/setup-node"),
+      same(steps, "pnpm install --frozen-lockfile"),
+      same(steps, "node tools/ci/check-no-hardcoded-hosts.mjs"),
+      uses(steps, "actions/cache/restore"),
+      bootstrap,
+      same(steps, "pnpm dev:keys"),
+      same(steps, "pnpm test:int"),
+    ];
+    assert.ok(order.every(Boolean), "every step of the alt-hosts job is there");
+    assert.deepEqual(order, steps, "and nothing else, in this order");
+    for (const action of [
+      "actions/checkout",
+      "pnpm/action-setup",
+      "actions/setup-node",
+      "actions/cache/restore",
+    ]) {
+      assert.equal(uses(steps, action).uses, uses(integration, action).uses, action);
+      assert.deepEqual(withOf(uses(steps, action)), withOf(uses(integration, action)), action);
+    }
+    const integrationBootstrap = integration.find((s) =>
+      /deploy\/postgres\/bootstrap\.sql/.test(s.run ?? ""),
+    );
+    assert.equal(
+      bootstrap.run,
+      integrationBootstrap.run.replaceAll("psql -h 127.0.0.1 ", "psql -h pg.internal.test -p 6543 "),
+      "the integration job's bootstrap, on the other host and port",
+    );
+
+    // Both names resolve to the runner, and nothing may answer on the default ports.
+    assert.match(
+      hosts.run,
+      /^echo "127\.0\.0\.1 pg\.internal\.test redis\.internal\.test" \| sudo tee -a \/etc\/hosts$/m,
+    );
+    assert.match(hosts.run, /for port in 5432 6379; do/);
+    assert.match(hosts.run, /\/dev\/tcp\/127\.0\.0\.1\/\$port/);
+    // PostgreSQL refuses every TCP connection without TLS and serves a certificate for pg.internal.test of the CA
+    // that the DSNs name; the step proves both before the tests start.
+    assert.match(tls.run, /echo "hostnossl all all all reject"; cat "\$PGDATA\/pg_hba\.conf"/);
+    assert.match(tls.run, /-subj "\/CN=pg\.internal\.test"/);
+    assert.match(tls.run, /subjectAltName=DNS:pg\.internal\.test/);
+    assert.match(tls.run, /-c "SELECT pg_reload_conf\(\)"/);
+    assert.match(tls.run, /sslmode=verify-full sslrootcert=\/tmp\/pg-tls\/ca\.crt/);
+    assert.match(
+      tls.run,
+      /sslmode=disable" .*then\n\s*echo "::error::PostgreSQL accepted a connection without TLS"/,
+    );
+    assert.match(tls.raw.join("\n"), /PG_CONTAINER: \$\{\{ job\.services\.postgres\.id \}\}/);
+    assert.ok(existsSync(join(ROOT, "tools/ci/check-no-hardcoded-hosts.mjs")), "the checker exists");
   });
 
   it("[X-019 AC5] every uses: in .github/workflows is pinned to a 40-character commit SHA", () => {

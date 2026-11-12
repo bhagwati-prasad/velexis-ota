@@ -29,7 +29,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 | **M1** Platform core | X-024 to X-027, X-035 | Nightly encrypted backups reach the off-site bucket. Integration tests assert e-mails through Mailpit. `pnpm stub:amadeus` serves token and flight-offers search, and tests start the stub in-process (PBE-020 and the M1 end-to-end harness use it). plan-lint reports the remaining work. |
 | **M2** Search & price | X-034, X-036 | Fixtures are recorded from the Amadeus test environment with scrubbing, and a scan keeps personal data out of them. The second-agent review procedure is ready for M3. |
 | **M3** Book & pay | X-028 | Signed Stripe webhook fixtures in tests; Stripe CLI forwarding for manual checks. |
-| **M6** Hardening & launch | X-029 to X-032, X-037 to X-041 | Uptime monitor and on-VM health checks alert. The restore drill is documented with a measured RTO and cannot reach live services. The move to managed services is proven to be configuration only. SSH needs a second factor, security logs are kept 12 months off the VM with a daily review, the WAF protects the public hosts, the master key can be rotated, and the VM reaches only the outside hosts it needs, with every refused attempt logged (X-041, since 2026-11-10). |
+| **M6** Hardening & launch | X-029 to X-032, X-037 to X-042 | Uptime monitor and on-VM health checks alert. The restore drill is documented with a measured RTO and cannot reach live services. The move to managed services is proven to be configuration only, and the VM's own checks and scripts follow it (X-042, since 2026-11-11). SSH needs a second factor, security logs are kept 12 months off the VM with a daily review, the WAF protects the public hosts, the master key can be rotated, and the VM reaches only the outside hosts it needs, with every refused attempt logged (X-041, since 2026-11-10). |
 
 ## What the component plans can depend on
 
@@ -1006,7 +1006,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 - **Verify:** `sudo /usr/local/sbin/velexis-restore drill /root/restore/set --identity /root/restore/velexis-data.key` (human step: run by the developer on the scratch VM)
 
 ### X-032 · Prove that the move to managed services is configuration only
-- **Status:** todo
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the first green run of the CI job alt-hosts on GitHub (AC2), which only the integrator's push starts; its local stand-in, the same settings in a network namespace, passed)
 - **Component:** foundation
 - **Milestone:** M6
 - **Depends on:** X-023, X-015
@@ -1129,6 +1129,27 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - `shellcheck -S style` is clean.
 - **Verify:** `shellcheck -S style deploy/scripts/provision-vm.sh deploy/scripts/check-vm.sh && sudo bash deploy/scripts/test/check-vm.test.sh`
 
+### X-042 · Make the VM's checks and scripts follow managed PostgreSQL and Redis
+- **Status:** todo
+- **Component:** foundation
+- **Milestone:** M6
+- **Depends on:** X-032, X-030, X-041
+- **Size:** M
+- **Read first:** docs/mvp/deployment-single-vm.md §5, §10, §11, §13 and §15 (the settings of a move to managed services, found by X-032 on 2026-11-11); docs/mvp/adr/0007-single-vm-without-docker.md (Moving to managed services later); deploy/scripts/check-vm.sh (groups services, database and redis); deploy/scripts/healthcheck.sh (checks redis-memory and disk); deploy/scripts/provision-vm.sh (steps postgres, redis and database); deploy/scripts/restore.sh; deploy/scripts/backup.sh (PG_RUNAS, SKIP_REDIS); deploy/scripts/egress.sh (url_host)
+- **Files:** `deploy/scripts/check-vm.sh`, `deploy/scripts/healthcheck.sh`, `deploy/scripts/provision-vm.sh`, `deploy/scripts/restore.sh`, `deploy/scripts/backup.sh` (its header only), `deploy/scripts/test/check-vm.test.sh`, `deploy/scripts/test/healthcheck.test.sh`, `deploy/scripts/test/backup-restore.test.sh`, `docs/mvp/deployment-single-vm.md`
+- **Steps:**
+  1. The apps already follow a move to managed services through their env files (X-032). The VM's own scripts do not: `check-vm.sh` requires `postgresql` and `redis-server` active and checks them as the local superuser and on `127.0.0.1:6379`, the health check reads Redis memory on `127.0.0.1:6379` and disk use under `/var/lib/postgresql`, `provision-vm.sh` installs, enables and restarts both services on every run, and `restore.sh` stops and starts `redis-server`. Give them one rule, read from the configuration only: PostgreSQL is local when the host of `DATABASE_URL` in `/etc/velexis/platform-backend.env` is `127.0.0.1`, `localhost` or `::1`, Redis when the host of `REDIS_URL` is (the host only, as `egress.sh`'s `url_host` reads it; no value is ever printed).
+  2. `check-vm.sh`: for a managed service, group `services` requires the local unit masked (only disabled is a failure: the API and worker units `Wants=` it and would start it again); group `database` checks that every DSN of the env files (`DATABASE_URL`, `DATABASE_PROVISIONER_URL`, `DATABASE_MIGRATOR_URL`, the reference loader's) names the same host and port with `sslmode=verify-full`, that a `sslrootcert` it names is a readable file, and that a connection as `velexis_migrator` uses TLS (`pg_stat_ssl`) and finds the four roles; group `redis` checks `rediss://`, a refused client without the password and `maxmemory-policy noeviction` where the provider answers `CONFIG GET` (a skip with the reason otherwise). Each managed host must have its `env:` line in the allow-list (group `firewall` already checks the ports).
+  3. `healthcheck.sh`: with managed Redis, `redis-memory` asks the managed instance through `REDIS_URL` (TLS, the password in the environment of `redis-cli`), or reports why it cannot; with managed PostgreSQL no disk check of `/var/lib/postgresql`.
+  4. `provision-vm.sh`: the steps `postgres`, `redis` and `database` leave a masked local service alone when the configuration names a managed one, and say so; a second run changes nothing. `restore.sh`: with `PG_RUNAS=env` it restores into the database the `PG*` settings name, and it leaves a masked `redis-server` alone (a set with `redis=skipped` has no AOF to restore).
+  5. Tests: `check-vm.test.sh` with a managed fixture (masked units, TLS DSNs and their CA file, the allow-list lines) and its failures; `healthcheck.test.sh` with a fake managed Redis; `backup-restore.test.sh` with `PG_RUNAS=env`. Update `deployment-single-vm.md` §13 and §15 (the paragraph "Code that the move still needs"), and the headers of `backup.sh` and `restore.sh`, which still call `PG_RUNAS` and `SKIP_REDIS` overrides that the VM never sets.
+- **Acceptance:**
+  - `check-vm.test.sh`: a VM with managed PostgreSQL and Redis passes the groups `services`, `database` and `redis`; a DSN without `sslmode=verify-full`, a local unit that is disabled but not masked, and a managed host without its allow-list line fail, each named.
+  - `healthcheck.test.sh`: with managed Redis, `redis-memory` reads the managed instance (or says why it cannot), and no check alerts for the masked local services.
+  - A second `provision-vm.sh` run on a VM with managed services changes nothing and starts neither local service; `restore.sh` restores a set through `PG_RUNAS=env` without touching a masked `redis-server` (`backup-restore.test.sh`).
+  - `shellcheck -S style` is clean.
+- **Verify:** `shellcheck -S style deploy/scripts/*.sh deploy/scripts/test/*.sh && sudo bash deploy/scripts/test/check-vm.test.sh && bash deploy/scripts/test/healthcheck.test.sh`
+
 ## Dependency graph
 
 Generated with `node tools/plan-lint/plan-lint.mjs --graph docs/mvp/plans/foundation-tasks.md`.
@@ -1185,6 +1206,7 @@ flowchart LR
     X_039["X-039"]
     X_040["X-040"]
     X_041["X-041"]
+    X_042["X-042"]
   end
   X_001 --> X_002
   X_001 --> X_003
@@ -1242,6 +1264,9 @@ flowchart LR
   X_004 --> X_040
   X_033 --> X_040
   X_020 --> X_041
+  X_032 --> X_042
+  X_030 --> X_042
+  X_041 --> X_042
 ```
 
 The critical path printed by plan-lint runs through the database work (X-002 → X-010 → X-011 → X-012 → X-013 → X-015). Start X-016, X-003, X-004, X-006, X-017, X-019 and X-021 in parallel on day one; they do not share files. The VM chain (X-021 → X-033 → X-020 → X-023, 24 agent-hours) also carries the human steps on the VM: start X-033 as soon as X-021 is merged.

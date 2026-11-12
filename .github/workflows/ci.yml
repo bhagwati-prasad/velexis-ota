@@ -11,7 +11,9 @@
 # tools/ci/check-package-json.mjs before the install, then install, the tools/ci and tools/perf tests, format, lint,
 # typecheck, unit, contracts up to date, build, the cross-backend tests, release dry run with the Caddy build),
 # integration (in parallel with build-test: the integration tests with PostgreSQL 16 + Redis 7.4 + Mailpit and the
-# PAN-absence proof that reads their report; lead decision (5o) of 2026-11-05, approved by the owner).
+# PAN-absence proof that reads their report; lead decision (5o) of 2026-11-05, approved by the owner), alt-hosts (task
+# X-032: tools/ci/check-no-hardcoded-hosts.mjs, then the same integration tests with PostgreSQL and Redis on other host
+# names and ports, PostgreSQL over TLS only).
 # Agents never change this file to get their own change through (AGENTS.md §7). What each guard enforces and how to
 # run it locally: tools/ci/README.md.
 # Third-party actions are pinned to full commit SHAs with the tag as the last thing in the comment, so Dependabot
@@ -678,3 +680,145 @@ jobs:
             fail("The PAN-absence test found card data or could not read a place (the scans above).");
           }
           EOF
+
+  # X-032: the move to managed PostgreSQL and Redis is configuration only (decisions.md §2, deployment-single-vm.md
+  # §15). The integration tests run with PostgreSQL and Redis reached through other host names (/etc/hosts aliases)
+  # and ports (6543, 6380), PostgreSQL over TLS only with the CA and the check of the host name in the DSNs, and
+  # nothing on 5432 or 6379, so any code that assumed the local services, dropped a DSN's parameters or connected
+  # without TLS fails here. The DSNs use sslmode=verify-full: node-postgres treats `prefer` as verify-full (TLS
+  # required, never a plain-text fallback) and prints a security warning on stderr for it, which fails the
+  # clean-stderr assertion of packages/db's codegen test. check-no-hardcoded-hosts.mjs runs first, in seconds.
+  alt-hosts:
+    name: Integration tests on other hosts and ports
+    runs-on: ubuntu-24.04
+    # The integration job's budget: the same tests on the same runner.
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ["6543:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7.4
+        ports: ["6380:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      mailpit:
+        image: axllent/mailpit:v1.29
+        ports: ["1025:1025", "8025:8025"]
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgres://velexis_platform_app:dev_platform@pg.internal.test:6543/velexis?sslmode=verify-full&sslrootcert=/tmp/pg-tls/ca.crt
+      DATABASE_MIGRATOR_URL: postgres://velexis_migrator:dev_migrator@pg.internal.test:6543/velexis?sslmode=verify-full&sslrootcert=/tmp/pg-tls/ca.crt
+      DATABASE_PROVISIONER_URL: postgres://velexis_provisioner:dev_provisioner@pg.internal.test:6543/velexis?sslmode=verify-full&sslrootcert=/tmp/pg-tls/ca.crt
+      TEST_DATABASE_ADMIN_URL: postgres://velexis_test_admin:dev_test_admin@pg.internal.test:6543/postgres?sslmode=verify-full&sslrootcert=/tmp/pg-tls/ca.crt
+      REDIS_URL: redis://redis.internal.test:6380/0
+      SMTP_URL: smtp://127.0.0.1:1025
+      MAILPIT_API_URL: http://127.0.0.1:8025
+      AMADEUS_BASE_URL_TEST: http://127.0.0.1:4900
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Host names pg.internal.test and redis.internal.test, and nothing on 5432 or 6379
+        run: |
+          echo "127.0.0.1 pg.internal.test redis.internal.test" | sudo tee -a /etc/hosts
+          getent hosts pg.internal.test redis.internal.test
+          for port in 5432 6379; do
+            if (exec 3<> "/dev/tcp/127.0.0.1/$port") 2> /dev/null; then
+              echo "::error::Something listens on 127.0.0.1:$port: this job needs the default ports free"
+              exit 1
+            fi
+          done
+
+      - name: PostgreSQL over TLS only (a throwaway CA and a certificate for pg.internal.test)
+        # The service container cannot take server options, so its certificate, its pg_hba.conf and ssl = on arrive
+        # through docker cp, docker exec and a configuration reload. Every TCP connection without TLS is then refused.
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          install -d -m 0700 /tmp/pg-tls
+          cd /tmp/pg-tls
+          openssl req -x509 -new -nodes -newkey rsa:2048 -keyout ca.key -out ca.crt -days 2 \
+            -subj "/CN=Velexis alt-hosts test CA" -addext "basicConstraints=critical,CA:TRUE" \
+            -addext "keyUsage=critical,keyCertSign,cRLSign"
+          openssl req -new -nodes -newkey rsa:2048 -keyout server.key -out server.csr -subj "/CN=pg.internal.test"
+          printf '%s\n' "subjectAltName=DNS:pg.internal.test" "basicConstraints=CA:FALSE" \
+            "keyUsage=digitalSignature,keyEncipherment" "extendedKeyUsage=serverAuth" > server.ext
+          openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out server.crt -days 2 \
+            -extfile server.ext
+          docker cp server.crt "$PG_CONTAINER:/var/lib/postgresql/server.crt"
+          docker cp server.key "$PG_CONTAINER:/var/lib/postgresql/server.key"
+          # PostgreSQL takes a key only from its own user with mode 0600; the first matching pg_hba.conf line wins.
+          docker exec "$PG_CONTAINER" sh -ec '
+            chown postgres:postgres /var/lib/postgresql/server.crt /var/lib/postgresql/server.key
+            chmod 0600 /var/lib/postgresql/server.key
+            { echo "hostnossl all all all reject"; cat "$PGDATA/pg_hba.conf"; } > /tmp/pg_hba.conf
+            cat /tmp/pg_hba.conf > "$PGDATA/pg_hba.conf"'
+          psql -h pg.internal.test -p 6543 -U postgres -X -q -v ON_ERROR_STOP=1 \
+            -c "ALTER SYSTEM SET ssl_cert_file = '/var/lib/postgresql/server.crt'" \
+            -c "ALTER SYSTEM SET ssl_key_file = '/var/lib/postgresql/server.key'" \
+            -c "ALTER SYSTEM SET ssl = on" \
+            -c "SELECT pg_reload_conf()"
+          verified="host=pg.internal.test port=6543 user=postgres dbname=postgres sslmode=verify-full sslrootcert=/tmp/pg-tls/ca.crt"
+          tls=""
+          for _ in $(seq 1 20); do
+            tls="$(psql "$verified" -X -At -c 'SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()' 2> /dev/null || true)"
+            if [ "$tls" = t ]; then break; fi
+            sleep 0.5
+          done
+          if [ "$tls" != t ]; then
+            docker logs "$PG_CONTAINER" 2>&1 | tail -n 20
+            echo "::error::PostgreSQL does not answer over TLS with the certificate for pg.internal.test"
+            exit 1
+          fi
+          if psql "host=pg.internal.test port=6543 user=postgres dbname=postgres sslmode=disable" -X -At -c 'SELECT 1' > /dev/null 2>&1; then
+            echo "::error::PostgreSQL accepted a connection without TLS"
+            exit 1
+          fi
+          echo "PostgreSQL on pg.internal.test:6543 answers over TLS only, with a certificate of the CA in /tmp/pg-tls/ca.crt"
+
+      # The pnpm version comes from package.json "packageManager".
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: No host or port written in the code of the apps and packages
+        run: node tools/ci/check-no-hardcoded-hosts.mjs
+
+      # Restore only, as the integration job does: build-test saves the cache.
+      - name: Restore the Turborepo cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .turbo/cache
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: turbo-${{ runner.os }}-
+
+      - name: Bootstrap database roles and schemas
+        run: |
+          psql -h pg.internal.test -p 6543 -U postgres -X -q -v ON_ERROR_STOP=1 -v db_name=velexis \
+            -v migrator_password=dev_migrator -v provisioner_password=dev_provisioner \
+            -v platform_password=dev_platform -v ota_password=dev_ota \
+            -f deploy/postgres/bootstrap.sql
+          psql -h pg.internal.test -p 6543 -U postgres -X -q -v ON_ERROR_STOP=1 -c "CREATE ROLE velexis_test_admin LOGIN CREATEDB PASSWORD 'dev_test_admin'" \
+            -c "GRANT velexis_migrator TO velexis_test_admin"
+
+      - name: Generate local key files
+        run: pnpm dev:keys
+
+      - name: Integration tests
+        run: pnpm test:int
