@@ -35,17 +35,20 @@
 // browser context, so the browser stays on the page and the token is never redeemed); and a full API key (`pk_`/`sk_`
 // of test or live and 40 characters) is only in the server action answer that shows it once, never in any other answer.
 // Every page, RSC payload, script and server action answer is read: the journey reads a page's answers before it leaves
-// the page (the browser drops them then), and a GET that the browser dropped before its end (an RSC prefetch the next
-// navigation cancelled) is fetched again with the same request headers from the same browser context (so with its
-// cookies), and that answer is checked as well. A server action's answer cannot be asked for again, and the browser
-// does not always keep its streamed body, so every server action is intercepted (lead decision (13b) of 2026-11-10,
-// FIX-W47-PLATFORM): each browser context routes its `POST`s that carry the `Next-Action` header (`context.route`),
-// sends them itself (`route.fetch()`, the context's cookies included, no redirect followed), records the answer's
-// headers and whole body, and hands that very answer to the page (`route.fulfill({ response })`). A server action that
-// ends with `redirect()` answers `303` without a `Location` and with the RSC payload of the page it leads to, which is
-// read like any answer; only a redirect the browser follows has no body. Any answer the journey could not read, a server
-// action's included, is named in the last step's annotation and fails that step. (Routing turns the browser's HTTP
-// cache off for the context, so the static scripts are fetched, and checked, on every page.)
+// the page (the browser drops them then), and a GET whose body went with its page before the journey read it is
+// fetched again with the same request headers from the same browser context (so with its cookies), and that answer is
+// checked as well. An RSC prefetch that the browser dropped before its body arrived (the next navigation cancelled it,
+// so its request failed with `net::ERR_ABORTED`) has no body: it is checked by its status (200) and its headers, without
+// a wait for a body or a second request (the lead's decision (19c) of 2026-11-12, FIX-W50-PLATFORM; the annotation of
+// the last step counts them); a prefetch that failed in another way is read again. A server action's answer cannot be asked for again, and the browser does not always keep its streamed body, so
+// every server action is intercepted (lead decision (13b) of 2026-11-10, FIX-W47-PLATFORM): each browser context
+// routes its `POST`s that carry the `Next-Action` header (`context.route`), sends them itself (`route.fetch()`, the
+// context's cookies included, no redirect followed), records the answer's headers and whole body, and hands that very
+// answer to the page (`route.fulfill({ response })`). A server action that ends with `redirect()` answers `303` without
+// a `Location` and with the RSC payload of the page it leads to, which is read like any answer; only a redirect the
+// browser follows has no body. Any answer the journey could not read, a server action's included, is named in the last
+// step's annotation and fails that step. (Routing turns the browser's HTTP cache off for the context, so the static
+// scripts are fetched, and checked, on every page.)
 //
 // Arranged in `beforeAll` through the platform API (PADR-0017 item 5): the owner's active OTA (`newOwnerWithActiveOta`
 // with MFA, set up by the OTA worker, so the journey needs `E2E_WITH_OTA=1` and fails at once without it); an admin, a
@@ -154,23 +157,23 @@ const ARRANGE_BUDGET_MS = 240_000;
  * 2026-11-11, FIX-W48-PLATFORM): ten pages, each read whole before the journey leaves it, in a browser context that
  * routes its server actions and so has no HTTP cache, which fetches and checks every script of every page again. It
  * took 13.4 to 14.9 s in wave 47 (14.4 s in CI run 42929326729), half of Playwright's default 30 s, so a loaded runner
- * could fail it on time alone. Its own budget changes nothing it checks.
+ * could fail it on time alone. Its own budget changes nothing it checks. Most of that time was a 10-second wait for the
+ * body of a dropped RSC prefetch (see the second pages step below): since Playwright 1.65.0 and the lead's decision
+ * (19c) of 2026-11-12 (FIX-W50-PLATFORM) the step took 2.8 to 5.4 s in ten local runs and 3.6 s in E2E run
+ * 43234757752; its budget stays, by decision (15g).
  */
 const ACCOUNT_AND_OTA_PAGES_BUDGET_MS = 60_000;
 
-/**
- * The budget of the second pages step, the OTA's Amadeus page to its go-live page (the lead's decision (17c) of
- * 2026-11-11, FIX-W49-PLATFORM): eight pages, a statement of no row among them, read whole in the same context without
- * an HTTP cache, as in the first pages step. It took 11.5 to 12.3 s in E2E runs 42926666028, 42996441373 and
- * 43075936872, 22.4 s in run 43065966073 (wave 48), and 23.3 s and 32.4 s in local runs (wave 49), past Playwright's
- * default 30 s in the last. The time grows in steps of about 10 s, not with the runner's load: a page takes about
- * 0.3 s, but before each page `answers.settled()` waits for every answer of the page before, and now and then the body
- * of an RSC answer that the portal's links prefetch (`text/x-component`) neither arrives nor fails once the browser has
- * left the page, so the journey waits out READ_BUDGET_MS (10 s) and reads it again (`again`). An instrumented local
- * run (wave 49) had one such wait in this step (12.6 s) and two in the first (22.7 s). Its own budget changes nothing
- * it checks.
- */
-const OTA_AMADEUS_TO_GO_LIVE_PAGES_BUDGET_MS = 60_000;
+// The second pages step, the OTA's Amadeus page to its go-live page, had a budget of 60 s of its own from the lead's
+// decision (17c) of 2026-11-11 (FIX-W49-PLATFORM) to decision (19c) of 2026-11-12 (FIX-W50-PLATFORM), and keeps
+// Playwright's default 30 s again: it took 11.5 to 12.3 s in E2E runs 42926666028, 42996441373 and 43075936872,
+// 22.4 s in run 43065966073 and up to 32.4 s locally, in steps of about 10 s, because now and then the body of an RSC
+// prefetch that the browser had dropped with its page (`text/x-component`) neither arrived nor failed, so the journey
+// waited out READ_BUDGET_MS (10 s) and read it again. Playwright 1.65.0 fails the requests still running in a document
+// when the next document commits, and the journey checks such a prefetch by its status and headers without waiting
+// for a body (`take`): the step took 2.5 to 5.0 s in ten local runs on 4 CPUs (portal-headers alone three times
+// before and three times after this change at a load average of 1.3 to 2.4, three times before it at 15 to 21, and
+// the portal, platform-admin and ota-admin projects after it at up to 23) and 3.6 s in E2E run 43234757752.
 
 /** The owner's name: the inviter in the invitation e-mails' subject. */
 const OWNER_NAME = "Henrik Headers";
@@ -238,6 +241,14 @@ const FULL_API_KEY = /\b(?:pk|sk)_(?:test|live)_[A-Za-z0-9]{40}\b/g;
 const PORTAL_TOKEN_FIELD = /<input type="hidden" name="portalToken" value="ptk_[A-Za-z0-9]{43}">/g;
 /** Content types whose bodies the journey reads: pages, RSC payloads, scripts, JSON, text and CSV. */
 const TEXT_BODY = /^(?:text\/(?:html|x-component|plain|csv|javascript)|application\/(?:json|javascript))/;
+/** An RSC payload's content type. */
+const RSC_BODY = /^text\/x-component/;
+/**
+ * The failure of a request the browser dropped itself: Chromium's, and the one Playwright gives the requests still
+ * running in a document when the next document of the frame commits. A request that failed otherwise (the portal broke
+ * off its answer, the connection was reset) was not dropped by the browser, so its body is read again.
+ */
+const DROPPED_BY_THE_BROWSER = "net::ERR_ABORTED";
 
 /**
  * How long the journey waits for an answer's headers or body (a few milliseconds locally): an answer the browser
@@ -400,6 +411,11 @@ function isServerAction(request: Request): boolean {
   return request.method() === "POST" && request.headers()["next-action"] !== undefined;
 }
 
+/** A prefetch of a page's RSC payload by the portal's links: a `GET` with `Next-Router-Prefetch: 1`. */
+function isPrefetch(request: Request): boolean {
+  return request.method() === "GET" && request.headers()["next-router-prefetch"] === "1";
+}
+
 /**
  * Watches every answer of the portal in browser contexts: the problems of its headers and cookies (checked by the last
  * step), each nonce its own, the cookies each answer set, the values of the token cookies, and the text bodies. Server
@@ -415,8 +431,16 @@ class PortalAnswers {
   readonly bodies: AnswerBody[] = [];
   /** The answers with a text body that could not be read (the browser had dropped it, or it never ended). */
   readonly unreadBodies: string[] = [];
+  /**
+   * The RSC prefetches the browser dropped before their bodies arrived (their requests failed with
+   * DROPPED_BY_THE_BROWSER, as an RSC prefetch does when the next navigation cancels it): checked by their status and
+   * headers only, neither waited for nor read again (the lead's decision (19c) of 2026-11-12).
+   */
+  readonly droppedPrefetches: string[] = [];
   private readonly nonces = new Map<string, string>();
   private readonly pending: Promise<void>[] = [];
+  /** The waits for a prefetch's drop (`dropOf`), ended by its `requestfailed`. */
+  private readonly drops = new WeakMap<Request, () => void>();
   private count = 0;
 
   get answers(): number {
@@ -430,6 +454,10 @@ class PortalAnswers {
       if (new URL(response.url()).port === portalPort && !isServerAction(response.request())) {
         this.pending.push(this.take(response, target));
       }
+    });
+    target.on("requestfailed", (request) => {
+      this.drops.get(request)?.();
+      this.drops.delete(request);
     });
     await target.route(
       (url) => url.port === portalPort,
@@ -495,8 +523,25 @@ class PortalAnswers {
   }
 
   /**
-   * Reads the body of a `GET` the browser dropped before its end (an RSC prefetch the next navigation cancelled) again:
-   * the same URL and request headers from the same context, so with its cookies, as the server answers it.
+   * Resolves (to `undefined`) once the browser drops `request` before its end (its `requestfailed`; Playwright fails
+   * the requests still running in a document when the next document of the frame commits). Asked for before any wait
+   * of `take`, so no drop that follows the answer is missed.
+   */
+  private dropOf(request: Request): Promise<undefined> {
+    return new Promise((resolve) => {
+      if (request.failure() === null) {
+        this.drops.set(request, () => resolve(undefined));
+      } else {
+        resolve(undefined);
+      }
+    });
+  }
+
+  /**
+   * Reads the body of a `GET` again that the browser no longer had when the journey asked for it (an answer that ended
+   * after the page's answers were settled but went with the page when the journey left it, or one the browser dropped
+   * that is not an RSC prefetch): the same URL and request headers from the same context, so with its cookies, as the
+   * server answers it.
    */
   private async again(target: BrowserContext, response: Response): Promise<string | undefined> {
     const sent = Object.entries(response.request().headers()).filter(
@@ -538,6 +583,9 @@ class PortalAnswers {
 
   private async take(response: Response, target: BrowserContext): Promise<void> {
     const { pathname } = new URL(response.url());
+    const request = response.request();
+    // A prefetch's drop is watched from its answer on (lead decision (19c) of 2026-11-12, FIX-W50-PLATFORM).
+    const dropped = isPrefetch(request) ? this.dropOf(request) : undefined;
     // The body is asked for at once: the browser drops a page's answers when it leaves the page.
     const text = within(response.text());
     const headers = await within(response.headersArray());
@@ -554,9 +602,24 @@ class PortalAnswers {
     if (followed || !TEXT_BODY.test(type)) {
       return;
     }
-    const request = response.request();
-    const body =
-      (await text) ?? (request.method() === "GET" ? await this.again(target, response) : undefined);
+    // An RSC prefetch that the browser dropped before its body arrived (the next navigation cancelled it, so its request
+    // failed with DROPPED_BY_THE_BROWSER) has no body to read: it is checked by its status and its headers (above),
+    // without waiting out READ_BUDGET_MS for a body that will not come and without asking the server for it again.
+    // Every other answer's body is read, or read again, a prefetch that failed in another way included.
+    const read = await (dropped === undefined ? text : Promise.race([text, dropped]));
+    if (
+      read === undefined &&
+      dropped !== undefined &&
+      RSC_BODY.test(type) &&
+      request.failure()?.errorText === DROPPED_BY_THE_BROWSER
+    ) {
+      if (status !== 200) {
+        this.problems.push(`${pathname}: a prefetch the browser dropped answered ${status}, not 200`);
+      }
+      this.droppedPrefetches.push(`GET ${pathname}`);
+      return;
+    }
+    const body = read ?? (request.method() === "GET" ? await this.again(target, response) : undefined);
     if (body === undefined) {
       this.unreadBodies.push(`${request.method()} ${pathname}`);
       return;
@@ -826,8 +889,9 @@ test("the sign-in sets the challenge and return-path cookies, then the session c
 /** A page route the journey opens: its route, path, title (a pattern for a not-found page) and status (200). */
 type PageVisit = readonly [PortalRoute, string, string | RegExp, number?];
 
-// The page routes are split over two steps, each with a budget of its own (one took 32.4 s: the waits for prefetched
-// answers of OTA_AMADEUS_TO_GO_LIVE_PAGES_BUDGET_MS).
+// The page routes are split over two steps (the lead's decision (17c) of 2026-11-11): the first with a budget of its own
+// (ACCOUNT_AND_OTA_PAGES_BUDGET_MS), the second with Playwright's default since the waits for dropped prefetches went
+// (decision (19c) of 2026-11-12; see the comment after ACCOUNT_AND_OTA_PAGES_BUDGET_MS).
 test("the account pages and the OTA's overview, set-up, API keys, domains and team answer with the portal's headers and their scripts with the nonce [PFE-028 AC1]", async () => {
   // Ten whole pages without an HTTP cache: see ACCOUNT_AND_OTA_PAGES_BUDGET_MS.
   test.setTimeout(ACCOUNT_AND_OTA_PAGES_BUDGET_MS);
@@ -849,8 +913,7 @@ test("the account pages and the OTA's overview, set-up, API keys, domains and te
 });
 
 test("the OTA's Amadeus, payments, payout account, settlements, a statement of no row, billing, settings and go-live answer with the portal's headers and their scripts with the nonce [PFE-028 AC1]", async () => {
-  // Eight whole pages without an HTTP cache: see OTA_AMADEUS_TO_GO_LIVE_PAGES_BUDGET_MS.
-  test.setTimeout(OTA_AMADEUS_TO_GO_LIVE_PAGES_BUDGET_MS);
+  // Eight whole pages without an HTTP cache, in Playwright's default 30 s (2.5 to 5.0 s measured, see above).
   const pages: readonly PageVisit[] = [
     ["/otas/[tenantId]/amadeus", otaPath("/amadeus"), "Amadeus"],
     ["/otas/[tenantId]/payments", otaPath("/payments"), "Payments"],
@@ -1101,7 +1164,7 @@ test("every answer carried the portal's headers and cookie attributes, every rou
   // Recorded before the checks, so a failing run says what it read too.
   test.info().annotations.push({
     type: "answers checked",
-    description: `${answers.answers} answers of the portal (on ${STACK_HOST}), ${bodies.length} bodies read (${bodies.filter((answer) => answer.serverAction).length} of server actions), ${answers.unreadBodies.length} no longer readable (${answers.unreadBodies.join(", ")})`,
+    description: `${answers.answers} answers of the portal (on ${STACK_HOST}), ${bodies.length} bodies read (${bodies.filter((answer) => answer.serverAction).length} of server actions), ${answers.droppedPrefetches.length} RSC prefetches the browser dropped before their bodies arrived (checked by their status and headers), ${answers.unreadBodies.length} no longer readable (${answers.unreadBodies.join(", ")})`,
   });
   expect([...visited].sort((a, b) => a.localeCompare(b))).toEqual(
     Object.keys(ROUTES).sort((a, b) => a.localeCompare(b)),
@@ -1109,7 +1172,9 @@ test("every answer carried the portal's headers and cookie attributes, every rou
   expect(answers.problems).toEqual([]);
 
   // Booleans and paths only, so a failure never prints a token. Every page, RSC payload and script the browser received
-  // was read (a GET it dropped was read again), and every server action's answer, which the journey sent itself.
+  // was read (a GET whose body went with its page was read again), but an RSC prefetch the browser dropped before its
+  // body arrived, which has none (checked by its status and headers), and every server action's answer, which the
+  // journey sent itself.
   expect(answers.unreadBodies).toEqual([]);
   // The journey's server actions: the reset request, the password and code steps of the sign-in, and the two that
   // showed keys.

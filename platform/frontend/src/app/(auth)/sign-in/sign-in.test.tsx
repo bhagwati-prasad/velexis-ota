@@ -228,6 +228,22 @@ async function redirectedTo(): Promise<string> {
   return status.textContent?.replace(/^Redirected to /, "") ?? "";
 }
 
+/**
+ * The new-password form once the server action of its last submission has answered. While the action runs, the
+ * button reads "Saving…"; its answer is rendered together with React's reset of the form, which empties the field, and
+ * the button's name comes back. A wait for the field's message alone can pass at once on the answer of the submission
+ * before, which shows the same message (dependabot PR #37's CI found the button still "Saving…" at the next submit; the
+ * lead's decision (19b) of 2026-11-12), so this waits for the form itself, outside the test's own act().
+ */
+async function resetFormAfterAction(): Promise<HTMLInputElement> {
+  return await waitFor(() => {
+    expect(screen.getByRole("button", { name: PASSWORD_RESET_STRINGS.resetSubmit })).toBeTruthy();
+    const field = input(PASSWORD_RESET_STRINGS.newPasswordLabel);
+    expect(field.value).toBe("");
+    return field;
+  }, ACTION_WAIT);
+}
+
 type SearchParams = Record<string, string | string[] | undefined>;
 
 async function renderSignInPage(searchParams: SearchParams = {}): Promise<void> {
@@ -817,24 +833,24 @@ describe("/reset-password: the page and the confirmPasswordReset action", () => 
     );
     expect(field.getAttribute("minlength")).toBe("12");
 
-    // The portal refuses what the rule refuses, before any call.
+    // The portal refuses what the rule refuses, before any call. Each refusal is the same message, so each submission
+    // waits for its own answer (the form back, its field emptied), not for a message the one before already shows.
     for (const weak of ["Fjord-Lan4!", "Kettle-Morning!", "4815-1623-42"]) {
       type(PASSWORD_RESET_STRINGS.newPasswordLabel, weak);
       submit(PASSWORD_RESET_STRINGS.resetSubmit);
-      await waitFor(() =>
-        expect(descriptionsOf(input(PASSWORD_RESET_STRINGS.newPasswordLabel))).toContain(
-          SIGN_UP_STRINGS.passwordRule,
-        ),
-      );
+      const refused = await resetFormAfterAction();
+      expect(descriptionsOf(refused), weak).toContain(SIGN_UP_STRINGS.passwordRule);
+      expect(refused.getAttribute("aria-invalid"), weak).toBe("true");
     }
     expect(fetchMock).not.toHaveBeenCalled();
 
-    // The API's refusal of the rule shows at the field in the portal's words.
+    // The API's refusal of the rule shows at the field in the portal's words: the answer of this submission, which
+    // called the API once, not the local refusal before it.
     type(PASSWORD_RESET_STRINGS.newPasswordLabel, "Copper-Lan4!");
     submit(PASSWORD_RESET_STRINGS.resetSubmit);
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-    const password = input(PASSWORD_RESET_STRINGS.newPasswordLabel);
-    await waitFor(() => expect(descriptionsOf(password)).toContain(SIGN_UP_STRINGS.passwordRule));
+    const password = await resetFormAfterAction();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(descriptionsOf(password)).toContain(SIGN_UP_STRINGS.passwordRule);
     expect(SIGN_UP_STRINGS.passwordRule).toBe(
       "Use at least 12 characters, with at least one letter and one digit.",
     );
