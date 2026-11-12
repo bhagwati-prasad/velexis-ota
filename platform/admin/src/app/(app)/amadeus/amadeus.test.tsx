@@ -301,7 +301,10 @@ function apiError(
   code: string,
   status: number,
   details?: Record<string, unknown>,
-  extra: { headers?: Record<string, string>; fieldErrors?: { path: string; code: string }[] } = {},
+  extra: {
+    headers?: Record<string, string>;
+    fieldErrors?: { path: string; code: string; message?: string }[];
+  } = {},
 ): Response {
   return json(
     {
@@ -914,6 +917,83 @@ describe("amadeus/accounts/page.tsx: the Velexis Amadeus accounts", () => {
     expect((within(form).getByLabelText(F.clientIdLabel) as HTMLInputElement).value).toBe(CLIENT_ID);
     expect(document.body.innerHTML).not.toContain(CLIENT_SECRET);
     expect(document.body.textContent).not.toContain("The API's own text");
+  });
+
+  it("[PBE-074 AC2] shows the production refusal of a host other than the official one at the host field, naming both official hosts", async () => {
+    const officialHost = {
+      path: "/baseUrl",
+      code: "official_host",
+      message: "The API's own field text, never shown",
+    };
+    const path = `${ACCOUNTS_PATH}/${TEST_ACCOUNT_ID}`;
+    accounts = [account()];
+    routes({
+      [`POST ${ACCOUNTS_PATH}`]: () =>
+        apiError("VALIDATION_FAILED", 400, undefined, { fieldErrors: [officialHost] }),
+      [`PATCH ${path}`]: () => apiError("VALIDATION_FAILED", 400, undefined, { fieldErrors: [officialHost] }),
+    });
+    expect(F.baseUrlNotOfficial).toContain("https://test.travel.api.amadeus.com for test");
+    expect(F.baseUrlNotOfficial).toContain("https://travel.api.amadeus.com for live");
+
+    // Creating the live account on the test host: the API knows it runs in production, the form does not.
+    await openAccounts();
+    const live = environmentSection("Live");
+    fireEvent.click(within(live).getByRole("button", { name: F.create("Live") }));
+    const form = within(live).getByRole("form", { name: F.createTitle("Live") });
+    fill(form, F.nameLabel, "Velexis live");
+    fill(form, F.baseUrlLabel, "https://test.travel.api.amadeus.com");
+    fill(form, F.clientIdLabel, CLIENT_ID);
+    const secretField = fill(form, F.clientSecretLabel, CLIENT_SECRET);
+    submit(F.save, form);
+
+    await waitFor(() => expect(within(form).getByText(F.baseUrlNotOfficial)).toBeTruthy(), UI_WAIT);
+    const host = within(form).getByLabelText(F.baseUrlLabel);
+    expect(host.getAttribute("aria-invalid")).toBe("true");
+    expect(host.getAttribute("aria-describedby")).toContain(
+      within(form).getByText(F.baseUrlNotOfficial).getAttribute("id"),
+    );
+    expect(within(form).queryByText(F.baseUrlInvalid)).toBeNull();
+    expect(secretField.value).toBe("");
+    expect(await bodies("POST", ACCOUNTS_PATH)).toEqual([
+      {
+        environment: "live",
+        name: "Velexis live",
+        baseUrl: "https://test.travel.api.amadeus.com",
+        clientId: CLIENT_ID,
+        clientSecret: CLIENT_SECRET,
+      },
+    ]);
+    expect(document.body.textContent).not.toContain("The API's own");
+    cleanup();
+
+    // Editing the host of the test account: the same refusal at the details form's host field.
+    await openAccounts();
+    fireEvent.click(within(environmentSection("Test")).getByRole("button", { name: F.edit }));
+    const details = within(environmentSection("Test")).getByRole("form", { name: F.editTitle });
+    fill(details, F.baseUrlLabel, "https://test.travel.api.amadeus.com.example.net");
+    submit(F.saveDetails, details);
+
+    await waitFor(() => expect(within(details).getByText(F.baseUrlNotOfficial)).toBeTruthy(), UI_WAIT);
+    expect(within(details).getByLabelText(F.baseUrlLabel).getAttribute("aria-invalid")).toBe("true");
+    expect(details.querySelector('[data-notice="failed"]')).toBeNull();
+    expect(nextCache.revalidatePath).not.toHaveBeenCalled();
+    expect(document.body.textContent).not.toContain("The API's own");
+
+    // The action's state holds the admin's words only; another code at the host keeps the general message.
+    expect(await createAmadeusAccount(IDLE, createFields())).toEqual({
+      status: "failed",
+      code: "VALIDATION_FAILED",
+      fieldErrors: { baseUrl: F.baseUrlNotOfficial },
+    });
+    routes({
+      [`POST ${ACCOUNTS_PATH}`]: () =>
+        apiError("VALIDATION_FAILED", 400, undefined, { fieldErrors: [{ path: "/baseUrl", code: "https" }] }),
+    });
+    expect(await createAmadeusAccount(IDLE, createFields())).toEqual({
+      status: "failed",
+      code: "VALIDATION_FAILED",
+      fieldErrors: { baseUrl: F.baseUrlInvalid },
+    });
   });
 
   it("edits the name without a step-up, and asks to reload a stale page (412)", async () => {

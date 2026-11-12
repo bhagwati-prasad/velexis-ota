@@ -9623,9 +9623,14 @@ paths:
         `platform.amadeus_accounts.client_secret_ciphertext:<id>`, never logged and never answered. The account starts
         `pending_verification`; after commit the job `amadeus_account.verify` on `platform-connections` requests an
         OAuth token and sets `active` or `invalid_credentials`. `baseUrl` is an `https` host, or the loopback Amadeus
-        stub in development. An environment that already has an account answers `409 CONFLICT` (`details.reason =
-        environment_exists`): rotate its secret with `adminUpdateAmadeusAccount` instead. Writes an audit row without
-        the secret.
+        stub outside production (development and tests). With `APP_ENV=production` it must be the official Amadeus host
+        of the account's `environment` (`AmadeusBaseUrl`): `https://test.travel.api.amadeus.com` for `test`,
+        `https://travel.api.amadeus.com` for `live`, with or without a trailing slash. Any other `https` host, a
+        look-alike such as `https://travel.api.amadeus.com.example.net` or the official host of the other environment
+        included, answers `400 VALIDATION_FAILED` with the field error `/baseUrl` and the code `official_host`; the
+        loopback stub answers `/baseUrl` with the code `https`. A refused request stores, audits and queues nothing.
+        An environment that already has an account answers `409 CONFLICT` (`details.reason = environment_exists`):
+        rotate its secret with `adminUpdateAmadeusAccount` instead. Writes an audit row without the secret.
       tags:
         - Admin Amadeus
       security:
@@ -9730,9 +9735,16 @@ paths:
         step-up. A new host, client id or secret sets the account `pending_verification` and runs the verification
         job again; the new secret is encrypted as on creation. A successful verification makes a
         disabled account `active` again. `If-Match` carries the account's `version`; a stale version answers `412
-        PRECONDITION_FAILED`. Writes an audit row without the secret and, after commit, publishes an `amadeus_account`
-        invalidation, so the OTA backend drops its cached account; office assignments are unaffected (PADR-0012 item
-        7).
+        PRECONDITION_FAILED`. With `APP_ENV=production` a `baseUrl` must be the official Amadeus host of the stored
+        account's environment (`AmadeusBaseUrl`; an account never changes its environment), with or without a trailing
+        slash: any other `https` host answers `400 VALIDATION_FAILED` with the field error `/baseUrl` and the code
+        `official_host` (the loopback stub, `https`). The account is found first (`404`); the refusal comes before the
+        version (`412`) and the step-up (`401`) are checked, and nothing is stored, audited or queued. Every `baseUrl`
+        sent is checked, also one equal to the stored value, so an account entered with another host before this rule
+        takes the official host before its name or client id changes; a request without `baseUrl` (a secret rotation,
+        `status: disabled`) is not checked. Writes an audit row without the secret and, after commit, publishes an
+        `amadeus_account` invalidation, so the OTA backend drops its cached account; office assignments are unaffected
+        (PADR-0012 item 7).
       tags:
         - Admin Amadeus
       security:
@@ -19676,8 +19688,14 @@ components:
     AmadeusBaseUrl:
       type: string
       description: >-
-        The Amadeus API host: an `https` URL, or the loopback Amadeus stub (`http://127.0.0.1:<port>`) in development;
-        the service refuses the stub in production.
+        The Amadeus API host of a Velexis Amadeus account (`platform.amadeus_accounts.base_url`): an `https` URL, or
+        the loopback Amadeus stub (`http://127.0.0.1:<port>`) outside production (development and tests). With
+        `APP_ENV=production` the service takes only the official Amadeus host of the account's environment, the host
+        the platform worker's verification and the OTA backend send the account's client secret to, and the only
+        Amadeus hosts of the VM's outbound allow-list: `https://test.travel.api.amadeus.com` for `test`,
+        `https://travel.api.amadeus.com` for `live`, with or without a trailing slash (compared exactly, so another
+        case, port, path or a look-alike host is not it). It answers `400 VALIDATION_FAILED` with the field error
+        `/baseUrl` and the code `official_host` for any other `https` host, and with the code `https` for the stub.
       format: uri
       maxLength: 300
       pattern: ^(https://[^\s/?#]+(/[^\s?#]*)?|http://127\.0\.0\.1(:[0-9]{1,5})?)$

@@ -20,6 +20,7 @@ import {
   createProcessLogger,
   DEFAULT_DNS_RESOLVERS,
   EMAIL_ADDRESS,
+  isOfficialAmadeusBaseUrl,
   loadConfig,
   loadConfigOrReport,
   MAX_DNS_RESOLVERS,
@@ -1294,6 +1295,54 @@ describe("parseConfig: the Amadeus hosts of own credentials (PBE-053)", () => {
         reason: "must be the official Amadeus host of its environment with APP_ENV=production",
       },
     ]);
+  });
+
+  it("[PBE-074 AC1] isOfficialAmadeusBaseUrl takes the official host of each environment, with or without a trailing slash", () => {
+    expect(isOfficialAmadeusBaseUrl("test", "https://test.travel.api.amadeus.com")).toBe(true);
+    expect(isOfficialAmadeusBaseUrl("test", "https://test.travel.api.amadeus.com/")).toBe(true);
+    expect(isOfficialAmadeusBaseUrl("live", "https://travel.api.amadeus.com")).toBe(true);
+    expect(isOfficialAmadeusBaseUrl("live", "https://travel.api.amadeus.com/")).toBe(true);
+  });
+
+  it.each([
+    ["test", "https://travel.api.amadeus.com", "the official host of the other environment"],
+    ["live", "https://test.travel.api.amadeus.com", "the official host of the other environment"],
+    ["live", "https://travel.api.amadeus.com.example.net", "a look-alike host below another domain"],
+    ["test", "https://test.travel.api.amadeus.com.example.net/", "a look-alike host with a trailing slash"],
+    ["live", "https://eu.travel.api.amadeus.com", "another host below the official one"],
+    ["live", "https://travel.api.amadeus.com//", "two trailing slashes"],
+    ["live", "https://travel.api.amadeus.com/v1", "a path"],
+    ["live", "https://travel.api.amadeus.com:443", "a port, even the default one"],
+    ["live", "https://Travel.api.amadeus.com", "another case"],
+    ["live", "http://travel.api.amadeus.com", "http"],
+    ["test", "http://127.0.0.1:4900", "the loopback stub"],
+    ["test", "https://amadeus.example.com", "another https host"],
+    ["staging", "https://test.travel.api.amadeus.com", "an environment that is neither test nor live"],
+    ["toString", "https://test.travel.api.amadeus.com", "a property every object inherits"],
+  ])("[PBE-074 AC1] isOfficialAmadeusBaseUrl(%s, %s) is false: %s", (environment, baseUrl) => {
+    expect(isOfficialAmadeusBaseUrl(environment, baseUrl)).toBe(false);
+  });
+
+  it("[PBE-074 AC1] the variables' production check is the account's rule: a look-alike or the other environment's host is refused", () => {
+    expect(
+      configError({
+        ...PRODUCTION,
+        AMADEUS_BASE_URL_TEST: "https://test.travel.api.amadeus.com.example.net",
+        AMADEUS_BASE_URL_LIVE: "https://travel.api.amadeus.com:443",
+      }).problems.map((problem) => problem.variable),
+    ).toEqual(["AMADEUS_BASE_URL_TEST", "AMADEUS_BASE_URL_LIVE"]);
+    expect(
+      amadeusUrlsOf(
+        parseConfig({
+          ...PRODUCTION,
+          AMADEUS_BASE_URL_TEST: "https://test.travel.api.amadeus.com/",
+          AMADEUS_BASE_URL_LIVE: "https://travel.api.amadeus.com",
+        }),
+      ),
+    ).toEqual({
+      AMADEUS_BASE_URL_TEST: "https://test.travel.api.amadeus.com/",
+      AMADEUS_BASE_URL_LIVE: "https://travel.api.amadeus.com",
+    });
   });
 
   it("[PBE-053] declares both hosts in every env template: the stub locally, empty (the official hosts) on the VM", () => {

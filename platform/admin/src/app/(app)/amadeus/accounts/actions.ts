@@ -147,6 +147,23 @@ const API_FIELD_MESSAGES: Readonly<Record<string, readonly [AccountField, string
   "/clientSecret": ["clientSecret", S.clientSecretTooLong],
 };
 
+/**
+ * The field code of a host other than the official Amadeus host of the account's environment, which the API refuses
+ * with APP_ENV=production (PBE-074). The form cannot check it itself: only the API knows its APP_ENV.
+ */
+const OFFICIAL_HOST_CODE = "official_host";
+
+/**
+ * The field and the admin's message of one field error of the API: the official host refusal names the two official
+ * hosts; the other codes of a field share its message. `undefined` for a path no form field has.
+ */
+function apiFieldMessage(path: string, code: string): readonly [AccountField, string] | undefined {
+  if (path === "/baseUrl" && code === OFFICIAL_HOST_CODE) {
+    return ["baseUrl", S.baseUrlNotOfficial];
+  }
+  return Object.hasOwn(API_FIELD_MESSAGES, path) ? API_FIELD_MESSAGES[path] : undefined;
+}
+
 /** Codes every account action words its own way; the others get the catalogue's message. */
 const ACCOUNT_CODES: Readonly<Partial<Record<PlatformErrorCode, string>>> = {
   PRECONDITION_FAILED: S.stale,
@@ -168,8 +185,8 @@ function messageOf(error: ApiError, codes: Readonly<Partial<Record<PlatformError
 
 /**
  * The state after a failed call: sign-in (and back to the page) for an ended session, a step-up request (the previous
- * state with `stepUp: true`) for `REAUTH_REQUIRED`, the API's field errors at their fields, otherwise the failure in
- * the admin's words.
+ * state with `stepUp: true`) for `REAUTH_REQUIRED`, the API's field errors at their fields (in the admin's words: the
+ * host refused in production names the two official hosts), otherwise the failure in the admin's words.
  */
 function failed(
   previous: AccountActionState,
@@ -184,8 +201,8 @@ function failed(
   }
   if (error.code === "VALIDATION_FAILED") {
     const fieldErrors: Partial<Record<AccountField, string>> = {};
-    for (const { path } of error.fieldErrors) {
-      const known = Object.hasOwn(API_FIELD_MESSAGES, path) ? API_FIELD_MESSAGES[path] : undefined;
+    for (const { path, code } of error.fieldErrors) {
+      const known = apiFieldMessage(path, code);
       if (known !== undefined) {
         fieldErrors[known[0]] ??= known[1];
       }

@@ -1660,7 +1660,7 @@ export const AMADEUS_ACCOUNT_FORM_STRINGS = Object.freeze({
   nameHint: "The label of the account in this console, for example “Velexis test”.",
   baseUrlLabel: "Amadeus host",
   baseUrlHint:
-    "An https address, such as https://test.travel.api.amadeus.com. The local Amadeus stub (http://127.0.0.1:4900) works in development only.",
+    "The official Amadeus host of this environment: https://test.travel.api.amadeus.com for test, https://travel.api.amadeus.com for live; production takes no other, development another https address too. The local Amadeus stub (http://127.0.0.1:4900) works in development only.",
   clientIdLabel: "Client id",
   clientIdHint: "The API key of the Velexis application in Amadeus.",
   clientSecretLabel: "Client secret",
@@ -1675,6 +1675,12 @@ export const AMADEUS_ACCOUNT_FORM_STRINGS = Object.freeze({
   nameTooLong: "Enter a name of at most 100 characters.",
   baseUrlInvalid:
     "Enter an https address of at most 300 characters, such as https://test.travel.api.amadeus.com.",
+  /**
+   * `VALIDATION_FAILED` at `/baseUrl` with the code `official_host` (PBE-074): with APP_ENV=production the API takes the
+   * official Amadeus host of the account's environment only.
+   */
+  baseUrlNotOfficial:
+    "In production, enter the official Amadeus host of this environment: https://test.travel.api.amadeus.com for test, https://travel.api.amadeus.com for live.",
   clientIdRequired: "Enter the client id.",
   clientIdInvalid: "Enter a client id of at most 200 characters, without spaces.",
   clientSecretRequired: "Enter the client secret.",

@@ -44,7 +44,10 @@ type AccountStatus = Schemas["AmadeusAccountStatus"];
 
 const IDLE: AccountActionState = { status: "idle" };
 
-/** The Amadeus API host of each environment, offered when an account is created (flows/amadeus-connection.md §D). */
+/**
+ * The Amadeus API host of each environment, offered when an account is created (flows/amadeus-connection.md §D): the
+ * only host the API takes with APP_ENV=production (PBE-074), whose refusal of another one shows at the host field.
+ */
 const DEFAULT_BASE_URLS: Readonly<Record<Environment, string>> = {
   test: "https://test.travel.api.amadeus.com",
   live: "https://travel.api.amadeus.com",

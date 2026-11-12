@@ -2245,8 +2245,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - The OTA backend's `breached-passwords.txt` and its customer password rule are unchanged (its SHA-256 is still the one of step 5, and its `password-policy` tests pass as they are).
 - **Verify:** `node platform/backend/scripts/breached-passwords.mjs --check && pnpm --filter @velexis/platform-backend test password-policy && pnpm --filter @velexis/platform-backend exec vitest run --config vitest.int.config.ts test/integration/auth/sign-up.int.test.ts test/integration/auth/password-reset.int.test.ts test/integration/accounts/me.int.test.ts && pnpm --filter @velexis/ota-backend test password-policy`
 
-### PBE-074 · Refuse a Velexis Amadeus account whose base URL is not the official Amadeus host in production
-- **Status:** todo
+### PBE-074 · Refuse a Velexis Amadeus account whose base URL is not the official Amadeus host in production ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M6
 - **Depends on:** PBE-020, PAD-007

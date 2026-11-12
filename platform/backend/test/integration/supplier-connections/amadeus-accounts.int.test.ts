@@ -9,6 +9,9 @@
 // would do. Every test starts with no Amadeus account, office or connection (one account per environment), and every
 // line both processes log, at every level, is kept, so "the secret never reaches a log line" covers them all. The
 // tokens the stub issues are read from the answers through a wrapper of `fetch`, so the test can look for them too.
+//
+// The last block (PBE-074) starts a second API of this file with APP_ENV=production, once the blocks above have run:
+// there a Velexis Amadeus account takes the official Amadeus host of its environment only.
 import { randomUUID } from "node:crypto";
 import { getQueueToken } from "@nestjs/bullmq";
 import { Test, type TestingModule } from "@nestjs/testing";
@@ -47,6 +50,11 @@ const FAMILY = testId("asn", 1);
 const ADMIN_IP = "203.0.113.7";
 /** The stub's accepted pair of the rejection tests (not a secret: a value of this file). */
 const ACCEPTED = { clientId: "velexis-strict-client", clientSecret: `accepted-${randomUUID()}` };
+/** The official Amadeus host of each environment: the only base URLs APP_ENV=production takes (PBE-074). */
+const OFFICIAL = {
+  test: "https://test.travel.api.amadeus.com",
+  live: "https://travel.api.amadeus.com",
+} as const;
 
 interface AccountBody {
   readonly id: string;
@@ -172,8 +180,18 @@ function newSecret(): string {
   return secret;
 }
 
-function errorOf(res: { body: unknown }): { code: string; details?: Record<string, unknown> } {
-  return (res.body as { error: { code: string; details?: Record<string, unknown> } }).error;
+interface ErrorBody {
+  readonly code: string;
+  readonly details?: Record<string, unknown>;
+  readonly fieldErrors?: ReadonlyArray<{
+    readonly path: string;
+    readonly code: string;
+    readonly message?: string;
+  }>;
+}
+
+function errorOf(res: { body: unknown }): ErrorBody {
+  return (res.body as { error: ErrorBody }).error;
 }
 
 async function stored(id: string): Promise<StoredAccount> {
@@ -573,6 +591,29 @@ describe("adminUpdateAmadeusAccount, adminVerifyAmadeusAccount and adminListAmad
     expect(await stored(id)).toMatchObject({ status: "active", version: 2 });
   });
 
+  it("[PBE-074 AC1] outside production takes another https host than the official ones, as before", async () => {
+    const id = await activeAccount();
+
+    // Disabled in the same request, so no verification job calls the host (no network in tests).
+    const res = await t.http
+      .patch(`/v1/admin/amadeus-accounts/${id}`)
+      .set(await adminHeaders())
+      .set("If-Match", '"1"')
+      .send({ baseUrl: "https://amadeus.example.com", status: "disabled" });
+
+    expect(t.config.APP_ENV).toBe("test");
+    expect(res.status).toBe(200);
+    expectResponseToMatch("adminUpdateAmadeusAccount", res, { document: "platform" });
+    expect(res.body).toMatchObject({
+      baseUrl: "https://amadeus.example.com",
+      status: "disabled",
+      version: 2,
+    });
+    expect(await jobsOf(id)).toEqual([]);
+    const { rows } = await pool.query("SELECT base_url FROM platform.amadeus_accounts WHERE id = $1", [id]);
+    expect(rows).toEqual([{ base_url: "https://amadeus.example.com" }]);
+  });
+
   it("disables an account without a verification, and adminVerifyAmadeusAccount makes it active again", async () => {
     const id = await activeAccount();
     invalidated.length = 0;
@@ -686,5 +727,245 @@ describe("adminUpdateAmadeusAccount, adminVerifyAmadeusAccount and adminListAmad
     ]);
     expect(JSON.stringify(res.body)).not.toMatch(/[Ss]ecret|[Cc]iphertext/);
     expect(JSON.stringify(res.body)).not.toContain(secret);
+  });
+});
+
+describe("the official Amadeus host with APP_ENV=production (PBE-074)", () => {
+  let production: TestApp;
+  let productionPool: PlatformPool;
+  let productionQueue: Queue;
+  let productionAdmin: string;
+
+  beforeAll(async () => {
+    // createTestApp empties this worker's Redis database: the blocks above have run by now. Their worker still runs on
+    // that database and takes a job this API queues; it finds no such account in its own clone (`missing`).
+    production = await createTestApp({
+      env: {
+        APP_ENV: "production",
+        LOG_LEVEL: "trace",
+        // APP_ENV=production takes an https OTA API URL only (FIX-W39-PLATFORM).
+        PUBLIC_OTA_API_URL: "https://api.ota.example.com",
+      },
+    });
+    productionPool = production.app.get<PlatformPool>(PLATFORM_POOL);
+    productionQueue = production.app.get<Queue>(getQueueToken(PLATFORM_QUEUE.connections), { strict: false });
+    productionAdmin = (await insertAccount(productionPool, { is_platform_admin: true, mfa_enabled: true }))
+      .id;
+  }, SETUP_TIMEOUT_MS);
+
+  afterAll(async () => {
+    await production?.close();
+  }, SETUP_TIMEOUT_MS);
+
+  beforeEach(async () => {
+    await productionPool.query("DELETE FROM platform.amadeus_accounts");
+  });
+
+  /** The headers of a production admin call, with a TOTP step-up now unless `stepUp` is false. */
+  async function productionHeaders(stepUp = true): Promise<Record<string, string>> {
+    const { token } = await production.app.get(TokenService).sign({
+      aud: "platform_admin",
+      sub: productionAdmin,
+      sid: FAMILY,
+      ev: true,
+      amr: ["pwd", "otp"],
+      ...(stepUp ? { mfa_at: Math.floor(production.clock.now().getTime() / 1000) } : {}),
+    });
+    return { Authorization: `Bearer ${token}`, ...production.bffHeaders(ADMIN_IP) };
+  }
+
+  /** The production API's Amadeus account rows, its audit rows of Amadeus accounts and its verification jobs. */
+  async function productionState(): Promise<{
+    accounts: Array<Record<string, unknown>>;
+    audit: Array<Record<string, unknown>>;
+    jobs: Job[];
+  }> {
+    const accounts = await productionPool.query(
+      "SELECT id, environment, base_url, status, version FROM platform.amadeus_accounts ORDER BY id",
+    );
+    const audit = await productionPool.query(
+      "SELECT action, target_id FROM platform.platform_audit_log WHERE target_type = 'amadeus_account' ORDER BY id",
+    );
+    const jobs = await productionQueue.getJobs([
+      "waiting",
+      "active",
+      "delayed",
+      "prioritized",
+      "completed",
+      "failed",
+    ]);
+    return {
+      accounts: accounts.rows as Array<Record<string, unknown>>,
+      audit: audit.rows as Array<Record<string, unknown>>,
+      jobs: jobs.filter((job): job is Job => job !== undefined),
+    };
+  }
+
+  /** `400 VALIDATION_FAILED` at `/baseUrl` with `official_host`, whose message names both official hosts. */
+  function expectOfficialHostRefusal(res: { status: number; body: unknown }): void {
+    expect(res.status).toBe(400);
+    const error = errorOf(res);
+    expect(error.code).toBe("VALIDATION_FAILED");
+    expect(error.fieldErrors).toEqual([
+      {
+        path: "/baseUrl",
+        code: "official_host",
+        message: expect.stringContaining(`${OFFICIAL.test} for test`),
+      },
+    ]);
+    expect(error.fieldErrors?.[0]?.message).toContain(`${OFFICIAL.live} for live`);
+  }
+
+  it("[PBE-074 AC1] refuses a create on any base URL but the official host of its environment; nothing is stored, audited or queued", async () => {
+    const secret = newSecret();
+    expect(production.config.APP_ENV).toBe("production");
+
+    for (const [environment, baseUrl] of [
+      ["test", OFFICIAL.live],
+      ["live", OFFICIAL.test],
+      ["live", "https://travel.api.amadeus.com.example.net"],
+      ["test", "https://test.travel.api.amadeus.com.example.net/"],
+      ["live", "https://amadeus.example.com"],
+    ] as const) {
+      const res = await production.http
+        .post("/v1/admin/amadeus-accounts")
+        .set(await productionHeaders())
+        .send({ name: "Velexis", environment, baseUrl, clientId: "velexis-client", clientSecret: secret });
+
+      expectOfficialHostRefusal(res);
+      expectResponseToMatch("adminCreateAmadeusAccount", res, { document: "platform" });
+      expect(JSON.stringify(res.body)).not.toContain(secret);
+      // The answer names the official hosts only, never another value that was sent.
+      expect(JSON.stringify(res.body)).not.toContain("example");
+    }
+    // The loopback stub keeps its own refusal.
+    const stubbed = await production.http
+      .post("/v1/admin/amadeus-accounts")
+      .set(await productionHeaders())
+      .send({ name: "Velexis", environment: "test", baseUrl: stub.url, clientId: "c", clientSecret: secret });
+    expect([stubbed.status, errorOf(stubbed).fieldErrors?.map((field) => [field.path, field.code])]).toEqual([
+      400,
+      [["/baseUrl", "https"]],
+    ]);
+
+    expect(await productionState()).toEqual({ accounts: [], audit: [], jobs: [] });
+    expect(JSON.stringify(production.logs.lines)).not.toContain(secret);
+  });
+
+  it("[PBE-074 AC1] refuses an update to another host than the stored account's official one before the 412 and the step-up, and takes the official host", async () => {
+    const account = await insertAmadeusAccount(productionPool, {
+      id: testId("ama", 500),
+      environment: "test",
+      base_url: OFFICIAL.test,
+    });
+    const path = `/v1/admin/amadeus-accounts/${account.id}`;
+    const before = await productionState();
+
+    const otherEnvironment = await production.http
+      .patch(path)
+      .set(await productionHeaders())
+      .set("If-Match", '"1"')
+      .send({ baseUrl: OFFICIAL.live });
+    const lookAlike = await production.http
+      .patch(path)
+      .set(await productionHeaders())
+      .set("If-Match", '"1"')
+      .send({ name: "Velexis test", baseUrl: "https://test.travel.api.amadeus.com.example.net" });
+    // A stale version and no step-up: the refusal of the host still comes first.
+    const staleWithoutStepUp = await production.http
+      .patch(path)
+      .set(await productionHeaders(false))
+      .set("If-Match", '"9"')
+      .send({ baseUrl: "https://amadeus.example.com" });
+    const unknown = await production.http
+      .patch(`/v1/admin/amadeus-accounts/${testId("ama", 999)}`)
+      .set(await productionHeaders())
+      .set("If-Match", '"1"')
+      .send({ baseUrl: "https://amadeus.example.com" });
+
+    for (const res of [otherEnvironment, lookAlike, staleWithoutStepUp]) {
+      expectOfficialHostRefusal(res);
+      expectResponseToMatch("adminUpdateAmadeusAccount", res, { document: "platform" });
+    }
+    expect([unknown.status, errorOf(unknown).code]).toEqual([404, "NOT_FOUND"]);
+    expect(await productionState()).toEqual(before);
+    expect(before.audit).toEqual([]);
+    expect(before.jobs).toEqual([]);
+
+    // The official host of the account's environment, with a trailing slash: stored, audited, verified again.
+    const official = await production.http
+      .patch(path)
+      .set(await productionHeaders())
+      .set("If-Match", '"1"')
+      .send({ baseUrl: `${OFFICIAL.test}/` });
+
+    expect(official.status).toBe(200);
+    expectResponseToMatch("adminUpdateAmadeusAccount", official, { document: "platform" });
+    expect(official.body).toMatchObject({
+      baseUrl: `${OFFICIAL.test}/`,
+      status: "pending_verification",
+      version: 2,
+    });
+    await invalidationOf(account.id);
+    const after = await productionState();
+    expect(after.accounts).toEqual([
+      {
+        id: account.id,
+        environment: "test",
+        base_url: `${OFFICIAL.test}/`,
+        status: "pending_verification",
+        version: 2,
+      },
+    ]);
+    expect(after.audit).toEqual([{ action: "amadeus_account.updated", target_id: account.id }]);
+    expect(after.jobs.map((job) => [job.name, job.data])).toEqual([
+      [AMADEUS_ACCOUNT_VERIFY_JOB, { amadeusAccountId: account.id }],
+    ]);
+    // Pub/sub keeps the order of one publisher: no refused request published an invalidation before this one.
+    expect(invalidated.filter((id) => id === account.id)).toEqual([account.id]);
+  });
+
+  it("[PBE-074 AC1] creates the account of each environment on its official host", async () => {
+    const ids: string[] = [];
+    for (const environment of ["test", "live"] as const) {
+      const res = await production.http
+        .post("/v1/admin/amadeus-accounts")
+        .set(await productionHeaders())
+        .send({
+          name: `Velexis ${environment}`,
+          environment,
+          baseUrl: OFFICIAL[environment],
+          clientId: "velexis-client",
+          clientSecret: newSecret(),
+        });
+
+      expect(res.status).toBe(201);
+      expectResponseToMatch("adminCreateAmadeusAccount", res, { document: "platform" });
+      expect(res.body).toMatchObject({
+        environment,
+        baseUrl: OFFICIAL[environment],
+        status: "pending_verification",
+      });
+      ids.push((res.body as AccountBody).id);
+    }
+    const state = await productionState();
+    expect(state.accounts.map((row) => [row["id"], row["base_url"]])).toEqual(
+      expect.arrayContaining([
+        [ids[0], OFFICIAL.test],
+        [ids[1], OFFICIAL.live],
+      ]),
+    );
+    expect(state.accounts).toHaveLength(2);
+    expect(state.audit.filter((row) => ids.includes(row["target_id"] as string))).toEqual([
+      { action: "amadeus_account.created", target_id: ids[0] },
+      { action: "amadeus_account.created", target_id: ids[1] },
+    ]);
+    // Each account's verification is queued after the commit.
+    expect(
+      state.jobs
+        .map((job) => (job.data as { amadeusAccountId?: string }).amadeusAccountId)
+        .filter((id): id is string => id !== undefined && ids.includes(id))
+        .sort(),
+    ).toEqual([...ids].sort());
   });
 });

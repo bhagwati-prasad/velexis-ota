@@ -220,6 +220,22 @@ export const AMADEUS_BASE_URL_VARIABLES = Object.freeze({
   live: "AMADEUS_BASE_URL_LIVE",
 } as const);
 
+/**
+ * True when `baseUrl` is the official Amadeus host of `environment` (AMADEUS_OFFICIAL_BASE_URLS), with or without one
+ * trailing slash: the only Amadeus base URL `APP_ENV=production` accepts, for AMADEUS_BASE_URL_TEST and
+ * AMADEUS_BASE_URL_LIVE (`amadeusBaseUrlProblems`) and for a Velexis Amadeus account entered in the platform admin
+ * (AmadeusAccountsService, PBE-074; lead decision (17k) of 2026-11-11), so a deployment sends Amadeus client secrets to
+ * no other host and X-041's outbound allow-list needs no other Amadeus line. The comparison is exact: the official host
+ * of the other environment, another case, a port, a path or a look-alike such as
+ * `https://travel.api.amadeus.com.example.net` is not it. An environment that is neither `test` nor `live` has none.
+ */
+export function isOfficialAmadeusBaseUrl(environment: string, baseUrl: string): boolean {
+  const variable = Object.hasOwn(AMADEUS_BASE_URL_VARIABLES, environment)
+    ? AMADEUS_BASE_URL_VARIABLES[environment as keyof typeof AMADEUS_BASE_URL_VARIABLES]
+    : undefined;
+  return variable !== undefined && baseUrl.replace(/\/$/, "") === AMADEUS_OFFICIAL_BASE_URLS[variable];
+}
+
 /** The configured Amadeus base URL of `environment`, without a trailing slash (`https://test.travel.api.amadeus.com`). */
 export function amadeusBaseUrl(
   config: Pick<PlatformBackendConfig, "AMADEUS_BASE_URL_TEST" | "AMADEUS_BASE_URL_LIVE">,
@@ -559,21 +575,21 @@ function dnsResolverProblems(source: EnvSource | undefined): ConfigProblem[] {
 /**
  * The Amadeus base URL rules that a pattern cannot express (PBE-053, flows/amadeus-connection.md §D item 3: the host is
  * "overridable only in development"): each value must be a URL whose port is at most 65535, and with
- * `APP_ENV=production` it must be the official host of its environment (AMADEUS_OFFICIAL_BASE_URLS), so a deployment
- * never sends an OTA's client secret anywhere else. A variable that is invalid on its own is reported by the schema,
- * not here.
+ * `APP_ENV=production` it must be the official host of its environment (`isOfficialAmadeusBaseUrl`, the rule of a
+ * Velexis Amadeus account's base URL too), so a deployment never sends an OTA's client secret anywhere else. A variable
+ * that is invalid on its own is reported by the schema, not here.
  */
 function amadeusBaseUrlProblems(source: EnvSource | undefined): ConfigProblem[] {
   const problems: ConfigProblem[] = [];
   const appEnv = validValues({ APP_ENV: PLATFORM_BACKEND_CONFIG_SCHEMA.APP_ENV }, source)?.APP_ENV;
-  for (const variable of Object.values(AMADEUS_BASE_URL_VARIABLES)) {
+  for (const [environment, variable] of Object.entries(AMADEUS_BASE_URL_VARIABLES)) {
     const value = validValues({ [variable]: PLATFORM_BACKEND_CONFIG_SCHEMA[variable] }, source)?.[variable];
     if (value === undefined) {
       continue;
     }
     if (!URL.canParse(value)) {
       problems.push({ variable, reason: "must be a URL with a port of at most 65535" });
-    } else if (appEnv === "production" && value.replace(/\/$/, "") !== AMADEUS_OFFICIAL_BASE_URLS[variable]) {
+    } else if (appEnv === "production" && !isOfficialAmadeusBaseUrl(environment, value)) {
       problems.push({
         variable,
         reason: "must be the official Amadeus host of its environment with APP_ENV=production",

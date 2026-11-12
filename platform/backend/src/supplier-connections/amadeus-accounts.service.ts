@@ -8,7 +8,13 @@
 // - The client secret is envelope-encrypted at once with the associated data
 //   `platform.amadeus_accounts.client_secret_ciphertext:<id>` (ADR-0010) and never logged, audited, queued or answered.
 // - `baseUrl` is an `https` host, or the loopback Amadeus stub outside production (`400 VALIDATION_FAILED`,
-//   `/baseUrl`, `https`, when APP_ENV is `production`).
+//   `/baseUrl`, `https`, when APP_ENV is `production`). With APP_ENV `production` it must be the official Amadeus host
+//   of the account's environment, with or without a trailing slash (`isOfficialAmadeusBaseUrl` of config.ts, the rule of
+//   AMADEUS_BASE_URL_TEST and _LIVE; PBE-074, lead decision (17k) of 2026-11-11): any other `https` host answers `400
+//   VALIDATION_FAILED`, `/baseUrl`, `official_host`, because the verification job and the OTA backend send the stored
+//   secret to it and X-041's outbound allow-list holds only the official hosts. An update checks every `baseUrl` it is
+//   sent against the stored account's environment (an account never changes it), after the `404` and before the `412`
+//   and the step-up. A refused request stores, audits and queues nothing.
 // - A new host, client id or secret needs a TOTP step-up within 15 minutes (`401 REAUTH_REQUIRED`, `403 MFA_REQUIRED`):
 //   the job and the OTA backend send the stored secret to the host. It sets the account `pending_verification` and
 //   runs the verification again. A new name or `status: disabled` needs none; disabling queues no verification, and
@@ -39,7 +45,7 @@ import { PLATFORM_DB, type PlatformDb } from "../common/database";
 import { IdGenerator } from "../common/ids";
 import { PLATFORM_QUEUE } from "../common/queues/queue-names";
 import { afterCommit, InvalidationPublisher, runInTransaction } from "../common/redis/invalidation.publisher";
-import type { PlatformBackendConfig } from "../config";
+import { AMADEUS_OFFICIAL_BASE_URLS, isOfficialAmadeusBaseUrl, type PlatformBackendConfig } from "../config";
 import {
   AmadeusAccountsRepository,
   emptyOfficeCounts,
@@ -60,6 +66,17 @@ export type UpdateAmadeusAccountRequest = components["schemas"]["UpdateAmadeusAc
 
 /** How long the enqueue of a verification job may take before it is given up. */
 export const VERIFY_ENQUEUE_TIMEOUT_MS = 2000;
+
+/**
+ * The field code of a base URL that is not the official Amadeus host of the account's environment, with APP_ENV
+ * `production` (PBE-074). The platform admin words it at the host field.
+ */
+export const OFFICIAL_HOST_CODE = "official_host";
+
+/** The message of OFFICIAL_HOST_CODE: the two official hosts, never the value that was sent. */
+export const OFFICIAL_HOST_MESSAGE =
+  `Must be the official Amadeus host of the account's environment in production: ` +
+  `${AMADEUS_OFFICIAL_BASE_URLS.AMADEUS_BASE_URL_TEST} for test, ${AMADEUS_OFFICIAL_BASE_URLS.AMADEUS_BASE_URL_LIVE} for live.`;
 
 const iso = (value: Date | null): string | null => (value === null ? null : value.toISOString());
 
@@ -123,7 +140,8 @@ export class AmadeusAccountsService {
     claims: Pick<AccessTokenClaims, "sub">,
     request: CreateAmadeusAccountRequest,
   ): Promise<AdminAmadeusAccount> {
-    this.assertBaseUrl(request.baseUrl);
+    this.assertHttps(request.baseUrl);
+    this.assertOfficialHost(request.environment, request.baseUrl);
     const now = this.clock.now();
     const id = this.ids.new("ama");
     const encrypted = await this.envelope.encrypt(request.clientSecret, clientSecretPlace(id));
@@ -169,7 +187,7 @@ export class AmadeusAccountsService {
     request: UpdateAmadeusAccountRequest,
   ): Promise<AdminAmadeusAccount> {
     if (request.baseUrl !== undefined) {
-      this.assertBaseUrl(request.baseUrl);
+      this.assertHttps(request.baseUrl);
     }
     const now = this.clock.now();
     const mayNeedStepUp =
@@ -186,6 +204,11 @@ export class AmadeusAccountsService {
       const current = await this.accounts.lock(trx, accountId);
       if (current === undefined) {
         throw new AppError("NOT_FOUND");
+      }
+      // Every base URL sent, also the stored one: an account entered with another host before PBE-074 takes the
+      // official host before anything else of it changes. Throwing here rolls the transaction back.
+      if (request.baseUrl !== undefined) {
+        this.assertOfficialHost(current.environment, request.baseUrl);
       }
       if (current.version !== version) {
         throw new AppError("PRECONDITION_FAILED");
@@ -372,7 +395,7 @@ export class AmadeusAccountsService {
   }
 
   /** The loopback stub (`http://127.0.0.1…`) is a development host only: production takes `https` hosts. */
-  private assertBaseUrl(baseUrl: string): void {
+  private assertHttps(baseUrl: string): void {
     if (this.production && !baseUrl.startsWith("https://")) {
       throw new AppError("VALIDATION_FAILED", {
         fieldErrors: [
@@ -382,6 +405,18 @@ export class AmadeusAccountsService {
             message: "Must be an https URL; the Amadeus stub is for development.",
           },
         ],
+      });
+    }
+  }
+
+  /**
+   * Production takes the official Amadeus host of the account's environment only (`isOfficialAmadeusBaseUrl`, with or
+   * without a trailing slash); outside production every `https` host and the loopback stub are accepted.
+   */
+  private assertOfficialHost(environment: string, baseUrl: string): void {
+    if (this.production && !isOfficialAmadeusBaseUrl(environment, baseUrl)) {
+      throw new AppError("VALIDATION_FAILED", {
+        fieldErrors: [{ path: "/baseUrl", code: OFFICIAL_HOST_CODE, message: OFFICIAL_HOST_MESSAGE }],
       });
     }
   }
