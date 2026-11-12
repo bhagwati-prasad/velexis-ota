@@ -16,9 +16,11 @@
 // stack turns FEATURE_LIVE_SWITCH on for the platform processes (support/stack.ts `PLATFORM_SWITCHES_ON`, OFE-022).
 //
 // Between the refusal and the switch, `meetLivePreconditions` of support/ota.ts (OFE-022) meets what the stack cannot
-// reach for real, as velexis_migrator fixtures: the OTA's own live Amadeus connection on the stack's stub (its client
-// secret sealed with the stack's KEK), a plan with live mode and its active manual subscription, and the test payment
-// connection as Stripe Connect leaves it (so no payout account is needed). goLive, MFA and the step-up are real.
+// reach for real: a plan with live mode and the OTA's manual subscription made `active` through the platform admin API
+// (`adminCreatePlan`, `adminUpdateManualSubscription`) as a platform admin of the journey's own (`newHarnessAdmin`,
+// made in `beforeAll`), and, as velexis_migrator fixtures because no API reaches them, the OTA's own live Amadeus
+// connection on the stack's stub (its client secret sealed with the stack's KEK) and the test payment connection as
+// Stripe Connect leaves it (so no payout account is needed). goLive, MFA and the step-up are real.
 //
 // Every page and dialog the journey visits passes axe once its title is in place. The steps are tests in order on one
 // browser context made in `beforeAll` (`mode: "serial"`).
@@ -37,21 +39,23 @@ import {
   EdgeApi,
   FIXTURE_PRECONDITIONS,
   meetLivePreconditions,
+  newHarnessAdmin,
   newOwnerWithActiveOta,
   storefrontHostsOf,
   uniqueLiveOfficeId,
   type OwnedOta,
 } from "../support/ota";
-import { stack } from "../support/seed";
+import { stack, type AdminApiSession } from "../support/seed";
 import { PORTAL_URL } from "../support/stack";
 import { getOtaWithApi } from "../support/tenants";
 
 test.describe.configure({ mode: "serial" });
 
 /**
- * The budget of the one-time arrangement in `beforeAll` (a hook, not a step of the journey): an account through the
- * platform API and Mailpit (at most 15 s), the OTA's set-up on the OTA worker (about 2 s, at most 45 s per OTA, and up
- * to three OTAs while admin-amadeus-pool.e2e.ts holds the test pool), and MFA turned on.
+ * The budget of the one-time arrangement in `beforeAll` (a hook, not a step of the journey): two accounts through the
+ * platform API and Mailpit (at most 15 s each; the second is the platform admin of `newHarnessAdmin`, with MFA and
+ * `admin:grant`), the OTA's set-up on the OTA worker (about 2 s, at most 45 s per OTA, and up to three OTAs while
+ * admin-amadeus-pool.e2e.ts holds the test pool), and MFA turned on.
  */
 const ARRANGE_BUDGET_MS = 180_000;
 
@@ -97,6 +101,8 @@ const ORDER = Object.keys(PRECONDITIONS) as Precondition[];
 type StateWords = "Done" | "Missing" | "Checked when you go live";
 
 let owned: OwnedOta;
+/** The platform admin of the journey's own that gives the OTA its plan with live mode (`meetLivePreconditions`). */
+let admin: AdminApiSession;
 /** The owner with MFA on: the authenticator answers the step-up. */
 let owner: MfaAccount;
 let context: BrowserContext;
@@ -115,6 +121,7 @@ test.beforeAll(async ({ browser }) => {
   owned = await newOwnerWithActiveOta("Gina Golive", "golive");
   owner = await enableMfa(owned.owner.account);
   goLivePath = `/otas/${owned.ota.id}/go-live`;
+  admin = await newHarnessAdmin("Gustav Golive Admin");
 
   context = await newAccountContext(browser, owner, PORTAL_URL);
   await addSessionCookies(context, "portal", owned.session);
@@ -213,8 +220,8 @@ test("Go live asks for a step-up, then names exactly the missing preconditions, 
 });
 
 test("once the preconditions are met, Go live switches the OTA to live and shows its live storefront [PFE-027 AC1]", async () => {
-  // What the stack cannot reach for real, as OFE-022's fixtures meet it (see the file header).
-  await meetLivePreconditions(owned, uniqueLiveOfficeId());
+  // What the stack cannot reach for real, as OFE-022's journey meets it (see the file header).
+  await meetLivePreconditions(owned, uniqueLiveOfficeId(), admin);
   await page.reload();
   await expect(page.getByRole("heading", { level: 1, name: "Go live" })).toBeVisible();
   // The live Amadeus connection exists now, so the page no longer marks it missing before the try.

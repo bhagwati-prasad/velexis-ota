@@ -181,6 +181,11 @@ export interface PlanMoveInput {
   readonly plan: Schemas["CreatePlanRequest"];
   /** The reason of `adminUpdateManualSubscription` (5 to 500 characters), stored in the audit log. */
   readonly reason: string;
+  /**
+   * The trial's new status as well, in the same edit: `active` marks it paid outside Stripe, which goLive accepts
+   * (FIX-W48-PLATFORM; support/ota.ts `meetLivePreconditions`). Default: the status stays.
+   */
+  readonly status?: Schemas["UpdateManualSubscriptionRequest"]["status"];
 }
 
 /**
@@ -189,8 +194,8 @@ export interface PlanMoveInput {
  * domains or live mode, and an owner's plan change runs through Stripe Billing, which is off in the stack.
  * `adminCreatePlan` creates the plan; the owner's `getSubscription` and the admin's `adminGetSubscription` read the
  * OTA's manual trial and its version; `adminUpdateManualSubscription` moves the trial to the plan (`If-Match`, the
- * reason), which sets the OTA's plan and publishes the platform's `tenant` invalidation. Resolves to the subscription
- * the admin operation answered.
+ * reason, and `input.status` when given), which sets the OTA's plan and publishes the platform's `tenant`
+ * invalidation. Resolves to the subscription the admin operation answered.
  */
 export async function moveOtaToNewPlan(
   call: PlatformApiCaller,
@@ -219,6 +224,7 @@ export async function moveOtaToNewPlan(
   });
   const change: Schemas["UpdateManualSubscriptionRequest"] = {
     planCode: input.plan.code,
+    ...(input.status === undefined ? {} : { status: input.status }),
     reason: input.reason,
   };
   return await call<Schemas["AdminSubscription"]>({

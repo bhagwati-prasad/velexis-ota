@@ -27,18 +27,20 @@
 // support/ota.ts for the rest):
 //   - through the platform API: the owner's active OTA (`newOwnerWithActiveOta` with MFA, set up by the OTA worker, so
 //     the journey needs `E2E_WITH_OTA=1` and fails at once without it); its payout account (the owner's
-//     `setPayoutAccount`, the step-up of the owner's TOTP sign-in), which a platform admin of the journey's own (MFA,
-//     `admin:grant`) verifies (`adminReviewPayoutAccount`) before approving the statement below
+//     `setPayoutAccount`, the step-up of the owner's TOTP sign-in), which a platform admin of the journey's own
+//     (`newHarnessAdmin` of support/ota.ts: MFA, `admin:grant`) verifies (`adminReviewPayoutAccount`) before approving
+//     the statement below
 //     (`adminApproveSettlement`, with the step-up of its TOTP sign-in), since an OTA's members never see a draft and a
 //     statement is approved only for a verified payout account; a co-owner, a verified account without MFA that the
 //     owner invites as owner and that accepts with the token of its invitation e-mail; a pending invitation to an address
 //     of the journey's own; and an unverified account (`signUp`, `signIn`) for the verification page's own state;
 //   - support/seed.ts (`insertDraftSettlement`, as the platform API's own role): last month's draft statement with two
 //     lines, as the monthly run builds it from Stripe's balance transactions, which the stack cannot have;
-//   - support/ota.ts (`meetLivePreconditions`, velexis_migrator fixtures, as OFE-022's, PFE-027's and PFE-030's
-//     journeys): what going live needs and the stack cannot reach (the OTA's own live Amadeus connection, a plan with
-//     live mode and its subscription, the Stripe Connect payment connection). The switch itself is the owner's, in the
-//     browser.
+//   - support/ota.ts (`meetLivePreconditions`, as OFE-022's, PFE-027's and PFE-030's journeys): what going live needs
+//     and the stack cannot reach for real: a plan with live mode and the OTA's manual subscription made `active`,
+//     through the platform admin API as the same platform admin; the OTA's own live Amadeus connection and the Stripe
+//     Connect payment connection, which no API reaches, as velexis_migrator fixtures. The switch itself is the owner's,
+//     in the browser.
 // The owner has MFA; the co-owner meets the enrolment gate on purpose, as the page's subject, and enrols there.
 //
 // The steps are tests in order (`mode: "serial"`) on one browser context for the owner made in `beforeAll`.
@@ -52,10 +54,8 @@ import {
   callPlatformApi,
   createVerifiedAccount,
   E2E_TERMS_VERSION,
-  enableMfa,
   expect,
   newAccountContext,
-  signInToAdminWithApi,
   signInWithApi,
   test,
   uniqueTestIp,
@@ -64,12 +64,13 @@ import {
 import { uniqueEmail, waitForLink } from "../support/mailpit";
 import {
   meetLivePreconditions,
+  newHarnessAdmin,
   newOwnerWithActiveOta,
   newTenantId,
   uniqueLiveOfficeId,
   type OwnedOta,
 } from "../support/ota";
-import { buildAccount, grantPlatformAdmin, insertDraftSettlement, stack } from "../support/seed";
+import { buildAccount, insertDraftSettlement, stack, type AdminApiSession } from "../support/seed";
 import { OTA_ADMIN_URL, PORTAL_URL, REPO_ROOT } from "../support/stack";
 import { Authenticator, TOTP_PERIOD_SECONDS, totpStep } from "../support/totp";
 
@@ -132,7 +133,7 @@ type PortalRoute = keyof typeof ROUTES;
  * platform API and Mailpit (up to 15 s each for the verification and invitation e-mails), the owner's and the admin's
  * MFA, `admin:grant`, the OTA's set-up on the OTA worker (about 2 s, at most 45 s per OTA, and up to three OTAs while
  * admin-amadeus-pool.e2e.ts holds the test pool), the payout account, the statement and its approval, the go-live
- * fixtures, and the wait for two unused TOTP steps of the owner (at most 60 s).
+ * preconditions (the admin API and the fixtures), and the wait for two unused TOTP steps of the owner (at most 60 s).
  */
 const ARRANGE_BUDGET_MS = 300_000;
 
@@ -248,10 +249,11 @@ async function invitedMember(role: Schemas["TenantRole"], fullName: string): Pro
 }
 
 /**
- * Last month's draft statement of the OTA with two lines, approved by a platform admin of the journey's own, who first
- * verifies the OTA's payout account (version `payoutVersion`): a statement is approved only for a verified one.
+ * Last month's draft statement of the OTA with two lines, approved by `adminApi`, a platform admin of the journey's own,
+ * who first verifies the OTA's payout account (version `payoutVersion`): a statement is approved only for a verified
+ * one.
  */
-async function approvedStatement(payoutVersion: number): Promise<void> {
+async function approvedStatement(payoutVersion: number, adminApi: AdminApiSession): Promise<void> {
   // Two payments in EUR and the totals of the platform's formula (settlement-formula.ts): payments 250.00 + 180.00 =
   // 430.00; Stripe fees 3.88 + 2.77 = 6.65; the Velexis fee 1.50 % of 430.00 = 6.45; net 430.00 − 6.65 − 6.45 = 416.90.
   const now = new Date();
@@ -296,15 +298,8 @@ async function approvedStatement(payoutVersion: number): Promise<void> {
       },
     ],
   });
-  const admin = await enableMfa(
-    await createVerifiedAccount(buildAccount({ fullName: "Ada Approving Admin" })),
-  );
-  await grantPlatformAdmin(admin.email);
-  // The admin's sign-in with a TOTP code is the step-up `adminApproveSettlement` asks for (15 minutes).
-  const adminApi = {
-    endUserIp: admin.endUserIp,
-    accessToken: (await signInToAdminWithApi(admin)).accessToken,
-  };
+  // The admin's sign-in with a TOTP code (`newHarnessAdmin`) is the step-up `adminApproveSettlement` asks for (15
+  // minutes).
   await callPlatformApi<Schemas["PayoutAccount"]>({
     operation: "adminReviewPayoutAccount",
     method: "POST",
@@ -366,9 +361,11 @@ test.beforeAll(async ({ browser }) => {
     accessToken: owned.owner.accessToken,
     body: { email: invitedAddress, role: "viewer" } satisfies Schemas["CreateInvitationRequest"],
   });
-  await approvedStatement(payout.version);
-  // What going live needs and the stack cannot reach; the switch is the owner's, in the browser.
-  await meetLivePreconditions(owned, uniqueLiveOfficeId());
+  const admin = await newHarnessAdmin("Ada Approving Admin");
+  await approvedStatement(payout.version, admin);
+  // What going live needs and the stack cannot reach (the plan and the subscription through the admin API, the rest as
+  // fixtures); the switch is the owner's, in the browser.
+  await meetLivePreconditions(owned, uniqueLiveOfficeId(), admin);
 
   context = await newAccountContext(browser, owned.owner.account, PORTAL_URL);
   page = await context.newPage();

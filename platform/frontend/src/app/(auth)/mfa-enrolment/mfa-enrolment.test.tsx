@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { components } from "@velexis/api-types/platform";
 import { Component, type ReactNode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -370,7 +370,9 @@ describe("/mfa-enrolment", () => {
       { name: MFA_ENROLMENT_STRINGS.enabledTitle },
       ACTION_WAIT,
     );
-    expect(document.activeElement).toBe(enabled);
+    // The heading takes the focus in the set-up's effect, which React may run after the commit that findByRole saw:
+    // wait for the focus itself (as domains.test.tsx since the lead's decision (17c) of 2026-11-11).
+    await waitFor(() => expect(document.activeElement).toBe(enabled), ACTION_WAIT);
     const panel = screen
       .getByRole("heading", { name: SECURITY_STRINGS.recoveryCodesTitle })
       .closest("section");

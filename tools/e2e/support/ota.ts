@@ -41,8 +41,10 @@
 //
 //   const owned = await newOwnerWithActiveOta("Lena Live", "live", { mfa: true });  // an owner with MFA
 //   const owner = await stepUpWithApi(owned.owner);                                  // the TOTP step-up
-//   const facts = await meetLivePreconditions(owned, officeId);  // velexis_migrator fixtures: own live Amadeus, plan,
-//                                                                 // subscription, Stripe Connect
+//   const admin = await newHarnessAdmin();                       // a platform admin of the journey's own (beforeAll)
+//   const facts = await meetLivePreconditions(owned, officeId, admin);  // the admin API: a plan with live mode and the
+//                                                       // subscription `active`; velexis_migrator fixtures: own live
+//                                                       // Amadeus, Stripe Connect
 //   const answer = await goLiveAttempt(owner, owned.ota.id);                         // goLive through the platform API
 //   await addPrimaryCustomDomain(owned, customHost);        // a verified custom domain, certificate issued, primary
 //   await serveStorefrontHost(context, { origin, endUserIp, pagesFrom });          // a host of the OTA in the browser
@@ -85,13 +87,22 @@ import {
   callPlatformApi,
   createVerifiedAccount,
   enableMfa,
+  signInToAdminWithApi,
   signInWithApi,
   uniqueTestIp,
   type ApiCall,
   type PortalAccount,
   type SessionTokens,
 } from "./fixtures";
-import { buildAccount, stack, withDatabase } from "./seed";
+import {
+  buildAccount,
+  grantPlatformAdmin,
+  moveOtaToNewPlan,
+  stack,
+  withDatabase,
+  type AdminApiSession,
+  type PlatformApiCaller,
+} from "./seed";
 import {
   AMADEUS_STUB_URL,
   DEMO_TENANT_KEY,
@@ -1778,19 +1789,22 @@ export async function forgetStorefrontCopies(page: StorageEvaluator): Promise<vo
 // own OTA goes live through the platform API as its owner does (goLive by an owner with MFA, after a TOTP step-up), gets
 // a verified custom domain that becomes its primary host, and its storefront is looked at in the browser on both hosts.
 //
-// What the stack cannot reach for real is written as velexis_migrator fixtures, as OBE-083's cross-backend test writes
-// it (lead decision of 2026-11-04): the OTA's own live Amadeus connection as the platform worker leaves verified own
-// credentials (PBE-053: `credential_source = 'tenant'`, `active`, the client secret sealed with the stack's KEK as the
-// platform seals it, so the OTA API decrypts it and asks the stack's Amadeus stub, which hands any client a token, for
-// a token), a plan with `limits.liveMode` and its active subscription (Stripe Billing is off in the stack: its Checkout
-// is a hosted page), a Stripe Connect test connection as the platform's Connect callback leaves it (the OAuth runs on
-// Stripe's pages; go-live copies it to live), and the custom domain verified with its certificate issued (no DNS or
-// ACME in the stack). The live Amadeus connection is no submission through the platform API because that needs
-// FEATURE_OWN_AMADEUS, whose portal and admin pages change what PAD-010's journey reads (a second region named after
-// the test environment), and the Velexis live account and its pool belong to the two platform admin journeys that
-// hold them in turn (admin-amadeus-pool.e2e.ts, which counts its offices exactly, and admin-live-office.e2e.ts since
-// PAD-015: `holdVelexisLivePool` of support/seed.ts), so no Velexis live office is used here either. goLive itself, the
-// owner's MFA and step-up are real.
+// The plan and the subscription go through the platform admin API, as Velexis staff arrange an OTA billed outside
+// Stripe (lead decision (17c) of 2026-11-11, FIX-W49-PLATFORM; PADR-0017 item 5): a platform admin of the journey's own
+// (`newHarnessAdmin`) creates a plan with `limits.liveMode` (`adminCreatePlan`) and moves the OTA's manual trial to it
+// as `active` (`adminUpdateManualSubscription`, which accepts `active` since FIX-W48-PLATFORM): Stripe Billing is off in
+// the stack, its Checkout is a hosted page, and no public plan has live mode. What no API reaches is written as
+// velexis_migrator fixtures, as OBE-083's cross-backend test writes it (lead decision of 2026-11-04): the OTA's own
+// live Amadeus connection as the platform worker leaves verified own credentials (PBE-053: `credential_source =
+// 'tenant'`, `active`, the client secret sealed with the stack's KEK as the platform seals it, so the OTA API decrypts
+// it and asks the stack's Amadeus stub, which hands any client a token, for a token), a Stripe Connect test connection
+// as the platform's Connect callback leaves it (the OAuth runs on Stripe's pages; go-live copies it to live), and the
+// custom domain verified with its certificate issued (no DNS or ACME in the stack). The live Amadeus connection is no
+// submission through the platform API because that needs FEATURE_OWN_AMADEUS, whose portal and admin pages change what
+// PAD-010's journey reads (a second region named after the test environment), and the Velexis live account and its
+// pool belong to the two platform admin journeys that hold them in turn (admin-amadeus-pool.e2e.ts, which counts its
+// offices exactly, and admin-live-office.e2e.ts since PAD-015: `holdVelexisLivePool` of support/seed.ts), so no
+// Velexis live office is used here either. goLive itself, the owner's MFA and step-up are real.
 //
 // In the browser, the OTA's two hosts are its own origins: its sub-domain `<key>.ota.example.com` is mapped to the
 // preview on STOREFRONT_URL with Chromium's host-resolver rules (`hostResolverRules`; the preview allows the storefront
@@ -1998,7 +2012,7 @@ export function livePlanCodeOf(key: string): string {
   return `e2elive_${key}`;
 }
 
-/** The go-live preconditions that `meetLivePreconditions` writes as fixtures, as goLive names them. */
+/** The go-live preconditions that `meetLivePreconditions` meets (the admin API and the fixtures), as goLive names them. */
 export const FIXTURE_PRECONDITIONS = Object.freeze([
   "amadeus_live",
   "payout_account",
@@ -2006,54 +2020,129 @@ export const FIXTURE_PRECONDITIONS = Object.freeze([
   "subscription",
 ] as const);
 
-/** The rows `meetLivePreconditions` wrote. */
+/** The rows `meetLivePreconditions` wrote, through the platform admin API or as fixtures. */
 export interface LivePreconditionFixtures {
-  /** The OTA's own live Amadeus connection (`sc_…`, `credential_source = 'tenant'`, `active`). */
+  /** The OTA's own live Amadeus connection (`sc_…`, `credential_source = 'tenant'`, `active`): a fixture. */
   readonly liveConnectionId: string;
   /** Its office, the only one it holds and its default, queuing and owner office. */
   readonly liveOfficeId: string;
-  /** The plan with `limits.liveMode` (not public), the OTA's plan from then on. */
+  /** The plan with `limits.liveMode` (not public) that `adminCreatePlan` created, the OTA's plan from then on. */
   readonly planCode: string;
-  /** The OTA's `active` manual subscription of that plan (`billing_provider = 'manual'`, FIX-W40-PLATFORM). */
+  /**
+   * The OTA's manual subscription (`billing_provider = 'manual'`), moved to that plan and made `active` by
+   * `adminUpdateManualSubscription` (FIX-W40-PLATFORM, FIX-W48-PLATFORM).
+   */
   readonly subscriptionId: string;
-  /** The connected account (`acct_…`) of the OTA's test payment connection, now `connect_standard`. */
+  /** The connected account (`acct_…`) of the OTA's test payment connection, now `connect_standard`: a fixture. */
   readonly connectAccount: string;
 }
 
 /**
- * Meets the go-live preconditions the stack cannot reach for real, as velexis_migrator fixtures in one transaction (the
- * way OBE-083's cross-backend test meets them), then publishes the platform's `tenant` and `connection` invalidations:
+ * A platform admin of the journey's own for the arrangements that go through the platform admin API
+ * (`meetLivePreconditions`): a verified account with MFA (`createVerifiedAccount`, `enableMfa`), made a platform admin
+ * by `admin:grant` of the platform CLI (PBE-028; no screen can), signed in to the admin API with its next TOTP code
+ * (`signInToAdminWithApi`). Call it in `beforeAll`: it waits for a verification e-mail and runs the CLI. The session's
+ * TOTP sign-in is the step-up of the admin operations for 15 minutes (PADR-0008).
+ */
+export async function newHarnessAdmin(fullName = "E2E Harness Admin"): Promise<AdminApiSession> {
+  const account = await enableMfa(await createVerifiedAccount(buildAccount({ fullName })));
+  await grantPlatformAdmin(account.email);
+  const { accessToken } = await signInToAdminWithApi(account);
+  return { endUserIp: account.endUserIp, accessToken };
+}
+
+/**
+ * The plan with live mode that `meetLivePreconditions` creates for the journey's OTA `key` (`adminCreatePlan`):
+ * `e2elive_<key>`, not public, without a trial or a settlement fee, with one custom domain.
+ */
+export function livePlanOf(key: string): PlatformComponents["schemas"]["CreatePlanRequest"] {
+  return {
+    code: livePlanCodeOf(key),
+    name: "E2E live",
+    description: "A plan with live mode for the go-live journeys (OFE-022, PFE-027, PFE-028, PFE-030).",
+    currency: "EUR",
+    monthlyPrice: { amount: "49.00", currency: "EUR" },
+    limits: { staffSeats: 5, apiKeys: 10, customDomains: 1, liveMode: true },
+    features: {},
+    isPublic: false,
+    trialDays: 0,
+    settlementFeeBps: 0,
+    sortOrder: 90,
+  };
+}
+
+/** The reason `meetLivePreconditions` gives `adminUpdateManualSubscription`, which the audit row keeps. */
+export const LIVE_SUBSCRIPTION_REASON =
+  "An end-to-end journey's OTA, billed outside Stripe, gets a plan with live mode so that it can go live.";
+
+/**
+ * The `plan_live_mode` and `subscription` preconditions through the platform admin API, as Velexis staff arrange an
+ * OTA they bill themselves (`moveOtaToNewPlan` of support/seed.ts with `status: "active"`): `admin` creates
+ * `livePlanOf(key)` (`adminCreatePlan`), the owner's `getSubscription` and the admin's `adminGetSubscription` read the
+ * OTA's manual trial and its version, and `adminUpdateManualSubscription` moves it to the plan as `active` (`If-Match`,
+ * LIVE_SUBSCRIPTION_REASON), which sets the OTA's plan and publishes the platform's `tenant` invalidation after its
+ * commit. Resolves to the subscription the admin operation answered.
+ */
+export async function activateLivePlan(
+  call: PlatformApiCaller,
+  owned: OwnedOta,
+  admin: AdminApiSession,
+): Promise<PlatformComponents["schemas"]["AdminSubscription"]> {
+  return await moveOtaToNewPlan(call, {
+    admin,
+    owner: owned.owner,
+    tenantId: owned.ota.id,
+    plan: livePlanOf(owned.ota.key),
+    reason: LIVE_SUBSCRIPTION_REASON,
+    status: "active",
+  });
+}
+
+/**
+ * Meets the go-live preconditions the stack cannot reach for real: the plan and the subscription through the platform
+ * admin API as `admin` (`activateLivePlan`; a platform admin of the journey's own, `newHarnessAdmin`), the rest, which
+ * no API reaches, as velexis_migrator fixtures in one transaction (the way OBE-083's cross-backend test meets them),
+ * then the platform's `tenant` and `connection` invalidations:
  *
- *   amadeus_live     the OTA's own live Amadeus connection as the platform worker leaves verified own credentials
- *                    (PBE-053's apply): `credential_source = 'tenant'`, `active`, the stack's Amadeus stub as its host,
- *                    a made-up client id and a random client secret sealed with the stack's KEK
+ *   plan_live_mode   a plan `e2elive_<key>` with `limits.liveMode` (not public, `adminCreatePlan`), the OTA's plan from
+ *                    now on;
+ *   subscription     the OTA's manual trial moved to that plan as `active` (`adminUpdateManualSubscription`, paid
+ *                    outside Stripe): Stripe Billing is off in the stack, and goLive takes an active manual
+ *                    subscription (FIX-W40-PLATFORM);
+ *   amadeus_live     a fixture: the OTA's own live Amadeus connection as the platform worker leaves verified own
+ *                    credentials (PBE-053's apply): `credential_source = 'tenant'`, `active`, the stack's Amadeus stub
+ *                    as its host, a made-up client id and a random client secret sealed with the stack's KEK
  *                    (`sealedClientSecret`), `liveOfficeId` as its only, default, queuing and owner office;
- *   plan_live_mode   a plan `e2elive_<key>` with `limits.liveMode` (not public), the OTA's plan from now on;
- *   subscription     its `active` manual subscription (the OTA's current one, the earlier ones `canceled`): Stripe
- *                    Billing is off in the stack, and goLive takes an active manual subscription (FIX-W40-PLATFORM);
- *   payout_account   not needed once the OTA's test payment connection is `connect_standard` with a connected account,
- *                    as the platform's Connect callback leaves it (`active`, charges and payouts enabled): goLive copies
- *                    it to live, and only `velexis` payments need a verified payout account (PADR-0003).
+ *   payout_account   a fixture: not needed once the OTA's test payment connection is `connect_standard` with a
+ *                    connected account, as the platform's Connect callback leaves it (`active`, charges and payouts
+ *                    enabled): goLive copies it to live, and only `velexis` payments need a verified payout account
+ *                    (PADR-0003).
  *
- * MFA is real (the owner's account). `keys` seal the client secret (default: the stack's, `stackKeyProvider`).
+ * MFA is real (the owner's account). `options.keys` seal the client secret (default: the stack's, `stackKeyProvider`);
+ * `options.call` calls the platform API (default `callPlatformApi`).
  */
 export async function meetLivePreconditions(
   owned: OwnedOta,
   liveOfficeId: string,
-  keys?: KeyProvider,
+  admin: AdminApiSession,
+  options: { readonly keys?: KeyProvider; readonly call?: PlatformApiCaller } = {},
 ): Promise<LivePreconditionFixtures> {
   if (!/^[A-Z0-9]{9}$/.test(liveOfficeId)) {
     throw new TypeError(`not an Amadeus office id: ${liveOfficeId}`);
   }
   const tenantId = owned.ota.id;
+  const subscription = await activateLivePlan(options.call ?? callPlatformApi, owned, admin);
   const fixtures: LivePreconditionFixtures = {
     liveConnectionId: newPlatformId("sc"),
     liveOfficeId,
-    planCode: livePlanCodeOf(owned.ota.key),
-    subscriptionId: newPlatformId("sub"),
+    planCode: subscription.planCode,
+    subscriptionId: subscription.id,
     connectAccount: `acct_e2e${randomBytes(8).toString("hex")}`,
   };
-  const sealed = await sealedClientSecret(fixtures.liveConnectionId, keys ?? (await stackKeyProvider()));
+  const sealed = await sealedClientSecret(
+    fixtures.liveConnectionId,
+    options.keys ?? (await stackKeyProvider()),
+  );
   await withDatabase("migrator", async (client) => {
     await client.query("BEGIN");
     try {
@@ -2073,31 +2162,6 @@ export async function meetLivePreconditions(
           liveOfficeId,
         ],
       );
-      await client.query(
-        `INSERT INTO platform.plans (code, name, description, currency, monthly_price, per_booking_fee,
-                                     included_bookings, limits, features, is_public, is_active, sort_order,
-                                     trial_days, settlement_fee_bps)
-         VALUES ($1, 'E2E live', 'A plan with live mode for the storefront live journey (OFE-022).', 'EUR', 49, 0, 0,
-                 '{"staffSeats":5,"apiKeys":10,"customDomains":1,"liveMode":true}'::jsonb, '{}'::jsonb, false, true,
-                 90, 0, 0)`,
-        [fixtures.planCode],
-      );
-      await client.query(
-        `UPDATE platform.subscriptions
-            SET status = 'canceled', canceled_at = now(), version = version + 1, updated_at = now()
-          WHERE tenant_id = $1 AND status IN ('trialing', 'active', 'past_due', 'paused', 'incomplete', 'unpaid')`,
-        [tenantId],
-      );
-      await client.query(
-        `INSERT INTO platform.subscriptions (id, tenant_id, plan_code, status, billing_interval, billing_provider,
-                                             current_period_start, current_period_end)
-         VALUES ($1, $2, $3, 'active', 'month', 'manual', now(), now() + interval '30 days')`,
-        [fixtures.subscriptionId, tenantId, fixtures.planCode],
-      );
-      const tenant = await client.query(
-        `UPDATE platform.tenants SET plan_code = $2, version = version + 1, updated_at = now() WHERE id = $1`,
-        [tenantId, fixtures.planCode],
-      );
       const connection = await client.query(
         `UPDATE platform.payment_provider_connections
             SET account_mode = 'connect_standard', account_reference = $2, publishable_key = NULL,
@@ -2108,8 +2172,8 @@ export async function meetLivePreconditions(
           WHERE tenant_id = $1 AND environment = 'test'`,
         [tenantId, fixtures.connectAccount],
       );
-      if (tenant.rowCount !== 1 || connection.rowCount !== 1) {
-        throw new Error(`the OTA ${tenantId} has no tenant row or no test payment connection to arrange`);
+      if (connection.rowCount !== 1) {
+        throw new Error(`the OTA ${tenantId} has no test payment connection to arrange`);
       }
       await client.query("COMMIT");
     } catch (error) {

@@ -681,8 +681,9 @@ describe("adding a domain", () => {
     // The host name as typed, trimmed; the API lower-cases and checks it.
     expect(await bodyOf(request)).toEqual({ hostname: "Travel.Acme.com" });
     expect(nextCache.revalidatePath).toHaveBeenCalledWith(DOMAINS_PAGE);
-    // The records to create take the focus, and the field is empty for the next domain.
-    expect(document.activeElement).toBe(added);
+    // The records to create take the focus (in the form's effect, which may run after the commit findByRole saw: wait
+    // for it), and the field is empty for the next domain.
+    await waitFor(() => expect(document.activeElement).toBe(added), ACTION_WAIT);
     expect((within(addForm()).getByLabelText(STRINGS.hostnameLabel) as HTMLInputElement).value).toBe("");
 
     // The TXT record and both routing options, as the API lists them, each name and value with a copy button.
@@ -739,7 +740,9 @@ describe("adding a domain", () => {
       { name: STRINGS.addedTitle("travel.acme.com") },
       ACTION_WAIT,
     );
-    expect(document.activeElement).toBe(added);
+    // The records take the focus in the form's effect, which React may run after the commit that findByRole saw
+    // (lead decision (17c) of 2026-11-11): wait for the focus itself.
+    await waitFor(() => expect(document.activeElement).toBe(added), ACTION_WAIT);
 
     // The revalidated page counts one custom domain on a plan with one: no form any more, the records stay.
     await refresh(view, {

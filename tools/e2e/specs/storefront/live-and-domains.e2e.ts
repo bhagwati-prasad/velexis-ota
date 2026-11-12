@@ -2,9 +2,10 @@
 // OF-12 AC1, the M5 demo of platform/docs/plans/implementation-plan.md §4), in the `storefront` project, with the
 // storefront guards on (support/storefront-guards.ts) and axe on every page it visits.
 //
-//   an owner with MFA creates an OTA and steps up → goLive names only the preconditions the stack cannot reach →
-//   velexis_migrator fixtures meet them (the OTA's own live Amadeus connection, a plan with live mode, its active
-//   subscription, a Stripe Connect test connection) → goLive switches the OTA to live → its custom domain, verified
+//   an owner with MFA creates an OTA and steps up → goLive names only the preconditions the stack cannot reach → a
+//   platform admin of the journey's own gives the OTA a plan with live mode and makes its manual subscription `active`
+//   through the platform admin API, and velexis_migrator fixtures meet what no API reaches (the OTA's own live Amadeus
+//   connection, a Stripe Connect test connection) → goLive switches the OTA to live → its custom domain, verified
 //   with its certificate issued (a fixture: no DNS in the stack),
 //   becomes its primary host → in the browser: the sub-domain and the custom domain show the same OTA without the test
 //   banner → a search on the custom domain runs on the live Amadeus connection → sign-in on the sub-domain goes to the
@@ -35,6 +36,7 @@ import {
   goLiveAttempt,
   hostResolverRules,
   meetLivePreconditions,
+  newHarnessAdmin,
   newOwnerWithActiveOta,
   recordedSearchOf,
   searchIdOf,
@@ -57,9 +59,11 @@ test.describe.configure({ mode: "serial" });
 /**
  * The arrangement of `beforeAll`: a verified account with MFA and a sign-up e-mail through Mailpit (at most 15 s), up
  * to three TOTP codes of their own 30-second steps (enableMfa, the MFA sign-in, the step-up: the platform takes each
- * code once, so up to 90 s), the OTA's set-up on the OTA worker (about 2 s, at most 45 s), the fixtures, two goLive
- * calls, the custom domain, the storefront's answer following them (at most 10 s) and a browser launch: about 180 s at
- * worst. Its own budget, commented; each step keeps the default 30 s.
+ * code once, so up to 90 s), the OTA's set-up on the OTA worker (about 2 s, at most 45 s), a platform admin of the
+ * journey's own (`newHarnessAdmin`: an account with MFA through Mailpit, at most 15 s, `admin:grant` and two TOTP codes
+ * of its own steps), the plan and the subscription through the admin API and the fixtures, two goLive calls, the
+ * custom domain, the storefront's answer following them (at most 10 s) and a browser launch: about 200 s at worst. Its
+ * own budget, commented; each step keeps the default 30 s.
  */
 const ARRANGE_TIMEOUT_MS = 240_000;
 
@@ -151,10 +155,12 @@ test.beforeAll(async ({ playwright, launchOptions }) => {
   const owner = await stepUpWithApi(owned.owner);
   const liveOffice = uniqueLiveOfficeId();
 
-  // goLive names what is still missing; the fixtures meet exactly that, and goLive switches the OTA to live.
+  // goLive names what is still missing; the admin API and the fixtures meet exactly that, and goLive switches the OTA to
+  // live.
+  const admin = await newHarnessAdmin("Lars Live Admin");
   const before = await amadeusConnectionOf(owned.ota.id, "live");
   const refused = await goLiveAttempt(owner, owned.ota.id);
-  const fixtures = await meetLivePreconditions(owned, liveOffice);
+  const fixtures = await meetLivePreconditions(owned, liveOffice, admin);
   const after = await amadeusConnectionOf(owned.ota.id, "live");
   const wentLive = await goLiveAttempt(owner, owned.ota.id);
 
@@ -235,6 +241,7 @@ test("the owner takes the OTA live through the platform API, the fixtures meetin
     defaultOfficeId: liveOffice,
     officeIds: [liveOffice],
   });
+  // The plan with live mode and the OTA's own manual subscription, made `active` through the platform admin API.
   expect(fixtures.planCode).toBe(`e2elive_${owned.ota.key}`);
   expect(fixtures.subscriptionId).toMatch(/^sub_[0-9A-HJKMNP-TV-Z]{26}$/);
   expect(fixtures.connectAccount).toMatch(/^acct_[A-Za-z0-9]+$/);

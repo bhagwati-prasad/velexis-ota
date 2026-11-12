@@ -831,10 +831,12 @@ describe("live access", () => {
     expectSessionHeaders(request);
     expect(await bodyOf(request)).toEqual({ note: "We start selling in March." });
     expect(nextCache.revalidatePath).toHaveBeenCalledWith(AMADEUS_PAGE);
-    // The confirmation takes the button's place (a status message) and the focus.
+    // The confirmation takes the button's place (a status message) and the focus, in the form's effect, which React may
+    // run after the commit that findByRole saw: wait for the focus itself (as domains.test.tsx since the lead's
+    // decision (17c) of 2026-11-11).
     const confirmation = await within(section).findByRole("status", {}, ACTION_WAIT);
     expect(confirmation.textContent).toBe(`${LIVE.requestedTitle}${LIVE.requested}`);
-    expect(document.activeElement).toBe(confirmation);
+    await waitFor(() => expect(document.activeElement).toBe(confirmation), ACTION_WAIT);
     expect(within(section).queryByRole("form")).toBeNull();
 
     // The revalidated page: the live connection waits for its office, and the confirmation stays in view.

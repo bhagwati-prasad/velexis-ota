@@ -51,11 +51,13 @@
 // with MFA, set up by the OTA worker, so the journey needs `E2E_WITH_OTA=1` and fails at once without it); an admin, a
 // verified account without MFA that the owner invites and that accepts with the token of its invitation e-mail; a
 // pending invitation to an address of the journey's own; then the OTA goes live: `meetLivePreconditions` of
-// support/ota.ts meets what the stack cannot reach as velexis_migrator fixtures (as OFE-022's, PFE-027's and PFE-030's
-// journeys) and the owner's goLive switches it, with the step-up of the owner's TOTP sign-in. The owner has MFA; the
-// admin meets the enrolment gate on purpose, as the page's subject. Pages with an id of no row (a statement) answer
-// `404` through the same middleware. The steps are tests in order (`mode: "serial"`) on one browser context for the
-// owner made in `beforeAll`. Tokens stay in variables: a finding names a cookie, a header or a path, never a value.
+// support/ota.ts (as OFE-022's, PFE-027's and PFE-030's journeys) gives it a plan with live mode and makes its manual
+// subscription `active` through the platform admin API as a platform admin of the journey's own (`newHarnessAdmin`),
+// meets what no API reaches (its own live Amadeus connection, Stripe Connect) as velexis_migrator fixtures, and the
+// owner's goLive switches it, with the step-up of the owner's TOTP sign-in. The owner has MFA; the admin meets the
+// enrolment gate on purpose, as the page's subject. Pages with an id of no row (a statement) answer `404` through the
+// same middleware. The steps are tests in order (`mode: "serial"`) on one browser context for the owner made in
+// `beforeAll`. Tokens stay in variables: a finding names a cookie, a header or a path, never a value.
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -78,6 +80,7 @@ import { uniqueEmail, waitForLink } from "../support/mailpit";
 import {
   goLiveAttempt,
   meetLivePreconditions,
+  newHarnessAdmin,
   newOwnerWithActiveOta,
   uniqueLiveOfficeId,
   type OwnedOta,
@@ -138,21 +141,36 @@ const ROUTES = Object.freeze({
 type PortalRoute = keyof typeof ROUTES;
 
 /**
- * The budget of the one-time arrangement in `beforeAll` (a hook, not a step of the journey): three accounts through the
- * platform API and Mailpit (up to 15 s each for the verification and invitation e-mails), the OTA's set-up on the OTA
- * worker (about 2 s, at most 45 s per OTA, and up to three OTAs while admin-amadeus-pool.e2e.ts holds the test pool),
- * the go-live fixtures and goLive, and the wait for two unused TOTP steps of the owner (at most 60 s).
+ * The budget of the one-time arrangement in `beforeAll` (a hook, not a step of the journey): four accounts through the
+ * platform API and Mailpit (up to 15 s each for the verification and invitation e-mails; the fourth is the platform
+ * admin of `newHarnessAdmin`, with MFA and `admin:grant`), the OTA's set-up on the OTA worker (about 2 s, at most 45 s
+ * per OTA, and up to three OTAs while admin-amadeus-pool.e2e.ts holds the test pool), the go-live preconditions and
+ * goLive, and the wait for two unused TOTP steps of the owner (at most 60 s).
  */
 const ARRANGE_BUDGET_MS = 240_000;
 
 /**
- * The budget of the slowest step, the account pages and the OTA's first five pages (the lead's decision (15g) of
+ * The budget of the first pages step, the account pages and the OTA's first five pages (the lead's decision (15g) of
  * 2026-11-11, FIX-W48-PLATFORM): ten pages, each read whole before the journey leaves it, in a browser context that
  * routes its server actions and so has no HTTP cache, which fetches and checks every script of every page again. It
  * took 13.4 to 14.9 s in wave 47 (14.4 s in CI run 42929326729), half of Playwright's default 30 s, so a loaded runner
  * could fail it on time alone. Its own budget changes nothing it checks.
  */
 const ACCOUNT_AND_OTA_PAGES_BUDGET_MS = 60_000;
+
+/**
+ * The budget of the second pages step, the OTA's Amadeus page to its go-live page (the lead's decision (17c) of
+ * 2026-11-11, FIX-W49-PLATFORM): eight pages, a statement of no row among them, read whole in the same context without
+ * an HTTP cache, as in the first pages step. It took 11.5 to 12.3 s in E2E runs 42926666028, 42996441373 and
+ * 43075936872, 22.4 s in run 43065966073 (wave 48), and 23.3 s and 32.4 s in local runs (wave 49), past Playwright's
+ * default 30 s in the last. The time grows in steps of about 10 s, not with the runner's load: a page takes about
+ * 0.3 s, but before each page `answers.settled()` waits for every answer of the page before, and now and then the body
+ * of an RSC answer that the portal's links prefetch (`text/x-component`) neither arrives nor fails once the browser has
+ * left the page, so the journey waits out READ_BUDGET_MS (10 s) and reads it again (`again`). An instrumented local
+ * run (wave 49) had one such wait in this step (12.6 s) and two in the first (22.7 s). Its own budget changes nothing
+ * it checks.
+ */
+const OTA_AMADEUS_TO_GO_LIVE_PAGES_BUDGET_MS = 60_000;
 
 /** The owner's name: the inviter in the invitation e-mails' subject. */
 const OWNER_NAME = "Henrik Headers";
@@ -703,9 +721,9 @@ test.beforeAll(async ({ browser }) => {
     accessToken: owned.owner.accessToken,
     body: { email: invitedAddress, role: "viewer" } satisfies Schemas["CreateInvitationRequest"],
   });
-  // The OTA goes live: the fixtures of what the stack cannot reach, then the owner's goLive (the owner's sign-in with
-  // a TOTP code is the step-up it asks for).
-  await meetLivePreconditions(owned, uniqueLiveOfficeId());
+  // The OTA goes live: its plan and subscription through the admin API and the fixtures of what no API reaches, then the
+  // owner's goLive (the owner's sign-in with a TOTP code is the step-up it asks for).
+  await meetLivePreconditions(owned, uniqueLiveOfficeId(), await newHarnessAdmin("Hana Headers Admin"));
   expect(await goLiveAttempt(owned.owner, owned.ota.id)).toEqual({
     status: 200,
     storefrontEnvironment: "live",
@@ -808,7 +826,8 @@ test("the sign-in sets the challenge and return-path cookies, then the session c
 /** A page route the journey opens: its route, path, title (a pattern for a not-found page) and status (200). */
 type PageVisit = readonly [PortalRoute, string, string | RegExp, number?];
 
-// The page routes are split over two steps, so no step comes near Playwright's 30 seconds on a slower runner.
+// The page routes are split over two steps, each with a budget of its own (one took 32.4 s: the waits for prefetched
+// answers of OTA_AMADEUS_TO_GO_LIVE_PAGES_BUDGET_MS).
 test("the account pages and the OTA's overview, set-up, API keys, domains and team answer with the portal's headers and their scripts with the nonce [PFE-028 AC1]", async () => {
   // Ten whole pages without an HTTP cache: see ACCOUNT_AND_OTA_PAGES_BUDGET_MS.
   test.setTimeout(ACCOUNT_AND_OTA_PAGES_BUDGET_MS);
@@ -830,6 +849,8 @@ test("the account pages and the OTA's overview, set-up, API keys, domains and te
 });
 
 test("the OTA's Amadeus, payments, payout account, settlements, a statement of no row, billing, settings and go-live answer with the portal's headers and their scripts with the nonce [PFE-028 AC1]", async () => {
+  // Eight whole pages without an HTTP cache: see OTA_AMADEUS_TO_GO_LIVE_PAGES_BUDGET_MS.
+  test.setTimeout(OTA_AMADEUS_TO_GO_LIVE_PAGES_BUDGET_MS);
   const pages: readonly PageVisit[] = [
     ["/otas/[tenantId]/amadeus", otaPath("/amadeus"), "Amadeus"],
     ["/otas/[tenantId]/payments", otaPath("/payments"), "Payments"],

@@ -14,6 +14,7 @@ import type { ApiCall } from "../support/fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ACCESS_TOKEN_TTL_SECONDS,
+  activateLivePlan,
   agedAccessToken,
   customDomainOf,
   FIXTURE_PRECONDITIONS,
@@ -21,7 +22,9 @@ import {
   goLiveAnswerOf,
   goLiveAttempt,
   hostResolverRules,
+  LIVE_SUBSCRIPTION_REASON,
   livePlanCodeOf,
+  livePlanOf,
   newPlatformId,
   returnedHeadersOf,
   sealedClientSecret,
@@ -30,6 +33,7 @@ import {
   uniqueLiveOfficeId,
   type ForwardedAnswer,
   type Forwarder,
+  type OwnedOta,
   airlineTestCard,
   bookAirlineCardTrip,
   createStubOrder,
@@ -1059,6 +1063,77 @@ describe("the live journey's names and rules (OFE-022)", () => {
       "plan_live_mode",
       "subscription",
     ]);
+  });
+
+  it("[OFE-022 AC1] gives the OTA its plan with live mode and makes its manual subscription active through the platform admin API, not a fixture", async () => {
+    // Lead decision (17c) of 2026-11-11 (FIX-W49-PLATFORM): the platform admin API reaches the plan and the
+    // subscription, so `meetLivePreconditions` writes neither as a fixture.
+    const plan = livePlanOf("live0a1b2c3d4e");
+    expect(plan).toEqual({
+      code: "e2elive_live0a1b2c3d4e",
+      name: "E2E live",
+      description: expect.stringMatching(/^A plan with live mode/),
+      currency: "EUR",
+      monthlyPrice: { amount: "49.00", currency: "EUR" },
+      limits: { staffSeats: 5, apiKeys: 10, customDomains: 1, liveMode: true },
+      features: {},
+      isPublic: false,
+      trialDays: 0,
+      settlementFeeBps: 0,
+      sortOrder: 90,
+    });
+    expect(() => livePlanOf("Live")).toThrow(TypeError);
+    // The audit row's reason: 5 to 500 characters after trimming (AdminReason).
+    expect(LIVE_SUBSCRIPTION_REASON.trim().length).toBeGreaterThanOrEqual(5);
+    expect(LIVE_SUBSCRIPTION_REASON.trim().length).toBeLessThanOrEqual(500);
+
+    const calls: ApiCall[] = [];
+    const answers: Record<string, unknown> = {
+      adminCreatePlan: { code: plan.code },
+      getSubscription: { id: "sub_01JA2Z7R5N0S3V7X1Z4B9D2F6H" },
+      adminGetSubscription: { subscription: { id: "sub_01JA2Z7R5N0S3V7X1Z4B9D2F6H", version: 1 } },
+      adminUpdateManualSubscription: {
+        id: "sub_01JA2Z7R5N0S3V7X1Z4B9D2F6H",
+        planCode: plan.code,
+        status: "active",
+        billingProvider: "manual",
+        version: 2,
+      },
+    };
+    const call = async <T>(apiCall: ApiCall): Promise<T> => {
+      calls.push(apiCall);
+      return await Promise.resolve(answers[apiCall.operation] as T);
+    };
+    const owned = {
+      owner: {
+        account: { email: "o@example.com", password: "p", fullName: "O", endUserIp: "198.18.0.2" },
+        accessToken: "owner-token",
+      },
+      ota: { id: "ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F", key: "live0a1b2c3d4e" },
+    } as unknown as OwnedOta;
+
+    const subscription = await activateLivePlan(call, owned, {
+      endUserIp: "198.18.0.1",
+      accessToken: "admin-token",
+    });
+
+    expect(subscription).toEqual(answers["adminUpdateManualSubscription"]);
+    expect(calls.map((apiCall) => `${apiCall.operation} ${apiCall.method} ${apiCall.path}`)).toEqual([
+      "adminCreatePlan POST /v1/admin/plans",
+      "getSubscription GET /v1/tenants/ten_01JA2Z7Q4M9R2T6V0X3Z8B1D5F/subscription",
+      "adminGetSubscription GET /v1/admin/subscriptions/sub_01JA2Z7R5N0S3V7X1Z4B9D2F6H",
+      "adminUpdateManualSubscription PATCH /v1/admin/subscriptions/sub_01JA2Z7R5N0S3V7X1Z4B9D2F6H",
+    ]);
+    // The admin creates the plan and edits the subscription; the owner only reads which subscription is the OTA's.
+    expect(calls[0]).toMatchObject({ accessToken: "admin-token", endUserIp: "198.18.0.1", body: plan });
+    expect(calls[1]).toMatchObject({ accessToken: "owner-token", endUserIp: "198.18.0.2" });
+    expect(calls[2]).toMatchObject({ accessToken: "admin-token", endUserIp: "198.18.0.1" });
+    expect(calls[3]).toMatchObject({
+      accessToken: "admin-token",
+      endUserIp: "198.18.0.1",
+      headers: { "If-Match": '"1"' },
+      body: { planCode: plan.code, status: "active", reason: LIVE_SUBSCRIPTION_REASON },
+    });
   });
 
   it("[OFE-022 AC1] seals a random client secret that only its own connection row's column decrypts", async () => {

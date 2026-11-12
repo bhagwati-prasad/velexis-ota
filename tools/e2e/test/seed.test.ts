@@ -130,6 +130,49 @@ describe("moveOtaToNewPlan", () => {
       headers: { "If-Match": '"3"' },
       body: { planCode: "e2eadom_x", reason: "The journey needs a plan of its own." },
     });
+    // Without `status`, the trial keeps its status.
+    expect(calls[3]?.body).toEqual({ planCode: "e2eadom_x", reason: "The journey needs a plan of its own." });
+  });
+
+  it("moves the trial to the plan and makes it active in the same edit when a status is given [OFE-022 AC1]", async () => {
+    // support/ota.ts `meetLivePreconditions` (FIX-W49-PLATFORM): `active` marks the manual subscription paid outside
+    // Stripe, which goLive accepts.
+    const calls: ApiCall[] = [];
+    const call = async <T>(apiCall: ApiCall): Promise<T> => {
+      calls.push(apiCall);
+      const answers: Record<string, unknown> = {
+        getSubscription: { id: "sub_2" },
+        adminGetSubscription: { subscription: { id: "sub_2", version: 1 } },
+        adminUpdateManualSubscription: { id: "sub_2", status: "active", version: 2 },
+      };
+      return await Promise.resolve(answers[apiCall.operation] as T);
+    };
+    const owner: SignedInOwner = {
+      account: { email: "o@example.com", password: "p", fullName: "O", endUserIp: "198.18.0.2" },
+      accessToken: "owner-token",
+    };
+
+    await moveOtaToNewPlan(call, {
+      admin: { endUserIp: "198.18.0.1", accessToken: "admin-token" },
+      owner,
+      tenantId: "ten_2",
+      plan: { code: "e2elive_x", name: "E2E" } as Parameters<typeof moveOtaToNewPlan>[1]["plan"],
+      reason: "The journey's OTA goes live.",
+      status: "active",
+    });
+
+    expect(calls.at(-1)).toMatchObject({
+      operation: "adminUpdateManualSubscription",
+      method: "PATCH",
+      path: "/v1/admin/subscriptions/sub_2",
+      accessToken: "admin-token",
+      headers: { "If-Match": '"1"' },
+    });
+    expect(calls.at(-1)?.body).toEqual({
+      planCode: "e2elive_x",
+      status: "active",
+      reason: "The journey's OTA goes live.",
+    });
   });
 });
 

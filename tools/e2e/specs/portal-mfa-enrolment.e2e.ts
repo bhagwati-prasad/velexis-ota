@@ -11,8 +11,10 @@
 // (`newOwnerWithActiveOta` with MFA, so the journey needs `E2E_WITH_OTA=1` and fails at once without it); the admin and
 // the agent, verified accounts without MFA that the owner invites (createInvitation) and that accept with the token of
 // their invitation e-mail (acceptInvitation) while the OTA is still in test mode; then the OTA goes live as OFE-022's
-// helpers of support/ota.ts take it there: `meetLivePreconditions` meets what the stack cannot reach as velexis_migrator
-// fixtures (the only rows no public operation writes), and the owner's real goLive switches it, with MFA and a step-up.
+// helpers of support/ota.ts take it there: `meetLivePreconditions` gives it a plan with live mode and makes its manual
+// subscription `active` through the platform admin API as a platform admin of the journey's own (`newHarnessAdmin`),
+// meets what no API reaches (its own live Amadeus connection, Stripe Connect) as velexis_migrator fixtures, and the
+// owner's real goLive switches it, with MFA and a step-up.
 // From then on the admin is an active admin of a live OTA without MFA: PBE-071's rule, which the portal only reads.
 //
 // Every page the journey visits passes axe once its title is in place. The TOTP secret and the recovery codes stay in
@@ -33,6 +35,7 @@ import { waitForLink } from "../support/mailpit";
 import {
   goLiveAttempt,
   meetLivePreconditions,
+  newHarnessAdmin,
   newOwnerWithActiveOta,
   stepUpWithApi,
   uniqueLiveOfficeId,
@@ -47,10 +50,11 @@ test.describe.configure({ mode: "serial" });
 type Schemas = components["schemas"];
 
 /**
- * The budget of the one-time arrangement in `beforeAll` (a hook, not a step of the journey): three accounts through the
- * platform API and Mailpit (up to 15 s each for the verification and the invitation e-mails), the OTA's set-up on the
- * OTA worker (about 2 s, at most 45 s per OTA, and up to three OTAs while admin-amadeus-pool.e2e.ts holds the test
- * pool), the go-live fixtures and goLive.
+ * The budget of the one-time arrangement in `beforeAll` (a hook, not a step of the journey): four accounts through the
+ * platform API and Mailpit (up to 15 s each for the verification and the invitation e-mails; the fourth is the platform
+ * admin of `newHarnessAdmin`, with MFA and `admin:grant`), the OTA's set-up on the OTA worker (about 2 s, at most 45 s
+ * per OTA, and up to three OTAs while admin-amadeus-pool.e2e.ts holds the test pool), the go-live preconditions and
+ * goLive.
  */
 const ARRANGE_BUDGET_MS = 180_000;
 
@@ -150,8 +154,9 @@ test.beforeAll(async ({ browser }) => {
   admin = await invitedMember(owned, "admin", "Ada Enrolling");
   agent = await invitedMember(owned, "agent", "Arne Agent");
 
-  // The OTA goes live: the fixtures of what the stack cannot reach, then the owner's goLive with a step-up.
-  await meetLivePreconditions(owned, uniqueLiveOfficeId());
+  // The OTA goes live: its plan and subscription through the admin API and the fixtures of what no API reaches, then
+  // the owner's goLive with a step-up.
+  await meetLivePreconditions(owned, uniqueLiveOfficeId(), await newHarnessAdmin("Mats Enrolment Admin"));
   const wentLive = await goLiveAttempt(await stepUpWithApi(owned.owner), owned.ota.id);
   expect(wentLive).toEqual({ status: 200, storefrontEnvironment: "live" });
 
