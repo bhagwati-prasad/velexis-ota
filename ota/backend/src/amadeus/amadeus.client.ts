@@ -14,7 +14,10 @@
 //      order office, `queuingOfficeId`/`ownerOfficeId`/`automatedProcess[].officeId` of an order, Queue List's
 //      `officeId`) answers 403 OFFICE_NOT_ALLOWED before any call; missing ones are filled from the connection;
 //   4. takes a token from the credential set's and the tenant's buckets (rate-limiter.ts: 429 RATE_LIMITED with
-//      `details.retryAfterSeconds`, no call; 503 without Redis);
+//      `details.retryAfterSeconds`, no call; 503 without Redis), with the call context's `priority`: a background call
+//      (the booking sync's order read) only while both buckets keep the reserve of the interactive calls (OBE-102,
+//      OADR-0001 point 6 as revised on 2026-11-12), and only for a read: a background write is refused at step 1
+//      (InvalidAmadeusCallContextError for `priority`), as a bug of the caller;
 //   5. gets the access token (token-provider.ts), once more after 300–800 ms when the token request failed on a network
 //      error, a timeout or a `5xx`, and sends the request with the operation's timeout (limits.ts, AbortController),
 //      `X-Stub-Scenario` only when APP_ENV is not `production`;
@@ -41,8 +44,10 @@ import type { ApiConfig } from "../config";
 import { NoTenantContextError, TenantContext } from "../tenancy/tenant-context";
 import { TenantTx } from "../tenancy/tenant-tx";
 import {
+  callPriority,
   checkCallContext,
   forwardedStubScenario,
+  InvalidAmadeusCallContextError,
   STUB_SCENARIO_HEADER,
   type AmadeusCallContext,
 } from "./call-context";
@@ -507,6 +512,11 @@ export class AmadeusClient {
   ): Promise<AmadeusResponse<T>> {
     const spec = AMADEUS_OPERATIONS[name];
     const context = checkCallContext(rawContext);
+    const priority = callPriority(context);
+    if (priority === "background" && spec.retry === "write") {
+      // A write is never left waiting for the reserve of the interactive calls (OADR-0001 point 6, 2026-11-12).
+      throw new InvalidAmadeusCallContextError("priority");
+    }
     this.requireTenant(context);
     const connection = await this.resolver.resolve(
       context.tenantId,
@@ -522,11 +532,10 @@ export class AmadeusClient {
     let retried = false;
     for (;;) {
       attempts += 1;
-      await this.rateLimiter.take({
-        credId: connection.credId,
-        tenantId: context.tenantId,
-        environment: context.environment,
-      });
+      await this.rateLimiter.take(
+        { credId: connection.credId, tenantId: context.tenantId, environment: context.environment },
+        priority,
+      );
       const token = await this.token(connection);
       const result = parse(await this.send(spec, connection, path, token, prepared.body, scenario));
       const supplierRequestId = await this.record(context, spec, prepared, path, result, options);

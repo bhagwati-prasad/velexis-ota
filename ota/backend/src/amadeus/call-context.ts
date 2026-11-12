@@ -2,7 +2,8 @@
 // and what the call belongs to. The client checks it before anything else, logs it (ids only) and writes it into the
 // `supplier_requests` row of the call:
 //
-//   { tenantId, environment, operation, requestId, staffId?, bookingId?, searchId?, orderOffice?, stubScenario? }
+//   { tenantId, environment, operation, requestId, staffId?, bookingId?, searchId?, orderOffice?, stubScenario?,
+//     priority? }
 //
 // - `operation` is the Velexis use case or SDK method (`flights.search`, `bookings.create`,
 //   `console.amadeus.quoteAirOffers`), `supplier_requests.operation`; the Amadeus operation is the client method.
@@ -17,11 +18,26 @@
 // - `stubScenario` picks a scenario of the Amadeus stub (`X-Stub-Scenario`) for a call made outside an HTTP request
 //   (a job, a test). Inside a request the client forwards the request's own `X-Stub-Scenario` header instead. Either is
 //   sent only when APP_ENV is not `production`.
+// - `priority` says whether a person waits for the call (OBE-102; OADR-0001 point 6, revision of 2026-11-12):
+//   `interactive`, the default, takes a token from both Amadeus buckets while each holds one; `background` takes one
+//   only while each keeps its reserve (limits.ts AMADEUS_BACKGROUND_RESERVE) for the interactive calls, and is refused
+//   with `429 RATE_LIMITED` otherwise. It is a constant of the calling code, never a value of a request. Only the booking
+//   sync's order read (BookingSyncService.attempt) is background, and only a read may be: the client refuses a
+//   background write (`InvalidAmadeusCallContextError` for `priority`), which is never left waiting.
 //
 // The context holds ids, never a body, a token or personal data, so it may be logged as it is.
 import { REQUEST_ID_PATTERN } from "@velexis/logger";
 import type { AmadeusEnvironment } from "../tenancy/platform-read.repository";
 import { AMADEUS_OFFICE_ID } from "./connection-resolver";
+
+/** Whether a person waits for a call (`interactive`) or a job that can wait makes it (`background`); see the header. */
+export type AmadeusCallPriority = "interactive" | "background";
+
+/** The priorities a call context may name. */
+export const AMADEUS_CALL_PRIORITIES: readonly AmadeusCallPriority[] = Object.freeze([
+  "interactive",
+  "background",
+]);
 
 export interface AmadeusCallContext {
   /** `ten_…`: the tenant the call is made for; it must be the tenant of the request or job context. */
@@ -41,6 +57,13 @@ export interface AmadeusCallContext {
   readonly orderOffice?: string | undefined;
   /** A stub scenario for calls outside an HTTP request (never sent in production). */
   readonly stubScenario?: string | undefined;
+  /** `background` for a read a job can wait for (the booking sync's); `interactive` when absent. */
+  readonly priority?: AmadeusCallPriority | undefined;
+}
+
+/** The priority of a call context: its own, else `interactive`. */
+export function callPriority(context: Pick<AmadeusCallContext, "priority">): AmadeusCallPriority {
+  return context.priority ?? "interactive";
 }
 
 /** The offices a booking keeps of its order (`bookings.owner_office_id`, `bookings.queuing_office_id`). */
@@ -125,6 +148,7 @@ export function checkCallContext(context: AmadeusCallContext): AmadeusCallContex
   check(optional(context.searchId, SEARCH_ID), "searchId");
   check(optional(context.orderOffice, AMADEUS_OFFICE_ID), "orderOffice");
   check(optional(context.stubScenario, STUB_SCENARIO), "stubScenario");
+  check(context.priority === undefined || AMADEUS_CALL_PRIORITIES.includes(context.priority), "priority");
   return Object.freeze({
     tenantId: context.tenantId,
     environment: context.environment,
@@ -135,6 +159,7 @@ export function checkCallContext(context: AmadeusCallContext): AmadeusCallContex
     searchId: context.searchId,
     orderOffice: context.orderOffice,
     stubScenario: context.stubScenario,
+    priority: context.priority,
   });
 }
 

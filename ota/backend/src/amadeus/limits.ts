@@ -4,7 +4,8 @@
 // buckets) to the client and the rate limiter through the `AMADEUS_LIMITS` injection token. The M2 load test (OBE-028,
 // the ADR-0012 follow-up) kept the bucket sizes: ota/docs/performance.md §3 has the figures and the reasons. The
 // timeouts cannot be measured against the stub; they stay as planned until the Amadeus test environment shows its
-// latencies.
+// latencies. Since OBE-102 (OADR-0001 point 6, revision of 2026-11-12) a background call leaves each bucket a reserve
+// for the calls a person waits for (AMADEUS_BACKGROUND_RESERVE below; performance.md §8 has the runs).
 //
 //   Operation                                       Timeout  Automatic retry
 //   OAuth token                                     10 s     1 (network, timeout, 5xx; the timeout is the token
@@ -212,6 +213,16 @@ export interface TokenBucketLimit {
   readonly burst: number;
 }
 
+/**
+ * The tokens of each bucket that a background call leaves for interactive calls (OADR-0001 point 6, revision of
+ * 2026-11-12): a background call takes a token only while the bucket holds its reserve and one more. A whole number from
+ * 0 (no reserve) to the bucket's burst less one.
+ */
+export interface BackgroundReserve {
+  readonly credential: number;
+  readonly tenant: number;
+}
+
 /** Everything the client and the rate limiter take from this file; tests pass their own. */
 export interface AmadeusLimits {
   /** The timeout of each operation, in milliseconds. */
@@ -222,7 +233,21 @@ export interface AmadeusLimits {
   readonly credentialBucket: TokenBucketLimit;
   /** The bucket of a tenant (`rl:amadeus:ten:<tenantId>:<env>`). */
   readonly tenantBucket: TokenBucketLimit;
+  /** What a background call leaves in each bucket (AMADEUS_BACKGROUND_RESERVE). */
+  readonly backgroundReserve: BackgroundReserve;
 }
+
+/**
+ * Half of each burst (OBE-102, lead decision (17g) of 2026-11-11; OADR-0001 point 6, revision of 2026-11-12): 10 of
+ * the credential set's 20 and 5 of the tenant's 10 stay for the calls a person waits for (shopping, checkout, the
+ * refreshes, the console) while a background call, the booking sync's order read, takes the rest. OBE-088 saw a sync
+ * burst (up to 20 reads per tenant at a scan, about 12 a second from `ota-bookings`' 4 workers) empty the tenant's
+ * bucket and most of the shared account's, and all four `429` answers to shoppers of its run came in such bursts
+ * (performance.md §6 item 2). Half keeps a tenant's shoppers a burst of 5, five visitors searching or pricing in the
+ * same second, and every OTA on the shared account 10, while the sync still gets the refill they leave. The rates are
+ * unchanged; performance.md §8 has the runs.
+ */
+export const AMADEUS_BACKGROUND_RESERVE: BackgroundReserve = Object.freeze({ credential: 10, tenant: 5 });
 
 /** Injection token of the `AmadeusLimits` (optional: `DEFAULT_AMADEUS_LIMITS` when nothing provides it). */
 export const AMADEUS_LIMITS = "AMADEUS_LIMITS";
@@ -248,6 +273,7 @@ export const DEFAULT_AMADEUS_LIMITS: AmadeusLimits = Object.freeze({
   // figure for the shared Velexis account (ADR-0012): lower it when Amadeus states the account's real quota.
   credentialBucket: Object.freeze({ ratePerSecond: 20, burst: 20 }),
   tenantBucket: Object.freeze({ ratePerSecond: 5, burst: 10 }),
+  backgroundReserve: AMADEUS_BACKGROUND_RESERVE,
 });
 
 /** The jittered wait before a retry: `min` plus `random()` (0 ≤ r < 1) of the range, in whole milliseconds. */

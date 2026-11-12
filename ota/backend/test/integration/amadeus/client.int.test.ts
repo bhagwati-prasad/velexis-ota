@@ -7,7 +7,8 @@
 // The module's client runs with the limits of limits.ts. Tests that need shorter timeouts (the stub's `timeout`
 // scenario holds an answer for 30 s), roomier buckets (twelve calls in a row) or a clock that stands still (so a bucket
 // does not refill between two calls) build a client of their own from the same graph's services, with other
-// `AmadeusLimits` or a `FakeClock` for its buckets.
+// `AmadeusLimits` or a `FakeClock` for its buckets. Since OBE-102 the buckets' tests also run the reserve that a
+// background call leaves for the interactive calls (OADR-0001 point 6, revision of 2026-11-12) through the script.
 import { randomBytes } from "node:crypto";
 import { Controller, Get } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
@@ -781,5 +782,123 @@ describe("the buckets", () => {
     expect(Number(await redis.client.hget(redisKeys.amadeusTenantBucket(third, "test").key, "tokens"))).toBe(
       9,
     );
+  });
+});
+
+// OBE-102 (OADR-0001 point 6, revision of 2026-11-12): a background call takes a token only while each bucket keeps
+// its reserve for the interactive calls (half of each burst: 10 of the credential set's 20, 5 of the tenant's 10). The
+// figures are those of the script's port in src/amadeus/rate-limiter.test.ts, here from the script itself in Redis.
+describe("the reserve of the interactive calls [OBE-102 AC1]", () => {
+  /** The `tokens` field of a bucket's hash, as the script wrote it (null for a bucket never taken from). */
+  const tokensOf = async (key: string): Promise<number | null> => {
+    const value = await redis.client.hget(key, "tokens");
+    return value === null ? null : Number(value);
+  };
+
+  it("refuses a background call at the tenant's reserve, lets an interactive one through, and refills", async () => {
+    const clock = new FakeClock(new Date());
+    const limiter = new AmadeusRateLimiter(api.app.get<Redis>(REDIS_CLIENT), clock);
+    const owner = { credId: newId("ama"), tenantId: newId("ten"), environment: "test" } as const;
+    const credKey = redisKeys.amadeusCredentialBucket(owner.credId, "test").key;
+    const tenKey = redisKeys.amadeusTenantBucket(owner.tenantId, "test").key;
+    const levels = async (): Promise<Array<number | null>> => [
+      await tokensOf(credKey),
+      await tokensOf(tenKey),
+    ];
+    for (let take = 0; take < 5; take += 1) {
+      await limiter.take(owner, "interactive");
+    }
+    expect(await levels()).toEqual([15, 5]);
+
+    const refused = await rejection(limiter.take(owner, "background"));
+
+    expect([refused.status, refused.code, refused.details]).toEqual([
+      429,
+      "RATE_LIMITED",
+      { retryAfterSeconds: 1 },
+    ]);
+    expect(refused.cause).toEqual(new AmadeusRateLimitedError("tenant", 200, "background"));
+    // Both or neither: the refused call took nothing from the credential bucket either.
+    expect(await levels()).toEqual([15, 5]);
+
+    await limiter.take(owner, "interactive");
+    expect(await levels()).toEqual([14, 4]);
+
+    // 400 ms refill 2 tenant tokens: 6, the reserve and one more.
+    clock.advance(400);
+    await limiter.take(owner, "background");
+    expect(await levels()).toEqual([19, 5]);
+    expect((await rejection(limiter.take(owner, "background"))).cause).toEqual(
+      new AmadeusRateLimitedError("tenant", 200, "background"),
+    );
+    expect(await levels()).toEqual([19, 5]);
+  });
+
+  it("refuses a background call at the shared credential set's reserve, taking nothing from the tenant", async () => {
+    const clock = new FakeClock(new Date());
+    const limiter = new AmadeusRateLimiter(api.app.get<Redis>(REDIS_CLIENT), clock);
+    const credId = newId("ama");
+    const [first, second, third] = [newId("ten"), newId("ten"), newId("ten")];
+    for (const tenantId of [first, second]) {
+      for (let take = 0; take < 5; take += 1) {
+        await limiter.take({ credId, tenantId, environment: "test" }, "interactive");
+      }
+    }
+    const credKey = redisKeys.amadeusCredentialBucket(credId, "test").key;
+    const thirdKey = redisKeys.amadeusTenantBucket(third, "test").key;
+    const shopper = { credId, tenantId: third, environment: "test" } as const;
+    expect(await tokensOf(credKey)).toBe(10);
+
+    const refused = await rejection(limiter.take(shopper, "background"));
+
+    expect(refused.cause).toEqual(new AmadeusRateLimitedError("credential", 50, "background"));
+    expect([await tokensOf(credKey), await redis.client.exists(thirdKey)]).toEqual([10, 0]);
+
+    await limiter.take(shopper, "interactive");
+    expect([await tokensOf(credKey), await tokensOf(thirdKey)]).toEqual([9, 9]);
+
+    // 100 ms refill 2 credential tokens: 11, the reserve and one more; the third tenant has 9.5.
+    clock.advance(100);
+    await limiter.take(shopper, "background");
+    expect([await tokensOf(credKey), await tokensOf(thirdKey)]).toEqual([10, 8.5]);
+  });
+
+  it("is applied by the client to a background read, while the interactive calls use the whole bucket", async () => {
+    const credentialKey = redisKeys.amadeusCredentialBucket(accountId, "test").key;
+    const tenantKey = redisKeys.amadeusTenantBucket(alpha.id, "test").key;
+    await redis.client.del(credentialKey, tenantKey);
+    // The buckets' clock stands still: no token comes back between the calls, however long they take.
+    const clock = new FakeClock(new Date());
+    const pinned = await clientWith(DEFAULT_AMADEUS_LIMITS, clock);
+    try {
+      for (let call = 0; call < 5; call += 1) {
+        await as(alpha, () => pinned.getFlightOffers(callContext(alpha), { query: SEARCH }));
+      }
+      const before = stub.requests().length;
+      const background = callContext(alpha, { operation: "booking.sync", priority: "background" });
+
+      const error = await rejection(as(alpha, () => pinned.getFlightOffers(background, { query: SEARCH })));
+
+      expect([error.status, error.code]).toEqual([429, "RATE_LIMITED"]);
+      expect(error.cause).toEqual(new AmadeusRateLimitedError("tenant", 200, "background"));
+      expect(stub.requests()).toHaveLength(before);
+      expect(await rowsOf(alpha, background.requestId)).toEqual([]);
+      expect(await tokensOf(tenantKey)).toBe(5);
+
+      // The shoppers still have the tenant's other 5 tokens.
+      for (let call = 0; call < 5; call += 1) {
+        await as(alpha, () => pinned.getFlightOffers(callContext(alpha), { query: SEARCH }));
+      }
+      expect(stub.requests()).toHaveLength(before + 5);
+      expect(await tokensOf(tenantKey)).toBe(0);
+
+      // Two seconds later both buckets are full again, and a background read reaches the stub.
+      clock.advance(2000);
+      await as(alpha, () => pinned.getFlightOffers(background, { query: SEARCH }));
+      expect(stub.requests()).toHaveLength(before + 6);
+      expect(await rowsOf(alpha, background.requestId)).toHaveLength(1);
+    } finally {
+      await redis.client.del(credentialKey, tenantKey);
+    }
   });
 });

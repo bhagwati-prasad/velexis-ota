@@ -33,11 +33,18 @@
 //      column, and no event), and commits before Amadeus is called: a second claim (another job, a refresh) sees it and
 //      stands back (a refresh within its throttle, the sync for 30 minutes).
 //   2. Read. Flight Order Management GET (the sync with `include=bags`, a refresh with the `include` and `fareRules` it
-//      was asked for). A failure is recorded in `sync_error` (Booking.syncStatus `failed`; `version` unchanged): Amadeus
-//      404 as `ORDER_NOT_FOUND` (an order purged, or cancelled outside Velexis: staff check it; never a cancellation,
-//      see order-diff.ts), an answer that cannot be read as `SUPPLIER_ERROR`, any other as its error code. The sync
-//      answers `failed` and tries again when due; a refresh answers `not_found` for a 404 and throws the error for the
-//      others (a code the booking reads do not document becomes `502 SUPPLIER_ERROR`).
+//      was asked for). The sync's read is a background call (OBE-102; OADR-0001 point 6, revision of 2026-11-12): it
+//      takes an Amadeus token only while the tenant's and the shared account's buckets keep the reserve of the calls a
+//      person waits for (shopping, checkout, these refreshes, the console), so a scan's burst never takes their last
+//      tokens. When the buckets refuse it (`429 RATE_LIMITED` of the rate limiter, AmadeusRateLimitedError), the sync
+//      waits the buckets' own wait and reads again, up to BOOKING_SYNC_RATE_LIMIT_BUDGET_MS of waits per job (all its
+//      reads together); the job's outcome counts them (`rateLimitWaits`, `rateLimitWaitMs`). Only a read still refused
+//      after that is a failure below. A refresh's read is interactive and never waits. A failure is recorded in
+//      `sync_error` (Booking.syncStatus `failed`; `version` unchanged): Amadeus 404 as `ORDER_NOT_FOUND` (an order
+//      purged, or cancelled outside Velexis: staff check it; never a cancellation, see order-diff.ts), an answer that
+//      cannot be read as `SUPPLIER_ERROR`, any other as its error code. The sync answers `failed` and tries again when
+//      due; a refresh answers `not_found` for a 404 and throws the error for the others (a code the booking reads do
+//      not document becomes `502 SUPPLIER_ERROR`).
 //   3. Record (T2), with the booking `version` of the claim: the booking is locked again (`FOR NO KEY UPDATE`, which
 //      waits) and must still be active with the same order; a booking whose `version` moved since the claim (another
 //      writer recorded something while the order was read: a ticketing job, a console patch or resync, another
@@ -84,6 +91,7 @@ import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { AmadeusClient } from "../amadeus/amadeus.client";
 import { bookingOrderOffice, type AmadeusCallContext } from "../amadeus/call-context";
 import { AmadeusCallError } from "../amadeus/error-mapper";
+import { AmadeusRateLimitedError } from "../amadeus/rate-limiter";
 import { Clock } from "../common/clock";
 import { IdGenerator } from "../common/ids";
 import type { SharedConfig } from "../config";
@@ -149,6 +157,20 @@ export const BOOKING_SYNC_OPERATION = "booking.sync";
 
 /** The reads of the order one sync makes at most when other writers keep moving the booking's version. */
 export const BOOKING_SYNC_ROUNDS = 3;
+
+/**
+ * The waits for the Amadeus buckets one sync job may spend, all its reads together (step 2 of the file header;
+ * OBE-102): a read the buckets still refuse once the job's waits would pass 10 seconds is recorded as `RATE_LIMITED`,
+ * and the booking is due again 30 minutes after its claim. The buckets refill 5 tokens a second per tenant and 20 for
+ * the shared account, so 10 seconds pass without a token for the sync only while the interactive calls use the whole
+ * refill. A budget per job, not per read (a job reads up to BOOKING_SYNC_ROUNDS times), keeps its hold on one of
+ * `ota-bookings`' 4 workers short: a reconciliation or a cancellation check (no BullMQ priority, ahead of the syncs)
+ * waits for a worker at most that long beyond the reads, and a stopping worker waits that long for the job.
+ */
+export const BOOKING_SYNC_RATE_LIMIT_BUDGET_MS = 10_000;
+
+/** The shortest wait between two reads the buckets refused (their own wait can round to a few milliseconds). */
+export const BOOKING_SYNC_MIN_RATE_LIMIT_WAIT_MS = 50;
 
 /** The event of a schedule change (the console's `hasScheduleChange`, console-bookings.repository.ts). */
 export const SCHEDULE_CHANGED_EVENT = "booking.schedule_changed";
@@ -445,13 +467,26 @@ export interface BookingSyncChanges {
   readonly versionMoved: boolean;
 }
 
+/**
+ * The waits of a sync for the Amadeus buckets (step 2 of the file header), on an outcome only when it waited: how many
+ * times and how long in all.
+ */
+export interface BookingSyncWaits {
+  readonly rateLimitWaits?: number;
+  readonly rateLimitWaitMs?: number;
+}
+
 /** What one sync job did (kept with the BullMQ job): ids, counts and codes, never more. */
 export type BookingSyncOutcome =
   | { readonly outcome: "skipped"; readonly reason: BookingSyncSkip }
-  | { readonly outcome: "synced"; readonly rounds: number; readonly changes: BookingSyncChanges }
-  | { readonly outcome: "failed"; readonly rounds: number; readonly code: string }
+  | ({
+      readonly outcome: "synced";
+      readonly rounds: number;
+      readonly changes: BookingSyncChanges;
+    } & BookingSyncWaits)
+  | ({ readonly outcome: "failed"; readonly rounds: number; readonly code: string } & BookingSyncWaits)
   /** Other writers moved the booking's version during every read: nothing was written. */
-  | { readonly outcome: "superseded"; readonly rounds: number };
+  | ({ readonly outcome: "superseded"; readonly rounds: number } & BookingSyncWaits);
 
 /** The Amadeus query of a refresh (the sync's is `include=bags`). */
 export interface RefreshQuery {
@@ -559,6 +594,25 @@ export function syncClaimSkip(
 const isOrderNotFound = (error: unknown): boolean =>
   isAppError(error) && error.cause instanceof AmadeusCallError && error.cause.httpStatus === 404;
 
+/**
+ * The wait before the sync asks again when `error` is a refusal of the Amadeus buckets (the rate limiter's
+ * `429 RATE_LIMITED`, whose cause says how long until a token is free): the buckets' own wait in milliseconds, not the
+ * whole seconds of `Retry-After`, and at least BOOKING_SYNC_MIN_RATE_LIMIT_WAIT_MS. `undefined` for anything else,
+ * Amadeus's own `429` included (an answer of Amadeus, recorded as before).
+ */
+export function bucketWaitMs(error: unknown): number | undefined {
+  if (
+    !isAppError(error) ||
+    error.code !== "RATE_LIMITED" ||
+    !(error.cause instanceof AmadeusRateLimitedError)
+  ) {
+    return undefined;
+  }
+  return Math.max(BOOKING_SYNC_MIN_RATE_LIMIT_WAIT_MS, Math.ceil(error.cause.retryAfterMs));
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+
 /** The API code of a failed read: an AppError's code (404 as ORDER_NOT_FOUND), `INTERNAL_ERROR` for anything else. */
 function readFailureCode(error: unknown): string {
   if (isOrderNotFound(error)) {
@@ -625,24 +679,35 @@ export class BookingSyncService {
       requestId,
       bookingId,
       ...(claim.office === null ? {} : { orderOffice: claim.office }),
+      // The sync can wait: it leaves the buckets' reserve to the calls a person waits for (step 2 of the header).
+      priority: "background",
     };
     const request: RecordRequest = {
       operation: BOOKING_SYNC_OPERATION,
       requestId,
       query: { include: ["bags"] },
     };
+    const waits = { count: 0, ms: 0 };
+    const waited = (): BookingSyncWaits =>
+      waits.count === 0 ? {} : { rateLimitWaits: waits.count, rateLimitWaitMs: waits.ms };
     let version = claim.version;
     for (let round = 1; round <= BOOKING_SYNC_ROUNDS; round += 1) {
-      const read = await this.read(context, claim, request.query);
+      const read = await this.readWaiting(context, claim, request.query, waits);
       if (!read.ok) {
         await this.recordFailure(bookingId, read.code);
-        this.logger.warn({ tenantId: tenant.id, bookingId, code: read.code, round }, "bookings.sync_failed");
-        return { outcome: "failed", rounds: round, code: read.code };
+        this.logger.warn(
+          { tenantId: tenant.id, bookingId, code: read.code, round, ...waited() },
+          "bookings.sync_failed",
+        );
+        return { outcome: "failed", rounds: round, code: read.code, ...waited() };
       }
       const result = await this.tx.run((trx) => this.record(trx, tenant, claim, version, read, request));
       if (result.kind === "applied") {
-        this.logger.info({ tenantId: tenant.id, bookingId, round, ...result.changes }, "bookings.synced");
-        return { outcome: "synced", rounds: round, changes: result.changes };
+        this.logger.info(
+          { tenantId: tenant.id, bookingId, round, ...result.changes, ...waited() },
+          "bookings.synced",
+        );
+        return { outcome: "synced", rounds: round, changes: result.changes, ...waited() };
       }
       if (result.kind === "gone") {
         this.logger.info({ bookingId, reason: result.reason, round }, "bookings.sync_skipped");
@@ -655,7 +720,31 @@ export class BookingSyncService {
       );
       version = result.version;
     }
-    return { outcome: "superseded", rounds: BOOKING_SYNC_ROUNDS };
+    return { outcome: "superseded", rounds: BOOKING_SYNC_ROUNDS, ...waited() };
+  }
+
+  /**
+   * The sync's read (step 2 of the header): when the Amadeus buckets refuse it, waits their wait (at least
+   * BOOKING_SYNC_MIN_RATE_LIMIT_WAIT_MS) and reads again, until the next wait would take the job's waits (`waits`, which
+   * this adds to, every round of the attempt together) past BOOKING_SYNC_RATE_LIMIT_BUDGET_MS; then answers the refusal.
+   */
+  private async readWaiting(
+    context: AmadeusCallContext,
+    claim: SyncClaim,
+    query: RefreshQuery,
+    waits: { count: number; ms: number },
+  ): Promise<OrderRead> {
+    for (;;) {
+      const read = await this.read(context, claim, query);
+      const wait = read.ok ? undefined : bucketWaitMs(read.error);
+      if (wait === undefined || waits.ms + wait > BOOKING_SYNC_RATE_LIMIT_BUDGET_MS) {
+        return read;
+      }
+      this.logger.debug({ bookingId: claim.id, waitMs: wait }, "bookings.sync_rate_limited");
+      await sleep(wait);
+      waits.count += 1;
+      waits.ms += wait;
+    }
   }
 
   /** Step 1 of the sync: the claim, `FOR NO KEY UPDATE SKIP LOCKED`, the due rule, `sync_claimed_at`. */

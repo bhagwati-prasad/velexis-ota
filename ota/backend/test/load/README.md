@@ -3,7 +3,7 @@
 Two load tests of the OTA backend. The figures of each recorded run and what was decided from them are in [`ota/docs/performance.md`](../../../docs/performance.md).
 
 - `search-load.mjs` is the M2 search load test of the OTA API (OBE-028). It answers the follow-ups of [OADR-0001](../../../docs/adr/0001-amadeus-client-design.md) ("load-test the buckets") and [OADR-0002](../../../docs/adr/0002-offer-and-priced-offer-caching.md) ("measure search insert time and table sizes").
-- `booking-load.mjs` is the M6 mixed-traffic test of the API **and the worker** against the VM's memory budget (OBE-088; [architecture §3](../../../../docs/mvp/architecture.md#3-hosts-ports-and-the-vm), the follow-up of [OADR-0014](../../../docs/adr/0014-per-tenant-workers-and-schedulers.md)). It reuses the helpers of `search-load.mjs` and is described in [its own section](#booking-loadmjs-mixed-traffic-with-the-worker-obe-088).
+- `booking-load.mjs` is the M6 mixed-traffic test of the API **and the worker** against the VM's memory budget (OBE-088; [architecture §3](../../../../docs/mvp/architecture.md#3-hosts-ports-and-the-vm), the follow-up of [OADR-0014](../../../docs/adr/0014-per-tenant-workers-and-schedulers.md)). It reuses the helpers of `search-load.mjs` and is described in [its own section](#booking-loadmjs-mixed-traffic-with-the-worker-obe-088). OBE-101 measured Redis's completed jobs with it, and OBE-102 the shoppers' share of the Amadeus buckets while the booking sync runs ([`performance.md`](../../../docs/performance.md) §7 and §8).
 
 Both:
 
@@ -147,6 +147,16 @@ The header of `booking-load.mjs` describes each step. In short:
 | Queue latency | Per queue and per job name: the jobs started, the retries, the failed attempts, the wait from due to the first attempt (p50, p95, max) and the run time of an attempt (p95, max). The health columns are the most waiting jobs and the oldest wait the worker's `/health/ready` reported. The verdict compares `ota-ticketing` and `ota-bookings` with `--queue-budget-s`. |
 | Database | The database's size after the warm-up and at the end, the largest tenant tables (all tenants together: rows, size and growth), the bookings by status, ticketing status and reconciliation outcome, the notifications by status and the documents by kind, and the document storage. |
 | Timeline | One row per `--window-minutes`: completed journeys and bookings started in the window, the p95 of `flights.search`, `flights.price`, the completion and `console.bookings.list`, the most RSS of the API and the worker, connections and Redis memory, the longest wait of the main queues, and the 1-minute load average (mean/max). |
+
+### The sync and the shoppers' share of the Amadeus buckets (OBE-102)
+
+Since OBE-102 the booking sync's order read is a background call ([OADR-0001](../../../docs/adr/0001-amadeus-client-design.md) point 6, revision of 2026-11-12). It takes an Amadeus token only while the tenant's bucket and the shared account's keep half their burst for the calls a person waits for. When they refuse it, the sync waits the buckets' own wait inside the job and reads again, up to 10 seconds of waits per job, all its reads together (`BOOKING_SYNC_RATE_LIMIT_BUDGET_MS`). This is where a run shows it:
+
+- **The shoppers' `429` answers** are in *Answers per operation*. With `--json`, each attempt's `at` (milliseconds from the start of the measured phase) places it against the sync bursts. A scan of `bookings.sync_scan` enqueues its jobs at every 10th minute of the clock, so the bursts come every 10 minutes, in minutes of the phase that depend on when the run started (`performance.md` §8 names each run's).
+- **The sync's own refusals never reach the proxy**, and they leave no `supplier_requests` row. They show as a longer run time of `ota-bookings booking.sync` in *Queue latency*, and in each job's result: `rateLimitWaits` and `rateLimitWaitMs` when the job waited, and `failed` with code `RATE_LIMITED` when the waits ran out. BullMQ keeps the result with the completed job in the run's Redis database, and the test empties that database at the end. So read the results while the run goes: `ZRANGE vx:ota-bookings:completed 0 -1`, then `HMGET vx:ota-bookings:<job id> timestamp processedOn finishedOn returnvalue`. OBE-102's runs did that every 10 s. The `timestamp` (added) and `finishedOn` of a scan's jobs give how long the scan took.
+- **The queue's latency** is the *Queue latency* row of `ota-bookings`, against `--queue-budget-s`, as before.
+
+OBE-102 ran `--tenants 5 --minutes 30` before and after the reserve and the Verify command after it, each under the end-to-end lock with a Redis of its own (`nproc` 4). Before, the largest burst refused one shopper's search and 27 of the sync's 97 reads. After, no shopper got a `429` and no sync read failed: 90 of 198 jobs waited, at most 2.2 s each, and the largest scan's jobs waited at most 15.4 s for a worker. [`performance.md`](../../../docs/performance.md) §8 has the runs, with the load average of each.
 
 ## Extending them
 

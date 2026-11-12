@@ -20,6 +20,7 @@ import {
   type AmadeusResponse,
 } from "./amadeus.client";
 import {
+  callPriority,
   checkCallContext,
   forwardedStubScenario,
   InvalidAmadeusCallContextError,
@@ -737,8 +738,64 @@ describe("the buckets", () => {
       "RATE_LIMITED",
       { retryAfterSeconds: 1 },
     ]);
-    expect(limiter.take).toHaveBeenCalledWith({ credId: connection.credId, tenantId, environment: "test" });
+    expect(limiter.take).toHaveBeenCalledWith(
+      { credId: connection.credId, tenantId, environment: "test" },
+      "interactive",
+    );
     expect([tokens.getToken.mock.calls.length, fetchMock.mock.calls.length, rows.length]).toEqual([0, 0, 0]);
+  });
+
+  it("[OBE-102 AC1] take a token for a background read with its priority, every attempt, else as interactive", async () => {
+    const owner = { credId: connection.credId, tenantId, environment: "test" };
+    for (const name of READS) {
+      limiter.take.mockClear();
+      context = { ...context, priority: "background" };
+      await CALLS[name](client());
+      context = { ...context, priority: undefined };
+      await CALLS[name](client());
+      context = { ...context, priority: "interactive" };
+      await CALLS[name](client());
+
+      expect(limiter.take.mock.calls).toEqual([
+        [owner, "background"],
+        [owner, "interactive"],
+        [owner, "interactive"],
+      ]);
+    }
+    // A retried read takes again, with the same priority.
+    limiter.take.mockClear();
+    fetchMock.mockResolvedValueOnce(amadeusError(500, 141, "SYSTEM ERROR HAS OCCURRED"));
+    context = { ...context, priority: "background" };
+    await CALLS.getFlightOrder(client());
+    expect(limiter.take.mock.calls).toEqual([
+      [owner, "background"],
+      [owner, "background"],
+    ]);
+  });
+
+  it("[OBE-102 AC1] answer a background read's refusal as 429 without a call, as any other", async () => {
+    limiter.take.mockRejectedValue(new AppError("RATE_LIMITED", { details: { retryAfterSeconds: 1 } }));
+    context = { ...context, priority: "background" };
+
+    const error = await rejection(CALLS.getFlightOrder(client()));
+
+    expect([error.status, error.code]).toEqual([429, "RATE_LIMITED"]);
+    expect([tokens.getToken.mock.calls.length, fetchMock.mock.calls.length, rows.length]).toEqual([0, 0, 0]);
+  });
+
+  it("[OBE-102 AC1] refuse a background write as a bug of the caller, before anything else", async () => {
+    context = { ...context, priority: "background" };
+    for (const name of WRITES) {
+      await expect(CALLS[name](client())).rejects.toThrow(new InvalidAmadeusCallContextError("priority"));
+    }
+
+    expect([
+      resolver.resolve.mock.calls.length,
+      limiter.take.mock.calls.length,
+      tokens.getToken.mock.calls.length,
+      fetchMock.mock.calls.length,
+      rows.length,
+    ]).toEqual([0, 0, 0, 0, 0]);
   });
 });
 
@@ -764,22 +821,28 @@ describe("the call context", () => {
       [{ searchId: newId("bkg") }, "searchId"],
       [{ orderOffice: "nce1a0955" }, "orderOffice"],
       [{ stubScenario: "Server Error" }, "stubScenario"],
+      [{ priority: "urgent" as "background" }, "priority"],
+      [{ priority: "" as "background" }, "priority"],
     ];
     for (const [change, field] of bad) {
       expect(() => checkCallContext({ ...context, ...change })).toThrow(
         new InvalidAmadeusCallContextError(field),
       );
     }
-    const full = {
+    const full: AmadeusCallContext = {
       ...context,
       staffId: newId("stf"),
       bookingId: newId("bkg"),
       searchId: newId("srch"),
       orderOffice: OFFICE,
       stubScenario: "timeout-lost",
+      priority: "background",
     };
     expect(checkCallContext(full)).toEqual(full);
     expect(Object.isFrozen(checkCallContext(full))).toBe(true);
+    expect(checkCallContext({ ...full, priority: "interactive" }).priority).toBe("interactive");
+    expect(callPriority(checkCallContext(context))).toBe("interactive");
+    expect(callPriority(checkCallContext(full))).toBe("background");
   });
 
   it("links the row to the booking, the search and the staff member", async () => {

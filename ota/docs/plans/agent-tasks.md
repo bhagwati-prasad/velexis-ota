@@ -2908,8 +2908,8 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - Failed jobs are still kept 30 days, and the queue and fan-out unit tests pass.
 - **Verify:** `pnpm --filter @velexis/ota-backend test queue-names fan-out && node ota/backend/test/load/booking-load.mjs --tenants 5 --minutes 10`
 
-### OBE-102 · Keep a share of the Amadeus buckets free for shopping while the booking sync runs
-- **Status:** todo
+### OBE-102 · Keep a share of the Amadeus buckets free for shopping while the booking sync runs ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M6
 - **Depends on:** OBE-018, OBE-045, OBE-088
