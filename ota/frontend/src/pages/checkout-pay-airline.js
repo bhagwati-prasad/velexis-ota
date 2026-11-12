@@ -1108,8 +1108,18 @@ export function start(context, env = {}) {
       return;
     }
     const brandName = doc.querySelector('body > header [data-field="brandName"]');
-    if (brandName && typeof config.name === "string" && config.name !== "") {
-      brandName.textContent = config.name;
+    // The footer's line with the OTA's whole name too (partials/footer.html, OFE-031), as components/footer.js fills it.
+    const footerName = /** @type {HTMLElement | null} */ (
+      doc.querySelector('body > footer [data-field="footerName"]')
+    );
+    if (typeof config.name === "string" && config.name !== "") {
+      if (brandName) {
+        brandName.textContent = config.name;
+      }
+      if (footerName) {
+        footerName.textContent = config.name;
+        footerName.hidden = false;
+      }
     }
     mountTestBanner(doc.body, { environment: config.environment });
     try {

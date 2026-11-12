@@ -1,9 +1,11 @@
 // The page footer (partials/footer.html, ota/frontend/README.md §5.1 point 3, §8 Help, docs/pages-account.md §7): the
-// OTA's legal links, its content pages and its support contacts, in the same place on every page (WCAG 3.2.6). The
-// partial's static links work without JavaScript; this component adds the links of `config.legal`, the published
-// content pages that have `showInFooter` (`storefront.listPages`, OFE-020) and the help centre, and fills the support
-// item from `config.support`. Everything is built with createElement and textContent, and every URL is checked
-// (`https:` or a same-origin path for pages, `/p/<slug>` for content pages, `mailto:` and `tel:` for contacts).
+// OTA's legal links, its content pages and its support contacts, in the same place on every page (WCAG 3.2.6), and the
+// OTA's whole name on the footer's last line (OFE-031: a phone's header cuts a long name with an ellipsis; this line
+// wraps and is never cut). The partial's static links work without JavaScript; this component adds the links of
+// `config.legal`, the published content pages that have `showInFooter` (`storefront.listPages`, OFE-020) and the help
+// centre, fills the support item from `config.support` and the name line from `config.name`. Everything is built with
+// createElement and textContent, and every URL is checked (`https:` or a same-origin path for pages, `/p/<slug>` for
+// content pages, `mailto:` and `tel:` for contacts).
 //
 // - A support address on the reserved `.invalid` domain (RFC 2606) is the API's placeholder until the OTA sets its own
 //   address: it is never shown.
@@ -321,6 +323,18 @@ function renderSupport(item, support) {
 }
 
 /**
+ * Fills the footer's name line with the OTA's whole name (`config.name`), or hides it without one. The header of a
+ * phone cuts a long name with an ellipsis; this line wraps instead and is never cut (partials/footer.html, OFE-031).
+ * @param {HTMLElement} line
+ * @param {unknown} name
+ */
+function renderName(line, name) {
+  const text = typeof name === "string" ? name.trim() : "";
+  line.textContent = text;
+  line.hidden = text === "";
+}
+
+/**
  * Mounts the footer component on the page's `<footer>` (partials/footer.html). With a client that has
  * `storefront.listPages`, the content pages join the links when they arrive (see the top of this file); `done`
  * settles then (at once without such a client) and never rejects.
@@ -332,6 +346,7 @@ export function mount(root, props) {
   const doc = root.ownerDocument;
   const list = root.querySelector('[data-slot="footer-links"]');
   const support = /** @type {HTMLElement | null} */ (root.querySelector('[data-slot="support"]'));
+  const nameLine = /** @type {HTMLElement | null} */ (root.querySelector('[data-field="footerName"]'));
   let config = props.config;
   /** @type {FooterPage[]} */
   let pages = [];
@@ -354,6 +369,9 @@ export function mount(root, props) {
     }
     if (support) {
       renderSupport(support, config.support);
+    }
+    if (nameLine) {
+      renderName(nameLine, config.name);
     }
   };
 
@@ -385,6 +403,9 @@ export function mount(root, props) {
       if (support) {
         support.replaceChildren();
         support.hidden = true;
+      }
+      if (nameLine) {
+        renderName(nameLine, null);
       }
     },
   };

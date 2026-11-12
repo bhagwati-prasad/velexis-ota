@@ -27,6 +27,7 @@ export const STRINGS = Object.freeze({
   "header.currencyOption": "{code} ({symbol})",
   "header.currencyChanged": "Prices will be shown in {currency} from your next search",
   "account.signIn": "Sign in",
+  "account.menu": "Account",
   "account.account": "My account",
   "account.greeting": "Hi, {name}",
   "account.signOut": "Sign out",

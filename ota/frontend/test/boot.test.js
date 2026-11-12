@@ -959,6 +959,47 @@ describe("the header's shape from the first paint (OFE-030)", () => {
     expect(text(menu?.querySelector("a"))).toBe("My account");
   });
 
+  it("[OFE-031 AC1] a signed-in customer's compact Account menu takes the Sign in link's place, kept from the first paint; the footer's last line is the whole name", async () => {
+    const doc = openPage();
+    const slot = /** @type {HTMLElement} */ (
+      doc.querySelector('body > header nav li[data-slot="account-menu"]')
+    );
+    // The static header: "Sign in" in a slot as wide as the Account button below md, in a navigation that holds the
+    // menu's panel; the footer's name line empty and hidden until storefront.get answers.
+    expect(text(slot)).toBe("Sign in");
+    expect(Array.from(slot.classList)).toContain("max-md:min-w-20");
+    expect(Array.from(doc.querySelector("body > header nav")?.classList ?? [])).toContain("relative");
+    const nameLine = /** @type {HTMLElement} */ (
+      doc.querySelector('body > footer [data-field="footerName"]')
+    );
+    expect(nameLine.hidden).toBe(true);
+    expect(nameLine.nextElementSibling).toBeNull();
+
+    const longName = `${"Mediterranean Sunshine Holidays and Flights International ".repeat(2)}Ltd`;
+    await boot({
+      client: fakeClient([{ ...CONFIG, name: longName }], { getSession: async () => SESSION }),
+      storage: null,
+      preferences: memoryStorage(),
+      doc,
+    });
+
+    // The same slot, still the navigation's last item: the button and its panel (greeting, My account; this fake
+    // client has no auth.signOut, so no "Sign out": auth-pages.test.js has it).
+    expect(slot.nextElementSibling).toBeNull();
+    const toggle = slot.querySelector("button[data-account-menu-toggle]");
+    expect(text(toggle)).toBe("Account");
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+    const panel = doc.getElementById(/** @type {string} */ (toggle?.getAttribute("aria-controls")));
+    expect(panel?.parentElement).toBe(slot);
+    expect(text(panel?.querySelector("[data-customer-name]"))).toBe("Hi, Ada");
+    expect(text(panel?.querySelector('a[href="/account/"]'))).toBe("My account");
+    // The footer: the whole name on its last line, which wraps and is never cut.
+    expect(nameLine.hidden).toBe(false);
+    expect(nameLine.textContent).toBe(longName);
+    expect(Array.from(nameLine.classList)).toContain("wrap-break-word");
+    expect(Array.from(nameLine.classList)).not.toContain("truncate");
+  });
+
   it("[OFE-030 AC1] main.css: every page's main is a window high, and the search form has its enhanced shape before its module runs", () => {
     const css = readFileSync(join(STOREFRONT_ROOT, "src", "styles", "main.css"), "utf8");
     // The footer starts below the window, so filling it from storefront.get moves nothing painted.
@@ -966,9 +1007,13 @@ describe("the header's shape from the first paint (OFE-030)", () => {
     // Only with JavaScript on (`scripting: none` keeps the plain form), and only until the form is enhanced.
     const scripted = /@media \(scripting: enabled\)\s*\{([\s\S]*?)\n {2}\}/.exec(css)?.[1] ?? "";
     expect(scripted).toContain("form[data-search-form]:not([data-enhanced]) [data-passenger-panel]");
-    expect(scripted).toContain("display: none;");
+    // Folded, the toggle and Multi-city shown, until the plain form's timer of OFE-031 sets its properties
+    // (search-form.test.js, `[OFE-031 AC3]`).
+    expect(scripted).toContain("display: var(--vx-search-panel, none);");
     expect(scripted).toContain("[data-passenger-toggle][hidden]");
+    expect(scripted).toContain("display: var(--vx-search-toggle, inline-block) !important;");
     expect(scripted).toContain("[data-trip-multi][hidden]");
+    expect(scripted).toContain("display: var(--vx-search-multi, inline-flex) !important;");
   });
 });
 
@@ -1008,6 +1053,15 @@ describe("pages", () => {
         .split("/")
         .join("-");
       expect(html, file).toContain(`<script type="module" src="/src/pages/${entry}.js"></script>`);
+    }
+  });
+
+  it("[OFE-031 AC3] every page's footer has the line for the OTA's whole name, its last", () => {
+    for (const file of pageFiles) {
+      const doc = openPage(file, `/${file}`);
+      const line = doc.querySelector('body > footer [data-field="footerName"]');
+      expect(line, file).not.toBeNull();
+      expect(line?.nextElementSibling, file).toBeNull();
     }
   });
 });

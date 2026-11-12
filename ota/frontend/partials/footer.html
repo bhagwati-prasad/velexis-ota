@@ -6,5 +6,9 @@
         <li data-slot="support" hidden></li>
       </ul>
     </nav>
+    <!-- The OTA's whole name (components/footer.js fills it from storefront.get), which a phone's header may cut with an
+         ellipsis: it wraps, it is never cut, and as the footer's last line, below the window since OFE-030, filling it
+         moves nothing (OFE-031). -->
+    <p class="mt-4 font-semibold wrap-break-word" data-field="footerName" hidden></p>
   </div>
 </footer>

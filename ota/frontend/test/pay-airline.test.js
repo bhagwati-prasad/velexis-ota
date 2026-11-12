@@ -394,6 +394,10 @@ describe("airline-card page: state from the address and the API only", () => {
       expect($("[data-pay-content]").hidden).toBe(true);
       expect(fake.client.checkout.get).not.toHaveBeenCalled();
       expect(text($('body > header [data-field="brandName"]'))).toBe("Demo Travel");
+      // The footer's line with the OTA's whole name too (OFE-031), filled without the footer component.
+      const footerName = $('body > footer [data-field="footerName"]');
+      expect(footerName.hidden).toBe(false);
+      expect(text(footerName)).toBe("Demo Travel");
     } finally {
       sessionStorage.removeItem("vx.storefront.config");
     }

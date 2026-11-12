@@ -305,6 +305,54 @@ function firstNameOf(customer) {
   return name === "" ? null : name;
 }
 
+/** The id of the signed-in account menu's panel, which its toggle button controls (one header per page). */
+export const ACCOUNT_MENU_PANEL_ID = "vx-account-menu";
+
+/**
+ * What undoes the listeners of the account menu rendered into a slot (the document's, for a press outside), run before
+ * the slot is rendered again.
+ * @type {WeakMap<Element, () => void>}
+ */
+const menuCleanups = new WeakMap();
+
+/** The chevron of the account menu's toggle (the one of the results page's "Filters" disclosure). */
+const CHEVRON_PATH =
+  "M5.22 7.22a.75.75 0 0 1 1.06 0L10 10.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 8.28a.75.75 0 0 1 0-1.06Z";
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+/** What a press can give the focus to deliberately: a control or its label, or an element in the keyboard's order. */
+const CONTROLS =
+  'a[href], button, input, select, textarea, label, summary, [contenteditable="true"], [tabindex]:not([tabindex="-1"])';
+
+/**
+ * The compact account menu's toggle button, shown below `md`: "Account" and a chevron, a disclosure (`aria-expanded`,
+ * `aria-controls`) at least 24 px high (2.5.8) whose negative margins keep the navigation's line as high as the
+ * "Sign in" link's, so that taking that link's place moves nothing (OFE-031).
+ * @param {Document} doc
+ */
+function accountMenuToggle(doc) {
+  const toggle = doc.createElement("button");
+  toggle.type = "button";
+  toggle.dataset.accountMenuToggle = "";
+  toggle.setAttribute("aria-expanded", "false");
+  toggle.setAttribute("aria-controls", ACCOUNT_MENU_PANEL_ID);
+  toggle.className =
+    "group peer -my-0.5 inline-flex min-h-6 items-center gap-1 underline-offset-4 hover:underline md:hidden";
+  const label = doc.createElement("span");
+  label.textContent = t("account.menu");
+  const chevron = doc.createElementNS(SVG_NAMESPACE, "svg");
+  chevron.setAttribute("aria-hidden", "true");
+  chevron.setAttribute("focusable", "false");
+  chevron.setAttribute("viewBox", "0 0 20 20");
+  chevron.setAttribute("fill", "currentColor");
+  chevron.setAttribute("class", "size-4 shrink-0 group-aria-expanded:rotate-180");
+  const path = doc.createElementNS(SVG_NAMESPACE, "path");
+  path.setAttribute("fill-rule", "evenodd");
+  path.setAttribute("d", CHEVRON_PATH);
+  chevron.append(path);
+  toggle.append(label, chevron);
+  return toggle;
+}
+
 /**
  * Fills the header's account menu slot (`[data-slot="account-menu"]`) for the session, with createElement and
  * textContent:
@@ -313,6 +361,17 @@ function firstNameOf(customer) {
  *   button. Sign-out ends the session (`auth.signOut`: the API revokes it and clears the cookies), shows the signed-out
  *   menu and goes to the home page; a `401` (the session had already ended) counts as signed out. Any other failure
  *   keeps the menu and says so in the live region.
+ *
+ * From `md` (768 px) the signed-in links stand in the navigation's row, as they always have. Below `md` they do not fit
+ * beside "Find a booking" and "My bookings": the row wrapped and moved the page when `auth.getSession` answered, after
+ * the first paint (ota/docs/storefront-accessibility.md §2 finding 5). There they sit in a panel behind one compact
+ * "Account" button, in the place the "Sign in" link has from the first paint (OFE-031). The button is a disclosure: it
+ * opens and closes the panel (`aria-expanded`, `aria-controls`; CSS shows the panel, `peer-aria-expanded`, floating
+ * under the navigation, so opening it moves nothing either). Escape closes it and puts the focus back on the button,
+ * wherever the focus was, as does a press outside (mouse, pen or touch), unless it was on another control, which then
+ * takes the focus, or never became a click (a touch that scrolled the page); the focus moving on past the menu closes
+ * it, so it never covers the focused element (2.4.11). One set of links serves both widths: from `md` the button is not
+ * shown and the panel is the row's inline group.
  * @param {Element} slot
  * @param {SessionInfo | null} session
  * @param {{ location?: Location, client?: SessionClient | null, navigate?: (url: string) => void }} [options]
@@ -322,6 +381,8 @@ export function renderAccountMenu(slot, session, options = {}) {
   const doc = slot.ownerDocument;
   const location = options.location ?? doc.defaultView?.location ?? globalThis.location;
   const { client = null } = options;
+  menuCleanups.get(slot)?.();
+  menuCleanups.delete(slot);
   const link = doc.createElement("a");
   link.className = "underline-offset-4 hover:underline";
   if (!session) {
@@ -333,16 +394,124 @@ export function renderAccountMenu(slot, session, options = {}) {
   link.href = ACCOUNT_PATH;
   link.textContent = t("account.account");
   link.dataset.signedIn = "true";
-  const group = doc.createElement("span");
-  group.className = "inline-flex flex-wrap items-baseline gap-x-4 gap-y-1";
+  link.className = "underline-offset-4 hover:underline max-md:block max-md:min-h-6 max-md:px-2 max-md:py-1.5";
+  const toggle = accountMenuToggle(doc);
+  const group = doc.createElement("div");
+  group.id = ACCOUNT_MENU_PANEL_ID;
+  group.dataset.accountMenuPanel = "";
+  // From md: the navigation row's inline group. Below md: not shown until the toggle is expanded, then a panel floating
+  // under the navigation (partials/header.html: `nav` is its containing block), at its right edge and never wider.
+  group.className =
+    "md:inline-flex md:flex-wrap md:items-baseline md:gap-x-4 md:gap-y-1 " +
+    "max-md:absolute max-md:top-full max-md:right-0 max-md:z-20 max-md:mt-2 max-md:hidden max-md:w-max " +
+    "max-md:max-w-full max-md:flex-col max-md:gap-1 max-md:rounded-ui max-md:border max-md:border-current " +
+    "max-md:bg-secondary max-md:p-2 max-md:text-on-secondary max-md:shadow-lg max-md:peer-aria-expanded:flex";
   const name = firstNameOf(session.customer);
   if (name !== null) {
     const greeting = doc.createElement("span");
     greeting.dataset.customerName = "";
+    // A long name wraps in the panel; it is never cut.
+    greeting.className = "wrap-anywhere max-md:block max-md:px-2 max-md:py-1 max-md:font-medium";
     greeting.textContent = t("account.greeting", { name });
     group.append(greeting);
   }
   group.append(link);
+
+  const isOpen = () => toggle.getAttribute("aria-expanded") === "true";
+  /**
+   * Forgets a press outside whose click never came: a touch that became a scroll (`pointercancel`), or a press that
+   * ended elsewhere before the next one began. Without this, a click long after (on the page's text, or on a button
+   * of a browser that does not focus a pressed button) would take the focus back up to the toggle.
+   */
+  const forgetPress = () => {
+    doc.removeEventListener("click", onClickAfterPress, true);
+    doc.removeEventListener("pointercancel", forgetPress, true);
+    doc.removeEventListener("pointerdown", forgetPress, true);
+  };
+  /**
+   * The click that ends a press outside the menu on no control: the browser has moved the focus by then (to the body,
+   * or to `main`, which only scripts focus, `tabindex="-1"`), and it goes back to the toggle unless it is on a control.
+   */
+  const onClickAfterPress = () => {
+    forgetPress();
+    const active = doc.activeElement;
+    if (active === null || !active.matches(CONTROLS)) {
+      toggle.focus();
+    }
+  };
+  /**
+   * A press (mouse, pen or touch) while the panel is open: outside the menu it closes the panel, before the focus
+   * moves. On another control the focus is left to the browser, which gives it to that control; elsewhere the click
+   * that follows gives it back to the toggle, unless the press is cancelled or another press begins first.
+   * @param {Event} event
+   */
+  const onPressOutside = (event) => {
+    const target = /** @type {Element | null} */ (event.target);
+    if (target && slot.contains(target)) {
+      return;
+    }
+    close();
+    if (!(typeof target?.closest === "function" && target.closest(CONTROLS) !== null)) {
+      // Listeners added while this `pointerdown` is dispatched do not run for it (DOM: the list is cloned first).
+      doc.addEventListener("click", onClickAfterPress, true);
+      doc.addEventListener("pointercancel", forgetPress, true);
+      doc.addEventListener("pointerdown", forgetPress, true);
+    }
+  };
+  /**
+   * Closes the panel; with `focus`, the focus goes back to the toggle.
+   * @param {boolean} [focus]
+   */
+  const close = (focus = false) => {
+    doc.removeEventListener("pointerdown", onPressOutside, true);
+    doc.removeEventListener("keydown", onKeyDown);
+    if (!isOpen()) {
+      return;
+    }
+    toggle.setAttribute("aria-expanded", "false");
+    if (focus) {
+      toggle.focus();
+    }
+  };
+  const onToggle = () => {
+    if (isOpen()) {
+      close();
+      return;
+    }
+    forgetPress();
+    toggle.setAttribute("aria-expanded", "true");
+    doc.addEventListener("pointerdown", onPressOutside, true);
+    doc.addEventListener("keydown", onKeyDown);
+  };
+  /**
+   * Escape while the panel is open, wherever the focus is: in the menu, or still on the page's body after a pointer
+   * opened it in a browser that does not focus a pressed button (Safari, and Firefox on macOS).
+   * @param {KeyboardEvent} event
+   */
+  const onKeyDown = (event) => {
+    if (event.key === "Escape" && !event.defaultPrevented && isOpen()) {
+      event.preventDefault();
+      close(true);
+    }
+  };
+  /** @param {FocusEvent} event */
+  const onFocusOut = (event) => {
+    const next = /** @type {Node | null} */ (event.relatedTarget);
+    // Tab past "Sign out", Shift+Tab past the toggle, or a script that moves the focus elsewhere. Without a next
+    // element (another window) the panel stays.
+    if (next !== null && !slot.contains(next)) {
+      close();
+    }
+  };
+  toggle.addEventListener("click", onToggle);
+  slot.addEventListener("focusout", onFocusOut);
+  menuCleanups.set(slot, () => {
+    doc.removeEventListener("pointerdown", onPressOutside, true);
+    doc.removeEventListener("keydown", onKeyDown);
+    forgetPress();
+    slot.removeEventListener("focusout", onFocusOut);
+  });
+
   const auth = client?.auth;
   const signOut = auth?.signOut;
   if (typeof signOut === "function") {
@@ -350,7 +519,9 @@ export function renderAccountMenu(slot, session, options = {}) {
     const button = doc.createElement("button");
     button.type = "button";
     button.dataset.action = "sign-out";
-    button.className = "underline-offset-4 hover:underline aria-disabled:opacity-60";
+    button.className =
+      "underline-offset-4 hover:underline aria-disabled:opacity-60 " +
+      "max-md:block max-md:min-h-6 max-md:w-full max-md:px-2 max-md:py-1.5 max-md:text-left";
     button.textContent = t("account.signOut");
     button.addEventListener("click", async () => {
       if (button.getAttribute("aria-disabled") === "true") {
@@ -376,5 +547,5 @@ export function renderAccountMenu(slot, session, options = {}) {
     });
     group.append(button);
   }
-  slot.replaceChildren(group);
+  slot.replaceChildren(toggle, group);
 }

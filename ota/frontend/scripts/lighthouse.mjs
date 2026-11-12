@@ -4,8 +4,8 @@
 // (OFE-027, lead decision 11n of 2026-11-06).
 //
 // Usage:  pnpm --filter @velexis/ota-frontend lighthouse [--base-url <url>] [--page home|results]... [--runs <n>]
-//                                                        [--width 412|360]... [--days-ahead <n>] [--chrome <path>]
-//                                                        [--json <file>]
+//                                                        [--width 412|360]... [--signed-in] [--days-ahead <n>]
+//                                                        [--chrome <path>] [--json <file>]
 //
 //   --base-url    the storefront to measure (default http://127.0.0.1:4173: the end-to-end harness's preview of the
 //                 demo OTA, the production build proxied to the built OTA API on the Amadeus stub)
@@ -14,6 +14,16 @@
 //   --width       the phone's width in CSS pixels, repeatable (default 412): 412 is Lighthouse's own phone (Moto G
 //                 Power, 412 x 823), 360 a narrower phone (360 x 800, OFE-030); the same device pixel ratio, user agent
 //                 and throttling for both. Each page is measured at each width.
+//   --signed-in   measure as a signed-in customer (OFE-031): in each run's new browser, before the measured
+//                 navigation, the customer signs in through the storefront's own pages: a new customer of this
+//                 invocation (a unique address on the reserved example.com domain, a random password), signed up
+//                 through the sign-up page in the first run (the demo OTA opens the session at sign-up) and signed in
+//                 through the sign-in page in every later run (the API allows 5 sign-ups per hour per address, and 10
+//                 sign-ins per minute). It stops when the storefront does not sign the customer in (an OTA that wants
+//                 the e-mail address verified first). The session's cookies stay for the navigation (Lighthouse's
+//                 storage reset keeps cookies), and the page's sessionStorage is emptied before it, so storefront.get is
+//                 asked again as in a visitor's run; the header's account menu fills in when auth.getSession answers.
+//                 Default: a visitor, with an empty profile.
 //   --days-ahead  the results page's departure date, days after today in UTC (default 69)
 //   --chrome      the Chromium to run (default the CHROME_PATH variable, else /opt/pw-browsers/chromium)
 //   --json        also write the figures as JSON to this file
@@ -29,6 +39,7 @@
 //            unticked, then "Cheapest first".
 // It prints the Markdown table of storefront-accessibility.md §3 with the median of each page and the layout shifts
 // of every run, and exits 1 when a run misses a target (LCP ≤ 2.5 s, CLS ≤ 0.1, INP ≤ 200 ms), 2 when it cannot run.
+import { randomBytes } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -54,6 +65,10 @@ export const PHONE_SCREENS = Object.freeze({
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 /** How long a search, a filter change or a suggestion may take on the stack (the stub answers in milliseconds). */
 const WAIT_MS = 60_000;
+/** The storefront's sign-up and sign-in pages, and the account page they lead to once signed in (no `next`). */
+const SIGN_UP_PATH = "/account/sign-up.html";
+const SIGN_IN_PATH = "/account/sign-in.html";
+const ACCOUNT_PATH = "/account/";
 
 /** @typedef {(typeof PAGES)[number]} PageName */
 /** @typedef {keyof typeof PHONE_SCREENS} PhoneWidth */
@@ -63,6 +78,7 @@ const WAIT_MS = 60_000;
  * @property {PageName[]} pages
  * @property {number} runs
  * @property {PhoneWidth[]} widths
+ * @property {boolean} signedIn measure as a signed-in customer
  * @property {number} daysAhead
  * @property {string} chrome
  * @property {string | null} json
@@ -77,6 +93,7 @@ const WAIT_MS = 60_000;
  * @property {PageName} page
  * @property {number} run
  * @property {PhoneWidth} [width] the phone's width (DEFAULT_WIDTH when absent)
+ * @property {boolean} [signedIn] measured as a signed-in customer (a visitor when absent)
  * @property {number | null} score
  * @property {number | null} fcp
  * @property {number | null} lcp
@@ -86,6 +103,8 @@ const WAIT_MS = 60_000;
  * @property {number | null} bytes
  * @property {number | null} fontBytes
  * @property {Shift[]} shifts
+ * @property {number} [session] the HTTP status of the navigation's auth.getSession request (`/v1/auth/session`): 200
+ *   for a signed-in customer, 401 for a visitor; absent when the page made none
  */
 
 /**
@@ -103,6 +122,7 @@ export function parseOptions(argv, env) {
       page: { type: "string", multiple: true },
       runs: { type: "string" },
       width: { type: "string", multiple: true },
+      "signed-in": { type: "boolean" },
       "days-ahead": { type: "string" },
       chrome: { type: "string" },
       json: { type: "string" },
@@ -148,6 +168,7 @@ export function parseOptions(argv, env) {
     pages: [...new Set(/** @type {PageName[]} */ (pages))],
     runs: whole("runs", values.runs, 3, 1, 20),
     widths: [...new Set(widths)],
+    signedIn: values["signed-in"] === true,
     daysAhead: whole("days-ahead", values["days-ahead"], 69, 1, 330),
     chrome: values.chrome ?? (env["CHROME_PATH"] || DEFAULT_CHROME),
     json: values.json ?? null,
@@ -185,6 +206,10 @@ export function figuresOf(flowResult, page, run) {
   const requests = navigation.audits?.["network-requests"]?.details?.items ?? [];
   const fonts = requests.filter((/** @type {any} */ item) => item.resourceType === "Font");
   const shiftItems = navigation.audits?.["layout-shifts"]?.details?.items ?? [];
+  const sessionRequest = requests.find(
+    (/** @type {any} */ item) => typeof item.url === "string" && /\/v1\/auth\/session(\?|$)/.test(item.url),
+  );
+  const session = numberOrNull(sessionRequest?.statusCode);
   return {
     page,
     run,
@@ -203,6 +228,7 @@ export function figuresOf(flowResult, page, run) {
       score: numberOrNull(item.score) ?? 0,
       element: String(item.node?.selector ?? item.node?.nodeLabel ?? "(no element)"),
     })),
+    ...(session === null ? {} : { session }),
   };
 }
 
@@ -257,25 +283,28 @@ const widthOf = (figures) => figures.width ?? DEFAULT_WIDTH;
 
 /**
  * How the report names the runs of a page at a width: "Home" when every run is at Lighthouse's default width, else
- * with the width ("Home, 360 px", "Home, 412 px").
+ * with the width ("Home, 360 px", "Home, 412 px"); with ", signed in" when the runs were a signed-in customer's
+ * (`--signed-in`, OFE-031).
  * @param {RunFigures[]} runs
  */
 function runTitles(runs) {
   const withWidths = runs.some((figures) => widthOf(figures) !== DEFAULT_WIDTH);
+  const signedIn = runs.some((figures) => figures.signedIn === true) ? ", signed in" : "";
   return (/** @type {PageName} */ page, /** @type {number} */ width) =>
-    withWidths ? `${PAGE_TITLES[page]}, ${width} px` : PAGE_TITLES[page];
+    `${withWidths ? `${PAGE_TITLES[page]}, ${width} px` : PAGE_TITLES[page]}${signedIn}`;
 }
 
 /**
  * The report: the table of storefront-accessibility.md §3 (with a median row per page and width), then bytes, fonts
- * and the layout shifts of every run.
+ * and the layout shifts of every run; the first line says when the runs were a signed-in customer's.
  * @param {RunFigures[]} runs
- * @param {{ lighthouse: string, browser: string, baseUrl: string, date: string }} meta
+ * @param {{ lighthouse: string, browser: string, baseUrl: string, date: string, signedIn?: boolean }} meta
  */
 export function formatReport(runs, meta) {
   const title = runTitles(runs);
+  const as = meta.signedIn === true ? ", a signed-in customer" : "";
   const lines = [
-    `Lighthouse ${meta.lighthouse} (user flow, default mobile configuration), ${meta.browser}, ${meta.baseUrl}, ${meta.date}`,
+    `Lighthouse ${meta.lighthouse} (user flow, default mobile configuration), ${meta.browser}, ${meta.baseUrl}, ${meta.date}${as}`,
     "",
     "| Page | Run | Performance score | FCP | LCP (≤ 2.5 s) | CLS (≤ 0.1) | TBT | INP (≤ 200 ms) |",
     "|---|---|---|---|---|---|---|---|",
@@ -308,9 +337,10 @@ export function formatReport(runs, meta) {
       figures.shifts.length === 0
         ? "no layout shift"
         : figures.shifts.map((entry) => `${shift(entry.score)} ${entry.element}`).join("; ");
+    const session = figures.session === undefined ? "" : `; auth.getSession ${figures.session}`;
     lines.push(
       `- ${title(figures.page, widthOf(figures))} ${figures.run}: ${kilobytes(figures.bytes)} transferred, fonts ` +
-        `${kilobytes(figures.fontBytes)}; layout shifts: ${shifts}`,
+        `${kilobytes(figures.fontBytes)}${session}; layout shifts: ${shifts}`,
     );
   }
   return `${lines.join("\n")}\n`;
@@ -334,6 +364,91 @@ async function resultsShown(page, mark = "") {
     { timeout: WAIT_MS },
     mark,
   );
+}
+
+/**
+ * A new customer for one signed-in run: a unique address on the reserved example.com domain (RFC 2606) and a random
+ * password of 34 characters with upper and lower case letters, digits and a symbol, which no password rule or list
+ * of common passwords refuses. Nothing of it is printed or kept.
+ * @param {(size: number) => Buffer} [random]
+ */
+export function newCustomer(random = randomBytes) {
+  return {
+    firstName: "Lighthouse",
+    lastName: "Customer",
+    email: `lighthouse-${random(8).toString("hex")}@example.com`,
+    password: `Lh-${random(24).toString("base64url")}-9`,
+  };
+}
+
+/**
+ * Signs `customer` in through the storefront in `page` (`--signed-in`): with `signUp`, first through the sign-up page
+ * (the demo OTA opens the session at sign-up), then, when that did not sign the customer in, through the sign-in page.
+ * Ends on the account page with the page's sessionStorage emptied, so the measured navigation asks storefront.get
+ * again. Throws when the storefront does not sign the customer in.
+ * @param {import("puppeteer-core").Page} page
+ * @param {string} baseUrl
+ * @param {ReturnType<typeof newCustomer>} customer
+ * @param {{ signUp?: boolean }} [options] sign the customer up first (the first run of an invocation)
+ */
+export async function signInThroughStorefront(page, baseUrl, customer, { signUp = false } = {}) {
+  const atAccount = () => new URL(page.url()).pathname === ACCOUNT_PATH;
+  /**
+   * Fills the page's auth form and sends it, once its module has started (the network quiet after boot), with the
+   * keyboard: a pointer's press could land on the test banner, fixed to the bottom of the window over the form.
+   */
+  const send = async (
+    /** @type {string} */ path,
+    /** @type {Record<string, string>} */ fields,
+    tick = "",
+  ) => {
+    await page.goto(new URL(path, baseUrl).href, { waitUntil: "networkidle0", timeout: WAIT_MS });
+    for (const [name, value] of Object.entries(fields)) {
+      await page.type(`form[data-auth-form] input[name="${name}"]`, value);
+    }
+    if (tick !== "") {
+      await page.focus(`form[data-auth-form] input[name="${tick}"]`);
+      await page.keyboard.press("Space");
+    }
+    await page.focus('form[data-auth-form] button[type="submit"]');
+    await page.keyboard.press("Enter");
+    // Signed in (the account page), or the page's answer: a state (refused, field errors) or "Check your e-mail".
+    await page
+      .waitForFunction(
+        (/** @type {string} */ account) =>
+          globalThis.location.pathname === account ||
+          globalThis.document.querySelector(
+            "[data-auth-state] [data-state], [data-check-email]:not([hidden]), [data-error-summary]:not([hidden])",
+          ) !== null,
+        { timeout: WAIT_MS },
+        ACCOUNT_PATH,
+      )
+      .catch(() => {
+        throw new Error(`${path} did not answer its form within ${WAIT_MS / 1000} s`);
+      });
+  };
+  if (signUp) {
+    await send(
+      SIGN_UP_PATH,
+      {
+        firstName: customer.firstName,
+        lastName: customer.lastName,
+        email: customer.email,
+        password: customer.password,
+      },
+      "termsAccepted",
+    );
+  }
+  if (!atAccount()) {
+    await send(SIGN_IN_PATH, { email: customer.email, password: customer.password });
+  }
+  if (!atAccount()) {
+    throw new Error(
+      "the storefront did not sign the customer in (an OTA that wants the e-mail address verified first, or a rate " +
+        "limit: 5 sign-ups per hour and 10 sign-ins per minute per address)",
+    );
+  }
+  await page.evaluate(() => globalThis.sessionStorage.clear());
 }
 
 /** What a traveller does first, per page (the timespan's interactions). */
@@ -374,9 +489,11 @@ const INTERACTIONS = Object.freeze({
  * @param {PageName} name
  * @param {PhoneWidth} width
  * @param {number} run
+ * @param {{ customer: ReturnType<typeof newCustomer>, signedUp: boolean } | null} account `--signed-in`'s customer,
+ *   whose `signedUp` the first run sets once the storefront has signed the customer up
  * @returns {Promise<{ figures: RunFigures, browser: string, lighthouse: string }>}
  */
-async function measure(options, name, width, run) {
+async function measure(options, name, width, run, account) {
   const [{ startFlow }, puppeteer] = await Promise.all([import("lighthouse"), import("puppeteer-core")]);
   const browser = await puppeteer.default.launch({
     executablePath: options.chrome,
@@ -386,7 +503,11 @@ async function measure(options, name, width, run) {
   });
   try {
     const page = await browser.newPage();
-    const title = `${PAGE_TITLES[name]}, ${width} px`;
+    if (account) {
+      await signInThroughStorefront(page, options.baseUrl, account.customer, { signUp: !account.signedUp });
+      account.signedUp = true;
+    }
+    const title = `${PAGE_TITLES[name]}, ${width} px${options.signedIn ? ", signed in" : ""}`;
     // The flow's flags apply to each of its steps: the navigation and the timespan both run on this phone's screen.
     const flow = await startFlow(page, {
       name: `${title} ${run}`,
@@ -399,8 +520,15 @@ async function measure(options, name, width, run) {
     await flow.endTimespan();
     const result = await flow.createFlowResult();
     const lighthouse = String(result.steps[0]?.lhr?.lighthouseVersion ?? "unknown");
+    const figures = figuresOf(result, name, run);
+    if (account && figures.session !== 200) {
+      // The cookies did not reach the measured navigation: its figures would be a visitor's.
+      throw new Error(
+        `${title} ${run}: the navigation was not signed in (auth.getSession ${figures.session ?? "not asked"})`,
+      );
+    }
     return {
-      figures: { ...figuresOf(result, name, run), width },
+      figures: { ...figures, width, ...(options.signedIn ? { signedIn: true } : {}) },
       browser: await browser.version(),
       lighthouse,
     };
@@ -422,17 +550,27 @@ async function main(options) {
   const runs = [];
   let browser = "Chromium";
   let lighthouse = "unknown";
+  // One customer per invocation: signed up in the first run, signed in again in each later run's new browser.
+  const account = options.signedIn ? { customer: newCustomer(), signedUp: false } : null;
   for (const name of options.pages) {
     for (const width of options.widths) {
       for (let run = 1; run <= options.runs; run += 1) {
-        const measured = await measure(options, name, width, run);
+        const measured = await measure(options, name, width, run, account);
         runs.push(measured.figures);
         ({ browser, lighthouse } = measured);
-        console.error(`lighthouse: ${name} at ${width} px ${run}/${options.runs} done`);
+        console.error(
+          `lighthouse: ${name} at ${width} px${options.signedIn ? ", signed in," : ""} ${run}/${options.runs} done`,
+        );
       }
     }
   }
-  const meta = { lighthouse, browser, baseUrl: options.baseUrl, date: new Date().toISOString() };
+  const meta = {
+    lighthouse,
+    browser,
+    baseUrl: options.baseUrl,
+    date: new Date().toISOString(),
+    ...(options.signedIn ? { signedIn: true } : {}),
+  };
   process.stdout.write(formatReport(runs, meta));
   if (options.json) {
     writeFileSync(resolve(options.json), `${JSON.stringify({ meta, targets: TARGETS, runs }, null, 2)}\n`);

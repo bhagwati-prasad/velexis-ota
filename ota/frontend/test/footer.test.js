@@ -313,6 +313,42 @@ describe("footer: content pages", () => {
   });
 });
 
+describe("footer: the OTA's whole name (OFE-031)", () => {
+  const nameLine = () =>
+    /** @type {HTMLElement} */ (document.querySelector('footer [data-field="footerName"]'));
+  const LONG_NAME = "Mediterranean Sunshine Holidays and Flights International <b>Ltd</b>";
+
+  it("[OFE-031 AC3] the footer's last line shows the whole name, as text, wrapping and never cut", async () => {
+    // Before storefront.get: empty and hidden, the footer's last line (filling it moves nothing above it).
+    const root = footerRoot();
+    expect(nameLine().hidden).toBe(true);
+    expect(text(nameLine())).toBe("");
+    expect(root.querySelector("div")?.lastElementChild).toBe(nameLine());
+    root.remove();
+
+    await mountFooter({ config: /** @type {never} */ ({ ...CONFIG, name: LONG_NAME }), storage: null });
+    expect(nameLine().hidden).toBe(false);
+    // Text, never markup: the name as the API gives it, whole.
+    expect(nameLine().textContent).toBe(LONG_NAME);
+    expect(nameLine().children).toHaveLength(0);
+    expect(Array.from(nameLine().classList)).toContain("wrap-break-word");
+    expect(Array.from(nameLine().classList)).not.toContain("truncate");
+  });
+
+  it("[OFE-031 AC3] follows a new configuration, hides a missing name and is emptied on destroy", async () => {
+    const view = await mountFooter({ storage: null });
+    expect(text(nameLine())).toBe("Demo Travel");
+    view.update({ config: /** @type {never} */ ({ ...CONFIG, name: "Demo Travel Holidays" }) });
+    expect(text(nameLine())).toBe("Demo Travel Holidays");
+    view.update({ config: /** @type {never} */ ({ ...CONFIG, name: "  " }) });
+    expect(nameLine().hidden).toBe(true);
+    view.update({ config: /** @type {never} */ (CONFIG) });
+    view.destroy();
+    expect(nameLine().hidden).toBe(true);
+    expect(text(nameLine())).toBe("");
+  });
+});
+
 describe("footer: boot", () => {
   it("[OFE-020] boot() gives the footer its client, so every page lists the content pages", async () => {
     footerRoot();

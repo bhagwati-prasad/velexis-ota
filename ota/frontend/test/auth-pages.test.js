@@ -1,10 +1,11 @@
 // The authentication pages and the account menu (ota/frontend/docs/pages-account.md §1 and §5, README §8 and §10):
 // account/sign-in.html, sign-up.html, verify.html, forgot-password.html and reset-password.html with their partials
 // expanded by the build's include plugin, run by src/pages/account-*.js against a fake SDK in cookie mode, and the
-// header's account menu of lib/session.js. It covers the one-time tokens taken out of the address bar with
-// history.replaceState, `next` that leaves the storefront going to `/`, paste and password managers on every
-// password field, and the states of §5 (INVALID_CREDENTIALS, ACCOUNT_LOCKED, EMAIL_NOT_VERIFIED,
-// EMAIL_ALREADY_REGISTERED, PASSWORD_TOO_WEAK, expired or used tokens, field errors with the focused summary, 429).
+// header's account menu of lib/session.js (below md one compact "Account" disclosure, OFE-031). It covers the
+// one-time tokens taken out of the address bar with history.replaceState, `next` that leaves the storefront going to
+// `/`, paste and password managers on every password field, and the states of §5 (INVALID_CREDENTIALS,
+// ACCOUNT_LOCKED, EMAIL_NOT_VERIFIED, EMAIL_ALREADY_REGISTERED, PASSWORD_TOO_WEAK, expired or used tokens, field errors
+// with the focused summary, 429).
 import {
   AuthenticationError,
   ConflictError,
@@ -1289,5 +1290,230 @@ describe("account menu", () => {
     expect(text(button)).toBe("Sign out");
     expect(button.hasAttribute("aria-disabled")).toBe(false);
     expect(text($("[data-live-region]"))).toBe("We could not sign you out. Please try again.");
+  });
+});
+
+describe("account menu below md: one compact button (OFE-031)", () => {
+  /** The header of index.html with a signed-in customer's menu rendered into its slot. */
+  const showSignedIn = (session = SESSION, client = fakeClient()) => {
+    showPage("index.html", "/search.html?from=PAR");
+    const header = /** @type {HTMLElement} */ (document.querySelector("body > header"));
+    const slot = /** @type {HTMLElement} */ (header.querySelector('[data-slot="account-menu"]'));
+    const navigate = vi.fn();
+    renderAccountMenu(slot, /** @type {never} */ (session), { client, navigate });
+    const toggle = /** @type {HTMLButtonElement} */ (slot.querySelector("button[data-account-menu-toggle]"));
+    const panel = /** @type {HTMLElement} */ (slot.querySelector("[data-account-menu-panel]"));
+    return { header, slot, toggle, panel, client, navigate };
+  };
+  const expanded = (/** @type {Element} */ toggle) => toggle.getAttribute("aria-expanded");
+  /** Presses `key` on `element`; returns whether its default action was prevented. */
+  const press = (/** @type {Element} */ element, /** @type {string} */ key) => {
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    element.dispatchEvent(event);
+    return event.defaultPrevented;
+  };
+  /** A control of the page outside the header, focused, as a pointer would leave it. */
+  const outsideControl = () => {
+    const control = document.createElement("button");
+    control.type = "button";
+    control.textContent = "Elsewhere";
+    $("main").append(control);
+    return control;
+  };
+  const classes = (/** @type {Element | null} */ element) => Array.from(element?.classList ?? []);
+
+  it("[OFE-031 AC2] signed in: an Account button in the Sign in link's place, a disclosure of the greeting, My account and Sign out", () => {
+    showPage("index.html", "/search.html?from=PAR");
+    const slot = $('body > header [data-slot="account-menu"]');
+    // From the first paint the slot is as wide as the button below md, and the navigation is the panel's containing
+    // block: the button takes the link's place without moving the row, and the open panel floats under it.
+    expect(classes(slot)).toContain("max-md:min-w-20");
+    expect(classes($("body > header nav"))).toContain("relative");
+    expect(text(slot)).toBe("Sign in");
+
+    const { toggle, panel } = showSignedIn();
+    // One button: "Account" (whatever the name), a disclosure that controls the panel, collapsed.
+    expect(toggle.type).toBe("button");
+    expect(text(toggle)).toBe("Account");
+    expect(expanded(toggle)).toBe("false");
+    expect(toggle.getAttribute("aria-controls")).toBe(panel.id);
+    expect(panel.id).toBe("vx-account-menu");
+    expect(toggle.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+    // Shown below md only; at least 24 px high (2.5.8), its negative margins keep the row's line height.
+    expect(classes(toggle)).toEqual(expect.arrayContaining(["md:hidden", "min-h-6", "-my-0.5", "peer"]));
+    // The panel follows it: hidden below md until the button is expanded (CSS, `peer-aria-expanded`), then floating
+    // under the navigation; from md the row's inline group, as before.
+    expect(toggle.nextElementSibling).toBe(panel);
+    expect(classes(panel)).toEqual(
+      expect.arrayContaining([
+        "max-md:hidden",
+        "max-md:peer-aria-expanded:flex",
+        "max-md:absolute",
+        "max-md:top-full",
+        "max-md:right-0",
+        "max-md:max-w-full",
+        "md:inline-flex",
+      ]),
+    );
+    expect(Array.from(panel.children, (child) => text(child))).toEqual(["Hi, Ada", "My account", "Sign out"]);
+    const account = /** @type {HTMLAnchorElement} */ (panel.querySelector("a"));
+    expect(account.getAttribute("href")).toBe("/account/");
+    // Both of the panel's controls are at least 24 px high in it.
+    expect(classes(account)).toContain("max-md:min-h-6");
+    expect(classes(panel.querySelector('[data-action="sign-out"]'))).toContain("max-md:min-h-6");
+  });
+
+  it("[OFE-031 AC2] signed out: the Sign in link alone, no disclosure", () => {
+    const { slot } = showSignedIn();
+    renderAccountMenu(slot, null, {});
+    expect(Array.from(slot.children, (child) => child.tagName)).toEqual(["A"]);
+    expect(text(slot)).toBe("Sign in");
+    expect(slot.querySelector("[aria-expanded], [data-account-menu-panel]")).toBeNull();
+  });
+
+  it("[OFE-031 AC2] the button opens and closes the panel; Escape closes it and gives the focus back to the button", () => {
+    const { toggle, panel } = showSignedIn();
+    toggle.click();
+    expect(expanded(toggle)).toBe("true");
+    toggle.click();
+    expect(expanded(toggle)).toBe("false");
+    // Escape while closed is left alone.
+    expect(press(toggle, "Escape")).toBe(false);
+
+    toggle.click();
+    const account = /** @type {HTMLAnchorElement} */ (panel.querySelector("a"));
+    account.focus();
+    expect(press(account, "Escape")).toBe(true);
+    expect(expanded(toggle)).toBe("false");
+    expect(document.activeElement).toBe(toggle);
+    // Other keys change nothing.
+    toggle.click();
+    expect(press(toggle, "ArrowDown")).toBe(false);
+    expect(expanded(toggle)).toBe("true");
+  });
+
+  /**
+   * A press on `element` as a browser runs it: `pointerdown`, then the focus moves to `focused` (what the browser
+   * focuses: the control pressed, `main` for its text, or nothing), then the click.
+   */
+  const tap = (/** @type {HTMLElement} */ element, /** @type {HTMLElement | null} */ focused) => {
+    element.dispatchEvent(new Event("pointerdown", { bubbles: true, cancelable: true }));
+    if (focused) {
+      focused.focus();
+    } else {
+      /** @type {HTMLElement | null} */ (document.activeElement)?.blur();
+    }
+    element.click();
+  };
+
+  it("[OFE-031 AC2] a press outside closes the panel: the focus back on the button, unless the press was on another control", () => {
+    const { toggle, panel } = showSignedIn();
+    toggle.click();
+    // A press inside the panel keeps it open.
+    tap(/** @type {HTMLElement} */ (panel.querySelector("[data-customer-name]")), toggle);
+    expect(expanded(toggle)).toBe("true");
+
+    // A press on the page's text that leaves the focus nowhere: closed, the focus on the button.
+    /** @type {HTMLButtonElement} */ (panel.querySelector('[data-action="sign-out"]')).focus();
+    tap($("main h1"), null);
+    expect(expanded(toggle)).toBe("false");
+    expect(document.activeElement).toBe(toggle);
+
+    // The same where the browser focuses `main` (`tabindex="-1"`, focusable by scripts and pointers only), whose
+    // focus would close the panel first: the button still gets the focus.
+    toggle.click();
+    tap($("main h1"), $("main"));
+    expect(expanded(toggle)).toBe("false");
+    expect(document.activeElement).toBe(toggle);
+
+    // A press on another control: closed, and the focus stays on that control.
+    toggle.click();
+    const elsewhere = outsideControl();
+    tap(elsewhere, elsewhere);
+    expect(expanded(toggle)).toBe("false");
+    expect(document.activeElement).toBe(elsewhere);
+    // A later click on the page does not take it back: the press listeners went with the closed panel.
+    $("main h1").click();
+    expect(document.activeElement).toBe(elsewhere);
+  });
+
+  it("[OFE-031 AC2] a press outside whose click never comes (a touch that scrolls the page) leaves a later click alone", () => {
+    const { toggle } = showSignedIn();
+    const focus = vi.spyOn(toggle, "focus");
+    const pointer = (/** @type {string} */ type) =>
+      $("main h1").dispatchEvent(new Event(type, { bubbles: true, cancelable: true }));
+    toggle.click();
+    // The touch closes the panel; the browser then turns it into a scroll: `pointercancel`, no click.
+    pointer("pointerdown");
+    expect(expanded(toggle)).toBe("false");
+    pointer("pointercancel");
+    // A click on the page long after does not take the focus up to the button.
+    $("main h1").click();
+    expect(focus).not.toHaveBeenCalled();
+
+    // Nor when the next press begins before the first one's click came.
+    toggle.click();
+    pointer("pointerdown");
+    pointer("pointerdown");
+    $("main h1").click();
+    expect(focus).not.toHaveBeenCalled();
+    expect(expanded(toggle)).toBe("false");
+  });
+
+  it("[OFE-031 AC2] Escape closes the open panel wherever the focus is, as when a pressed button does not take it", () => {
+    const { toggle } = showSignedIn();
+    // Safari, and Firefox on macOS, leave the focus where it was when a pointer presses a button.
+    toggle.click();
+    /** @type {HTMLElement | null} */ (document.activeElement)?.blur();
+    expect(document.activeElement).not.toBe(toggle);
+    expect(press(document.body, "Escape")).toBe(true);
+    expect(expanded(toggle)).toBe("false");
+    expect(document.activeElement).toBe(toggle);
+    // Closed, Escape is the page's again.
+    expect(press(document.body, "Escape")).toBe(false);
+  });
+
+  it("[OFE-031 AC2] the focus leaving the menu closes the panel, so it never covers the focused element; within the menu it stays open", () => {
+    const { toggle, panel } = showSignedIn();
+    const signOut = /** @type {HTMLButtonElement} */ (panel.querySelector('[data-action="sign-out"]'));
+    const leave = (/** @type {Element | null} */ next) =>
+      signOut.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: next }));
+    toggle.click();
+    leave(toggle);
+    expect(expanded(toggle)).toBe("true");
+    // No next element (another window, a click on the page): the click decides.
+    leave(null);
+    expect(expanded(toggle)).toBe("true");
+    leave(outsideControl());
+    expect(expanded(toggle)).toBe("false");
+  });
+
+  it("[OFE-031 AC2] Sign out in the panel: auth.signOut, the Sign in link back in the button's place, the home page", async () => {
+    const { slot, toggle, panel, client, navigate } = showSignedIn();
+    toggle.click();
+    /** @type {HTMLButtonElement} */ (panel.querySelector('[data-action="sign-out"]')).click();
+    await settle();
+
+    expect(client.auth.signOut).toHaveBeenCalledTimes(1);
+    expect(Array.from(slot.children, (child) => text(child))).toEqual(["Sign in"]);
+    expect(navigate).toHaveBeenCalledWith("/");
+    // The signed-in menu's listeners went with it: a later press on the page or Escape does not reach its button.
+    const focus = vi.spyOn(toggle, "focus");
+    tap($("main h1"), null);
+    press(slot, "Escape");
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it("[OFE-031 AC2] a long first name: the greeting holds it whole and wraps in the panel; the button stays 'Account'", () => {
+    const firstName = "Maximiliana-Alexandrina Wilhelmina Konstantinopoulou";
+    const { toggle, panel } = showSignedIn({ ...SESSION, customer: { ...CUSTOMER, firstName } });
+    expect(text(toggle)).toBe("Account");
+    const greeting = /** @type {HTMLElement} */ (panel.querySelector("[data-customer-name]"));
+    expect(text(greeting)).toBe(`Hi, ${firstName}`);
+    // Never cut: no ellipsis, and it breaks anywhere rather than overflowing the panel, which is never wider than
+    // the navigation.
+    expect(classes(greeting)).toContain("wrap-anywhere");
+    expect(classes(greeting)).not.toContain("truncate");
+    expect(classes(panel)).toEqual(expect.arrayContaining(["max-md:w-max", "max-md:max-w-full"]));
   });
 });

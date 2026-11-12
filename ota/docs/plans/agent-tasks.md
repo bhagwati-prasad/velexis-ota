@@ -3087,8 +3087,8 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - `boot.test.js` still proves the header's name, logo, currency selector and account menu.
 - **Verify:** `pnpm --filter @velexis/ota-frontend build && pnpm --filter @velexis/ota-frontend test && E2E_WITH_OTA=1 pnpm test:e2e -- --project=storefront specs/storefront/a11y-phone.e2e.ts specs/storefront/a11y-pages.e2e.ts`
 
-### OFE-031 · Keep a signed-in customer's phone page still, fall back to the plain search form, and show the OTA's full name in the footer
-- **Status:** todo
+### OFE-031 · Keep a signed-in customer's phone page still, fall back to the plain search form, and show the OTA's full name in the footer ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-frontend
 - **Milestone:** M6
 - **Depends on:** OFE-030, OFE-009

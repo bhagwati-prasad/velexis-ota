@@ -14,11 +14,14 @@
       >Flights</a
     >
     <div class="flex items-center" data-header-currency></div>
-    <nav aria-label="Main" class="col-span-2 sm:col-span-1">
+    <!-- The containing block of a signed-in customer's account menu panel below md (lib/session.js, OFE-031). -->
+    <nav aria-label="Main" class="relative col-span-2 sm:col-span-1">
       <ul class="flex flex-wrap gap-x-6 gap-y-2 text-sm">
         <li><a href="/lookup.html" class="underline-offset-4 hover:underline">Find a booking</a></li>
         <li><a href="/bookings.html" class="underline-offset-4 hover:underline">My bookings</a></li>
-        <li data-slot="account-menu">
+        <!-- Below md, as wide as a signed-in customer's "Account" button (lib/session.js) from the first paint, so the
+             button takes the "Sign in" link's place without moving the navigation (OFE-031). -->
+        <li data-slot="account-menu" class="max-md:min-w-20">
           <a href="/account/sign-in.html" class="underline-offset-4 hover:underline">Sign in</a>
         </li>
       </ul>

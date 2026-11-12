@@ -2,10 +2,11 @@
 // (partials expanded by the build's include plugin), enhanced by src/components/search-form.js with the passenger
 // picker and the date range, against a fake SDK. It covers the query string the form sends for one-way, return and
 // multi-city trips, the plain GET without JavaScript, the client checks, pre-filling from the address, the passenger
-// steppers and the multi-city rows.
+// steppers and the multi-city rows, and the CSS of the form's shape before its module mounts: enhanced from the first
+// paint (OFE-030), plain 5 s later when the module never mounts (OFE-031).
 import { NotFoundError } from "@velexis/ota-sdk";
 import { Browser } from "happy-dom";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -765,6 +766,8 @@ describe("search form: its enhanced shape from the first paint (OFE-030)", () =>
   it("[OFE-030 AC1] before the module runs the rules fold the passengers and show the toggle and Multi-city; mounting marks the form enhanced", () => {
     const selectors = scriptedSelectors();
     expect(selectors).toEqual([
+      // The form's own rule: the timer of its plain form (OFE-031, below).
+      "form[data-search-form]:not([data-enhanced])",
       "form[data-search-form]:not([data-enhanced]) [data-passenger-panel]",
       "form[data-search-form]:not([data-enhanced]) [data-passenger-toggle][hidden]",
       "form[data-search-form]:not([data-enhanced]) [data-trip-multi][hidden]",
@@ -795,6 +798,127 @@ describe("search form: its enhanced shape from the first paint (OFE-030)", () =>
     for (const selector of scriptedSelectors()) {
       expect(document.querySelectorAll(selector), selector).toHaveLength(0);
     }
+  });
+});
+
+describe("search form: the plain form when its module never mounts (OFE-031)", () => {
+  /** main.css as written. */
+  const css = readFileSync(join(STOREFRONT_ROOT, "src", "styles", "main.css"), "utf8");
+  /** The rules of its `@media (scripting: enabled)` block: selector and declarations. */
+  const rules = Array.from(
+    (/@media \(scripting: enabled\)\s*\{([\s\S]*?)\n {2}\}/.exec(css)?.[1] ?? "").matchAll(
+      /^\s*([^{}\s][^{}]*?)\s*\{([^{}]*)\}/gm,
+    ),
+    (match) => ({ selector: match[1] ?? "", body: (match[2] ?? "").trim() }),
+  );
+  /** The rule that starts the timer: its selector and the parts of its `animation` shorthand. */
+  const timer = (() => {
+    const rule = rules.find((candidate) => /^animation:/.test(candidate.body));
+    const parts = /^animation:\s*([\w-]+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+);$/.exec(rule?.body ?? "") ?? [];
+    return {
+      selector: rule?.selector ?? "",
+      name: parts[1] ?? "",
+      duration: parts[2] ?? "",
+      delayMs: parts[4]?.endsWith("ms")
+        ? Number.parseFloat(parts[4])
+        : Number.parseFloat(parts[4] ?? "") * 1000,
+      fill: parts[5] ?? "",
+    };
+  })();
+  /** The selector whose match pauses the timer. */
+  const paused = rules.find((rule) => /^animation-play-state:\s*paused;$/.test(rule.body))?.selector ?? "";
+  /** The custom properties the timer's keyframes set (the same at its start and end). */
+  const plainProperties = (() => {
+    const body =
+      new RegExp(`@keyframes ${timer.name}\\s*\\{\\s*from,\\s*to\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? "";
+    return Object.fromEntries(
+      Array.from(body.matchAll(/(--[\w-]+):\s*([\w-]+);/g), (match) => [match[1] ?? "", match[2] ?? ""]),
+    );
+  })();
+
+  /**
+   * The display that main.css gives the passenger fieldset, the passenger toggle and "Multi-city" `runningMs` after the
+   * timer started (its clock runs while the form matches the timer's rule and not the paused one), as a browser applies
+   * the rules: a matching display rule's var() with the timer's properties once its delay has passed, else the
+   * element's own state (`hidden` or not).
+   * @param {number} runningMs
+   */
+  const shapeAfter = (runningMs) => {
+    const running = form().matches(timer.selector) && !form().matches(paused);
+    const properties = running && runningMs >= timer.delayMs ? plainProperties : {};
+    const display = (/** @type {Element} */ element) => {
+      const rule = rules.find(
+        (candidate) => candidate.body.startsWith("display:") && element.matches(candidate.selector),
+      );
+      if (!rule) {
+        return element.hasAttribute("hidden") ? "none" : "shown";
+      }
+      const [, property = "", fallback = ""] =
+        /^display:\s*var\((--[\w-]+),\s*([\w-]+)\)/.exec(rule.body) ?? [];
+      return properties[property] ?? fallback;
+    };
+    return {
+      panel: display(field("[data-passenger-panel]")),
+      toggle: display(field("[data-passenger-toggle]")),
+      multi: display(/** @type {Element} */ (form().querySelector("[data-trip-multi]"))),
+    };
+  };
+  const ENHANCED = { panel: "none", toggle: "inline-block", multi: "inline-flex" };
+  const PLAIN = { panel: "block", toggle: "none", multi: "none" };
+
+  it("[OFE-031 AC3] main.css: the form's own animation, which no script starts, ends the enhanced shape after 5 s", () => {
+    // Only on a form its module has not marked, in a browser with JavaScript on.
+    expect(timer.selector).toBe("form[data-search-form]:not([data-enhanced])");
+    expect(timer).toMatchObject({ name: "vx-search-form-plain", duration: "0s", fill: "forwards" });
+    // A few seconds: long enough for storefront.get and the module, short enough for a traveller.
+    expect(timer.delayMs).toBe(5000);
+    // The plain form: the fieldset shown, the toggle and Multi-city not.
+    expect(plainProperties).toEqual({
+      "--vx-search-panel": "block",
+      "--vx-search-toggle": "none",
+      "--vx-search-multi": "none",
+    });
+    // No script has to run for it (a page script that never loaded is covered too): no module of the storefront names
+    // the timer or its properties.
+    const modules = readdirSync(join(STOREFRONT_ROOT, "src"), { recursive: true, encoding: "utf8" }).filter(
+      (file) => file.endsWith(".js"),
+    );
+    expect(modules.length).toBeGreaterThan(10);
+    for (const file of modules) {
+      expect(readFileSync(join(STOREFRONT_ROOT, "src", file), "utf8"), file).not.toMatch(
+        /vx-search-form-plain|--vx-search-(panel|toggle|multi)/,
+      );
+    }
+    expect(paused).toBe("details:not([open]) > form[data-search-form]");
+  });
+
+  it("[OFE-031 AC3] a module that never mounts: the enhanced shape, then the plain form 5 s after the first paint", () => {
+    expect(form().hasAttribute("data-enhanced")).toBe(false);
+    expect(shapeAfter(0)).toEqual(ENHANCED);
+    expect(shapeAfter(4999)).toEqual(ENHANCED);
+    expect(shapeAfter(5000)).toEqual(PLAIN);
+    expect(shapeAfter(60_000)).toEqual(PLAIN);
+  });
+
+  it("[OFE-031 AC3] a module that mounts in time: the form leaves the timer's rule, so its plain form never shows", () => {
+    expect(shapeAfter(1000)).toEqual(ENHANCED);
+    mountForm();
+    // The module's own shape from then on, whatever time passes: the toggle and Multi-city shown, the fieldset folded.
+    for (const runningMs of [1000, 5000, 60_000]) {
+      expect(shapeAfter(runningMs)).toEqual({ panel: "none", toggle: "shown", multi: "shown" });
+    }
+  });
+
+  it("[OFE-031 AC3] the results page's form, in its closed panel until it is opened and enhanced, pauses its timer", () => {
+    // search.html: the form inside the "Change search" disclosure, closed.
+    const panel = document.createElement("details");
+    form().before(panel);
+    panel.append(form());
+    expect(shapeAfter(60_000)).toEqual(ENHANCED);
+    // Opened while its module does not mount: 5 s later the plain form.
+    panel.open = true;
+    expect(shapeAfter(4999)).toEqual(ENHANCED);
+    expect(shapeAfter(5000)).toEqual(PLAIN);
   });
 });
 

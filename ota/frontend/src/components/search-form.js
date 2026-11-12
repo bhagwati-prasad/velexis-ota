@@ -21,7 +21,10 @@
 // - The page mounts the form once storefront.get has answered, after the first paint. Its enhanced shape is there from
 //   the first paint in a browser with JavaScript on (`@media (scripting: enabled)` in main.css, until the form is
 //   marked `data-enhanced`), so mounting it moves nothing below it (OFE-030); without JavaScript the plain form shows.
-//   The three trip types fit one row on a 360 px phone (`gap-x-4` in partials/search-form.html).
+//   The three trip types fit one row on a 360 px phone (`gap-x-4` in partials/search-form.html). That shape lasts
+//   5 seconds: a module that never mounts (its script failed to load, or threw before mounting) leaves the plain form
+//   after that, by CSS alone (main.css: the form's own animation, which no script has to start; paused while the
+//   results page's "Change search" panel is closed), and a form mounted in time never shows it (OFE-031).
 
 import { clone, fill } from "../lib/dom.js";
 import { clearFieldErrors, showFieldErrors } from "../lib/forms.js";
@@ -246,8 +249,9 @@ function labelInput(doc, input, label, prefix) {
 /**
  * Mounts the search form (see the top of this file) and marks it `data-enhanced="true"`: until then a browser with
  * JavaScript on shows the form in its enhanced shape from the first paint (`main.css`, OFE-030: the passenger toggle
- * instead of the passenger fieldset, and "Multi-city"), so that enhancing it moves nothing. Should enhancing fail, the
- * form is marked `data-enhanced="failed"` and shows the plain form's passenger fieldset again. Returns `{ destroy }`.
+ * instead of the passenger fieldset, and "Multi-city"), so that enhancing it moves nothing, for 5 seconds (OFE-031: the
+ * plain form after that, should this never run). Should enhancing fail, the form is marked `data-enhanced="failed"`
+ * and shows the plain form's passenger fieldset again. Returns `{ destroy }`.
  * @param {HTMLFormElement} form the `[data-search-form]` form
  * @param {SearchFormProps} props
  */

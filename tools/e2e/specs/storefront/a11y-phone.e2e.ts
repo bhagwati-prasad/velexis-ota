@@ -12,13 +12,21 @@
 //      the page reflows to the phone's width (1.4.10: no sideways scrolling);
 //   4. the home and results pages in the states a traveller meets first (the search form, its checks, the location
 //      suggestions, the passengers, multi-city; the offers and the "Filters" disclosure), and the keyboard's focus
-//      from the skip link to the search button never hidden behind anything (2.4.11).
+//      from the skip link to the search button never hidden behind anything (2.4.11);
+//   5. (OFE-031) a signed-in customer's compact account menu below md: part 3 judges every page with the menu closed
+//      and open; the page's layout shifts while storefront.get and then auth.getSession are held and answered, summed
+//      with a PerformanceObserver at 360 and 412 px: nothing moves when the session answers (the header keeps its
+//      height and nothing in it moves), and the home page moves by nothing at all; the menu's links by keyboard and by
+//      pointer; and the search form's plain form when its module never mounts (the page's scripts aborted), which a
+//      form mounted in time never shows. The footer shows the OTA's whole name on every page (part 3).
 //
 // What the stack cannot answer on demand is answered in the browser (`page.route`), and only that: the shared states
 // of `storefront.get` (the API's error envelope) and, for part 3, storefront.get's own answer with the OTA's name and
-// currencies changed. The customer signs up through the OTA API (`auth.signUp`, as the browser's SDK calls it). The
-// pages, their scripts and their headers stay the preview's. Stripe.js never comes from the network (its request is
-// aborted): the card page then shows "Card payment is unavailable".
+// currencies changed. Part 5 holds storefront.get and auth.getSession in the browser and then lets the API's own
+// answers through, and aborts the page's scripts where it needs a module that never mounts. The customers sign up
+// through the OTA API (`auth.signUp`, as the browser's SDK calls it). The pages, their scripts and their headers stay
+// the preview's. Stripe.js never comes from the network (its request is aborted): the card page then shows "Card
+// payment is unavailable".
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Browser, BrowserContext, Locator, Page } from "@playwright/test";
@@ -38,6 +46,24 @@ const PHONE = Object.freeze({
 });
 
 test.use({ ...PHONE });
+
+/**
+ * The phones of part 5's layout-shift check: 360 × 800 (PHONE) and Lighthouse's own 412 × 823 (the Moto G Power,
+ * device pixel ratio 1.75, scripts/lighthouse.mjs).
+ */
+const SHIFT_PHONES = Object.freeze([
+  PHONE,
+  Object.freeze({
+    viewport: Object.freeze({ width: 412, height: 823 }),
+    deviceScaleFactor: 1.75,
+    isMobile: true,
+    hasTouch: true,
+  }),
+]);
+type Phone = (typeof SHIFT_PHONES)[number];
+
+/** How long a search form whose module never mounts may keep its enhanced shape: main.css's 5 s, and a margin. */
+const FALLBACK_BUDGET_MS = 10_000;
 
 /** The built storefront the preview serves. */
 const DIST = join(REPO_ROOT, "ota", "frontend", "dist");
@@ -250,10 +276,10 @@ interface Browsing {
   readonly api: StorefrontApi;
 }
 
-async function openBrowsing(browser: Browser): Promise<Browsing> {
+async function openBrowsing(browser: Browser, phone: Phone = PHONE): Promise<Browsing> {
   const ip = uniqueTestIp();
   const context = await browser.newContext({
-    ...PHONE,
+    ...phone,
     baseURL: STOREFRONT_URL,
     extraHTTPHeaders: { "X-Forwarded-For": ip },
   });
@@ -283,16 +309,47 @@ async function withFullestHeader(context: BrowserContext): Promise<void> {
   );
 }
 
-/** The header's parts on a phone: the name, the currency selector and the account menu. */
+/**
+ * The header's parts on a phone: the name, the currency selector and the account menu (below md a signed-in
+ * customer's "Account" button and the panel it opens, OFE-031); and the footer's line with the OTA's whole name.
+ */
 function header(page: Page) {
   const banner = page.getByRole("banner");
   return {
     name: banner.locator('a[data-field="brandName"]'),
     currency: banner.getByRole("combobox", { name: "Currency" }),
     signIn: banner.getByRole("link", { name: "Sign in", exact: true }),
+    menu: banner.getByRole("button", { name: "Account", exact: true }),
+    account: banner.getByRole("link", { name: "My account", exact: true }),
     signOut: banner.getByRole("button", { name: "Sign out" }),
     greeting: banner.getByText(`Hi, ${CUSTOMER.firstName}`, { exact: true }),
+    footerName: page.getByRole("contentinfo").locator('[data-field="footerName"]'),
   };
+}
+
+/**
+ * Signs a new customer up through the OTA API in `browsing`'s context, as the sign-up page's SDK does: the demo OTA
+ * opens the session at once (its e-mail verification is optional), in the context's httpOnly cookies.
+ */
+async function signUp(browsing: Browsing, tag: string): Promise<void> {
+  const config = (await browsing.api.call("getStorefront", "GET", "/v1/storefront")) as {
+    legal?: { termsVersion?: string | null };
+  };
+  const termsVersion = config.legal?.termsVersion;
+  await browsing.api.call(
+    "signUp",
+    "POST",
+    "/v1/auth/sign-up",
+    {
+      email: uniqueEmail(tag),
+      password: newPassword(),
+      firstName: CUSTOMER.firstName,
+      lastName: CUSTOMER.lastName,
+      marketingConsent: false,
+      ...(typeof termsVersion === "string" && termsVersion !== "" ? { termsVersion } : {}),
+    },
+    201,
+  );
 }
 
 /** What the page's focus is on, for 2.4.11: the element, and whether its centre is in the window and uncovered. */
@@ -411,26 +468,7 @@ test.describe("every page with a long OTA name, two currencies and a signed-in c
     customer = await openBrowsing(browser);
     await withFullestHeader(visitor.context);
     await withFullestHeader(customer.context);
-    // The customer signs up through the OTA API, as the sign-up page's SDK does; the demo OTA opens the session at
-    // once (its e-mail verification is optional), in the context's httpOnly cookies.
-    const config = (await customer.api.call("getStorefront", "GET", "/v1/storefront")) as {
-      legal?: { termsVersion?: string | null };
-    };
-    const termsVersion = config.legal?.termsVersion;
-    await customer.api.call(
-      "signUp",
-      "POST",
-      "/v1/auth/sign-up",
-      {
-        email: uniqueEmail("ofe030-phone"),
-        password: newPassword(),
-        firstName: CUSTOMER.firstName,
-        lastName: CUSTOMER.lastName,
-        marketingConsent: false,
-        ...(typeof termsVersion === "string" && termsVersion !== "" ? { termsVersion } : {}),
-      },
-      201,
-    );
+    await signUp(customer, "ofe030-phone");
   });
 
   test.afterEach(async () => {
@@ -446,7 +484,7 @@ test.describe("every page with a long OTA name, two currencies and a signed-in c
   });
 
   for (const target of PAGES) {
-    test(`${target.file} at 360 px for a visitor and for a customer [OFE-030 AC2]`, async () => {
+    test(`${target.file} at 360 px for a visitor and for a customer, the account menu closed and open, the OTA's whole name in the footer [OFE-030 AC2] [OFE-031 AC2]`, async () => {
       for (const [browsing, signedIn] of [
         [visitor, false],
         [customer, true],
@@ -454,8 +492,11 @@ test.describe("every page with a long OTA name, two currencies and a signed-in c
         const { page, guards } = browsing;
         await page.goto(target.path);
         const parts = header(page);
-        // The whole name in the link's text, on one line.
+        // The whole name in the link's text, on one line; in the footer too, on a line that wraps (OFE-031).
         await expect(parts.name).toHaveText(LONG_NAME);
+        await expect(parts.footerName).toHaveText(LONG_NAME);
+        await expect(parts.footerName).toBeVisible();
+        const signedInMenu = signedIn && target.header !== "static";
         if (target.header === "static") {
           // The static header's links as the partial has them, for the customer too.
           await expect(parts.signIn).toBeVisible();
@@ -469,14 +510,31 @@ test.describe("every page with a long OTA name, two currencies and a signed-in c
             await expect(parts.currency).toBeVisible();
             await expect(parts.currency.locator("option")).toHaveCount(2);
           }
-          await expect(signedIn ? parts.signOut : parts.signIn).toBeVisible();
-          if (signedIn) {
-            await expect(parts.greeting).toBeVisible();
+          if (signedInMenu) {
+            // Below md one "Account" button, its panel closed (OFE-031).
+            await expect(parts.menu).toBeVisible();
+            await expect(parts.menu).toHaveAttribute("aria-expanded", "false");
+            await expect(parts.signOut).toBeHidden();
+          } else {
+            await expect(parts.signIn).toBeVisible();
           }
         }
         await expect((signedIn ? target.customer : target.visitor)(page)).toBeVisible();
         expect(await reflowsOnPhone(page), "no sideways scrolling").toBe(true);
         await guards.checkA11y(page);
+        if (signedInMenu) {
+          // The panel open: the greeting, "My account" and "Sign out", over the page, still within its width.
+          await parts.menu.click();
+          await expect(parts.menu).toHaveAttribute("aria-expanded", "true");
+          await expect(parts.greeting).toBeVisible();
+          await expect(parts.account).toBeVisible();
+          await expect(parts.signOut).toBeVisible();
+          expect(await reflowsOnPhone(page), "no sideways scrolling with the account menu open").toBe(true);
+          await guards.checkA11y(page);
+          await page.keyboard.press("Escape");
+          await expect(parts.menu).toHaveAttribute("aria-expanded", "false");
+          await expect(parts.menu).toBeFocused();
+        }
       }
     });
   }
@@ -576,5 +634,455 @@ test.describe("home and results on a phone", () => {
     await expect(filters).toHaveAttribute("aria-expanded", "true");
     expect(await reflowsOnPhone(page()), "no sideways scrolling with the filters open").toBe(true);
     await browsing.guards.checkA11y(page());
+  });
+});
+
+/** A layout shift the page recorded (part 5): its score, whether input caused it, and whether it moved the header. */
+interface RecordedShift {
+  readonly value: number;
+  readonly recentInput: boolean;
+  readonly inHeader: boolean;
+}
+
+/**
+ * In the browser, before the page's own scripts (an init script): records every layout shift with a
+ * PerformanceObserver (`buffered`: none before it is lost), whether input caused it and whether an element of the
+ * header moved, and offers `__vxTakeShifts()`, which also takes the entries not delivered yet and empties the record.
+ * Playwright sends this function's source to the page, so it uses nothing from its module.
+ */
+function recordLayoutShifts(): void {
+  type Entry = PerformanceEntry & {
+    readonly value: number;
+    readonly hadRecentInput: boolean;
+    readonly sources?: ReadonlyArray<{ readonly node?: Node | null }>;
+  };
+  const shifts: { value: number; recentInput: boolean; inHeader: boolean }[] = [];
+  const keep = (entries: PerformanceEntryList) => {
+    const banner = document.querySelector("body > header");
+    for (const entry of entries as Entry[]) {
+      shifts.push({
+        value: entry.value,
+        recentInput: entry.hadRecentInput,
+        inHeader: (entry.sources ?? []).some(
+          (source) => source.node instanceof Node && banner !== null && banner.contains(source.node),
+        ),
+      });
+    }
+  };
+  const observer = new PerformanceObserver((list) => keep(list.getEntries()));
+  observer.observe({ type: "layout-shift", buffered: true });
+  Object.assign(window, {
+    __vxTakeShifts: () => {
+      keep(observer.takeRecords());
+      return shifts.splice(0);
+    },
+  });
+}
+
+/** The layout shifts the page recorded since the last call, once two frames have been painted. */
+async function takeShifts(page: Page): Promise<RecordedShift[]> {
+  await page.evaluate(
+    () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
+  );
+  return page.evaluate(() =>
+    (window as unknown as { __vxTakeShifts: () => RecordedShift[] }).__vxTakeShifts(),
+  );
+}
+
+/** The sum of the shifts no input caused, as CLS counts them. */
+const scoreOf = (shifts: readonly RecordedShift[]): number =>
+  shifts.filter((shift) => !shift.recentInput).reduce((sum, shift) => sum + shift.value, 0);
+
+/** Where the header ends and the main content starts, in the document. */
+const headerGeometry = (page: Page) =>
+  page.evaluate(() => {
+    const banner = document.querySelector("body > header")?.getBoundingClientRect();
+    const main = document.querySelector("main")?.getBoundingClientRect();
+    return { headerHeight: banner?.height ?? -1, mainTop: (main?.top ?? -1) + window.scrollY };
+  });
+
+/** Holds the page's requests to `pathname` until `release()`, then lets them through to the API as they are. */
+async function hold(page: Page, pathname: string): Promise<{ seen: Promise<void>; release: () => void }> {
+  let release: () => void = () => undefined;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let saw: () => void = () => undefined;
+  const seen = new Promise<void>((resolve) => {
+    saw = resolve;
+  });
+  await page.route(
+    (url) => url.pathname === pathname,
+    async (route) => {
+      saw();
+      await released;
+      await route.continue();
+    },
+  );
+  return { seen, release };
+}
+
+/**
+ * The pages of the layout-shift check: those that show a signed-in customer's account menu and stay where they are
+ * (not the airline-card page, whose static header has no menu, nor sign-in and sign-up, which send a customer on to
+ * the account page).
+ */
+const MENU_PAGES = PAGES.filter(
+  (target) =>
+    target.header !== "static" && !["account/sign-in.html", "account/sign-up.html"].includes(target.file),
+);
+
+test.describe("a signed-in customer's page stays still on a phone when the session answers late (OFE-031)", () => {
+  test.describe.configure({ mode: "serial" });
+
+  /** One signed-in customer per phone. */
+  const customers: Browsing[] = [];
+
+  test.beforeAll(async ({ browser }) => {
+    test.setTimeout(ARRANGE_TIMEOUT_MS);
+    for (const phone of SHIFT_PHONES) {
+      const browsing = await openBrowsing(browser, phone);
+      await signUp(browsing, `ofe031-shift-${phone.viewport.width}`);
+      // Every page asks storefront.get (the configuration is never taken from sessionStorage), so it can be held, and
+      // every layout shift from the first paint on is recorded.
+      await browsing.context.addInitScript(() => {
+        try {
+          sessionStorage.removeItem("vx.storefront.config");
+        } catch {
+          // No storage: storefront.get is asked anyway.
+        }
+      });
+      await browsing.context.addInitScript(recordLayoutShifts);
+      customers.push(browsing);
+    }
+  });
+
+  test.afterEach(async () => {
+    for (const browsing of customers) {
+      await browsing.page.unrouteAll({ behavior: "ignoreErrors" });
+      await browsing.guards.finish(browsing.page);
+    }
+  });
+
+  test.afterAll(async () => {
+    for (const browsing of customers.splice(0)) {
+      await browsing.context.close();
+    }
+  });
+
+  for (const target of MENU_PAGES) {
+    test(`${target.file} at 360 and 412 px: nothing moves when auth.getSession answers after storefront.get, both held [OFE-031 AC1]`, async () => {
+      for (const { page, guards } of customers) {
+        const width = page.viewportSize()?.width;
+        const config = await hold(page, "/api/v1/storefront");
+        const session = await hold(page, "/api/v1/auth/session");
+        await page.goto(target.path);
+        // The static page painted, storefront.get on its way.
+        await config.seen;
+        const painted = await takeShifts(page);
+        config.release();
+        await expect(header(page).name).toHaveAttribute("title", /\S/);
+        // The configuration applied (theme, header, footer, test banner), auth.getSession on its way.
+        await session.seen;
+        const configured = await takeShifts(page);
+        const before = await headerGeometry(page);
+        session.release();
+        await expect(header(page).menu).toBeVisible();
+        await expect(target.customer(page)).toBeVisible();
+        const signedIn = await takeShifts(page);
+        const after = await headerGeometry(page);
+        test.info().annotations.push({
+          type: "layout shifts",
+          description:
+            `${target.file} at ${width} px: painted ${scoreOf(painted).toFixed(4)}, configuration ` +
+            `${scoreOf(configured).toFixed(4)}, session ${scoreOf(signedIn).toFixed(4)}`,
+        });
+        // The session's answer moves nothing in the header and does not make it grow (2.5.8's button included).
+        expect(
+          signedIn.filter((shift) => shift.inHeader),
+          `${width} px: shifts in the header`,
+        ).toEqual([]);
+        expect(after, `${width} px: the header's height and where main starts`).toEqual(before);
+        if (target.file === "index.html") {
+          // The home page moves by nothing at all, from the first paint to the signed-in menu.
+          expect(
+            scoreOf([...painted, ...configured, ...signedIn]),
+            `${width} px: the home page's shifts`,
+          ).toBe(0);
+        }
+        expect(
+          await page.evaluate(reflows, width ?? PHONE.viewport.width),
+          `${width} px: no sideways scrolling`,
+        ).toBe(true);
+        await page.unrouteAll({ behavior: "ignoreErrors" });
+        await guards.checkA11y(page);
+      }
+    });
+  }
+});
+
+test.describe("the account menu by keyboard and by pointer, on a phone (OFE-031)", () => {
+  /** A new customer of its own, signed in, on a phone. */
+  async function signedInBrowsing(browser: Browser, tag: string): Promise<Browsing> {
+    const browsing = await openBrowsing(browser);
+    await signUp(browsing, tag);
+    return browsing;
+  }
+
+  /** Presses Tab until `target` has the focus (at most MAX_FOCUS_STOPS times). */
+  async function tabTo(page: Page, target: Locator): Promise<void> {
+    for (let presses = 0; presses < MAX_FOCUS_STOPS; presses += 1) {
+      await page.keyboard.press("Tab");
+      if (await target.evaluate((element) => element === document.activeElement)) {
+        return;
+      }
+    }
+    throw new Error("the keyboard never reached the element");
+  }
+
+  test("by keyboard: Enter and Space open it, Tab walks its links and leaving closes it, Escape gives the focus back, My account and Sign out work [OFE-031 AC2]", async ({
+    browser,
+  }) => {
+    const browsing = await signedInBrowsing(browser, "ofe031-keyboard");
+    const { page, guards } = browsing;
+    try {
+      await page.goto("/lookup.html");
+      const parts = header(page);
+      await expect(parts.menu).toBeVisible();
+      await tabTo(page, parts.menu);
+      await page.keyboard.press("Enter");
+      await expect(parts.menu).toHaveAttribute("aria-expanded", "true");
+      await page.keyboard.press("Tab");
+      await expect(parts.account).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expect(parts.signOut).toBeFocused();
+      // Tab past the last link: the focus leaves the menu, which closes, so it covers nothing.
+      await page.keyboard.press("Tab");
+      await expect(parts.menu).toHaveAttribute("aria-expanded", "false");
+      await page.keyboard.press("Shift+Tab");
+      await expect(parts.menu).toBeFocused();
+      // Escape closes it from inside and gives the focus back to the button.
+      await page.keyboard.press("Space");
+      await expect(parts.menu).toHaveAttribute("aria-expanded", "true");
+      await page.keyboard.press("Tab");
+      await expect(parts.account).toBeFocused();
+      await page.keyboard.press("Escape");
+      await expect(parts.menu).toHaveAttribute("aria-expanded", "false");
+      await expect(parts.menu).toBeFocused();
+      await guards.checkA11y(page);
+
+      // My account.
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("Enter");
+      await expect(page).toHaveURL(/\/account\/$/);
+      await expect(page.getByRole("heading", { level: 1, name: "My account" })).toBeVisible();
+
+      // Sign out: the home page, with "Sign in" in the button's place.
+      await tabTo(page, parts.menu);
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("Tab");
+      await expect(parts.signOut).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expect(page).toHaveURL(/\/$/);
+      await expect(parts.signIn).toBeVisible();
+      await expect(parts.menu).toHaveCount(0);
+      await guards.checkA11y(page);
+    } finally {
+      await guards.finish(page);
+      await browsing.context.close();
+    }
+  });
+
+  test("by pointer: a tap opens it, a tap outside closes it, My account and Sign out work [OFE-031 AC2]", async ({
+    browser,
+  }) => {
+    const browsing = await signedInBrowsing(browser, "ofe031-pointer");
+    const { page, guards } = browsing;
+    try {
+      await page.goto("/lookup.html");
+      const parts = header(page);
+      await parts.menu.click();
+      await expect(parts.menu).toHaveAttribute("aria-expanded", "true");
+      // A tap on the page outside the menu closes it; the focus, left nowhere, goes back to the button.
+      await page.getByRole("heading", { level: 1 }).click();
+      await expect(parts.menu).toHaveAttribute("aria-expanded", "false");
+      await expect(parts.menu).toBeFocused();
+
+      await parts.menu.click();
+      await parts.account.click();
+      await expect(page).toHaveURL(/\/account\/$/);
+      await expect(page.getByRole("heading", { level: 1, name: "My account" })).toBeVisible();
+
+      await parts.menu.click();
+      await parts.signOut.click();
+      await expect(page).toHaveURL(/\/$/);
+      await expect(parts.signIn).toBeVisible();
+      // The session has ended: a new page shows a visitor's header.
+      await page.goto("/lookup.html");
+      await expect(parts.signIn).toBeVisible();
+      await expect(parts.menu).toHaveCount(0);
+      await guards.checkA11y(page);
+    } finally {
+      await guards.finish(page);
+      await browsing.context.close();
+    }
+  });
+});
+
+/** The search form's shape as the page shows it: whether its passenger fieldset, toggle and "Multi-city" are shown. */
+interface FormShape {
+  readonly panel: boolean;
+  readonly toggle: boolean;
+  readonly multi: boolean;
+}
+
+/**
+ * In the browser (self-contained, as Playwright sends its source): the search form's shape in the main content, or
+ * `null` without a form.
+ */
+function formShape(): FormShape | null {
+  const form = document.querySelector("main form[data-search-form]");
+  if (!form) {
+    return null;
+  }
+  const shown = (selector: string) => {
+    const element = form.querySelector(selector);
+    return element !== null && getComputedStyle(element).display !== "none";
+  };
+  return {
+    panel: shown("[data-passenger-panel]"),
+    toggle: shown("[data-passenger-toggle]"),
+    multi: shown("[data-trip-multi]"),
+  };
+}
+
+const ENHANCED_SHAPE: FormShape = Object.freeze({ panel: false, toggle: true, multi: true });
+const PLAIN_SHAPE: FormShape = Object.freeze({ panel: true, toggle: false, multi: false });
+
+test.describe("the search form's plain form when its module never mounts, on a phone (OFE-031)", () => {
+  /** Aborts every script of the storefront's build: the page's module never runs, as when it failed to load. */
+  const withoutScripts = (page: Page) =>
+    page.route(
+      (url) => url.pathname.startsWith("/assets/") && url.pathname.endsWith(".js"),
+      (route) => route.abort("blockedbyclient"),
+    );
+
+  test("home with its script blocked: the enhanced shape at load, the plain form within seconds, and it searches [OFE-031 AC3]", async ({
+    page,
+    guards,
+  }) => {
+    await withoutScripts(page);
+    // The shape when the page has loaded, and when that was (main.css's timer starts with the first paint).
+    await page.addInitScript(() => {
+      addEventListener("load", () => {
+        const form = document.querySelector("main form[data-search-form]");
+        const shown = (selector: string) => {
+          const element = form?.querySelector(selector);
+          return element !== null && element !== undefined && getComputedStyle(element).display !== "none";
+        };
+        Object.assign(window, {
+          __vxAtLoad: {
+            at: performance.now(),
+            shape: {
+              panel: shown("[data-passenger-panel]"),
+              toggle: shown("[data-passenger-toggle]"),
+              multi: shown("[data-trip-multi]"),
+            },
+          },
+        });
+      });
+    });
+    await page.goto("/");
+    const atLoad = await page.evaluate(
+      () => (window as unknown as { __vxAtLoad: { at: number; shape: FormShape } }).__vxAtLoad,
+    );
+    expect(atLoad.at, "the page loaded before the timer's 5 s").toBeLessThan(5_000);
+    expect(atLoad.shape).toEqual(ENHANCED_SHAPE);
+
+    const form = page.getByRole("form", { name: "Search flights" });
+    await expect(form.getByRole("group", { name: "Passengers" })).toBeVisible({
+      timeout: FALLBACK_BUDGET_MS,
+    });
+    expect(await page.evaluate(formShape)).toEqual(PLAIN_SHAPE);
+    await expect(form.getByRole("radio", { name: "Multi-city" })).toBeHidden();
+    expect(
+      await page.evaluate(() =>
+        document.querySelector("form[data-search-form]")?.hasAttribute("data-enhanced"),
+      ),
+    ).toBe(false);
+    expect(await reflowsOnPhone(page), "no sideways scrolling").toBe(true);
+    await guards.checkA11y(page);
+
+    // The plain GET form searches without its module.
+    const depart = departureDate(SEARCH_DAYS_AHEAD);
+    await form.getByRole("textbox", { name: "From", exact: true }).fill("MAD");
+    await form.getByRole("textbox", { name: "To", exact: true }).fill("PAR");
+    await form.locator("#search-depart").fill(depart);
+    await form.locator("#search-return").fill(departureDate(SEARCH_DAYS_AHEAD + 7));
+    await form.getByRole("button", { name: "Search flights" }).click();
+    await page.waitForURL(/\/search\.html\?/);
+    const sent = new URL(page.url()).searchParams;
+    expect(
+      Object.fromEntries(["trip", "from", "to", "depart", "adults"].map((name) => [name, sent.get(name)])),
+    ).toEqual({
+      trip: "return",
+      from: "MAD",
+      to: "PAR",
+      depart,
+      adults: "1",
+    });
+  });
+
+  test("home with its module: the plain form never shows, before or after the timer's 5 s [OFE-031 AC3]", async ({
+    page,
+    guards,
+  }) => {
+    // Every frame until 6 s after the start: whether the plain form's fieldset ever showed on the form.
+    await page.addInitScript(() => {
+      const seen = { plain: false };
+      Object.assign(window, { __vxPlainSeen: seen });
+      const sample = () => {
+        const panel = document.querySelector("main form[data-search-form] [data-passenger-panel]");
+        if (panel && getComputedStyle(panel).display !== "none") {
+          seen.plain = true;
+        }
+        if (performance.now() < 6_000) {
+          requestAnimationFrame(sample);
+        }
+      };
+      requestAnimationFrame(sample);
+    });
+    await page.goto("/");
+    await expect(page.locator('main form[data-search-form][data-enhanced="true"]')).toBeVisible();
+    await page.waitForFunction(() => performance.now() > 6_000, undefined, { timeout: FALLBACK_BUDGET_MS });
+    expect(await page.evaluate(formShape)).toEqual(ENHANCED_SHAPE);
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { __vxPlainSeen: { plain: boolean } }).__vxPlainSeen.plain,
+      ),
+      "the fieldset was shown",
+    ).toBe(false);
+    await guards.checkA11y(page);
+  });
+
+  test("results with its script blocked: the form in the closed panel waits; opened, the plain form within seconds [OFE-031 AC3]", async ({
+    page,
+    guards,
+  }) => {
+    await withoutScripts(page);
+    await page.goto("/search.html");
+    const panel = page.locator("main details[data-search-panel]");
+    // Long after the first paint the closed panel's form has kept its enhanced shape (its timer paused)...
+    await page.waitForFunction(() => performance.now() > 6_000, undefined, { timeout: FALLBACK_BUDGET_MS });
+    await panel.locator("summary").click();
+    expect(await page.evaluate(formShape)).toEqual(ENHANCED_SHAPE);
+    // ...and its module never enhances it: the plain form within seconds of opening.
+    await expect(panel.getByRole("group", { name: "Passengers" })).toBeVisible({
+      timeout: FALLBACK_BUDGET_MS,
+    });
+    expect(await page.evaluate(formShape)).toEqual(PLAIN_SHAPE);
+    await guards.checkA11y(page);
   });
 });

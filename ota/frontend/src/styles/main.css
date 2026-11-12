@@ -105,18 +105,45 @@
    * the plain form back. Without JavaScript (`scripting: none`) the plain form shows, as before. `!important` and the
    * attribute selectors are needed to win over the `[hidden]` rule of Tailwind's preflight, which is `!important` in
    * this same layer.
+   *
+   * A module that never mounts (its script failed to load, or threw before mounting) must not leave that shape, with a
+   * passenger toggle that does nothing, so the shape lasts 5 seconds (OFE-031): the form's own animation, which no
+   * script has to start, sets the --vx-search-* properties after that delay, and the three rules then give the plain
+   * form (the fieldset shown, the toggle and "Multi-city" not). A form the module marks `data-enhanced` in time no
+   * longer matches, so the animation and its plain shape never apply and nothing moves. The properties are read with
+   * var() because an animation cannot override the `!important` declarations. The results page's form is in the
+   * closed "Change search" panel until the traveller opens it, and its module enhances it then (pages/search.js), so
+   * its 5 seconds pause while the panel is closed: the open panel never shows the plain form before the module mounts.
    */
   @media (scripting: enabled) {
+    form[data-search-form]:not([data-enhanced]) {
+      animation: vx-search-form-plain 0s linear 5s forwards;
+    }
+
+    details:not([open]) > form[data-search-form] {
+      animation-play-state: paused;
+    }
+
     form[data-search-form]:not([data-enhanced]) [data-passenger-panel] {
-      display: none;
+      display: var(--vx-search-panel, none);
     }
 
     form[data-search-form]:not([data-enhanced]) [data-passenger-toggle][hidden] {
-      display: inline-block !important;
+      display: var(--vx-search-toggle, inline-block) !important;
     }
 
     form[data-search-form]:not([data-enhanced]) [data-trip-multi][hidden] {
-      display: inline-flex !important;
+      display: var(--vx-search-multi, inline-flex) !important;
+    }
+  }
+
+  /* The plain search form, once the 5 seconds above have passed without the module. */
+  @keyframes vx-search-form-plain {
+    from,
+    to {
+      --vx-search-panel: block;
+      --vx-search-toggle: none;
+      --vx-search-multi: none;
     }
   }
 }

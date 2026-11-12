@@ -1,7 +1,8 @@
 // @vitest-environment node
 // The pinned Lighthouse script (scripts/lighthouse.mjs, README §9, OFE-027): its options, the results page's address,
-// the figures it takes from Lighthouse's flow result, the medians and the targets of README §9. The measurement itself
-// needs a browser and a running storefront, so it is run by hand (ota/docs/storefront-accessibility.md §3).
+// the figures it takes from Lighthouse's flow result, the medians and the targets of README §9, the phone widths
+// (OFE-030) and the signed-in customer of `--signed-in` (OFE-031). The measurement itself needs a browser and a running
+// storefront, so it is run by hand (ota/docs/storefront-accessibility.md §3).
 import { describe, expect, it } from "vitest";
 
 import {
@@ -14,15 +15,22 @@ import {
   formatReport,
   median,
   missedTargets,
+  newCustomer,
   parseOptions,
   resultsPath,
 } from "../scripts/lighthouse.mjs";
 
 /**
  * A flow result as Lighthouse's user-flow API gives it, with the audits the script reads.
- * @param {{ cls?: number, inp?: number | null, shifts?: Array<{ score: number, selector?: string }> }} [options]
+ * @param {{ cls?: number, inp?: number | null, shifts?: Array<{ score: number, selector?: string }>, session?: number }} [options]
+ *   `session`: the status of an auth.getSession request in the navigation (none without it)
  */
-function flowResult({ cls = 0.012, inp = 42, shifts = [{ score: 0.012, selector: "body > footer" }] } = {}) {
+function flowResult({
+  cls = 0.012,
+  inp = 42,
+  shifts = [{ score: 0.012, selector: "body > footer" }],
+  session = /** @type {number | undefined} */ (undefined),
+} = {}) {
   return {
     steps: [
       {
@@ -42,6 +50,16 @@ function flowResult({ cls = 0.012, inp = 42, shifts = [{ score: 0.012, selector:
                   { resourceType: "Document", transferSize: 6_000 },
                   { resourceType: "Font", transferSize: 25_000 },
                   { resourceType: "Font", transferSize: 24_000 },
+                  ...(session === undefined
+                    ? []
+                    : [
+                        {
+                          resourceType: "Fetch",
+                          transferSize: 600,
+                          url: "http://127.0.0.1:4173/api/v1/auth/session",
+                          statusCode: session,
+                        },
+                      ]),
                 ],
               },
             },
@@ -73,6 +91,7 @@ describe("the Lighthouse script", () => {
       pages: ["home", "results"],
       runs: 3,
       widths: [412],
+      signedIn: false,
       daysAhead: 69,
       chrome: DEFAULT_CHROME,
       json: null,
@@ -145,6 +164,80 @@ describe("the Lighthouse script", () => {
     expect(
       formatReport([at(412, 1, 0)], { lighthouse: "13.5.0", browser: "x", baseUrl: "y", date: "z" }),
     ).toContain("| **Home, median** |");
+  });
+
+  it("[OFE-031 AC1] measures as a signed-in customer on request, and says so in the report", () => {
+    expect(parseOptions(["--", "--signed-in", "--width", "360"], {})).toMatchObject({
+      signedIn: true,
+      widths: [360],
+    });
+    expect(() => parseOptions(["--signed-in=yes"], {})).toThrow();
+    const signedIn = (/** @type {360 | 412} */ width, /** @type {number} */ run) => ({
+      ...figuresOf(flowResult({ cls: 0, shifts: [] }), "results", run),
+      width,
+      signedIn: true,
+    });
+    const report = formatReport([signedIn(412, 1), signedIn(360, 1)], {
+      lighthouse: "13.5.0",
+      browser: "HeadlessChrome/153.0.8010.12",
+      baseUrl: DEFAULT_BASE_URL,
+      date: "a date",
+      signedIn: true,
+    });
+    const lines = report.split("\n");
+    expect(lines[0]).toBe(
+      "Lighthouse 13.5.0 (user flow, default mobile configuration), HeadlessChrome/153.0.8010.12, " +
+        "http://127.0.0.1:4173, a date, a signed-in customer",
+    );
+    expect(lines.slice(4, 8)).toEqual([
+      "| Results, 412 px, signed in | 1 | 0.97 | 1.51 s | 1.90 s | 0 | 0 ms | 42 ms |",
+      "| **Results, 412 px, signed in, median** | | 0.97 | 1.51 s | **1.90 s** | **0** | 0 ms | **42 ms** |",
+      "| Results, 360 px, signed in | 1 | 0.97 | 1.51 s | 1.90 s | 0 | 0 ms | 42 ms |",
+      "| **Results, 360 px, signed in, median** | | 0.97 | 1.51 s | **1.90 s** | **0** | 0 ms | **42 ms** |",
+    ]);
+    expect(report).toContain("- Results, 360 px, signed in 1: 161.1 KB transferred");
+    // At the default width alone: "Results, signed in".
+    expect(
+      formatReport([signedIn(412, 1)], { lighthouse: "x", browser: "x", baseUrl: "x", date: "x" }),
+    ).toContain("| **Results, signed in, median** |");
+  });
+
+  it("[OFE-031 AC1] reads whether the navigation was signed in from its auth.getSession request, and reports it", () => {
+    expect(figuresOf(flowResult({ session: 200 }), "home", 1).session).toBe(200);
+    expect(figuresOf(flowResult({ session: 401 }), "home", 1).session).toBe(401);
+    // No such request (an OTA without customer accounts): no status, and the report line as before.
+    expect(figuresOf(flowResult(), "home", 1)).not.toHaveProperty("session");
+    const report = formatReport(
+      [
+        { ...figuresOf(flowResult({ session: 200, shifts: [] }), "home", 1), signedIn: true },
+        { ...figuresOf(flowResult({ shifts: [] }), "home", 2), signedIn: true },
+      ],
+      { lighthouse: "x", browser: "x", baseUrl: "x", date: "x", signedIn: true },
+    );
+    expect(report).toContain(
+      "- Home, signed in 1: 161.1 KB transferred, fonts 47.9 KB; auth.getSession 200; layout shifts: no layout shift",
+    );
+    expect(report).toContain(
+      "- Home, signed in 2: 161.1 KB transferred, fonts 47.9 KB; layout shifts: no layout shift",
+    );
+  });
+
+  it("[OFE-031 AC1] makes a new customer per invocation: a unique example.com address and a strong random password", () => {
+    const first = newCustomer();
+    const second = newCustomer();
+    expect(first.email).toMatch(/^lighthouse-[0-9a-f]{16}@example\.com$/);
+    expect(second.email).not.toBe(first.email);
+    expect(second.password).not.toBe(first.password);
+    // Long, with upper and lower case letters, a digit and a symbol: no password rule of an OTA refuses it.
+    expect(first.password.length).toBeGreaterThanOrEqual(30);
+    for (const rule of [/[A-Z]/, /[a-z]/, /\d/, /[^A-Za-z0-9]/]) {
+      expect(first.password).toMatch(rule);
+    }
+    expect(first).toMatchObject({ firstName: "Lighthouse", lastName: "Customer" });
+    // The random source decides everything that varies.
+    const fixed = newCustomer((size) => Buffer.alloc(size, 7));
+    expect(fixed.email).toBe("lighthouse-0707070707070707@example.com");
+    expect(fixed.password).toBe(`Lh-${Buffer.alloc(24, 7).toString("base64url")}-9`);
   });
 
   it("[OFE-027] searches Madrid to Paris one way for one adult, the given number of days ahead", () => {
