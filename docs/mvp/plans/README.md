@@ -35,7 +35,7 @@ flowchart TD
 - **Decisions flow down.** [`decisions.md`](../decisions.md) wins over everything. The ADRs refine it, the implementation plans apply it per milestone, and the task blocks turn it into work.
 - **Task blocks are the single source of scope.** Each task is defined once, in one agent task plan. The solo plans and the roadmap reference task ids and never redefine a task.
 - **Dependencies cross files.** Component tasks depend on `X-` tasks, and some platform and OTA tasks depend on each other (for example OBE-003 on PBE-002, and OAD-016 on PFE-017). A few platform tasks carry a **Gate** that names an OTA feature (PBE-035, PBE-036, PAD-011, PFE-019).
-- **The roadmap combines them.** It schedules all 334 tasks (317 at its re-baseline of 2026-11-06, then OFE-029, X-041 and OFE-030 of 2026-11-10, seven more at its re-baseline of 2026-11-11, OBE-101, which OBE-088 added the same day, five more at its second re-baseline of that day, and X-042, which X-032 added the same day) in one calendar, maps the two solo plans' week numbers to calendar weeks, and keeps the milestone status, outside steps and change log.
+- **The roadmap combines them.** It schedules all 335 tasks (317 at its re-baseline of 2026-11-06, then OFE-029, X-041 and OFE-030 of 2026-11-10, seven more at its re-baseline of 2026-11-11, OBE-101, which OBE-088 added the same day, five more at its second re-baseline of that day, X-042, which X-032 added the same day, and X-043, which X-031 added on 2026-11-12) in one calendar, maps the two solo plans' week numbers to calendar weeks, and keeps the milestone status, outside steps and change log.
 
 ## 3. Which file to open
 
@@ -98,14 +98,14 @@ Calendars: **31 working weeks** with AI agents (M6 gets a fourth week), **81 wor
 
 | Plan | Tasks | Agent-hours | Solo days |
 |---|---|---|---|
-| Foundation (`X-`) | 42 | 178 | 44.5 |
+| Foundation (`X-`) | 43 | 180 | 45 |
 | Platform (`PBE-` 74, `PFE-` 30, `PAD-` 17) | 121 | 602 | 150.5 |
 | OTA (`OBE-` 102, `OFE-` 31, `OAD-` 22, `SDK-` 16) | 171 | 756 | 189 |
-| **Total** | **334** | **1,536** | **384** |
+| **Total** | **335** | **1,538** | **384.5** |
 
 Calendars: **31 working weeks** with AI agents (M6's buffer falls from 20 h to 8 h, and to 7 h with X-042), **82 working weeks** without (a calendar week C79 holds the OTA's new Week 39d and the platform's new Week 30d before the launch block, and PBE-073 joins the platform's Week 30c in C78; [`roadmap.md`](roadmap.md) §1.3). The foundation row and the totals include X-042 (M, 4 h, 1 solo day), which X-032 added the same day (`tasks: 334  estimated hours: 1536`): it took the launch block's ½ day of buffer and ran ½ day over it until the lead confirmed its milestone ([`roadmap.md`](roadmap.md) §4.5).
 
-**Re-baseline (2026-11-12, [ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md) item 6, lead decision (19h) of 2026-11-12, approved by the owner; FIX-W50-SHARED).** `node tools/plan-lint/plan-lint.mjs` still prints `tasks: 334  estimated hours: 1536`, `ERRORS: 0`, and the same critical path, so the table above stands. X-042 keeps its M6 tag and runs after the launch, as PBE-064 does: with agents M6's buffer is 8 h again, without agents the launch block keeps its ½ day of buffer (27 buffer days); both calendars keep their 31 and 82 weeks ([`roadmap.md`](roadmap.md) §1 and §4.5).
+**Re-baseline (2026-11-12, [ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md) item 6, lead decision (19h) of 2026-11-12, approved by the owner; FIX-W50-SHARED).** `node tools/plan-lint/plan-lint.mjs` still prints `tasks: 334  estimated hours: 1536`, `ERRORS: 0`, and the same critical path, so the table above stands. X-042 keeps its M6 tag and runs after the launch, as PBE-064 does: with agents M6's buffer is 8 h again, without agents the launch block keeps its ½ day of buffer (27 buffer days); both calendars keep their 31 and 82 weeks ([`roadmap.md`](roadmap.md) §1 and §4.5). The table above includes X-043 (S, 2 h, ½ solo day; `systemctl mask` for the VM's units), which X-031 added the same day (`tasks: 335  estimated hours: 1538`): with agents it leaves M6 7 h of buffer, and without agents it takes the launch block's ½ day of buffer (26.5 buffer days), until the lead confirms its place ([`roadmap.md`](roadmap.md) §4.5).
 
 ## 6. Changing a plan
 
