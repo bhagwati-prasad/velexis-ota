@@ -6262,6 +6262,31 @@ paths:
 
         **Caching.** Never cache: `cache: "no-store"`. Call it from a server action or route handler (secret key) or
         from the browser (publishable key).
+
+
+        **Long bodies through `api.ota.example.com`.** The edge's web application firewall refuses a request before the
+        API sees it when its arguments (the body's JSON values and the query, each with its name) number 1,000 or more
+        (`400 INVALID_REQUEST`, rule 200007) or exceed 128 KiB, names and values together, which it does not inspect
+        (`413` without a body, rule 200008); both rules are in `deploy/caddy/waf/coraza.conf` and block on that host
+        unless `VELEXIS_WAF_ENGINE` sets it to detect only (`docs/mvp/deployment-single-vm.md` §6). It counts one
+        argument per JSON value and one per array and names each by its whole path
+        (`json.amadeusFlightOffers.0.itineraries.0.segments.0.departure.iataCode`), so the arguments of an Amadeus body
+        take about three times its bytes and usually reach the count of 1,000 first. This concerns
+        `amadeusFlightOffers` most, which only console scope sends (a secret key with a staff token or with
+        `X-Velexis-Scope: console`): six of the offers of Amadeus's own Flight Offers Search example (five segments for
+        two travellers each, about 3 KB) make about 880 arguments and pass, but six offers of two segments each way for
+        three travellers (about 25 KB) make more than 1,100 and are refused: price fewer offers per call. A body of
+        `offerIds` usually stays far below both (nine travellers with documents and 36 services chosen by `optionId`
+        make about 235 arguments), but a service chosen explicitly (type, offer, traveller, segments, quantity) counts
+        several arguments: eighteen travellers with documents and the 108 services this schema takes, chosen
+        explicitly, make about 1,140 and are refused, through a storefront's `/api` too, whose firewall blocks with the
+        same rules. Choose services by `optionId`.
+
+
+        A call through that host whose arguments reach either limit gets the `400` or the `413`, and nothing is priced
+        or stored. The OTA admin is not affected (`deploy/caddy/Caddyfile`): its staff's browsers reach
+        `admin.ota.example.com`, whose firewall only detects (`DetectionOnly`, with a body limit of 10 MB), and its
+        server calls this API on the loopback (`127.0.0.1:4000`) with its service key, never through Caddy.
       tags:
         - Flight pricing
       security:
@@ -12851,6 +12876,27 @@ paths:
         operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
         (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
         key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+
+
+        **Long bodies through `api.ota.example.com`.** The edge's web application firewall refuses a request before the
+        API sees it when its arguments (the body's JSON values and the query, each with its name) number 1,000 or more
+        (`400 INVALID_REQUEST`, rule 200007) or exceed 128 KiB, names and values together, which it does not inspect
+        (`413` without a body, rule 200008); both rules are in `deploy/caddy/waf/coraza.conf` and block on that host
+        unless `VELEXIS_WAF_ENGINE` sets it to detect only (`docs/mvp/deployment-single-vm.md` §6). It counts one
+        argument per JSON value and one per array and names each by its whole path
+        (`json.flightOffers.0.travelerPricings.0.fareDetailsBySegment.0.segmentId`), so the arguments of an Amadeus body
+        take about three times its bytes and usually reach the count of 1,000 first. A usual change stays far below both
+        (eighteen travellers with a document and a contact each, three contacts and five remarks make about 430
+        arguments), but long lists reach the count: 200 general and 200 airline remarks make about 1,400 arguments, and
+        `flightOffers` (up to six) count most, six offers of two segments each way for three travellers (about 25 KB)
+        making more than 1,100.
+
+
+        A call by API key through that host (a `console:automation` key, or a secret key with a staff token) whose
+        arguments reach either limit gets the `400` or the `413`, and nothing is sent to Amadeus or changed. The OTA
+        admin is not affected (`deploy/caddy/Caddyfile`): its staff's browsers reach `admin.ota.example.com`, whose
+        firewall only detects (`DetectionOnly`, with a body limit of 10 MB), and its server calls this API on the
+        loopback (`127.0.0.1:4000`) with its service key, never through Caddy.
       tags:
         - Console bookings
       security:
@@ -15179,6 +15225,24 @@ paths:
         operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
         (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
         key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+
+
+        **Long bodies through `api.ota.example.com`.** The edge's web application firewall refuses a request before the
+        API sees it when its arguments (the body's JSON values and the query, each with its name) number 1,000 or more
+        (`400 INVALID_REQUEST`, rule 200007) or exceed 128 KiB, names and values together, which it does not inspect
+        (`413` without a body, rule 200008); both rules are in `deploy/caddy/waf/coraza.conf` and block on that host
+        unless `VELEXIS_WAF_ENGINE` sets it to detect only (`docs/mvp/deployment-single-vm.md` §6). It counts one
+        argument per JSON value and one per array and names each by its whole path
+        (`json.amadeus.originDestinations.0.departureDateTimeRange.date`), so the arguments of an Amadeus body take
+        about three times its bytes and usually reach the count of 1,000 first. A search body stays far below both: six
+        legs with connection points, nine travellers and cabin and carrier filters make about 145 arguments.
+
+
+        A call by API key through that host (a `console:automation` key, or a secret key with a staff token) whose
+        arguments reach either limit gets the `400` or the `413`, and nothing is sent to Amadeus. The OTA admin is not
+        affected (`deploy/caddy/Caddyfile`): its staff's browsers reach `admin.ota.example.com`, whose firewall only
+        detects (`DetectionOnly`, with a body limit of 10 MB), and its server calls this API on the loopback
+        (`127.0.0.1:4000`) with its service key, never through Caddy.
       tags:
         - Console Amadeus
       security:
@@ -15670,6 +15734,24 @@ paths:
         operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
         (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
         key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+
+
+        **Long bodies through `api.ota.example.com`.** The edge's web application firewall refuses a request before the
+        API sees it when its arguments (the body's JSON values and the query, each with its name) number 1,000 or more
+        (`400 INVALID_REQUEST`, rule 200007) or exceed 128 KiB, names and values together, which it does not inspect
+        (`413` without a body, rule 200008); both rules are in `deploy/caddy/waf/coraza.conf` and block on that host
+        unless `VELEXIS_WAF_ENGINE` sets it to detect only (`docs/mvp/deployment-single-vm.md` §6). It counts one
+        argument per JSON value and one per array and names each by its whole path
+        (`json.amadeus.originDestinations.0.departureDateTime.date`), so the arguments of an Amadeus body take about
+        three times its bytes and usually reach the count of 1,000 first. A body stays far below both: six legs with
+        connection points and carriers and nine travellers make about 120 arguments.
+
+
+        A call by API key through that host (a `console:automation` key, or a secret key with a staff token) whose
+        arguments reach either limit gets the `400` or the `413`, and nothing is sent to Amadeus. The OTA admin is not
+        affected (`deploy/caddy/Caddyfile`): its staff's browsers reach `admin.ota.example.com`, whose firewall only
+        detects (`DetectionOnly`, with a body limit of 10 MB), and its server calls this API on the loopback
+        (`127.0.0.1:4000`) with its service key, never through Caddy.
       tags:
         - Console Amadeus
       security:
@@ -15840,6 +15922,25 @@ paths:
         operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
         (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
         key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+
+
+        **Long bodies through `api.ota.example.com`.** The edge's web application firewall refuses a request before the
+        API sees it when its arguments (the body's JSON values and the query, each with its name) number 1,000 or more
+        (`400 INVALID_REQUEST`, rule 200007) or exceed 128 KiB, names and values together, which it does not inspect
+        (`413` without a body, rule 200008); both rules are in `deploy/caddy/waf/coraza.conf` and block on that host
+        unless `VELEXIS_WAF_ENGINE` sets it to detect only (`docs/mvp/deployment-single-vm.md` §6). It counts one
+        argument per JSON value and one per array and names each by its whole path
+        (`json.amadeus.data.flightOffers.0.itineraries.0.segments.0.departure.iataCode`), so the arguments of an Amadeus
+        body take about three times its bytes and usually reach the count of 1,000 first. One offer stays below both
+        (one of the offers of Amadeus's own Flight Offers Search example, five segments for two travellers, makes about
+        150 arguments); several large offers in one body can reach the count.
+
+
+        A call by API key through that host (a `console:automation` key, or a secret key with a staff token) whose
+        arguments reach either limit gets the `400` or the `413`, and nothing is sent to Amadeus. The OTA admin is not
+        affected (`deploy/caddy/Caddyfile`): its staff's browsers reach `admin.ota.example.com`, whose firewall only
+        detects (`DetectionOnly`, with a body limit of 10 MB), and its server calls this API on the loopback
+        (`127.0.0.1:4000`) with its service key, never through Caddy.
       tags:
         - Console Amadeus
       security:
@@ -16060,6 +16161,26 @@ paths:
         operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
         (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
         key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+
+
+        **Long bodies through `api.ota.example.com`.** The edge's web application firewall refuses a request before the
+        API sees it when its arguments (the body's JSON values and the query, each with its name) number 1,000 or more
+        (`400 INVALID_REQUEST`, rule 200007) or exceed 128 KiB, names and values together, which it does not inspect
+        (`413` without a body, rule 200008); both rules are in `deploy/caddy/waf/coraza.conf` and block on that host
+        unless `VELEXIS_WAF_ENGINE` sets it to detect only (`docs/mvp/deployment-single-vm.md` §6). It counts one
+        argument per JSON value and one per array and names each by its whole path
+        (`json.amadeus.data.flightOffers.0.itineraries.0.segments.0.departure.iataCode`), so the arguments of an Amadeus
+        body take about three times its bytes and usually reach the count of 1,000 first. The offers count most: six of
+        the offers of Amadeus's own Flight Offers Search example (five segments for two travellers each, about 3 KB)
+        make about 880 arguments and pass, but six offers of two segments each way for three travellers (about 25 KB)
+        make more than 1,100 and are refused: price fewer offers per call.
+
+
+        A call by API key through that host (a `console:automation` key, or a secret key with a staff token) whose
+        arguments reach either limit gets the `400` or the `413`, and nothing is sent to Amadeus. The OTA admin is not
+        affected (`deploy/caddy/Caddyfile`): its staff's browsers reach `admin.ota.example.com`, whose firewall only
+        detects (`DetectionOnly`, with a body limit of 10 MB), and its server calls this API on the loopback
+        (`127.0.0.1:4000`) with its service key, never through Caddy.
       tags:
         - Console Amadeus
       security:
@@ -16341,6 +16462,25 @@ paths:
         operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
         (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
         key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+
+
+        **Long bodies through `api.ota.example.com`.** The edge's web application firewall refuses a request before the
+        API sees it when its arguments (the body's JSON values and the query, each with its name) number 1,000 or more
+        (`400 INVALID_REQUEST`, rule 200007) or exceed 128 KiB, names and values together, which it does not inspect
+        (`413` without a body, rule 200008); both rules are in `deploy/caddy/waf/coraza.conf` and block on that host
+        unless `VELEXIS_WAF_ENGINE` sets it to detect only (`docs/mvp/deployment-single-vm.md` §6). It counts one
+        argument per JSON value and one per array and names each by its whole path
+        (`json.amadeus.data.flightOffers.0.itineraries.0.segments.0.departure.iataCode`), so the arguments of an Amadeus
+        body take about three times its bytes and usually reach the count of 1,000 first. One offer for two travellers
+        with documents, a contact and a remark makes about 210 arguments; six of the offers of Amadeus's own Flight
+        Offers Search example for nine travellers with documents (about 23 KB) make more than 1,000 and are refused.
+
+
+        A call by API key through that host (a `console:automation` key, or a secret key with a staff token) whose
+        arguments reach either limit gets the `400` or the `413`, and nothing is sent to Amadeus. The OTA admin is not
+        affected (`deploy/caddy/Caddyfile`): its staff's browsers reach `admin.ota.example.com`, whose firewall only
+        detects (`DetectionOnly`, with a body limit of 10 MB), and its server calls this API on the loopback
+        (`127.0.0.1:4000`) with its service key, never through Caddy.
       tags:
         - Console Amadeus
       security:
@@ -16621,6 +16761,23 @@ paths:
         operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
         (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
         key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+
+
+        **Long bodies through `api.ota.example.com`.** The edge's web application firewall refuses a request before the
+        API sees it when its arguments (the body's JSON values and the query, each with its name) number 1,000 or more
+        (`400 INVALID_REQUEST`, rule 200007) or exceed 128 KiB, names and values together, which it does not inspect
+        (`413` without a body, rule 200008); both rules are in `deploy/caddy/waf/coraza.conf` and block on that host
+        unless `VELEXIS_WAF_ENGINE` sets it to detect only (`docs/mvp/deployment-single-vm.md` §6). It counts one
+        argument per JSON value and one per array and names each by its whole path
+        (`json.amadeus.data.formOfPayments.0.other.method`), so the arguments of an Amadeus body take about three times
+        its bytes and usually reach the count of 1,000 first. An issue body (its forms of payment) stays far below both.
+
+
+        A call by API key through that host (a `console:automation` key, or a secret key with a staff token) whose
+        arguments reach either limit gets the `400` or the `413`, and nothing is sent to Amadeus. The OTA admin is not
+        affected (`deploy/caddy/Caddyfile`): its staff's browsers reach `admin.ota.example.com`, whose firewall only
+        detects (`DetectionOnly`, with a body limit of 10 MB), and its server calls this API on the loopback
+        (`127.0.0.1:4000`) with its service key, never through Caddy.
       tags:
         - Console Amadeus
       security:
@@ -17001,6 +17158,27 @@ paths:
         operation's permission in `platform.api_keys.scopes` — otherwise `403 SCOPE_NOT_ALLOWED`
         (`details.requiredScope`) or `403 FORBIDDEN` (`details.requiredPermission`); such calls are audited as the API
         key (see ConsoleApiKeyScope). A key scoped `storefront` is refused even with a staff token.
+
+
+        **Long bodies through `api.ota.example.com`.** The edge's web application firewall refuses a request before the
+        API sees it when its arguments (the body's JSON values and the query, each with its name) number 1,000 or more
+        (`400 INVALID_REQUEST`, rule 200007) or exceed 128 KiB, names and values together, which it does not inspect
+        (`413` without a body, rule 200008); both rules are in `deploy/caddy/waf/coraza.conf` and block on that host
+        unless `VELEXIS_WAF_ENGINE` sets it to detect only (`docs/mvp/deployment-single-vm.md` §6). It counts one
+        argument per JSON value and one per array and names each by its whole path
+        (`json.amadeus.data.travelers.0.name.lastName`), so the arguments of an Amadeus body take about three times its
+        bytes and usually reach the count of 1,000 first. A usual change stays far below both (eighteen travellers with
+        a document and a contact each, three contacts and five remarks make about 430 arguments), but long lists reach
+        the count: 200 general and 200 airline remarks make about 1,400 arguments, and `flightOffers` count as in a
+        pricing request, where six offers of two segments each way for three travellers (about 25 KB) make more than
+        1,100.
+
+
+        A call by API key through that host (a `console:automation` key, or a secret key with a staff token) whose
+        arguments reach either limit gets the `400` or the `413`, and nothing is sent to Amadeus. The OTA admin is not
+        affected (`deploy/caddy/Caddyfile`): its staff's browsers reach `admin.ota.example.com`, whose firewall only
+        detects (`DetectionOnly`, with a body limit of 10 MB), and its server calls this API on the loopback
+        (`127.0.0.1:4000`) with its service key, never through Caddy.
       tags:
         - Console Amadeus
       security:
