@@ -53,24 +53,58 @@ export const OTA_BACKEND_QUEUES = Object.freeze([...OTA_QUEUES, PLATFORM_TENANT_
 /** A queue this backend opens. */
 export type OtaBackendQueueName = (typeof OTA_BACKEND_QUEUES)[number];
 
-const DAY_SECONDS = 24 * 60 * 60;
+const HOUR_SECONDS = 60 * 60;
+const DAY_SECONDS = 24 * HOUR_SECONDS;
 
 /** Failed jobs are kept 30 days, for the admin queue views and investigations (ADR-0009 item 7). */
 export const KEEP_FAILED_JOBS: KeepJobs = Object.freeze({ age: 30 * DAY_SECONDS });
-/** Completed jobs are kept 1 day (ADR-0009 item 7). */
+/** Completed jobs are kept 1 day (ADR-0009 item 7); those of `ota-maintenance` 1 hour (below). */
 export const KEEP_COMPLETED_JOBS: KeepJobs = Object.freeze({ age: DAY_SECONDS });
+
+/**
+ * The completed jobs of `ota-maintenance`, the schedulers' `fan-out` jobs and their per-tenant jobs, are kept 1 hour
+ * (ADR-0009 item 7, revision of 2026-11-11, OBE-101). Every active tenant adds about 5 260 of them a day, so a day of
+ * them grew Redis's memory with the tenants (ota/docs/performance.md §6 item 4); an hour of them keeps a tenant's at
+ * about 0.3 MiB. The hour keeps the deduplication of their deterministic ids (`<task>:<tenantId>:<bucket>`,
+ * jobs/fan-out.ts): only a run of the same scheduler iteration builds an id again (a retried fan-out, a stalled job, a
+ * retried job that adds its continuation again), and it comes within the backoffs (RETRY_BACKOFF_TOTAL_SECONDS,
+ * 7.5 minutes) and the waits for a worker, which the on-VM check alerts on above 10 minutes each: 47.5 minutes at most
+ * before an alert. BullMQ removes a queue's completed jobs older than the age of each job that completes, so every
+ * job of the queue carries this one.
+ */
+export const KEEP_COMPLETED_MAINTENANCE_JOBS: KeepJobs = Object.freeze({ age: HOUR_SECONDS });
+
+/** The attempts of a job and the first delay of their exponential backoff (ADR-0009 item 7). */
+const ATTEMPTS = 5;
+const BACKOFF_DELAY_MS = 30_000;
+
+/**
+ * The backoffs of a job's retries added up: 30 + 60 + 120 + 240 s = 7.5 minutes. A job's last attempt is due this long
+ * after its first failed, plus the time the attempts ran and waited for a worker.
+ */
+export const RETRY_BACKOFF_TOTAL_SECONDS =
+  Array.from({ length: ATTEMPTS - 1 }, (_, retry) => BACKOFF_DELAY_MS * 2 ** retry).reduce(
+    (a, b) => a + b,
+    0,
+  ) / 1000;
 
 /**
  * The options of every job this backend adds (ADR-0009 item 7): 5 attempts, exponential backoff from 30 s
  * (30 s, 60 s, 120 s, 240 s), failed jobs kept 30 days and completed ones 1 day. A producer overrides them only with
- * a reason (for example the job id of a provisioning report). An `UnrecoverableError` ends the attempts at once.
+ * a reason (for example the job id of a provisioning report, or the hour of `ota-maintenance`'s completed jobs). An
+ * `UnrecoverableError` ends the attempts at once.
  */
 export const DEFAULT_JOB_OPTIONS: Readonly<DefaultJobOptions> = Object.freeze({
-  attempts: 5,
-  backoff: Object.freeze({ type: "exponential", delay: 30_000 }),
+  attempts: ATTEMPTS,
+  backoff: Object.freeze({ type: "exponential", delay: BACKOFF_DELAY_MS }),
   removeOnFail: KEEP_FAILED_JOBS,
   removeOnComplete: KEEP_COMPLETED_JOBS,
 });
+
+/** How long the completed jobs of `queue` are kept: 1 hour for `ota-maintenance`, 1 day for the others. */
+export function keepCompletedJobs(queue: OtaQueueName): KeepJobs {
+  return queue === OTA_QUEUE.maintenance ? KEEP_COMPLETED_MAINTENANCE_JOBS : KEEP_COMPLETED_JOBS;
+}
 
 /** What a processor of this backend passes to `@Processor(queue, …)`. */
 export interface OtaWorkerOptions {
@@ -81,7 +115,9 @@ export interface OtaWorkerOptions {
 }
 
 /**
- * The worker options of a queue the OTA worker consumes: its concurrency and the retention of ADR-0009.
+ * The worker options of a queue the OTA worker consumes: its concurrency and the retention of ADR-0009
+ * (`keepCompletedJobs`). BullMQ applies them only to a job added without its own `removeOnFail` or
+ * `removeOnComplete`.
  *
  *   @Processor(OTA_QUEUE.tenantOps, otaWorkerOptions(OTA_QUEUE.tenantOps))
  */
@@ -89,6 +125,6 @@ export function otaWorkerOptions(queue: OtaQueueName): OtaWorkerOptions {
   return {
     concurrency: OTA_QUEUE_CONCURRENCY[queue],
     removeOnFail: KEEP_FAILED_JOBS,
-    removeOnComplete: KEEP_COMPLETED_JOBS,
+    removeOnComplete: keepCompletedJobs(queue),
   };
 }

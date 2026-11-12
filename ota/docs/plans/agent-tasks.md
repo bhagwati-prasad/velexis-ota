@@ -2889,8 +2889,8 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - No output, log line or error of the command holds a secret, a ciphertext, a document number or a row id.
 - **Verify:** `pnpm --filter @velexis/ota-backend test cli rewrap && pnpm --filter @velexis/ota-backend exec vitest run --config vitest.int.config.ts test/integration/secrets/rewrap.int.test.ts`
 
-### OBE-101 · Keep Redis within its budget as tenants grow: bound the completed jobs the OTA worker keeps
-- **Status:** todo
+### OBE-101 · Keep Redis within its budget as tenants grow: bound the completed jobs the OTA worker keeps ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-backend
 - **Milestone:** M6
 - **Depends on:** OBE-088

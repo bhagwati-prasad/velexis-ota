@@ -49,7 +49,8 @@
 //   7. the report: p50/p95/p99 per operation, the journeys, the Amadeus calls, the e-mails, the API's and the worker's
 //      CPU and RSS against their `MemoryMax` (768 and 512 MiB), the connections against the pools and
 //      `max_connections`, Redis's memory against the VM's `maxmemory` (512 MiB) and `MEMORY USAGE` of the run's keys
-//      by kind and of its jobs by name at the end (what one completed job holds), the queue latency per queue and per
+//      by kind and of its jobs by name at the end (what one completed job holds), what the completed jobs hold at the
+//      run's rate, each queue's for the retention its jobs carry (OBE-101), the queue latency per queue and per
 //      job against
 //      --queue-budget-s for `ota-ticketing` and `ota-bookings`, the bookings' outcomes, the database and
 //      document storage growth, a timeline per --window-minutes, and the run (date, commit, `nproc`, the load average
@@ -983,10 +984,22 @@ function redisKindOf(key, type) {
   return type === "hash" && !meta && !scheduler ? "bullmqJobs" : "bullmqOther";
 }
 
+/** `removeOnComplete.age` of a job's options as BullMQ stores them (the job hash's `opts`), or undefined. */
+function completedAgeOf(opts) {
+  try {
+    const age = JSON.parse(String(opts ?? "{}"))?.removeOnComplete?.age;
+    return typeof age === "number" && Number.isFinite(age) && age > 0 ? age : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Redis's memory by kind of key of the run's database (redisKindOf), from `MEMORY USAGE` of every key (all samples of
- * a key's values, `SAMPLES 0`): the keys and bytes of each kind, and of the BullMQ jobs by queue and job name (the
- * job hash's `name` field). Key names and job names only, never a job's data or another value.
+ * a key's values, `SAMPLES 0`): the keys and bytes of each kind, of the BullMQ jobs by queue and job name (the job
+ * hash's `name` field), and by queue with the shortest `removeOnComplete.age` its jobs' options carry (the job hash's
+ * `opts`: BullMQ removes a queue's completed jobs older than the age of each job that completes). Key names, job names
+ * and that age only, never a job's data or another value.
  */
 async function redisBreakdown(redis) {
   const kinds = {
@@ -996,6 +1009,7 @@ async function redisBreakdown(redis) {
     application: { keys: 0, bytes: 0 },
   };
   const jobNames = {};
+  const queues = {};
   let cursor = "0";
   do {
     const [next, keys] = await redis.scan(cursor, "COUNT", 1000);
@@ -1005,8 +1019,8 @@ async function redisBreakdown(redis) {
       for (const key of keys) {
         pipeline.type(key);
         pipeline.memory("USAGE", key, "SAMPLES", "0");
-        // A WRONGTYPE answer for a key that is no hash stays in its result: only the job hashes' names are read.
-        pipeline.hget(key, "name");
+        // A WRONGTYPE answer for a key that is no hash stays in its result: only the job hashes' fields are read.
+        pipeline.hmget(key, "name", "opts");
       }
       const results = await pipeline.exec();
       keys.forEach((key, index) => {
@@ -1015,15 +1029,72 @@ async function redisBreakdown(redis) {
         kinds[kind].keys += 1;
         kinds[kind].bytes += bytes;
         if (kind === "bullmqJobs") {
-          const name = `${key.split(":")[1]} ${String(results[3 * index + 2]?.[1] ?? "?")}`;
+          const [jobName, opts] = Array.isArray(results[3 * index + 2]?.[1]) ? results[3 * index + 2][1] : [];
+          const queue = key.split(":")[1];
+          const name = `${queue} ${String(jobName ?? "?")}`;
           const entry = (jobNames[name] ??= { keys: 0, bytes: 0 });
           entry.keys += 1;
           entry.bytes += bytes;
+          const byQueue = (queues[queue] ??= { keys: 0, bytes: 0, completedAgeS: undefined });
+          byQueue.keys += 1;
+          byQueue.bytes += bytes;
+          const age = completedAgeOf(opts);
+          if (age !== undefined) {
+            byQueue.completedAgeS = Math.min(byQueue.completedAgeS ?? age, age);
+          }
         }
       });
     }
   } while (cursor !== "0");
-  return { kinds, jobNames };
+  return { kinds, jobNames, queues };
+}
+
+const DAY_SECONDS = 86_400;
+
+/**
+ * What the completed jobs hold in Redis at the phase's rate (OBE-101): per queue, the jobs completed a minute for the
+ * retention its kept jobs carry (at most a day; a day when none carries one, ADR-0009 item 7) at the bytes of one of
+ * its kept jobs, and a day of them (every queue's retention before OBE-101); then the totals, and the per-tenant jobs
+ * of the schedules (`ota-maintenance`, every name but `fan-out`) per tenant.
+ */
+function completedJobsHeld(redisKinds, jobs, phaseMs, tenants) {
+  const perMinute = (completed) => (completed / phaseMs) * 60_000;
+  const held = (jobsPerMinute, retentionS, bytesPerJob) => ({
+    retentionS,
+    jobsPerMinute: round1(jobsPerMinute),
+    bytesPerJob: Math.round(bytesPerJob),
+    heldMiB: mib(jobsPerMinute * (retentionS / 60) * bytesPerJob),
+    dayMiB: mib(jobsPerMinute * 1_440 * bytesPerJob),
+  });
+  const byQueue = {};
+  let heldBytes = 0;
+  let dayBytes = 0;
+  for (const [queue, q] of Object.entries(jobs.byQueue)) {
+    const kept = redisKinds.queues[queue];
+    const rate = perMinute(q.completed);
+    const bytesPerJob = kept === undefined || kept.keys === 0 ? 0 : kept.bytes / kept.keys;
+    const retentionS = Math.min(kept?.completedAgeS ?? DAY_SECONDS, DAY_SECONDS);
+    byQueue[queue] = held(rate, retentionS, bytesPerJob);
+    heldBytes += rate * (retentionS / 60) * bytesPerJob;
+    dayBytes += rate * 1_440 * bytesPerJob;
+  }
+  const isTenantJob = (key) => key.startsWith("ota-maintenance ") && key !== "ota-maintenance fan-out";
+  const tenantCompleted = Object.entries(jobs.byName)
+    .filter(([key]) => isTenantJob(key))
+    .reduce((n, [, q]) => n + q.completed, 0);
+  const tenantKept = Object.entries(redisKinds.jobNames)
+    .filter(([key]) => isTenantJob(key))
+    .reduce((sum, [, k]) => ({ keys: sum.keys + k.keys, bytes: sum.bytes + k.bytes }), { keys: 0, bytes: 0 });
+  return {
+    byQueue,
+    heldMiB: mib(heldBytes),
+    dayMiB: mib(dayBytes),
+    perTenantScheduled: held(
+      perMinute(tenantCompleted) / tenants,
+      byQueue["ota-maintenance"]?.retentionS ?? DAY_SECONDS,
+      tenantKept.keys === 0 ? 0 : tenantKept.bytes / tenantKept.keys,
+    ),
+  };
 }
 
 /** The worker's `/health/ready` queues: `{queue: {waiting, oldestWaitingSeconds, failedLastHour}}`, or undefined. */
@@ -1564,7 +1635,8 @@ function figuresOf(input) {
       vmMaxmemoryMiB: mib(VM_REDIS_MAXMEMORY),
       maxmemoryMiB: mib(Number(redisEnd.maxmemory ?? 0)),
       // MEMORY USAGE of the run's keys by kind at the end, and of one BullMQ job on average: the completed jobs stay in
-      // Redis for a day (KEEP_COMPLETED_JOBS, ADR-0009 item 7), so a day of jobs at the phase's rate is what they hold.
+      // Redis for the retention their options carry (a day, those of ota-maintenance an hour since OBE-101: ADR-0009
+      // item 7), so that much of each queue's jobs at the phase's rate is what they hold (`completedJobs`).
       byKind: Object.fromEntries(
         Object.entries(redisKinds.kinds).map(([kind, k]) => [kind, { keys: k.keys, MiB: mib(k.bytes) }]),
       ),
@@ -1581,6 +1653,7 @@ function figuresOf(input) {
       jobsPerMinute: round1(
         (Object.values(jobs.byQueue).reduce((n, q) => n + q.completed, 0) / phaseMs) * 60_000,
       ),
+      completedJobs: completedJobsHeld(redisKinds, jobs, phaseMs, options.tenants),
     },
     queues: {
       jobs: jobs.byQueue,
@@ -1730,10 +1803,23 @@ function report(run, figures) {
   add(
     `  by kind (MEMORY USAGE): ${Object.entries(r.byKind)
       .map(([kind, k]) => `${kind} ${k.keys} keys, ${k.MiB} MiB`)
-      .join(
-        "; ",
-      )}; ${r.bytesPerJob ?? "-"} bytes per job kept; ${r.jobsPerMinute} jobs completed a minute, ` +
-      `so a day of completed jobs at this rate holds about ${mib((r.bytesPerJob ?? 0) * r.jobsPerMinute * 1_440)} MiB\n`,
+      .join("; ")}; ${r.bytesPerJob ?? "-"} bytes per job kept; ${r.jobsPerMinute} jobs completed a minute\n`,
+  );
+  const c = r.completedJobs;
+  add(
+    `  completed jobs at this rate, each queue's for the retention its jobs carry: ${c.heldMiB} MiB (a day of each: ` +
+      `${c.dayMiB} MiB): ${Object.entries(c.byQueue)
+        .filter(([, q]) => q.jobsPerMinute > 0)
+        .map(
+          ([queue, q]) =>
+            `${queue} ${q.retentionS} s × ${q.jobsPerMinute}/min × ${q.bytesPerJob} B = ${q.heldMiB} MiB`,
+        )
+        .join("; ")}\n`,
+  );
+  const t = c.perTenantScheduled;
+  add(
+    `  the schedules' per-tenant jobs, per tenant: ${t.jobsPerMinute} a minute, ${t.bytesPerJob} bytes each, kept ` +
+      `${t.retentionS} s: ${t.heldMiB} MiB (a day of them: ${t.dayMiB} MiB)\n`,
   );
   add(
     `  jobs kept by queue and name (jobs, bytes per job): ${Object.entries(r.bytesPerJobByName)

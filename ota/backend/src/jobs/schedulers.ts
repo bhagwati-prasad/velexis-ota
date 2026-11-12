@@ -29,7 +29,7 @@ import {
 import type { Queue } from "bullmq";
 import type { Redis } from "ioredis";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
-import { OTA_QUEUE } from "../common/queues/queue-names";
+import { KEEP_COMPLETED_MAINTENANCE_JOBS, OTA_QUEUE } from "../common/queues/queue-names";
 import { REDIS_BULLMQ_CONNECTION } from "../common/redis/redis.module";
 
 /** The tenant statuses a schedule may target (OADR-0014 points 1 and 4). */
@@ -215,8 +215,9 @@ export interface ScheduleRegistration {
 
 /**
  * Upserts a scheduler for every schedule of `definitions` (its id, its UTC cron pattern, and a `fan-out` job template
- * with `{task: id}` and the queue's default job options) and removes every scheduler of the queue that is not one of
- * them. Upserting an unchanged scheduler keeps its waiting job.
+ * with `{task: id}` and the queue's default job options, but completed jobs kept an hour as every job of
+ * `ota-maintenance`: KEEP_COMPLETED_MAINTENANCE_JOBS, OBE-101) and removes every scheduler of the queue that is not one
+ * of them. Upserting an unchanged scheduler keeps its waiting job.
  */
 export async function registerSchedules(
   queue: SchedulerQueue,
@@ -228,7 +229,7 @@ export async function registerSchedules(
     await queue.upsertJobScheduler(
       definition.id,
       { pattern: definition.pattern, tz: SCHEDULE_TIME_ZONE },
-      { name: FAN_OUT_JOB, data },
+      { name: FAN_OUT_JOB, data, opts: { removeOnComplete: KEEP_COMPLETED_MAINTENANCE_JOBS } },
     );
     registered.push(definition.id);
   }

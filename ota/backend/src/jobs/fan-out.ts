@@ -13,8 +13,12 @@
 // Deterministic ids: `<bucket>` is the minute (epoch minutes, UTC) at which the scheduler iteration was due, which
 // BullMQ keeps with the iteration's job (`opts.prevMillis`); a fan-out job added by other means uses the current
 // minute of `Clock`. Two runs of one iteration (a fan-out retried after it failed half-way, a duplicate) therefore
-// build the same ids, and BullMQ ignores a job whose id it holds already (completed jobs are kept 1 day, ADR-0009), so
-// each tenant gets one job per iteration. Job ids have exactly three `:`-separated parts, which BullMQ allows.
+// build the same ids, and BullMQ ignores a job whose id it holds already, so each tenant gets one job per iteration.
+// It holds a completed job of `ota-maintenance` for an hour (KEEP_COMPLETED_MAINTENANCE_JOBS, ADR-0009 item 7 as
+// revised on 2026-11-11, OBE-101): longer than the retries of an iteration take (7.5 minutes of backoffs and the
+// waits for a worker), and short enough that the jobs every active tenant adds each minute do not fill Redis. Every
+// per-tenant job, continuations included, carries that retention itself (`tenantJob`), as the `fan-out` jobs do
+// (schedulers.ts). Job ids have exactly three `:`-separated parts, which BullMQ allows.
 //
 // One processor consumes the queue (concurrency 2): BullMQ hands any job of a queue to any of its workers, whatever its
 // name, so the fan-out and every schedule's per-tenant jobs share it. A module that owns scheduled work marks an
@@ -28,10 +32,10 @@
 import { InjectQueue, OnWorkerEvent, Processor, WorkerHost } from "@nestjs/bullmq";
 import { Injectable, SetMetadata } from "@nestjs/common";
 import { DiscoveryService, Reflector } from "@nestjs/core";
-import { UnrecoverableError, type Job, type Queue } from "bullmq";
+import { UnrecoverableError, type Job, type KeepJobs, type Queue } from "bullmq";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { Clock } from "../common/clock";
-import { OTA_QUEUE, otaWorkerOptions } from "../common/queues/queue-names";
+import { KEEP_COMPLETED_MAINTENANCE_JOBS, OTA_QUEUE, otaWorkerOptions } from "../common/queues/queue-names";
 import { PlatformCache } from "../tenancy/platform-cache";
 import { PlatformReadRepository } from "../tenancy/platform-read.repository";
 import type { PlatformTenant, TenantStatus } from "../tenancy/platform-read.types";
@@ -73,15 +77,22 @@ export interface TenantJobData {
 export interface TenantJobSpec {
   readonly name: string;
   readonly data: TenantJobData;
-  readonly opts: { readonly jobId: string };
+  readonly opts: { readonly jobId: string; readonly removeOnComplete: KeepJobs };
 }
 
-/** The per-tenant job of `task` for `tenantId`: its name is the task, its id `tenantJobId(…)`. */
+/**
+ * The per-tenant job of `task` for `tenantId`: its name is the task, its id `tenantJobId(…)`, and once completed it is
+ * kept an hour (KEEP_COMPLETED_MAINTENANCE_JOBS) instead of the day of the queue's defaults; its other options
+ * (attempts, backoff, failed jobs kept 30 days) are the defaults of ADR-0009 item 7.
+ */
 export function tenantJob(task: string, tenantId: string, bucket: number, continuation = 0): TenantJobSpec {
   return {
     name: task,
     data: { tenantId, bucket, continuation },
-    opts: { jobId: tenantJobId(task, tenantId, bucket, continuation) },
+    opts: {
+      jobId: tenantJobId(task, tenantId, bucket, continuation),
+      removeOnComplete: KEEP_COMPLETED_MAINTENANCE_JOBS,
+    },
   };
 }
 

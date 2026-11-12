@@ -190,6 +190,7 @@ From packages.redis.io, pinned to 7.4 with an apt preference, configured by [`de
 
 - loopback only, `requirepass` (generated), `protected-mode yes`;
 - `maxmemory 512mb` with `maxmemory-policy noeviction` (BullMQ requirement): **every cache key has a TTL** ([ADR-0009](adr/0009-background-jobs-bullmq.md));
+- BullMQ keeps failed jobs 30 days and completed jobs a day, but the completed jobs of the OTA's `ota-maintenance` (its schedulers' jobs, 5 258 a day per active OTA) an hour ([ADR-0009](adr/0009-background-jobs-bullmq.md) item 7, revised on 2026-11-11 by OBE-101). Measured: about 0.3 MiB per active OTA, and about 9 KiB per booking of the last day for the other queues ([`performance.md`](../../ota/docs/performance.md) §7);
 - AOF with `appendfsync everysec`, no RDB snapshots; `FLUSHALL` and `DEBUG` disabled;
 - logs to journald.
 
@@ -484,7 +485,7 @@ Rough limits for the 4 vCPU / 8 GB start. Measure in the M6 performance sanity c
 | Flight searches | ~5 per second sustained | Amadeus latency and quota, OTA API CPU | Per-tenant rate limits, offer caching in Redis, second CPU pair |
 | Bookings | thousands per day | Amadeus order creation latency, not the VM | — |
 | Connections | ~50 pooled | `max_connections = 100` | PgBouncer (ADR-0004 follow-up) |
-| Redis memory | 512 MB | `noeviction` refuses writes when full | TTL review, raise `maxmemory`, separate Redis for queues |
+| Redis memory | 512 MB. Completed jobs, measured by OBE-101: about 0.3 MiB per active OTA (its scheduled jobs, kept an hour) and about 9 KiB per booking of the last day, so ~300 OTAs with 5 000 bookings a day hold about 130 MiB ([`performance.md`](../../ota/docs/performance.md) §7) | `noeviction` refuses writes when full; the on-VM check alerts above 70 % | TTL review, a shorter retention of completed jobs, raise `maxmemory`, separate Redis for queues |
 | Disk | 160 GB | Storage documents + dumps + journald | Resize disk, move documents to S3 (`STORAGE_DRIVER=s3`) |
 | New certificates | ~50 per week | Let's Encrypt rate limit | DNS-01 wildcard certificate |
 
