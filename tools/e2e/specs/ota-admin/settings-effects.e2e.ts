@@ -6,7 +6,8 @@
 //   every flight 10 % dearer → a booking service fee of €7.50 → the next priced offer carries it in its breakdown and
 //   total → the primary colour changed → the storefront shows it once its own 5-minute copy is gone → a new published
 //   page listed in the footer → the storefront shows it at /p/<slug> and lists it → an e-mail template that does not
-//   compile is refused, line by line, and nothing is saved
+//   compile is refused, line by line, and nothing is saved → 40 offers per search (OAD-021) → the storefront's next
+//   search asks Amadeus for 40 and lists at most 40 → "Use the default" → the next search asks for the API's 150
 //
 // The storefront in the browser. The journey's OTA is its own (`newOwnerWithActiveOta`: a new owner, an office of the
 // test pool): the demo OTA is shared by every storefront journey and must not change. No preview serves the journey
@@ -29,6 +30,12 @@
 // 10 % each selling price is its net price plus 10 % of it rounded half-up to the cent (OADR-0005 point 4). The API
 // answers an identical search within 30 s with the search already made (OADR-0002 point 2), so every search of the
 // journey asks for a departure date of its own.
+//
+// Offers per search (OAD-021). The stub answers at most `max` of its five offers, fewer than the 40 the journey sets, so
+// the results list five either way, and what the journey proves is what the storefront's search asked Amadeus for: the
+// OTA admin's supplier log (`/supplier-log?requestId=`, the X-Request-Id of the storefront's flights.search) shows the
+// Amadeus call's path with its `max` (a one-way search is SIMPLE mode, a GET), and the results list no more offers than
+// that, as the API stores no more offers than Amadeus answers.
 //
 // Every page the journey visits passes axe once its title is in place (the console's pages, the portal's page of the
 // OTA, the storefront's pages), and on every page of the OTA admin JavaScript reads no cookie.
@@ -59,6 +66,12 @@ test.describe.configure({ mode: "serial" });
 const BEFORE_MARKUP_DAYS = 44;
 const AFTER_MARKUP_DAYS = 45;
 const FEE_DAYS = 46;
+const OFFERS_SET_DAYS = 47;
+const OFFERS_CLEARED_DAYS = 48;
+
+/** The offers per search the owner sets (OAD-021), and the API's default once the field is emptied again. */
+const OFFERS_PER_SEARCH = 40;
+const DEFAULT_OFFERS_PER_SEARCH = 150;
 
 /** The default rule's new percentage, and the booking service fee the journey adds (EUR, the OTA's currency). */
 const MARKUP_PERCENT = 10;
@@ -148,6 +161,40 @@ async function searchPrices(daysAhead: number): Promise<number[]> {
     links.map((link) => link.getAttribute("aria-label") ?? ""),
   );
   return labels.map(centsOf).sort((a, b) => a - b);
+}
+
+/**
+ * Searches on the storefront as `searchPrices` does and answers the X-Request-Id of its flights.search (the OTA API's
+ * id of the request, which the supplier log records with the Amadeus call it made) and the offers it listed.
+ */
+async function searchWithRequestId(daysAhead: number): Promise<{ requestId: string; offers: number }> {
+  const created = shop.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      new URL(response.url()).pathname === "/api/v1/flight-searches",
+  );
+  const prices = await searchPrices(daysAhead);
+  const response = await created;
+  expect(response.status()).toBe(201);
+  const requestId = response.headers()["x-request-id"] ?? "";
+  expect(requestId).toMatch(/^\S{1,100}$/);
+  return { requestId, offers: prices.length };
+}
+
+/**
+ * The `max` of the Amadeus Flight Offers Search that the OTA API's request `requestId` made, as the OTA admin's
+ * supplier log shows its path (axe and the cookie check on the log's page).
+ */
+async function amadeusMaxOf(requestId: string): Promise<string | null> {
+  await consolePage.goto(`/supplier-log?requestId=${encodeURIComponent(requestId)}`);
+  await expectAdminPage(consolePage, "Supplier log");
+  const call = consolePage
+    .getByRole("main")
+    .locator("code")
+    .filter({ hasText: /^GET \/v2\/shopping\/flight-offers\?/ });
+  await expect(call).toHaveCount(1);
+  const path = (await call.textContent()) ?? "";
+  return new URLSearchParams(path.slice(path.indexOf("?") + 1)).get("max");
 }
 
 /** The value of the storefront's primary colour property on `<html>` (lib/theme.js `--vx-primary`). */
@@ -418,4 +465,69 @@ test("an e-mail template that does not compile is refused, and nothing is saved 
   await consolePage.reload();
   await expect(main.getByRole("textbox", { name: "HTML body", exact: true })).toHaveValue(saved);
   await expectAdminPage(consolePage, "E-mail template");
+});
+
+test("an owner sets 40 offers per search and the storefront's next search follows it, then the default again [OAD-021 AC1]", async () => {
+  await consolePage.goto("/settings/storefront?tab=features");
+  await expectAdminPage(consolePage, "Storefront settings");
+  await expect(consolePage.getByRole("tab", { name: "Features and search", selected: true })).toBeVisible();
+  const search = consolePage.getByRole("main").getByRole("form", { name: "Search", exact: true });
+  const field = search.getByRole("textbox", { name: "Offers per search", exact: true });
+  // A new OTA sets none: the field is empty, the API's default beside it.
+  await expect(field).toHaveValue("");
+  await expect(search.getByText(`Default: ${DEFAULT_OFFERS_PER_SEARCH} offers per search`)).toBeVisible();
+  await expect(search.getByRole("button", { name: "Use the default" })).toBeDisabled();
+
+  await field.fill(String(OFFERS_PER_SEARCH));
+  await search.getByRole("button", { name: "Save search" }).click();
+  await expect(search.getByRole("status")).toHaveText(
+    "Saved. The storefront's next search asks Amadeus for this number of offers.",
+  );
+  await expect(search.getByText(`Current setting: ${OFFERS_PER_SEARCH} offers per search.`)).toBeVisible();
+  await expect(field).toHaveValue(String(OFFERS_PER_SEARCH));
+  await expectAdminPage(consolePage, "Storefront settings");
+
+  // The storefront's next search: Amadeus asked for 40 offers, and the results list no more than that.
+  const set = await searchWithRequestId(OFFERS_SET_DAYS);
+  expect(set.offers).toBeLessThanOrEqual(OFFERS_PER_SEARCH);
+  expect(await amadeusMaxOf(set.requestId)).toBe(String(OFFERS_PER_SEARCH));
+
+  // "Use the default" empties the field; saved, the next search asks for the API's default again.
+  await consolePage.goto("/settings/storefront?tab=features");
+  await expectAdminPage(consolePage, "Storefront settings");
+  await expect(field).toHaveValue(String(OFFERS_PER_SEARCH));
+  await search.getByRole("button", { name: "Use the default" }).click();
+  await expect(field).toHaveValue("");
+  await expect(field).toBeFocused();
+  await search.getByRole("button", { name: "Save search" }).click();
+  await expect(search.getByRole("status")).toHaveText(
+    "Saved. The storefront's next search asks Amadeus for this number of offers.",
+  );
+  await expect(
+    search.getByText(`Current setting: the default, ${DEFAULT_OFFERS_PER_SEARCH} offers per search.`),
+  ).toBeVisible();
+  await expectAdminPage(consolePage, "Storefront settings");
+
+  const cleared = await searchWithRequestId(OFFERS_CLEARED_DAYS);
+  expect(await amadeusMaxOf(cleared.requestId)).toBe(String(DEFAULT_OFFERS_PER_SEARCH));
+
+  // Both changes as the API audited them: the owner's two updates of the settings with the offers per search.
+  const updates = await withTenantTx(owned.schema, async (trx) =>
+    trx
+      .selectFrom("staff_actions")
+      .select(["outcome", "staff_role", "after"])
+      .where("action", "=", "settings.storefront.update")
+      .orderBy("created_at")
+      .execute(),
+  );
+  const searchOf = (after: unknown): unknown =>
+    typeof after === "object" && after !== null && "search" in after ? after.search : undefined;
+  expect(
+    updates
+      .filter((row) => searchOf(row.after) !== undefined)
+      .map((row) => [row.outcome, row.staff_role, searchOf(row.after)]),
+  ).toEqual([
+    ["succeeded", "owner", { maxResults: OFFERS_PER_SEARCH }],
+    ["succeeded", "owner", { maxResults: null }],
+  ]);
 });

@@ -2,9 +2,10 @@
 // 6, OADR-0004): what the page (page.tsx), its sections (sections.tsx, theme-editor.tsx) and the server actions
 // (actions.ts) share. A `"use server"` module may export only async functions, and server code cannot read the
 // constants of a `"use client"` module (they reach it as client references), so the choices and their labels, the Zod
-// mirrors of the thirteen sections of `StorefrontSettingsUpdate` the page edits (`SettingsSection`), the form-to-body
-// rules and the texts of the API's refusals live here, in a module without a directive that imports no server-only
-// module and of the SDK only types (OADR-0018 point 1), as pricing-rules.ts does for the markup and fee rules.
+// mirrors of the fourteen sections of `StorefrontSettingsUpdate` the page edits (`SettingsSection`; the fourteenth,
+// `search`, the offers per search, since OAD-021), the form-to-body rules and the texts of the API's refusals live
+// here, in a module without a directive that imports no server-only module and of the SDK only types (OADR-0018 point
+// 1), as pricing-rules.ts does for the markup and fee rules.
 //
 // Every section is its own form and its own `PATCH` (each section sent replaces that section as a whole, the others
 // keep their value), with `ifMatch` = the version the page displayed. The forms post flat fields named after the
@@ -26,10 +27,11 @@ import type { ActionState } from "@/lib/action-state";
 // ---- Sections ---------------------------------------------------------------------------------------------------
 
 /**
- * A top-level section of the settings, which an update replaces as a whole. `search` (the offers per search, OBE-098)
- * is not edited on this page until OAD-021 adds its form: no action sends it, so the API keeps its value.
+ * A top-level section of the settings, which an update replaces as a whole. Every one has its form on this page:
+ * `search` (the offers per search, OBE-098) since OAD-021, whose action sends it only when it changed
+ * (`searchUnchanged`).
  */
-export type SettingsSection = Exclude<keyof StorefrontSettingsUpdate & keyof StorefrontSettings, "search">;
+export type SettingsSection = keyof StorefrontSettingsUpdate & keyof StorefrontSettings;
 
 /** The sections in the document's order. */
 export const SETTINGS_SECTIONS = Object.freeze([
@@ -46,6 +48,7 @@ export const SETTINGS_SECTIONS = Object.freeze([
   "seo",
   "consent",
   "operations",
+  "search",
 ] as const satisfies readonly SettingsSection[]);
 
 /** A warning of the API about saved settings (`airline_card_net_price`, OADR-0004); new codes may appear. */
@@ -68,7 +71,7 @@ export const STOREFRONT_SETTINGS_PATH = "/settings/storefront";
 export const STOREFRONT_TABS = Object.freeze([
   { value: "brand", label: "Brand and theme", sections: ["brand", "branding"] },
   { value: "locales", label: "Locales and markets", sections: ["locales", "currencies", "markets"] },
-  { value: "features", label: "Features", sections: ["features"] },
+  { value: "features", label: "Features and search", sections: ["features", "search"] },
   { value: "policies", label: "Policies", sections: ["policies"] },
   { value: "payments", label: "Payments", sections: ["airlineCard"] },
   { value: "legal", label: "Legal and support", sections: ["legal", "support"] },
@@ -243,6 +246,51 @@ export const PAYMENT_TIMING: Policies["paymentTiming"] = "authorize_before_booki
 /** The longest lists of the document. */
 export const MAX_LIST_LENGTH = Object.freeze({ locales: 20, currencies: 20, markets: 50, legalLinks: 20 });
 
+// ---- Offers per search (OAD-021) --------------------------------------------------------------------------------
+
+/**
+ * The offers per search of a storefront that sets none (`search.maxResults` `null`): the API's default, which the
+ * contract's `StorefrontSettingsSearch.maxResults` names (`DEFAULT_OFFERS_PER_SEARCH` of the OTA backend's
+ * offers.mapper.ts, 150 since lead decision (15i) of 2026-11-11). The page shows it beside the field; actions.test.ts
+ * compares it, and the bound below, with the OpenAPI document.
+ */
+export const DEFAULT_OFFERS_PER_SEARCH = 150;
+
+/** The most offers per search a storefront may set (the contract's `maximum`, the most a search stores). */
+export const MAX_OFFERS_PER_SEARCH = 250;
+
+/**
+ * The hidden field of the search section's form: `search.maxResults` as the page displayed it (`""` for the default),
+ * so the action sends the section only when staff changed it (`searchUnchanged`).
+ */
+export const SHOWN_SEARCH_FIELD = "shownMaxResults";
+
+/** The search section of settings as the API answered them; an answer without it (before OBE-098) is the default. */
+export function searchOf(settings: StorefrontSettings): NonNullable<StorefrontSettings["search"]> {
+  return settings.search ?? { maxResults: null };
+}
+
+/** `maxResults` as the field shows it: the number, or empty for the default. */
+export function maxResultsText(maxResults: number | null): string {
+  return maxResults === null ? "" : String(maxResults);
+}
+
+/**
+ * The search section posted unchanged: the `search.maxResults` checked by its schema (`changes`) is the one the page
+ * displayed (`SHOWN_SEARCH_FIELD`). A form without that field, or with a value the page never renders, counts as
+ * changed: the API decides then.
+ */
+export function searchUnchanged(changes: StorefrontSettingsUpdate, form: FormData): boolean {
+  const shown = form.get(SHOWN_SEARCH_FIELD);
+  if (changes.search === undefined || typeof shown !== "string") {
+    return false;
+  }
+  if (shown === "") {
+    return changes.search.maxResults === null;
+  }
+  return /^[1-9][0-9]{0,2}$/.test(shown) && changes.search.maxResults === Number(shown);
+}
+
 // ---- Form fields ------------------------------------------------------------------------------------------------
 
 /** The text of a field (`""` when absent or a file). */
@@ -347,6 +395,7 @@ const MESSAGES = Object.freeze({
   categoryDescription: "Use at most 500 characters.",
   queueNumber: "Enter a queue number from 0 to 99, or leave it empty for none.",
   queueCategory: "Enter a category from 0 to 255.",
+  maxResults: `Enter a whole number of offers from 1 to ${MAX_OFFERS_PER_SEARCH}, or leave the field empty for the default (${DEFAULT_OFFERS_PER_SEARCH}).`,
 });
 
 const ASSET_ID = /^ast_[0-9A-Za-z]{16,40}$/;
@@ -655,6 +704,11 @@ function buildSectionSchemas() {
     }),
   });
 
+  // An empty field is the API's default (`null`); a number from 1 to MAX_OFFERS_PER_SEARCH otherwise.
+  const search = z.object({
+    maxResults: optional(wholeNumber(1, MAX_OFFERS_PER_SEARCH, MESSAGES.maxResults)),
+  });
+
   return {
     brand,
     branding,
@@ -669,6 +723,7 @@ function buildSectionSchemas() {
     seo,
     consent,
     operations,
+    search,
   } as const satisfies Record<SettingsSection, z.ZodType>;
 }
 
@@ -694,6 +749,7 @@ const _schemasMatchTheContract: {
   seo: true,
   consent: true,
   operations: true,
+  search: true,
 };
 
 // ---- Form → body ------------------------------------------------------------------------------------------------
@@ -860,6 +916,8 @@ function formInputOf(section: SettingsSection, form: FormData): { input: unknown
         },
         rows: {},
       };
+    case "search":
+      return { input: { maxResults: text("maxResults") }, rows: {} };
   }
 }
 
@@ -920,6 +978,14 @@ export function settingsFieldOf(name: string, rows: PostedRows): string {
   }
   return name;
 }
+
+/**
+ * The page's own words for the API's field errors of a field whose rule fits one sentence: a `400 VALIDATION_FAILED`
+ * at `/search/maxResults` (`minimum`, `maximum`, `type`) is shown at the field as the form's own check words it.
+ */
+export const API_FIELD_MESSAGES: Readonly<Record<string, string>> = Object.freeze({
+  "search.maxResults": MESSAGES.maxResults,
+});
 
 /** The texts of the reasons of `422 UNPROCESSABLE` (`details.reason`, with `details.path` the refused field). */
 export const UNPROCESSABLE_REASONS: Readonly<Record<string, string>> = Object.freeze({

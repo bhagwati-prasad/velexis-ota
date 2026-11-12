@@ -2822,8 +2822,8 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 - **Verify:** `pnpm contracts:lint && pnpm --filter @velexis/ota-backend test storefront-settings && pnpm --filter @velexis/ota-backend exec vitest run --config vitest.int.config.ts test/integration/settings/storefront-settings.int.test.ts test/integration/shopping/search.int.test.ts`
 - **Note:** 2026-11-12 (lead decision (19f) of 2026-11-12, recorded by FIX-W50-OTA): the `path` of step 2's `400 VALIDATION_FAILED` is `/search/maxResults`, a plain JSON pointer into the body, not `/body/search/maxResults`: only parameters get their location as a prefix (`/<in>/<name>`, `toFieldErrors` of `ota/backend/src/common/http/openapi-validation.interceptor.ts`), and the OTA document's `FieldError.path` is a JSON pointer into the request. That is what the API answers and what `storefront-settings.int.test.ts` (`[OBE-098 AC1]`, a value outside 1 to 250) and `console-settings.contract.test.ts` prove. OAD-021, whose settings page shows this error at the field, corrects its own block's step 2 the same way.
 
-### OAD-021 · Edit a storefront's offers per search in the OTA admin
-- **Status:** todo
+### OAD-021 · Edit a storefront's offers per search in the OTA admin ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-admin
 - **Milestone:** M6
 - **Depends on:** OBE-098, OAD-014
@@ -2832,7 +2832,7 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 - **Files:** `ota/admin/src/app/(console)/settings/storefront/sections.tsx`, `ota/admin/src/app/(console)/settings/storefront/settings-rules.ts`, `ota/admin/src/app/(console)/settings/storefront/actions.ts`, `ota/admin/src/app/(console)/settings/storefront/actions.test.ts`, `ota/admin/docs/routes.md`, `tools/e2e/specs/ota-admin/settings-effects.e2e.ts`
 - **Steps:**
   1. Added by FIX-W48-SHARED (lead decision (15j) of 2026-11-11): the storefront settings page gets a search section with a whole-number field "Offers per search" (1–250) and "Use the default" (an empty field, sent as `null`), the default's number beside it, and a hint that more offers make every search of the storefront slower for its visitors; with `settings:write` only, read-only otherwise, as the page's other fields.
-  2. The server action sends `search` only when it changed; the API's `400` for a value outside 1–250 (`path` `/body/search/maxResults`) shows at the field, as the page's other field errors do.
+  2. The server action sends `search` only when it changed; the API's `400` for a value outside 1–250 (`path` `/search/maxResults`) shows at the field, as the page's other field errors do. *2026-11-12 (lead decision (19f), OAD-021): the path corrected from `/body/search/maxResults`; a body field error's `path` is a plain JSON pointer into the body, as OBE-098's integration test checks.*
   3. Tests: the action's payloads (set, clear, unchanged), the field's validation and a viewer's read-only page; `settings-effects.e2e.ts`: an owner sets 40 offers per search and the storefront's next search lists at most 40 results; axe on the page.
 - **Acceptance:**
   - An owner or admin sets and clears a storefront's offers per search in the OTA admin and the storefront's next search follows it; a viewer sees the value read-only.

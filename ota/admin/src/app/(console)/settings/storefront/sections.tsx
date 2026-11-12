@@ -22,11 +22,24 @@
 //   `false` (lead decision (2b) of 2026-10-30, third batch, FIX-W36-OTA; before, the box was disabled and a hidden
 //   field sent the saved `true`, so the card could not be turned off). The API refuses only turning the live card on
 //   (`403 FEATURE_DISABLED`, shown on the box; lead decision (2e) of the second batch).
+// - The offers per search (OAD-021, OBE-098's `search.maxResults`), in the "Features and search" tab: a whole number
+//   from 1 to 250, or an empty field for the API's default, whose number the page shows beside it ("Use the default"
+//   empties the field), with the hint that more offers make every search of the storefront slower for its visitors.
+//   The form posts the value it displayed too (`SHOWN_SEARCH_FIELD`), so its action sends the section only when it
+//   changed.
 //
 // Every input has `autoComplete="off"`; nothing here asks for a card.
 import type { StorefrontSettings } from "@velexis/ota-sdk";
 import { LoaderCircleIcon, PlusIcon } from "lucide-react";
-import { startTransition, useActionState, useId, useState, type FormEvent, type ReactNode } from "react";
+import {
+  startTransition,
+  useActionState,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 
 import {
   CheckboxField,
@@ -36,6 +49,7 @@ import {
 } from "@/app/(console)/bookings/[bookingId]/patch-form";
 import type { ConfirmAction } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
@@ -55,6 +69,7 @@ import {
   saveMarkets,
   saveOperations,
   savePolicies,
+  saveSearch,
   saveSeo,
   saveSupport,
 } from "./actions";
@@ -62,13 +77,18 @@ import {
   CARD_BRANDS,
   CONSENT_CATEGORIES,
   CONSENT_REGIMES,
+  DEFAULT_OFFERS_PER_SEARCH,
   LEGAL_LINK_KINDS,
   LEGAL_LINK_TARGETS,
   MAX_LIST_LENGTH,
+  MAX_OFFERS_PER_SEARCH,
   PAYMENT_TIMING,
+  SHOWN_SEARCH_FIELD,
   STOREFRONT_TABS,
   TICKETING_POLICIES,
   VERSION_FIELD,
+  maxResultsText,
+  searchOf,
   warningsOf,
   type SettingsSection,
   type StorefrontTab,
@@ -135,6 +155,11 @@ export const SECTION_STRINGS = Object.freeze({
     operations: {
       title: "Operations",
       description: "Where staff alerts go, and the Amadeus queue every new order is placed on.",
+    },
+    search: {
+      title: "Search",
+      description:
+        "How many flight offers each search of the storefront asks Amadeus for; travellers see at most this many results.",
     },
   } satisfies Record<SettingsSection, { readonly title: string; readonly description: string }>,
   // Brand
@@ -249,6 +274,15 @@ export const SECTION_STRINGS = Object.freeze({
     "The Amadeus queue of the queuing office where every new order is placed, so an order made during a timeout can be found (0 to 99; empty: none).",
   queueCategory: "Booking queue category",
   queueCategoryHint: "0 to 255.",
+  // Search
+  offersPerSearch: "Offers per search",
+  offersPerSearchHint: `A whole number from 1 to ${MAX_OFFERS_PER_SEARCH}, or empty for the default. More offers make every search of the storefront slower for its visitors.`,
+  offersDefault: `Default: ${DEFAULT_OFFERS_PER_SEARCH} offers per search`,
+  useDefault: "Use the default",
+  offersInUse: (maxResults: number | null) =>
+    maxResults === null
+      ? `Current setting: the default, ${DEFAULT_OFFERS_PER_SEARCH} offers per search.`
+      : `Current setting: ${maxResults} offers per search.`,
 });
 
 const MUTED = "text-xs text-muted-foreground";
@@ -883,6 +917,68 @@ function ConsentFields({
   );
 }
 
+/**
+ * The offers per search: the number, or an empty field for the API's default (shown beside it); "Use the default"
+ * empties the field and puts the focus back in it. The hidden field posts the value the page displayed, so the action
+ * sends the section only when it changed. Read only without `settings:write`, as the other sections (the fieldset).
+ */
+function SearchFields({
+  search,
+  state,
+}: {
+  readonly search: NonNullable<StorefrontSettings["search"]>;
+  readonly state: ActionState;
+}) {
+  const id = useId();
+  const input = useRef<HTMLInputElement>(null);
+  const shown = maxResultsText(search.maxResults);
+  const [value, setValue] = useState(shown);
+  const error = fieldError(state, "search.maxResults");
+  return (
+    <>
+      <input type="hidden" name={SHOWN_SEARCH_FIELD} value={shown} />
+      <div className="grid gap-1.5">
+        <Label htmlFor={id}>{SECTION_STRINGS.offersPerSearch}</Label>
+        <p id={`${id}-hint`} className={MUTED}>
+          {SECTION_STRINGS.offersPerSearchHint}
+        </p>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <Input
+            ref={input}
+            id={id}
+            name="search.maxResults"
+            type="text"
+            inputMode="numeric"
+            maxLength={3}
+            autoComplete="off"
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+            className="w-24"
+            {...describedBy(`${id}-hint ${id}-default`, `${id}-error`, error)}
+          />
+          <span id={`${id}-default`} className="text-sm text-muted-foreground">
+            {SECTION_STRINGS.offersDefault}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={value === ""}
+            onClick={() => {
+              setValue("");
+              input.current?.focus();
+            }}
+          >
+            {SECTION_STRINGS.useDefault}
+          </Button>
+        </div>
+        <FieldMessage id={`${id}-error`} message={error} />
+      </div>
+      <p className="text-sm">{SECTION_STRINGS.offersInUse(search.maxResults)}</p>
+    </>
+  );
+}
+
 // ---- The page's sections ----------------------------------------------------------------------------------------
 
 export interface StorefrontSettingsSectionsProps {
@@ -920,7 +1016,7 @@ export function StorefrontSettingsSections({
       section={section}
       action={action}
       version={version}
-      value={settings[section]}
+      value={section === "search" ? searchOf(settings) : settings[section]}
       canWrite={canWrite}
     >
       {children}
@@ -1161,6 +1257,7 @@ export function StorefrontSettingsSections({
         </div>
       </>
     )),
+    search: form("search", saveSearch, (state) => <SearchFields search={searchOf(settings)} state={state} />),
   };
 
   return (

@@ -9,7 +9,7 @@
 //   saveBranding     branding      savePolicies     policies      saveSeo          seo
 //   saveLocales      locales       saveAirlineCard  airlineCard   saveConsent      consent
 //   saveCurrencies   currencies    saveLegal        legal         saveOperations   operations
-//   saveMarkets      markets
+//   saveMarkets      markets                                      saveSearch       search
 //
 // Each starts with `requireStaff("settings:write")` (owners and admins; an agent's, a finance member's or a viewer's
 // forged POST gets "You do not have permission to do this (settings:write)" before any call; the API decides and
@@ -17,6 +17,14 @@
 // validates the section with its Zod mirror (settings-rules.ts `sectionChangesOf`, naming every problem at once), then
 // sends that section complete, as the API replaces it. The `PATCH` has no idempotency key (the contract has none:
 // `If-Match` makes a replay a `412`), so its answers bring no new one.
+//
+// The offers per search (`saveSearch`, OAD-021; OBE-098's `search.maxResults`, 1 to 250, or `null` for the API's
+// default, an empty field) are sent only when they changed: the form posts the value the page displayed
+// (`SHOWN_SEARCH_FIELD`), and the same value again makes no call ("Nothing to save"), so a save that changes nothing
+// neither moves the version nor writes an audit row. The API's `400` for a value outside 1 to 250 (`path`
+// `/search/maxResults`, a plain pointer into the body: lead decision (19f) of 2026-11-12) is shown at the field in this
+// page's words (`API_FIELD_MESSAGES`). Searches read the setting itself, which no cache holds, so "Saved" says that the
+// storefront's next search uses it.
 //
 // A success answers the API's `warnings[]` as the API sent them (`airline_card_net_price`: the airline card is on while
 // markup or fee rules add an amount, and airline-card bookings are sold at the airline's price, OADR-0004), which the
@@ -37,10 +45,12 @@ import { fieldNameOfPointer, fromVelexisError, type VelexisErrorLike } from "@/l
 import { requireStaff, type StaffContext } from "@/lib/session";
 
 import {
+  API_FIELD_MESSAGES,
   STOREFRONT_SETTINGS_PATH,
   UNPROCESSABLE_REASONS,
   VERSION_FIELD,
   VERSION_PATTERN,
+  searchUnchanged,
   sectionChangesOf,
   settingsFieldOf,
   type PostedRows,
@@ -53,6 +63,8 @@ const WRITE_PERMISSION: StaffPermission = "settings:write";
 
 const STRINGS = Object.freeze({
   saved: "Saved. The storefront shows the change within 5 minutes.",
+  savedSearch: "Saved. The storefront's next search asks Amadeus for this number of offers.",
+  unchangedSearch: "Nothing to save: the offers per search are as shown.",
   staleForm: "This form is out of date. Reload the page and try again.",
   changed:
     "The storefront settings changed since this page was loaded (another section was saved, or someone else changed them). Reload the page to see them; this section was not saved.",
@@ -86,7 +98,8 @@ async function staffFor(
 /**
  * The state of a failed update of `section`: lib/errors.ts's message, request id and field errors, the field errors on
  * the form's fields (`settingsFieldOf`: a code list's item on its list, a row's position on the row the form posted),
- * and this page's words for the codes it knows. Redirects and bugs are thrown again (`fromVelexisError`).
+ * and this page's words for the codes it knows and for the fields it words itself (`API_FIELD_MESSAGES`: the offers per
+ * search). Redirects and bugs are thrown again (`fromVelexisError`).
  */
 function failureOf(error: unknown, section: SettingsSection, rows: PostedRows): ActionState {
   const base = fromVelexisError(error);
@@ -95,7 +108,9 @@ function failureOf(error: unknown, section: SettingsSection, rows: PostedRows): 
   for (const [name, message] of Object.entries(base.fieldErrors ?? {})) {
     const field = settingsFieldOf(name, rows);
     if (!Object.hasOwn(fieldErrors, field)) {
-      fieldErrors[field] = message;
+      // The page's own words for a field it has them for (the offers per search), else the API's.
+      const ours = Object.hasOwn(API_FIELD_MESSAGES, field) ? API_FIELD_MESSAGES[field] : undefined;
+      fieldErrors[field] = ours ?? message;
     }
   }
   let message = base.message ?? STRINGS.staleForm;
@@ -149,6 +164,10 @@ async function saveSection(section: SettingsSection, form: FormData): Promise<Se
   if (!parsed.success) {
     return fromZod(parsed.error);
   }
+  // The offers per search go only when they changed (see the module comment).
+  if (section === "search" && searchUnchanged(parsed.changes, form)) {
+    return { ok: true, message: STRINGS.unchangedSearch };
+  }
 
   let saved: StorefrontSettingsUpdateResult;
   try {
@@ -161,7 +180,11 @@ async function saveSection(section: SettingsSection, form: FormData): Promise<Se
   }
   revalidatePath(STOREFRONT_SETTINGS_PATH);
   const warnings = saved.warnings;
-  return { ok: true, message: STRINGS.saved, ...(warnings.length === 0 ? {} : { warnings }) };
+  return {
+    ok: true,
+    message: section === "search" ? STRINGS.savedSearch : STRINGS.saved,
+    ...(warnings.length === 0 ? {} : { warnings }),
+  };
 }
 
 /** "Save" of the brand: name, legal name, time zone. */
@@ -227,4 +250,9 @@ export async function saveConsent(_state: ActionState, form: FormData): Promise<
 /** "Save" of the operations: the staff alert e-mail and the booking queue. */
 export async function saveOperations(_state: ActionState, form: FormData): Promise<SettingsActionState> {
   return saveSection("operations", form);
+}
+
+/** "Save" of the search: the offers per search, sent only when they changed (OAD-021). */
+export async function saveSearch(_state: ActionState, form: FormData): Promise<SettingsActionState> {
+  return saveSection("search", form);
 }

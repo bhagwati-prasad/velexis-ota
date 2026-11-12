@@ -4,9 +4,13 @@
 // answers (the API's warnings, its refusals on their fields) and the page it revalidates; the page as Next.js renders
 // it on the server (rendered to HTML and queried in a detached happy-dom document: what each role is offered, the
 // pickers' images by kind, the contrast warning, the API's codes handled on the server); and every form the page
-// renders posted as it is to its real action, so the page, the sections and the actions agree on every field. Next.js's
-// request scope (`cookies()`, `headers()`), `redirect()` and `revalidatePath()` are mocked. Every token, id and name
-// here is a dummy.
+// renders posted as it is to its real action, so the page, the sections and the actions agree on every field. The
+// offers per search of OAD-021 (`saveSearch`): the payloads (set, cleared, unchanged: no call), the field's checks, the
+// API's 400 at the field, the page's field for an owner and read only for a viewer, and the default and bound compared
+// with the OpenAPI document. Next.js's request scope (`cookies()`, `headers()`), `redirect()` and `revalidatePath()` are
+// mocked. Every token, id and name here is a dummy.
+import { readFileSync } from "node:fs";
+
 import type { StaffRole, StorefrontAsset, StorefrontSettings } from "@velexis/ota-sdk";
 import { Window } from "happy-dom";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -60,12 +64,19 @@ import {
   saveMarkets,
   saveOperations,
   savePolicies,
+  saveSearch,
   saveSeo,
   saveSupport,
 } from "./actions";
 import StorefrontSettingsPage from "./page";
 import { SECTION_STRINGS } from "./sections";
-import type { SettingsActionState, SettingsSection } from "./settings-rules";
+import {
+  DEFAULT_OFFERS_PER_SEARCH,
+  MAX_OFFERS_PER_SEARCH,
+  SETTINGS_SECTIONS,
+  type SettingsActionState,
+  type SettingsSection,
+} from "./settings-rules";
 
 const ME = "GET /v1/console/auth/me";
 const SETTINGS = "/v1/console/settings/storefront";
@@ -91,6 +102,7 @@ const ACTIONS: Readonly<
   seo: saveSeo,
   consent: saveConsent,
   operations: saveOperations,
+  search: saveSearch,
 };
 
 let api: FakeOtaApi;
@@ -199,6 +211,7 @@ function storefrontSettings(): StorefrontSettings {
       ],
     },
     operations: { opsAlertEmail: "ops@demo.example.com", bookingQueue: { number: 50, category: 0 } },
+    search: { maxResults: null },
     version: 12,
     updatedAt: "2026-10-29T10:00:00Z",
   };
@@ -1058,6 +1071,7 @@ describe("/settings/storefront", () => {
       "currencies",
       "markets",
       "features",
+      "search",
       "policies",
       "airlineCard",
       "legal",
@@ -1136,9 +1150,9 @@ describe("/settings/storefront", () => {
     expect(page.querySelector("[data-contrast]")?.getAttribute("data-contrast")).toBe("passes");
   });
 
-  // One render per test: a page of thirteen forms takes a while to render and parse on a busy runner.
+  // One render per test: a page of fourteen forms takes a while to render and parse on a busy runner.
   it.each(["agent", "finance", "viewer"] as const)(
-    "[OAD-014] shows every section read only to a role without settings:write (%s)",
+    "[OAD-014] [OAD-021] shows every section read only to a role without settings:write (%s)",
     async (role) => {
       signedIn(role);
       serveSettings();
@@ -1149,7 +1163,7 @@ describe("/settings/storefront", () => {
         "Read only: changing the storefront settings needs the permission settings:write.",
       );
       const forms = [...page.querySelectorAll("form[data-section]")];
-      expect(forms).toHaveLength(13);
+      expect(forms).toHaveLength(14);
       for (const form of forms) {
         expect(form.querySelector("fieldset")?.hasAttribute("disabled")).toBe(true);
         expect(form.querySelector('button[type="submit"]')).toBeNull();
@@ -1250,26 +1264,34 @@ describe("/settings/storefront", () => {
     });
   });
 
-  it("[OAD-014] posts every form as the page renders it to its action: each section is sent back unchanged", async () => {
+  it("[OAD-014] [OAD-021] posts every form as the page renders it to its action: each section is sent back unchanged", async () => {
     signedIn("owner");
-    const settings = storefrontSettings();
+    const settings = { ...storefrontSettings(), search: { maxResults: 40 } };
     serveSettings(settings);
     serveUpdate();
     const page = await renderPage();
 
+    const states: Record<string, SettingsActionState> = {};
     for (const [section, action] of Object.entries(ACTIONS) as [
       SettingsSection,
       (typeof ACTIONS)[SettingsSection],
     ][]) {
-      const state = await run(action, formDataOf(sectionForm(page, section)));
-      expect(state, section).toMatchObject({ ok: true });
+      states[section] = await run(action, formDataOf(sectionForm(page, section)));
+      expect(states[section], section).toMatchObject({ ok: true });
     }
 
+    // Every section but the offers per search, which the action sends only when they changed (OAD-021).
     const sent = api.sent(`PATCH ${SETTINGS}`);
     expect(sent.map((request) => request.headers.get("If-Match"))).toEqual(Array(13).fill('"12"'));
     expect(sent.map((request) => request.body)).toEqual(
-      Object.keys(ACTIONS).map((section) => ({ [section]: settings[section as SettingsSection] })),
+      SETTINGS_SECTIONS.filter((section) => section !== "search").map((section) => ({
+        [section]: settings[section],
+      })),
     );
+    expect(states["search"]).toEqual({
+      ok: true,
+      message: "Nothing to save: the offers per search are as shown.",
+    });
   });
 
   it.each([
@@ -1338,5 +1360,201 @@ describe("/settings/storefront", () => {
     );
     expect(page.textContent).toContain("You do not have permission to do this (settings:read).");
     expect(actionRequests()).toEqual([]);
+  });
+});
+
+// ---- The offers per search (OAD-021) ----------------------------------------------------------------------------
+
+describe("the offers per search (OAD-021)", () => {
+  const SAVED_SEARCH = "Saved. The storefront's next search asks Amadeus for this number of offers.";
+  const UNCHANGED_SEARCH = "Nothing to save: the offers per search are as shown.";
+  const FIELD_MESSAGE =
+    "Enter a whole number of offers from 1 to 250, or leave the field empty for the default (150).";
+
+  /** The search form as the page posts it: the field and the value the page displayed (`""` for the default). */
+  const searchForm = (maxResults: string, shown: string): FormData =>
+    formOf({ version: "12", shownMaxResults: shown, "search.maxResults": maxResults });
+
+  it("[OAD-021 AC1] sets a number and clears it to the default, each with If-Match = the displayed version", async () => {
+    signedIn("admin");
+    serveUpdate();
+
+    const set = await run(saveSearch, searchForm(" 40 ", ""));
+    const cleared = await run(saveSearch, searchForm("", "40"));
+
+    const sent = api.sent(`PATCH ${SETTINGS}`);
+    expect(sent.map((request) => request.body)).toEqual([
+      { search: { maxResults: 40 } },
+      { search: { maxResults: null } },
+    ]);
+    expect(sent.map((request) => request.headers.get("If-Match"))).toEqual(['"12"', '"12"']);
+    expect(sent[0]?.headers.get("Idempotency-Key")).toBeNull();
+    expect(set).toEqual({ ok: true, message: SAVED_SEARCH });
+    expect(cleared).toEqual({ ok: true, message: SAVED_SEARCH });
+    expect(revalidated()).toEqual(["/settings/storefront", "/settings/storefront"]);
+  });
+
+  it("[OAD-021 AC1] sends nothing when the offers per search are as the page showed them", async () => {
+    signedIn("owner");
+    serveUpdate();
+
+    expect(await run(saveSearch, searchForm("40", "40"))).toEqual({ ok: true, message: UNCHANGED_SEARCH });
+    expect(await run(saveSearch, searchForm(" ", ""))).toEqual({ ok: true, message: UNCHANGED_SEARCH });
+    expect(actionRequests()).toEqual([]);
+    expect(revalidated()).toEqual([]);
+
+    // A form without the displayed value (not the page's) or with one the page never renders is sent: the API decides.
+    await run(saveSearch, formOf({ version: "12", "search.maxResults": "40" }));
+    await run(saveSearch, searchForm("40", "040"));
+    expect(api.sent(`PATCH ${SETTINGS}`).map((request) => request.body)).toEqual([
+      { search: { maxResults: 40 } },
+      { search: { maxResults: 40 } },
+    ]);
+  });
+
+  it("[OAD-021] checks the field first: a whole number from 1 to 250, or empty for the default", async () => {
+    signedIn("owner");
+    serveUpdate();
+
+    for (const typed of ["0", "251", "1000", "-1", "2.5", "forty", "4 0"]) {
+      const state = await run(saveSearch, searchForm(typed, ""));
+      expect(state, typed).toMatchObject({
+        ok: false,
+        code: "VALIDATION_FAILED",
+        fieldErrors: { "search.maxResults": FIELD_MESSAGE },
+      });
+    }
+    expect(actionRequests()).toEqual([]);
+
+    for (const typed of ["1", "250"]) {
+      expect(await run(saveSearch, searchForm(typed, "")), typed).toMatchObject({ ok: true });
+    }
+    expect(api.sent(`PATCH ${SETTINGS}`).map((request) => request.body)).toEqual([
+      { search: { maxResults: 1 } },
+      { search: { maxResults: 250 } },
+    ]);
+  });
+
+  it("[OAD-021] shows the API's 400 at /search/maxResults on the field, in the page's words", async () => {
+    signedIn("owner");
+    api.on(`PATCH ${SETTINGS}`, () =>
+      apiError("VALIDATION_FAILED", 400, {
+        fieldErrors: [{ path: "/search/maxResults", code: "maximum", message: "must be <= 250" }],
+      }),
+    );
+
+    const state = await run(saveSearch, searchForm("120", ""));
+
+    expect(only(`PATCH ${SETTINGS}`).body).toEqual({ search: { maxResults: 120 } });
+    expect(state).toEqual({
+      ok: false,
+      code: "VALIDATION_FAILED",
+      requestId: "req_fake_1",
+      message: "Some values were not accepted. Check the highlighted fields and try again.",
+      fieldErrors: { "search.maxResults": FIELD_MESSAGE },
+    });
+    expect(revalidated()).toEqual([]);
+  });
+
+  it("[OAD-021] refuses an agent, a finance member and a viewer before any call, naming the permission", async () => {
+    for (const role of ["agent", "finance", "viewer"] as const) {
+      api = fakeOtaApi();
+      vi.stubGlobal("fetch", api.fetch);
+      signedIn(role);
+
+      expect(await run(saveSearch, searchForm("40", ""))).toEqual({
+        ok: false,
+        code: "FORBIDDEN",
+        message: "You do not have permission to do this (settings:write).",
+      });
+      expect(actionRequests()).toEqual([]);
+    }
+  });
+
+  it("[OAD-021] states the API's default and bound, as the OpenAPI document does", () => {
+    const document = readFileSync(
+      new URL("../../../../../../backend/openapi/velexis-ota-booking-api.openapi.yaml", import.meta.url),
+      "utf8",
+    );
+    const schema = /\n {4}StorefrontSettingsSearch:\n((?: {6}.*\n|\n)+)/.exec(document)?.[1] ?? "";
+    expect(schema).toContain("minimum: 1\n");
+    expect(schema).toContain(`maximum: ${MAX_OFFERS_PER_SEARCH}\n`);
+    expect(schema.replace(/\s+/g, " ")).toContain(
+      `\`null\` uses the API's default of ${DEFAULT_OFFERS_PER_SEARCH} offers per search.`,
+    );
+  });
+
+  it("[OAD-021 AC1] offers an owner the field in the Features and search tab, with the default beside it", async () => {
+    signedIn("owner");
+    serveSettings({ ...storefrontSettings(), search: { maxResults: 40 } });
+    serveUpdate();
+
+    const page = await renderPage({ tab: "features" });
+
+    expect(page.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("Features and search");
+    const form = sectionForm(page, "search");
+    expect(form.closest('[role="tabpanel"]')?.querySelector('form[data-section="features"]')).not.toBeNull();
+    expect(form.querySelector("h2")?.textContent).toBe("Search");
+    const field = form.querySelector<HTMLInputElement>('input[name="search.maxResults"]');
+    expect(field?.getAttribute("value")).toBe("40");
+    expect(field?.getAttribute("inputmode")).toBe("numeric");
+    expect(field?.hasAttribute("disabled")).toBe(false);
+    const label = form.querySelector(`label[for="${field?.id ?? ""}"]`);
+    expect(label?.textContent).toBe("Offers per search");
+    // The hint (more offers, slower searches) and the default's number describe the field.
+    const described = (field?.getAttribute("aria-describedby") ?? "")
+      .split(" ")
+      .map((id) => form.querySelector(`[id="${id}"]`)?.textContent);
+    expect(described).toEqual([
+      "A whole number from 1 to 250, or empty for the default. More offers make every search of the storefront slower for its visitors.",
+      `Default: ${DEFAULT_OFFERS_PER_SEARCH} offers per search`,
+    ]);
+    expect(form.querySelector('input[name="shownMaxResults"]')?.getAttribute("value")).toBe("40");
+    const useDefault = [...form.querySelectorAll("button")].find(
+      (button) => button.textContent === "Use the default",
+    );
+    expect(useDefault?.getAttribute("type")).toBe("button");
+    expect(useDefault?.hasAttribute("disabled")).toBe(false);
+    expect(form.textContent).toContain("Current setting: 40 offers per search.");
+    expect(form.querySelector('button[type="submit"]')?.textContent).toBe("Save search");
+
+    // Posted as rendered, the form sends nothing.
+    expect(await run(saveSearch, formDataOf(form))).toEqual({ ok: true, message: UNCHANGED_SEARCH });
+    expect(api.sent(`PATCH ${SETTINGS}`)).toEqual([]);
+  });
+
+  it("[OAD-021] shows the default as an empty field, also for an answer without the section", async () => {
+    signedIn("owner");
+    const { search: _search, ...withoutSearch } = storefrontSettings();
+    serveSettings(withoutSearch);
+
+    const page = await renderPage();
+
+    const form = sectionForm(page, "search");
+    expect(form.querySelector('input[name="search.maxResults"]')?.getAttribute("value")).toBe("");
+    expect(form.querySelector('input[name="shownMaxResults"]')?.getAttribute("value")).toBe("");
+    expect(form.textContent).toContain(
+      `Current setting: the default, ${DEFAULT_OFFERS_PER_SEARCH} offers per search.`,
+    );
+    const useDefault = [...form.querySelectorAll("button")].find(
+      (button) => button.textContent === "Use the default",
+    );
+    expect(useDefault?.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("[OAD-021 AC1] shows a viewer the offers per search read only", async () => {
+    signedIn("viewer");
+    serveSettings({ ...storefrontSettings(), search: { maxResults: 40 } });
+
+    const page = await renderPage({ tab: "features" });
+
+    const form = sectionForm(page, "search");
+    expect(form.querySelector("fieldset")?.hasAttribute("disabled")).toBe(true);
+    expect(form.querySelector('input[name="search.maxResults"]')?.getAttribute("value")).toBe("40");
+    expect(form.querySelector('button[type="submit"]')).toBeNull();
+    expect(form.textContent).toContain("Current setting: 40 offers per search.");
+    expect(actionRequests().map((request) => `${request.method} ${request.url.pathname}`)).not.toContain(
+      `PATCH ${SETTINGS}`,
+    );
   });
 });
