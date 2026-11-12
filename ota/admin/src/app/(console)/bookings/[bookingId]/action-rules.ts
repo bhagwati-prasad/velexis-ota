@@ -32,9 +32,16 @@
 // - Patch (`console.bookings.patch`): the API replaces an order contact of the same purpose whole, and a traveller's
 //   `contact` whole, so the traveller and contact dialogs post the stored contact (`KEPT_FIELD`, `keptContactOf`) and the
 //   action puts the dialog's values over it: what the dialog does not show is sent back as it was.
+// - Close the review (`console.bookings.closeReview`, OAD-022, OBE-099): offered only for a booking in Reconciliation
+//   review (`pending`, the API's `consoleActions.canCloseReview`) and to staff with `bookings:cancel`
+//   (`closeReviewOffered`). What follows each outcome depends on the payment the reconciliation held
+//   (`reviewClosurePlanOf`): a Stripe authorisation is captured once the order is recorded (`order_found`) or released
+//   (`not_booked`, the traveller e-mailed); an airline-card booking has nothing to capture or release, so the agent
+//   asks the airline about a charge after `not_booked` (runbook §4.3). The note is the staff action's reason (the
+//   closure takes no `reason`), required for `not_booked` only, never a card number (the API refuses one).
 //
 // Money stays a decimal string (conventions §1): the sums below use whole ten-thousandths in a `bigint`, never a float.
-import type { ConsoleBooking, ConsolePayment, StaffRole } from "@velexis/ota-sdk";
+import type { ConsoleBooking, ConsolePayment, StaffPermission, StaffRole } from "@velexis/ota-sdk";
 
 import type { MoneyValue } from "@/components/money";
 
@@ -79,6 +86,12 @@ export const PATCH_ELEMENT_FIELD = "element";
 export const KEPT_FIELD = "kept";
 /** The longest `kept` an action reads: a contact with three phones and a full address is far shorter. */
 export const KEPT_MAX_LENGTH = 8000;
+/** Radio of a review closure: `outcome` (`REVIEW_OUTCOMES`). */
+export const REVIEW_OUTCOME_FIELD = "outcome";
+/** The record locator of an order found (`recordLocator` of `order_found`). */
+export const RECORD_LOCATOR_FIELD = "recordLocator";
+/** The note of a review closure (`note`): the staff action's reason and a staff-only note on the booking. */
+export const REVIEW_NOTE_FIELD = "note";
 
 /** The inputs of the patch dialogs (one element per dialog). */
 export const PATCH_FIELDS = Object.freeze({
@@ -618,4 +631,72 @@ export function refundableOf(payment: ConsolePayment): MoneyValue | undefined {
   const inFlight = refundsInFlightOf(payment);
   const rest = inFlight === undefined ? refundable : subtractAmounts(refundable, inFlight);
   return rest !== undefined && isPositiveAmount(rest.amount) ? rest : undefined;
+}
+
+// ---- Close the review -------------------------------------------------------------------------------------------------
+
+/** The permission of `console.bookings.closeReview` (the staff who cancel bookings and release their payments). */
+export const CLOSE_REVIEW_PERMISSION = "bookings:cancel" satisfies StaffPermission;
+
+/** `ConsoleBookingReviewClosureRequest.outcome`: what the staff found in the queuing office. */
+export const REVIEW_OUTCOMES = [
+  { value: "order_found", label: "Order found" },
+  { value: "not_booked", label: "Not booked" },
+] as const satisfies readonly Choice[];
+export type ReviewOutcome = (typeof REVIEW_OUTCOMES)[number]["value"];
+
+/** A record locator as the API takes it (`recordLocator`: 5 to 8 capital letters and digits). */
+export const RECORD_LOCATOR_PATTERN = /^[A-Z0-9]{5,8}$/;
+/** The longest record locator. */
+export const RECORD_LOCATOR_MAX_LENGTH = 8;
+/** The longest note of a closure (`note.maxLength`, counted in code points as JSON Schema counts). */
+export const REVIEW_NOTE_MAX_LENGTH = 2000;
+
+/** A record locator as staff typed it, as the API takes it: without surrounding white space, in capital letters. */
+export function normalizeRecordLocator(value: string): string {
+  return value.trim().toUpperCase();
+}
+
+/**
+ * The "Close the review" action is offered: the booking is in Reconciliation review (`pending`, and the API's
+ * `consoleActions.canCloseReview`, which an answer from before OBE-099 lacks) and the staff member holds
+ * `bookings:cancel` (`permitted`: `can(staff, CLOSE_REVIEW_PERMISSION)`). The API decides again and refuses a booking
+ * that left the review meanwhile (`409 not_in_review`).
+ */
+export function closeReviewOffered(
+  booking: Pick<ConsoleBooking, "status" | "consoleActions">,
+  permitted: boolean,
+): boolean {
+  return permitted && booking.status === "pending" && booking.consoleActions.canCloseReview === true;
+}
+
+/** The payment a review closure settles, as the dialog says what follows each outcome. */
+export type ReviewMoney =
+  /** The traveller's card through the airline (OADR-0004): Velexis captures or releases nothing. */
+  | { readonly kind: "airline" }
+  /** A Stripe authorisation: captured after `order_found`, released after `not_booked`. */
+  | { readonly kind: "authorized"; readonly authorized: MoneyValue }
+  /** A Stripe payment that captured money already: never refunded by the closure. */
+  | { readonly kind: "captured" }
+  /** No payment to settle. */
+  | { readonly kind: "none" };
+
+/** What closing the review of `booking` does to its money (see `ReviewMoney`). */
+export interface ReviewClosurePlan {
+  readonly money: ReviewMoney;
+}
+
+/** What closing the review of `booking` does (the airline card first: Velexis never charged it). */
+export function reviewClosurePlanOf(booking: Pick<ConsoleBooking, "payments">): ReviewClosurePlan {
+  if (booking.payments.some(isAirlinePayment)) {
+    return { money: { kind: "airline" } };
+  }
+  const authorized = booking.payments.find((payment) => isStripe(payment) && payment.status === "authorized");
+  if (authorized !== undefined) {
+    return { money: { kind: "authorized", authorized: authorized.amountAuthorized } };
+  }
+  if (booking.payments.some((payment) => isStripe(payment) && CAPTURED_STATUSES.has(payment.status))) {
+    return { money: { kind: "captured" } };
+  }
+  return { money: { kind: "none" } };
 }

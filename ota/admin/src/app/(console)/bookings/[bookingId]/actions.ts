@@ -14,6 +14,9 @@
 //   addNote          console.bookings.addNote   bookings:write     idempotency key; internal unless asked
 //   capturePayment   console.payments.capture   payments:capture   `ifMatch` = the payment's version, idempotency key
 //   refundPayment    console.payments.refund    payments:refund    idempotency key; never an airline card
+//   closeBookingReview  console.bookings.closeReview  bookings:cancel  `ifMatch`, idempotency key; `order_found`
+//                                                                    with the record locator or `not_booked` with a
+//                                                                    note (OAD-022)
 //
 // Every action starts with `requireStaff(permission)` (a forged POST fails before any call; the API decides and audits
 // all the same), then validates the form with Zod, then makes one call. The idempotency key is the dialog's hidden
@@ -70,17 +73,24 @@ import {
   PAYMENT_ID_FIELD,
   PHONE_DEVICE_TYPES,
   REASON_CODE_FIELD,
+  RECORD_LOCATOR_FIELD,
+  RECORD_LOCATOR_PATTERN,
   REFUND_MODE_FIELD,
   REFUND_NOT_AVAILABLE_CODE,
   REFUND_REASON_FIELD,
   REFUND_REASONS,
   REMARK_TYPES,
+  REVIEW_NOTE_FIELD,
+  REVIEW_NOTE_MAX_LENGTH,
+  REVIEW_OUTCOME_FIELD,
+  REVIEW_OUTCOMES,
   SETTLEMENT_FIELD,
   SETTLEMENT_METHODS,
   TYPED_AMOUNT_PATTERN,
   VERSION_FIELD,
   canAllowUnpaid,
   isPositiveAmount,
+  normalizeRecordLocator,
   valuesOf,
 } from "@/app/(console)/bookings/[bookingId]/action-rules";
 import { formatMoney, type MoneyValue } from "@/components/money";
@@ -146,6 +156,21 @@ const STRINGS = Object.freeze({
     "A ticket was issued before today (or at an unknown time), so this cancellation is a request to the airline: the " +
     "airline is asked first, and the refund is made from the payment once it answers. The form now sends no refund: " +
     "confirm again to send the request.",
+  // The review closure's refusals (OAD-022): the API's `details.reason` and codes in the dialog's words.
+  notInReview:
+    "This booking is no longer in Reconciliation review: the review was closed, or the booking changed. Reload the page to see its state.",
+  remarkMismatch:
+    "The order with this record locator does not carry this booking's remark (VELEXIS and the booking's reference). Check the record locator in the queuing office.",
+  orderHeld: (details: Readonly<Record<string, unknown>>) => {
+    const reference = details["reference"];
+    return typeof reference === "string" && /^[0-9A-Za-z-]{1,40}$/.test(reference)
+      ? `This order is already booking ${reference}: it cannot close this review. Check the record locator.`
+      : "This order is already a booking of this OTA: it cannot close this review. Check the record locator.";
+  },
+  orderNotFound: "Amadeus has no order with this record locator. Check it in the queuing office.",
+  officeNotAllowed: "This order belongs to an office outside this OTA's offices. Check the record locator.",
+  orderNotRecordable:
+    "The order carries this booking's remark but cannot be recorded on it. Contact Velexis support with the request id.",
   // Successes
   patched: "Saved to the Amadeus order.",
   issued: "Tickets issued.",
@@ -162,6 +187,9 @@ const STRINGS = Object.freeze({
   noteAdded: "Note added.",
   captured: (amount: string) => `Captured ${amount}.`,
   refundRequested: (amount: string) => `Refund of ${amount} requested: Stripe completes it.`,
+  reviewFound: (recordLocator: string, status: string) =>
+    `Review closed: the order ${recordLocator} is recorded and the booking is ${status.replaceAll("_", " ")}.`,
+  reviewNotBooked: "Review closed: the booking is not booked (failed).",
 });
 
 /** A message of an override: fixed, or built from the error's `details` (an amount the API answered, say). */
@@ -1271,4 +1299,147 @@ export async function refundPayment(_previous: ActionState, form: FormData): Pro
   }
   revalidatePayment(paymentId, bookingId);
   return actionSuccess(STRINGS.refundRequested(moneyText({ amount, currency })));
+}
+
+// ---- closeBookingReview ---------------------------------------------------------------------------------------------
+
+/** The note of a closure: trimmed, at most 2,000 characters as the API counts them (code points). */
+const ReviewNote = z
+  .string()
+  .trim()
+  .refine(
+    (value) => [...value].length <= REVIEW_NOTE_MAX_LENGTH,
+    `Use at most ${REVIEW_NOTE_MAX_LENGTH.toLocaleString("en")} characters.`,
+  );
+
+/** A record locator as staff typed it (in any case, with spaces around it), as the API takes it. */
+const RecordLocator = z
+  .string()
+  .transform(normalizeRecordLocator)
+  .refine(
+    (value) => RECORD_LOCATOR_PATTERN.test(value),
+    "Enter the record locator: 5 to 8 letters and digits, like L2P9XC.",
+  );
+
+const ReviewForm = z
+  .object({
+    bookingId: BookingId,
+    version: Version,
+    actionKey: ActionKey,
+    outcome: z.enum(valuesOf(REVIEW_OUTCOMES), {
+      error: "Choose what you found: Order found or Not booked.",
+    }),
+    recordLocator: optional(RecordLocator),
+    note: optional(ReviewNote),
+  })
+  .superRefine((value, context) => {
+    if (value.outcome === "order_found" && value.recordLocator === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: [RECORD_LOCATOR_FIELD],
+        message: "Enter the record locator of the order you found.",
+      });
+    }
+    if (value.outcome === "not_booked" && value.note === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: [REVIEW_NOTE_FIELD],
+        message: "Say what you looked for and found before closing the booking as not booked.",
+      });
+    }
+  });
+
+/**
+ * The API's pointers of the closure's fields: the document's own validation answers a plain pointer into the body
+ * (`/note`), the closure's checks (a missing record locator or note, a card number in the note) answer `/body/note`
+ * and `/body/recordLocator` (review-closure.service.ts `refuseClosureRequest`); both land on the dialog's field.
+ */
+const REVIEW_POINTERS: Readonly<Record<string, string>> = Object.freeze({
+  "/outcome": REVIEW_OUTCOME_FIELD,
+  "/recordLocator": RECORD_LOCATOR_FIELD,
+  "/body/recordLocator": RECORD_LOCATOR_FIELD,
+  "/note": REVIEW_NOTE_FIELD,
+  "/body/note": REVIEW_NOTE_FIELD,
+});
+
+const REVIEW_OVERRIDES: Overrides = Object.freeze({
+  ...BOOKING_OVERRIDES,
+  "CONFLICT:not_in_review": STRINGS.notInReview,
+  "CONFLICT:remark_mismatch": { message: STRINGS.remarkMismatch, field: RECORD_LOCATOR_FIELD },
+  ORDER_ALREADY_IMPORTED: { message: STRINGS.orderHeld, field: RECORD_LOCATOR_FIELD },
+  OFFICE_NOT_ALLOWED: { message: STRINGS.officeNotAllowed, field: RECORD_LOCATOR_FIELD },
+  "UNPROCESSABLE:order_not_recordable": STRINGS.orderNotRecordable,
+});
+
+/**
+ * Amadeus has no order for the record locator: `404 NOT_FOUND` with the supplier's error (`error.supplier`), which a
+ * booking the environment does not have never carries.
+ */
+function supplierNotFound(error: unknown): boolean {
+  if (!isVelexisErrorLike(error) || error.code !== "NOT_FOUND") {
+    return false;
+  }
+  const { supplier } = error as { readonly supplier?: unknown };
+  return typeof supplier === "object" && supplier !== null;
+}
+
+/**
+ * Close a booking in Reconciliation review (`bookings:cancel`, OAD-022, OBE-099): `ifMatch`, the dialog's idempotency
+ * key, and what the staff found in the queuing office: `order_found` with the order's record locator (and an optional
+ * note), which the API reads in the booking's office and accepts only with the remark `VELEXIS {reference}` of this
+ * booking, or `not_booked` with a required note. The note is the staff action's reason and a staff-only note on the
+ * booking; the API refuses one that holds a card number, at the note. A record locator goes with `order_found` only.
+ * The refusals (`409 not_in_review`, `remark_mismatch`, `ORDER_ALREADY_IMPORTED`, a stale version's `412`) answer the
+ * dialog's state, which keeps it open; a success revalidates the page, whose booking has left the review.
+ */
+export async function closeBookingReview(_previous: ActionState, form: FormData): Promise<ActionState> {
+  const staff = await staffFor("bookings:cancel");
+  if ("state" in staff) {
+    return staff.state;
+  }
+  const found = textOf(form, REVIEW_OUTCOME_FIELD) === "order_found";
+  const input = ReviewForm.safeParse({
+    bookingId: textOf(form, BOOKING_ID_FIELD),
+    version: textOf(form, VERSION_FIELD),
+    actionKey: textOf(form, ACTION_KEY_FIELD),
+    outcome: textOf(form, REVIEW_OUTCOME_FIELD),
+    // A record locator belongs to `order_found` only; `not_booked` leaves it out.
+    recordLocator: found ? (textOf(form, RECORD_LOCATOR_FIELD) ?? "") : undefined,
+    note: textOf(form, REVIEW_NOTE_FIELD),
+  });
+  if (!input.success) {
+    return invalid(input.error);
+  }
+  const { bookingId, version, actionKey, outcome, recordLocator, note } = input.data;
+  let booking: ConsoleBooking;
+  try {
+    booking = await staff.context.console.bookings.closeReview(
+      {
+        bookingId,
+        ifMatch: version,
+        outcome,
+        ...(outcome === "order_found" && recordLocator !== undefined ? { recordLocator } : {}),
+        ...(note === undefined ? {} : { note }),
+      },
+      { idempotencyKey: actionKey },
+    );
+  } catch (error) {
+    const state = keyedFailure(error, REVIEW_POINTERS, REVIEW_OVERRIDES);
+    return supplierNotFound(error)
+      ? {
+          ...state,
+          message: STRINGS.orderNotFound,
+          fieldErrors: { ...state.fieldErrors, [RECORD_LOCATOR_FIELD]: STRINGS.orderNotFound },
+        }
+      : state;
+  }
+  revalidateBooking(bookingId);
+  return actionSuccess(
+    withWarnings(
+      outcome === "order_found" && recordLocator !== undefined
+        ? STRINGS.reviewFound(recordLocator, booking.status)
+        : STRINGS.reviewNotBooked,
+      booking,
+    ),
+  );
 }

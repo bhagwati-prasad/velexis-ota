@@ -36,6 +36,7 @@ import {
   type OwnedOta,
   airlineTestCard,
   bookAirlineCardTrip,
+  bookLostAirlineCardTrip,
   createStubOrder,
   customerScopeLeaks,
   ConsoleApi,
@@ -460,6 +461,43 @@ describe("bookAirlineCardTrip", () => {
     expect(review.calls.at(-1)?.extra).toEqual({ "x-stub-scenario": "ticketing-failed" });
   });
 
+  it("[OAD-022 AC1] books a lost answer with server-error: the 504's booking id, the scenario with the completion alone", async () => {
+    const seeded = fakeSeedApi();
+    const calls: SeedCall[] = [];
+    const api: SeedApi = {
+      call: (operation, method, path, body, expected = 200, extra) => {
+        if (operation !== "checkout.completeWithAirlineCard") {
+          return seeded.api.call(operation, method, path, body, expected, extra);
+        }
+        calls.push({ operation, method, path, body, expected, extra });
+        return Promise.resolve({
+          error: { code: "SUPPLIER_TIMEOUT", details: { bookingId: "bkg_lost1", replayed: false } },
+        });
+      },
+    };
+    await expect(bookLostAirlineCardTrip(api, SEED_INPUT)).resolves.toEqual({
+      bookingId: "bkg_lost1",
+      checkoutId: "chk_1",
+      paymentId: "pay_1",
+    });
+    expect(calls.map(({ path, expected, extra }) => [path, expected, extra])).toEqual([
+      ["/v1/checkouts/chk_1/airline-card-completion", 504, { "x-stub-scenario": "server-error" }],
+    ]);
+    // Every step before the completion as bookAirlineCardTrip's, without a scenario.
+    expect(seeded.calls.map((call) => call.operation)).toEqual([
+      "flights.search",
+      "offers.price",
+      "checkout.create",
+      "checkout.setTravelers",
+      "checkout.setContacts",
+      "checkout.createPayment",
+      "checkout.updatePayment",
+    ]);
+    expect(
+      seeded.calls.every((call) => call.extra === undefined || Object.keys(call.extra).length === 0),
+    ).toBe(true);
+  });
+
   it("fails with the refusal alone, never quoting the card [OFE-019 AC1]", async () => {
     const { api } = fakeSeedApi("checkout.completeWithAirlineCard");
     const error = await bookAirlineCardTrip(api, SEED_INPUT).catch((caught: unknown) => caught);
@@ -796,6 +834,37 @@ describe("createStubOrder", () => {
     expect(offer?.itineraries[0]?.segments[0]?.departure.at.slice(0, 10)).toBe(departureDate(58));
     // No form of payment, so no card: the order is paid outside Velexis.
     expect(data).not.toHaveProperty("formOfPayments");
+  });
+
+  it("[OAD-022 AC1] adds the BACKOFFICE remark that makes the order a Velexis booking's, only when asked", async () => {
+    const answers = () => [
+      json(200, { access_token: "stub-token" }),
+      json(200, { data: [OFFER] }),
+      json(201, { data: { id: "ORDER1", associatedRecords: [{ reference: "Q7RT2K" }] } }),
+    ];
+    const input = {
+      officeId: "DEV1A0006",
+      traveller: {
+        firstName: "Rita",
+        lastName: "Found",
+        dateOfBirth: "1984-03-02",
+        gender: "FEMALE" as const,
+      },
+      email: "rita@example.com",
+      daysAhead: 61,
+    };
+    const created = (calls: readonly FetchCall[]): Record<string, unknown> =>
+      (JSON.parse(calls[2]?.body ?? "{}") as { data: Record<string, unknown> }).data;
+
+    const remarked = fakeFetch(answers());
+    await createStubOrder({ ...input, backofficeRemark: "VELEXIS VXFND234" }, { fetch: remarked.fetch });
+    expect(created(remarked.calls)["remarks"]).toEqual({
+      general: [{ subType: "BACKOFFICE", text: "VELEXIS VXFND234" }],
+    });
+
+    const plain = fakeFetch(answers());
+    await createStubOrder(input, { fetch: plain.fetch });
+    expect(created(plain.calls)).not.toHaveProperty("remarks");
   });
 
   it("names the stub's operation and status when it refuses, never the body [OAD-016 AC1]", async () => {

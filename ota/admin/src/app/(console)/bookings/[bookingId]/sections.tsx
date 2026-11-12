@@ -34,9 +34,10 @@
 // 2026-10-24), and the airline card is never offered again (OADR-0018, OADR-0004).
 //
 // The actions (OAD-008) are client components the page hands in as `actions` (`BookingActionSlots`), already filtered by
-// the staff member's permissions and the booking's `consoleActions`: issue, cancel and resync under the header on every
-// tab, the order's edits on the Travellers and contacts tab, the note form on the Timeline and notes tab, and capture and
-// refund on each payment of the Payments tab.
+// the staff member's permissions and the booking's `consoleActions`: issue, cancel, resync and, for a booking in
+// Reconciliation review, "Close the review" (OAD-022) under the header on every tab, the order's edits on the
+// Travellers and contacts tab, the note form on the Timeline and notes tab, and capture and refund on each payment of
+// the Payments tab.
 import type {
   ConsoleBooking,
   ConsoleBookingEvent,
@@ -107,7 +108,7 @@ export type OrderView =
  * member may do now (permissions and `consoleActions`); a slot left out renders nothing.
  */
 export interface BookingActionSlots {
-  /** Issue, cancel and resync: under the header, on every tab. */
+  /** Issue, cancel, resync and close the review: under the header, on every tab. */
   readonly bar?: ReactNode;
   /** The order's edits (travellers, contacts, remarks, ticketing agreement): on the Travellers and contacts tab. */
   readonly travellers?: ReactNode;
@@ -377,6 +378,8 @@ const CONSOLE_ACTIONS = [
   ["canResync", "Resync from Amadeus"],
   ["canRetrieve", "Open the Amadeus order"],
   ["canAddNote", "Add a note"],
+  // OAD-022 (OBE-099): `canCloseReview` is answered since OBE-099; an older answer without it reads as not offered.
+  ["canCloseReview", "Close the reconciliation review"],
 ] as const;
 
 /** Why a console action is not available (`ConsoleBookingActions.reasons`). */
@@ -390,6 +393,7 @@ const CONSOLE_REASONS: Readonly<Record<string, string>> = {
   flown: "the trip has started or is over",
   deadline_passed: "the ticketing deadline has passed",
   throttled: "it was synchronised moments ago",
+  not_in_review: "the booking is not in Reconciliation review",
 };
 
 /** Why the customer cannot cancel themselves (`allowedActions.reasons`). */
@@ -765,7 +769,7 @@ export function attentionOf(booking: ConsoleBooking, timeZone: string): Attentio
         id: "reconcile-review",
         tone: "danger",
         title: "Reconciliation needs staff review",
-        detail: `${review.summary} Check the order in Amadeus and decide.`,
+        detail: `${review.summary} Check the queuing office for the order, then close the review: order found or not booked.`,
       });
     }
   }
@@ -1385,7 +1389,7 @@ function ConsoleActionsSection({ booking }: { readonly booking: ConsoleBooking }
           return [
             label,
             <ActionAvailability
-              allowed={consoleActions[key]}
+              allowed={consoleActions[key] === true}
               reason={reason === undefined ? undefined : labelOf(CONSOLE_REASONS, reason)}
             />,
           ];

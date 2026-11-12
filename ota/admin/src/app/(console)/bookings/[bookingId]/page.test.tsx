@@ -1801,6 +1801,68 @@ describe("/bookings/[bookingId] actions (OAD-008)", () => {
     expect(buttonsOf(actionBar(page) as HTMLElement)).toEqual(["Resync from Amadeus"]);
   });
 
+  it("[OAD-022 AC1] offers Close the review for a booking in Reconciliation review to staff with bookings:cancel only", async () => {
+    /** The airline-card booking handed to the staff by the reconciliation, as the API answers it to `role`. */
+    const inReview = (canCloseReview: boolean, reason?: string): ConsoleBooking => {
+      const booking = airlineCardBooking();
+      return {
+        ...booking,
+        status: "pending",
+        ticketing: { ...booking.ticketing, status: "manual_review" },
+        consoleActions: {
+          ...booking.consoleActions,
+          canIssue: false,
+          canCancel: false,
+          canCloseReview,
+          reasons: {
+            canIssue: "pending",
+            canCancel: "pending",
+            ...(reason === undefined ? {} : { canCloseReview: reason }),
+          },
+        },
+      } as ConsoleBooking;
+    };
+    const consoleActions = (page: HTMLElement): string =>
+      fact(region(page, "What you can do now"), "Close the reconciliation review");
+
+    for (const role of ["owner", "agent"] as const) {
+      staffOf(role);
+      bookingAnswers(inReview(true));
+      const page = await renderTab(AIRLINE_BOOKING_ID, "overview");
+      const bar = actionBar(page) as HTMLElement;
+      expect(buttonsOf(bar), role).toEqual(["Close the review", "Resync from Amadeus"]);
+      expect(
+        within(bar).getByRole("button", { name: "Close the review" }).getAttribute("aria-haspopup"),
+      ).toBe("dialog");
+      expect(consoleActions(page)).toBe("Allowed");
+    }
+
+    // Finance holds no bookings:cancel: no action, whatever the answer says; the API's reason for it is shown.
+    staffOf("finance");
+    bookingAnswers(inReview(true));
+    let page = await renderTab(AIRLINE_BOOKING_ID, "overview");
+    expect(actionBar(page)).toBeNull();
+    staffOf("viewer");
+    bookingAnswers(inReview(false, "no_permission"));
+    page = await renderTab(AIRLINE_BOOKING_ID, "overview");
+    expect(actionBar(page)).toBeNull();
+    expect(consoleActions(page)).toBe("Not nowyour role does not allow it");
+
+    // Once the review is closed the booking leaves it: no action, and why.
+    staffOf("owner");
+    bookingAnswers({
+      ...airlineCardBooking(),
+      consoleActions: {
+        ...airlineCardBooking().consoleActions,
+        canCloseReview: false,
+        reasons: { canCloseReview: "not_in_review" },
+      },
+    });
+    page = await renderTab(AIRLINE_BOOKING_ID, "overview");
+    expect(buttonsOf(actionBar(page) as HTMLElement)).not.toContain("Close the review");
+    expect(consoleActions(page)).toBe("Not nowthe booking is not in Reconciliation review");
+  });
+
   it("offers a refund of a captured Stripe payment with payments:refund only, and nothing for the airline card", async () => {
     staffOf("owner");
     bookingAnswers(ticketedBooking());

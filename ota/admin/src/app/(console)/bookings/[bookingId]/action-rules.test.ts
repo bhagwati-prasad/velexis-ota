@@ -4,10 +4,25 @@
 //
 // The cancel dialog's Amadeus step (`cancelPlanOf`, lead decision (2a) of 2026-10-30, FIX-W35-OTA): the API's own
 // `cancellationMode`, whatever the tickets' issue times look like in another zone, and no step without one.
-import type { ConsoleBooking, ConsolePayment } from "@velexis/ota-sdk";
+//
+// "Close the review" (OAD-022): offered only for a booking in Reconciliation review and to staff with `bookings:cancel`
+// (`closeReviewOffered`), and what follows each outcome by the payment the review held (`reviewClosurePlanOf`).
+import type { ConsoleBooking, ConsolePayment, StaffRole } from "@velexis/ota-sdk";
 import { describe, expect, it } from "vitest";
 
-import { cancelPlanOf, issuePlanOf, refundableOf, refundsInFlightOf } from "./action-rules";
+import { ROLE_PERMISSIONS } from "@/lib/permissions";
+
+import {
+  CLOSE_REVIEW_PERMISSION,
+  RECORD_LOCATOR_PATTERN,
+  cancelPlanOf,
+  closeReviewOffered,
+  issuePlanOf,
+  normalizeRecordLocator,
+  refundableOf,
+  refundsInFlightOf,
+  reviewClosurePlanOf,
+} from "./action-rules";
 
 const eur = (amount: string) => ({ amount, currency: "EUR" });
 
@@ -183,5 +198,80 @@ describe("cancelPlanOf: the API's cancellation mode (FIX-W35-OTA)", () => {
       "full",
       "amount",
     ]);
+  });
+});
+
+describe("closeReviewOffered and reviewClosurePlanOf (OAD-022)", () => {
+  type Actions = ConsoleBooking["consoleActions"];
+  /** A booking of `status` whose console actions say `canCloseReview` (absent: an answer from before OBE-099). */
+  const booking = (status: ConsoleBooking["status"], canCloseReview?: boolean): ConsoleBooking =>
+    ({
+      status,
+      consoleActions: {
+        canIssue: false,
+        canPatch: false,
+        canCancel: false,
+        canResync: false,
+        canRetrieve: false,
+        canAddNote: true,
+        ...(canCloseReview === undefined ? {} : { canCloseReview }),
+        reasons: canCloseReview === true ? {} : { canCloseReview: "not_in_review" },
+      } satisfies Actions,
+    }) as unknown as ConsoleBooking;
+  const roles: readonly StaffRole[] = ["owner", "admin", "agent", "finance", "viewer"];
+  const permitted = (role: StaffRole): boolean => ROLE_PERMISSIONS[role].includes(CLOSE_REVIEW_PERMISSION);
+
+  it("[OAD-022 AC1] offers the action only in review and only to the roles with bookings:cancel", () => {
+    const inReview = booking("pending", true);
+    expect(roles.filter((role) => closeReviewOffered(inReview, permitted(role)))).toEqual([
+      "owner",
+      "admin",
+      "agent",
+    ]);
+    // Not in review (the API's `not_in_review`), or an answer from before the field: nobody sees it.
+    for (const other of [
+      booking("pending", false),
+      booking("pending"),
+      booking("confirmed", false),
+      booking("failed", false),
+    ]) {
+      expect(
+        roles.filter((role) => closeReviewOffered(other, permitted(role))),
+        other.status,
+      ).toEqual([]);
+    }
+    // A booking that is no longer pending is never offered, whatever an outdated flag says.
+    expect(closeReviewOffered(booking("confirmed", true), true)).toBe(false);
+  });
+
+  it("[OAD-022 AC1] names the payment each outcome settles: an authorisation, an airline card, a capture or none", () => {
+    const withPayments = (payments: readonly Record<string, unknown>[]): ConsoleBooking =>
+      ({ payments }) as unknown as ConsoleBooking;
+    const authorized = { amount: "412.30", currency: "EUR" };
+    expect(
+      reviewClosurePlanOf(
+        withPayments([
+          { provider: "stripe", method: "card", status: "authorized", amountAuthorized: authorized },
+        ]),
+      ),
+    ).toEqual({ money: { kind: "authorized", authorized } });
+    // The airline card first: Velexis never charged it, whatever its status.
+    expect(
+      reviewClosurePlanOf(
+        withPayments([{ provider: "airline", method: "airline_card", status: "processing" }]),
+      ),
+    ).toEqual({ money: { kind: "airline" } });
+    expect(
+      reviewClosurePlanOf(withPayments([{ provider: "stripe", method: "card", status: "captured" }])),
+    ).toEqual({ money: { kind: "captured" } });
+    expect(reviewClosurePlanOf(withPayments([]))).toEqual({ money: { kind: "none" } });
+  });
+
+  it("[OAD-022 AC1] takes a record locator as staff type it, as the API takes it", () => {
+    expect(normalizeRecordLocator("  l2p9xc ")).toBe("L2P9XC");
+    expect(RECORD_LOCATOR_PATTERN.test(normalizeRecordLocator("l2p9xc"))).toBe(true);
+    for (const wrong of ["L2P9", "L2P9XC123", "L2-P9X", ""]) {
+      expect(RECORD_LOCATOR_PATTERN.test(normalizeRecordLocator(wrong)), wrong).toBe(false);
+    }
   });
 });

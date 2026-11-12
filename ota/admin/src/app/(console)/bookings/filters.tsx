@@ -89,7 +89,11 @@ export function BookingViews({ className }: { readonly className?: string }) {
                     aria-current={selected ? "page" : undefined}
                     className={cn(
                       "inline-flex h-8 items-center rounded-full border px-3 text-sm font-medium hover:bg-accent hover:text-accent-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none",
-                      selected && "border-primary bg-primary text-primary-foreground hover:bg-primary/90",
+                      // The current view keeps its light text on its dark pill under the pointer too: the base's
+                      // hover text colour on `bg-primary` failed axe's color-contrast once a click left the pointer
+                      // on the pill (OAD-022's journey).
+                      selected &&
+                        "border-primary bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground",
                     )}
                   >
                     {view.label}

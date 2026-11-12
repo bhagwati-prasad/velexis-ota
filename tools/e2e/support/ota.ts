@@ -587,9 +587,20 @@ export interface AirlineCardTripInput {
   /**
    * The Amadeus stub's scenario for the completion alone (`X-Stub-Scenario`, which the OTA API forwards outside
    * production): `ticketing-failed` makes Flight Create Orders store the order without its tickets, so the airline-card
-   * booking waits in `manual_review` for the staff (OAD-016). Default: none, the airline issues the tickets.
+   * booking waits in `manual_review` for the staff (OAD-016). Default: none, the airline issues the tickets. A lost
+   * answer is `bookLostAirlineCardTrip`'s.
    */
   readonly completionScenario?: "ticketing-failed";
+}
+
+/**
+ * A booking whose Flight Create Orders answer `bookLostAirlineCardTrip` lost: `pending`, known by its id (the `504`
+ * names no reference, and the guest's token of the hosted storefront is a cookie this client does not keep).
+ */
+export interface LostAnswerBooking {
+  readonly bookingId: string;
+  readonly checkoutId: string;
+  readonly paymentId: string;
 }
 
 /** A booking that `bookAirlineCardTrip` made. */
@@ -655,6 +666,47 @@ const objectOf = (value: unknown): Record<string, unknown> =>
  * (`enableAirlineCard()` for the demo OTA, `switchAirlineCardOn(schema)` for a journey's own).
  */
 export async function bookAirlineCardTrip(api: SeedApi, input: AirlineCardTripInput): Promise<SeededBooking> {
+  const { checkoutId, paymentId, completed } = await completeAirlineCardTrip(
+    api,
+    input,
+    201,
+    input.completionScenario,
+  );
+  const booking = objectOf(objectOf(completed)["booking"]);
+  return {
+    bookingId: field(booking, "checkout.completeWithAirlineCard", (value) => value["id"]),
+    reference: field(booking, "checkout.completeWithAirlineCard", (value) => value["reference"]),
+    checkoutId,
+    paymentId,
+  };
+}
+
+/**
+ * Books as `bookAirlineCardTrip` does, with the Amadeus stub's `server-error` for the completion alone (OAD-022):
+ * Flight Create Orders answers 500 and stores no order, which the OTA cannot tell from a lost answer, so the
+ * completion answers `504 SUPPLIER_TIMEOUT` with the booking's id and keeps the booking `pending` for its
+ * reconciliation (OADR-0003 point 2), its checkout locked and its card payment `processing`.
+ */
+export async function bookLostAirlineCardTrip(
+  api: SeedApi,
+  input: Omit<AirlineCardTripInput, "completionScenario">,
+): Promise<LostAnswerBooking> {
+  const { checkoutId, paymentId, completed } = await completeAirlineCardTrip(api, input, 504, "server-error");
+  const details = objectOf(objectOf(objectOf(completed)["error"])["details"]);
+  return {
+    bookingId: field(details, "checkout.completeWithAirlineCard", (value) => value["bookingId"]),
+    checkoutId,
+    paymentId,
+  };
+}
+
+/** The steps of an airline-card booking to its completion, which answers `expected` (see `bookAirlineCardTrip`). */
+async function completeAirlineCardTrip(
+  api: SeedApi,
+  input: Omit<AirlineCardTripInput, "completionScenario">,
+  expected: 201 | 504,
+  scenario: "ticketing-failed" | "server-error" | undefined,
+): Promise<{ readonly checkoutId: string; readonly paymentId: string; readonly completed: unknown }> {
   const search = await api.call(
     "flights.search",
     "POST",
@@ -726,16 +778,10 @@ export async function bookAirlineCardTrip(api: SeedApi, input: AirlineCardTripIn
     "POST",
     `/v1/checkouts/${checkoutId}/airline-card-completion`,
     { paymentId, expectedTotal, card },
-    201,
-    input.completionScenario === undefined ? {} : { "x-stub-scenario": input.completionScenario },
+    expected,
+    scenario === undefined ? {} : { "x-stub-scenario": scenario },
   );
-  const booking = objectOf(objectOf(completed)["booking"]);
-  return {
-    bookingId: field(booking, "checkout.completeWithAirlineCard", (value) => value["id"]),
-    reference: field(booking, "checkout.completeWithAirlineCard", (value) => value["reference"]),
-    checkoutId,
-    paymentId,
-  };
+  return { checkoutId, paymentId, completed };
 }
 
 /**
@@ -1352,6 +1398,12 @@ export interface StubOrderInput {
   readonly email: string;
   /** Its flight's departure, days from today (the times of day of the stub's offer are kept). */
   readonly daysAhead: number;
+  /**
+   * The text of a general remark of sub-type BACKOFFICE, as `VELEXIS <reference>` makes an order the order of a
+   * Velexis booking (OADR-0003 point 3): the order a staff member finds for a booking in Reconciliation review
+   * (OAD-022). Default: no remark.
+   */
+  readonly backofficeRemark?: string;
 }
 
 /** An order of the stub: its Amadeus id and its record locator. */
@@ -1505,6 +1557,9 @@ export async function createStubOrder(
                 },
               ],
               ticketingAgreement: { option: "CONFIRM" },
+              ...(input.backofficeRemark === undefined
+                ? {}
+                : { remarks: { general: [{ subType: "BACKOFFICE", text: input.backofficeRemark }] } }),
             },
           }),
         }),

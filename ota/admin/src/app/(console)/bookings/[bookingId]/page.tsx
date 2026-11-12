@@ -22,9 +22,10 @@
 // now, by permission (`can()`) and by the booking's `consoleActions` (Issue and Cancel never while the outcome is
 // unknown, `pending`), each with an idempotency key rendered here once per render (`crypto.randomUUID()`), so a double
 // submit replays the same action and a success, which revalidates the page, brings new keys. Issue, Cancel and Resync
-// sit under the header on every tab; the order's edits on the Travellers and contacts tab; the note form on the Timeline
-// and notes tab; Capture and Refund on the payments of the Payments tab, which know their `version` from
-// `console.payments.get`. The client components get plain values only (ids, versions, amounts, the names and contacts
+// sit under the header on every tab, and so does "Close the review" for a booking in Reconciliation review
+// (`canCloseReview` and `bookings:cancel`, OAD-022); the order's edits on the Travellers and contacts tab; the note form
+// on the Timeline and notes tab; Capture and Refund on the payments of the Payments tab, which know their `version`
+// from `console.payments.get`. The client components get plain values only (ids, versions, amounts, the names and contacts
 // they prefill), never the booking.
 import type {
   ConsoleApi,
@@ -38,14 +39,17 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 import {
+  CLOSE_REVIEW_PERMISSION,
   CONTACT_PURPOSES,
   canAllowUnpaid,
   cancelPlanOf,
   capturableOf,
+  closeReviewOffered,
   issuePlanOf,
   keptContactOf,
   keptFieldOf,
   refundableOf,
+  reviewClosurePlanOf,
 } from "@/app/(console)/bookings/[bookingId]/action-rules";
 import { CancelDialog } from "@/app/(console)/bookings/[bookingId]/cancel-dialog";
 import { IssueDialog } from "@/app/(console)/bookings/[bookingId]/issue-dialog";
@@ -57,6 +61,7 @@ import {
   type TravelerEditValues,
 } from "@/app/(console)/bookings/[bookingId]/patch-form";
 import { CaptureDialog, RefundDialog } from "@/app/(console)/bookings/[bookingId]/payment-dialogs";
+import { ReviewDialog } from "@/app/(console)/bookings/[bookingId]/review-dialog";
 import {
   BOOKING_ID_PATTERN,
   BookingDetail,
@@ -327,8 +332,9 @@ function paymentActions(
 
 /**
  * The action controls of the booking for this staff member, now: each one only with its permission and when the
- * booking's `consoleActions` allow it; Issue and Cancel never while the outcome is unknown (`pending`). Tab-specific
- * controls are built for their tab only.
+ * booking's `consoleActions` allow it; Issue and Cancel never while the outcome is unknown (`pending`), and "Close the
+ * review" only then, for a booking in Reconciliation review (`closeReviewOffered`). Tab-specific controls are built for
+ * their tab only.
  */
 function bookingActions(
   booking: ConsoleBooking,
@@ -362,6 +368,11 @@ function bookingActions(
   if (decided && actions.canCancel && can(staff, "bookings:cancel")) {
     bar.push(
       <CancelDialog key="cancel" {...common} idempotencyKey={newKey()} plan={cancelPlanOf(booking)} />,
+    );
+  }
+  if (closeReviewOffered(booking, can(staff, CLOSE_REVIEW_PERMISSION))) {
+    bar.push(
+      <ReviewDialog key="review" {...common} idempotencyKey={newKey()} plan={reviewClosurePlanOf(booking)} />,
     );
   }
   if (actions.canResync && can(staff, "bookings:write")) {

@@ -2857,8 +2857,8 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - A booking not in review, an order whose remark names another booking or that another booking holds, a caller without `bookings:cancel` and another tenant's booking are refused without a change; the runbook and the launch checklist no longer record the limitation.
 - **Verify:** `pnpm contracts:lint && pnpm --filter @velexis/ota-backend test review-closure console-bookings.mapper && pnpm --filter @velexis/ota-backend exec vitest run --config vitest.int.config.ts test/integration/console/review-closure.int.test.ts test/integration/bookings/reconcile.int.test.ts && pnpm --filter @velexis/ota-sdk test`
 
-### OAD-022 · Close a booking in Reconciliation review in the OTA admin
-- **Status:** todo
+### OAD-022 · Close a booking in Reconciliation review in the OTA admin ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-admin
 - **Milestone:** M6
 - **Depends on:** OBE-099, OAD-008

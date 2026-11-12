@@ -44,6 +44,7 @@ import {
   addNote,
   cancelBooking,
   capturePayment,
+  closeBookingReview,
   issueTickets,
   patchBooking,
   refundPayment,
@@ -64,9 +65,10 @@ const RESYNC = `POST /v1/console/bookings/${BOOKING_ID}/resync`;
 const NOTES = `POST /v1/console/bookings/${BOOKING_ID}/notes`;
 const CAPTURE = `POST /v1/console/payments/${PAYMENT_ID}/capture`;
 const REFUND = `POST /v1/console/payments/${PAYMENT_ID}/refunds`;
+const REVIEW = `POST /v1/console/bookings/${BOOKING_ID}/review-closure`;
 
 /** Every route an action of this file may send, besides `console.auth.me`. */
-const ACTION_ROUTES = [ISSUE, CANCEL, PATCH, RESYNC, NOTES, CAPTURE, REFUND];
+const ACTION_ROUTES = [ISSUE, CANCEL, PATCH, RESYNC, NOTES, CAPTURE, REFUND, REVIEW];
 
 let api: FakeOtaApi;
 let sequence = 0;
@@ -1278,6 +1280,233 @@ describe("refundPayment", () => {
   });
 });
 
+// ---- closeBookingReview (OAD-022) -------------------------------------------------------------------------------------
+
+describe("closeBookingReview", () => {
+  const NOTE = "Queue 50 and the Selling Platform checked for BERG around 10:05; no order.";
+
+  function reviewForm(key: string, extra: Record<string, string> = {}): FormData {
+    return formOf({
+      bookingId: BOOKING_ID,
+      version: VERSION,
+      actionKey: key,
+      outcome: "order_found",
+      recordLocator: "L2P9XC",
+      ...extra,
+    });
+  }
+
+  it("[OAD-022 AC1] sends POST /review-closure with If-Match, the dialog's key twice on a double submit, and the order found", async () => {
+    signedIn();
+    api.on(REVIEW, () => bookingAnswer({ status: "confirmed", ticketing: { status: "pending" } }));
+    const key = randomUUID();
+    // Typed in lower case with spaces around it: the API takes capital letters.
+    const form = reviewForm(key, { recordLocator: "  l2p9xc ", note: "Found on queue 50 with the remark." });
+
+    const first = await closeBookingReview(INITIAL_ACTION_STATE, form);
+    const second = await closeBookingReview(INITIAL_ACTION_STATE, form);
+
+    expect(first).toEqual({
+      ok: true,
+      message: "Review closed: the order L2P9XC is recorded and the booking is confirmed.",
+    });
+    expect(second.ok).toBe(true);
+    const sent = api.sent(REVIEW);
+    expect(sent.map((request) => request.headers.get("Idempotency-Key"))).toEqual([key, key]);
+    for (const request of sent) {
+      expect(request.method).toBe("POST");
+      expect(request.headers.get("If-Match")).toBe(`"${VERSION}"`);
+      expect(request.headers.get("X-Velexis-Environment")).toBe("test");
+      expect(request.body).toEqual({
+        outcome: "order_found",
+        recordLocator: "L2P9XC",
+        note: "Found on queue 50 with the remark.",
+      });
+    }
+    expect(nextCache.revalidatePath).toHaveBeenCalledWith(`/bookings/${BOOKING_ID}`);
+  });
+
+  it("[OAD-022 AC1] sends not_booked with its note and never a record locator, and an order found without a note", async () => {
+    signedIn("owner");
+    api.on(REVIEW, () => bookingAnswer({ status: "failed" }));
+
+    const notBooked = await closeBookingReview(
+      INITIAL_ACTION_STATE,
+      // A record locator typed before the choice changed stays out of a closure as not booked.
+      reviewForm(randomUUID(), { outcome: "not_booked", note: `  ${NOTE}  ` }),
+    );
+    const found = await closeBookingReview(INITIAL_ACTION_STATE, reviewForm(randomUUID(), { note: "   " }));
+
+    expect(notBooked).toEqual({ ok: true, message: "Review closed: the booking is not booked (failed)." });
+    expect(found.ok).toBe(true);
+    expect(api.sent(REVIEW).map((request) => request.body)).toEqual([
+      { outcome: "not_booked", note: NOTE },
+      { outcome: "order_found", recordLocator: "L2P9XC" },
+    ]);
+  });
+
+  it("[OAD-022 AC1] refuses a form without an outcome, a record locator or a note where one is needed, before the call", async () => {
+    signedIn();
+    const key = randomUUID();
+    const cases: readonly [Record<string, string>, string, string][] = [
+      [{ outcome: "" }, "outcome", "Choose what you found: Order found or Not booked."],
+      [{ outcome: "cancelled" }, "outcome", "Choose what you found: Order found or Not booked."],
+      [{ recordLocator: "" }, "recordLocator", "Enter the record locator of the order you found."],
+      [
+        { recordLocator: "L2-P9" },
+        "recordLocator",
+        "Enter the record locator: 5 to 8 letters and digits, like L2P9XC.",
+      ],
+      [
+        { outcome: "not_booked", note: " " },
+        "note",
+        "Say what you looked for and found before closing the booking as not booked.",
+      ],
+      [{ outcome: "not_booked", note: "x".repeat(2001) }, "note", "Use at most 2,000 characters."],
+    ];
+    for (const [extra, field, message] of cases) {
+      const state = await closeBookingReview(INITIAL_ACTION_STATE, reviewForm(key, extra));
+      expect(state, JSON.stringify(extra).slice(0, 60)).toMatchObject({
+        ok: false,
+        code: "VALIDATION_FAILED",
+        fieldErrors: { [field]: message },
+      });
+      // A refusal before the call used no key.
+      expect(state.nextActionKey).toBeUndefined();
+    }
+    // A tampered version asks for a reload.
+    expect(await closeBookingReview(INITIAL_ACTION_STATE, reviewForm(key, { version: "3a" }))).toMatchObject({
+      ok: false,
+      message: "This form is out of date. Reload the page and try again.",
+    });
+    expect(actionRequests()).toEqual([]);
+  });
+
+  it("[OAD-022 AC1] shows not_in_review in the dialog's words, with a new key, and a stale version's 412 with the same key", async () => {
+    signedIn();
+    api.on(REVIEW, () =>
+      apiError("CONFLICT", 409, {
+        message: "This booking is not in Reconciliation review.",
+        details: { reason: "not_in_review", status: "confirmed", reconcileOutcome: "found" },
+      }),
+    );
+    const notInReview = await closeBookingReview(INITIAL_ACTION_STATE, reviewForm(randomUUID()));
+    expect(notInReview).toMatchObject({
+      ok: false,
+      code: "CONFLICT",
+      requestId: "req_fake_1",
+      message:
+        "This booking is no longer in Reconciliation review: the review was closed, or the booking changed. Reload the page to see its state.",
+    });
+    expect(notInReview.fieldErrors).toBeUndefined();
+    // A final refusal the API keeps under the key (FIX-W31-OTA): the next submission is a new request.
+    expect(notInReview.nextActionKey).toMatch(/^[0-9a-f-]{36}$/);
+
+    api.on(REVIEW, () => apiError("PRECONDITION_FAILED", 412));
+    const stale = await closeBookingReview(INITIAL_ACTION_STATE, reviewForm(randomUUID()));
+    expect(stale).toMatchObject({
+      ok: false,
+      code: "PRECONDITION_FAILED",
+      message: "This record changed; reload to see the latest version.",
+    });
+    expect(stale.nextActionKey).toBeUndefined();
+    expect(nextCache.revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("[OAD-022 AC1] puts the order's refusals at the record locator: remark_mismatch, ORDER_ALREADY_IMPORTED, no order, another office; an unrecordable order in the dialog's words", async () => {
+    signedIn();
+    const at = async (answer: () => Response): Promise<ActionState> => {
+      api.on(REVIEW, answer);
+      return await closeBookingReview(INITIAL_ACTION_STATE, reviewForm(randomUUID()));
+    };
+
+    const mismatch = await at(() => apiError("CONFLICT", 409, { details: { reason: "remark_mismatch" } }));
+    expect(mismatch.fieldErrors?.["recordLocator"]).toBe(
+      "The order with this record locator does not carry this booking's remark (VELEXIS and the booking's reference). Check the record locator in the queuing office.",
+    );
+    expect(mismatch.message).toBe(mismatch.fieldErrors?.["recordLocator"]);
+
+    const held = await at(() =>
+      apiError("ORDER_ALREADY_IMPORTED", 409, {
+        details: { bookingId: "bkg_01JA9ZZ1M3P5R7T9V1X3Z5B7D9", reference: "VX9M4R" },
+      }),
+    );
+    expect(held).toMatchObject({
+      code: "ORDER_ALREADY_IMPORTED",
+      fieldErrors: {
+        recordLocator:
+          "This order is already booking VX9M4R: it cannot close this review. Check the record locator.",
+      },
+    });
+
+    const none = await at(() =>
+      apiError("NOT_FOUND", 404, {
+        supplier: { provider: "amadeus", status: 404, code: 1931, title: "NO RECORD FOUND" },
+      }),
+    );
+    expect(none).toMatchObject({
+      code: "NOT_FOUND",
+      message: "Amadeus has no order with this record locator. Check it in the queuing office.",
+      fieldErrors: {
+        recordLocator: "Amadeus has no order with this record locator. Check it in the queuing office.",
+      },
+    });
+    // A booking the environment does not have is no record locator's fault.
+    const gone = await at(() => apiError("NOT_FOUND", 404));
+    expect(gone.fieldErrors).toBeUndefined();
+
+    const office = await at(() => apiError("OFFICE_NOT_ALLOWED", 403));
+    expect(office.fieldErrors?.["recordLocator"]).toBe(
+      "This order belongs to an office outside this OTA's offices. Check the record locator.",
+    );
+
+    // The order carries the booking's remark but cannot be recorded: nothing to correct at a field, the request id
+    // for support, and a new key (a final refusal the API keeps under the key).
+    const unrecordable = await at(() =>
+      apiError("UNPROCESSABLE", 422, { details: { reason: "order_not_recordable" } }),
+    );
+    expect(unrecordable).toMatchObject({
+      ok: false,
+      code: "UNPROCESSABLE",
+      requestId: "req_fake_1",
+      message:
+        "The order carries this booking's remark but cannot be recorded on it. Contact Velexis support with the request id.",
+    });
+    expect(unrecordable.fieldErrors).toBeUndefined();
+    expect(unrecordable.nextActionKey).toMatch(/^[0-9a-f-]{36}$/);
+    expect(nextCache.revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("[OAD-022 AC1] shows the API's card-number refusal at the note, whichever pointer the API answers", async () => {
+    signedIn();
+    for (const path of ["/body/note", "/note"]) {
+      api.on(REVIEW, () =>
+        apiError("VALIDATION_FAILED", 400, {
+          fieldErrors: [{ path, code: "card_data", message: "A note never holds a card number: remove it." }],
+        }),
+      );
+      const state = await closeBookingReview(
+        INITIAL_ACTION_STATE,
+        reviewForm(randomUUID(), { outcome: "not_booked", note: "Called the traveller about a charge." }),
+      );
+      expect(state, path).toMatchObject({
+        ok: false,
+        code: "VALIDATION_FAILED",
+        fieldErrors: { note: "A note never holds a card number: remove it." },
+      });
+    }
+    // The closure's own record locator check answers `/body/recordLocator`.
+    api.on(REVIEW, () =>
+      apiError("VALIDATION_FAILED", 400, {
+        fieldErrors: [{ path: "/body/recordLocator", code: "required", message: "Give the record locator." }],
+      }),
+    );
+    expect((await closeBookingReview(INITIAL_ACTION_STATE, reviewForm(randomUUID()))).fieldErrors).toEqual({
+      recordLocator: "Give the record locator.",
+    });
+  });
+});
+
 // ---- Every action -----------------------------------------------------------------------------------------------------
 
 /** One valid submission of each action, and the route it sends. */
@@ -1387,6 +1616,23 @@ const SUBMISSIONS: readonly {
         }),
       ),
     answer: () => Response.json({ payment: {}, refund: {} }, { status: 201 }),
+  },
+  {
+    name: "closeBookingReview",
+    permission: "bookings:cancel",
+    route: REVIEW,
+    run: () =>
+      closeBookingReview(
+        INITIAL_ACTION_STATE,
+        formOf({
+          bookingId: BOOKING_ID,
+          version: VERSION,
+          actionKey: randomUUID(),
+          outcome: "not_booked",
+          note: "Queue 50 checked; no order.",
+        }),
+      ),
+    answer: () => bookingAnswer({ status: "failed" }),
   },
 ];
 
@@ -1573,7 +1819,14 @@ describe("the idempotency key after a refusal (OADR-0018 point 5, revision of 20
 
   it("[FIX-W32-OTA AC3] hands no new key to any keyed action after 409 IDEMPOTENCY_KEY_REUSED, and still one after another stored 4xx", async () => {
     signedIn("owner");
-    const keyed = new Set(["issueTickets", "cancelBooking", "addNote", "capturePayment", "refundPayment"]);
+    const keyed = new Set([
+      "issueTickets",
+      "cancelBooking",
+      "addNote",
+      "capturePayment",
+      "refundPayment",
+      "closeBookingReview",
+    ]);
     for (const submission of SUBMISSIONS.filter((entry) => keyed.has(entry.name))) {
       api.on(submission.route, () => apiError("IDEMPOTENCY_KEY_REUSED", 409));
       const state = await submission.run();
@@ -1638,7 +1891,14 @@ describe("the idempotency key after a refusal (OADR-0018 point 5, revision of 20
 
   it("[FIX-W31-OTA AC2] gives every keyed action a new key after a final 4xx, and none to a patch or a resync, which send none", async () => {
     signedIn("owner");
-    const keyed = new Set(["issueTickets", "cancelBooking", "addNote", "capturePayment", "refundPayment"]);
+    const keyed = new Set([
+      "issueTickets",
+      "cancelBooking",
+      "addNote",
+      "capturePayment",
+      "refundPayment",
+      "closeBookingReview",
+    ]);
     for (const submission of SUBMISSIONS) {
       api.on(submission.route, () =>
         apiError("BOOKING_NOT_MODIFIABLE", 409, { details: { reason: "pending" } }),

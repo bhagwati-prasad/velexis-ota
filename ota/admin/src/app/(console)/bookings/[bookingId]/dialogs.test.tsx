@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
 // The dialogs and forms of a booking's actions (OAD-008: issue-dialog.tsx, cancel-dialog.tsx, payment-dialogs.tsx,
-// patch-form.tsx, note-form.tsx) in a DOM, with their server actions mocked (README §12): what each dialog offers for
-// the booking it is given, the hidden fields it posts (the idempotency key the page rendered, `version` for `ifMatch`),
-// the action's field errors on their fields, and that no input of any of them asks for a card (OADR-0018 point 8).
+// patch-form.tsx, note-form.tsx; OAD-022: review-dialog.tsx) in a DOM, with their server actions mocked (README §12):
+// what each dialog offers for the booking it is given, the hidden fields it posts (the idempotency key the page
+// rendered, `version` for `ifMatch`), the action's field errors on their fields, and that no input of any of them asks
+// for a card (OADR-0018 point 8).
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -14,6 +15,7 @@ const actions = vi.hoisted(() => ({
   addNote: vi.fn(),
   capturePayment: vi.fn(),
   refundPayment: vi.fn(),
+  closeBookingReview: vi.fn(),
 }));
 vi.mock("./actions", () => actions);
 // The environment badge's module imports the switch's server actions; the dialogs never call them.
@@ -22,12 +24,18 @@ vi.mock("@/app/(console)/env-actions", () => ({ switchEnvironment: vi.fn(), rese
 import { CONFIRM_STRINGS } from "@/components/confirm-dialog";
 import type { ActionState } from "@/lib/action-state";
 
-import { REFUND_NOT_AVAILABLE_CODE, type CancelPlan, type IssuePlan } from "./action-rules";
+import {
+  REFUND_NOT_AVAILABLE_CODE,
+  type CancelPlan,
+  type IssuePlan,
+  type ReviewClosurePlan,
+} from "./action-rules";
 import { CANCEL_STRINGS, CancelDialog } from "./cancel-dialog";
 import { ISSUE_STRINGS, IssueDialog } from "./issue-dialog";
 import { NOTE_STRINGS, NoteForm } from "./note-form";
 import { BookingEditPanel, PATCH_STRINGS, RESYNC_STRINGS, ResyncForm } from "./patch-form";
 import { CaptureDialog, PAYMENT_STRINGS, RefundDialog } from "./payment-dialogs";
+import { REVIEW_STRINGS, ReviewDialog } from "./review-dialog";
 
 const BOOKING_ID = "bkg_01JA4CG3S8W1Z4C7F0H3L6P9T2";
 const PAYMENT_ID = "pay_01JA4CF2R7V0Y3B6D9G2K5N8Q1";
@@ -122,6 +130,19 @@ function cancelDialog(plan: CancelPlan) {
       version={3}
       environment="test"
       idempotencyKey={KEY}
+      plan={plan}
+    />
+  );
+}
+
+function reviewDialog(plan: ReviewClosurePlan, key = KEY) {
+  return (
+    <ReviewDialog
+      bookingId={BOOKING_ID}
+      reference="VX7K2Q"
+      version={3}
+      environment="test"
+      idempotencyKey={key}
       plan={plan}
     />
   );
@@ -440,6 +461,148 @@ describe("CancelDialog", () => {
   });
 });
 
+describe("ReviewDialog (OAD-022)", () => {
+  const AUTHORIZED: ReviewClosurePlan = { money: { kind: "authorized", authorized: eur("412.30") } };
+
+  it("[OAD-022 AC1] says what follows each outcome and posts the order found with its record locator and the page's key", async () => {
+    render(reviewDialog(AUTHORIZED));
+    const { dialog, form } = await open(REVIEW_STRINGS.trigger);
+
+    expect(within(dialog).getByText(REVIEW_STRINGS.summary("VX7K2Q"))).toBeTruthy();
+    // Both choices name what follows for this booking's authorisation before anything is sent.
+    expect(within(dialog).getByText(/The authorised €412\.30 is captured/)).toBeTruthy();
+    expect(within(dialog).getByText(/the authorised €412\.30 is released/)).toBeTruthy();
+    const radios = within(dialog).getAllByRole("radio") as HTMLInputElement[];
+    expect(radios.map((radio) => [radio.name, radio.value, radio.checked])).toEqual([
+      ["outcome", "order_found", false],
+      ["outcome", "not_booked", false],
+    ]);
+    // The closure's note is its reason: no confirmation-dialog reason, and no record locator before "Order found".
+    expect(within(dialog).queryByLabelText(CONFIRM_STRINGS.reasonLabel)).toBeNull();
+    expect(within(dialog).queryByLabelText(REVIEW_STRINGS.recordLocator)).toBeNull();
+    expect(hidden(form, "bookingId")).toBe(BOOKING_ID);
+    expect(hidden(form, "version")).toBe("3");
+    expect(hidden(form, "actionKey")).toBe(KEY);
+
+    fireEvent.click(within(dialog).getByLabelText("Order found"));
+    fireEvent.change(await within(dialog).findByLabelText(REVIEW_STRINGS.recordLocator, {}, UI_WAIT), {
+      target: { value: "l2p9xc" },
+    });
+    fireEvent.change(within(dialog).getByLabelText(REVIEW_STRINGS.note), {
+      target: { value: "Found on queue 50." },
+    });
+    fireEvent.submit(form);
+    await waitFor(() => expect(actions.closeBookingReview).toHaveBeenCalledTimes(1), UI_WAIT);
+    expect(Object.fromEntries(lastForm(actions.closeBookingReview).entries())).toEqual({
+      bookingId: BOOKING_ID,
+      version: "3",
+      actionKey: KEY,
+      outcome: "order_found",
+      recordLocator: "l2p9xc",
+      note: "Found on queue 50.",
+    });
+    // A success closes the dialog, with the action's message beside the trigger.
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull(), UI_WAIT);
+    expect(screen.getByRole("status").textContent).toBe("Done.");
+  });
+
+  it("[OAD-022 AC1] asks for the note of a booking not booked and tells an airline-card booking's agent to ask the airline", async () => {
+    render(reviewDialog({ money: { kind: "airline" } }));
+    const { dialog, form } = await open(REVIEW_STRINGS.trigger);
+
+    expect(within(dialog).getByText(REVIEW_STRINGS.notBooked.airline)).toBeTruthy();
+    expect(within(dialog).getByText(REVIEW_STRINGS.found.airline)).toBeTruthy();
+    fireEvent.click(within(dialog).getByLabelText("Not booked"));
+    const note = await within(dialog).findByLabelText(REVIEW_STRINGS.noteRequired, {}, UI_WAIT);
+    expect(note.getAttribute("aria-required")).toBe("true");
+    expect(note.getAttribute("maxlength")).toBe("2000");
+    expect(within(dialog).queryByLabelText(REVIEW_STRINGS.recordLocator)).toBeNull();
+    fireEvent.change(note, { target: { value: "Queue 50 checked; no order." } });
+    fireEvent.submit(form);
+
+    await waitFor(() => expect(actions.closeBookingReview).toHaveBeenCalledTimes(1), UI_WAIT);
+    const sent = lastForm(actions.closeBookingReview);
+    expect(sent.get("outcome")).toBe("not_booked");
+    expect(sent.get("note")).toBe("Queue 50 checked; no order.");
+    expect(sent.has("recordLocator")).toBe(false);
+  });
+
+  it("[OAD-022 AC1] keeps the dialog open with the API's refusals: not in review, a stale version, at the record locator and at the note", async () => {
+    actions.closeBookingReview.mockResolvedValueOnce({
+      ok: false,
+      code: "CONFLICT",
+      message: "This booking is no longer in Reconciliation review.",
+      requestId: "req_409",
+      nextActionKey: OTHER_KEY,
+    } satisfies ActionState);
+    actions.closeBookingReview.mockResolvedValueOnce({
+      ok: false,
+      code: "PRECONDITION_FAILED",
+      message: "This record changed; reload to see the latest version.",
+    } satisfies ActionState);
+    const mismatch = "The order with this record locator does not carry this booking's remark.";
+    actions.closeBookingReview.mockResolvedValueOnce({
+      ok: false,
+      code: "CONFLICT",
+      message: mismatch,
+      fieldErrors: { recordLocator: mismatch },
+    } satisfies ActionState);
+    const cardRefusal = "A note never holds a card number: remove it.";
+    actions.closeBookingReview.mockResolvedValueOnce({
+      ok: false,
+      code: "VALIDATION_FAILED",
+      message: "Some values were not accepted. Check the highlighted fields and try again.",
+      fieldErrors: { note: cardRefusal },
+    } satisfies ActionState);
+    render(reviewDialog(AUTHORIZED));
+    const { dialog, form } = await open(REVIEW_STRINGS.trigger);
+    fireEvent.click(within(dialog).getByLabelText("Order found"));
+    fireEvent.change(await within(dialog).findByLabelText(REVIEW_STRINGS.recordLocator, {}, UI_WAIT), {
+      target: { value: "L2P9XC" },
+    });
+
+    fireEvent.submit(form);
+    const alert = await within(dialog).findByRole("alert", {}, UI_WAIT);
+    expect(alert.textContent).toContain("This booking is no longer in Reconciliation review.");
+    expect(alert.textContent).toContain("req_409");
+
+    fireEvent.submit(form);
+    expect(
+      await within(dialog).findByText("This record changed; reload to see the latest version.", {}, UI_WAIT),
+    ).toBeTruthy();
+
+    fireEvent.submit(form);
+    await waitFor(
+      () =>
+        expect(within(dialog).getByLabelText(REVIEW_STRINGS.recordLocator).getAttribute("aria-invalid")).toBe(
+          "true",
+        ),
+      UI_WAIT,
+    );
+
+    fireEvent.submit(form);
+    await waitFor(
+      () =>
+        expect(within(dialog).getByLabelText(REVIEW_STRINGS.note).getAttribute("aria-invalid")).toBe("true"),
+      UI_WAIT,
+    );
+    const noteError = within(dialog)
+      .getAllByText(cardRefusal)
+      .find((element) => element.id !== "");
+    expect(within(dialog).getByLabelText(REVIEW_STRINGS.note).getAttribute("aria-describedby")).toContain(
+      noteError?.id,
+    );
+    // Still open, with what was typed; the refusal of the 409 brought a new key, which every later submission sent.
+    expect(screen.getByRole("dialog")).toBe(dialog);
+    expect((within(dialog).getByLabelText(REVIEW_STRINGS.recordLocator) as HTMLInputElement).value).toBe(
+      "L2P9XC",
+    );
+    expect(
+      actions.closeBookingReview.mock.calls.map(([, sent]) => (sent as FormData).get("actionKey")),
+    ).toEqual([KEY, OTHER_KEY, OTHER_KEY, OTHER_KEY]);
+  });
+});
+
 describe("CaptureDialog and RefundDialog", () => {
   it("post the payment, its version (capture), the currency and the key the page rendered", async () => {
     render(
@@ -687,6 +850,7 @@ describe("no card input", () => {
         />
         <NoteForm bookingId={BOOKING_ID} idempotencyKey={KEY} />
         <ResyncForm bookingId={BOOKING_ID} />
+        {reviewDialog({ money: { kind: "airline" } })}
       </>,
     );
     const triggers = [
@@ -698,6 +862,7 @@ describe("no card input", () => {
       PATCH_STRINGS.editContact("Standard"),
       PATCH_STRINGS.addRemark,
       PATCH_STRINGS.agreement,
+      REVIEW_STRINGS.trigger,
     ];
     const seen: string[] = controlsOf(document.body);
     for (const trigger of triggers) {
@@ -707,6 +872,12 @@ describe("no card input", () => {
       if (amountMode !== null) {
         fireEvent.click(amountMode);
         await within(dialog).findByLabelText(CANCEL_STRINGS.amount("EUR"), {}, UI_WAIT);
+      }
+      // The review dialog's record locator appears with "Order found".
+      const orderFound = within(dialog).queryByLabelText("Order found");
+      if (orderFound !== null) {
+        fireEvent.click(orderFound);
+        await within(dialog).findByLabelText(REVIEW_STRINGS.recordLocator, {}, UI_WAIT);
       }
       seen.push(...controlsOf(dialog));
       fireEvent.click(within(dialog).getByRole("button", { name: CONFIRM_STRINGS.cancel }));

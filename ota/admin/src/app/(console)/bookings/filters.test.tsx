@@ -290,6 +290,20 @@ describe("BookingViews", () => {
     ).toHaveLength(1);
   });
 
+  it("[OAD-022] keeps the current view's light text on its dark pill under the pointer (axe color-contrast)", () => {
+    navigation.searchParams = new URLSearchParams("reconcileOutcome=manual_review");
+    render(<BookingViews />);
+
+    const nav = screen.getByRole("navigation", { name: FILTER_STRINGS.viewsLabel });
+    const current = within(nav).getByRole("link", { name: "Reconciliation review" });
+    expect(current.getAttribute("aria-current")).toBe("page");
+    // The base's hover text colour (dark, for the light pills) gives way to the dark pill's light one.
+    expect(current.classList.contains("hover:text-primary-foreground")).toBe(true);
+    expect(current.classList.contains("hover:text-accent-foreground")).toBe(false);
+    const other = within(nav).getByRole("link", { name: "Ticketing problems" });
+    expect(other.classList.contains("hover:text-accent-foreground")).toBe(true);
+  });
+
   it("marks no view when the URL adds a filter to it", () => {
     navigation.searchParams = new URLSearchParams("status=cancelled&q=berg");
     render(<BookingViews />);
