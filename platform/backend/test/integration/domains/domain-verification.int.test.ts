@@ -364,6 +364,21 @@ async function jobsFor(name: string, domainId: string): Promise<Job[]> {
   return jobs.filter((job) => job.name === name && (job.data as { domainId?: string }).domainId === domainId);
 }
 
+/**
+ * Waits until every `domain.verify` job of the domain has completed. The job's transaction commits first and its work
+ * after the commit follows in order (the owners' e-mails enqueued, then the `domain` event, then the TLS probe): a
+ * test that has seen the committed row must wait for the job before it reads what that work sends (`settle`, Mailpit).
+ */
+async function waitForVerifyJobs(domainId: string): Promise<void> {
+  await vi.waitFor(async () => {
+    const jobs = await jobsFor(DOMAIN_VERIFY_JOB, domainId);
+    expect(jobs.length, `the domain.verify jobs of ${domainId}`).toBeGreaterThan(0);
+    for (const job of jobs) {
+      expect(await job.getState(), `domain.verify job ${job.id ?? ""}`).toBe("completed");
+    }
+  }, WAIT);
+}
+
 /** Waits until a marker published now comes back: every event published before it has arrived. */
 async function settle(): Promise<void> {
   const marker = host("marker");
@@ -448,6 +463,7 @@ describe("domain.verify: the worker's DNS check", () => {
       domainsUrl: `${t.config.PUBLIC_PORTAL_URL}/otas/${ota.tenant.id}/domains`,
     });
 
+    await waitForVerifyJobs(added.id);
     await settle();
     expect(eventsFor(hostname)).toEqual([{ v: 1, type: "domain", hostname }]);
 
@@ -744,6 +760,7 @@ describe("the verification window", () => {
     const emails = await emailsOf(ota.tenant.id, "domain.failed");
     expect(emails.map((email) => email["account_id"]).sort()).toEqual(ota.owners.map(({ id }) => id).sort());
     expect(emails[0]?.["data"]).toMatchObject({ hostname, reason: DNS_CHECK_ERROR_TEXT.txt_missing });
+    await waitForVerifyJobs(added.id);
     const message = await waitForMessage({ to: ota.owners[0]?.email ?? "", timeoutMs: MAIL_WAIT_MS });
     expect(message.Subject).toBe(`${hostname} could not be verified for ${ota.tenant.name}`);
     await settle();
