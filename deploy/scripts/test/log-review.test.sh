@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =====================================================================================================
 # log-review.test.sh — tests deploy/scripts/log-review.sh (velexis-logreview) without root, systemd, a journal or SMTP
-# (task X-038).
+# (tasks X-038 and X-044).
 #
 #   bash deploy/scripts/test/log-review.test.sh
 #
@@ -12,7 +12,9 @@
 #   VELEXIS_ROOT   a temporary folder laid out like the VM: /var/lib/velexis (the state of velexis-shiplogs, its last
 #                  success and failure, which the test sets for each run, and deploy-history), /var/log/velexis
 #                  (security/ and provision.log), /var/log/aide/aide.log (AIDE's daily check, as dailyaidecheck of
-#                  aide-common 0.18 writes it) and the home folders of the accounts with their authorized_keys
+#                  aide-common 0.18 writes it, with AIDE 0.18.6's report in the layout the real binary prints: the
+#                  added and changed entries, then each one's detail, its values cut into 32-byte pieces) and the home
+#                  folders of the accounts with their authorized_keys
 #   SHIP_LOGS      the real deploy/scripts/ship-logs.sh, which reads the entries through
 #   JOURNALCTL     a fake journalctl over a fake journal export (JSON lines as `journalctl -o json` writes them):
 #                  the entries after the cursor of --cursor-file (then the last one's cursor is written to it), or
@@ -39,6 +41,12 @@
 #       root logins, sudo and su, auditd events by watched key, AIDE, unit failures, the WAF's matches by rule and which
 #       were refused (403), the airline-card route's 4xx and 5xx, refused outbound connections by destination and user,
 #       fail2ban, the apps' security events and warnings; --summary sends one at once; --status;
+#    8. AIDE entries that change again (task X-044, its checks end in [X-044 AC<n>]), one report a day: the first run
+#       after the upgrade reads X-038's state file (entries only) without an alert and keeps each entry's detail; a file
+#       a deploy changed, listed again unchanged, raises nothing; the same file changed again outside a deploy (new
+#       hashes) raises aide-change, naming what differs, once; a directory whose only new detail is its times follows
+#       the same rule; changes after a later deploy raise nothing, and the day after neither; an added entry, which
+#       AIDE details with report_level=added_removed_entries (its new values alone), is compared the same way;
 #   and over the whole run: no summary or alert holds a value of a WAF line's query, or any [uri] (AC2, lead decision
 #   (17i) of 2026-11-11).
 #
@@ -214,9 +222,88 @@ access_line() { # client uri status [user-agent]
 new_key() { head -c 51 /dev/urandom | base64 -w0; }
 fp_of() { printf 'SHA256:%s' "$(printf '%s' "$1" | base64 -d | openssl dgst -sha256 -binary | base64 -w0 | tr -d '=')"; }
 shipped_ok() { printf '%s 12 security-x.jsonl.zst.age\n' "$(($1 - 600))" >"$SHIPSTATE/last-success"; rm -f "$SHIPSTATE/last-failure"; }
-aide_report() { # "YYYY-MM-DD HH:MM:SS" exit-code [kind path]... -> AIDE's log as dailyaidecheck writes it
-  local start="$1" code="$2"
+aide_attr() { # name old new -> one attribute of AIDE 0.18.6's "Detailed information about changes", as its
+  # report_plain.c prints it: ` %-10s%c %-33.32s| %.32s`, each value cut into 32-byte pieces on the lines below
+  local name="$1" old="$2" new="$3" k=0 c
+  while [ $((${#old} - 33 * k)) -ge 0 ] || [ $((${#new} - 33 * k)) -ge 0 ]; do
+    c=$((k * 32))
+    if [ "$k" = 0 ]; then
+      printf ' %-10s: %-33.32s| %.32s\n' "$name" "${old:c}" "${new:c}"
+    else
+      printf ' %-10s  %-33.32s| %.32s\n' "" "${old:c}" "${new:c}"
+    fi
+    k=$((k + 1))
+  done
+}
+aide_attr_new() { # name value... -> one attribute of an added entry, which AIDE 0.18.6 details only with
+  # report_level=added_removed_entries: no old value, ` %-10s%c %-33c  %.32s`, each value cut into 32-byte pieces, a
+  # second value (an ACL's next line) on lines of its own with no name
+  local name="$1" v i=0 k c
+  shift
+  for v in "$@"; do
+    k=0
+    while [ $((${#v} - 33 * k)) -ge 0 ]; do
+      c=$((k * 32))
+      if [ $((i + k)) = 0 ]; then
+        printf ' %-10s: %-33s  %.32s\n' "$name" "" "${v:c}"
+      else
+        printf ' %-10s  %-33s  %.32s\n' "" "" "${v:c}"
+      fi
+      k=$((k + 1))
+    done
+    i=$((i + 1))
+  done
+}
+aide_time() { date -u -d "@$(($(date -u -d "$TODAY" +%s) - 30 * 86400 + $1 * 86400))" '+%Y-%m-%d %H:%M:%S +0000'; }
+aide_hash() { printf '%s %s' "$2" "$3" | openssl dgst "-$1" -binary | base64 -w0; } # algorithm path version
+aide_detail() { # f|d|t|a path version -> the path's block of the detailed section (a file, a directory, a file only
+  # touched, as systemd touches a timer's stamp file, or an added file: its new values alone); version 0 is AIDE's
+  # database
+  local p="$2" v="$3"
+  echo
+  if [ "$1" = a ]; then
+    printf 'File: %s\n' "$p"
+    aide_attr_new 'File type' File
+    aide_attr_new Size "$((1200 + v))"
+    aide_attr_new Perm -rwxr-xr-x
+    aide_attr_new Uid 0
+    aide_attr_new Gid 0
+    aide_attr_new Mtime "$(aide_time "$v")"
+    aide_attr_new Ctime "$(aide_time "$v")"
+    aide_attr_new Inode 4242
+    aide_attr_new Linkcount 1
+    aide_attr_new SHA256 "$(aide_hash sha256 "$p" "$v")"
+    aide_attr_new SHA512 "$(aide_hash sha512 "$p" "$v")"
+    aide_attr_new ACL 'A: user::rwx' 'A: group::r-x' 'A: other::r-x'
+    aide_attr_new XAttrs num=0
+  elif [ "$1" = d ]; then
+    printf 'Directory: %s\n' "$p"
+    aide_attr Mtime "$(aide_time 0)" "$(aide_time "$v")"
+    aide_attr Ctime "$(aide_time 0)" "$(aide_time "$v")"
+    aide_attr Linkcount 3 4
+  elif [ "$1" = t ]; then
+    printf 'File: %s\n' "$p"
+    aide_attr Mtime "$(aide_time 0)" "$(aide_time "$v")"
+    aide_attr Ctime "$(aide_time 0)" "$(aide_time "$v")"
+  else
+    printf 'File: %s\n' "$p"
+    aide_attr Size 1200 "$((1200 + v))"
+    aide_attr Mtime "$(aide_time 0)" "$(aide_time "$v")"
+    aide_attr Ctime "$(aide_time 0)" "$(aide_time "$v")"
+    aide_attr SHA256 "$(aide_hash sha256 "$p" 0)" "$(aide_hash sha256 "$p" "$v")"
+    aide_attr SHA512 "$(aide_hash sha512 "$p" 0)" "$(aide_hash sha512 "$p" "$v")"
+  fi
+}
+aide_report() { # "YYYY-MM-DD HH:MM:SS" exit-code [f|d|t|a path version]... -> AIDE's log as dailyaidecheck writes
+  # it, with AIDE 0.18.6's report (its layout as the real binary prints it): each path in Added entries (a: then the
+  # report has report_level=added_removed_entries) or Changed entries, then its detail, the new values those of the
+  # given version of the file (f), directory (d), touched file (t) or added file (a)
+  local start="$1" code="$2" i na=0 nc=0
   shift 2
+  local -a e=("$@")
+  for ((i = 0; i < ${#e[@]}; i += 3)); do
+    if [ "${e[i]}" = a ]; then na=$((na + 1)); else nc=$((nc + 1)); fi
+  done
   {
     printf 'aide run on vm-test.example.com started at %s.\n' "$start"
     if [ "$code" = 0 ]; then
@@ -224,14 +311,36 @@ aide_report() { # "YYYY-MM-DD HH:MM:SS" exit-code [kind path]... -> AIDE's log a
     else
       printf 'AIDE returned with exit code %s. Changed entries detected!\n\nAIDE produced no errors.\n' "$code"
       printf 'AIDE output (40 lines):\nbegin timestamp %s\nStart timestamp: %s +0000 (AIDE 0.18.6)\n' "$start" "$start"
-      printf 'AIDE found differences between database and filesystem!!\n\nSummary:\n  Total number of entries:\t4242\n'
-      printf '  Added entries:\t\t0\n  Removed entries:\t\t0\n  Changed entries:\t\t%s\n\n' "$(($# / 2))"
-      printf -- '---------------------------------------------------\nChanged entries:\n'
-      printf -- '---------------------------------------------------\n\n'
-      while [ $# -ge 2 ]; do printf 'f   ...    .C... : %s\n' "$2"; shift 2; done
+      printf 'AIDE found differences between database and filesystem!!\n'
+      [ "$na" = 0 ] || printf 'Report level: added_removed_entries\n'
+      printf '\nSummary:\n  Total number of entries:\t4242\n'
+      printf '  Added entries:\t\t%s\n  Removed entries:\t\t0\n  Changed entries:\t\t%s\n' "$na" "$nc"
+      if [ "$na" != 0 ]; then
+        printf -- '\n---------------------------------------------------\nAdded entries:\n'
+        printf -- '---------------------------------------------------\n\n'
+        for ((i = 0; i < ${#e[@]}; i += 3)); do
+          if [ "${e[i]}" = a ]; then printf 'f+++++++++++++++++: %s\n' "${e[i + 1]}"; fi
+        done
+      fi
+      if [ "$nc" != 0 ]; then
+        printf -- '\n---------------------------------------------------\nChanged entries:\n'
+        printf -- '---------------------------------------------------\n\n'
+        for ((i = 0; i < ${#e[@]}; i += 3)); do
+          case "${e[i]}" in
+            a) ;;
+            d) printf 'd =.... mc.. .. . : %s\n' "${e[i + 1]}" ;;
+            t) printf 'f =.... mc.. .. . : %s\n' "${e[i + 1]}" ;;
+            *) printf 'f >.... mc..H.. . : %s\n' "${e[i + 1]}" ;;
+          esac
+        done
+      fi
       printf -- '\n---------------------------------------------------\nDetailed information about changes:\n'
-      printf -- '---------------------------------------------------\n\nFile: /etc/hosts\n  SHA256    : a | b\n'
-      printf 'End of AIDE output.\n\n'
+      printf -- '---------------------------------------------------\n'
+      for ((i = 0; i < ${#e[@]}; i += 3)); do aide_detail "${e[i]}" "${e[i + 1]}" "${e[i + 2]}"; done
+      printf -- '\n\n---------------------------------------------------\nThe attributes of the (uncompressed) database(s):\n'
+      printf -- '---------------------------------------------------\n\n/var/lib/aide/aide.db\n'
+      printf ' %-10s: %.32s\n' SHA256 "$(aide_hash sha256 aide.db "$start")"
+      printf '\n\nEnd timestamp: %s +0000 (run time: 4m 2s)\nEnd of AIDE output.\n\n' "$start"
     fi
     printf 'End of AIDE daily aide check at %s, run time 42 seconds\n' "${start%:*}"
   } >"$AIDE_LOG"
@@ -299,7 +408,7 @@ add_entry $((T0 + H + 1810)) "$(sshd "Accepted publickey for deploy from 192.0.2
 add_entry $((T0 + H + 1820)) "$(plain auditd.service audisp-syslog 6 syslog 'type=SYSCALL msg=audit(1794510757.370:777): arch=c000003e syscall=257 success=yes exit=3 auid=1000 uid=0 tty=pts0 comm="cp" exe="/usr/bin/cp" key="velexis-keys"')"
 add_entry $((T0 + H + 1820)) "$(plain auditd.service audisp-syslog 6 syslog 'type=PATH msg=audit(1794510757.370:777): item=1 name="/etc/velexis/keys/ota/master-v9.key" nametype=CREATE')"
 add_entry $((T0 + H + 1821)) "$(plain auditd.service audisp-syslog 6 syslog 'type=SYSCALL msg=audit(1794510757.400:778): arch=c000003e syscall=257 success=yes comm="vi" exe="/usr/bin/vim.basic" key="velexis-config"')"
-aide_report "$TODAY 08:50:00" 4 changed /etc/ssh/sshd_config.d/00-velexis.conf
+aide_report "$TODAY 08:50:00" 4 f /etc/ssh/sshd_config.d/00-velexis.conf 1
 printf '%s 3 security-y.jsonl.zst.age\n' $((T0 + 2 * H - 900)) >"$SHIPSTATE/last-success"
 printf '%s the upload of security-z.jsonl.zst.age (40 entries) to offsite:b/logs failed\n' $((T0 + 2 * H - 300)) \
   >"$SHIPSTATE/last-failure"
@@ -341,7 +450,7 @@ same "two recoveries, one message each" "$(new_subjects | LC_ALL=C sort | paste 
 # ---- 5. AIDE after a deploy -------------------------------------------------------------------------------------------
 step "An AIDE change after a deploy is expected"
 printf '%s deploy-2222222\n' "$(date -u -d "$TODAY 10:30:00" +%Y-%m-%dT%H:%M:%SZ)" >>"$LIB/deploy-history"
-aide_report "$TODAY 11:00:00" 4 changed /etc/ssh/sshd_config.d/00-velexis.conf changed /etc/systemd/system/velexis-ota-api.service
+aide_report "$TODAY 11:00:00" 4 f /etc/ssh/sshd_config.d/00-velexis.conf 1 f /etc/systemd/system/velexis-ota-api.service 1
 shipped_ok $((T0 + 5 * H))
 run_review $((T0 + 5 * H))
 same "no message for the deploy's change" "$RC $(new_count)" "0 0"
@@ -432,6 +541,94 @@ run_review $((T0 + 24 * H))
 same "07:20: no second summary that day" "$RC $(new_count)" "0 0"
 run_review $((T0 + 24 * H)) --summary
 same "--summary sends one at once" "$RC $(new_count)" "0 1"
+
+# ---- 8. AIDE: an entry that changed again (X-044) ---------------------------------------------------------------------
+# One AIDE report a day at 02:13 (day N after today), reviewed at 03:20 (before the 06:00 summary): T0 + N days - 4 h.
+day() { date -u -d "$TODAY +$1 day" +%F; }
+at_day() { echo $((T0 + $1 * 24 * H - 4 * H + ${2:-0})); }
+review_day() { shipped_ok "$(at_day "$@")"; run_review "$(at_day "$@")"; }
+SSHD_CONF=/etc/ssh/sshd_config.d/00-velexis.conf
+UNIT=/etc/systemd/system/velexis-ota-api.service # changed by deploy-2222222 (case 5)
+SBIN=/usr/local/sbin
+STAMP=/var/lib/systemd/timers/stamp-velexis-log-review.timer # systemd touches it at every run: new times each day
+T=$'\t'
+step "X-044: the first run after the upgrade reads X-038's state file (entries only) without a false alert [X-044 AC2]"
+# The state as X-038's log-review.sh left it after a report of tomorrow: section and path, no detail.
+printf 'run %sT02:13:14Z\nchanged %s\nchanged %s\nchanged %s\nchanged %s\n' "$TOMORROW" "$SSHD_CONF" "$UNIT" "$STAMP" "$SBIN" \
+  >"$STATE/aide"
+aide_report "$(day 2) 02:13:14" 4 f "$SSHD_CONF" 1 f "$UNIT" 1 d "$SBIN" 1 t "$STAMP" 2
+review_day 2
+same "no message: the old state holds no detail to compare [X-044 AC2]" "$RC $(new_count)" "0 0"
+same "the state now keeps the detail of each entry" "$(grep -c "^detail${T}changed " "$STATE/aide")" 4
+check "with the new values of the file's attributes (each hash joined from AIDE's 32-byte pieces)" grep -qxF \
+  "detail${T}changed $UNIT${T}File${T}Size=1201${T}Mtime=$(aide_time 1)${T}Ctime=$(aide_time 1)${T}SHA256=$(aide_hash sha256 "$UNIT" 1)${T}SHA512=$(aide_hash sha512 "$UNIT" 1)" \
+  "$STATE/aide"
+check "and of the directory's" \
+  grep -qxF "detail${T}changed $SBIN${T}Directory${T}Mtime=$(aide_time 1)${T}Ctime=$(aide_time 1)${T}Linkcount=4" "$STATE/aide"
+
+step "X-044: a file a deploy changed, listed again unchanged, raises nothing [X-044 AC2]"
+aide_report "$(day 3) 02:13:14" 4 f "$SSHD_CONF" 1 f "$UNIT" 1 d "$SBIN" 1 t "$STAMP" 3
+review_day 3
+same "no message: the same entries with the same detail [X-044 AC2]" "$RC $(new_count)" "0 0"
+check "(the timer's stamp file has new times, nothing else: a file only touched raises nothing)" \
+  grep -qxF "detail${T}changed $STAMP${T}File${T}Mtime=$(aide_time 3)${T}Ctime=$(aide_time 3)" "$STATE/aide"
+
+step "X-044: the same file changed again outside a deploy (new hashes) raises aide-change [X-044 AC1]"
+aide_report "$(day 4) 02:13:14" 4 f "$SSHD_CONF" 1 f "$UNIT" 2 d "$SBIN" 1 t "$STAMP" 4
+review_day 4
+same "one message, the AIDE alert [X-044 AC1]" "$RC $(new_subjects)" "0 security alert: AIDE found changes outside a deploy"
+check "it names the file and what differs from the previous report [X-044 AC1]" body_has "security alert: AIDE" \
+  "changed $UNIT (again: Size, Mtime, Ctime, SHA256, SHA512 differ from the previous report)"
+check "and no unchanged entry [X-044 AC1]" not body_has "security alert: AIDE" "$SSHD_CONF"
+check "(the directory neither)" not body_has "security alert: AIDE" "$SBIN"
+check "nor the timer's stamp file, only touched again [X-044 AC2]" not body_has "security alert: AIDE" "$STAMP"
+check "the alert is logged as a security event of the kind aide-change [X-044 AC1]" \
+  grep -qF '{"security":true,"event":"log_review.alert","kind":"aide-change",' "$LAST_OUT"
+review_day 4 3600
+same "the next run repeats nothing (the report was reviewed)" "$RC $(new_count)" "0 0"
+
+step "X-044: a directory whose only new detail is its times (an entry renamed or replaced in it) follows the same rule"
+aide_report "$(day 5) 02:13:14" 4 f "$SSHD_CONF" 1 f "$UNIT" 2 d "$SBIN" 2 t "$STAMP" 5
+review_day 5
+same "one message, the AIDE alert" "$RC $(new_subjects)" "0 security alert: AIDE found changes outside a deploy"
+check "it names the directory and its times" body_has "security alert: AIDE" \
+  "changed $SBIN (again: Mtime, Ctime differ from the previous report)"
+check "and not the file it alerted yesterday" not body_has "security alert: AIDE" "$UNIT"
+
+step "X-044: changes after a later deploy raise nothing [X-044 AC2]"
+printf '%s deploy-3333333\n' "$(day 6)T01:00:00Z" >>"$LIB/deploy-history"
+aide_report "$(day 6) 02:13:14" 4 f "$SSHD_CONF" 2 f "$UNIT" 3 d "$SBIN" 3 t "$STAMP" 6
+shipped_ok "$(at_day 6)"
+run_review "$(at_day 6)" --summary
+same "no alert, only the summary asked for [X-044 AC2]" "$RC $(new_count)" "0 1"
+check "the summary's AIDE line counts them as the deploy's [X-044 AC2]" body_has "security log review $(day 6)" \
+  "AIDE: last check $(day 6)T02:13:14Z: 4 change(s) since AIDE's database was made (exit code 4); 3 new or changed again since the previous check, after the $(day 6)T01:00:00Z deploy of deploy-3333333 (expected)"
+aide_report "$(day 7) 02:13:14" 4 f "$SSHD_CONF" 2 f "$UNIT" 3 d "$SBIN" 3 t "$STAMP" 7
+review_day 7
+same "the day after, the same detail again: no message [X-044 AC2]" "$RC $(new_count)" "0 0"
+
+step "X-044: an added entry's detail (AIDE's report_level=added_removed_entries) is compared the same way [X-044 AC1]"
+# provision-vm.sh makes AIDE's database before it installs the Velexis scripts and units, so on a VM provisioned from
+# scratch they are added entries. AIDE 0.18.6 details them only with report_level=added_removed_entries: the new values
+# alone, no database value (checked with the Ubuntu package's binary).
+SCRIPT=$SBIN/velexis-backup
+printf '%s deploy-4444444\n' "$(day 8)T01:00:00Z" >>"$LIB/deploy-history"
+aide_report "$(day 8) 02:13:14" 5 f "$SSHD_CONF" 2 f "$UNIT" 3 d "$SBIN" 3 t "$STAMP" 8 a "$SCRIPT" 1
+review_day 8
+same "the deploy that installed the script: no message" "$RC $(new_count)" "0 0"
+check "the state keeps the added entry's new values (hashes joined from their pieces, the ACL from its lines)" \
+  grep -qxF "detail${T}added $SCRIPT${T}File${T}File type=File${T}Size=1201${T}Perm=-rwxr-xr-x${T}Uid=0${T}Gid=0${T}Mtime=$(aide_time 1)${T}Ctime=$(aide_time 1)${T}Inode=4242${T}Linkcount=1${T}SHA256=$(aide_hash sha256 "$SCRIPT" 1)${T}SHA512=$(aide_hash sha512 "$SCRIPT" 1)${T}ACL=A: user::rwxA: group::r-xA: other::r-x${T}XAttrs=num=0" \
+  "$STATE/aide"
+aide_report "$(day 9) 02:13:14" 5 f "$SSHD_CONF" 2 f "$UNIT" 3 d "$SBIN" 3 t "$STAMP" 9 a "$SCRIPT" 1
+review_day 9
+same "the added script listed again unchanged: no message" "$RC $(new_count)" "0 0"
+aide_report "$(day 10) 02:13:14" 5 f "$SSHD_CONF" 2 f "$UNIT" 3 d "$SBIN" 3 t "$STAMP" 10 a "$SCRIPT" 2
+review_day 10
+same "the added script rewritten in place outside a deploy: one message, the AIDE alert [X-044 AC1]" \
+  "$RC $(new_subjects)" "0 security alert: AIDE found changes outside a deploy"
+check "it names the added script and what differs [X-044 AC1]" body_has "security alert: AIDE" \
+  "added $SCRIPT (again: Size, Mtime, Ctime, SHA256, SHA512 differ from the previous report)"
+check "and nothing else" not body_has "security alert: AIDE" "$UNIT"
 
 step "Over the whole run"
 ALL="$(cat "$FAKE"/alerts/*.subject "$FAKE"/alerts/*.body)"

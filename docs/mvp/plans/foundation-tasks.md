@@ -1174,6 +1174,24 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 - **Verify:** `shellcheck -S style deploy/scripts/deploy.sh deploy/scripts/provision-vm.sh deploy/scripts/test/fake-systemctl.sh deploy/scripts/test/deploy.test.sh && bash deploy/scripts/test/deploy.test.sh`
 - **Note (2026-11-13, lead decision (20n), approved by the owner, FIX-W51-SHARED):** X-043 runs after the launch, as X-042 and PBE-064 do, and keeps its M6 tag: a named exception to the M6 go criterion "every task done" ([roadmap](roadmap.md) §2.0 and the M6 go/no-go, [ADR-0025](../adr/0025-roadmap-scheduling-and-tracking.md) item 4), answering X-031's question of 2026-11-12. The restore drill does not need it: until X-043 is merged, the drill masks both workers on the scratch VM with the links in `/etc/systemd/system.control` that [`restore-drill.md`](../runbooks/restore-drill.md) step 2 names. The roadmap's re-baseline of 2026-11-13 places it after the launch in both calendars (§1.3 and the M6 batches of §2), and its ½ solo day leaves the launch block to X-044. This Note changes no Status.
 
+### X-044 · Raise an AIDE change again when the same file changes a second time ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
+- **Component:** foundation
+- **Milestone:** M6
+- **Depends on:** X-038
+- **Size:** S
+- **Read first:** deploy/scripts/log-review.sh (`aide_check`: it keeps AIDE's report entries by section and path in /var/lib/velexis/log-review/aide and alerts on an entry the previous report did not hold); deploy/scripts/test/log-review.test.sh; docs/mvp/deployment-single-vm.md §12 (AIDE, COPYNEWDB=no, X-038's notes); X-038's review question (lead decision (20p) of 2026-11-13)
+- **Files:** `deploy/scripts/log-review.sh`, `deploy/scripts/test/log-review.test.sh`, `docs/mvp/deployment-single-vm.md`
+- **Steps:**
+  1. Added by the lead for wave 51 (decision (20p) of 2026-11-13, approved by the owner; found by X-038's review): AIDE's database is never updated (COPYNEWDB=no), so once a deploy has changed a file every later report lists it with the same path, and a second change to that file outside a deploy raises no alert, because `log-review` compares entries by section and path only. Keep, per changed path, the detail AIDE's report gives for it (its "Detailed information about changes" block: the new hashes, size, mtime, permissions and owner) and alert when that detail differs from the previous report's, unless a deploy or provisioning ran since that report (as today). An entry whose only new detail is a directory's mtime or link count follows the same rule; say in §12 how much noise that gives on a VM between deploys and why it is acceptable, or leave such entries out with the reason.
+  2. Tests in log-review.test.sh: a file changed by a deploy and listed again unchanged raises nothing; the same file changed again outside a deploy (new hashes) raises `aide-change`; a change after a later deploy raises nothing; the state file's old format (path only) is read without a false alert on the first run after the upgrade.
+  3. deployment-single-vm.md §12 says what `log-review` compares.
+- **Acceptance:**
+  - A second change to a file that an earlier deploy changed, made outside a deploy, raises `aide-change` at the next review.
+  - Unchanged entries and changes after a deploy raise nothing, and the first run after the upgrade raises no false alert.
+  - `shellcheck -S style` is clean.
+- **Verify:** `shellcheck -S style deploy/scripts/log-review.sh deploy/scripts/test/log-review.test.sh && bash deploy/scripts/test/log-review.test.sh`
+
 ## Dependency graph
 
 Generated with `node tools/plan-lint/plan-lint.mjs --graph docs/mvp/plans/foundation-tasks.md`.

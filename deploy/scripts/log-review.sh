@@ -26,7 +26,10 @@
 #                  previous report did not, and neither a deploy (/var/lib/velexis/deploy-history) nor a run of
 #                  provision-vm.sh (/var/log/velexis/provision.log) happened since that previous check (AIDE's
 #                  database is not updated after a deploy, so a deploy's changes stay in its reports; only new ones
-#                  count)
+#                  count). A change is an entry the previous report did not list, or a listed entry whose detail (the
+#                  new values of its "Detailed information about changes": hashes, size, times, permissions, owner)
+#                  differs from the previous report's: a file that a deploy changed and that changed again (X-044);
+#                  new times alone count for a directory, not for a file (a timer's stamp is touched at every run)
 #   shipment       the log shipment failed, or the last verified shipment is older than two hours (state of
 #                  velexis-ship-logs); once when it starts, and once when it recovers
 #   egress-burst   30 or more refused outbound connections (X-041's VELEXIS-EGRESS-DENY lines; the kernel logs at
@@ -44,7 +47,10 @@
 # destination and user; fail2ban's bans; the apps' security events and the velexis-* units' warnings and errors.
 # Neither the summary nor an alert quotes a WAF line's [uri] (a body line that holds one is dropped before sending).
 #
-# State: /var/lib/velexis/log-review/ (cursor, ssh-keys, aide, shipment, egress-burst, folder-size, summary-day).
+# State: /var/lib/velexis/log-review/ (cursor, ssh-keys, aide, shipment, egress-burst, folder-size, summary-day). The
+# file aide holds the last report reviewed: "run <start>", its entries ("<section> <path>") and, since X-044, the
+# detail of each ("detail<TAB><section> <path><TAB><type><TAB><attribute>=<new value>..."); a file without detail lines
+# (X-038's format) compares entries only, once, and gets them with that run.
 #
 # Tests only (deploy/scripts/test/log-review.test.sh). With VELEXIS_ROOT=<absolute folder> the paths of this script
 # (/etc/velexis, /var/lib/velexis, /var/log/velexis, /var/log/aide and every home folder) move under that folder, it
@@ -255,8 +261,80 @@ if [ -s "$WORK/keys-changes" ]; then
   } | add_alert keys-change "security alert: change under /etc/velexis/keys"
 fi
 
-# AIDE: a change its previous report did not hold, with no deploy or provisioning since that report.
+# AIDE: a change its previous report did not hold, with no deploy or provisioning since that report: a new entry, or
+# an entry whose detail differs from the previous report's (X-044).
 AIDE_NOTE="no report of AIDE's daily check ($(show "$AIDE_LOG"))"
+# The detail of each entry: the aide-entries file ("<section> <path>"), then AIDE's log -> for each entry with a block
+# in "Detailed information about changes", one line "detail<TAB><section> <path><TAB><type><TAB><attribute>=<new
+# value>...". AIDE 0.18's plain report (report_plain.c) prints a block as "<type>: <path>" (File, Directory, Link, ...)
+# and one line per attribute, ` %-10s%c %-33.32s| %.32s`: its name and ":", the old value (the database's), "| " at
+# column 47 and the new value from column 49, each value cut into 32-byte pieces on the lines below (no name, " " for
+# ":"); with no old value the new one alone (spaces up to column 48), with no new value the old one alone (none now).
+# Only the new values are kept: the old ones are the database's, which COPYNEWDB=no never changes. A line of another
+# layout keeps both sides, still compared. Added and removed entries get a block only with report_level=
+# added_removed_entries (an added one its new values alone, a removed one its old values alone: empty values here); at
+# AIDE 0.18.6's default level, changed_attributes, they get none (deployment-single-vm.md §12, the residual).
+# shellcheck disable=SC2016 # an awk program
+AIDE_DETAIL='
+function flush(   i, out) {
+  if (key != "" && n > 0) {
+    out = "detail\t" key "\t" type
+    for (i = 1; i <= n; i++) out = out "\t" name[i] "=" val[i]
+    print out
+  }
+  key = ""; n = 0
+}
+FNR == NR { p = $0; s = p; sub(/ .*/, "", s); sub(/^[^ ]* /, "", p); sec[p] = s; next }
+/^Detailed information about changes:$/ { flush(); det = 1; next }
+/^(The attributes of the \(uncompressed\) database\(s\)|End timestamp|End of AIDE output)/ { flush(); det = 0; next }
+!det || /^-+$/ { next }
+/^$/ { flush(); next }
+/^ / {
+  if (key == "") next
+  if (substr($0, 12, 1) == ":") { n++; name[n] = substr($0, 2, 10); sub(/ +$/, "", name[n]); val[n] = "" }
+  else if (n == 0) next
+  if (substr($0, 47, 2) == "| ") v = substr($0, 49)          # old and new: the new value
+  else if (substr($0, 14, 33) ~ /^ +$/) v = substr($0, 49)    # the new value alone
+  else if (index($0, " | ")) v = substr($0, 14)               # another layout: both sides
+  else v = ""                                                 # the old value alone: none now
+  val[n] = val[n] v
+  next
+}
+{
+  flush(); p = $0; type = ""
+  if (p !~ /^\//) { type = p; sub(/: .*/, "", type); sub(/^[^:]*: /, "", p) }
+  key = (p in sec) ? sec[p] " " p : ""
+}
+END { flush() }'
+# The previous state file, then this report's detail lines -> "<section> <path> (again: <attributes> differ(s) from the
+# previous report)" for each entry whose detail differs from the one the previous report gave it. An entry the previous
+# report gave no detail (X-038's state file, or a new entry) is not compared. Nor is an entry other than a directory
+# whose only new values are its times (Mtime, Ctime, Atime): its content, permissions, owner and inode are those the
+# previous report held; systemd touches the stamp file of every Persistent= timer at each run (velexis-backup,
+# velexis-ship-logs, velexis-log-review, dailyaidecheck, motd-news: no aide-common rule), which would alert every day.
+# A directory's times count: an entry renamed or replaced in it changes them, the only trace of a new copy of a file
+# that AIDE lists as added when its report does not detail added entries (the default level). An added entry's detail
+# (report_level=added_removed_entries) is compared like a changed one's. docs/mvp/deployment-single-vm.md §12.
+# shellcheck disable=SC2016 # an awk program
+AIDE_AGAIN='
+function attrs(line, m,   f, n, i, k) {
+  split("", m); n = split(line, f, "\t")
+  for (i = 4; i <= n; i++) { k = f[i]; sub(/=.*/, "", k); m[k] = substr(f[i], length(k) + 2); order[i - 3] = k }
+  return n - 3
+}
+FNR == NR { if ($1 == "detail") { prev[$2] = $0; ptype[$2] = $3 }; next }
+$1 == "detail" && ($2 in prev) && prev[$2] != $0 {
+  np = attrs(prev[$2], a); names = ""; others = 0; count = 0
+  for (i = 1; i <= np; i++) old[i] = order[i]
+  nc = attrs($0, b)
+  for (i = 1; i <= nc; i++) if (!(order[i] in a) || a[order[i]] != b[order[i]]) differs(order[i])
+  for (i = 1; i <= np; i++) if (!(old[i] in b)) differs(old[i])
+  if (ptype[$2] != $3) differs("type")
+  if (names == "") differs("detail")
+  if (!others && $3 != "Directory") next
+  print $2 " (again: " substr(names, 3) (count == 1 ? " differs" : " differ") " from the previous report)"
+}
+function differs(k) { names = names ", " k; count++; if (k !~ /^(Mtime|Ctime|Atime)$/) others = 1 }'
 aide_check() {
   local start code entries prev_start window_start changes since
   [ -r "$AIDE_LOG" ] || return 0
@@ -277,17 +355,21 @@ aide_check() {
     "") AIDE_NOTE="last check $start: no result in its log" ;;
     *) AIDE_NOTE="last check $start: AIDE reported an error (exit code $code)" ;;
   esac
-  { echo "run $start"; cat "$WORK/aide-entries"; } >"$WORK/state/aide"
+  : >"$WORK/aide-detail"
+  [ ! -s "$WORK/aide-entries" ] || LC_ALL=C awk "$AIDE_DETAIL" "$WORK/aide-entries" "$AIDE_LOG" >"$WORK/aide-detail"
+  { echo "run $start"; cat "$WORK/aide-entries" "$WORK/aide-detail"; } >"$WORK/state/aide"
   prev_start="$(sed -n '1s/^run //p' "$STATE_DIR/aide" 2>/dev/null || true)"
   [ "$prev_start" != "$start" ] || return 0   # this report was reviewed already
   if [ -n "$prev_start" ]; then
     window_start="$prev_start"
-    tail -n +2 "$STATE_DIR/aide" | LC_ALL=C sort -u >"$WORK/aide-before"
+    LC_ALL=C awk 'NR > 1 && !/^detail\t/' "$STATE_DIR/aide" | LC_ALL=C sort -u >"$WORK/aide-before"
+    LC_ALL=C awk -F '\t' "$AIDE_AGAIN" "$STATE_DIR/aide" "$WORK/aide-detail" >"$WORK/aide-again"
   else
     window_start="$(iso "$(($(date -u -d "$start" +%s) - 26 * 3600))")"
     : >"$WORK/aide-before"
+    : >"$WORK/aide-again"
   fi
-  LC_ALL=C comm -13 "$WORK/aide-before" "$WORK/aide-entries" >"$WORK/aide-new"
+  { LC_ALL=C comm -13 "$WORK/aide-before" "$WORK/aide-entries"; cat "$WORK/aide-again"; } | LC_ALL=C sort >"$WORK/aide-new"
   [ -s "$WORK/aide-new" ] || return 0
   # Deploys (deploy-history: "<UTC time> <sha>") and provisioning runs (provision.log) between the two checks.
   since="$( {
@@ -297,14 +379,15 @@ aide_check() {
   } | LC_ALL=C sort | tail -n 1)"
   changes="$(wc -l <"$WORK/aide-new")"
   if [ -n "$since" ]; then
-    AIDE_NOTE="$AIDE_NOTE; $changes new since the previous check, after the $since (expected)"
+    AIDE_NOTE="$AIDE_NOTE; $changes new or changed again since the previous check, after the $since (expected)"
     return 0
   fi
-  AIDE_NOTE="$AIDE_NOTE; $changes new since the previous check, outside a deploy (alerted)"
+  AIDE_NOTE="$AIDE_NOTE; $changes new or changed again since the previous check, outside a deploy (alerted)"
   {
-    echo "AIDE's daily check of $start found $changes change(s) that its previous report did not hold, and no deploy"
-    echo "or provisioning ran since $window_start. Find out what changed them; if nobody did, treat it as a compromise"
-    echo "(deployment-single-vm.md §16). Full report: sudo less /var/log/aide/aide.log"
+    echo "AIDE's daily check of $start found $changes change(s) that its previous report did not hold (a new entry, or"
+    echo "an entry whose detail differs: it changed again), and no deploy or provisioning ran since $window_start. Find"
+    echo "out what changed them; if nobody did, treat it as a compromise (deployment-single-vm.md §16). Full report:"
+    echo "sudo less /var/log/aide/aide.log"
     echo
     head -n 50 "$WORK/aide-new"
     [ "$changes" -le 50 ] || echo "... and $((changes - 50)) more"
