@@ -1829,6 +1829,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - Two tenants on the shared account: tenant B cannot find or import tenant A's PNR [OF-09 AC3].
   - Importing the same order twice answers 409 the second time.
 - **Verify:** `pnpm --filter @velexis/ota-backend test -- console && pnpm --filter @velexis/ota-backend test:int console`
+- **Note (2026-11-13, lead decision (21f), approved by the owner, FIX-W52-OTA):** Amadeus's `200` without an order for the record locator answers the lookup and the import as Amadeus's own `404` does: `404 NOT_FOUND` with `error.supplier` `{ provider: "amadeus", status: 200 }` (before, a plain `404`), as console.bookings.closeReview answers it since FIX-W51-OTA; one helper for every read by record locator (`noOrderFor` and `noOrderInAnswer` of `pnr-import.service.ts`), and the OTA admin says "Amadeus has no order" for it (`isSupplierNotFound` of `ota/admin/src/lib/errors.ts`). The import's `404` of an unknown customer never carries `error.supplier`. This Note changes no Status.
 
 ### OBE-065 · Implement queues, snapshots and the queue poller ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -1881,6 +1882,7 @@ The console API (staff sign-in by portal token, bookings, PNR import, queues, cu
   - Each read reaches the stub with the tenant's offices; another tenant's office is refused before any call [OF-09 AC3].
   - `console.amadeus.createFlightOrders` answers 501 `NOT_IMPLEMENTED`.
 - **Verify:** `pnpm --filter @velexis/ota-backend test:int console`
+- **Note (2026-11-13, lead decision (21f), approved by the owner, FIX-W52-OTA):** `getFlightOrderByReference` answers Amadeus's `200` without an order as its own `404`: `404 NOT_FOUND` with `error.supplier` `{ provider: "amadeus", status: 200 }`, the call's `details.supplierRequestId` and an empty `details.errors` (before, a plain `404` without them), through `noOrderInAnswer` of `pnr-import.service.ts`; the OTA admin's Advanced panel says "Amadeus has no order with this record locator" for it. This Note changes no Status.
 
 ### OBE-068 · Implement console payments list, get, capture and refund ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -3161,6 +3163,7 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - From 1024 px up the header is unchanged.
   - axe passes with the menu closed and open at 800 and 1023 px.
 - **Verify:** `pnpm --filter @velexis/ota-frontend build && pnpm --filter @velexis/ota-frontend test && E2E_WITH_OTA=1 pnpm test:e2e --project=storefront specs/storefront/a11y-phone.e2e.ts`
+- **Note (2026-11-13, lead decision (21h), approved by the owner, FIX-W52-OTA):** the review's "Left" (a first name much longer than 23 characters still wrapped the row from `lg` when the session answered: 0.756 at 1024 px on the demo OTA, 0.669 and 0.691 at 1024 and 1100 px with a long OTA name and two currencies) is closed by a cap: from `lg` the greeting is at most 12rem wide and a longer one ends in an ellipsis (`GREETING_CAP_CLASSES` of `ota/frontend/src/lib/session.js`, `lg:max-w-48 lg:truncate`), its whole text kept in the DOM, which screen readers read, and in its `title`; below `lg` nothing changed. The second acceptance criterion's "from 1024 px up the header is unchanged" holds as OFE-032 measured it, with a 23-character first name, which the cap does not cut; a longer one is cut at the cap, so a first name of up to 60 characters (the contract's longest) no longer wraps the row at any width from 1024 px. The session's answer still moves the navigation sideways from `lg` (0.0025 to 0.0050, never up or down), as OFE-032 measured and accepted; whether it should be 0 there is a question for the lead (FIX-W52-OTA's report). `a11y-phone.e2e.ts` checks 60 characters at 1024 and 1100 px on both storefronts and `auth-pages.test.js` the cap's classes as Tailwind compiles them; the figures are in [storefront-accessibility.md](../storefront-accessibility.md) §3.8. This Note changes no Status.
 
 ## Cross-group dependencies at a glance
 

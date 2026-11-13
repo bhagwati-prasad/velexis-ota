@@ -38,6 +38,7 @@ import {
 import { startAmadeusStub, type AmadeusStub } from "@velexis/testing/amadeus";
 import request, { type Response } from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { AmadeusClient } from "../../../src/amadeus/amadeus.client";
 import {
   SupplierRequestsRepository,
   type SupplierRequestRecord,
@@ -1014,6 +1015,41 @@ describe("console.amadeus order reads", () => {
     expect(answer(res)).toEqual([404, "NOT_FOUND"]);
     expectResponseToMatch("consoleAmadeusGetFlightOrder", res);
     expect(res.body.error).toMatchObject({ supplier: { provider: "amadeus", status: 404 } });
+  });
+
+  it("[FIX-W52-OTA AC1] answers getFlightOrderByReference's 200 without an order as Amadeus's own 404: the supplier marker and the call's row", async () => {
+    const agent = await staffSession(alphaId, "agent");
+    const order = await stubOrder({ queuing: alphaOffice, owner: alphaOffice });
+    // Amadeus answers 200 without an order (the order's real read, its `data` emptied): the API's client, once.
+    const client = api.app.get(AmadeusClient, { strict: false });
+    const byReference = client.getFlightOrderByReference.bind(client);
+    const emptyRead = vi
+      .spyOn(client, "getFlightOrderByReference")
+      .mockImplementationOnce(async (context, req, options) => {
+        const reply = await byReference(context, req, options);
+        return { ...reply, body: { data: [] } as unknown as typeof reply.body };
+      });
+    let res: Response;
+    try {
+      res = await agent.get(`${BY_REFERENCE}?reference=${order.recordLocator}&originSystemCode=GDS`);
+    } finally {
+      emptyRead.mockRestore();
+    }
+
+    // Lead decision (21f) of 2026-11-13: as console.bookings.closeReview marks it, with the call's row as Amadeus's
+    // own 404 of this read carries it (rawErrorOf).
+    expect(answer(res)).toEqual([404, "NOT_FOUND"]);
+    expectResponseToMatch("consoleAmadeusGetFlightOrderByReference", res);
+    expect(res.body.error).toMatchObject({
+      message: "Amadeus has no order with this record locator.",
+      supplier: { provider: "amadeus", status: 200 },
+      details: { supplierRequestId: expect.stringMatching(/^sreq_/), errors: [] },
+    });
+    const [row] = (await supplierRequestsOf("tenant_alpha", agent.member.staffId)).filter(
+      (entry) => entry.id === res.body.error.details.supplierRequestId,
+    );
+    expect(row).toBeDefined();
+    expect(amadeusCalls("getFlightOrderByReference")).toHaveLength(1);
   });
 });
 

@@ -68,7 +68,10 @@
 // Errors: Amadeus's own refusals keep every issue of its answer in `details.errors` with the call's
 // `details.supplierRequestId` (console scope; `error.supplier` is the first issue). An Amadeus `4xx` is `422
 // SUPPLIER_REJECTED` (the client's finer codes, such as `SOLD_OUT` or `PRICE_CHANGED`, which the raw reads do not
-// document, included), Amadeus 404 of an order read `404 NOT_FOUND`, and Amadeus 403 of an order read or Queue List
+// document, included), Amadeus 404 of an order read `404 NOT_FOUND` (a `200` of getFlightOrderByReference whose `data`
+// holds no order too, with `error.supplier` `{ provider: "amadeus", status: 200 }`, the call's
+// `details.supplierRequestId` and no `details.errors`: pnr-import.service.ts `noOrderInAnswer`, lead decision (21f) of
+// 2026-11-13, as the PNR lookup and the review closure mark it), and Amadeus 403 of an order read or Queue List
 // `403 OFFICE_NOT_ALLOWED`; the client's other codes pass as they are when the operation documents them (`5xx` →
 // `502`/`503`, timeout `504`, `424`, `429`, and the `503` of the client's rate limiter without Redis), anything else is
 // `502 SUPPLIER_ERROR`.
@@ -105,6 +108,7 @@ import { consoleOrderReplyOf } from "./console-booking-actions.service";
 import {
   attachedBookingOf,
   consoleOrderOf,
+  noOrderInAnswer,
   orderOfficeOf,
   partitionOrders,
   PnrImportRepository,
@@ -670,7 +674,8 @@ export class RawAmadeusService {
     );
     const orders = records(reply.body["data"]);
     if (orders.length === 0) {
-      throw new AppError("NOT_FOUND", { message: "Amadeus has no order with this record locator." });
+      // As Amadeus's own 404 (rawErrorOf): the marker, the call's row and its issues (none).
+      throw noOrderInAnswer(reply.call.status, { supplierRequestId: reply.supplierRequestId, errors: [] });
     }
     const { allowed, withheld } = partitionOrders(orders, orderOfficeIds);
     if (withheld.length > 0) {

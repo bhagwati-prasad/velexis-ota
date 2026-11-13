@@ -16,7 +16,10 @@
 //
 // The answers of OBE-064 (backend README "Console: PNR lookup and import"):
 //
-//   `404 NOT_FOUND`            "No order with this record locator in your offices"
+//   `404 NOT_FOUND`            with `error.supplier` (Amadeus's own `404`, or its `200` without an order, lead
+//                              decision (21f) of 2026-11-13): "Amadeus has no order with this record locator", as the
+//                              booking page's review says it; without it, "No order with this record locator in your
+//                              offices"
 //   `403 OFFICE_NOT_ALLOWED`   "This order belongs to an office outside this OTA", explained: Amadeus has the order,
 //                              but its owner office (or its queuing office, without an owner office) is not one of the
 //                              OTA's offices, which the page lists; another OTA's order is never shown
@@ -49,7 +52,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { errorMessage, isVelexisErrorLike, type VelexisErrorLike } from "@/lib/errors";
+import { errorMessage, isSupplierNotFound, isVelexisErrorLike, type VelexisErrorLike } from "@/lib/errors";
 import { can, type StaffEnvironment } from "@/lib/permissions";
 import { redirectOnSessionError } from "@/lib/session";
 import { cn } from "@/lib/utils";
@@ -58,6 +61,7 @@ import { getConsoleRequest, type ConsoleRequest } from "@/lib/velexis";
 import { AdvancedPanel } from "./advanced-panel";
 import { ImportDialog } from "./import-dialog";
 import {
+  AMADEUS_NO_ORDER,
   PNR_PATH,
   RECORD_LOCATOR_PARAM,
   RECORD_LOCATOR_PATTERN,
@@ -464,14 +468,17 @@ function LookupResult({
   );
 }
 
-/** "No order with this record locator in your offices". */
-function NoMatch() {
+/**
+ * "No order with this record locator in your offices", or, for the `404` with `error.supplier` (`fromAmadeus`),
+ * "Amadeus has no order with this record locator".
+ */
+function NoMatch({ fromAmadeus = false }: { readonly fromAmadeus?: boolean }) {
   return (
     <section role="status" aria-labelledby="pnr-no-match" className="grid max-w-xl gap-2">
       <h2 id="pnr-no-match" className="text-xl font-semibold">
         {PAGE_STRINGS.noMatchTitle}
       </h2>
-      <p>{PAGE_STRINGS.noMatch}</p>
+      <p>{fromAmadeus ? AMADEUS_NO_ORDER : PAGE_STRINGS.noMatch}</p>
     </section>
   );
 }
@@ -556,7 +563,7 @@ export default async function PnrPage({ searchParams }: Readonly<{ searchParams:
     if (error.code === "NOT_FOUND") {
       return (
         <PnrShell value={reference}>
-          <NoMatch />
+          <NoMatch fromAmadeus={isSupplierNotFound(error)} />
           {advanced([])}
         </PnrShell>
       );

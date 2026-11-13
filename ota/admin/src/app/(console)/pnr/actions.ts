@@ -59,10 +59,16 @@ import {
   withNextActionKey,
   type ActionState,
 } from "@/lib/action-state";
-import { GENERIC_ERROR_MESSAGE, fromVelexisError, isVelexisErrorLike } from "@/lib/errors";
+import {
+  GENERIC_ERROR_MESSAGE,
+  fromVelexisError,
+  isSupplierNotFound,
+  isVelexisErrorLike,
+} from "@/lib/errors";
 import { requireStaff, type StaffContext } from "@/lib/session";
 
 import {
+  AMADEUS_NO_ORDER,
   CONTACT_EMAIL_FIELD,
   CURRENCY_FIELD,
   CUSTOMER_FIELD,
@@ -421,16 +427,14 @@ function importFailure(error: unknown, values: ImportFormValues): ImportState {
         state = said(state, STRINGS.busy);
       }
       break;
-    case "NOT_FOUND": {
-      // Amadeus's 404 carries `error.supplier`; the customer's does not.
-      const { supplier } = error as { readonly supplier?: unknown };
-      const fromSupplier = typeof supplier === "object" && supplier !== null;
+    case "NOT_FOUND":
+      // Amadeus without the order carries `error.supplier` (its own 404, or its 200 without an order since lead
+      // decision (21f) of 2026-11-13); the customer's 404 does not.
       state =
-        !fromSupplier && values[CUSTOMER_FIELD] !== undefined
+        !isSupplierNotFound(error) && values[CUSTOMER_FIELD] !== undefined
           ? said(state, STRINGS.customerNotFound, CUSTOMER_FIELD)
           : said(state, STRINGS.orderNotFound);
       break;
-    }
     case "UNPROCESSABLE":
       if (reason === "contact_email_required") {
         state = said(state, STRINGS.contactEmailRequired, CONTACT_EMAIL_FIELD);
@@ -629,7 +633,9 @@ export async function readRawOrders(reference: unknown): Promise<RawOrdersState>
       result: await staff.context.console.amadeus.getFlightOrderByReference({ reference: value }),
     };
   } catch (error) {
-    return rawFailure(error, RAW_STRINGS.noOrders);
+    // Amadeus's "no order" (`error.supplier`, lead decision (21f) of 2026-11-13) as the lookup and the booking page's
+    // review say it.
+    return rawFailure(error, isSupplierNotFound(error) ? AMADEUS_NO_ORDER : RAW_STRINGS.noOrders);
   }
 }
 

@@ -105,7 +105,7 @@ import {
   withNextActionKey,
   type ActionState,
 } from "@/lib/action-state";
-import { fromVelexisError, isVelexisErrorLike } from "@/lib/errors";
+import { fromVelexisError, isSupplierNotFound, isVelexisErrorLike } from "@/lib/errors";
 import { requireStaff, type StaffContext } from "@/lib/session";
 
 // ---- States ---------------------------------------------------------------------------------------------------------
@@ -1370,19 +1370,6 @@ const REVIEW_OVERRIDES: Overrides = Object.freeze({
 });
 
 /**
- * Amadeus has no order for the record locator: `404 NOT_FOUND` with the supplier's error (`error.supplier`: Amadeus's
- * own `404`, or a `200` without an order, `status` `200`), which a booking the environment does not have never
- * carries.
- */
-function supplierNotFound(error: unknown): boolean {
-  if (!isVelexisErrorLike(error) || error.code !== "NOT_FOUND") {
-    return false;
-  }
-  const { supplier } = error as { readonly supplier?: unknown };
-  return typeof supplier === "object" && supplier !== null;
-}
-
-/**
  * Close a booking in Reconciliation review (`bookings:cancel`, OAD-022, OBE-099): `ifMatch`, the dialog's idempotency
  * key, and what the staff found in the queuing office: `order_found` with the order's record locator (and an optional
  * note), which the API reads in the booking's office and accepts only with the remark `VELEXIS {reference}` of this
@@ -1424,7 +1411,8 @@ export async function closeBookingReview(_previous: ActionState, form: FormData)
     );
   } catch (error) {
     const state = keyedFailure(error, REVIEW_POINTERS, REVIEW_OVERRIDES);
-    return supplierNotFound(error)
+    // Amadeus has no order for the record locator (`error.supplier`), which an unknown booking's 404 never carries.
+    return isSupplierNotFound(error)
       ? {
           ...state,
           message: STRINGS.orderNotFound,

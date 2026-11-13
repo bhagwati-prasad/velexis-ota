@@ -525,6 +525,31 @@ describe("the raw read use cases", () => {
     expect(h.entries).toEqual([]);
   });
 
+  it("[FIX-W52-OTA AC1] answers a by-reference 200 without an order as Amadeus's own 404: the marker, the call's row, no issues", async () => {
+    for (const body of [{ data: [] }, { meta: { count: 0 } }, { data: ["not an order"] }]) {
+      const h = harness({ body });
+
+      const error = await h.service
+        .getFlightOrderByReference({ reference: "ZZZZ99", originSystemCode: "GDS" })
+        .catch((caught: unknown) => caught);
+
+      // Lead decision (21f) of 2026-11-13: as the PNR lookup and the review closure mark it, so the OTA admin reads
+      // "Amadeus has no order" from error.supplier; details as rawErrorOf gives Amadeus's own 404.
+      expect(
+        isAppError(error) ? [error.status, error.code, error.message, error.supplier, error.details] : error,
+      ).toEqual([
+        404,
+        "NOT_FOUND",
+        "Amadeus has no order with this record locator.",
+        { provider: "amadeus", status: 200 },
+        { supplierRequestId: "sreq_01JA4H1A3C5E7G9J1L3N5Q7S9U", errors: [] },
+      ]);
+      expect(h.amadeus.getFlightOrderByReference).toHaveBeenCalledOnce();
+      // Nothing to audit as a success, and no denied row: the interceptor writes the failed one.
+      expect(h.entries).toEqual([]);
+    }
+  });
+
   it("[OBE-067 AC1] passes a search body to the client as it is and audits the reason", async () => {
     const h = harness({ body: { meta: { count: 0 }, data: [] } });
     const amadeus = { originDestinations: [], travelers: [], sources: ["GDS"] } as never;

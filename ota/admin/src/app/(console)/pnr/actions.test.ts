@@ -510,6 +510,18 @@ describe("importBooking", () => {
     });
   });
 
+  it("[FIX-W52-OTA AC1] takes Amadeus's 200 without an order (the marked 404) for the order, never for the customer", async () => {
+    signedIn("agent");
+    api.on(IMPORT, () => apiError("NOT_FOUND", 404, { supplier: { provider: "amadeus", status: 200 } }));
+
+    const state = await run(importForm(randomUUID(), { customerId: CUSTOMER_ID }));
+
+    expect(state).toMatchObject({
+      message: "Amadeus no longer has an order with this record locator. Look it up again.",
+    });
+    expect(state.fieldErrors?.["customerId"]).toBeUndefined();
+  });
+
   it("keeps the key after a timeout or a rate limit, so the same import is replayed instead of made twice", async () => {
     signedIn("agent");
     const key = randomUUID();
@@ -731,5 +743,26 @@ describe("readRawOrders and readRawOrder", () => {
       ok: false,
       message: "Amadeus has no order with this id (any more).",
     });
+  });
+
+  it("[FIX-W52-OTA AC1] says 'Amadeus has no order' for the by-reference read's marked 404, its 200 without an order or its own 404", async () => {
+    signedIn("agent");
+    for (const supplier of [
+      { provider: "amadeus", status: 200 },
+      { provider: "amadeus", status: 404, code: 1797, title: "NOT FOUND" },
+    ]) {
+      api.on(RAW_BY_REFERENCE, () =>
+        apiError("NOT_FOUND", 404, {
+          supplier,
+          details: { supplierRequestId: "sreq_01JA4H9Z1B3D5F7H9K1M3P5R7T", errors: [] },
+        }),
+      );
+      expect(await readRawOrders(REFERENCE)).toEqual({
+        ok: false,
+        code: "NOT_FOUND",
+        message: "Amadeus has no order with this record locator.",
+        requestId: "req_fake_1",
+      });
+    }
   });
 });

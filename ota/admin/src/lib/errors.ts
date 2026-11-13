@@ -166,6 +166,21 @@ export function isVelexisErrorLike(value: unknown): value is VelexisErrorLike {
   );
 }
 
+/**
+ * `error` is a `404 NOT_FOUND` with the supplier's error (`error.supplier`): Amadeus has no order for the record
+ * locator, by its own `404` or by a `200` without an order (marked `{ provider: "amadeus", status: 200 }`), as
+ * console.bookings.closeReview, findByRecordLocator and import and console.amadeus.getFlightOrderByReference answer it
+ * (lead decisions (20l) and (21f) of 2026-11-13). A `404` without it (an unknown booking or customer) is something
+ * else. Only the presence of `error.supplier` is read; it is never shown.
+ */
+export function isSupplierNotFound(error: unknown): boolean {
+  if (!isVelexisErrorLike(error) || error.code !== "NOT_FOUND") {
+    return false;
+  }
+  const { supplier } = error as { readonly supplier?: unknown };
+  return typeof supplier === "object" && supplier !== null;
+}
+
 /** The message of a status without a code of its own here. */
 function statusMessage(status: number): string {
   return STATUS_MESSAGES.find(([matches]) => matches(status))?.[1] ?? GENERIC_ERROR_MESSAGE;

@@ -23,7 +23,10 @@
 //      demo OTA and with a long OTA name and two currencies: below lg (768, 800, 850, 900 and 1023 px) the compact
 //      menu, and nothing moves when the session answers late (OFE-031's held answers), axe with the menu closed and
 //      open at 800 and 1023 px; from lg (1024 and 1280 px) the signed-in links in the navigation's row, which does
-//      not wrap.
+//      not wrap; and (FIX-W52-OTA, lead decision (21h) of 2026-11-13) the contract's longest first name (60
+//      characters) at 1024 and 1100 px for both storefronts: the greeting cut with an ellipsis at its cap (12rem),
+//      whole in the DOM, the accessibility tree and its title, the row not wrapping when the session answers (nothing
+//      moves up or down; the wider navigation moves along its line, as from lg before), axe.
 //
 // What the stack cannot answer on demand is answered in the browser (`page.route`), and only that: the shared states
 // of `storefront.get` (the API's error envelope) and, for parts 3 and 6, storefront.get's own answer with the OTA's
@@ -654,15 +657,17 @@ test.describe("home and results on a phone", () => {
 });
 
 /**
- * A layout shift the page recorded (parts 5 and 6): its score, whether input caused it, whether it moved the header, and
+ * A layout shift the page recorded (parts 5 and 6): its score, whether input caused it, whether it moved the header,
  * whether every element it names changed its own size (`resized`), as text does when a web font's face replaces the
- * font stack's fallback.
+ * font stack's fallback, and whether an element it names moved up or down (`vertical`; a row that only grows sideways
+ * moves its neighbours along the line).
  */
 interface RecordedShift {
   readonly value: number;
   readonly recentInput: boolean;
   readonly inHeader: boolean;
   readonly resized: boolean;
+  readonly vertical: boolean;
 }
 
 /**
@@ -681,7 +686,13 @@ function recordLayoutShifts(): void {
       readonly currentRect: DOMRectReadOnly;
     }>;
   };
-  const shifts: { value: number; recentInput: boolean; inHeader: boolean; resized: boolean }[] = [];
+  const shifts: {
+    value: number;
+    recentInput: boolean;
+    inHeader: boolean;
+    resized: boolean;
+    vertical: boolean;
+  }[] = [];
   const keep = (entries: PerformanceEntryList) => {
     const banner = document.querySelector("body > header");
     for (const entry of entries as Entry[]) {
@@ -698,6 +709,7 @@ function recordLayoutShifts(): void {
               source.previousRect.width !== source.currentRect.width ||
               source.previousRect.height !== source.currentRect.height,
           ),
+        vertical: (entry.sources ?? []).some((source) => source.previousRect.y !== source.currentRect.y),
       });
     }
   };
@@ -903,6 +915,79 @@ const STOREFRONTS = Object.freeze([
   { label: "a long OTA name and two currencies", fullest: true },
 ]);
 
+/**
+ * Home at `width` as OFE-031's check opens a page: storefront.get held until the static page has painted, then
+ * auth.getSession held until the configuration has been applied, then let through; the layout shifts of each phase,
+ * and the header's geometry before and after the session answered.
+ *
+ * From md the bundled face's swap (`font-display: swap`, even from the memory cache) moves the navigation sideways
+ * and the search form's text, by as much as the face's metrics differ from the fallback's: 0 where `system-ui` is
+ * Inter itself (the agents' machine), 0.0005 to 0.0007 at 768 to 1023 px where it is DejaVu Sans (CI's runner, E2E
+ * run 43371391946, wave 51's integrator). That depends on the machine's fonts, not on the page, so the checks of the
+ * static paint and the configuration leave such shifts out (`withoutFontSwaps`) and the annotation reports them; the
+ * session's answer is checked with every shift.
+ */
+async function homeWithLateSession(page: Page, width: number) {
+  await page.setViewportSize({ width, height: WINDOW.viewport.height });
+  const config = await hold(page, "/api/v1/storefront");
+  const session = await hold(page, "/api/v1/auth/session");
+  await page.goto("/");
+  await config.seen;
+  const painted = await takeShifts(page);
+  config.release();
+  await expect(header(page).name).toHaveAttribute("title", /\S/);
+  await session.seen;
+  const configured = await takeShifts(page);
+  const before = await headerGeometry(page);
+  session.release();
+  await expect(
+    page.locator('body > header [data-slot="account-menu"] [data-account-menu-panel]'),
+  ).toBeAttached();
+  await expect(searchForm(page)).toBeVisible();
+  const signedIn = await takeShifts(page);
+  const after = await headerGeometry(page);
+  await page.unrouteAll({ behavior: "ignoreErrors" });
+  test.info().annotations.push({
+    type: "layout shifts",
+    description:
+      `home at ${width} px: painted ${scoreOf(painted).toFixed(4)}, configuration ` +
+      `${scoreOf(configured).toFixed(4)}, session ${scoreOf(signedIn).toFixed(4)}; the font's swap before the ` +
+      `session ${scoreOf([...painted, ...configured].filter((shift) => shift.resized)).toFixed(4)}`,
+  });
+  return { painted, configured, signedIn, before, after };
+}
+
+/**
+ * Whether the navigation is one row (part 6, from lg): the middle of each of its links, "Find a booking", the greeting,
+ * "My account" and "Sign out", lies within the navigation's box, which kept one line's height.
+ */
+const navigationRow = (page: Page) =>
+  page.evaluate(() => {
+    const middle = (element: Element | null) => {
+      const rect = element?.getBoundingClientRect();
+      return rect === undefined ? -1 : rect.top + rect.height / 2;
+    };
+    const nav = document.querySelector("body > header nav")?.getBoundingClientRect();
+    return {
+      nav: nav === undefined ? null : { top: nav.top, bottom: nav.bottom },
+      middles: [
+        'a[href="/lookup.html"]',
+        "[data-customer-name]",
+        'a[href="/account/"]',
+        '[data-action="sign-out"]',
+      ].map((selector) => middle(document.querySelector(`body > header nav ${selector}`))),
+    };
+  });
+
+/** Checks that `row` (`navigationRow`) is one row at `width`. */
+function expectOneRow(row: Awaited<ReturnType<typeof navigationRow>>, width: number): void {
+  expect(row.nav).not.toBeNull();
+  for (const middle of row.middles) {
+    expect(middle, `${width} px: a link out of the row`).toBeGreaterThan(row.nav?.top ?? 0);
+    expect(middle, `${width} px: a link out of the row`).toBeLessThan(row.nav?.bottom ?? 0);
+  }
+}
+
 test.describe("a signed-in customer with a long first name, from md to the large breakpoint and beyond (OFE-032)", () => {
   test.describe.configure({ mode: "serial" });
 
@@ -939,48 +1024,6 @@ test.describe("a signed-in customer with a long first name, from md to the large
   /** The customer's greeting, wherever it is (the row from lg, the compact menu's panel below it). */
   const greeting = (page: Page) =>
     page.getByRole("banner").getByText(`Hi, ${LONG_FIRST_NAME}`, { exact: true });
-
-  /**
-   * Home at `width` as OFE-031's check opens a page: storefront.get held until the static page has painted, then
-   * auth.getSession held until the configuration has been applied, then let through; the layout shifts of each phase,
-   * and the header's geometry before and after the session answered.
-   *
-   * From md the bundled face's swap (`font-display: swap`, even from the memory cache) moves the navigation sideways
-   * and the search form's text, by as much as the face's metrics differ from the fallback's: 0 where `system-ui` is
-   * Inter itself (the agents' machine), 0.0005 to 0.0007 at 768 to 1023 px where it is DejaVu Sans (CI's runner, E2E
-   * run 43371391946, wave 51's integrator). That depends on the machine's fonts, not on the page, so the checks of the
-   * static paint and the configuration leave such shifts out (`withoutFontSwaps`) and the annotation reports them; the
-   * session's answer is checked with every shift.
-   */
-  async function homeWithLateSession(page: Page, width: number) {
-    await page.setViewportSize({ width, height: WINDOW.viewport.height });
-    const config = await hold(page, "/api/v1/storefront");
-    const session = await hold(page, "/api/v1/auth/session");
-    await page.goto("/");
-    await config.seen;
-    const painted = await takeShifts(page);
-    config.release();
-    await expect(header(page).name).toHaveAttribute("title", /\S/);
-    await session.seen;
-    const configured = await takeShifts(page);
-    const before = await headerGeometry(page);
-    session.release();
-    await expect(
-      page.locator('body > header [data-slot="account-menu"] [data-account-menu-panel]'),
-    ).toBeAttached();
-    await expect(searchForm(page)).toBeVisible();
-    const signedIn = await takeShifts(page);
-    const after = await headerGeometry(page);
-    await page.unrouteAll({ behavior: "ignoreErrors" });
-    test.info().annotations.push({
-      type: "layout shifts",
-      description:
-        `home at ${width} px: painted ${scoreOf(painted).toFixed(4)}, configuration ` +
-        `${scoreOf(configured).toFixed(4)}, session ${scoreOf(signedIn).toFixed(4)}; the font's swap before the ` +
-        `session ${scoreOf([...painted, ...configured].filter((shift) => shift.resized)).toFixed(4)}`,
-    });
-    return { painted, configured, signedIn, before, after };
-  }
 
   for (const storefront of STOREFRONTS) {
     test(`home on ${storefront.label} at 768, 800, 850, 900 and 1023 px: the compact menu, nothing moves when auth.getSession answers late; axe with the menu closed and open at 800 and 1023 px [OFE-032 AC1] [OFE-032 AC3]`, async () => {
@@ -1041,33 +1084,105 @@ test.describe("a signed-in customer with a long first name, from md to the large
         await expect(greeting(page)).toBeVisible();
         await expect(parts.account).toBeVisible();
         await expect(parts.signOut).toBeVisible();
-        const row = await page.evaluate(() => {
-          const middle = (element: Element | null) => {
-            const rect = element?.getBoundingClientRect();
-            return rect === undefined ? -1 : rect.top + rect.height / 2;
-          };
-          const nav = document.querySelector("body > header nav")?.getBoundingClientRect();
-          return {
-            nav: nav === undefined ? null : { top: nav.top, bottom: nav.bottom },
-            middles: [
-              'a[href="/lookup.html"]',
-              "[data-customer-name]",
-              'a[href="/account/"]',
-              '[data-action="sign-out"]',
-            ].map((selector) => middle(document.querySelector(`body > header nav ${selector}`))),
-          };
-        });
         // One row: every link's middle within the navigation, which kept its one line's height.
-        expect(row.nav).not.toBeNull();
-        for (const middle of row.middles) {
-          expect(middle, `${width} px: a link out of the row`).toBeGreaterThan(row.nav?.top ?? 0);
-          expect(middle, `${width} px: a link out of the row`).toBeLessThan(row.nav?.bottom ?? 0);
-        }
+        expectOneRow(await navigationRow(page), width);
         // The row does not wrap when the session answers: the header and the navigation keep their height and main
         // its start (the wider navigation only moves sideways, as before OFE-032); nothing moved before it either.
         expect(after, `${width} px: the header's and the navigation's height, where main starts`).toEqual(
           before,
         );
+        expect(
+          scoreOf([...withoutFontSwaps(painted), ...withoutFontSwaps(configured)]),
+          `${width} px: shifts before the session answered, but the font's swap`,
+        ).toBe(0);
+        expect(await page.evaluate(reflows, width), `${width} px: no sideways scrolling`).toBe(true);
+        await guards.checkA11y(page);
+      }
+    });
+  }
+});
+
+/**
+ * The contract's longest first name (60 characters, `Customer.firstName`). Before the greeting's cap from lg (lead
+ * decision (21h) of 2026-11-13) the signed-in links wrapped the navigation's row with it when the session answered: at
+ * 1024 px on the demo OTA, and at 1024 and 1100 px with a long OTA name and two currencies
+ * (storefront-accessibility.md §3.8).
+ */
+const LONGEST_FIRST_NAME = "Maximiliana-Alexandrina Wilhelmina Konstantinopoulou-Papadop";
+/** The widths of the cap's check: where the longest name wrapped the row before it. */
+const CAP_WIDTHS = Object.freeze([1024, 1100]);
+/** The greeting's cap from lg, in CSS pixels: 12rem (`lg:max-w-48` of lib/session.js `GREETING_CAP_CLASSES`). */
+const GREETING_CAP_PX = 192;
+
+test.describe("a signed-in customer with the longest first name, from the large breakpoint (FIX-W52-OTA)", () => {
+  test.describe.configure({ mode: "serial" });
+
+  /** One customer named LONGEST_FIRST_NAME per storefront of STOREFRONTS, signed in, in a WINDOW. */
+  const customers = new Map<boolean, Browsing>();
+
+  test.beforeAll(async ({ browser }) => {
+    test.setTimeout(ARRANGE_TIMEOUT_MS);
+    for (const { fullest } of STOREFRONTS) {
+      const browsing = await openBrowsing(browser, WINDOW);
+      if (fullest) {
+        await withFullestHeader(browsing.context);
+      }
+      await signUp(browsing, `w52-${fullest ? "fullest" : "demo"}`, LONGEST_FIRST_NAME);
+      await watchShifts(browsing);
+      customers.set(fullest, browsing);
+    }
+  });
+
+  test.afterEach(async () => {
+    for (const browsing of customers.values()) {
+      await browsing.page.unrouteAll({ behavior: "ignoreErrors" });
+      await browsing.guards.finish(browsing.page);
+    }
+  });
+
+  test.afterAll(async () => {
+    for (const browsing of customers.values()) {
+      await browsing.context.close();
+    }
+    customers.clear();
+  });
+
+  for (const storefront of STOREFRONTS) {
+    test(`home on ${storefront.label} at 1024 and 1100 px with a 60-character first name: the greeting cut at its cap and whole in the DOM, the accessibility tree and its title; the row does not wrap when the session answers; axe [FIX-W52-OTA AC2]`, async () => {
+      const { page, guards } = customers.get(storefront.fullest) as Browsing;
+      const parts = header(page);
+      const whole = `Hi, ${LONGEST_FIRST_NAME}`;
+      for (const width of CAP_WIDTHS) {
+        const { painted, configured, signedIn, before, after } = await homeWithLateSession(page, width);
+        // The inline links, no compact menu.
+        await expect(page.locator("body > header [data-account-menu-toggle]")).toBeHidden();
+        const greeting = page.getByRole("banner").getByText(whole, { exact: true });
+        await expect(greeting, `${width} px: the greeting in the row`).toBeVisible();
+        await expect(parts.account).toBeVisible();
+        await expect(parts.signOut).toBeVisible();
+        // Cut by CSS only, with an ellipsis at the cap: the DOM, the accessibility tree that a screen reader reads
+        // and the title hold the whole greeting.
+        await expect(greeting).toHaveAttribute("title", whole);
+        const cut = await greeting.evaluate((element) => ({
+          shown: element.clientWidth,
+          whole: element.scrollWidth,
+          ellipsis: getComputedStyle(element).textOverflow,
+        }));
+        expect(cut.ellipsis).toBe("ellipsis");
+        expect(cut.shown, `${width} px: the greeting's width`).toBeLessThanOrEqual(GREETING_CAP_PX);
+        expect(cut.whole, `${width} px: the greeting is cut`).toBeGreaterThan(cut.shown);
+        expect(await page.getByRole("navigation", { name: "Main" }).ariaSnapshot()).toContain(whole);
+        // One row, which did not wrap when the session answered: the header and the navigation kept their height
+        // and main its start, and nothing moved up or down; the wider navigation only moves along its line (its
+        // neighbours to the left, as from lg before), and nothing moved before the session answered.
+        expectOneRow(await navigationRow(page), width);
+        expect(after, `${width} px: the header's and the navigation's height, where main starts`).toEqual(
+          before,
+        );
+        expect(
+          signedIn.filter((shift) => shift.vertical),
+          `${width} px: shifts up or down when the session answered`,
+        ).toEqual([]);
         expect(
           scoreOf([...withoutFontSwaps(painted), ...withoutFontSwaps(configured)]),
           `${width} px: shifts before the session answered, but the font's swap`,

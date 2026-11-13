@@ -13917,7 +13917,9 @@ paths:
         order is left the answer is `403 OFFICE_NOT_ALLOWED`; the order data of another office is not kept in the
         OTA's `supplier_requests` either. No tenant booking data is changed — use console.bookings.resync for
         attached bookings. Amadeus 400 (477 INVALID FORMAT, 572 INVALID OPTION, 4926) → `422 SUPPLIER_REJECTED`; no
-        order → `404 NOT_FOUND` (`error.supplier` set). Not cached (PNR contents change); Next.js `cache:
+        order → `404 NOT_FOUND` with `error.supplier`, both for Amadeus's own `404` (`error.supplier` is its issue)
+        and for a `200` whose `data` holds no order (`error.supplier` then has `provider` `amadeus` and `status`
+        `200`), as console.bookings.closeReview answers them. Not cached (PNR contents change); Next.js `cache:
         "no-store"`.
 
 
@@ -14030,7 +14032,11 @@ paths:
         responses may be partial). Only orders of the OTA's own offices are imported (OF-09, ADR-0012 office
         isolation): an order whose owner office (its queuing office when Amadeus gives no owner office) is not one of
         the offices of the OTA's supplier connection answers `403 OFFICE_NOT_ALLOWED`, before the Management GET and
-        before anything is written. A known record locator is refused before Amadeus is called.
+        before anything is written. A known record locator is refused before Amadeus is called. Amadeus without an
+        order for the record locator answers `404 NOT_FOUND` with `error.supplier`, both for Amadeus's own `404`
+        (`error.supplier` is its issue) and for a `200` whose `data` holds no order (`error.supplier` then has
+        `provider` `amadeus` and `status` `200`), as console.bookings.closeReview answers them; the `404` of a
+        `customerId` the OTA does not have never carries `error.supplier`, so the two are told apart by it.
 
 
         **Customer.** `customerId` must name a customer of this OTA (`404 NOT_FOUND`); a customer who deleted their
@@ -17501,7 +17507,11 @@ paths:
         Returns the verbatim response (`meta`, `warnings`, `data` = array of flight orders, `included.bags`,
         `dictionaries`) in `amadeus`, plus `matches` linking each order to a booking of this OTA when attached. For the
         normalised lookup + import flow use console.bookings.findByRecordLocator / console.bookings.import. Amadeus 400
-        (477, 572, 4926, 32171) → `422 SUPPLIER_REJECTED`; no order → `404 NOT_FOUND`. Office isolation on the
+        (477, 572, 4926, 32171) → `422 SUPPLIER_REJECTED`; no order → `404 NOT_FOUND` with `error.supplier` and
+        the call's `details.supplierRequestId`, both for Amadeus's own `404` (`error.supplier` is its first issue,
+        `details.errors` all of them) and for a `200` whose `data` holds no order (`error.supplier` then has
+        `provider` `amadeus` and `status` `200`, and `details.errors` is empty), as console.bookings.closeReview
+        marks it. Office isolation on the
         shared Amadeus account: only orders held by one of the OTA's offices are answered (the order's `ownerOfficeId`,
         or its `queuingOfficeId` when Amadeus gives no owner office); another office's orders are left out of `data`,
         `matches` and the OTA's `supplier_requests` row of the call (which keeps their id only), and `included` and

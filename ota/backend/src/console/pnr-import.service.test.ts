@@ -1,15 +1,24 @@
 // The pure rules of the console PNR lookup and import (OBE-064, pnr-import.service.ts): the office isolation of the
 // shared Amadeus account (ADR-0012, OF-09 AC3), what the tenant's supplier log keeps of another office's order, the
 // lookup's summary and booking link, the order an import takes, its status, net and selling amounts for the three
-// pricing modes (OADR-0005 point 10) and its contact e-mail. The orders are the Amadeus stub's synthetic fixture
-// (test/builders/bookings.ts); the HTTP, database and Amadeus paths are in
+// pricing modes (OADR-0005 point 10) and its contact e-mail, and (with fakes) what the lookup and the import answer
+// when Amadeus has no order for the record locator (lead decision (21f) of 2026-11-13). The orders are the Amadeus
+// stub's synthetic fixture (test/builders/bookings.ts); the HTTP, database and Amadeus paths are in
 // test/integration/console/pnr-import.int.test.ts.
+import type { ConfigService } from "@nestjs/config";
 import { isAppError } from "@velexis/errors";
-import { describe, expect, it } from "vitest";
+import type { PinoLogger } from "nestjs-pino";
+import { describe, expect, it, vi } from "vitest";
 import { buildCreatedOrderBody } from "../../test/builders/bookings";
+import type { AmadeusClient } from "../amadeus/amadeus.client";
+import type { ConnectionResolver } from "../amadeus/connection-resolver";
+import { mapAmadeusError } from "../amadeus/error-mapper";
 import { orderSegmentsOf } from "../bookings/order-diff";
 import { readCreatedOrder, type CreatedOrder } from "../bookings/order-recorder";
+import type { SharedConfig } from "../config";
 import type { FeeRule, MarkupRule } from "../pricing/pricing.types";
+import type { RequestTenant, TenantContext } from "../tenancy/tenant-context";
+import type { TenantTransaction, TenantTx } from "../tenancy/tenant-tx";
 import {
   attachedBookingOf,
   chooseImportOrder,
@@ -20,8 +29,11 @@ import {
   importPricingOf,
   importStateOf,
   isTenantOrder,
+  noOrderFor,
+  noOrderInAnswer,
   orderOfficeOf,
   partitionOrders,
+  PnrImportService,
   pnrMatchOf,
   pnrSummaryOf,
   refuseImportRequest,
@@ -31,6 +43,7 @@ import {
   withheldResponseOf,
   type AttachedBooking,
   type ImportRulesContext,
+  type PnrImportRepository,
 } from "./pnr-import.service";
 
 type JsonObject = Record<string, unknown>;
@@ -573,5 +586,166 @@ describe("the import's contact, customer and documents", () => {
     });
     expect(storedDocumentOf({ documentType: "PASSPORT" })).toBeUndefined();
     expect(storedDocumentOf({ documentType: "LIBRARY_CARD", number: "1" })).toBeUndefined();
+  });
+});
+
+// ---- Amadeus without an order (lead decision (21f) of 2026-11-13) --------------------------------------------------
+
+const TRX = {} as TenantTransaction;
+const TENANT: RequestTenant = {
+  tenantId: "ten_01JA4H1A3C5E7G9J1L3N5Q7S9U",
+  key: "alpha",
+  schemaName: "tenant_alpha" as RequestTenant["schemaName"],
+  environment: "test",
+  caller: { type: "service" } as unknown as RequestTenant["caller"],
+  actor: { type: "staff", id: "stf_01JA4H1A3C5E7G9J1L3N5Q7S9U" } as RequestTenant["actor"],
+  requestId: "req_01JA4H1A3C5E7G9J1L3N5Q7S9U",
+};
+const CUSTOMER_ID = "cus_01JA4H1A3C5E7G9J1L3N5Q7S9U";
+const SUPPLIER_REQUEST_ID = "sreq_01JA4H1A3C5E7G9J1L3N5Q7S9U";
+
+/**
+ * The lookup and the import with fakes up to their Get Flight Order By Record Locator: no booking of the environment
+ * holds the record locator, one active customer, the tenant's offices, and Amadeus answering `answer`: a `200` with this
+ * body, or the client's error. Everything after the read is a throwing stand-in: these cases end at it.
+ */
+function lookupHarness(answer: { readonly body: unknown } | { readonly error: unknown }) {
+  const getFlightOrderByReference = vi.fn(() =>
+    "error" in answer
+      ? Promise.reject(answer.error)
+      : Promise.resolve({
+          body: answer.body,
+          call: {
+            supplierRequestId: SUPPLIER_REQUEST_ID,
+            officeId: OWN,
+            status: 200,
+            durationMs: 12,
+            correlationId: "0005K2D7QX1JZT",
+            attempts: 1,
+          },
+        }),
+  );
+  const repository = {
+    attachedBookings: vi.fn(() => Promise.resolve([])),
+    customer: vi.fn((_trx: unknown, id: string) =>
+      Promise.resolve(
+        id === CUSTOMER_ID ? { id, email: "a@example.com", status: "active", deletedAt: null } : undefined,
+      ),
+    ),
+  };
+  const tenantOffices = vi.fn(() =>
+    Promise.resolve({
+      connection: { officeIds: OFFICES, offices: { queuing: OWN, owner: OWN, queue: OWN, retrieval: OWN } },
+      orderOfficeIds: OFFICES,
+    }),
+  );
+  const unreached = new Proxy(
+    {},
+    {
+      get: (_target, name) => {
+        throw new Error(`not reached in these cases: ${String(name)}`);
+      },
+    },
+  ) as never;
+  const service = new PnrImportService(
+    { run: (fn: (trx: TenantTransaction) => Promise<unknown>) => fn(TRX) } as unknown as TenantTx,
+    repository as unknown as PnrImportRepository,
+    unreached, // bookings
+    unreached, // consoleBookings
+    unreached, // travelerDocuments
+    unreached, // recorder
+    unreached, // rules
+    { getFlightOrderByReference } as unknown as AmadeusClient,
+    { tenantOffices } as unknown as ConnectionResolver,
+    unreached, // audit: no office refusal here
+    unreached, // outbox
+    { require: () => TENANT, requestId: () => undefined } as unknown as TenantContext,
+    unreached, // ids
+    unreached, // clock
+    { get: () => "ota.example.com" } as unknown as ConfigService<SharedConfig, true>,
+    { warn: vi.fn(), info: vi.fn(), error: vi.fn() } as unknown as PinoLogger,
+  );
+  return { service, repository, getFlightOrderByReference };
+}
+
+/** What a `404` carries for the OTA admin: status, code, message, `error.supplier` and `details`. */
+const notFoundOf = (error: unknown): unknown =>
+  isAppError(error) ? [error.status, error.code, error.message, error.supplier, error.details] : error;
+
+const MARKED_EMPTY = [
+  404,
+  "NOT_FOUND",
+  "Amadeus has no order with this record locator.",
+  { provider: "amadeus", status: 200 },
+  undefined,
+];
+
+describe("Amadeus without an order for the record locator (lead decision (21f) of 2026-11-13)", () => {
+  it("[FIX-W52-OTA AC1] marks the empty answer as Amadeus's: 404 NOT_FOUND with error.supplier { provider: amadeus, status }", () => {
+    expect(notFoundOf(noOrderInAnswer(200))).toEqual(MARKED_EMPTY);
+    expect(notFoundOf(noOrderInAnswer(200, { supplierRequestId: SUPPLIER_REQUEST_ID, errors: [] }))).toEqual([
+      ...MARKED_EMPTY.slice(0, 4),
+      { supplierRequestId: SUPPLIER_REQUEST_ID, errors: [] },
+    ]);
+    // Without an issue (an unknown booking or customer would never use it) there is no marker.
+    expect(notFoundOf(noOrderFor(undefined, { message: "Amadeus no longer has this order." }))).toEqual([
+      404,
+      "NOT_FOUND",
+      "Amadeus no longer has this order.",
+      undefined,
+      undefined,
+    ]);
+  });
+
+  it("[FIX-W52-OTA AC1] answers the lookup's 200 without an order with the marked 404, as Amadeus's own 404", async () => {
+    for (const body of [{ data: [] }, { meta: { count: 0 } }, { data: ["not an order"] }]) {
+      const h = lookupHarness({ body });
+
+      const error = await h.service
+        .findByRecordLocator({ reference: "ZZZZ99", originSystemCode: "GDS" })
+        .catch((caught: unknown) => caught);
+
+      expect(notFoundOf(error)).toEqual(MARKED_EMPTY);
+      expect(h.getFlightOrderByReference).toHaveBeenCalledOnce();
+    }
+    // Amadeus's own 404 keeps its issue (1797), as before.
+    const own404 = mapAmadeusError("getFlightOrderByReference", {
+      kind: "http",
+      status: 404,
+      issues: [{ status: 404, code: 1797, title: "NOT FOUND" }],
+    });
+    const h = lookupHarness({ error: own404 });
+    const error = await h.service
+      .findByRecordLocator({ reference: "ZZZZ99", originSystemCode: "GDS" })
+      .catch((caught: unknown) => caught);
+    expect(notFoundOf(error)).toEqual([
+      404,
+      "NOT_FOUND",
+      "Amadeus has no order with this record locator.",
+      { provider: "amadeus", status: 404, code: 1797, title: "NOT FOUND" },
+      undefined,
+    ]);
+  });
+
+  it("[FIX-W52-OTA AC1] answers the import's 200 without an order with the marked 404, which an unknown customer's 404 never is", async () => {
+    const h = lookupHarness({ body: { data: [] } });
+
+    const empty = await h.service
+      .import({ reference: "ZZZZ99", customerId: CUSTOMER_ID, pricing: { mode: "net" } })
+      .catch((caught: unknown) => caught);
+    const unknownCustomer = await h.service
+      .import({ reference: "ZZZZ99", customerId: "cus_01JA4H1A3C5E7G9J1L3N5Q7S9V", pricing: { mode: "net" } })
+      .catch((caught: unknown) => caught);
+
+    expect(notFoundOf(empty)).toEqual(MARKED_EMPTY);
+    // The customer's 404 comes before Amadeus is called, without error.supplier: the OTA admin tells them apart by it.
+    expect(notFoundOf(unknownCustomer)).toEqual([
+      404,
+      "NOT_FOUND",
+      "No customer with this id.",
+      undefined,
+      undefined,
+    ]);
+    expect(h.getFlightOrderByReference).toHaveBeenCalledOnce();
   });
 });

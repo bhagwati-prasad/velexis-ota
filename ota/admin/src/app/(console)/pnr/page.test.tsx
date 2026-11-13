@@ -321,6 +321,21 @@ describe("/pnr", () => {
     );
   });
 
+  it("[FIX-W52-OTA AC1] says 'Amadeus has no order' for the lookup's marked 404: Amadeus's 200 without an order or its own 404", async () => {
+    for (const supplier of [
+      { provider: "amadeus", status: 200 },
+      { provider: "amadeus", status: 404, code: 1797, title: "NOT FOUND" },
+    ]) {
+      api.on(LOOKUP, () => apiError("NOT_FOUND", 404, { supplier }));
+
+      const page = await renderPage("reference=ZZ9ZZZ");
+
+      const status = within(page).getByRole("status");
+      expect(status.textContent).toContain("Amadeus has no order with this record locator.");
+      expect(status.textContent).not.toContain("in your offices");
+    }
+  });
+
   it("names a record locator the API would refuse, without a request", async () => {
     const page = await renderPage("recordLocator=L2-P9");
 

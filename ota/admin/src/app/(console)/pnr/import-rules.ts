@@ -1,9 +1,10 @@
 // The shared vocabulary of the PNR lookup and import `/pnr` (OAD-009, routes.md §4, console-operations flow §3 step 4):
-// the URL of a lookup, the record locator's rule, the import dialog's field names and choices, and the state the
-// import's server action answers. The page (page.tsx), the dialog (import-dialog.tsx), the server actions (actions.ts)
-// and the queue pages (`/queues`, whose orphan PNRs link here) import it. A module without a directive, as the booking
-// page's action-rules.ts: a `"use server"` module may export async functions only, and a `"use client"` module would
-// reach the server only as client references. No SDK runtime import (types only), nothing secret.
+// the URL of a lookup, the record locator's rule, the words of Amadeus's "no order", the import dialog's field names
+// and choices, and the state the import's server action answers. The page (page.tsx), the dialog (import-dialog.tsx),
+// the server actions (actions.ts) and the queue pages (`/queues`, whose orphan PNRs link here) import it. A module
+// without a directive, as the booking page's action-rules.ts: a `"use server"` module may export async functions only,
+// and a `"use client"` module would reach the server only as client references. No SDK runtime import (types only),
+// nothing secret.
 import type { Choice } from "@/app/(console)/bookings/[bookingId]/action-rules";
 import type { ActionState } from "@/lib/action-state";
 
@@ -33,6 +34,13 @@ export function pnrHref(recordLocator: string): string {
 export function bookingPath(bookingId: string): string {
   return `/bookings/${encodeURIComponent(bookingId)}`;
 }
+
+/**
+ * The words of a record locator Amadeus has no order for, as the booking page's review says it: the lookup's and the
+ * raw by-reference read's `404` with `error.supplier` (`isSupplierNotFound` of lib/errors.ts: Amadeus's own `404`, or
+ * its `200` without an order since lead decision (21f) of 2026-11-13).
+ */
+export const AMADEUS_NO_ORDER = "Amadeus has no order with this record locator.";
 
 // ---- The import dialog's fields -------------------------------------------------------------------------------------
 

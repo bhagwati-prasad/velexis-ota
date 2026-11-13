@@ -309,6 +309,17 @@ function firstNameOf(customer) {
 export const ACCOUNT_MENU_PANEL_ID = "vx-account-menu";
 
 /**
+ * The cap of the signed-in greeting in the navigation's row from `lg` (1024 px): at most 12rem (192 px) wide, a longer
+ * greeting cut with an ellipsis (`truncate`: one line, `overflow: hidden`, `text-overflow: ellipsis`). The row's widest
+ * content, "Find a booking", "My bookings", the greeting at its cap, "My account" and "Sign out", is then about 590 px
+ * (with the bundled Inter), which leaves the OTA's name more than its 8rem beside two currencies at 1024 px, so a first
+ * name of up to 60 characters never wraps the row, while "Hi, " and a 23-character first name (184 px) are not cut
+ * (ota/docs/storefront-accessibility.md §3.8, lead decision (21h) of 2026-11-13). Below `lg` nothing applies: the
+ * panel shows the greeting whole.
+ */
+export const GREETING_CAP_CLASSES = "lg:max-w-48 lg:truncate";
+
+/**
  * What undoes the listeners of the account menu rendered into a slot (the document's, for a press outside), run before
  * the slot is rendered again.
  * @type {WeakMap<Element, () => void>}
@@ -373,6 +384,12 @@ function accountMenuToggle(doc) {
  * unless it was on another control, which then takes the focus, or never became a click (a touch that scrolled the
  * page); the focus moving on past the menu closes it, so it never covers the focused element (2.4.11). One set of
  * links serves both widths: from `lg` the button is not shown and the panel is the row's inline group.
+ *
+ * From `lg` the greeting's width is capped (GREETING_CAP_CLASSES) and a longer first name ends in an ellipsis, so a
+ * first name of up to 60 characters (the contract's longest) never wraps the navigation's row when the session
+ * answers, at any width from 1024 px (lead decision (21h) of 2026-11-13, after OFE-032's review). The whole greeting
+ * stays in the DOM, which screen readers read, and in the greeting's `title`; below `lg` the panel shows it whole,
+ * wrapping, as before.
  * @param {Element} slot
  * @param {SessionInfo | null} session
  * @param {{ location?: Location, client?: SessionClient | null, navigate?: (url: string) => void }} [options]
@@ -411,9 +428,12 @@ export function renderAccountMenu(slot, session, options = {}) {
   if (name !== null) {
     const greeting = doc.createElement("span");
     greeting.dataset.customerName = "";
-    // A long name wraps in the panel; it is never cut.
-    greeting.className = "wrap-anywhere max-lg:block max-lg:px-2 max-lg:py-1 max-lg:font-medium";
+    // Below lg a long name wraps in the panel and is never cut; from lg it ends in an ellipsis at the cap, the whole
+    // greeting in the DOM and in the title.
+    greeting.className =
+      "wrap-anywhere max-lg:block max-lg:px-2 max-lg:py-1 max-lg:font-medium " + GREETING_CAP_CLASSES;
     greeting.textContent = t("account.greeting", { name });
+    greeting.title = greeting.textContent;
     group.append(greeting);
   }
   group.append(link);

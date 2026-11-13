@@ -27,6 +27,7 @@ import { mount as mountHeader } from "../src/components/header.js";
 import { CONFIG_STORAGE_KEY } from "../src/lib/config.js";
 import { formatTimestamp } from "../src/lib/format.js";
 import {
+  GREETING_CAP_CLASSES,
   nextTarget,
   passwordFieldErrors,
   passwordRules,
@@ -1512,10 +1513,11 @@ describe("account menu below lg: one compact button (OFE-031, OFE-032)", () => {
     expect(text(toggle)).toBe("Account");
     const greeting = /** @type {HTMLElement} */ (panel.querySelector("[data-customer-name]"));
     expect(text(greeting)).toBe(`Hi, ${firstName}`);
-    // Never cut: no ellipsis, and it breaks anywhere rather than overflowing the panel, which is never wider than
-    // the navigation.
+    // Never cut in the panel: no ellipsis below lg (the cap's classes are lg's only, below), and it breaks anywhere
+    // rather than overflowing the panel, which is never wider than the navigation.
     expect(classes(greeting)).toContain("wrap-anywhere");
     expect(classes(greeting)).not.toContain("truncate");
+    expect(classes(greeting).filter((name) => /^max-lg:(truncate|max-w-)/.test(name))).toEqual([]);
     expect(classes(panel)).toEqual(expect.arrayContaining(["max-lg:w-max", "max-lg:max-w-full"]));
   });
 
@@ -1577,5 +1579,33 @@ describe("account menu below lg: one compact button (OFE-031, OFE-032)", () => {
     // a media query's rem is the browser's initial font size, 16 px.
     expect(new Set(Object.values(queries))).toEqual(new Set([BELOW_LG, FROM_LG]));
     expect(Number(/([\d.]+)rem/.exec(BELOW_LG)?.[1]) * 16).toBe(1024);
+  });
+
+  it("[FIX-W52-OTA AC2] from lg the greeting is capped at 12rem with an ellipsis, the whole greeting in the DOM and its title; below lg nothing changes", () => {
+    // The contract's longest first name (60 characters).
+    const firstName = "Maximiliana-Alexandrina Wilhelmina Konstantinopoulou-Papadop";
+    expect(firstName).toHaveLength(60);
+    const { panel } = showSignedIn({ ...SESSION, customer: { ...CUSTOMER, firstName } });
+    const greeting = /** @type {HTMLElement} */ (panel.querySelector("[data-customer-name]"));
+    // The whole greeting, as a screen reader reads it and as the title shows it: the cut is CSS's only.
+    expect(text(greeting)).toBe(`Hi, ${firstName}`);
+    expect(greeting.title).toBe(`Hi, ${firstName}`);
+    expect(GREETING_CAP_CLASSES.split(" ")).toEqual(["lg:max-w-48", "lg:truncate"]);
+    expect(classes(greeting)).toEqual(expect.arrayContaining(["lg:max-w-48", "lg:truncate"]));
+    // Both switch on at 1024 px and only there, as Tailwind compiles them: below lg the panel shows the greeting
+    // whole, wrapping (the test above).
+    expect(mediaQueries([greeting])).toMatchObject({ "lg:max-w-48": FROM_LG, "lg:truncate": FROM_LG });
+    const css = /** @type {NonNullable<typeof tailwind>} */ (tailwind).build(["lg:max-w-48", "lg:truncate"]);
+    const rule = (/** @type {string} */ name) =>
+      new RegExp(`\\.lg\\\\:${name} \\{\\s*@media \\(width >= 64rem\\) \\{([^}]*)\\}`).exec(css)?.[1] ?? "";
+    // 12rem: Tailwind's spacing step (0.25rem) times 48, the cap of GREETING_CAP_CLASSES.
+    expect(rule("max-w-48")).toMatch(/max-width: calc\(var\(--spacing\) \* 48\);/);
+    expect(css).toMatch(/--spacing: 0\.25rem;/);
+    expect(rule("truncate")).toMatch(/overflow: hidden;/);
+    expect(rule("truncate")).toMatch(/text-overflow: ellipsis;/);
+    expect(rule("truncate")).toMatch(/white-space: nowrap;/);
+    // A short name gets the same classes and title: the cap only shows on a name longer than it.
+    const short = showSignedIn().panel.querySelector("[data-customer-name]");
+    expect(short?.getAttribute("title")).toBe("Hi, Ada");
   });
 });

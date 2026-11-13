@@ -26,9 +26,10 @@
 //      recorded: `422 UNPROCESSABLE`, `order_not_recordable`). Amadeus without an order for the record locator answers
 //      `404 NOT_FOUND` with `error.supplier`: its own `404`, or a `200` without an order (`ordersOfReply`, marked
 //      `{ provider: "amadeus", status: 200 }` as the client marks an answer without issues; lead decision (20l) of
-//      2026-11-13). Then T2 (`recordOrderFound`): the checkout, then the booking locked
-//      (OADR-0003 point 11), still in review in that checkout and at the version of T1, no other booking holding the
-//      order by its id or one of its records (the unique indexes catch a concurrent import: `409
+//      2026-11-13; since (21f) the PNR lookup, the import and the raw by-reference read answer it alike, through
+//      pnr-import.service.ts `noOrderFor` and `noOrderInAnswer`). Then T2 (`recordOrderFound`): the checkout, then the
+//      booking locked (OADR-0003 point 11), still in review in that checkout and at the version of T1, no other
+//      booking holding the order by its id or one of its records (the unique indexes catch a concurrent import: `409
 //      ORDER_ALREADY_IMPORTED`), and the reconciliation's found decision (`recordFoundOrder`: the order recorded by
 //      the staff member, `reconcile_outcome = found`, the checkout `completed`, the staff event
 //      `booking.reconcile_closed` as the decision's event, an airline-card payment settled as the airline charged it).
@@ -57,13 +58,7 @@ import { InjectQueue } from "@nestjs/bullmq";
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type { components } from "@velexis/api-types";
-import {
-  AppError,
-  isAppError,
-  type FieldError,
-  type OtaErrorCode,
-  type SupplierIssue,
-} from "@velexis/errors";
+import { AppError, isAppError, type FieldError, type OtaErrorCode } from "@velexis/errors";
 import { redactPayload } from "@velexis/logger";
 import type { Queue } from "bullmq";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
@@ -103,6 +98,8 @@ import type { ConsoleBooking } from "./console-bookings.mapper";
 import { STAFF_NOTE_EVENT } from "./console-bookings.repository";
 import { ConsoleBookingsService } from "./console-bookings.service";
 import {
+  noOrderFor,
+  noOrderInAnswer,
   partitionOrders,
   PnrImportRepository,
   withheldResponseOf,
@@ -331,26 +328,14 @@ function isOrderNotFound(error: unknown): error is AppError {
   );
 }
 
-/** The message of a record locator Amadeus has no order for. */
-const NO_ORDER_MESSAGE = "Amadeus has no order with this record locator.";
-
 /**
- * `404 NOT_FOUND` of a record locator Amadeus has no order for, with what Amadeus answered as `error.supplier` (shown
- * in console scope): the issue of its own `404`, or the status of an answer without an order. A `404` without it is an
- * unknown booking, so the OTA admin tells the two apart by it.
+ * The answer of a failed by-reference read (see SUPPLIER_CODES): `404` with the supplier error (pnr-import.service.ts
+ * `noOrderFor`, the helper of every read by record locator: a `404` without it is an unknown booking, so the OTA admin
+ * tells the two apart by it), the codes, or a `502`.
  */
-function noOrderFor(supplier: SupplierIssue | undefined, cause?: unknown): AppError {
-  return new AppError("NOT_FOUND", {
-    message: NO_ORDER_MESSAGE,
-    ...(supplier === undefined ? {} : { supplier }),
-    ...(cause === undefined ? {} : { cause }),
-  });
-}
-
-/** The answer of a failed by-reference read (see SUPPLIER_CODES): `404` with the supplier error, the codes, or a `502`. */
 export function closureSupplierAnswerOf(error: unknown): unknown {
   if (isOrderNotFound(error)) {
-    return noOrderFor(error.supplier, error);
+    return noOrderFor(error.supplier, { cause: error });
   }
   if (!isAppError(error) || SUPPLIER_CODES.has(error.code)) {
     return error;
@@ -376,7 +361,7 @@ export function ordersOfReply(body: unknown, status: number): { orders: JsonObje
   const data = body["data"];
   const orders = (Array.isArray(data) ? data : isRecord(data) ? [data] : []).filter(isRecord);
   if (orders.length === 0) {
-    throw noOrderFor({ provider: "amadeus", status });
+    throw noOrderInAnswer(status);
   }
   return { orders, body };
 }

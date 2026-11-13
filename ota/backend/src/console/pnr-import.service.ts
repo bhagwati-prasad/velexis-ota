@@ -28,14 +28,18 @@
 //   Order By Record Locator (the connection's retrieval office; `include=bags` passed through), the office isolation
 //   above, and each order of the tenant wrapped with its summary (PnrOrderSummary) and its link to a booking of this
 //   environment (matched on `bookings.amadeus_order_id`, else on an associated record): `importable` when there is
-//   none. Amadeus 404 answers `404 NOT_FOUND` with `error.supplier`. The PNR lookup is an audited read (OADR-0011 point 8
-//   as decided on 2026-10-21): the use case writes its `pnr.lookup` row (target: the record locator) in a transaction
-//   of its own, and its handler opts in with `@AuditedRead` (the interceptor then writes no second row).
+//   none. Amadeus without an order for the record locator answers `404 NOT_FOUND` with `error.supplier` (`noOrderFor`):
+//   its own `404` with its issue, or a `200` whose `data` holds no order marked `{ provider: "amadeus", status: 200 }`
+//   (`noOrderInAnswer`; lead decision (21f) of 2026-11-13, as the review closure answers it since (20l)). The PNR
+//   lookup is an audited read (OADR-0011 point 8 as decided on 2026-10-21): the use case writes its `pnr.lookup` row
+//   (target: the record locator) in a transaction of its own, and its handler opts in with `@AuditedRead` (the
+//   interceptor then writes no second row).
 // - `import` (`bookings:write`, `Idempotency-Key`): the request's checks first (`pricing.sellingTotal` with `override`
 //   only and required there, `400`); T1: a booking of the environment with this record locator answers `409
 //   ORDER_ALREADY_IMPORTED` before Amadeus is called, the customer must be one of the tenant's (`404`), not deleted or
 //   disabled (`409 CONFLICT`, `details.reason` `customer_deleted` / `customer_disabled`, as a console checkout answers
-//   it). Then Get Flight Order By Record Locator (`include=bags`), the office isolation, the order (`flightOrderId`
+//   it). Then Get Flight Order By Record Locator (`include=bags`; no order: the lookup's marked `404`, which the
+//   customer's `404` never is), the office isolation, the order (`flightOrderId`
 //   among several matches, otherwise `422 UNPROCESSABLE` with the tenant's `details.flightOrderIds`), Flight Order
 //   Management GET of that order for its office (`include=bags`: the complete order). T2, one transaction: the order
 //   known by its id or one of its records (or the unique indexes on a concurrent import) answers `409
@@ -70,7 +74,7 @@ import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type { components, operations } from "@velexis/api-types";
 import type { Insertable, TenantDatabase } from "@velexis/db";
-import { AppError, isAppError, type OtaErrorCode } from "@velexis/errors";
+import { AppError, isAppError, type OtaErrorCode, type SupplierIssue } from "@velexis/errors";
 import { redactPayload } from "@velexis/logger";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import { AmadeusClient, requestPath, type AmadeusCallInfo } from "../amadeus/amadeus.client";
@@ -828,14 +832,47 @@ const countryOrNull = (value: string | undefined): string | null =>
 const isNotFound = (error: unknown): error is AppError =>
   isAppError(error) && error.cause instanceof AmadeusCallError && error.cause.httpStatus === 404;
 
+/** The message of a record locator Amadeus has no order for. */
+export const NO_ORDER_MESSAGE = "Amadeus has no order with this record locator.";
+
+/** What `noOrderFor` puts besides its supplier issue. */
+export interface NoOrderOptions {
+  /** NO_ORDER_MESSAGE by default. */
+  readonly message?: string;
+  readonly details?: Readonly<Record<string, unknown>>;
+  readonly cause?: unknown;
+}
+
+/**
+ * `404 NOT_FOUND` of a record locator (or an order) Amadeus has no order for, with what Amadeus answered as
+ * `error.supplier` (shown in console scope): the issue of its own `404`, or the mark of an answer without an order
+ * (`noOrderInAnswer`). A `404` without it is something else, an unknown booking or customer, so the OTA admin tells the
+ * two apart by it. The one helper of the reads by record locator: this file's lookup and import, the raw by-reference
+ * read (raw-amadeus.service.ts) and the review closure (review-closure.service.ts; lead decisions (20l) and (21f) of
+ * 2026-11-13).
+ */
+export function noOrderFor(supplier: SupplierIssue | undefined, options: NoOrderOptions = {}): AppError {
+  return new AppError("NOT_FOUND", {
+    message: options.message ?? NO_ORDER_MESSAGE,
+    ...(supplier === undefined ? {} : { supplier }),
+    ...(options.details === undefined ? {} : { details: options.details }),
+    ...(options.cause === undefined ? {} : { cause: options.cause }),
+  });
+}
+
+/**
+ * `noOrderFor` an Amadeus answer of `status` (a `200`) whose `data` holds no order: `error.supplier` `{ provider:
+ * "amadeus", status }`, the client's mark of an answer without issues (error-mapper.ts), as Amadeus's own `404` carries
+ * its issue (lead decision (21f) of 2026-11-13).
+ */
+export function noOrderInAnswer(status: number, details?: Readonly<Record<string, unknown>>): AppError {
+  return noOrderFor({ provider: "amadeus", status }, details === undefined ? {} : { details });
+}
+
 /** A supplier error a use case passes on (SUPPLIER_CODES; an Amadeus 404 as `404 NOT_FOUND`). */
 function supplierAnswerOf(error: unknown, notFound: string): unknown {
   if (isNotFound(error)) {
-    return new AppError("NOT_FOUND", {
-      message: notFound,
-      ...(error.supplier === undefined ? {} : { supplier: error.supplier }),
-      cause: error,
-    });
+    return noOrderFor(error.supplier, { message: notFound, cause: error });
   }
   if (!isAppError(error) || SUPPLIER_CODES.has(error.code)) {
     return error;
@@ -1788,7 +1825,7 @@ export class PnrImportService {
       );
       return { ...reply, ...offices };
     } catch (error) {
-      throw supplierAnswerOf(error, "Amadeus has no order with this record locator.");
+      throw supplierAnswerOf(error, NO_ORDER_MESSAGE);
     }
   }
 
@@ -1808,7 +1845,8 @@ export class PnrImportService {
   /**
    * The tenant's orders of a by-reference answer (see the file header): another office's are withheld from the
    * answer (the tenant's `supplier_requests` row never held them: `byReference`); none left is `403
-   * OFFICE_NOT_ALLOWED`, `denied`. An answer without any order is `404 NOT_FOUND`.
+   * OFFICE_NOT_ALLOWED`, `denied`. An answer without any order is `404 NOT_FOUND` with `error.supplier` `{ provider:
+   * "amadeus", status }` (`noOrderInAnswer`), as Amadeus's own `404` is answered (`supplierAnswerOf`).
    */
   private async tenantOrders(
     kind: "lookup" | "import",
@@ -1823,7 +1861,7 @@ export class PnrImportService {
   > {
     const orders = records(reply.body["data"]);
     if (orders.length === 0) {
-      throw new AppError("NOT_FOUND", { message: "Amadeus has no order with this record locator." });
+      throw noOrderInAnswer(reply.call.status);
     }
     const { connection, orderOfficeIds } = reply;
     const { allowed, withheld } = partitionOrders(orders, orderOfficeIds);

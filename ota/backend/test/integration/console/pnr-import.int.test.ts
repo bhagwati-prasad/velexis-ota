@@ -644,6 +644,46 @@ describe("console.bookings.findByRecordLocator", () => {
     expect(res.body.error.supplier).toBeTruthy();
   });
 
+  it("[FIX-W52-OTA AC1] answers Amadeus's 200 without an order as its own 404, in the lookup and the import: 404 NOT_FOUND with the supplier marker", async () => {
+    const agent = await staffSession(alphaId, "agent");
+    const order = await stubOrder({ queuing: alphaOffice, owner: alphaOffice });
+    const customerId = await newCustomer("tenant_alpha");
+    // Amadeus answers 200 without an order (the order's real read, its `data` emptied): the API's client.
+    const client = api.app.get(AmadeusClient, { strict: false });
+    const byReference = client.getFlightOrderByReference.bind(client);
+    const emptyRead = vi
+      .spyOn(client, "getFlightOrderByReference")
+      .mockImplementation(async (context, req, options) => {
+        const reply = await byReference(context, req, options);
+        return { ...reply, body: { data: [] } as unknown as typeof reply.body };
+      });
+    let lookup: Response;
+    let imported: Response;
+    try {
+      lookup = await agent.lookup(order.recordLocator);
+      imported = await agent.import({ reference: order.recordLocator, customerId, pricing: { mode: "net" } });
+    } finally {
+      emptyRead.mockRestore();
+    }
+
+    // Lead decision (21f) of 2026-11-13: as console.bookings.closeReview answers it (FIX-W51-OTA).
+    const marked = {
+      code: "NOT_FOUND",
+      message: "Amadeus has no order with this record locator.",
+      supplier: { provider: "amadeus", status: 200 },
+    };
+    expect(answer(lookup)).toEqual([404, "NOT_FOUND"]);
+    expect(lookup.body.error).toMatchObject(marked);
+    expectResponseToMatch("consoleFindBookingByRecordLocator", lookup);
+    // With a customer chosen too: the OTA admin tells this 404 from an unknown customer's by error.supplier.
+    expect(answer(imported)).toEqual([404, "NOT_FOUND"]);
+    expect(imported.body.error).toMatchObject(marked);
+    expectResponseToMatch("consoleImportBooking", imported);
+    expect(amadeusCalls("getFlightOrderByReference")).toHaveLength(2);
+    expect(amadeusCalls("getFlightOrder")).toEqual([]);
+    expect(await bookingsOf("tenant_alpha", order.recordLocator)).toEqual([]);
+  });
+
   it("shows an imported order as attached to its booking", async () => {
     const agent = await staffSession(alphaId, "agent");
     const order = await stubOrder({ queuing: alphaOffice, owner: alphaOffice });

@@ -28,6 +28,7 @@ import {
   fieldErrorsToForm,
   fieldNameOfPointer,
   fromVelexisError,
+  isSupplierNotFound,
   isVelexisErrorLike,
   withRequestId,
 } from "./errors";
@@ -155,6 +156,28 @@ describe("error messages", () => {
   it("appends the request id for plain-text places", () => {
     expect(withRequestId("Failed.", "req_1")).toBe("Failed. (request id req_1)");
     expect(withRequestId("Failed.", null)).toBe("Failed.");
+  });
+
+  it("[FIX-W52-OTA AC1] tells Amadeus's 'no order' (a 404 with error.supplier, its 200 without an order too) from any other 404", async () => {
+    const marked = await sdkError(404, { code: "NOT_FOUND", supplier: { provider: "amadeus", status: 200 } });
+    const own = await sdkError(404, {
+      code: "NOT_FOUND",
+      supplier: { provider: "amadeus", status: 404, code: 1797, title: "NOT FOUND" },
+    });
+    const unknown = await sdkError(404, { code: "NOT_FOUND" });
+    const otherCode = await sdkError(422, {
+      code: "SUPPLIER_REJECTED",
+      supplier: { provider: "amadeus", status: 400, code: 477, title: "INVALID FORMAT" },
+    });
+
+    expect([marked, own].map(isSupplierNotFound)).toEqual([true, true]);
+    // An unknown booking or customer, another code with a supplier error, and anything that is no SDK error.
+    expect([unknown, otherCode, new Error("x"), null].map(isSupplierNotFound)).toEqual([
+      false,
+      false,
+      false,
+      false,
+    ]);
   });
 });
 
