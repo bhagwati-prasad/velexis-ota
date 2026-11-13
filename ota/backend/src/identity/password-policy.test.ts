@@ -13,7 +13,7 @@ import {
   parseBreachedPasswords,
 } from "./password-policy";
 
-/** The SHA-256 of the shipped list, as password-policy.ts documents its source (the platform's list). */
+/** The SHA-256 of the shipped list, as password-policy.ts documents its source (the OTA's own top-10 000 list). */
 const LIST_SHA256 = "68782d6a4a19a4768d5f15dd66bd534e7a33055cc755411e33f16d18c50fdcce";
 
 /** A password of the test, never a real one: long enough and not on the list. */

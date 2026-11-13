@@ -857,8 +857,15 @@ const answer = (res: Response): [number, string | undefined] => [
   (res.body as { error?: { code?: string } }).error?.code,
 ];
 
-const errorOf = (res: Response): { code: string; details?: JsonObject; fieldErrors?: JsonObject[] } =>
-  (res.body as { error: { code: string; details?: JsonObject; fieldErrors?: JsonObject[] } }).error;
+type ErrorBody = {
+  code: string;
+  message?: string;
+  details?: JsonObject;
+  fieldErrors?: JsonObject[];
+  supplier?: JsonObject;
+};
+
+const errorOf = (res: Response): ErrorBody => (res.body as { error: ErrorBody }).error;
 
 /** The booking's ETag as the console reads it. */
 async function etagOf(session: AdminSession, bookingId: string): Promise<string> {
@@ -1320,6 +1327,20 @@ describe("a Stripe booking in review whose order was never created: the refusals
     refused["remarkMismatch"] = await agent.closeReview(review.bookingId, etag, found(decoy));
     refused["alreadyImported"] = await agent.closeReview(review.bookingId, etag, found(held));
     refused["unknownLocator"] = await agent.closeReview(review.bookingId, etag, found("ZZZZZZ"));
+    // Amadeus answers 200 without an order (the decoy's real read, its `data` emptied): the API's client, once.
+    const apiAmadeus = api.app.get(AmadeusClient, { strict: false });
+    const readByReference = apiAmadeus.getFlightOrderByReference.bind(apiAmadeus);
+    const emptyRead = vi
+      .spyOn(apiAmadeus, "getFlightOrderByReference")
+      .mockImplementationOnce(async (context, input, options) => {
+        const reply = await readByReference(context, input, options);
+        return { ...reply, body: { data: [] } as unknown as typeof reply.body };
+      });
+    try {
+      refused["emptyAnswer"] = await agent.closeReview(review.bookingId, etag, found(decoy));
+    } finally {
+      emptyRead.mockRestore();
+    }
     refused["otherTenant"] = await agent.closeReview(betaId, etag, {
       outcome: "not_booked",
       note: "Not ours.",
@@ -1355,10 +1376,10 @@ describe("a Stripe booking in review whose order was never created: the refusals
     expect(answer(refused["staleVersion"] as Response)).toEqual([412, "PRECONDITION_FAILED"]);
     expect(answer(refused["noNote"] as Response)).toEqual([400, "VALIDATION_FAILED"]);
     expect(errorOf(refused["noNote"] as Response).fieldErrors).toEqual([
-      expect.objectContaining({ path: "/body/note", code: "required" }),
+      expect.objectContaining({ path: "/note", code: "required" }),
     ]);
     expect(errorOf(refused["noLocator"] as Response).fieldErrors).toEqual([
-      expect.objectContaining({ path: "/body/recordLocator", code: "required" }),
+      expect.objectContaining({ path: "/recordLocator", code: "required" }),
     ]);
     expect(answer(refused["remarkMismatch"] as Response)).toEqual([409, "CONFLICT"]);
     expect(errorOf(refused["remarkMismatch"] as Response).details).toEqual({ reason: "remark_mismatch" });
@@ -1373,10 +1394,29 @@ describe("a Stripe booking in review whose order was never created: the refusals
       bookingId: expect.stringMatching(/^bkg_/),
     });
     expect(answer(refused["unknownLocator"] as Response)).toEqual([404, "NOT_FOUND"]);
-    // Two reads by record locator: the decoy's and the unknown one; the held one was refused from the database.
+    // Amadeus's own 404 (the stub's 1797) as `error.supplier`, which tells it from an unknown booking's 404.
+    expect(errorOf(refused["unknownLocator"] as Response).supplier).toMatchObject({
+      provider: "amadeus",
+      status: 404,
+    });
+    expect(errorOf(refused["otherTenant"] as Response)).not.toHaveProperty("supplier");
+    // Three reads by record locator: the decoy's, the unknown one and the emptied one; the held one was refused from
+    // the database.
     expect(stub.requests().filter((entry) => entry.operation === "getFlightOrderByReference")).toHaveLength(
-      2,
+      3,
     );
+  });
+
+  it("[OBE-099 AC2] answers Amadeus's 200 without an order as its own 404: 404 NOT_FOUND with the supplier marker", () => {
+    // Lead decision (20l) of 2026-11-13: the OTA admin shows "Amadeus has no order" at the record locator for both.
+    expect(answer(refused["emptyAnswer"] as Response)).toEqual([404, "NOT_FOUND"]);
+    expect(errorOf(refused["emptyAnswer"] as Response)).toMatchObject({
+      message: "Amadeus has no order with this record locator.",
+      supplier: { provider: "amadeus", status: 200 },
+    });
+    expect(errorOf(refused["unknownLocator"] as Response)).toMatchObject({
+      message: "Amadeus has no order with this record locator.",
+    });
   });
 
   it("[OBE-099 AC2] answers another tenant's booking 404 and leaves it as it was", () => {
@@ -1480,7 +1520,7 @@ describe("an airline-card booking in review whose order was never created, close
   it("[OBE-099] refuses a note that holds a card number, without a change and without echoing it", async () => {
     expect(answer(withCard)).toEqual([400, "VALIDATION_FAILED"]);
     expect(errorOf(withCard).fieldErrors).toEqual([
-      expect.objectContaining({ path: "/body/note", code: "card_data" }),
+      expect.objectContaining({ path: "/note", code: "card_data" }),
     ]);
     expect(withCard.text).not.toContain(TEST_PAN);
     expect(afterCard).toEqual(initial);

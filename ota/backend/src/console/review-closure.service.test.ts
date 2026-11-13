@@ -3,9 +3,10 @@
 // note), when a booking is in Reconciliation review (`pending` with `reconcile_outcome = manual_review`) and the
 // refusals of one that is not, an order that does not carry the booking's remark or that another booking holds, the
 // staff event of each outcome (the outcome and the record locator, nothing personal; the airline-card note), and the
-// answer of a failed by-reference read. The HTTP, database, Amadeus, Stripe and queue paths are in
-// test/integration/console/review-closure.int.test.ts. Card numbers here are test data only (Visa's documented test
-// PAN and Mastercard's).
+// answer of a failed by-reference read or of one without an order. The field errors answer plain pointers into the
+// body (`/recordLocator`, `/note`), as the document's own validation does (lead decision (20l) of 2026-11-13). The
+// HTTP, database, Amadeus, Stripe and queue paths are in test/integration/console/review-closure.int.test.ts. Card
+// numbers here are test data only (Visa's documented test PAN and Mastercard's).
 import { AppError, isAppError } from "@velexis/errors";
 import { describe, expect, it } from "vitest";
 import { AmadeusCallError } from "../amadeus/error-mapper";
@@ -17,6 +18,7 @@ import {
   inReview,
   notInReview,
   orderHeldBy,
+  ordersOfReply,
   refuseClosureRequest,
   remarkMismatch,
   REVIEW_CLOSED_EVENT,
@@ -46,12 +48,12 @@ describe("a closure request", () => {
   });
 
   it("[OBE-099] refuses order_found without a record locator, and not_booked without a note or with a locator", () => {
-    expect(refusals({ outcome: "order_found" })).toEqual([["/body/recordLocator", "required"]]);
-    expect(refusals({ outcome: "not_booked" })).toEqual([["/body/note", "required"]]);
+    expect(refusals({ outcome: "order_found" })).toEqual([["/recordLocator", "required"]]);
+    expect(refusals({ outcome: "not_booked" })).toEqual([["/note", "required"]]);
     // A note of blanks says nothing.
-    expect(refusals({ outcome: "not_booked", note: "   " })).toEqual([["/body/note", "required"]]);
+    expect(refusals({ outcome: "not_booked", note: "   " })).toEqual([["/note", "required"]]);
     expect(refusals({ outcome: "not_booked", recordLocator: "L2P9XC", note: "None." })).toEqual([
-      ["/body/recordLocator", "not_allowed"],
+      ["/recordLocator", "not_allowed"],
     ]);
   });
 
@@ -74,13 +76,13 @@ describe("a closure request", () => {
       expect(isAppError(caught) && caught.code).toBe("VALIDATION_FAILED");
       const error = caught as AppError;
       expect(error.fieldErrors?.map((fieldError) => [fieldError.path, fieldError.code])).toEqual([
-        ["/body/note", "card_data"],
+        ["/note", "card_data"],
       ]);
       expect(JSON.stringify(error.fieldErrors)).not.toMatch(/4111|5555/);
     }
     expect(
       refusals({ outcome: "order_found", recordLocator: "L2P9XC", note: "PAN 4111111111111111" }),
-    ).toEqual([["/body/note", "card_data"]]);
+    ).toEqual([["/note", "card_data"]]);
   });
 
   it("[OBE-099] keeps numbers that are no card number: phones, references, amounts, short runs", () => {
@@ -187,11 +189,14 @@ describe("the staff event booking.reconcile_closed", () => {
 
 describe("a failed read of the order by record locator", () => {
   it("[OBE-099] answers Amadeus's 404 as 404 NOT_FOUND with the supplier error, and passes the supplier codes", () => {
+    const supplier = { provider: "amadeus" as const, status: 404, code: 1797, title: "NOT FOUND" };
     const amadeus404 = new AppError("SUPPLIER_ERROR", {
+      supplier,
       cause: new AmadeusCallError("getFlightOrderByReference", { kind: "http", status: 404, issues: [] }),
     });
     const answer = closureSupplierAnswerOf(amadeus404) as AppError;
-    expect([answer.code, answer.status]).toEqual(["NOT_FOUND", 404]);
+    expect([answer.code, answer.status, answer.supplier]).toEqual(["NOT_FOUND", 404, supplier]);
+    expect(answer.message).toBe("Amadeus has no order with this record locator.");
     for (const code of [
       "OFFICE_NOT_ALLOWED",
       "SUPPLIER_REJECTED",
@@ -210,5 +215,57 @@ describe("a failed read of the order by record locator", () => {
     );
     const bug = new Error("a bug");
     expect(closureSupplierAnswerOf(bug)).toBe(bug);
+  });
+});
+
+describe("an answer of the read by record locator", () => {
+  const order = { type: "flight-order", id: "eJzTd9cPMQ0OCgI" };
+
+  it("[OBE-099] takes the orders of data, a list or one order", () => {
+    expect(ordersOfReply({ data: [order] }, 200).orders).toEqual([order]);
+    expect(ordersOfReply({ data: order, dictionaries: {} }, 200)).toEqual({
+      orders: [order],
+      body: { data: order, dictionaries: {} },
+    });
+  });
+
+  it("[OBE-099] answers a 200 without an order as Amadeus's own 404: 404 NOT_FOUND with the supplier marker", () => {
+    // Lead decision (20l) of 2026-11-13: the same `error.supplier` mark as Amadeus's own 404, so the OTA admin shows
+    // "Amadeus has no order" at the record locator for both.
+    for (const body of [
+      { data: [] },
+      {},
+      { data: null },
+      { data: ["not an order"] },
+      { meta: { count: 0 } },
+    ]) {
+      let caught: unknown;
+      try {
+        ordersOfReply(body, 200);
+      } catch (error) {
+        caught = error;
+      }
+      expect(isAppError(caught)).toBe(true);
+      const error = caught as AppError;
+      expect([body, error.code, error.status, error.supplier, error.message]).toEqual([
+        body,
+        "NOT_FOUND",
+        404,
+        { provider: "amadeus", status: 200 },
+        "Amadeus has no order with this record locator.",
+      ]);
+    }
+  });
+
+  it("[OBE-099] answers a body that is no JSON object as the supplier's error, without the not-found mark", () => {
+    for (const body of [undefined, "<html>", ["an order"]]) {
+      let caught: unknown;
+      try {
+        ordersOfReply(body, 200);
+      } catch (error) {
+        caught = error;
+      }
+      expect(isAppError(caught) && [caught.code, caught.supplier]).toEqual(["SUPPLIER_ERROR", undefined]);
+    }
   });
 });

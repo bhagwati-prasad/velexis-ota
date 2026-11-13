@@ -620,7 +620,10 @@ test.describe("the airline's answer is lost", () => {
     await expect(
       page.getByRole("heading", { level: 1, name: "We are confirming your booking with the airline" }),
     ).toBeVisible();
-    await expect(page.getByText(/Please do not book again: this page updates by itself/)).toBeVisible();
+    // In the page's main region: the live region after the footer announces the same words ("<title>. <text>").
+    await expect(
+      page.getByRole("main").getByText(/Please do not book again: this page updates by itself/),
+    ).toBeVisible();
     await guards.checkA11y(page);
 
     // The card went out once: one completion from the browser, one Flight Create Orders from the OTA, which keeps the

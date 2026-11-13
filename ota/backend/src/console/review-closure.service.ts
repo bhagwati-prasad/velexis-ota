@@ -11,7 +11,8 @@
 //   1. The request (`refuseClosureRequest`, before anything is read): `order_found` needs `recordLocator`, `not_booked`
 //      needs a `note` and takes no record locator, and a note never holds a card number (`holdsCardNumber`: 12 to 19
 //      digits, grouped or not and wherever they stand among other digits, that pass the Luhn check): `400
-//      VALIDATION_FAILED` at `/body/recordLocator` or `/body/note`.
+//      VALIDATION_FAILED` at `/recordLocator` or `/note`, plain pointers into the body as the document's own validation
+//      answers them (lead decision (20l) of 2026-11-13).
 //   2. T1 (`check`): the booking of the request's environment, its `If-Match` (`412 PRECONDITION_FAILED`), the review
 //      (`pending` with `reconcile_outcome = manual_review`, else `409 CONFLICT`, `details.reason = not_in_review`), and
 //      for `order_found` a booking of the environment that already holds the record locator (`409
@@ -23,7 +24,9 @@
 //      remark `VELEXIS {reference}` of sub-type BACKOFFICE of this booking (reconcile.service.ts `orderOfBooking`, the
 //      reconciliation's own proof: `409 CONFLICT`, `remark_mismatch`, otherwise; one that carries it but cannot be
 //      recorded: `422 UNPROCESSABLE`, `order_not_recordable`). Amadeus without an order for the record locator answers
-//      `404 NOT_FOUND` with `error.supplier`. Then T2 (`recordOrderFound`): the checkout, then the booking locked
+//      `404 NOT_FOUND` with `error.supplier`: its own `404`, or a `200` without an order (`ordersOfReply`, marked
+//      `{ provider: "amadeus", status: 200 }` as the client marks an answer without issues; lead decision (20l) of
+//      2026-11-13). Then T2 (`recordOrderFound`): the checkout, then the booking locked
 //      (OADR-0003 point 11), still in review in that checkout and at the version of T1, no other booking holding the
 //      order by its id or one of its records (the unique indexes catch a concurrent import: `409
 //      ORDER_ALREADY_IMPORTED`), and the reconciliation's found decision (`recordFoundOrder`: the order recorded by
@@ -54,7 +57,13 @@ import { InjectQueue } from "@nestjs/bullmq";
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import type { components } from "@velexis/api-types";
-import { AppError, isAppError, type FieldError, type OtaErrorCode } from "@velexis/errors";
+import {
+  AppError,
+  isAppError,
+  type FieldError,
+  type OtaErrorCode,
+  type SupplierIssue,
+} from "@velexis/errors";
 import { redactPayload } from "@velexis/logger";
 import type { Queue } from "bullmq";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
@@ -197,35 +206,36 @@ export function holdsCardNumber(text: string): boolean {
 
 /**
  * The refusals of a closure request that need nothing else (`400 VALIDATION_FAILED`, see the file header): the
- * record locator of `order_found`, the note of `not_booked`, and a note without a card number.
+ * record locator of `order_found`, the note of `not_booked`, and a note without a card number. The pointers are plain
+ * pointers into the body (`/recordLocator`, `/note`), as the document's own validation answers a body field.
  */
 export function refuseClosureRequest(body: ReviewClosureRequest): void {
   const fieldErrors: FieldError[] = [];
   const note = body.note?.trim() ?? "";
   if (body.outcome === "order_found" && body.recordLocator === undefined) {
     fieldErrors.push({
-      path: "/body/recordLocator",
+      path: "/recordLocator",
       code: "required",
       message: "Give the record locator of the order that was found.",
     });
   }
   if (body.outcome === "not_booked" && body.recordLocator !== undefined) {
     fieldErrors.push({
-      path: "/body/recordLocator",
+      path: "/recordLocator",
       code: "not_allowed",
       message: "A booking closed as not booked has no record locator.",
     });
   }
   if (body.outcome === "not_booked" && note === "") {
     fieldErrors.push({
-      path: "/body/note",
+      path: "/note",
       code: "required",
       message: "Say what was looked for and found before closing the booking as not booked.",
     });
   }
   if (body.note !== undefined && holdsCardNumber(body.note)) {
     fieldErrors.push({
-      path: "/body/note",
+      path: "/note",
       code: "card_data",
       message: "A note never holds a card number: remove it.",
     });
@@ -321,14 +331,26 @@ function isOrderNotFound(error: unknown): error is AppError {
   );
 }
 
+/** The message of a record locator Amadeus has no order for. */
+const NO_ORDER_MESSAGE = "Amadeus has no order with this record locator.";
+
+/**
+ * `404 NOT_FOUND` of a record locator Amadeus has no order for, with what Amadeus answered as `error.supplier` (shown
+ * in console scope): the issue of its own `404`, or the status of an answer without an order. A `404` without it is an
+ * unknown booking, so the OTA admin tells the two apart by it.
+ */
+function noOrderFor(supplier: SupplierIssue | undefined, cause?: unknown): AppError {
+  return new AppError("NOT_FOUND", {
+    message: NO_ORDER_MESSAGE,
+    ...(supplier === undefined ? {} : { supplier }),
+    ...(cause === undefined ? {} : { cause }),
+  });
+}
+
 /** The answer of a failed by-reference read (see SUPPLIER_CODES): `404` with the supplier error, the codes, or a `502`. */
 export function closureSupplierAnswerOf(error: unknown): unknown {
   if (isOrderNotFound(error)) {
-    return new AppError("NOT_FOUND", {
-      message: "Amadeus has no order with this record locator.",
-      ...(error.supplier === undefined ? {} : { supplier: error.supplier }),
-      cause: error,
-    });
+    return noOrderFor(error.supplier, error);
   }
   if (!isAppError(error) || SUPPLIER_CODES.has(error.code)) {
     return error;
@@ -337,6 +359,26 @@ export function closureSupplierAnswerOf(error: unknown): unknown {
     ...(error.supplier === undefined ? {} : { supplier: error.supplier }),
     cause: error,
   });
+}
+
+/**
+ * The orders of a by-reference answer (`data`, a list or one order). A `200` without one is answered as Amadeus's own
+ * `404` is: `404 NOT_FOUND` with `error.supplier` `{ provider: "amadeus", status }` (the client's mark of an answer
+ * without issues, error-mapper.ts), so the staff see "Amadeus has no order" at the record locator either way (lead
+ * decision (20l) of 2026-11-13). An answer that is no JSON object is the supplier's error.
+ */
+export function ordersOfReply(body: unknown, status: number): { orders: JsonObject[]; body: JsonObject } {
+  if (!isRecord(body)) {
+    throw new AppError("SUPPLIER_ERROR", {
+      message: "Amadeus answered with something that is not an order.",
+    });
+  }
+  const data = body["data"];
+  const orders = (Array.isArray(data) ? data : isRecord(data) ? [data] : []).filter(isRecord);
+  if (orders.length === 0) {
+    throw noOrderFor({ provider: "amadeus", status });
+  }
+  return { orders, body };
 }
 
 /** The PostgreSQL unique violation of one of `constraints`. */
@@ -520,18 +562,7 @@ export class ReviewClosureService {
       this.logger.warn({ bookingId: booking.id, code: codeOf(error) }, "console.bookings.review_read_failed");
       throw closureSupplierAnswerOf(error);
     }
-    const body = isRecord(reply.body) ? reply.body : undefined;
-    if (body === undefined) {
-      throw new AppError("SUPPLIER_ERROR", {
-        message: "Amadeus answered with something that is not an order.",
-      });
-    }
-    const orders = (
-      Array.isArray(body["data"]) ? body["data"] : isRecord(body["data"]) ? [body["data"]] : []
-    ).filter(isRecord);
-    if (orders.length === 0) {
-      throw new AppError("NOT_FOUND", { message: "Amadeus has no order with this record locator." });
-    }
+    const { orders, body } = ordersOfReply(reply.body, reply.call.status);
     const { allowed, withheld } = partitionOrders(orders, orderOfficeIds);
     if (allowed.length === 0) {
       this.logger.warn(

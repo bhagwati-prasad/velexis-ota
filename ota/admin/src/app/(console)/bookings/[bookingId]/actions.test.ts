@@ -1451,6 +1451,18 @@ describe("closeBookingReview", () => {
         recordLocator: "Amadeus has no order with this record locator. Check it in the queuing office.",
       },
     });
+    // Amadeus answered 200 without an order: the API's 404 carries the same mark, with the status Amadeus gave
+    // (lead decision (20l) of 2026-11-13), and the dialog says the same at the record locator.
+    const empty = await at(() =>
+      apiError("NOT_FOUND", 404, { supplier: { provider: "amadeus", status: 200 } }),
+    );
+    expect(empty).toMatchObject({
+      code: "NOT_FOUND",
+      message: "Amadeus has no order with this record locator. Check it in the queuing office.",
+      fieldErrors: {
+        recordLocator: "Amadeus has no order with this record locator. Check it in the queuing office.",
+      },
+    });
     // A booking the environment does not have is no record locator's fault.
     const gone = await at(() => apiError("NOT_FOUND", 404));
     expect(gone.fieldErrors).toBeUndefined();
@@ -1477,33 +1489,47 @@ describe("closeBookingReview", () => {
     expect(nextCache.revalidatePath).not.toHaveBeenCalled();
   });
 
-  it("[OAD-022 AC1] shows the API's card-number refusal at the note, whichever pointer the API answers", async () => {
+  it("[OAD-022 AC1] shows the API's card-number refusal at the note and its record locator check at the record locator, at plain body pointers", async () => {
     signedIn();
-    for (const path of ["/body/note", "/note"]) {
-      api.on(REVIEW, () =>
-        apiError("VALIDATION_FAILED", 400, {
-          fieldErrors: [{ path, code: "card_data", message: "A note never holds a card number: remove it." }],
-        }),
-      );
-      const state = await closeBookingReview(
-        INITIAL_ACTION_STATE,
-        reviewForm(randomUUID(), { outcome: "not_booked", note: "Called the traveller about a charge." }),
-      );
-      expect(state, path).toMatchObject({
-        ok: false,
-        code: "VALIDATION_FAILED",
-        fieldErrors: { note: "A note never holds a card number: remove it." },
-      });
-    }
-    // The closure's own record locator check answers `/body/recordLocator`.
+    // The closure's own checks answer plain pointers into the body, as the schema's validation does (lead decision
+    // (20l) of 2026-11-13).
     api.on(REVIEW, () =>
       apiError("VALIDATION_FAILED", 400, {
-        fieldErrors: [{ path: "/body/recordLocator", code: "required", message: "Give the record locator." }],
+        fieldErrors: [
+          { path: "/note", code: "card_data", message: "A note never holds a card number: remove it." },
+        ],
+      }),
+    );
+    const card = await closeBookingReview(
+      INITIAL_ACTION_STATE,
+      reviewForm(randomUUID(), { outcome: "not_booked", note: "Called the traveller about a charge." }),
+    );
+    expect(card).toMatchObject({
+      ok: false,
+      code: "VALIDATION_FAILED",
+      fieldErrors: { note: "A note never holds a card number: remove it." },
+    });
+    api.on(REVIEW, () =>
+      apiError("VALIDATION_FAILED", 400, {
+        fieldErrors: [{ path: "/recordLocator", code: "required", message: "Give the record locator." }],
       }),
     );
     expect((await closeBookingReview(INITIAL_ACTION_STATE, reviewForm(randomUUID()))).fieldErrors).toEqual({
       recordLocator: "Give the record locator.",
     });
+    // The `/body/...` form is no pointer of the API's any more, and the dialog no longer maps it to its fields.
+    api.on(REVIEW, () =>
+      apiError("VALIDATION_FAILED", 400, {
+        fieldErrors: [
+          { path: "/body/note", code: "card_data", message: "A note never holds a card number." },
+        ],
+      }),
+    );
+    const legacy = await closeBookingReview(
+      INITIAL_ACTION_STATE,
+      reviewForm(randomUUID(), { outcome: "not_booked", note: "Called the traveller about a charge." }),
+    );
+    expect(legacy.fieldErrors?.["note"]).toBeUndefined();
   });
 });
 

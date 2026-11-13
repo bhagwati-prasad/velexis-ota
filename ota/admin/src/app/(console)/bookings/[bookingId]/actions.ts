@@ -1350,16 +1350,14 @@ const ReviewForm = z
   });
 
 /**
- * The API's pointers of the closure's fields: the document's own validation answers a plain pointer into the body
- * (`/note`), the closure's checks (a missing record locator or note, a card number in the note) answer `/body/note`
- * and `/body/recordLocator` (review-closure.service.ts `refuseClosureRequest`); both land on the dialog's field.
+ * The API's pointers of the closure's fields: plain pointers into the body, which both the document's own validation
+ * and the closure's checks (a missing record locator or note, a card number in the note; review-closure.service.ts
+ * `refuseClosureRequest`) answer since lead decision (20l) of 2026-11-13; each lands on the dialog's field.
  */
 const REVIEW_POINTERS: Readonly<Record<string, string>> = Object.freeze({
   "/outcome": REVIEW_OUTCOME_FIELD,
   "/recordLocator": RECORD_LOCATOR_FIELD,
-  "/body/recordLocator": RECORD_LOCATOR_FIELD,
   "/note": REVIEW_NOTE_FIELD,
-  "/body/note": REVIEW_NOTE_FIELD,
 });
 
 const REVIEW_OVERRIDES: Overrides = Object.freeze({
@@ -1372,8 +1370,9 @@ const REVIEW_OVERRIDES: Overrides = Object.freeze({
 });
 
 /**
- * Amadeus has no order for the record locator: `404 NOT_FOUND` with the supplier's error (`error.supplier`), which a
- * booking the environment does not have never carries.
+ * Amadeus has no order for the record locator: `404 NOT_FOUND` with the supplier's error (`error.supplier`: Amadeus's
+ * own `404`, or a `200` without an order, `status` `200`), which a booking the environment does not have never
+ * carries.
  */
 function supplierNotFound(error: unknown): boolean {
   if (!isVelexisErrorLike(error) || error.code !== "NOT_FOUND") {

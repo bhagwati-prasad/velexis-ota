@@ -13474,9 +13474,11 @@ paths:
         order is accepted only when it carries the general remark `VELEXIS {reference}` of sub-type `BACKOFFICE` of
         this booking, the proof the reconciliation itself asks for (`409 CONFLICT` with `details.reason =
         remark_mismatch` otherwise; Amadeus without an order for the record locator answers `404 NOT_FOUND` with
-        `error.supplier`; an order with the remark that cannot be recorded `422 UNPROCESSABLE` with `details.reason =
-        order_not_recordable`). The order is then recorded through the reconciliation's found path: the order, its
-        travellers, segments, remarks and tickets, the booking `confirmed` (or `ticketed`, `partially_ticketed` when
+        `error.supplier`, both for Amadeus's own `404` and for a `200` whose `data` holds no order (`error.supplier`
+        then has `provider` `amadeus` and `status` `200`), so a `404` with `error.supplier` means that Amadeus has no
+        order for the record locator and one without it an unknown booking; an order with the remark that cannot be
+        recorded `422 UNPROCESSABLE` with `details.reason = order_not_recordable`). The order is then recorded through
+        the reconciliation's found path: the order, its travellers, segments, remarks and tickets, the booking `confirmed` (or `ticketed`, `partially_ticketed` when
         the order came back issued), `reconcile_outcome = found`, the checkout `completed` (its lock released), the
         traveller's `booking.confirmed` e-mail; another booking that holds the order by then answers `409
         ORDER_ALREADY_IMPORTED`. The money follows as after an automatic find: a Stripe authorisation is captured by the
@@ -13501,7 +13503,7 @@ paths:
         **Both.** `If-Match` (the booking's version: `412 PRECONDITION_FAILED` when stale). A booking that is not in
         review (any other status or outcome, a review already closed) answers `409 CONFLICT` with `details.reason =
         not_in_review` and changes nothing. A `note` (up to 2000 characters) becomes a staff-only note on the booking
-        (`staff.note`); a note that holds a card number answers `400 VALIDATION_FAILED` at `/body/note`. The booking
+        (`staff.note`); a note that holds a card number answers `400 VALIDATION_FAILED` at `/note`. The booking
         gets the staff event `booking.reconcile_closed` (the outcome, the record locator of a found order and the staff
         member; no other personal data) and the `staff_actions` row `booking.reconcile_close` (before and after, the
         note as its reason). The transactions lock the checkout, then the booking, then its payments (OADR-0003 point
@@ -42094,7 +42096,8 @@ components:
       description: >-
         Body of console.bookings.closeReview (OBE-099): what the staff found for a booking in Reconciliation review.
         `order_found` needs `recordLocator` and takes an optional `note`; `not_booked` needs `note` and takes no
-        `recordLocator` (`400 VALIDATION_FAILED` at `/body/recordLocator` or `/body/note` otherwise).
+        `recordLocator` (`400 VALIDATION_FAILED` at `/recordLocator` or `/note` otherwise: plain pointers into the
+        body, as the schema's own validation answers them).
       properties:
         outcome:
           type: string
