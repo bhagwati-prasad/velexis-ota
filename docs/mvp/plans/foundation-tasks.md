@@ -1250,6 +1250,7 @@ flowchart LR
     X_041["X-041"]
     X_042["X-042"]
     X_043["X-043"]
+    X_044["X-044"]
   end
   X_001 --> X_002
   X_001 --> X_003
@@ -1311,6 +1312,7 @@ flowchart LR
   X_030 --> X_042
   X_041 --> X_042
   X_031 --> X_043
+  X_038 --> X_044
 ```
 
 The critical path printed by plan-lint runs through the database work (X-002 → X-010 → X-011 → X-012 → X-013 → X-015). Start X-016, X-003, X-004, X-006, X-017, X-019 and X-021 in parallel on day one; they do not share files. The VM chain (X-021 → X-033 → X-020 → X-023, 24 agent-hours) also carries the human steps on the VM: start X-033 as soon as X-021 is merged.

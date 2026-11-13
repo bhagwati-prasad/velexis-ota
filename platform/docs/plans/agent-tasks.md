@@ -2301,7 +2301,7 @@ flowchart LR
   PFE --> M24["M2–M4<br/>PBE-036…PBE-040, PFE-016…PFE-019, PAD-011"]
   PAD --> M24
   M24 --> M5["M5<br/>PBE-041…PBE-061, PFE-020…PFE-027, PAD-012…PAD-015"]
-  M5 --> M6["M6<br/>PBE-062…PBE-065, PFE-028, PAD-016<br/>review findings PBE-067…PBE-070, PFE-029, PAD-017<br/>MFA for live OTAs PBE-071, PFE-030<br/>secrets:rewrap PBE-072<br/>breached list PBE-073, Amadeus host PBE-074<br/>(PBE-064 after launch)"]
+  M5 --> M6["M6<br/>PBE-062…PBE-065, PFE-028, PAD-016<br/>review findings PBE-067…PBE-070, PFE-029, PAD-017<br/>MFA for live OTAs PBE-071, PFE-030<br/>secrets:rewrap PBE-072<br/>breached list PBE-073, Amadeus host PBE-074<br/>demo OTA command PBE-075<br/>(PBE-064 after launch)"]
   OTA(["OTA plan gates<br/>OF-11 (M1), OF-01 (M2), OF-09 (M4)"]) -.-> LC
   OTA -.-> M24
 ```
