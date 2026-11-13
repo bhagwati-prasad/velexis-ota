@@ -2038,8 +2038,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
 - **Verify:** `pnpm plan:lint && grep -c "\[ \]" platform/docs/runbooks/launch-checklist.md`
 - **Note (2026-11-11, lead decision (15b), FIX-W48-SHARED):** the Verify line ran `node tools/plan-lint/plan-lint.mjs docs/mvp/plans/foundation-tasks.md platform/docs/plans/agent-tasks.md`, which fails on every platform task that depends on an OTA task (OTA tasks are not in those two files); it now runs `pnpm plan:lint` (the three plans) and still counts the launch checklist's boxes.
 
-### PFE-028 · Complete the portal end-to-end suite with accessibility and security checks
-- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: three consecutive green nightly runs)
+### PFE-028 · Complete the portal end-to-end suite with accessibility and security checks ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-frontend
 - **Milestone:** M6
 - **Depends on:** PFE-027, PFE-019
@@ -2056,6 +2056,7 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - The four specs pass and the nightly run is green three times in a row.
   - No serious accessibility violation on any portal route.
 - **Verify:** `pnpm test:e2e -- --project=portal`
+- **Note (2026-11-13, wave 52's integrator):** step 5 and AC1 are met: the scheduled runs of the `e2e` workflow [42996441373](https://github.com/bhagwati-prasad/velexis-ota/actions/runs/42996441373) (2026-11-11, `ad5e666`), [43195955783](https://github.com/bhagwati-prasad/velexis-ota/actions/runs/43195955783) (2026-11-12, `65f10d1`) and [43403729562](https://github.com/bhagwati-prasad/velexis-ota/actions/runs/43403729562) (2026-11-13, `342ba35`) are green in a row, and each ran the `portal` project with the four specs (41 steps: `portal-a11y` 14, `portal-keyboard` 5, `portal-roles` 8, `portal-headers` 14) in its step of the four projects; the run of 2026-11-13 passed 385 tests in 14.2 minutes. They are recorded in [`tools/e2e/README.md`](../../../tools/e2e/README.md#tests-of-pfe-028). The Stripe projects are not part of this task (PFE-027's `portal-stripe` waits for the Stripe test secrets).
 
 ### PAD-016 · Complete the admin end-to-end suite with accessibility and header checks ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
