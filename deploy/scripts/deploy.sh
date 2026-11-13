@@ -21,15 +21,23 @@
 #   transient units with a dynamic user (run_transient), and between them the fan-out report published as the OTA
 #   zone (velexis-run ota ... tenants:report-migrations) -> switch the `current` symlink -> restart workers, APIs,
 #   front ends one at a time with health checks -> put the staged Caddy files live and reload Caddy (restart it when
-#   its binary changed) -> prune old releases (never the active one nor the --rollback target). Any failed health
-#   check rolls back: the previous release's snapshot (units, Caddyfile, rule files, Caddy build) is re-installed, then
-#   `current` is switched back and the units restart.
+#   its binary or its drop-in changed) -> prune old releases (never the active one nor the --rollback target). Any
+#   failed health check rolls back: the previous release's snapshot (units, Caddyfile, rule files, Caddy build) is
+#   re-installed, then `current` is switched back and the units restart.
 #
 # The Velexis Caddy build (task X-039, docs/mvp/deployment-single-vm.md §6): a release's caddy/bin/caddy (Caddy 2.8.4
 # with the Coraza web application firewall, deploy/caddy/build/build-caddy.sh) is installed root-owned as
 # /usr/local/bin/caddy-velexis when its content changed, but only on a VM where the caddy service runs that file:
 # /usr/bin/caddy is a link to it (provision-vm.sh, step caddy, once). Until then the release's binary waits, and its
 # Caddyfile is validated with the service's own /usr/bin/caddy (one with the firewall's directives is refused).
+#
+# The caddy drop-in (deploy/systemd/caddy.service.d/velexis.conf: caddy.env, /run/caddy, Caddy started without
+# --environ) is installed with the units, and systemd applies a changed one only when Caddy starts again. So Caddy is
+# restarted, not reloaded, when the drop-in that a run leaves installed differs from the one installed when it began:
+# after the daemon-reload and after the new Caddyfile was validated and put in place, with the units healthy, and only
+# where the caddy service runs the Velexis build (until then the restart waits for provision-vm.sh --steps caddy,
+# which restarts Caddy). An automatic rollback that puts the running release's drop-in back restarts nothing, as for the
+# build (lead decision (21k) of 2026-11-13, docs/mvp/deployment-single-vm.md §8 and §12).
 #
 # Tests only (deploy/scripts/test/deploy.test.sh). With VELEXIS_ROOT=<absolute folder> every path of this script
 # (/srv/velexis, /etc/velexis, /var/lib/velexis, /var/lib/velexis-migrate, /var/log/velexis, /usr/local/sbin,
@@ -92,6 +100,7 @@ CADDY_DIR="$R/etc/caddy"
 CADDY_WAF="$CADDY_DIR/waf"                        # the web application firewall's rule files (deploy/caddy/waf)
 CADDY_BIN="$R/usr/local/bin/caddy-velexis"        # the Velexis Caddy build (X-039)
 CADDY_SERVICE_BIN="$R/usr/bin/caddy"              # what caddy.service runs: a link to CADDY_BIN (provision-vm.sh)
+CADDY_DROPIN="$SYSTEMD_DIR/caddy.service.d/velexis.conf"  # applied at Caddy's next start only (restart, not reload)
 LOCK_FILE="$R/run/velexis-deploy.lock"
 KEEP_RELEASES=5
 
@@ -208,6 +217,10 @@ switch_current() { # release dir; a link that already points there stays as it i
   [ "$(readlink "$CURRENT" 2>/dev/null || true)" != "$1" ] || return 0
   ln -sfn "$1" "$CURRENT.new"
   mv -T "$CURRENT.new" "$CURRENT"
+}
+
+file_sha() { # path -> its SHA-256, or "none" when there is no such file
+  if [ -f "$1" ]; then sha256sum "$1" | cut -d' ' -f1; else echo none; fi
 }
 
 install_if_changed() { # src dest mode -> 0 when the file changed, 1 when it was already the same
@@ -373,7 +386,8 @@ stage_system_files() { # root-owned snapshot dir (never a folder the deploy user
     install_if_changed "$f" "$SYSTEMD_DIR/$(basename "$f")" 0644 && UNITS_CHANGED=1
   done
   install -d -m 0755 "$SYSTEMD_DIR/caddy.service.d"
-  install_if_changed "$src/systemd/caddy.service.d/velexis.conf" "$SYSTEMD_DIR/caddy.service.d/velexis.conf" 0644 && UNITS_CHANGED=1
+  # A changed drop-in reaches the running Caddy only through the restart of activate_caddyfile.
+  install_if_changed "$src/systemd/caddy.service.d/velexis.conf" "$CADDY_DROPIN" 0644 && UNITS_CHANGED=1
   if [ "$UNITS_CHANGED" -eq 1 ]; then "$SYSTEMCTL" daemon-reload; log "systemd units updated from $src"; fi
 
   install -d -m 0755 "$BASE/maintenance"
@@ -381,6 +395,17 @@ stage_system_files() { # root-owned snapshot dir (never a folder the deploy user
 }
 
 activate_caddyfile() { # after the units are healthy: the staged Caddy build, rule files and Caddyfile go live
+  local dropin_changed=0 why what
+  # The drop-in this run leaves installed (loaded by the daemon-reload of stage_system_files) against the one installed
+  # when it began, which the running Caddy was started with: a deploy that brings a new one, or a --rollback to a
+  # release with another one, differs; an automatic rollback that put the running release's drop-in back does not.
+  if [ "$(file_sha "$CADDY_DROPIN")" != "$DROPIN_AT_START" ]; then
+    if caddy_service_runs_build; then
+      dropin_changed=1
+    else
+      log "the caddy service does not run $CADDY_BIN yet ($CADDY_SERVICE_BIN is no link to it): Caddy's restart for its changed drop-in waits for provision-vm.sh --steps caddy, which restarts Caddy"
+    fi
+  fi
   if [ "$BINARY_CHANGED" -eq 1 ]; then
     mv -f "$CADDY_BIN.next" "$CADDY_BIN"
     log "Caddy build installed: $CADDY_BIN $(sha256sum "$CADDY_BIN" | cut -d' ' -f1)"
@@ -392,13 +417,20 @@ activate_caddyfile() { # after the units are healthy: the staged Caddy build, ru
     rm -rf "$CADDY_WAF.old"
   fi
   if [ "$CADDY_CHANGED" -eq 1 ]; then mv "$CADDY_DIR/Caddyfile.next" "$CADDY_DIR/Caddyfile"; fi
-  if [ "$BINARY_CHANGED" -eq 1 ]; then
-    # A running Caddy keeps its old binary: only a restart starts the new one (a few seconds without connections).
-    # The build validated the Caddyfile above; should it still not start, the release stays current (its units are
-    # healthy) and --rollback puts the previous release's build back (from its snapshot) and restarts Caddy with it.
+  if [ "$BINARY_CHANGED$dropin_changed" != 00 ]; then
+    # A running Caddy keeps its old binary and the settings of the drop-in it was started with: only a restart applies
+    # a new one (a few seconds without connections), and it reads the Caddyfile and rule files put in place above, so
+    # no reload is needed too. The Caddyfile was validated above; should Caddy still not start, the release stays
+    # current (its units are healthy) and --rollback puts the previous release's build and drop-in back (from its
+    # snapshot) and restarts Caddy with them.
+    if [ "$BINARY_CHANGED" -eq 0 ]; then why="the changed drop-in $CADDY_DROPIN"; what="drop-in"
+    elif [ "$dropin_changed" -eq 0 ]; then why="the new build $CADDY_BIN"; what="build"
+    else why="the new build $CADDY_BIN and the changed drop-in $CADDY_DROPIN"; what="build and drop-in"
+    fi
     "$SYSTEMCTL" restart caddy ||
-      die "Caddy did not start with the new build $CADDY_BIN; run: sudo velexis-deploy --rollback (the previous release's build)"
-    log "Caddy restarted (new binary)"
+      die "Caddy did not start with $why; run: sudo velexis-deploy --rollback (the previous release's $what)"
+    DROPIN_AT_START="$(file_sha "$CADDY_DROPIN")"
+    log "Caddy restarted (new $what)"
   elif [ "$WAF_CHANGED$CADDY_CHANGED" != 00 ]; then
     "$SYSTEMCTL" reload caddy
     log "Caddyfile reloaded"
@@ -442,6 +474,11 @@ rollback_to() { # sha
 }
 
 # ---- commands ----------------------------------------------------------------------------------------------
+# The caddy drop-in installed when this run begins, taken as the one the running Caddy was started with: a run that
+# changed it restarted Caddy, left the restart to provision-vm.sh --steps caddy, or stopped with the way back
+# (--rollback). A run cut off between its staging and activate_caddyfile (killed, or stopped by an unexpected error)
+# leaves its new drop-in to Caddy's next start. activate_caddyfile compares with it.
+DROPIN_AT_START="$(file_sha "$CADDY_DROPIN")"
 case "${1:-}" in
   --status)
     echo "current: $(readlink -e "$CURRENT" 2>/dev/null || echo none)"

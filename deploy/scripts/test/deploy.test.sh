@@ -74,6 +74,13 @@
 #       new binary, rule files and Caddyfile rolls back without any of them going live and without a Caddy restart; a
 #       binary with which Caddy does not start stops the deploy with the way back, and --rollback restores the previous
 #       release's binary and restarts Caddy;
+#   15. the caddy drop-in (lead decision (21k) of 2026-11-13, every check ends with [FIX-W52-SHARED 21k]): a changed
+#       drop-in is installed and loaded (daemon-reload) and Caddy is restarted once, after the units and with the new
+#       Caddyfile live, and not also reloaded; an unchanged one restarts nothing (a changed Caddyfile is reloaded); an
+#       unhealthy release with a new drop-in rolls back without a Caddy restart; a drop-in with which Caddy does not
+#       start stops the deploy with the way back, and --rollback restores the previous one and restarts Caddy; on a VM
+#       whose caddy service does not run the Velexis build the restart waits for provision-vm.sh; a new build and a
+#       changed drop-in together restart Caddy once. fake-systemctl.sh records the loaded drop-in with each restart;
 #   and over the whole run: no DSN or secret of the env files in any output, command line or log, no unit used
 #   without a daemon-reload after its file changed, and no call that fake-systemctl.sh does not know.
 #
@@ -170,6 +177,7 @@ mkdir -p "$ETC" "$ROOT/etc/caddy" "$UNITS" "$SRV/incoming" "$SRV/releases" "$SRV
   "$ROOT/var/lib/velexis-migrate" "$LOGS" "$SBIN" "$ROOT/run"
 cp "$DEPLOY/caddy/Caddyfile" "$CADDYFILE"
 cp "$DEPLOY/caddy/maintenance/index.html" "$SRV/maintenance/index.html"
+install -D -m 0644 "$DEPLOY/systemd/caddy.service.d/velexis.conf" "$UNITS/caddy.service.d/velexis.conf" # step scripts
 for tpl in "$DEPLOY"/env/*.env.example; do
   grep -qE '^[A-Z][A-Z0-9_]*=' "$tpl" || continue # only comments: an optional file that the VM does not have
   install -m 0600 "$tpl" "$ETC/$(basename "$tpl" .example)"
@@ -454,6 +462,11 @@ SH
         if [ "${opt#caddy-bin=}" = nostart ]; then printf '# deploy.test.sh: fails to start\n' >>"$dir/caddy/bin/caddy"; fi
         chmod 0755 "$dir/caddy/bin/caddy" ;;
       waf=*) printf '# deploy.test.sh marker: %s\n' "${opt#waf=}" >>"$dir/deploy/caddy/waf/exclusions.conf" ;;
+      dropin=*) # the caddy drop-in (21k); fake-systemctl.sh fails to restart Caddy with the drop-in "nostart"
+        printf '# deploy.test.sh marker: %s\n' "${opt#dropin=}" >>"$dir/deploy/systemd/caddy.service.d/velexis.conf"
+        if [ "${opt#dropin=}" = nostart ]; then
+          printf '# deploy.test.sh: fails to start\n' >>"$dir/deploy/systemd/caddy.service.d/velexis.conf"
+        fi ;;
       *) die "make_release: unknown option $opt" ;;
     esac
   done
@@ -1053,13 +1066,16 @@ no_staged_caddy_files() { [ ! -e "$ROOT/etc/caddy/Caddyfile.next" ] && [ ! -e "$
 binary_is() { # release dir -> the installed build is that release's caddy/bin/caddy, root's 0755 (the test's user)
   same_file "$1/caddy/bin/caddy" "$CADDY_BIN" && [ "$(stat -c '%U:%G %a' "$CADDY_BIN")" = "$(id -un):$(id -gn) 755" ]
 }
-restarted_after_units() { # exactly one Caddy restart, after the last unit restart, with the installed binary; no reload
+CADDY_DROPIN="$UNITS/caddy.service.d/velexis.conf"
+restarted_after_units() { # exactly one Caddy restart, after the last unit restart, with the installed binary and the
+  # installed drop-in as loaded by a daemon-reload; no reload
   local r s
   [ "$(calls_matching '^restart caddy ')" = 1 ] && no_call '^reload caddy' || return 1
   r="$(last_line_of '^restart caddy ')"
   s="$(printf '%s\n' "$CALLS" | grep -nE '^restart velexis-' | tail -n 1 | cut -d: -f1)"
   [ -n "$s" ] && [ "$r" -gt "$s" ] &&
-    printf '%s\n' "$CALLS" | grep -q "^restart caddy binary=$(sha_file "$CADDY_BIN") caddyfile=$(sha_file "$CADDYFILE")$"
+    printf '%s\n' "$CALLS" |
+    grep -q "^restart caddy binary=$(sha_file "$CADDY_BIN") caddyfile=$(sha_file "$CADDYFILE") dropin=$(sha_file "$CADDY_DROPIN")$"
 }
 
 make_release r15 caddy-bin=b1
@@ -1206,12 +1222,119 @@ r20_back() {
 check "--rollback then re-installs r17's build and Caddyfile [X-039 AC3]" r20_back
 check "and restarts Caddy once, after the units, with r17's build [X-039 AC3]" restarted_after_units
 
+# ---- 15. the caddy drop-in (lead decision (21k) of 2026-11-13) ------------------------------------------------------------
+step "15. The caddy drop-in: a changed one restarts Caddy once, after the daemon-reload and the new Caddyfile; unchanged, no restart"
+# systemd applies a changed drop-in only when Caddy starts again, so deploy.sh restarts Caddy (never only reloads it) when
+# the drop-in it leaves installed differs from the one installed when it began, and only where the caddy service runs
+# the Velexis build. Every release here carries r17's build (b1) unless it says otherwise.
+LOADED_DROPIN="$STATE/loaded/caddy.service.d/velexis.conf"
+dropin_marker_is() { [ "$(marker_of "$CADDY_DROPIN")" = "$1" ]; }
+loaded_dropin_marker_is() { [ "$(marker_of "$LOADED_DROPIN")" = "$1" ]; }
+reloaded_before_caddy_restart() { # the last daemon-reload of this run comes before Caddy's restart
+  local d r
+  d="$(last_line_of '^daemon-reload')"
+  r="$(last_line_of '^restart caddy ')"
+  [ -n "$d" ] && [ -n "$r" ] && [ "$d" -lt "$r" ]
+}
+
+make_release r21 caddy-bin=b1 caddy=r21 dropin=r21
+R21="$BUILT"
+upload "$R21"
+deploy "$R21"
+r21_live() {
+  rc_is 0 && current_is "$R21" && dropin_marker_is r21 && loaded_dropin_marker_is r21 && caddy_marker_is r21 &&
+    [ "$VALIDATES" = "validate $VM_ROOT/etc/caddy/Caddyfile.next edge-secret=set build=b1 waf=$VM_ROOT/etc/caddy/waf" ] &&
+    no_staged_caddy_files && output_has "Caddy restarted (new drop-in)"
+}
+check "a deploy with a changed drop-in installs and loads it (daemon-reload); its new Caddyfile is validated and goes live [FIX-W52-SHARED 21k]" \
+  r21_live
+check "Caddy is restarted once, after the daemon-reload and the units, with the new drop-in and Caddyfile, and not also reloaded [FIX-W52-SHARED 21k]" \
+  all_of reloaded_before_caddy_restart restarted_after_units
+
+make_release r22 caddy-bin=b1 caddy=r22 dropin=r21
+R22="$BUILT"
+upload "$R22"
+deploy "$R22"
+r22_reloaded() {
+  rc_is 0 && current_is "$R22" && dropin_marker_is r21 && caddy_marker_is r22 && no_call '^daemon-reload' &&
+    no_call '^restart caddy' && caddy_reload_after_restarts && not output_has "Caddy restarted"
+}
+check "a deploy whose drop-in is the installed one (only the Caddyfile changed): no daemon-reload, no Caddy restart, one reload [FIX-W52-SHARED 21k]" \
+  r22_reloaded
+
+# An unhealthy release with a new drop-in: it is installed and loaded before the units restart, the automatic rollback
+# puts r22's back and loads it again, so the running Caddy, which never had r23's, is neither restarted nor reloaded.
+make_release r23 caddy-bin=b1 caddy=r23 dropin=r23 unhealthy
+R23="$BUILT"
+upload "$R23"
+deploy "$R23"
+r23_rolled_back() {
+  rc_is 1 && output_has "deploy of $R23 failed health checks; rolled back to $R22" && current_is "$R22" &&
+    history_ends_with "$R22 rollback"
+}
+r23_no_restart() {
+  dropin_marker_is r21 && loaded_dropin_marker_is r21 && caddy_marker_is r22 && [ -z "$(caddy_calls)" ] &&
+    [ "$(calls_matching '^daemon-reload')" = 2 ] && no_staged_caddy_files
+}
+check "an unhealthy release with a new drop-in: exit 1, rolled back to r22 [FIX-W52-SHARED 21k]" r23_rolled_back
+check "its drop-in was loaded, then r22's put back and loaded again; Caddy neither restarted nor reloaded [FIX-W52-SHARED 21k]" \
+  r23_no_restart
+
+# A drop-in with which Caddy does not start: the deploy stops like a failed reload, with the way back; --rollback puts
+# r22's drop-in back from its snapshot and restarts Caddy with it.
+make_release r24 caddy-bin=b1 dropin=nostart
+R24="$BUILT"
+upload "$R24"
+deploy "$R24"
+r24_stopped() {
+  rc_is 1 && current_is "$R24" && [ "$(calls_matching '^restart caddy ')" = 1 ] && no_call '^reload caddy' &&
+    output_has "Caddy did not start with the changed drop-in $VM_ROOT/etc/systemd/system/caddy.service.d/velexis.conf; run: sudo velexis-deploy --rollback (the previous release's drop-in)" &&
+    ! grep -q " $R24" "$LIB/deploy-history"
+}
+check "a drop-in with which Caddy does not start: exit 1 with the way back (--rollback), the release stays current [FIX-W52-SHARED 21k]" \
+  r24_stopped
+deploy --rollback
+r24_back() {
+  rc_is 0 && current_is "$R22" && dropin_marker_is r21 && loaded_dropin_marker_is r21 && caddy_marker_is r22 &&
+    no_staged_caddy_files && output_has "Caddy restarted (new drop-in)"
+}
+check "--rollback then re-installs r22's drop-in and Caddyfile from its snapshot [FIX-W52-SHARED 21k]" r24_back
+check "and restarts Caddy once, after the daemon-reload and the units, with r22's drop-in, not also reloaded [FIX-W52-SHARED 21k]" \
+  all_of reloaded_before_caddy_restart restarted_after_units
+
+# A VM whose caddy service does not run the Velexis build yet (no link from provision-vm.sh --steps caddy): the drop-in is
+# installed and loaded, and Caddy's restart waits for that step, which restarts Caddy.
+rm -f "$ROOT/usr/bin/caddy"
+make_release r25 caddy-bin=b1 dropin=r25
+R25="$BUILT"
+upload "$R25"
+deploy "$R25"
+r25_waits() {
+  rc_is 0 && current_is "$R25" && dropin_marker_is r25 && loaded_dropin_marker_is r25 && no_call '^restart caddy' &&
+    output_has "Caddy's restart for its changed drop-in waits for provision-vm.sh --steps caddy" &&
+    not output_has "Caddy restarted"
+}
+check "a VM whose caddy service does not run the Velexis build: the changed drop-in is loaded, Caddy not restarted, the restart waits for provision-vm.sh [FIX-W52-SHARED 21k]" \
+  r25_waits
+ln -s /usr/local/bin/caddy-velexis "$ROOT/usr/bin/caddy"
+
+make_release r26 caddy-bin=b4 dropin=r26
+R26="$BUILT"
+upload "$R26"
+deploy "$R26"
+r26_once() {
+  rc_is 0 && current_is "$R26" && binary_is "$SRV/releases/$R26" && dropin_marker_is r26 && loaded_dropin_marker_is r26 &&
+    output_has "Caddy restarted (new build and drop-in)"
+}
+check "a new build and a changed drop-in together: one Caddy restart for both, after the units, not also reloaded [FIX-W52-SHARED 21k]" \
+  all_of r26_once reloaded_before_caddy_restart restarted_after_units
+
 # ---- over the whole run -----------------------------------------------------------------------------------------------------
 step "Over the whole run"
 DEPLOY_LOG=""
 check "no DSN or secret of the env files in any deploy.sh output, deploy log, command line or fake log [X-023 AC1]" \
   not grep -rqF "$TOKEN" "$OUT" "$LOGS" "$STATE"
-check "no unit was restarted from a file that changed on disk without a daemon-reload [X-023 AC1]" \
+check "no unit was restarted from a file that changed on disk without a daemon-reload, Caddy with its drop-in included [X-023 AC1] [FIX-W52-SHARED 21k]" \
   test ! -s "$STATE/stale.log"
 check "deploy.sh called only systemctl commands that fake-systemctl.sh knows [X-023 AC1]" \
   not grep -q '^unexpected' "$STATE/systemctl.log"

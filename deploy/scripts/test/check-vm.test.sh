@@ -32,7 +32,8 @@
 # the lead's fix of 2026-11-10 (the AIDE timer, the lockout guard) in [FIX-W47-SHARED AC4] or [FIX-W47-SHARED AC5], of
 # the fix of 2026-11-11 (the SSH source address) in [FIX-W48-SHARED AC5], the real-nft part that must run (lead
 # decision (17a) of 2026-11-11) in [FIX-W49-SHARED AC4], and the security logs' timers and auditd's syslog plugin (lead
-# decision (20p) of 2026-11-13) in [FIX-W51-SHARED 20p].
+# decision (20p) of 2026-11-13) in [FIX-W51-SHARED 20p], and AIDE's settings in 90_velexis (lead decision (21l) of
+# 2026-11-13) in [FIX-W52-SHARED 21l].
 #
 # What it proves:
 #   1. Two runs of provision-vm.sh --steps users,keys,envfiles: the second changes no key, env or secrets file
@@ -50,7 +51,10 @@
 #      (20p) of 2026-11-13, [FIX-W51-SHARED 20p]): PASS for active and enabled velexis-ship-logs.timer and
 #      velexis-log-review.timer and for auditd's syslog plugin as provision-vm.sh writes it (its text read from
 #      provision-vm.sh), FAIL for a timer stopped, not enabled or missing, and for the plugin's file missing, switched
-#      off, sending the other way or naming no executable audisp-syslog.
+#      off, sending the other way or naming no executable audisp-syslog. AIDE's settings (lead decision (21l) of
+#      2026-11-13, [FIX-W52-SHARED 21l]): PASS for /etc/aide/aide.conf.d/90_velexis as provision-vm.sh's step harden
+#      writes it (its text read from provision-vm.sh), FAIL for report_level=added_removed_entries or the apt lists'
+#      rule missing, changed or commented out, for both missing and for the file missing.
 #   4. With a variable removed from a test copy of an env file, check-vm.sh reports FAIL naming the variable, and
 #      provision-vm.sh --steps envfiles warns about it by name and leaves the file as it is (AC3).
 #   5. A master-key rotation (X-040): NEW_MASTER_KEY=v2 with the step keys creates master-v2.key once, as copies with
@@ -301,6 +305,19 @@ audit_plugin_healthy() { # the plugin's file and program as provision-vm.sh and 
   [ -x "$ROOT/sbin/audisp-syslog" ] || install -D -m 0755 /dev/null "$ROOT/sbin/audisp-syslog"
 }
 audit_plugin_healthy
+# AIDE's 90_velexis as provision-vm.sh's step harden writes it (lead decision (21l) of 2026-11-13): the text of its
+# heredoc AIDE, read from provision-vm.sh.
+sed -n "/90_velexis <<'AIDE'\$/,/^AIDE\$/p" "$PROVISION" | sed '1d;$d' >"$PREFIX/aide-90_velexis"
+if ! grep -qxF 'report_level=added_removed_entries' "$PREFIX/aide-90_velexis" ||
+  ! grep -qxF '/var/lib/apt/lists/[^/]+$ f VarFile' "$PREFIX/aide-90_velexis" || grep -q '<<' "$PREFIX/aide-90_velexis"; then
+  die "provision-vm.sh's AIDE settings (heredoc AIDE of the step harden, /etc/aide/aide.conf.d/90_velexis) were not found"
+fi
+install -d -m 0755 "$ROOT/etc/aide/aide.conf.d"
+aide_conf_healthy() { # 90_velexis as provision-vm.sh leaves it
+  cmp -s "$PREFIX/aide-90_velexis" "$ROOT/etc/aide/aide.conf.d/90_velexis" \
+    || install -m 0644 "$PREFIX/aide-90_velexis" "$ROOT/etc/aide/aide.conf.d/90_velexis"
+}
+aide_conf_healthy
 # One release, handed over the way velexis-deploy does it, and the current symlink.
 REL="$ROOT/srv/velexis/releases/0123456789abcdef0123456789abcdef01234567"
 mkdir -p "$REL/ota-backend/dist" "$REL/storefront"
@@ -598,6 +615,7 @@ velexis-ship-logs.timer active enabled
 velexis-log-review.timer active enabled
 EOF
   audit_plugin_healthy
+  aide_conf_healthy
   cat >"$FAKE/ufw" <<'EOF'
 Status: active
 Logging: on (low)
@@ -816,6 +834,7 @@ PASS velexis-healthcheck.timer is active and enabled
 PASS /usr/local/sbin/velexis-healthcheck is root:root 755
 PASS the AIDE database exists
 PASS dailyaidecheck.timer is active and enabled (AIDE's daily check)
+PASS AIDE's 90_velexis details added entries and relaxes apt's lists (report_level=added_removed_entries; /var/lib/apt/lists/[^/]+$ f VarFile)
 PASS sshd -T: AllowUsers $ADMIN_TEST_USER $DEPLOY_TEST_USER
 PASS sshd -T -C user=$ADMIN_TEST_USER: second factor FIDO2 (publickey with sk-ssh-ed25519@openssh.com only, pubkeyauthoptions touch-required verify-required)
 PASS sshd -T -C user=$ADMIN_TEST_USER: keys only from .ssh/authorized_keys
@@ -900,6 +919,49 @@ if run_check "$OUT/aide-timer.out" --only system && grep -qx "PASS dailyaidechec
 else
   indent "$OUT/aide-timer.out"
   fail "check-vm.sh --only system reports PASS for an active and enabled dailyaidecheck.timer [FIX-W47-SHARED AC4]"
+fi
+# AIDE's two settings in 90_velexis (lead decision (21l) of 2026-11-13): each one missing, changed or commented out, and
+# the file missing (a VM provisioned before the decision gets them from provision-vm.sh --steps harden).
+AIDE_CONF="$ROOT/etc/aide/aide.conf.d/90_velexis"
+AIDE_FIX='provision-vm.sh --steps harden\)'
+sed -i '/^report_level=added_removed_entries$/d' "$AIDE_CONF"
+broken "90_velexis without report_level" system \
+  "AIDE's 90_velexis details added entries .*\\(missing the line: report_level=added_removed_entries; .*$AIDE_FIX" "FIX-W52-SHARED 21l"
+healthy
+sed -i 's/^report_level=added_removed_entries$/report_level=changed_attributes/' "$AIDE_CONF"
+broken "90_velexis with AIDE's default report level" system \
+  "AIDE's 90_velexis details added entries .*\\(missing the line: report_level=added_removed_entries; " "FIX-W52-SHARED 21l"
+healthy
+sed -i 's/^report_level=added_removed_entries$/# &/' "$AIDE_CONF"
+broken "90_velexis with report_level commented out" system \
+  "AIDE's 90_velexis details added entries .*\\(missing the line: report_level=added_removed_entries; " "FIX-W52-SHARED 21l"
+healthy
+sed -i '\#^/var/lib/apt/lists/#d' "$AIDE_CONF"
+broken "90_velexis without the apt lists' rule" system \
+  "AIDE's 90_velexis details added entries .*\\(missing the line: /var/lib/apt/lists/\\[\\^/\\]\\+\\\$ f VarFile; .*$AIDE_FIX" "FIX-W52-SHARED 21l"
+healthy
+sed -i 's#^\(/var/lib/apt/lists/\[^/\]+\$ f\) VarFile$#\1 Full#' "$AIDE_CONF"
+broken "90_velexis with the apt lists under Full" system \
+  "AIDE's 90_velexis details added entries .*\\(missing the line: /var/lib/apt/lists/\\[\\^/\\]\\+\\\$ f VarFile; " "FIX-W52-SHARED 21l"
+healthy
+sed -i 's#^/var/lib/apt/lists/\[^/\]+\$ f VarFile$#\# &#' "$AIDE_CONF"
+broken "90_velexis with the apt lists' rule commented out" system \
+  "AIDE's 90_velexis details added entries .*\\(missing the line: /var/lib/apt/lists/\\[\\^/\\]\\+\\\$ f VarFile; .*$AIDE_FIX" "FIX-W52-SHARED 21l"
+healthy
+sed -i -e '/^report_level=/d' -e '\#^/var/lib/apt/lists/#d' "$AIDE_CONF"
+broken "90_velexis without either line (provisioned before the decision)" system \
+  "AIDE's 90_velexis details added entries .*\\(missing the line: report_level=added_removed_entries, /var/lib/apt/lists/" "FIX-W52-SHARED 21l"
+healthy
+rm -f "$AIDE_CONF"
+broken "no 90_velexis" system "AIDE's 90_velexis details added entries .*\\(/etc/aide/aide.conf.d/90_velexis is missing; .*$AIDE_FIX" \
+  "FIX-W52-SHARED 21l"
+healthy
+if run_check "$OUT/aide-settings.out" --only system &&
+  grep -qxF "PASS AIDE's 90_velexis details added entries and relaxes apt's lists (report_level=added_removed_entries; /var/lib/apt/lists/[^/]+\$ f VarFile)" "$OUT/aide-settings.out"; then
+  pass "check-vm.sh --only system reports PASS for 90_velexis as provision-vm.sh writes it (its text read from provision-vm.sh) [FIX-W52-SHARED 21l]"
+else
+  indent "$OUT/aide-settings.out"
+  fail "check-vm.sh --only system reports PASS for 90_velexis as provision-vm.sh writes it [FIX-W52-SHARED 21l]"
 fi
 # The security logs (X-038; lead decision (20p) of 2026-11-13): both timers, and auditd's syslog plugin.
 for timer in velexis-ship-logs.timer velexis-log-review.timer; do

@@ -18,7 +18,10 @@
 #   system    Ubuntu 24.04; time zone UTC; no swap (swapon --show is empty, no swap line in /etc/fstab); no core
 #             dumps (kernel.core_pattern |/bin/false, fs.suid_dumpable 0, apport.service masked); unattended
 #             upgrades on; an AIDE database exists, and dailyaidecheck.timer (package aide-common), which runs AIDE's
-#             daily check, is active and enabled (PCI DSS 11.5.2; lead decision (13j) of 2026-11-10)
+#             daily check, is active and enabled (PCI DSS 11.5.2; lead decision (13j) of 2026-11-10); AIDE's
+#             /etc/aide/aide.conf.d/90_velexis holds the lines report_level=added_removed_entries and
+#             /var/lib/apt/lists/[^/]+$ f VarFile as provision-vm.sh's step harden writes them (lead decision (21l) of
+#             2026-11-13)
 #   services  postgresql, redis-server, caddy, velexis-backup.timer and velexis-healthcheck.timer active and enabled,
 #             the cluster postgresql@16-main active; fail2ban, auditd and chrony active and enabled; Node.js 22; the
 #             security logs of task X-038 (lead decision (20p) of 2026-11-13): velexis-ship-logs.timer and
@@ -165,6 +168,27 @@ env_value() { # file key -> sets ENV_VALUE to the value of the last KEY= line, q
 }
 
 # ---- system -----------------------------------------------------------------------------------------------
+# AIDE's two settings of provision-vm.sh's 90_velexis (lead decision (21l) of 2026-11-13): AIDE details added entries,
+# so a second change to a file that was new at aideinit raises velexis-logreview's aide-change, and apt's package lists
+# get aide-common's relaxed rule, since 31_aide_apt does not read Ubuntu 24.04's deb822 sources (deployment §12).
+AIDE_SETTINGS=('report_level=added_removed_entries' '/var/lib/apt/lists/[^/]+$ f VarFile')
+aide_settings() {
+  local f="$R/etc/aide/aide.conf.d/90_velexis" line missing=""
+  local fix="sudo bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps harden"
+  if [ ! -f "$f" ]; then
+    fail "AIDE's 90_velexis details added entries and relaxes apt's lists (/etc/aide/aide.conf.d/90_velexis is missing; $fix)"
+    return
+  fi
+  for line in "${AIDE_SETTINGS[@]}"; do
+    grep -qxF -- "$line" "$f" || missing="${missing:+$missing, }$line"
+  done
+  if [ -z "$missing" ]; then
+    pass "AIDE's 90_velexis details added entries and relaxes apt's lists (${AIDE_SETTINGS[0]}; ${AIDE_SETTINGS[1]})"
+  else
+    fail "AIDE's 90_velexis details added entries and relaxes apt's lists (missing the line: $missing; $fix)"
+  fi
+}
+
 group_system() {
   local os tz swaps fstab state v
   # shellcheck disable=SC1091
@@ -200,6 +224,7 @@ group_system() {
     fail "unattended-upgrades runs daily (/etc/apt/apt.conf.d/20auto-upgrades)"
   fi
   if [ -s "$R/var/lib/aide/aide.db" ]; then pass "the AIDE database exists"; else fail "the AIDE database exists (/var/lib/aide/aide.db; run aideinit)"; fi
+  aide_settings
   # AIDE's daily check (PCI DSS 11.5.2) runs from the timer of the package aide-common, which provision-vm.sh enables.
   state="$(unit_state dailyaidecheck.timer)"
   if [ "$state" = "active enabled" ]; then

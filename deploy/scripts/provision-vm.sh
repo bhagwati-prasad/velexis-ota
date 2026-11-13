@@ -342,8 +342,10 @@ EOF
   augenrules --load >/dev/null || warn "augenrules failed; check auditd"
   systemctl enable --now auditd
 
-  # AIDE file integrity: exclude data and release folders that change by design.
-  cat > /etc/aide/aide.conf.d/90_velexis <<'EOF'
+  # AIDE file integrity: exclude data and release folders that change by design. check-vm.sh (group system) checks the
+  # two settings below and deploy/scripts/test/check-vm.test.sh reads them from this heredoc (lead decision (21l) of
+  # 2026-11-13; deployment-single-vm.md §12, "What the AIDE check compares").
+  cat > /etc/aide/aide.conf.d/90_velexis <<'AIDE'
 !/srv/velexis/releases
 !/srv/velexis/incoming
 !/var/lib/velexis
@@ -353,7 +355,15 @@ EOF
 !/var/lib/caddy
 !/var/log
 !/var/cache/velexis
-EOF
+# AIDE details added entries too (their new values), not only changed ones. aideinit runs before the steps that install
+# the Velexis units, scripts and env files, so AIDE lists them as added; without their detail a second change to such a
+# file, outside a deploy, would not raise velexis-logreview's aide-change alert (X-044's first criterion).
+report_level=added_removed_entries
+# apt's package lists get the relaxed rule (no content, size or times) that aide-common's 31_aide_apt gives the lists of
+# one-line sources: Ubuntu 24.04 keeps its own sources in deb822 form (ubuntu.sources), which 31_aide_apt does not read,
+# so apt-daily's refresh of them would otherwise fall under 99_aide_root's Full and change on most days.
+/var/lib/apt/lists/[^/]+$ f VarFile
+AIDE
   if [ ! -f /var/lib/aide/aide.db ]; then
     log "Initialising the AIDE database (takes a few minutes)"
     aideinit -y -f >/dev/null || warn "aideinit failed; run it manually"
