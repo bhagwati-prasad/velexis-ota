@@ -7,6 +7,11 @@
 // `checkTenantKey` (the wizard's live check) answers `available: false` with the first problem: `invalid`, then
 // `reserved`, then `taken`; `createTenant` (PBE-018) applies the same rules again, because a key can be taken between
 // the check and the submit.
+//
+// Velexis's own OTAs (PBE-075, lead decision (20a) of 2026-11-13) are the one exception: `VELEXIS_OWN_TENANT_KEYS`, a
+// short frozen list of reserved keys (only `demo`, the production demo OTA), which the platform command
+// `tenants:create-demo` (demo-ota.command.ts) alone may give an OTA, through createTenant's own transaction. For
+// everyone else they stay reserved: the key check answers `reserved` and createTenant `409 TENANT_KEY_UNAVAILABLE`.
 
 /** The key rule: a DNS label of 3–30 lower-case letters and digits that starts with a letter. */
 export const TENANT_KEY_PATTERN = /^[a-z][a-z0-9]{2,29}$/;
@@ -39,6 +44,19 @@ export const RESERVED_TENANT_KEYS: readonly string[] = Object.freeze([
   "test",
   "demo",
 ]);
+
+/**
+ * The reserved keys of Velexis's own OTAs (PBE-075): `demo`, the production demo OTA that the external uptime monitor,
+ * the on-VM payment page check (`HEALTHCHECK_STOREFRONT_HOST`), the ASV scope and the airline-card go-live use
+ * (platform/docs/runbooks/launch-checklist.md §6). Each is on RESERVED_TENANT_KEYS as well, so nobody else gets it;
+ * only `tenants:create-demo` creates an OTA with one. A key joins this list only by a decision of the lead.
+ */
+export const VELEXIS_OWN_TENANT_KEYS: readonly string[] = Object.freeze(["demo"]);
+
+/** True when `key` is one of Velexis's own reserved keys (VELEXIS_OWN_TENANT_KEYS). */
+export function isVelexisOwnTenantKey(key: string): boolean {
+  return VELEXIS_OWN_TENANT_KEYS.includes(key);
+}
 
 /** Why a key cannot be used: it breaks the rule, it is reserved, or a tenant row has it. */
 export type TenantKeyUnavailableReason = "invalid" | "reserved" | "taken";

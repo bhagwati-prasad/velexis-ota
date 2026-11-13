@@ -37,7 +37,8 @@ export const AUDIT_ACTIONS = Object.freeze([
   "admin.revoked", // adminRevokeAdmin
 
   // OTA lifecycle (provisioning flow, PADR-0001, PADR-0014).
-  "tenant.created", // createTenant
+  "tenant.created", // createTenant, cli tenants:create-demo
+  "tenant.reserved_key_used", // cli tenants:create-demo (PBE-075): Velexis's own OTA with its reserved key
   "tenant.updated", // updateTenant, adminUpdateTenant
   "tenant.activated", // provisioning step activate (system)
   "tenant.provisioning_failed", // provision job failed (system), abandoned Checkout (system)

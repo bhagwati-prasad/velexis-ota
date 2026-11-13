@@ -1,7 +1,7 @@
 // The key rules of an OTA (PBE-017 step 1; platform/docs/scope.md PF-10 AC1): the pattern, the reserved list of the
 // sign-up flow and the storefront host. The pattern and the list are compared with the documents that define them,
 // so a change on one side fails here: the flow (step 6), the OpenAPI document's `TenantKey` and migration 0002's
-// `tenants_key_dns_ck`.
+// `tenants_key_dns_ck`. Velexis's own keys (PBE-075) stay reserved for every key check.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -10,10 +10,12 @@ import { APP_DIR } from "../config";
 import {
   isReservedTenantKey,
   isValidTenantKey,
+  isVelexisOwnTenantKey,
   RESERVED_TENANT_KEYS,
   storefrontHost,
   TENANT_KEY_PATTERN,
   tenantKeyProblem,
+  VELEXIS_OWN_TENANT_KEYS,
 } from "./tenant-key";
 
 const SIGN_UP_FLOW = join(APP_DIR, "..", "docs", "flows", "signup-and-create-ota.md");
@@ -64,6 +66,33 @@ describe("tenantKeyProblem", () => {
     for (const key of RESERVED_TENANT_KEYS) {
       expect(isValidTenantKey(key), key).toBe(true);
       expect(tenantKeyProblem(key), key).toBe("reserved");
+    }
+  });
+});
+
+describe("Velexis's own keys (PBE-075)", () => {
+  it("[PBE-075 AC3] are exactly demo, a frozen list, and demo stays reserved for every key check", () => {
+    expect([...VELEXIS_OWN_TENANT_KEYS]).toEqual(["demo"]);
+    expect(Object.isFrozen(VELEXIS_OWN_TENANT_KEYS)).toBe(true);
+    expect(isVelexisOwnTenantKey("demo")).toBe(true);
+    // The portal's key check (`checkTenantKey`) and createTenant read tenantKeyProblem and isReservedTenantKey: both
+    // still refuse demo.
+    expect(tenantKeyProblem("demo")).toBe("reserved");
+    expect(isReservedTenantKey("demo")).toBe(true);
+  });
+
+  it("[PBE-075 AC2] holds only valid reserved keys, so no other key, reserved or free, is Velexis's own", () => {
+    for (const key of VELEXIS_OWN_TENANT_KEYS) {
+      expect(isValidTenantKey(key), key).toBe(true);
+      expect(RESERVED_TENANT_KEYS, key).toContain(key);
+    }
+    for (const key of [
+      ...RESERVED_TENANT_KEYS.filter((reserved) => reserved !== "demo"),
+      "acme",
+      "Demo",
+      "demo2",
+    ]) {
+      expect(isVelexisOwnTenantKey(key), key).toBe(false);
     }
   });
 });

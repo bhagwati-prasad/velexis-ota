@@ -42,6 +42,7 @@ export const AUDIT_ACTIONS: readonly string[] = Object.freeze([
   "admin.granted",
   "admin.revoked",
   "tenant.created",
+  "tenant.reserved_key_used",
   "tenant.updated",
   "tenant.activated",
   "tenant.provisioning_failed",

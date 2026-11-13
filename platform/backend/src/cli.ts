@@ -3,8 +3,9 @@
 // the command dispatcher; each command is one entry of CLI_COMMANDS. PBE-028 adds `admin:grant` and
 // `admin:reset-mfa` (admin/admin-cli.commands.ts, loaded only when one of them runs), PBE-034 adds `dev:seed`
 // (dev/dev-seed.command.ts, loaded the same way; development only), PBE-072 adds `secrets:rewrap`
-// (secrets/rewrap.command.ts, loaded the same way: the master-key rotation's re-wrap). A command that needs the database
-// or Redis loads the configuration itself, so `help` works without any.
+// (secrets/rewrap.command.ts, loaded the same way: the master-key rotation's re-wrap), PBE-075 adds
+// `tenants:create-demo` (tenants/demo-ota.command.ts, loaded the same way: Velexis's own demo OTA with its reserved
+// key). A command that needs the database or Redis loads the configuration itself, so `help` works without any.
 //
 // Exit codes: 0 done, 1 the command failed, 2 usage error (no or unknown command, or wrong arguments).
 import type { EnvSource } from "@velexis/config";
@@ -13,6 +14,7 @@ import type * as AdminCliCommands from "./admin/admin-cli.commands";
 import { PLATFORM_PROCESSES } from "./config";
 import type * as DevSeedCommand from "./dev/dev-seed.command";
 import type * as SecretsRewrapCommand from "./secrets/rewrap.command";
+import type * as DemoOtaCommand from "./tenants/demo-ota.command";
 
 /** Where the CLI writes (the process's stdout and stderr; tests pass buffers). */
 export interface CliOutput {
@@ -133,6 +135,27 @@ const secretsRewrapCommand: CliCommand = {
   },
 };
 
+/** Velexis's own demo OTA, loaded when it runs (PBE-075; tenants/demo-ota.command.ts). */
+function demoOtaCommands(): Promise<typeof DemoOtaCommand> {
+  return import("./tenants/demo-ota.command.js");
+}
+
+/**
+ * `tenants:create-demo <email> --country <code> --currency <code> --time-zone <zone> [--name <name>] [--key demo]
+ * [--operator <name>]`: creates Velexis's own demo OTA with the reserved key `demo` for an owner with MFA, out of billing
+ * (platform/docs/runbooks/launch-checklist.md §6; tenants/demo-ota.command.ts). The arguments are repeated here so that
+ * `help` does not load the command's module.
+ */
+const demoOtaCommand: CliCommand = {
+  name: "tenants:create-demo",
+  args: "<email> --country <code> --currency <code> --time-zone <zone> [--name <name>] [--key demo] [--operator <name>]",
+  summary:
+    "Create Velexis's own demo OTA (key demo) for <email>, an owner with MFA, out of billing (audited as system).",
+  async run(args, context) {
+    return (await demoOtaCommands()).runCreateDemoOta(args, context);
+  },
+};
+
 /** Every command of the CLI. Later tasks append theirs. */
 export const CLI_COMMANDS: readonly CliCommand[] = [
   helpCommand,
@@ -140,6 +163,7 @@ export const CLI_COMMANDS: readonly CliCommand[] = [
   adminResetMfaCommand,
   devSeedCommand,
   secretsRewrapCommand,
+  demoOtaCommand,
 ];
 
 /** `-h` and `--help` are spellings of `help`. */

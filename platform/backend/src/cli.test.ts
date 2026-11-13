@@ -101,13 +101,16 @@ describe("the admin commands (PBE-028)", () => {
   }, 60_000);
 
   it("[PBE-028] registers admin:grant and admin:reset-mfa, which take an e-mail address and an operator", () => {
-    // dev:seed (PBE-034) follows them and takes no argument; secrets:rewrap (PBE-072) comes last.
+    // dev:seed (PBE-034) follows them and takes no argument; secrets:rewrap (PBE-072) and tenants:create-demo
+    // (PBE-075) come last.
     expect(CLI_COMMANDS.map((command) => `${command.name} ${command.args}`.trim())).toEqual([
       "help",
       "admin:grant <email> [--operator <name>]",
       "admin:reset-mfa <email> [--operator <name>]",
       "dev:seed",
       "secrets:rewrap [--dry-run] [--batch-size <n>]",
+      "tenants:create-demo <email> --country <code> --currency <code> --time-zone <zone> [--name <name>] " +
+        "[--key demo] [--operator <name>]",
     ]);
   });
 

@@ -44,6 +44,21 @@
 // the same `Idempotency-Key` and body gets the stored `202` without running this again, and while Redis is down the
 // interceptor answers `503` before this service runs.
 //
+// Velexis's own OTAs (PBE-075, lead decision (20a) of 2026-11-13): createTenant's fourth argument, `VelexisOwnTenant`,
+// is passed by the platform command `tenants:create-demo` (tenants/demo-ota.command.ts) and by nothing else: the
+// portal's route (LifecycleController) never passes it, and no field of `CreateTenantRequest` can set it. With it:
+//
+// - the key must be one of Velexis's own (`VELEXIS_OWN_TENANT_KEYS`: `demo`), which it lets past the reserved list;
+//   any other key, reserved or free, answers `409 TENANT_KEY_UNAVAILABLE`, and so does an own key without it, as for
+//   every caller. A key used by any tenant row still answers `409` (the same check, the same unique index);
+// - the plan is `early_access` with the manual trial whatever `FEATURE_STRIPE_BILLING` says (no `planCode`, no
+//   Checkout): Velexis's own OTA stays out of billing, and the command then sets its subscription `active`;
+// - the same transaction writes the same rows (the tenant in the storefront environment `test`, the owner membership,
+//   the manual trial, the verified primary sub-domain, the `provision` job) and the job is dispatched after the commit
+//   as above. Its audit rows name the command (`actor_type = 'system'`, its label, its `details`): `tenant.created`
+//   with the owner's account id in its details, and `tenant.reserved_key_used`, the row that records the exception to
+//   the reserved list.
+//
 // The setup page (PBE-023; flows/provisioning.md §4 and "Failure handling", scope PF-11). TenantRoleGuard has checked
 // the caller's membership and role before each of these runs (`404` for non-members):
 //
@@ -77,7 +92,7 @@ import type { components } from "@velexis/api-types/platform";
 import { AppError, type FieldError } from "@velexis/errors";
 import { InjectPinoLogger, PinoLogger } from "nestjs-pino";
 import type { PlatformTransaction } from "../audit/audit.repository";
-import { AuditService } from "../audit/audit.service";
+import { AuditService, type AuditDetails } from "../audit/audit.service";
 import { AccountsRepository } from "../auth/accounts.repository";
 import {
   CheckoutService,
@@ -96,7 +111,7 @@ import { InvalidationPublisher, runInTransaction } from "../common/redis/invalid
 import type { PlatformBackendConfig } from "../config";
 import { DomainsRepository, HOSTNAME_UNIQUE_INDEX } from "../domains/domains.repository";
 import { MembershipsRepository } from "../memberships/memberships.repository";
-import { isReservedTenantKey, storefrontHost } from "../tenants/tenant-key";
+import { isReservedTenantKey, isVelexisOwnTenantKey, storefrontHost } from "../tenants/tenant-key";
 import { TENANT_KEY_CONSTRAINTS, TenantsRepository } from "../tenants/tenants.repository";
 import { toTenant } from "../tenants/tenants.service";
 import { ProvisioningDispatcher } from "./dispatcher";
@@ -135,6 +150,25 @@ export const CHECKOUT_ERROR_MESSAGE =
  */
 export function checkoutErrorOf(error: unknown): CheckoutError {
   return { code: error instanceof AppError ? error.code : "INTERNAL_ERROR", message: CHECKOUT_ERROR_MESSAGE };
+}
+
+/**
+ * The creation of one of Velexis's own OTAs (PBE-075; see the file header): the option of createTenant that only the
+ * command `tenants:create-demo` passes.
+ */
+export interface VelexisOwnTenant {
+  /** The command's audit actor (`actor_type = 'system'`), for example `cli tenants:create-demo by <operator>`. */
+  readonly actorLabel: string;
+  /** What the audit rows' `details` add: the command and its operator. */
+  readonly details: AuditDetails;
+}
+
+/**
+ * True when the key of a creation may be used whatever the reserved list says: one of Velexis's own keys, created by
+ * the command that passes `own` (file header).
+ */
+export function ownKeyAllowed(key: string, own: VelexisOwnTenant | undefined): boolean {
+  return own !== undefined && isVelexisOwnTenantKey(key);
 }
 
 /** A Checkout that a retry starts after its commit: the `incomplete` row and the plan it is for. */
@@ -291,14 +325,16 @@ export class LifecycleService {
 
   /**
    * createTenant for the account `accountId` (see the file header); `requestKey` is the request's `Idempotency-Key`,
-   * part of Stripe's idempotency key of the Checkout (M5).
+   * part of Stripe's idempotency key of the Checkout (M5). `own` is passed by `tenants:create-demo` only (PBE-075):
+   * one of Velexis's own OTAs, on the manual trial whatever the billing switch.
    */
   async createTenant(
     accountId: string,
     request: CreateTenantRequest,
     requestKey: string,
+    own?: VelexisOwnTenant,
   ): Promise<TenantCreated> {
-    const stripeBilling = this.features.isEnabled("stripe_billing");
+    const stripeBilling = own === undefined && this.features.isEnabled("stripe_billing");
     await this.checkReferences(request, stripeBilling);
     const plan =
       stripeBilling && request.planCode !== undefined
@@ -306,7 +342,7 @@ export class LifecycleService {
         : undefined;
     let ota: CreatedOta;
     try {
-      ota = await runInTransaction(this.db, (trx) => this.create(trx, accountId, request, plan));
+      ota = await runInTransaction(this.db, (trx) => this.create(trx, accountId, request, plan, own));
     } catch (error) {
       if (isKeyConflict(error)) {
         throw keyUnavailable(error);
@@ -553,20 +589,27 @@ export class LifecycleService {
 
   /**
    * The transaction of createTenant: the checks that need the database, then the six rows; the subscription is the
-   * manual trial without `plan` (before M5) and the `incomplete` Stripe row of `plan` with it (M5).
+   * manual trial without `plan` (before M5) and the `incomplete` Stripe row of `plan` with it (M5). With `own`
+   * (PBE-075) the key must be one of Velexis's own, which passes the reserved list, and the audit rows name the command.
    */
   private async create(
     trx: PlatformTransaction,
     accountId: string,
     request: CreateTenantRequest,
     plan: CheckoutPlan | undefined,
+    own: VelexisOwnTenant | undefined,
   ): Promise<CreatedOta> {
     const account = await this.accounts.lockForUpdate(trx, accountId);
     if (account === undefined || account.status !== "active" || account.email_verified_at === null) {
       throw new AppError("EMAIL_NOT_VERIFIED");
     }
     const { key } = request;
-    if (isReservedTenantKey(key) || (await this.tenants.keyExists(key, trx))) {
+    const ownKey = ownKeyAllowed(key, own);
+    // The command makes Velexis's own OTAs only; everyone else meets the reserved list as before.
+    if (own !== undefined && !ownKey) {
+      throw keyUnavailable();
+    }
+    if ((isReservedTenantKey(key) && !ownKey) || (await this.tenants.keyExists(key, trx))) {
       throw keyUnavailable();
     }
     const owned = await this.memberships.countOwnedTenants(trx, accountId);
@@ -612,8 +655,10 @@ export class LifecycleService {
       now,
     });
     await this.audit.record(trx, {
-      actorType: "account",
-      actorAccountId: accountId,
+      // The portal's owner, or the command that created one of Velexis's own OTAs for it (PBE-075).
+      ...(own === undefined
+        ? { actorType: "account", actorAccountId: accountId }
+        : { actorType: "system", actorLabel: own.actorLabel }),
       action: "tenant.created",
       targetType: "tenant",
       targetId: tenantId,
@@ -631,6 +676,7 @@ export class LifecycleService {
         primaryHost: hostname,
       },
       details: {
+        ...(own === undefined ? {} : { ...own.details, ownerAccountId: accountId }),
         provisioningJobId: job.id,
         subscriptionId: subscription.id,
         subscriptionStatus: subscription.status,
@@ -638,6 +684,19 @@ export class LifecycleService {
         ...(plan === undefined ? {} : { billingInterval: plan.interval }),
       },
     });
+    if (own !== undefined) {
+      // The exception to the reserved list, on a row of its own, so the audit search finds every use of it.
+      await this.audit.record(trx, {
+        actorType: "system",
+        actorLabel: own.actorLabel,
+        action: "tenant.reserved_key_used",
+        targetType: "tenant",
+        targetId: tenantId,
+        tenantId,
+        tenantKey: key,
+        details: { ...own.details, key, ownerAccountId: accountId },
+      });
+    }
 
     const row = await this.tenants.findWithHost(tenantId, trx);
     if (row === undefined) {

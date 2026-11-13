@@ -1,8 +1,9 @@
 // The platform admin's subscriptions (platform/docs/api-inventory-admin.md §4, flows/subscription-billing.md §G,
 // flows/platform-admin-operations.md §D; PADR-0002 items 6 and 9; scope PF-75): adminListSubscriptions,
 // adminGetSubscription and adminUpdateManualSubscription. Who may call them is AdminAuthGuard's (`platform_admin`).
-// This service owns the transaction of the manual edit, its audit row (`actor_type = 'platform_admin'`) and the
-// `tenant` invalidation after the commit.
+// This service owns the transaction of the manual edit, its audit row (`actor_type = 'platform_admin'`; `system` with
+// the command's label when `tenants:create-demo` of dist/cli.js sets the demo OTA's subscription `active`, PBE-075) and
+// the `tenant` invalidation after the commit.
 //
 // - The list holds every subscription row, current or ended, newest first (`created_at`, then id), with the filters
 //   `status`, `provider` and `planCode` and an opaque cursor of the last row's id (`400 VALIDATION_FAILED`,
@@ -55,7 +56,7 @@ import { Inject, Injectable } from "@nestjs/common";
 import type { components } from "@velexis/api-types/platform";
 import { AppError } from "@velexis/errors";
 import Stripe from "stripe";
-import { AuditService } from "../audit/audit.service";
+import { AuditService, type AuditDetails } from "../audit/audit.service";
 import type { AccessTokenClaims } from "../auth/token.service";
 import { Clock } from "../common/clock";
 import { PLATFORM_DB, type PlatformDb } from "../common/database";
@@ -86,6 +87,15 @@ export type AdminInvoice = components["schemas"]["AdminInvoice"];
 export type AdminInvoiceList = components["schemas"]["AdminInvoiceList"];
 export type AdminStripeEvent = components["schemas"]["AdminStripeEvent"];
 export type UpdateManualSubscriptionRequest = components["schemas"]["UpdateManualSubscriptionRequest"];
+
+/**
+ * Who makes a manual edit: a platform admin (adminUpdateManualSubscription, the access token's `sub`; audited as
+ * `platform_admin`), or a command of dist/cli.js (PBE-075: `tenants:create-demo` sets the demo OTA's subscription
+ * `active`; audited as `system` with the command's label, and its `details` beside the reason).
+ */
+export type ManualSubscriptionActor =
+  | Pick<AccessTokenClaims, "sub">
+  | { readonly system: { readonly label: string; readonly details: AuditDetails } };
 
 /** The query of `adminListSubscriptions`, as the validation interceptor coerced it (`limit` defaults to 50). */
 export interface ListSubscriptionsQuery {
@@ -381,10 +391,10 @@ export class SubscriptionsService {
    * adminUpdateManualSubscription: the changes of `request` that differ from the stored row, with `version + 1`, one
    * `subscription.manually_updated` audit row holding the reason, the changed fields before and after and, when the
    * tenant's plan followed, its plan before and after, and a `tenant` invalidation after the commit in that case. The
-   * tenant's row is locked before the subscription's (file header).
+   * tenant's row is locked before the subscription's (file header). `actor` is the admin, or a CLI command (PBE-075).
    */
   async updateManual(
-    claims: Pick<AccessTokenClaims, "sub">,
+    actor: ManualSubscriptionActor,
     subscriptionId: string,
     version: number,
     request: UpdateManualSubscriptionRequest,
@@ -482,9 +492,17 @@ export class SubscriptionsService {
         const billingNoticeChanged =
           billingNotice !== tenant.billing_notice &&
           (await this.tenants.setBillingNotice(trx, current.tenant_id, billingNotice, now));
+        // An actor with a `sub` (the admin's token claims, whatever else they hold) is always the admin; only the
+        // command's actor, which has none, is audited as `system` (PBE-075).
+        const by =
+          "sub" in actor
+            ? { actor: { actorType: "platform_admin", actorAccountId: actor.sub } as const, details: {} }
+            : {
+                actor: { actorType: "system", actorLabel: actor.system.label } as const,
+                details: actor.system.details,
+              };
         await this.audit.record(trx, {
-          actorType: "platform_admin",
-          actorAccountId: claims.sub,
+          ...by.actor,
           action: "subscription.manually_updated",
           targetType: "subscription",
           targetId: current.id,
@@ -492,6 +510,7 @@ export class SubscriptionsService {
           before,
           after,
           details: {
+            ...by.details,
             reason: request.reason,
             ...(tenantPlanChanged ? { tenantPlan: { before: tenantPlanBefore, after: planCode } } : {}),
             ...(billingNoticeChanged
