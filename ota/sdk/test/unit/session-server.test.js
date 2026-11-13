@@ -3,7 +3,11 @@
 // key is refused in a browser page; `environment` sends X-Velexis-Environment on console operations only;
 // `sessionKind: "staff"` refreshes through console.auth.refresh and reports the whole staff session. The clients of a
 // family (a client and those derived from it with withOptions) share the refresh of each refresh-token value, so two
-// staff clients holding one refresh token send one refresh and never present a rotated one (task SDK-017).
+// staff clients holding one refresh token send one refresh and never present a rotated one (task SDK-017). A rotated
+// staff refresh token leads to the family's newest tokens only for a client that held it as its own string before the
+// rotation, or within 10 s of it, and an old staff access token is replaced only together with its session's refresh
+// token (FIX-W52-SDK, lead decisions (21d) and (21e) of 2026-11-13; at the end of this file).
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -513,5 +517,118 @@ describe("server mode: the staff clients of a family share the refresh of a refr
     ]);
     expect(api.presented).toEqual([STAFF_TOKENS.refreshToken]);
     await expect(member.console.auth.me()).resolves.toEqual({ member: "stf_1", client: "first" });
+  });
+});
+
+describe("server mode: a rotated staff refresh token leads to the newest tokens only for a client that held it, or within 10 s", () => {
+  /** A service client of the OTA admin's kind, without a staff session. */
+  const serviceOptions = (/** @type {typeof fetch} */ fetch) => ({
+    secretKey: SK,
+    fetch,
+    sessionKind: /** @type {const} */ ("staff"),
+    environment: /** @type {const} */ ("test"),
+  });
+  /** The first tokens of the staff member `stf_1`: the access token has expired. */
+  const STAFF_TOKENS = { accessToken: "at_sdk017_stf_1_0", refreshToken: "rt_sdk017_stf_1_0" };
+
+  for (const [elapsed, outcome] of /** @type {const} */ ([
+    [9_000, "takes the newest staff tokens"],
+    [11_000, "presents the rotated token and gets REFRESH_TOKEN_REUSED"],
+  ])) {
+    it(`a staff request's client derived from the service client with the rotated refresh token ${elapsed / 1000} s after the rotation ${outcome} [FIX-W52-SDK AC1]`, async () => {
+      vi.useFakeTimers();
+      const api = staffApi();
+      const fake = createFakeFetch(api.answers(6));
+      const serviceClient = createVelexisClient(serviceOptions(fake.fetch));
+      await expect(serviceClient.withOptions(STAFF_TOKENS).console.auth.me()).resolves.toMatchObject({
+        member: "stf_1",
+      });
+      vi.advanceTimersByTime(elapsed);
+      const expired = vi.fn();
+
+      const late = await serviceClient
+        .withOptions({ ...STAFF_TOKENS, onSessionExpired: expired })
+        .console.auth.me()
+        .catch((caught) => caught);
+
+      if (elapsed < 10_000) {
+        expect(late).toEqual({ member: "stf_1", client: "first" });
+        expect(api.presented).toEqual([STAFF_TOKENS.refreshToken]);
+        expect(fake.lastRequest?.headers["authorization"]).toBe("Bearer at_sdk017_stf_1_1");
+        expect(expired).not.toHaveBeenCalled();
+      } else {
+        expect(late).toMatchObject({ code: "REFRESH_TOKEN_REUSED" });
+        expect(api.presented).toEqual([STAFF_TOKENS.refreshToken, STAFF_TOKENS.refreshToken]);
+        expect(api.counts.reused).toBe(1);
+        expect(expired).toHaveBeenCalledTimes(1);
+      }
+    });
+  }
+
+  it("a staff client derived before the refresh keeps following it after 11 s and an hour [FIX-W52-SDK AC1]", async () => {
+    vi.useFakeTimers();
+    const api = staffApi();
+    const fake = createFakeFetch(api.answers(6));
+    const serviceClient = createVelexisClient(serviceOptions(fake.fetch));
+    const member = serviceClient.withOptions(STAFF_TOKENS);
+    const derived = member.withOptions({ headers: { "X-Client": "second" } });
+
+    await member.console.auth.me();
+    vi.advanceTimersByTime(11_000);
+    await expect(derived.console.auth.me()).resolves.toEqual({ member: "stf_1", client: "second" });
+    vi.advanceTimersByTime(3_600_000);
+    await expect(derived.console.auth.me()).resolves.toEqual({ member: "stf_1", client: "second" });
+
+    expect(api.presented).toEqual([STAFF_TOKENS.refreshToken]);
+    expect(api.counts.reused).toBe(0);
+    expect(fake.requests.slice(-2).map((request) => request.headers["authorization"])).toEqual([
+      "Bearer at_sdk017_stf_1_1",
+      "Bearer at_sdk017_stf_1_1",
+    ]);
+  });
+
+  it("a staff client whose token functions read the request's staff member (AsyncLocalStorage) sends an old access token without its session's refresh token as it is, and presents the rotated refresh token after 11 s [FIX-W52-SDK AC1 AC2]", async () => {
+    vi.useFakeTimers();
+    const api = staffApi(["stf_1", "stf_2"]);
+    const fake = createFakeFetch(api.answers(10));
+    /** @type {AsyncLocalStorage<{ accessToken?: string, refreshToken?: string }>} */
+    const staffMember = new AsyncLocalStorage();
+    const expired = vi.fn();
+    const client = createVelexisClient({
+      ...serviceOptions(fake.fetch),
+      accessToken: () => staffMember.getStore()?.accessToken,
+      refreshToken: () => staffMember.getStore()?.refreshToken,
+      onSessionExpired: expired,
+    });
+    const as = (/** @type {{ accessToken?: string, refreshToken?: string }} */ store) =>
+      staffMember.run(store, () => client.console.auth.me().catch((/** @type {unknown} */ caught) => caught));
+    await expect(as(STAFF_TOKENS)).resolves.toEqual({ member: "stf_1", client: "first" });
+    const sentBefore = fake.requests.length;
+
+    // At once: the old access token alone, or with stf_2's refresh token, is sent as it is; with its own session's
+    // rotated refresh token it is replaced.
+    const alone = await as({ accessToken: STAFF_TOKENS.accessToken });
+    const withOwn = await as(STAFF_TOKENS);
+    const withOther = await as({ accessToken: STAFF_TOKENS.accessToken, refreshToken: "rt_sdk017_stf_2_0" });
+    // 11 s later the rotated refresh token is the request's own: it is presented as it is.
+    vi.advanceTimersByTime(11_000);
+    const late = await as(STAFF_TOKENS);
+
+    expect(alone).toMatchObject({ code: "TOKEN_EXPIRED" });
+    expect(withOther).toEqual({ member: "stf_2", client: "first" });
+    expect(withOwn).toEqual({ member: "stf_1", client: "first" });
+    expect(late).toMatchObject({ code: "REFRESH_TOKEN_REUSED" });
+    expect(
+      fake.requests.slice(sentBefore).map((request) => request.headers["authorization"] ?? request.json),
+    ).toEqual([
+      `Bearer ${STAFF_TOKENS.accessToken}`,
+      "Bearer at_sdk017_stf_1_1",
+      `Bearer ${STAFF_TOKENS.accessToken}`,
+      { refreshToken: "rt_sdk017_stf_2_0" },
+      "Bearer at_sdk017_stf_2_1",
+      `Bearer ${STAFF_TOKENS.accessToken}`,
+      { refreshToken: STAFF_TOKENS.refreshToken },
+    ]);
+    expect(expired).toHaveBeenCalledTimes(1);
   });
 });

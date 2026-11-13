@@ -49,8 +49,9 @@ export { VERSION } from "./version.js";
  *   which shares the refreshes of the session: in cookie mode the refresh state of the session cookies they all send
  *   (the refresh in flight, the count of finished refreshes and the CSRF re-fetch in flight), sent with the settings
  *   of the client `createVelexisClient` made; in token and server mode the refresh of each refresh token and the tokens
- *   that replaced it, so clients that present the same refresh token send one refresh and never present a rotated
- *   one, and clients with different refresh tokens share nothing
+ *   that replaced it, so clients that present the same refresh token send one refresh, a client that held a refresh
+ *   token as its own string before the family rotated it never presents it (another client follows the rotation for
+ *   10 s, then presents it and the API refuses it as reused), and clients with different refresh tokens share nothing
  * @property {<T = unknown>(method: HttpMethod, path: string, init?: { query?: Record<string, string | number | boolean | string[] | undefined>, body?: unknown, options?: RequestOptions }) => Promise<T>} request
  *   low-level escape hatch for endpoints that are not wrapped yet; applies keys, tokens, retries and error mapping
  */

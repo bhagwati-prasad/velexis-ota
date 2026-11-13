@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 
 import { responseChecker } from "@velexis/testing";
 import ts from "typescript";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 
 import {
@@ -296,6 +296,10 @@ beforeAll(() => {
     PROBLEMS.set(`fixture:${operationId}`, checker.check(operationId, { status: 200, body: SESSION_INFO }));
   }
 }, SETUP_TIMEOUT_MS);
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("the canned responses", () => {
   it("are the documented examples of all 22 operations and match their response schemas [SDK-008]", () => {
@@ -783,6 +787,8 @@ describe("session results in token and server mode", () => {
   });
 
   it("server mode: a token source that still gives the replaced tokens gets the new ones, also when the hook fails [SDK-008]", async () => {
+    // The clock stands still: a token function gets the new tokens for 10 s after the rotation (FIX-W52-SDK).
+    vi.useFakeTimers();
     const api = fakeApi({ accessToken: AT, refreshToken: RT });
     const fake = createFakeFetch(api.answers(3));
     // The integrator's store never learns the new tokens: the hook rejects.

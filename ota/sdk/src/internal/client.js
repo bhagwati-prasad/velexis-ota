@@ -18,7 +18,10 @@
 // client joins it. In cookie mode the family's clients share one refresh state (SDK-016), and their shared refresh and
 // CSRF fetch go out with the root's transport settings (SDK-017); in token and server mode they share the refresh of
 // each refresh-token value and the tokens that replaced each rotated one (SDK-017), so clients that present the same
-// refresh token send one refresh, and clients with different tokens share nothing.
+// refresh token send one refresh, and clients with different tokens share nothing. A rotated refresh token leads to
+// those tokens only for a client that held it as its own string before the rotation, or within 10 s of it, and an old
+// access token only together with its session's refresh token (FIX-W52-SDK, lead decisions (21d) and (21e) of
+// 2026-11-13; internal/session.js).
 
 import { isPageBody, Page } from "./pagination.js";
 import { createFamily, createSession } from "./session.js";
@@ -57,7 +60,8 @@ const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
  * @typedef {object} Core
  * @property {Readonly<VelexisClientOptions>} options the client's validated options (what `withOptions` starts from),
  *   with string tokens that have been replaced (by this client's automatic refresh or adopted session result, or by a
- *   rotation the API made for any client of the family) replaced by the current ones
+ *   rotation the API made for any client of the family that this client follows) replaced by the current ones; a
+ *   string access token only together with the string refresh token of its session
  * @property {"cookie" | "token" | "server"} mode the session mode (README §4)
  * @property {(overrides: unknown) => VelexisClientOptions} derive the options of `withOptions(overrides)`: these
  *   options with the overrides applied (validated when the new client is created); a cookie-mode client cannot be
