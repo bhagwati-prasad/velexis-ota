@@ -3144,6 +3144,24 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - The storefront (booking.js, boot.js) works unchanged, and the frozen contract files are untouched.
 - **Verify:** `pnpm --filter @velexis/ota-sdk test && E2E_WITH_OTA=1 pnpm test:e2e --project=storefront`
 
+### OFE-032 · Keep the compact signed-in account menu up to the large breakpoint ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
+- **Component:** ota-frontend
+- **Milestone:** M6
+- **Depends on:** OFE-031
+- **Size:** S
+- **Read first:** ota/docs/storefront-accessibility.md §3.8 ("Left": a first name of about 20 or more characters still wraps the navigation's row at 768 to about 850 px when the session answers, CLS 0.63; 0.53 with a long OTA name and two currencies), §1.1 and §3.1; ota/frontend/partials/header.html, src/lib/session.js (`renderAccountMenu`, the compact menu below md that OFE-031 built) and src/styles/main.css (the md breakpoint); tools/e2e/specs/storefront/a11y-phone.e2e.ts; ota/frontend/scripts/lighthouse.mjs (`--signed-in`)
+- **Files:** `ota/frontend/partials/header.html`, `ota/frontend/src/lib/session.js`, `ota/frontend/src/styles/main.css`, `ota/frontend/test/auth-pages.test.js`, `ota/frontend/test/boot.test.js`, `tools/e2e/specs/storefront/a11y-phone.e2e.ts`, `ota/docs/storefront-accessibility.md`, `ota/frontend/README.md`
+- **Steps:**
+  1. Added by the lead for wave 51 (decision (20h) of 2026-11-13, approved by the owner): the compact account menu that OFE-031 shows below md (768 px) applies below lg (1024 px), so a long first name never wraps the navigation's row when the session answers; from lg up the signed-in links stand in the row as today. The menu's keyboard, focus, Escape and outside-press behaviour (OFE-031 and its review fixes) stay as they are.
+  2. Measure with a signed-in customer whose first name has 23 characters, on the demo OTA and on one with a long name and two currencies: the page shift when the session answers is 0 on home at 768, 800, 850, 900 and 1023 px, and the header at 1024 and 1280 px is as before (the inline links; the row does not wrap, and the wider navigation only moves sideways in it, as before). Record the method and figures in storefront-accessibility.md §3.8 (the "Left" entry closed with a date).
+  3. The a11y-phone spec (or a sibling) visits home signed in at 800 and 1023 px with the menu closed and open (axe) and checks the shift; unit tests cover the breakpoint's class or media query.
+- **Acceptance:**
+  - Below 1024 px a signed-in customer's header uses the compact menu, and the page shift when the session answers is 0 on home at the five widths above.
+  - From 1024 px up the header is unchanged.
+  - axe passes with the menu closed and open at 800 and 1023 px.
+- **Verify:** `pnpm --filter @velexis/ota-frontend build && pnpm --filter @velexis/ota-frontend test && E2E_WITH_OTA=1 pnpm test:e2e --project=storefront specs/storefront/a11y-phone.e2e.ts`
+
 ## Cross-group dependencies at a glance
 
 | OTA task | Needs | Why |

@@ -964,10 +964,10 @@ describe("the header's shape from the first paint (OFE-030)", () => {
     const slot = /** @type {HTMLElement} */ (
       doc.querySelector('body > header nav li[data-slot="account-menu"]')
     );
-    // The static header: "Sign in" in a slot as wide as the Account button below md, in a navigation that holds the
-    // menu's panel; the footer's name line empty and hidden until storefront.get answers.
+    // The static header: "Sign in" in a slot as wide as the Account button below lg (OFE-032; md before), in a
+    // navigation that holds the menu's panel; the footer's name line empty and hidden until storefront.get answers.
     expect(text(slot)).toBe("Sign in");
-    expect(Array.from(slot.classList)).toContain("max-md:min-w-20");
+    expect(Array.from(slot.classList)).toContain("max-lg:min-w-20");
     expect(Array.from(doc.querySelector("body > header nav")?.classList ?? [])).toContain("relative");
     const nameLine = /** @type {HTMLElement} */ (
       doc.querySelector('body > footer [data-field="footerName"]')

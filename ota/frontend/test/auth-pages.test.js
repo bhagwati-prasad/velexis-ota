@@ -1,8 +1,8 @@
 // The authentication pages and the account menu (ota/frontend/docs/pages-account.md §1 and §5, README §8 and §10):
 // account/sign-in.html, sign-up.html, verify.html, forgot-password.html and reset-password.html with their partials
 // expanded by the build's include plugin, run by src/pages/account-*.js against a fake SDK in cookie mode, and the
-// header's account menu of lib/session.js (below md one compact "Account" disclosure, OFE-031). It covers the
-// one-time tokens taken out of the address bar with history.replaceState, `next` that leaves the storefront going to
+// header's account menu of lib/session.js (below lg one compact "Account" disclosure, OFE-031, OFE-032). It covers
+// the one-time tokens taken out of the address bar with history.replaceState, `next` that leaves the storefront going to
 // `/`, paste and password managers on every password field, and the states of §5 (INVALID_CREDENTIALS,
 // ACCOUNT_LOCKED, EMAIL_NOT_VERIFIED, EMAIL_ALREADY_REGISTERED, PASSWORD_TOO_WEAK, expired or used tokens, field errors
 // with the focused summary, 429).
@@ -17,7 +17,9 @@ import {
 } from "@velexis/ota-sdk";
 import { Browser } from "happy-dom";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { compile as compileTailwind } from "tailwindcss";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { includePartials } from "../scripts/vite-plugins.js";
@@ -1293,7 +1295,7 @@ describe("account menu", () => {
   });
 });
 
-describe("account menu below md: one compact button (OFE-031)", () => {
+describe("account menu below lg: one compact button (OFE-031, OFE-032)", () => {
   /** The header of index.html with a signed-in customer's menu rendered into its slot. */
   const showSignedIn = (session = SESSION, client = fakeClient()) => {
     showPage("index.html", "/search.html?from=PAR");
@@ -1325,9 +1327,9 @@ describe("account menu below md: one compact button (OFE-031)", () => {
   it("[OFE-031 AC2] signed in: an Account button in the Sign in link's place, a disclosure of the greeting, My account and Sign out", () => {
     showPage("index.html", "/search.html?from=PAR");
     const slot = $('body > header [data-slot="account-menu"]');
-    // From the first paint the slot is as wide as the button below md, and the navigation is the panel's containing
+    // From the first paint the slot is as wide as the button below lg, and the navigation is the panel's containing
     // block: the button takes the link's place without moving the row, and the open panel floats under it.
-    expect(classes(slot)).toContain("max-md:min-w-20");
+    expect(classes(slot)).toContain("max-lg:min-w-20");
     expect(classes($("body > header nav"))).toContain("relative");
     expect(text(slot)).toBe("Sign in");
 
@@ -1339,28 +1341,28 @@ describe("account menu below md: one compact button (OFE-031)", () => {
     expect(toggle.getAttribute("aria-controls")).toBe(panel.id);
     expect(panel.id).toBe("vx-account-menu");
     expect(toggle.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
-    // Shown below md only; at least 24 px high (2.5.8), its negative margins keep the row's line height.
-    expect(classes(toggle)).toEqual(expect.arrayContaining(["md:hidden", "min-h-6", "-my-0.5", "peer"]));
-    // The panel follows it: hidden below md until the button is expanded (CSS, `peer-aria-expanded`), then floating
-    // under the navigation; from md the row's inline group, as before.
+    // Shown below lg only; at least 24 px high (2.5.8), its negative margins keep the row's line height.
+    expect(classes(toggle)).toEqual(expect.arrayContaining(["lg:hidden", "min-h-6", "-my-0.5", "peer"]));
+    // The panel follows it: hidden below lg until the button is expanded (CSS, `peer-aria-expanded`), then floating
+    // under the navigation; from lg the row's inline group, as before.
     expect(toggle.nextElementSibling).toBe(panel);
     expect(classes(panel)).toEqual(
       expect.arrayContaining([
-        "max-md:hidden",
-        "max-md:peer-aria-expanded:flex",
-        "max-md:absolute",
-        "max-md:top-full",
-        "max-md:right-0",
-        "max-md:max-w-full",
-        "md:inline-flex",
+        "max-lg:hidden",
+        "max-lg:peer-aria-expanded:flex",
+        "max-lg:absolute",
+        "max-lg:top-full",
+        "max-lg:right-0",
+        "max-lg:max-w-full",
+        "lg:inline-flex",
       ]),
     );
     expect(Array.from(panel.children, (child) => text(child))).toEqual(["Hi, Ada", "My account", "Sign out"]);
     const account = /** @type {HTMLAnchorElement} */ (panel.querySelector("a"));
     expect(account.getAttribute("href")).toBe("/account/");
     // Both of the panel's controls are at least 24 px high in it.
-    expect(classes(account)).toContain("max-md:min-h-6");
-    expect(classes(panel.querySelector('[data-action="sign-out"]'))).toContain("max-md:min-h-6");
+    expect(classes(account)).toContain("max-lg:min-h-6");
+    expect(classes(panel.querySelector('[data-action="sign-out"]'))).toContain("max-lg:min-h-6");
   });
 
   it("[OFE-031 AC2] signed out: the Sign in link alone, no disclosure", () => {
@@ -1514,6 +1516,66 @@ describe("account menu below md: one compact button (OFE-031)", () => {
     // the navigation.
     expect(classes(greeting)).toContain("wrap-anywhere");
     expect(classes(greeting)).not.toContain("truncate");
-    expect(classes(panel)).toEqual(expect.arrayContaining(["max-md:w-max", "max-md:max-w-full"]));
+    expect(classes(panel)).toEqual(expect.arrayContaining(["max-lg:w-max", "max-lg:max-w-full"]));
+  });
+
+  /** The media queries Tailwind gives the `lg` breakpoint's variants: below 1024 px, and from 1024 px. */
+  const BELOW_LG = "(width < 64rem)";
+  const FROM_LG = "(width >= 64rem)";
+  /** main.css compiled by Tailwind (its `compile`, as @tailwindcss/vite builds the storefront's CSS). */
+  let tailwind = /** @type {{ build: (candidates: string[]) => string } | null} */ (null);
+
+  beforeAll(async () => {
+    const styles = join(STOREFRONT_ROOT, "src", "styles");
+    const tailwindIndex = createRequire(import.meta.url).resolve("tailwindcss/index.css");
+    tailwind = await compileTailwind(readFileSync(join(styles, "main.css"), "utf8"), {
+      base: styles,
+      loadStylesheet: async (/** @type {string} */ id, /** @type {string} */ base) => {
+        const path = id === "tailwindcss" ? tailwindIndex : join(base, id);
+        return { path, base: dirname(path), content: readFileSync(path, "utf8") };
+      },
+    });
+  }, 10_000); // reads main.css, fonts.css and Tailwind's stylesheets and compiles them once (about 50 ms here)
+
+  /**
+   * The media query that the compiled CSS gives each responsive class (`lg:hidden`, `max-lg:min-w-20`, …) of
+   * `elements`, or `null` for a class it does not generate.
+   * @param {ReadonlyArray<Element | null>} elements
+   * @returns {Record<string, string | null>}
+   */
+  const mediaQueries = (elements) => {
+    const names = [...new Set(elements.flatMap((element) => classes(element)))].filter((name) =>
+      /^(max-)?(sm|md|lg|xl|2xl):/.test(name),
+    );
+    const css = /** @type {NonNullable<typeof tailwind>} */ (tailwind).build(names);
+    return Object.fromEntries(
+      names.map((name) => {
+        // Tailwind's selector: `.max-lg\:py-1\.5`, its rule's first line the variant's media query.
+        const selector = `.${name.replace(/[^\w-]/g, (character) => `\\${character}`)}`;
+        const escaped = selector.replace(/[\\.]/g, (character) => `\\${character}`);
+        return [name, new RegExp(`${escaped} \\{\\s*@media (\\([^)]*\\))`).exec(css)?.[1] ?? null];
+      }),
+    );
+  };
+
+  it("[OFE-032 AC1] [OFE-032 AC2] the breakpoint: below 1024 px the compact button and its panel, from 1024 px the inline links, as Tailwind compiles them", () => {
+    const { slot, toggle, panel } = showSignedIn();
+    const queries = mediaQueries([slot, toggle, panel, ...Array.from(panel.children)]);
+    // Below lg the slot keeps the button's width from the first paint, the button shows and the panel is the
+    // disclosure's, floating; from lg the button is hidden and the panel is the row's inline group.
+    expect(queries).toMatchObject({
+      "max-lg:min-w-20": BELOW_LG,
+      "lg:hidden": FROM_LG,
+      "max-lg:hidden": BELOW_LG,
+      "max-lg:peer-aria-expanded:flex": BELOW_LG,
+      "max-lg:absolute": BELOW_LG,
+      "lg:inline-flex": FROM_LG,
+      "max-lg:min-h-6": BELOW_LG,
+      "max-lg:py-1.5": BELOW_LG,
+    });
+    // Every responsive class of the menu switches at lg and nowhere else (no md left from OFE-031), and lg is 1024 px:
+    // a media query's rem is the browser's initial font size, 16 px.
+    expect(new Set(Object.values(queries))).toEqual(new Set([BELOW_LG, FROM_LG]));
+    expect(Number(/([\d.]+)rem/.exec(BELOW_LG)?.[1]) * 16).toBe(1024);
   });
 });

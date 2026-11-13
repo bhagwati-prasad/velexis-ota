@@ -324,9 +324,9 @@ const CONTROLS =
   'a[href], button, input, select, textarea, label, summary, [contenteditable="true"], [tabindex]:not([tabindex="-1"])';
 
 /**
- * The compact account menu's toggle button, shown below `md`: "Account" and a chevron, a disclosure (`aria-expanded`,
- * `aria-controls`) at least 24 px high (2.5.8) whose negative margins keep the navigation's line as high as the
- * "Sign in" link's, so that taking that link's place moves nothing (OFE-031).
+ * The compact account menu's toggle button, shown below `lg` (1024 px; below `md` until OFE-032): "Account" and a
+ * chevron, a disclosure (`aria-expanded`, `aria-controls`) at least 24 px high (2.5.8) whose negative margins keep the
+ * navigation's line as high as the "Sign in" link's, so that taking that link's place moves nothing (OFE-031).
  * @param {Document} doc
  */
 function accountMenuToggle(doc) {
@@ -336,7 +336,7 @@ function accountMenuToggle(doc) {
   toggle.setAttribute("aria-expanded", "false");
   toggle.setAttribute("aria-controls", ACCOUNT_MENU_PANEL_ID);
   toggle.className =
-    "group peer -my-0.5 inline-flex min-h-6 items-center gap-1 underline-offset-4 hover:underline md:hidden";
+    "group peer -my-0.5 inline-flex min-h-6 items-center gap-1 underline-offset-4 hover:underline lg:hidden";
   const label = doc.createElement("span");
   label.textContent = t("account.menu");
   const chevron = doc.createElementNS(SVG_NAMESPACE, "svg");
@@ -362,16 +362,17 @@ function accountMenuToggle(doc) {
  *   menu and goes to the home page; a `401` (the session had already ended) counts as signed out. Any other failure
  *   keeps the menu and says so in the live region.
  *
- * From `md` (768 px) the signed-in links stand in the navigation's row, as they always have. Below `md` they do not fit
- * beside "Find a booking" and "My bookings": the row wrapped and moved the page when `auth.getSession` answered, after
- * the first paint (ota/docs/storefront-accessibility.md §2 finding 5). There they sit in a panel behind one compact
- * "Account" button, in the place the "Sign in" link has from the first paint (OFE-031). The button is a disclosure: it
- * opens and closes the panel (`aria-expanded`, `aria-controls`; CSS shows the panel, `peer-aria-expanded`, floating
- * under the navigation, so opening it moves nothing either). Escape closes it and puts the focus back on the button,
- * wherever the focus was, as does a press outside (mouse, pen or touch), unless it was on another control, which then
- * takes the focus, or never became a click (a touch that scrolled the page); the focus moving on past the menu closes
- * it, so it never covers the focused element (2.4.11). One set of links serves both widths: from `md` the button is not
- * shown and the panel is the row's inline group.
+ * From `lg` (1024 px) the signed-in links stand in the navigation's row, as they always have. Below `lg` they may
+ * not fit beside "Find a booking" and "My bookings": on a phone, and from 768 to about 850 px with a long first name,
+ * the row wrapped and moved the page when `auth.getSession` answered, after the first paint
+ * (ota/docs/storefront-accessibility.md §2 finding 5 and §3.8). There they sit in a panel behind one compact
+ * "Account" button, in the place the "Sign in" link has from the first paint (OFE-031 below `md`, OFE-032 below
+ * `lg`). The button is a disclosure: it opens and closes the panel (`aria-expanded`, `aria-controls`; CSS shows the
+ * panel, `peer-aria-expanded`, floating under the navigation, so opening it moves nothing either). Escape closes it
+ * and puts the focus back on the button, wherever the focus was, as does a press outside (mouse, pen or touch),
+ * unless it was on another control, which then takes the focus, or never became a click (a touch that scrolled the
+ * page); the focus moving on past the menu closes it, so it never covers the focused element (2.4.11). One set of
+ * links serves both widths: from `lg` the button is not shown and the panel is the row's inline group.
  * @param {Element} slot
  * @param {SessionInfo | null} session
  * @param {{ location?: Location, client?: SessionClient | null, navigate?: (url: string) => void }} [options]
@@ -394,24 +395,24 @@ export function renderAccountMenu(slot, session, options = {}) {
   link.href = ACCOUNT_PATH;
   link.textContent = t("account.account");
   link.dataset.signedIn = "true";
-  link.className = "underline-offset-4 hover:underline max-md:block max-md:min-h-6 max-md:px-2 max-md:py-1.5";
+  link.className = "underline-offset-4 hover:underline max-lg:block max-lg:min-h-6 max-lg:px-2 max-lg:py-1.5";
   const toggle = accountMenuToggle(doc);
   const group = doc.createElement("div");
   group.id = ACCOUNT_MENU_PANEL_ID;
   group.dataset.accountMenuPanel = "";
-  // From md: the navigation row's inline group. Below md: not shown until the toggle is expanded, then a panel floating
+  // From lg: the navigation row's inline group. Below lg: not shown until the toggle is expanded, then a panel floating
   // under the navigation (partials/header.html: `nav` is its containing block), at its right edge and never wider.
   group.className =
-    "md:inline-flex md:flex-wrap md:items-baseline md:gap-x-4 md:gap-y-1 " +
-    "max-md:absolute max-md:top-full max-md:right-0 max-md:z-20 max-md:mt-2 max-md:hidden max-md:w-max " +
-    "max-md:max-w-full max-md:flex-col max-md:gap-1 max-md:rounded-ui max-md:border max-md:border-current " +
-    "max-md:bg-secondary max-md:p-2 max-md:text-on-secondary max-md:shadow-lg max-md:peer-aria-expanded:flex";
+    "lg:inline-flex lg:flex-wrap lg:items-baseline lg:gap-x-4 lg:gap-y-1 " +
+    "max-lg:absolute max-lg:top-full max-lg:right-0 max-lg:z-20 max-lg:mt-2 max-lg:hidden max-lg:w-max " +
+    "max-lg:max-w-full max-lg:flex-col max-lg:gap-1 max-lg:rounded-ui max-lg:border max-lg:border-current " +
+    "max-lg:bg-secondary max-lg:p-2 max-lg:text-on-secondary max-lg:shadow-lg max-lg:peer-aria-expanded:flex";
   const name = firstNameOf(session.customer);
   if (name !== null) {
     const greeting = doc.createElement("span");
     greeting.dataset.customerName = "";
     // A long name wraps in the panel; it is never cut.
-    greeting.className = "wrap-anywhere max-md:block max-md:px-2 max-md:py-1 max-md:font-medium";
+    greeting.className = "wrap-anywhere max-lg:block max-lg:px-2 max-lg:py-1 max-lg:font-medium";
     greeting.textContent = t("account.greeting", { name });
     group.append(greeting);
   }
@@ -521,7 +522,7 @@ export function renderAccountMenu(slot, session, options = {}) {
     button.dataset.action = "sign-out";
     button.className =
       "underline-offset-4 hover:underline aria-disabled:opacity-60 " +
-      "max-md:block max-md:min-h-6 max-md:w-full max-md:px-2 max-md:py-1.5 max-md:text-left";
+      "max-lg:block max-lg:min-h-6 max-lg:w-full max-lg:px-2 max-lg:py-1.5 max-lg:text-left";
     button.textContent = t("account.signOut");
     button.addEventListener("click", async () => {
       if (button.getAttribute("aria-disabled") === "true") {

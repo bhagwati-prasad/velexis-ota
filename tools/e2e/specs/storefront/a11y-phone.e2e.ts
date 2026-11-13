@@ -18,15 +18,20 @@
 //      with a PerformanceObserver at 360 and 412 px: nothing moves when the session answers (the header keeps its
 //      height and nothing in it moves), and the home page moves by nothing at all; the menu's links by keyboard and by
 //      pointer; and the search form's plain form when its module never mounts (the page's scripts aborted), which a
-//      form mounted in time never shows. The footer shows the OTA's whole name on every page (part 3).
+//      form mounted in time never shows. The footer shows the OTA's whole name on every page (part 3);
+//   6. (OFE-032) a signed-in customer with a 23-character first name on home, in windows from 768 to 1280 px, for the
+//      demo OTA and with a long OTA name and two currencies: below lg (768, 800, 850, 900 and 1023 px) the compact
+//      menu, and nothing moves when the session answers late (OFE-031's held answers), axe with the menu closed and
+//      open at 800 and 1023 px; from lg (1024 and 1280 px) the signed-in links in the navigation's row, which does
+//      not wrap.
 //
 // What the stack cannot answer on demand is answered in the browser (`page.route`), and only that: the shared states
-// of `storefront.get` (the API's error envelope) and, for part 3, storefront.get's own answer with the OTA's name and
-// currencies changed. Part 5 holds storefront.get and auth.getSession in the browser and then lets the API's own
-// answers through, and aborts the page's scripts where it needs a module that never mounts. The customers sign up
-// through the OTA API (`auth.signUp`, as the browser's SDK calls it). The pages, their scripts and their headers stay
-// the preview's. Stripe.js never comes from the network (its request is aborted): the card page then shows "Card
-// payment is unavailable".
+// of `storefront.get` (the API's error envelope) and, for parts 3 and 6, storefront.get's own answer with the OTA's
+// name and currencies changed. Parts 5 and 6 hold storefront.get and auth.getSession in the browser and then let them
+// through (to part 6's changed answer where it has one, else to the API), and part 5 aborts the page's scripts where
+// it needs a module that never mounts. The customers sign up through the OTA API (`auth.signUp`, as the browser's SDK
+// calls it). The pages, their scripts and their headers stay the preview's. Stripe.js never comes from the network
+// (its request is aborted): the card page then shows "Card payment is unavailable".
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Browser, BrowserContext, Locator, Page } from "@playwright/test";
@@ -60,7 +65,13 @@ const SHIFT_PHONES = Object.freeze([
     hasTouch: true,
   }),
 ]);
-type Phone = (typeof SHIFT_PHONES)[number];
+/** A browser's device in this spec: a phone of SHIFT_PHONES, or OFE-032's window (WINDOW). */
+interface Phone {
+  readonly viewport: Readonly<{ width: number; height: number }>;
+  readonly deviceScaleFactor: number;
+  readonly isMobile: boolean;
+  readonly hasTouch: boolean;
+}
 
 /** How long a search form whose module never mounts may keep its enhanced shape: main.css's 5 s, and a margin. */
 const FALLBACK_BUDGET_MS = 10_000;
@@ -310,8 +321,9 @@ async function withFullestHeader(context: BrowserContext): Promise<void> {
 }
 
 /**
- * The header's parts on a phone: the name, the currency selector and the account menu (below md a signed-in
- * customer's "Account" button and the panel it opens, OFE-031); and the footer's line with the OTA's whole name.
+ * The header's parts on a phone: the name, the currency selector and the account menu (below lg a signed-in
+ * customer's "Account" button and the panel it opens, OFE-031 below md, OFE-032 up to lg); and the footer's line with
+ * the OTA's whole name.
  */
 function header(page: Page) {
   const banner = page.getByRole("banner");
@@ -331,7 +343,11 @@ function header(page: Page) {
  * Signs a new customer up through the OTA API in `browsing`'s context, as the sign-up page's SDK does: the demo OTA
  * opens the session at once (its e-mail verification is optional), in the context's httpOnly cookies.
  */
-async function signUp(browsing: Browsing, tag: string): Promise<void> {
+async function signUp(
+  browsing: Browsing,
+  tag: string,
+  firstName: string = CUSTOMER.firstName,
+): Promise<void> {
   const config = (await browsing.api.call("getStorefront", "GET", "/v1/storefront")) as {
     legal?: { termsVersion?: string | null };
   };
@@ -343,7 +359,7 @@ async function signUp(browsing: Browsing, tag: string): Promise<void> {
     {
       email: uniqueEmail(tag),
       password: newPassword(),
-      firstName: CUSTOMER.firstName,
+      firstName,
       lastName: CUSTOMER.lastName,
       marketingConsent: false,
       ...(typeof termsVersion === "string" && termsVersion !== "" ? { termsVersion } : {}),
@@ -693,15 +709,23 @@ async function takeShifts(page: Page): Promise<RecordedShift[]> {
 const scoreOf = (shifts: readonly RecordedShift[]): number =>
   shifts.filter((shift) => !shift.recentInput).reduce((sum, shift) => sum + shift.value, 0);
 
-/** Where the header ends and the main content starts, in the document. */
+/** Where the header ends and the main content starts, in the document, and how high the navigation is. */
 const headerGeometry = (page: Page) =>
   page.evaluate(() => {
     const banner = document.querySelector("body > header")?.getBoundingClientRect();
     const main = document.querySelector("main")?.getBoundingClientRect();
-    return { headerHeight: banner?.height ?? -1, mainTop: (main?.top ?? -1) + window.scrollY };
+    const nav = document.querySelector("body > header nav")?.getBoundingClientRect();
+    return {
+      headerHeight: banner?.height ?? -1,
+      mainTop: (main?.top ?? -1) + window.scrollY,
+      navHeight: nav?.height ?? -1,
+    };
   });
 
-/** Holds the page's requests to `pathname` until `release()`, then lets them through to the API as they are. */
+/**
+ * Holds the page's requests to `pathname` until `release()`, then lets them through as they are: to the context's own
+ * route of that address when it has one (OFE-032's long OTA name, `withFullestHeader`), else to the API.
+ */
 async function hold(page: Page, pathname: string): Promise<{ seen: Promise<void>; release: () => void }> {
   let release: () => void = () => undefined;
   const released = new Promise<void>((resolve) => {
@@ -716,10 +740,25 @@ async function hold(page: Page, pathname: string): Promise<{ seen: Promise<void>
     async (route) => {
       saw();
       await released;
-      await route.continue();
+      await route.fallback();
     },
   );
   return { seen, release };
+}
+
+/**
+ * Makes every page of `browsing` ask storefront.get (the configuration is never taken from sessionStorage), so that
+ * it can be held, and record every layout shift from the first paint on.
+ */
+async function watchShifts(browsing: Browsing): Promise<void> {
+  await browsing.context.addInitScript(() => {
+    try {
+      sessionStorage.removeItem("vx.storefront.config");
+    } catch {
+      // No storage: storefront.get is asked anyway.
+    }
+  });
+  await browsing.context.addInitScript(recordLayoutShifts);
 }
 
 /**
@@ -743,16 +782,7 @@ test.describe("a signed-in customer's page stays still on a phone when the sessi
     for (const phone of SHIFT_PHONES) {
       const browsing = await openBrowsing(browser, phone);
       await signUp(browsing, `ofe031-shift-${phone.viewport.width}`);
-      // Every page asks storefront.get (the configuration is never taken from sessionStorage), so it can be held, and
-      // every layout shift from the first paint on is recorded.
-      await browsing.context.addInitScript(() => {
-        try {
-          sessionStorage.removeItem("vx.storefront.config");
-        } catch {
-          // No storage: storefront.get is asked anyway.
-        }
-      });
-      await browsing.context.addInitScript(recordLayoutShifts);
+      await watchShifts(browsing);
       customers.push(browsing);
     }
   });
@@ -815,6 +845,200 @@ test.describe("a signed-in customer's page stays still on a phone when the sessi
           `${width} px: no sideways scrolling`,
         ).toBe(true);
         await page.unrouteAll({ behavior: "ignoreErrors" });
+        await guards.checkA11y(page);
+      }
+    });
+  }
+});
+
+/**
+ * The windows of part 6 (OFE-032): a narrow desktop window or a tablet held upright, 900 px high, no touch. The width
+ * changes per visit (`page.setViewportSize`).
+ */
+const WINDOW = Object.freeze({
+  viewport: Object.freeze({ width: 1024, height: 900 }),
+  deviceScaleFactor: 1,
+  isMobile: false,
+  hasTouch: false,
+});
+/** From md (768 px) to just below lg (1024 px): the compact account menu since OFE-032 (OFE-031: below md only). */
+const BELOW_LG_WIDTHS = Object.freeze([768, 800, 850, 900, 1023]);
+/** The widths of BELOW_LG_WIDTHS where axe also judges the account menu closed and open. */
+const AXE_WIDTHS: readonly number[] = Object.freeze([800, 1023]);
+/** From lg: the signed-in links in the navigation's row, as they have always been. */
+const FROM_LG_WIDTHS = Object.freeze([1024, 1280]);
+/**
+ * A first name of 23 characters: with it the signed-in links wrapped the navigation's row when the session answered
+ * at 768 px, and up to 850 px with a long OTA name and two currencies, before OFE-032 (storefront-accessibility.md
+ * §3.8).
+ */
+const LONG_FIRST_NAME = "Maximiliana-Alexandrina";
+/** The storefronts of part 6: the demo OTA as it is, and with the header at its fullest (`withFullestHeader`). */
+const STOREFRONTS = Object.freeze([
+  { label: "the demo OTA", fullest: false },
+  { label: "a long OTA name and two currencies", fullest: true },
+]);
+
+test.describe("a signed-in customer with a long first name, from md to the large breakpoint and beyond (OFE-032)", () => {
+  test.describe.configure({ mode: "serial" });
+
+  /** One customer named LONG_FIRST_NAME per storefront of STOREFRONTS, signed in, in a WINDOW. */
+  const customers = new Map<boolean, Browsing>();
+
+  test.beforeAll(async ({ browser }) => {
+    test.setTimeout(ARRANGE_TIMEOUT_MS);
+    for (const { fullest } of STOREFRONTS) {
+      const browsing = await openBrowsing(browser, WINDOW);
+      if (fullest) {
+        await withFullestHeader(browsing.context);
+      }
+      await signUp(browsing, `ofe032-${fullest ? "fullest" : "demo"}`, LONG_FIRST_NAME);
+      await watchShifts(browsing);
+      customers.set(fullest, browsing);
+    }
+  });
+
+  test.afterEach(async () => {
+    for (const browsing of customers.values()) {
+      await browsing.page.unrouteAll({ behavior: "ignoreErrors" });
+      await browsing.guards.finish(browsing.page);
+    }
+  });
+
+  test.afterAll(async () => {
+    for (const browsing of customers.values()) {
+      await browsing.context.close();
+    }
+    customers.clear();
+  });
+
+  /** The customer's greeting, wherever it is (the row from lg, the compact menu's panel below it). */
+  const greeting = (page: Page) =>
+    page.getByRole("banner").getByText(`Hi, ${LONG_FIRST_NAME}`, { exact: true });
+
+  /**
+   * Home at `width` as OFE-031's check opens a page: storefront.get held until the static page has painted, then
+   * auth.getSession held until the configuration has been applied, then let through; the layout shifts of each phase,
+   * and the header's geometry before and after the session answered.
+   */
+  async function homeWithLateSession(page: Page, width: number) {
+    await page.setViewportSize({ width, height: WINDOW.viewport.height });
+    const config = await hold(page, "/api/v1/storefront");
+    const session = await hold(page, "/api/v1/auth/session");
+    await page.goto("/");
+    await config.seen;
+    const painted = await takeShifts(page);
+    config.release();
+    await expect(header(page).name).toHaveAttribute("title", /\S/);
+    await session.seen;
+    const configured = await takeShifts(page);
+    const before = await headerGeometry(page);
+    session.release();
+    await expect(
+      page.locator('body > header [data-slot="account-menu"] [data-account-menu-panel]'),
+    ).toBeAttached();
+    await expect(searchForm(page)).toBeVisible();
+    const signedIn = await takeShifts(page);
+    const after = await headerGeometry(page);
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+    test.info().annotations.push({
+      type: "layout shifts",
+      description:
+        `home at ${width} px: painted ${scoreOf(painted).toFixed(4)}, configuration ` +
+        `${scoreOf(configured).toFixed(4)}, session ${scoreOf(signedIn).toFixed(4)}`,
+    });
+    return { painted, configured, signedIn, before, after };
+  }
+
+  for (const storefront of STOREFRONTS) {
+    test(`home on ${storefront.label} at 768, 800, 850, 900 and 1023 px: the compact menu, nothing moves when auth.getSession answers late; axe with the menu closed and open at 800 and 1023 px [OFE-032 AC1] [OFE-032 AC3]`, async () => {
+      const { page, guards } = customers.get(storefront.fullest) as Browsing;
+      const parts = header(page);
+      for (const width of BELOW_LG_WIDTHS) {
+        const { painted, configured, signedIn, before, after } = await homeWithLateSession(page, width);
+        // One "Account" button in the "Sign in" link's place, its panel closed: the long name is not in the row.
+        await expect(parts.menu, `${width} px: the compact menu`).toBeVisible();
+        await expect(parts.menu).toHaveAttribute("aria-expanded", "false");
+        await expect(greeting(page)).toBeHidden();
+        await expect(parts.signOut).toBeHidden();
+        // The session's answer moves nothing: not in the header, which keeps its height, and not on the page.
+        expect(
+          signedIn.filter((shift) => shift.inHeader),
+          `${width} px: shifts in the header`,
+        ).toEqual([]);
+        expect(after, `${width} px: the header's and the navigation's height, where main starts`).toEqual(
+          before,
+        );
+        expect(scoreOf(signedIn), `${width} px: the session's shift`).toBe(0);
+        expect(scoreOf([...painted, ...configured, ...signedIn]), `${width} px: the home page's shifts`).toBe(
+          0,
+        );
+        expect(await page.evaluate(reflows, width), `${width} px: no sideways scrolling`).toBe(true);
+        if (!AXE_WIDTHS.includes(width)) {
+          continue;
+        }
+        await guards.checkA11y(page);
+        // Open: the whole greeting, "My account" and "Sign out" in the panel, within the window.
+        await parts.menu.click();
+        await expect(parts.menu).toHaveAttribute("aria-expanded", "true");
+        await expect(greeting(page)).toBeVisible();
+        await expect(parts.account).toBeVisible();
+        await expect(parts.signOut).toBeVisible();
+        expect(
+          await page.evaluate(reflows, width),
+          `${width} px: no sideways scrolling with the account menu open`,
+        ).toBe(true);
+        await guards.checkA11y(page);
+        await page.keyboard.press("Escape");
+        await expect(parts.menu).toHaveAttribute("aria-expanded", "false");
+        await expect(parts.menu).toBeFocused();
+      }
+    });
+
+    test(`home on ${storefront.label} at 1024 and 1280 px: the signed-in links in the navigation's row as before, which does not wrap when the session answers [OFE-032 AC2]`, async () => {
+      const { page, guards } = customers.get(storefront.fullest) as Browsing;
+      const parts = header(page);
+      for (const width of FROM_LG_WIDTHS) {
+        const { painted, configured, before, after } = await homeWithLateSession(page, width);
+        // No compact menu: its button is there but not shown, and the greeting, "My account" and "Sign out" are in
+        // the row.
+        const toggle = page.locator("body > header [data-account-menu-toggle]");
+        await expect(toggle).toHaveCount(1);
+        await expect(toggle, `${width} px: no compact menu`).toBeHidden();
+        await expect(greeting(page)).toBeVisible();
+        await expect(parts.account).toBeVisible();
+        await expect(parts.signOut).toBeVisible();
+        const row = await page.evaluate(() => {
+          const middle = (element: Element | null) => {
+            const rect = element?.getBoundingClientRect();
+            return rect === undefined ? -1 : rect.top + rect.height / 2;
+          };
+          const nav = document.querySelector("body > header nav")?.getBoundingClientRect();
+          return {
+            nav: nav === undefined ? null : { top: nav.top, bottom: nav.bottom },
+            middles: [
+              'a[href="/lookup.html"]',
+              "[data-customer-name]",
+              'a[href="/account/"]',
+              '[data-action="sign-out"]',
+            ].map((selector) => middle(document.querySelector(`body > header nav ${selector}`))),
+          };
+        });
+        // One row: every link's middle within the navigation, which kept its one line's height.
+        expect(row.nav).not.toBeNull();
+        for (const middle of row.middles) {
+          expect(middle, `${width} px: a link out of the row`).toBeGreaterThan(row.nav?.top ?? 0);
+          expect(middle, `${width} px: a link out of the row`).toBeLessThan(row.nav?.bottom ?? 0);
+        }
+        // The row does not wrap when the session answers: the header and the navigation keep their height and main
+        // its start (the wider navigation only moves sideways, as before OFE-032); nothing moved before it either.
+        expect(after, `${width} px: the header's and the navigation's height, where main starts`).toEqual(
+          before,
+        );
+        expect(scoreOf([...painted, ...configured]), `${width} px: shifts before the session answered`).toBe(
+          0,
+        );
+        expect(await page.evaluate(reflows, width), `${width} px: no sideways scrolling`).toBe(true);
         await guards.checkA11y(page);
       }
     });
