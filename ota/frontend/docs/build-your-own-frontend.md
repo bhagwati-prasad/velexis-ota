@@ -68,7 +68,7 @@ From version 1.0.0 the SDK is on npm as `@velexis/ota-sdk` ([SDK README §9](../
 
 - **Self-host the IIFE**: copy `node_modules/@velexis/ota-sdk/dist/velexis-sdk.iife.js` to your site, so your CSP stays `script-src 'self'`. From the versioned CDN copy instead, add the `integrity` hash of the release notes and `crossorigin="anonymous"`.
 - **Pin the version** (`"@velexis/ota-sdk": "1.0.0"`) and read the CHANGELOG before upgrading: a major version may change types or behaviour.
-- **One client per page** in a browser. On a server, one client per process for anonymous calls, and per request `client.withOptions({ accessToken, endUser })` for the visitor's own calls: `withOptions` shares nothing mutable, so one visitor's token never reaches another's request.
+- **One client per page** in a browser. On a server, one client per process for anonymous calls, and per request `client.withOptions({ accessToken, endUser })` for the visitor's own calls. A client and the clients derived from it with `withOptions` form a family that shares only what is keyed by a token's value ([SDK README §4.2](../../sdk/README.md#42-token-mode-publishable-key)): clients that carry the same refresh token (`withOptions({ accessToken, refreshToken, endUser })` for two concurrent requests of one visitor) send one refresh for it and never present it once it is rotated, and clients with different tokens share nothing, so one visitor's token never reaches another's request. Two clients made with `createVelexisClient` share nothing at all, so derive every request's client from the one client of the process; across several processes or instances, de-duplicate refreshes yourself (§8.1).
 
 | Option | Default | Notes |
 |---|---|---|
@@ -534,7 +534,7 @@ The API sends the verification, password-reset and booking e-mails, and their li
 
 ### 8.4 Sessions in a browser-only app
 
-With a publishable key (§2.2, §2.3) the tokens are in the page. Keep them in a module's memory; a reload signs the customer out. The SDK refreshes once on `401 TOKEN_EXPIRED` (one refresh at a time per client) and hands the new pair to `onSessionRefreshed`.
+With a publishable key (§2.2, §2.3) the tokens are in the page. Keep them in a module's memory; a reload signs the customer out. The SDK refreshes once on `401 TOKEN_EXPIRED` (one refresh per refresh token for the client and the clients derived from it with `withOptions`) and hands the new pair to `onSessionRefreshed`.
 
 ```js
 // src/velexis.js

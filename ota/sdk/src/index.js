@@ -44,10 +44,13 @@ export { VERSION } from "./version.js";
  *   with a staff token; server-side only): all bookings, PNR lookup and import, order management, issuance, queues,
  *   customers, the Amadeus call log, raw Amadeus access, the OTA's settings and its payments
  * @property {(overrides: Partial<VelexisClientOptions>) => VelexisClient} withOptions a new client with some options
- *   replaced (for example a per-request access token on the server); its options, tokens and hooks are its own. In
- *   cookie mode it shares one thing with this client, the refresh state of the session cookies both send (the refresh
- *   in flight, the count of finished refreshes and the CSRF re-fetch in flight), so the clients derived from one
- *   cookie-mode client send one refresh at a time; in token and server mode it shares nothing mutable with this one
+ *   replaced (for example a per-request access token on the server); its options, tokens and hooks are its own. It
+ *   joins this client's family (this client, the one `createVelexisClient` made and every client derived from it),
+ *   which shares the refreshes of the session: in cookie mode the refresh state of the session cookies they all send
+ *   (the refresh in flight, the count of finished refreshes and the CSRF re-fetch in flight), sent with the settings
+ *   of the client `createVelexisClient` made; in token and server mode the refresh of each refresh token and the tokens
+ *   that replaced it, so clients that present the same refresh token send one refresh and never present a rotated
+ *   one, and clients with different refresh tokens share nothing
  * @property {<T = unknown>(method: HttpMethod, path: string, init?: { query?: Record<string, string | number | boolean | string[] | undefined>, body?: unknown, options?: RequestOptions }) => Promise<T>} request
  *   low-level escape hatch for endpoints that are not wrapped yet; applies keys, tokens, retries and error mapping
  */
@@ -64,7 +67,7 @@ export function createVelexisClient(options) {
 
 /**
  * The client of a request core. `withOptions` builds the new client's core from this one's options with the overrides
- * applied and, in cookie mode, joins it to this core's refresh state (internal/client.js `sharedState`, SDK-016).
+ * applied and joins it to this core's family (internal/client.js `family`; SDK-016, SDK-017).
  * @param {import("./internal/client.js").Core} core
  * @returns {VelexisClient}
  */
@@ -78,7 +81,7 @@ function clientOf(core) {
     checkout: createCheckoutApi(core),
     bookings: createBookingsApi(core),
     console: createConsoleApi(core),
-    withOptions: (overrides) => clientOf(createCore(core.derive(overrides), core.sharedState)),
+    withOptions: (overrides) => clientOf(createCore(core.derive(overrides), core.family)),
     request: (method, path, init) => core.request(method, path, init),
   };
 }

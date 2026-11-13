@@ -698,41 +698,53 @@ describe("cookie mode: the clients derived with withOptions share the refresh st
     ]);
   });
 
-  it("rejects every waiting call with the AuthenticationError of a refresh refused REFRESH_TOKEN_REUSED and calls onSessionExpired once, the starting client's [SDK-016 AC1]", async () => {
-    useCookies({ [CSRF_COOKIE]: CSRF });
-    const api = apiForCallsInFlight(3, { refreshAnswer: errorResponse(401, "REFRESH_TOKEN_REUSED") });
-    const parentExpired = vi.fn();
-    const ownExpired = vi.fn();
-    const { fake, client } = setup(
-      Array.from({ length: 4 }, () => api.answer),
-      {
-        onSessionExpired: parentExpired,
-        headers: { "X-Client": "parent" },
-      },
-    );
-    // One derived client keeps the parent's hook and headers; the other sets its own.
-    const inheriting = client.withOptions({ currency: "EUR" });
-    const own = client.withOptions({ onSessionExpired: ownExpired, headers: { "X-Client": "own" } });
+  it.each([
+    ["the parent's call", "/api/v1/account", "parent"],
+    ["the call of a derived client with a hook of its own", "/api/v1/bookings/bkg_1/fare-rules", "own"],
+  ])(
+    "rejects every waiting call with the AuthenticationError of a refresh refused REFRESH_TOKEN_REUSED and calls onSessionExpired once, the starting client's, when %s started it [SDK-017 AC2]",
+    async (_starter, starterPath, starterHook) => {
+      useCookies({ [CSRF_COOKIE]: CSRF });
+      // The starting call is refused at once; the others while the refresh is in flight, so they join it.
+      /** @type {import("../helpers/fake-fetch.js").Answer} */
+      const api = (request) =>
+        request.path === "/api/v1/auth/refresh"
+          ? { ...errorResponse(401, "REFRESH_TOKEN_REUSED"), delayMs: 50 }
+          : { ...errorResponse(401, "TOKEN_EXPIRED"), delayMs: request.path === starterPath ? 0 : 10 };
+      const expired = { parent: vi.fn(), own: vi.fn() };
+      const { fake, client } = setup(
+        Array.from({ length: 4 }, () => api),
+        { onSessionExpired: expired.parent, headers: { "X-Client": "parent" } },
+      );
+      // One derived client keeps the parent's hook and headers; the other sets its own.
+      const inheriting = client.withOptions({ currency: "EUR" });
+      const own = client.withOptions({ onSessionExpired: expired.own, headers: { "X-Client": "own" } });
+      vi.useFakeTimers();
 
-    const errors = await Promise.all([
-      client.account.get().catch((caught) => caught),
-      inheriting.bookings.get({ bookingId: "bkg_1" }).catch((caught) => caught),
-      own.bookings.getFareRules({ bookingId: "bkg_1" }).catch((caught) => caught),
-    ]);
+      const waiting = Promise.all([
+        client.account.get().catch((caught) => caught),
+        inheriting.bookings.get({ bookingId: "bkg_1" }).catch((caught) => caught),
+        own.bookings.getFareRules({ bookingId: "bkg_1" }).catch((caught) => caught),
+      ]);
+      await vi.advanceTimersByTimeAsync(60);
+      const errors = await waiting;
 
-    expect(errors[0]).toBeInstanceOf(AuthenticationError);
-    expect(errors[0].code).toBe("REFRESH_TOKEN_REUSED");
-    expect(errors[1]).toBe(errors[0]);
-    expect(errors[2]).toBe(errors[0]);
-    expect(api.refreshes).toBe(1);
-    expect(fake.requests).toHaveLength(4);
-    // The refresh went out with the options of the client whose call started it, and calls that client's hook only.
-    const refresh = fake.requests.find((request) => request.path === "/api/v1/auth/refresh");
-    const [starterHook, otherHook] =
-      refresh?.headers["x-client"] === "own" ? [ownExpired, parentExpired] : [parentExpired, ownExpired];
-    expect(starterHook).toHaveBeenCalledTimes(1);
-    expect(otherHook).not.toHaveBeenCalled();
-  });
+      expect(errors[0]).toBeInstanceOf(AuthenticationError);
+      expect(errors[0].code).toBe("REFRESH_TOKEN_REUSED");
+      expect(errors[1]).toBe(errors[0]);
+      expect(errors[2]).toBe(errors[0]);
+      expect(fake.requests.map((request) => request.path)).toEqual([
+        "/api/v1/account",
+        "/api/v1/bookings/bkg_1",
+        "/api/v1/bookings/bkg_1/fare-rules",
+        "/api/v1/auth/refresh",
+      ]);
+      // The refresh went out with the root's headers whichever client started it, and called the starter's hook only.
+      expect(fake.requests[3]?.headers["x-client"]).toBe("parent");
+      expect(expired[/** @type {"parent" | "own"} */ (starterHook)]).toHaveBeenCalledTimes(1);
+      expect(expired[starterHook === "own" ? "parent" : "own"]).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps a derived client's maxRetries: 0 to its own calls: after the shared refresh only the parent's call is retried on 429 [SDK-016 AC1]", async () => {
     useCookies({ [CSRF_COOKIE]: CSRF });
@@ -830,6 +842,123 @@ describe("cookie mode: the clients derived with withOptions share the refresh st
       "PUT /api/v1/anything": 2,
       "GET /api/v1/storefront": 1,
     });
+  });
+
+  it("retries a shared refresh that a maxRetries: 0 client started and the API answered 503 with the root's retries, and every waiting call succeeds [SDK-017 AC2]", async () => {
+    useCookies({ [CSRF_COOKIE]: CSRF });
+    let refreshed = false;
+    let refreshAttempts = 0;
+    /** @type {import("../helpers/fake-fetch.js").Answer} */
+    const api = (request) => {
+      if (request.path === "/api/v1/auth/refresh") {
+        refreshAttempts += 1;
+        if (refreshAttempts === 1) {
+          return {
+            ...errorResponse(503, "SERVICE_UNAVAILABLE", { headers: { "retry-after": "1" } }),
+            delayMs: 20,
+          };
+        }
+        refreshed = true;
+        return { body: { customer: { id: "cus_1" } } };
+      }
+      if (refreshed) {
+        return { body: { path: request.path, currency: request.headers["x-currency"] ?? null } };
+      }
+      // The fare-rules client's call is refused first and starts the refresh; the others join it.
+      const first = request.path === "/api/v1/bookings/bkg_1/fare-rules";
+      return { ...errorResponse(401, "TOKEN_EXPIRED"), delayMs: first ? 0 : 10 };
+    };
+    const { fake, client } = setup(
+      Array.from({ length: 8 }, () => api),
+      { maxRetries: 2 },
+    );
+    // The storefront's two derived clients (booking.js `rulesClientOf`, boot.js `clientFor`).
+    const rulesClient = client.withOptions({ maxRetries: 0 });
+    const currencyClient = client.withOptions({ currency: "EUR" });
+    vi.useFakeTimers();
+
+    const results = Promise.all([
+      rulesClient.bookings.getFareRules({ bookingId: "bkg_1" }),
+      currencyClient.bookings.get({ bookingId: "bkg_1" }),
+      client.account.get(),
+    ]);
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(await results).toEqual([
+      { path: "/api/v1/bookings/bkg_1/fare-rules", currency: null },
+      { path: "/api/v1/bookings/bkg_1", currency: "EUR" },
+      { path: "/api/v1/account", currency: null },
+    ]);
+    expect(refreshAttempts).toBe(2);
+    expect(countsByPath(fake)).toEqual({
+      "GET /api/v1/bookings/bkg_1/fare-rules": 2,
+      "GET /api/v1/bookings/bkg_1": 2,
+      "GET /api/v1/account": 2,
+      "POST /api/v1/auth/refresh": 2,
+    });
+    // The retried refresh is the same request: the same Idempotency-Key.
+    const [refusedRefresh, retriedRefresh] = fake.requests.filter(
+      (request) => request.path === "/api/v1/auth/refresh",
+    );
+    expect(retriedRefresh?.headers["idempotency-key"]).toBe(refusedRefresh?.headers["idempotency-key"]);
+  });
+
+  it("sends the shared refresh and CSRF fetch with the root's fetch, headers, timeout and onResponse, whichever client of the family started them [SDK-017 AC2]", async () => {
+    useCookies();
+    const rootFake = createFakeFetch([
+      // The CSRF cookie and the refresh answer after 50 ms, past the starting client's own 20 ms timeout.
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return storefrontIssuing(CSRF)();
+      },
+      { body: { customer: { id: "cus_1" } }, delayMs: 50 },
+    ]);
+    const ownFake = createFakeFetch([
+      errorResponse(401, "TOKEN_EXPIRED"),
+      { status: 201, body: { id: "srch_1" } },
+    ]);
+    const rootSeen = vi.fn();
+    const ownSeen = vi.fn();
+    const root = createVelexisClient({
+      session: "cookie",
+      fetch: rootFake.fetch,
+      maxRetries: 0,
+      headers: { "X-Client": "root" },
+      onResponse: rootSeen,
+    });
+    // A client derived from a derived client: the family's root is still the client createVelexisClient made.
+    const grandchild = root.withOptions({ headers: { "X-Client": "middle" } }).withOptions({
+      fetch: ownFake.fetch,
+      timeoutMs: 20,
+      headers: { "X-Client": "grandchild" },
+      onResponse: ownSeen,
+    });
+    vi.useFakeTimers();
+
+    const search = grandchild.request("POST", "/v1/flight-searches", { body: { originLocationCode: "MAD" } });
+    await vi.advanceTimersByTimeAsync(200);
+
+    await expect(search).resolves.toEqual({ id: "srch_1" });
+    expect(
+      rootFake.requests.map((request) => [request.method, request.path, request.headers["x-client"]]),
+    ).toEqual([
+      ["GET", "/api/v1/storefront", "root"],
+      ["POST", "/api/v1/auth/refresh", "root"],
+    ]);
+    expect(
+      ownFake.requests.map((request) => [request.method, request.path, request.headers["x-client"]]),
+    ).toEqual([
+      ["POST", "/api/v1/flight-searches", "grandchild"],
+      ["POST", "/api/v1/flight-searches", "grandchild"],
+    ]);
+    expect(rootSeen.mock.calls.map(([info]) => [info.path, info.status])).toEqual([
+      ["/v1/storefront", 200],
+      ["/v1/auth/refresh", 200],
+    ]);
+    expect(ownSeen.mock.calls.map(([info]) => [info.path, info.status])).toEqual([
+      ["/v1/flight-searches", 401],
+      ["/v1/flight-searches", 201],
+    ]);
   });
 });
 

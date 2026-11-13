@@ -14,11 +14,14 @@
 // handles CSRF and the automatic refresh; internal/http.js sends the requests. `environment` adds
 // `X-Velexis-Environment` to console operations (the route table's `environment` flag; `/v1/console/…` paths for
 // `request`). `withOptions` (src/index.js) builds the derived client's core from `derive(overrides)` and this core's
-// `sharedState`: in cookie mode the derived client's session joins this one's refresh state (SDK-016), so the clients
-// derived from one cookie-mode client send one refresh at a time; token and server mode give it a state of its own.
+// `family` (internal/session.js `Family`): `createVelexisClient` starts a family, and every client derived from its
+// client joins it. In cookie mode the family's clients share one refresh state (SDK-016), and their shared refresh and
+// CSRF fetch go out with the root's transport settings (SDK-017); in token and server mode they share the refresh of
+// each refresh-token value and the tokens that replaced each rotated one (SDK-017), so clients that present the same
+// refresh token send one refresh, and clients with different tokens share nothing.
 
 import { isPageBody, Page } from "./pagination.js";
-import { createSession } from "./session.js";
+import { createFamily, createSession } from "./session.js";
 
 /** @typedef {import("../shared.js").VelexisClientOptions} VelexisClientOptions */
 /** @typedef {import("../shared.js").RequestOptions} RequestOptions */
@@ -53,14 +56,14 @@ const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
  * The request core handed to the namespace factories.
  * @typedef {object} Core
  * @property {Readonly<VelexisClientOptions>} options the client's validated options (what `withOptions` starts from),
- *   with string tokens that an automatic refresh or an adopted session result has rotated replaced by the current ones
+ *   with string tokens that have been replaced (by this client's automatic refresh or adopted session result, or by a
+ *   rotation the API made for any client of the family) replaced by the current ones
  * @property {"cookie" | "token" | "server"} mode the session mode (README §4)
  * @property {(overrides: unknown) => VelexisClientOptions} derive the options of `withOptions(overrides)`: these
  *   options with the overrides applied (validated when the new client is created); a cookie-mode client cannot be
  *   switched to another mode
- * @property {import("./session.js").RefreshState | undefined} sharedState cookie mode: the refresh state the core of
- *   a client derived with `withOptions` joins (`createCore`'s second argument, SDK-016); `undefined` in token and
- *   server mode
+ * @property {import("./session.js").Family} family the family the core of a client derived with `withOptions` joins
+ *   (`createCore`'s second argument; SDK-016, SDK-017)
  * @property {<T = unknown>(operation: Operation, params?: object, options?: RequestOptions) => Promise<T>} call
  *   one SDK method: params split by the route-table entry; list operations resolve with a `Page`
  * @property {<T = unknown>(method: HttpMethod, path: string, init?: RawRequestInit) => Promise<T>} request
@@ -450,12 +453,12 @@ function formOf(entries) {
 /**
  * Builds the request core of a client.
  * @param {unknown} options the options of `createVelexisClient`, or `derive(overrides)` of the parent for `withOptions`
- * @param {import("./session.js").RefreshState} [sharedState] for `withOptions`: the parent core's `sharedState`, which
- *   the new session joins in cookie mode
+ * @param {import("./session.js").Family} [family] for `withOptions`: the parent core's `family`, which the new client
+ *   joins; a new family when it is left out (`createVelexisClient`)
  * @returns {Core}
  * @throws {TypeError} on an invalid option
  */
-export function createCore(options, sharedState) {
+export function createCore(options, family = createFamily()) {
   const validated = validateClientOptions(options);
   const defaultBaseUrl = validated.session === "cookie" ? COOKIE_BASE_URL : DEFAULT_BASE_URL;
   const session = createSession(
@@ -472,7 +475,7 @@ export function createCore(options, sharedState) {
       headers: Object.freeze({ ...validated.headers }),
       onResponse: validated.onResponse,
     },
-    sharedState,
+    family,
   );
 
   /**
@@ -617,7 +620,7 @@ export function createCore(options, sharedState) {
     },
     mode: session.mode,
     derive,
-    sharedState: session.sharedState,
+    family,
     call,
     request,
     adoptSession: (result, presentedRefreshToken, requestOptions) =>

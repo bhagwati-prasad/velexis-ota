@@ -1,8 +1,11 @@
 // Client and request options (ota/sdk/README.md §5.1, docs/velexis-sdk/sdk/src/shared.d.ts, task SDK-003):
 // createVelexisClient validates its options with the contract's defaults and throws a TypeError before any request,
-// naming the option but never its value; withOptions makes a new client whose options are its own and that shares
-// nothing mutable in token and server mode (in cookie mode it shares the refresh state of the session cookies,
-// session-cookie.test.js, task SDK-016); the per-call options are validated the same way.
+// naming the option but never its value; withOptions makes a new client whose options are its own and that joins its
+// parent's family: in cookie mode the refresh state of the session cookies (session-cookie.test.js, tasks SDK-016 and
+// SDK-017), in token and server mode the refresh of each refresh token, so derived clients with different refresh
+// tokens share nothing (here) and those with the same one send one refresh (session-token.test.js and
+// session-server.test.js, task SDK-017); two clients made with createVelexisClient share nothing at all. The per-call
+// options are validated the same way.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { VERSION, createVelexisClient } from "../../src/index.js";
@@ -296,10 +299,11 @@ describe("withOptions", () => {
     ["token", { publishableKey: PK }],
     ["server", { secretKey: SK }],
   ])(
-    "keeps a refresh state per client in %s mode: derived clients with their own tokens refresh on their own [SDK-016]",
+    "shares nothing between derived clients with different refresh tokens in %s mode: each refreshes its own session [SDK-017 AC1]",
     async (_mode, key) => {
-      // Two visitors' clients derived from one server client (OADR-0018, the build-your-own-frontend guide §8.2):
-      // each refreshes its own session, at the same time, and neither waits for nor reuses the other's refresh.
+      // Two visitors' clients derived from one server client (OADR-0018, the build-your-own-frontend guide §4): each
+      // refreshes its own session, at the same time, and neither waits for nor takes the other's refresh (SDK-016
+      // proved it; SDK-017 keys the family's refreshes by refresh token, so it still holds).
       /** @type {string[]} */
       const presented = [];
       /** @type {import("../helpers/fake-fetch.js").Answer} */
@@ -340,6 +344,50 @@ describe("withOptions", () => {
       expect(refreshedA).toHaveBeenCalledWith(expect.objectContaining({ refreshToken: "rt_sdk016_a_new" }));
       expect(refreshedB).toHaveBeenCalledWith(expect.objectContaining({ refreshToken: "rt_sdk016_b_new" }));
       expect(fake.requests).toHaveLength(6);
+    },
+  );
+
+  it.each([
+    ["token", { publishableKey: PK }],
+    ["server", { secretKey: SK }],
+  ])(
+    "shares the refresh of one refresh token between a client and the client derived from it in %s mode, and nothing between two clients made with createVelexisClient [SDK-017 AC1]",
+    async (_mode, key) => {
+      // One session: its refresh token rotates on every refresh, and one presented again is refused as reused.
+      let current = "rt_sdk017_0";
+      let refreshes = 0;
+      /** @type {import("../helpers/fake-fetch.js").Answer} */
+      const api = (request) => {
+        if (request.path === "/v1/auth/refresh") {
+          if (/** @type {{ refreshToken: string }} */ (request.json).refreshToken !== current) {
+            return errorResponse(401, "REFRESH_TOKEN_REUSED");
+          }
+          refreshes += 1;
+          current = `rt_sdk017_${refreshes}`;
+          return { body: { session: { accessToken: `at_sdk017_${refreshes}`, refreshToken: current } } };
+        }
+        return request.headers["authorization"] === `Bearer at_sdk017_${refreshes}` && refreshes > 0
+          ? { body: { ok: true } }
+          : errorResponse(401, "TOKEN_EXPIRED");
+      };
+      const tokens = { accessToken: "at_sdk017_0", refreshToken: "rt_sdk017_0" };
+      const fake = createFakeFetch(Array.from({ length: 9 }, () => api));
+      const client = createVelexisClient({ ...key, ...tokens, fetch: fake.fetch, maxRetries: 0 });
+      const derived = client.withOptions({ locale: "es-ES" });
+      const separate = createVelexisClient({ ...key, ...tokens, fetch: fake.fetch, maxRetries: 0 });
+
+      await expect(Promise.all([client.account.get(), derived.account.get()])).resolves.toEqual([
+        { ok: true },
+        { ok: true },
+      ]);
+      const error = await separate.account.get().catch((caught) => caught);
+
+      expect(refreshes).toBe(1);
+      // The separate client's family never heard of the rotation: it presents the rotated token, and the API refuses.
+      expect(error).toMatchObject({ code: "REFRESH_TOKEN_REUSED" });
+      expect(
+        fake.requests.filter((request) => request.path === "/v1/auth/refresh").map((request) => request.json),
+      ).toEqual([{ refreshToken: "rt_sdk017_0" }, { refreshToken: "rt_sdk017_0" }]);
     },
   );
 });
