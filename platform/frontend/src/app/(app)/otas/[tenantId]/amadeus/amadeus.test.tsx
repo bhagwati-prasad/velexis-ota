@@ -830,7 +830,9 @@ describe("live access", () => {
     const [request] = calls("POST", LIVE_REQUEST_PATH);
     expectSessionHeaders(request);
     expect(await bodyOf(request)).toEqual({ note: "We start selling in March." });
-    expect(nextCache.revalidatePath).toHaveBeenCalledWith(AMADEUS_PAGE);
+    // The action revalidates the page once the API has answered, which can come after the call the test saw: wait for
+    // the revalidation itself (the lead's decision (20b) of 2026-11-13).
+    await waitFor(() => expect(nextCache.revalidatePath).toHaveBeenCalledWith(AMADEUS_PAGE), ACTION_WAIT);
     // The confirmation takes the button's place (a status message) and the focus, in the form's effect, which React may
     // run after the commit that findByRole saw: wait for the focus itself (as domains.test.tsx since the lead's
     // decision (17c) of 2026-11-11).

@@ -1136,13 +1136,27 @@ describe("plans/[planCode]/page.tsx: one plan", () => {
     expectSessionHeaders(first);
     expect(nextCache.revalidatePath.mock.calls).toEqual([["/plans/growth"], ["/plans"]]);
 
-    // The next save sends the saved version, also after the page came back revalidated.
+    // The next save sends the saved version, also after the page came back revalidated. The test waits for that save's
+    // answer (the form holds the version it saved, its button reads "Save" again), not only for its call: the action
+    // revalidates the pages after the API answered, and that must not land in the next test, which checks that a
+    // refused save revalidates nothing (the lead's decision (20b) of 2026-11-13).
     await view.rerender();
     type(PLAN_FORM_STRINGS.trialDaysLabel, "30", planForm(PLAN_FORM_STRINGS.editTitle));
     submit(PLAN_FORM_STRINGS.save, planForm(PLAN_FORM_STRINGS.editTitle));
-    await waitFor(() => expect(calls("PATCH", `${PLANS_PATH}/growth`)).toHaveLength(2), UI_WAIT);
+    await waitFor(() => {
+      const again = planForm(PLAN_FORM_STRINGS.editTitle);
+      expect(again.querySelector<HTMLInputElement>('input[name="version"]')?.value).toBe("4");
+      expect(within(again).getByRole("button", { name: PLAN_FORM_STRINGS.save })).toBeTruthy();
+    }, UI_WAIT);
+    expect(calls("PATCH", `${PLANS_PATH}/growth`)).toHaveLength(2);
     expect(calls("PATCH", `${PLANS_PATH}/growth`)[1]?.headers.get("if-match")).toBe('"3"');
     expect(await bodies("PATCH", `${PLANS_PATH}/growth`)).toMatchObject([{}, { trialDays: 30 }]);
+    expect(nextCache.revalidatePath.mock.calls).toEqual([
+      ["/plans/growth"],
+      ["/plans"],
+      ["/plans/growth"],
+      ["/plans"],
+    ]);
   });
 
   it("asks to reload the page after a stale edit (412) and keeps what was typed", async () => {

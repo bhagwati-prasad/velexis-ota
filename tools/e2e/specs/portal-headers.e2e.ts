@@ -152,28 +152,22 @@ type PortalRoute = keyof typeof ROUTES;
  */
 const ARRANGE_BUDGET_MS = 240_000;
 
-/**
- * The budget of the first pages step, the account pages and the OTA's first five pages (the lead's decision (15g) of
- * 2026-11-11, FIX-W48-PLATFORM): ten pages, each read whole before the journey leaves it, in a browser context that
- * routes its server actions and so has no HTTP cache, which fetches and checks every script of every page again. It
- * took 13.4 to 14.9 s in wave 47 (14.4 s in CI run 42929326729), half of Playwright's default 30 s, so a loaded runner
- * could fail it on time alone. Its own budget changes nothing it checks. Most of that time was a 10-second wait for the
- * body of a dropped RSC prefetch (see the second pages step below): since Playwright 1.65.0 and the lead's decision
- * (19c) of 2026-11-12 (FIX-W50-PLATFORM) the step took 2.8 to 5.4 s in ten local runs and 3.6 s in E2E run
- * 43234757752; its budget stays, by decision (15g).
- */
-const ACCOUNT_AND_OTA_PAGES_BUDGET_MS = 60_000;
-
-// The second pages step, the OTA's Amadeus page to its go-live page, had a budget of 60 s of its own from the lead's
-// decision (17c) of 2026-11-11 (FIX-W49-PLATFORM) to decision (19c) of 2026-11-12 (FIX-W50-PLATFORM), and keeps
-// Playwright's default 30 s again: it took 11.5 to 12.3 s in E2E runs 42926666028, 42996441373 and 43075936872,
-// 22.4 s in run 43065966073 and up to 32.4 s locally, in steps of about 10 s, because now and then the body of an RSC
-// prefetch that the browser had dropped with its page (`text/x-component`) neither arrived nor failed, so the journey
-// waited out READ_BUDGET_MS (10 s) and read it again. Playwright 1.65.0 fails the requests still running in a document
-// when the next document commits, and the journey checks such a prefetch by its status and headers without waiting
-// for a body (`take`): the step took 2.5 to 5.0 s in ten local runs on 4 CPUs (portal-headers alone three times
-// before and three times after this change at a load average of 1.3 to 2.4, three times before it at 15 to 21, and
-// the portal, platform-admin and ota-admin projects after it at up to 23) and 3.6 s in E2E run 43234757752.
+// Both pages steps keep Playwright's default 30 s, like every other step. Each had a budget of 60 s of its own for a
+// while: the first, the account pages and the OTA's first five pages, from the lead's decision (15g) of 2026-11-11
+// (FIX-W48-PLATFORM) to decision (20b) of 2026-11-13 (FIX-W51-PLATFORM); the second, the OTA's Amadeus page to its
+// go-live page, from decision (17c) of 2026-11-11 (FIX-W49-PLATFORM) to decision (19c) of 2026-11-12
+// (FIX-W50-PLATFORM). Each page is read whole before the journey leaves it, in a browser context that routes its server
+// actions and so has no HTTP cache, which fetches and checks every script of every page again. The first step took
+// 13.4 to 14.9 s in wave 47 (14.4 s in CI run 42929326729), the second 11.5 to 12.3 s in E2E runs 42926666028,
+// 42996441373 and 43075936872, 22.4 s in run 43065966073 and up to 32.4 s locally, in steps of about 10 s: now and then
+// the body of an RSC prefetch that the browser had dropped with its page (`text/x-component`) neither arrived nor
+// failed, so the journey waited out READ_BUDGET_MS (10 s) and read it again. Playwright 1.65.0 fails the requests still
+// running in a document when the next document commits, and the journey checks such a prefetch by its status and
+// headers without waiting for a body (`take`): since then the first step took 2.8 to 5.4 s and the second 2.5 to 5.0 s
+// in ten local runs on 4 CPUs at load averages up to 23 (wave 50), 3.6 s each in E2E run 43234757752, and with
+// portal-headers alone three times before the first step's budget went (load averages of 3.6 to 8.7) and three times
+// after (1.2 to 2.5), the first 3.5 to 3.7 s and 3.2 to 4.2 s, the second 3.2 to 3.4 s and 2.9 to 3.3 s, and in the
+// whole portal project after it (load average up to 15) 5.9 and 5.1 s.
 
 /** The owner's name: the inviter in the invitation e-mails' subject. */
 const OWNER_NAME = "Henrik Headers";
@@ -889,12 +883,12 @@ test("the sign-in sets the challenge and return-path cookies, then the session c
 /** A page route the journey opens: its route, path, title (a pattern for a not-found page) and status (200). */
 type PageVisit = readonly [PortalRoute, string, string | RegExp, number?];
 
-// The page routes are split over two steps (the lead's decision (17c) of 2026-11-11): the first with a budget of its own
-// (ACCOUNT_AND_OTA_PAGES_BUDGET_MS), the second with Playwright's default since the waits for dropped prefetches went
-// (decision (19c) of 2026-11-12; see the comment after ACCOUNT_AND_OTA_PAGES_BUDGET_MS).
+// The page routes are split over two steps (the lead's decision (17c) of 2026-11-11), each with Playwright's default
+// budget since the waits for dropped prefetches went (decisions (19c) of 2026-11-12 and (20b) of 2026-11-13; see the
+// comment after ARRANGE_BUDGET_MS).
 test("the account pages and the OTA's overview, set-up, API keys, domains and team answer with the portal's headers and their scripts with the nonce [PFE-028 AC1]", async () => {
-  // Ten whole pages without an HTTP cache: see ACCOUNT_AND_OTA_PAGES_BUDGET_MS.
-  test.setTimeout(ACCOUNT_AND_OTA_PAGES_BUDGET_MS);
+  // Ten whole pages without an HTTP cache, in Playwright's default 30 s (2.8 to 5.9 s measured since Playwright 1.65.0,
+  // see above).
   const pages: readonly PageVisit[] = [
     ["/dashboard", "/dashboard", "My OTAs"],
     ["/otas/new", "/otas/new", "Create an OTA"],
@@ -913,7 +907,8 @@ test("the account pages and the OTA's overview, set-up, API keys, domains and te
 });
 
 test("the OTA's Amadeus, payments, payout account, settlements, a statement of no row, billing, settings and go-live answer with the portal's headers and their scripts with the nonce [PFE-028 AC1]", async () => {
-  // Eight whole pages without an HTTP cache, in Playwright's default 30 s (2.5 to 5.0 s measured, see above).
+  // Eight whole pages without an HTTP cache, in Playwright's default 30 s (2.5 to 5.1 s measured since Playwright
+  // 1.65.0, see above).
   const pages: readonly PageVisit[] = [
     ["/otas/[tenantId]/amadeus", otaPath("/amadeus"), "Amadeus"],
     ["/otas/[tenantId]/payments", otaPath("/payments"), "Payments"],
