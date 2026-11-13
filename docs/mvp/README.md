@@ -88,10 +88,10 @@ There are two plan styles ([ADR-0020](adr/0020-ai-agent-development-workflow.md)
 | [`plans/foundation-tasks.md`](plans/foundation-tasks.md) | Agent tasks | `X-` | Monorepo, shared packages, CI, baseline migrations, VM and deploy (M0), and the shared work of M1–M6 (stub, backups, monitoring, PCI controls). |
 | [`../../platform/docs/plans/implementation-plan.md`](../../platform/docs/plans/implementation-plan.md) | Implementation plan | references `PBE-`, `PFE-`, `PAD-` | Platform goals, epics, demos, exit criteria, interfaces with the OTA group and risks per milestone. |
 | [`../../platform/docs/plans/agent-tasks.md`](../../platform/docs/plans/agent-tasks.md) | Agent tasks | `PBE-`, `PFE-`, `PAD-` | Platform backend, portal and platform admin tasks, M0–M6. |
-| [`../../platform/docs/plans/solo-developer-plan.md`](../../platform/docs/plans/solo-developer-plan.md) | Solo developer | references platform ids | The platform group week by week without agents (35 weeks: Weeks 1–31, the security review's follow-up Weeks 30a and 30b, added 2026-11-06, and Weeks 30c and 30d, added 2026-11-11). |
+| [`../../platform/docs/plans/solo-developer-plan.md`](../../platform/docs/plans/solo-developer-plan.md) | Solo developer | references platform ids | The platform group week by week without agents (36 weeks: Weeks 1–31, the security review's follow-up Weeks 30a and 30b, added 2026-11-06, Weeks 30c and 30d, added 2026-11-11, and Week 30e, added 2026-11-13). |
 | [`../../ota/docs/plans/implementation-plan.md`](../../ota/docs/plans/implementation-plan.md) | Implementation plan | references `OBE-`, `OFE-`, `OAD-`, `SDK-` | OTA goals, epics, demos, exit criteria, interfaces with the platform group and risks per milestone. |
 | [`../../ota/docs/plans/agent-tasks.md`](../../ota/docs/plans/agent-tasks.md) | Agent tasks | `OBE-`, `OFE-`, `OAD-`, `SDK-` | OTA backend, storefront, OTA admin and SDK tasks, M0–M6. |
-| [`../../ota/docs/plans/solo-developer-plan.md`](../../ota/docs/plans/solo-developer-plan.md) | Solo developer | references OTA ids | The OTA group week by week without agents (44 weeks: Weeks 1–40, the follow-up Week 39a, added 2026-11-06, and Weeks 39b, 39c and 39d, added 2026-11-11). |
+| [`../../ota/docs/plans/solo-developer-plan.md`](../../ota/docs/plans/solo-developer-plan.md) | Solo developer | references OTA ids | The OTA group week by week without agents (45 weeks: Weeks 1–40, the follow-up Week 39a, added 2026-11-06, Weeks 39b, 39c and 39d, added 2026-11-11, and Week 39e, added 2026-11-13). |
 
 ## 6. Repository-level documents
 

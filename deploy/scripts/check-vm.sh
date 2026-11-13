@@ -20,7 +20,11 @@
 #             upgrades on; an AIDE database exists, and dailyaidecheck.timer (package aide-common), which runs AIDE's
 #             daily check, is active and enabled (PCI DSS 11.5.2; lead decision (13j) of 2026-11-10)
 #   services  postgresql, redis-server, caddy, velexis-backup.timer and velexis-healthcheck.timer active and enabled,
-#             the cluster postgresql@16-main active; fail2ban, auditd and chrony active and enabled; Node.js 22
+#             the cluster postgresql@16-main active; fail2ban, auditd and chrony active and enabled; Node.js 22; the
+#             security logs of task X-038 (lead decision (20p) of 2026-11-13): velexis-ship-logs.timer and
+#             velexis-log-review.timer active and enabled, and auditd's syslog plugin on as provision-vm.sh writes it
+#             (/etc/audit/plugins.d/syslog.conf: active = yes, direction = out, path = an executable audisp-syslog), so
+#             that auditd's records reach the journal and leave the VM
 #   firewall  ufw active, incoming denied by default, and only 22, 80 and 443 allowed (each of them allowed); the
 #             outbound allow-list of task X-041 (nft list table inet velexis_egress, read through egress.sh parse):
 #             outgoing denied by default (chain output, policy drop), the chain's rules exactly those of egress.sh,
@@ -213,11 +217,52 @@ group_services() {
     s="$(unit_state "$u")"
     if [ "$s" = "active enabled" ]; then pass "$u is active and enabled"; else fail "$u is active and enabled (found: $s)"; fi
   done
+  # The security logs (X-038; lead decision (20p) of 2026-11-13): the hourly shipment off the VM and its review.
+  for u in velexis-ship-logs.timer velexis-log-review.timer; do
+    s="$(unit_state "$u")"
+    if [ "$s" = "active enabled" ]; then
+      pass "$u is active and enabled (security logs, X-038)"
+    else
+      fail "$u is active and enabled (found: $s; sudo bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps scripts)"
+    fi
+  done
+  audit_syslog_plugin
   # postgresql.service only groups the clusters; this is the server (started through postgresql.service).
   s="$(systemctl is-active "postgresql@${PG_MAJOR}-main" 2>/dev/null)"
   if [ "$s" = active ]; then pass "postgresql@${PG_MAJOR}-main is active"; else fail "postgresql@${PG_MAJOR}-main is active (found: ${s:-unknown})"; fi
   v="$(node --version 2>/dev/null)"
   case "$v" in v22.*) pass "Node.js $v" ;; *) fail "Node.js 22 (found: ${v:-none})" ;; esac
+}
+
+# auditd's syslog plugin (X-038): the settings provision-vm.sh writes (audit_records_to_journal). The package ships the
+# plugin off; without it auditd's records never reach the journal, so neither velexis-shiplogs nor velexis-logreview
+# sees them.
+AUDIT_SYSLOG_PLUGIN="$R/etc/audit/plugins.d/syslog.conf"
+plugin_setting() { # key -> its value in the plugin's file (the last line that sets it, as auditd reads it)
+  awk -v k="$1" '/^[[:space:]]*#/ { next } index($0, "=") {
+      key = substr($0, 1, index($0, "=") - 1); gsub(/[[:space:]]/, "", key)
+      if (key == k) { v = substr($0, index($0, "=") + 1); sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v); last = v }
+    } END { printf "%s", last }' "$AUDIT_SYSLOG_PLUGIN"
+}
+audit_syslog_plugin() {
+  local active direction path what
+  what="auditd's syslog plugin is on ($(show "$AUDIT_SYSLOG_PLUGIN"): active = yes, direction = out, path = audisp-syslog)"
+  if [ ! -f "$AUDIT_SYSLOG_PLUGIN" ]; then
+    fail "$what: the file is missing (sudo bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps scripts)"
+    return
+  fi
+  active="$(plugin_setting active)"
+  direction="$(plugin_setting direction)"
+  path="$(plugin_setting path)"
+  if [ "$active" != yes ]; then
+    fail "$what (found: active = ${active:-unset}; provision-vm.sh --steps scripts turns it on)"
+  elif [ "$direction" != out ]; then
+    fail "$what (found: direction = ${direction:-unset})"
+  elif [ "${path##*/}" != audisp-syslog ] || [ ! -x "$R$path" ]; then
+    fail "$what (found: path = ${path:-unset}, not an executable audisp-syslog)"
+  else
+    pass "$what"
+  fi
 }
 
 # ---- firewall ---------------------------------------------------------------------------------------------

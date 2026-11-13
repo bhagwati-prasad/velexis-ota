@@ -10,9 +10,9 @@ Related: [`implementation-plan.md`](implementation-plan.md), [`agent-tasks.md`](
 |---|---|
 | People | One developer, no agents, five working days a week |
 | Effort per task size | S = ½ day, M = 1 day, L = 2 days, including tests, docs and self-review against the definition of done (the same rule as the platform plan) |
-| OTA work | 171 tasks = 189 days (M0 3.5, M1 6.5, M2 39.5, M3 55.5, M4 45, M5 9.5, M6 29.5; M6's 29.5 days are the first plan's 11.5, the follow-ups of its reviews, 7 days, in Weeks 39a, 39c and 40 since 2026-11-06 and 2026-11-10, the tasks of 2026-11-11, 7 days, in Weeks 39b, 39c and 40, and those of the lead's second set of that day, 4 days, in Week 39d, §4). One of them, OBE-007 (1 day, M1), runs in the calendar week of platform Week 17, so the OTA weeks hold 188 task days |
-| Buffer and demos | 15 days inside OTA weeks (mostly at milestone exits: Weeks 1, 4, 12, 24, 33, 36) |
-| Length | **44 OTA weeks**: Weeks 1–40, the follow-up Week 39a (added 2026-11-06) and the follow-up Weeks 39b, 39c and 39d (added 2026-11-11, §4), holding 203 OTA days: 37 full weeks and 7 split weeks (Weeks 3, 12, 24, 34, 37, 39c, 39d) that share a calendar week with platform or foundation work |
+| OTA work | 174 tasks = 191 days (M0 3.5, M1 6.5, M2 39.5, M3 55.5, M4 45, M5 9.5, M6 31.5; M6's 31.5 days are the first plan's 11.5, the follow-ups of its reviews, 7 days, in Weeks 39a, 39c and 40 since 2026-11-06 and 2026-11-10, the tasks of 2026-11-11, 7 days, in Weeks 39b, 39c and 40, those of the lead's second set of that day, 4 days, in Week 39d, and those of 2026-11-13, 2 days: SDK-017 and OFE-032 in Week 39e, and OAD-023 after the launch, §4). OBE-007 (1 day, M1) runs in the calendar week of platform Week 17 and OAD-023 (½ day, M6) after the launch, so the OTA weeks hold 189.5 task days |
+| Buffer and demos | 16 days inside OTA weeks (mostly at milestone exits: Weeks 1, 4, 12, 24, 33, 36, and Week 39e since 2026-11-13) |
+| Length | **45 OTA weeks**: Weeks 1–40, the follow-up Week 39a (added 2026-11-06), the follow-up Weeks 39b, 39c and 39d (added 2026-11-11) and the follow-up Week 39e (added 2026-11-13, §4), holding 205.5 OTA days: 37 full weeks and 8 split weeks (Weeks 3, 12, 24, 34, 37, 39c, 39d, 39e) that share a calendar week with platform or foundation work |
 | Start | Week 1 starts when the foundation tasks `X-001` to `X-016` are merged, like platform Week 1 |
 | Week numbers | OTA-plan weeks. The roadmap maps them to calendar weeks. The **Overlap** column names the platform weeks (platform-plan numbering) that sit in the same calendar window, and the gates between the groups |
 
@@ -66,6 +66,7 @@ Related: [`implementation-plan.md`](implementation-plan.md), [`agent-tasks.md`](
 | 39b | M6 | Follow-ups of 2026-11-11: CORS, offers per search, closing a Reconciliation review | OBE-097, OBE-098, OAD-021, OBE-099, OAD-022 | 5 | Calendar week of its own after platform Weeks 30a and 30b (added 2026-11-11; roadmap C77) |
 | 39c | M6 | `secrets:rewrap`, layout shifts on phones | OBE-100, OFE-030 | 2 (split; its ½ day of buffer went to platform Week 30c on 2026-11-11) | **Split week** with platform Week 30c (PBE-072, PBE-073) and X-041 (added 2026-11-11; roadmap C78) |
 | 39d | M6 | Follow-ups of the lead's second set of 2026-11-11: the SDK's shared refresh, the Amadeus buckets kept for shopping, a signed-in customer's phone page | SDK-016, OBE-102, OFE-031 | 4 (split) | **Split week** with platform Week 30d (PBE-074) (added 2026-11-11, second set; roadmap C79) |
+| 39e | M6 | Follow-ups of 2026-11-13: one refresh per refresh token in the SDK, the compact account menu up to the large breakpoint | SDK-017, OFE-032 | 2.5 (split; 1 day of buffer) | **Split week** with platform Week 30e (PBE-075) (added 2026-11-13; roadmap C80); SDK-017 before SDK-015 (Week 40) publishes 1.0.0 |
 | 40 | M6 exit | SDK 1.0.0, airline-card gate, search budget, Redis's completed jobs, stable suites, launch | SDK-015, OBE-086, OBE-096, OBE-101, OFE-026 | 5 | Shared launch week with platform Week 31 |
 
 ```mermaid
@@ -82,7 +83,7 @@ timeline
   section Inside platform M5
     Weeks 35-37 : M5 self-service (Week 37 after platform Week 28)
   section Shared
-    Weeks 38-40 : M6 hardening (Weeks 38-39, platform Week 30) : follow-ups (Week 39a, before platform Weeks 30a and 30b; Weeks 39b, 39c and 39d, after them) : launch (Week 40, platform Week 31)
+    Weeks 38-40 : M6 hardening (Weeks 38-39, platform Week 30) : follow-ups (Week 39a, before platform Weeks 30a and 30b; Weeks 39b, 39c, 39d and 39e, after them) : launch (Week 40, platform Week 31)
 ```
 
 ## 3. Weeks 1 and 2, day by day
@@ -117,7 +118,7 @@ timeline
 **Deliverables:** the OTA worker provisions tenants from the platform's queue.
 **Demo:** create an OTA through the platform API (or the portal wizard if PFE-008 is merged), watch the OTA worker log `tenant.provision`, list `tenant_<key>` tables and the ledger in `psql`, and see the platform mark the tenant active from `tenant.provisioned`.
 
-## 4. Weeks 3 to 40 (and Weeks 39a, 39b, 39c and 39d)
+## 4. Weeks 3 to 40 (and Weeks 39a, 39b, 39c, 39d and 39e)
 
 Each week lists its goal, the tasks in order with their days, the deliverables, the Friday demo and the overlap with platform work.
 
@@ -399,6 +400,8 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 
 *Note (2026-11-11, lead decisions (17d), (17g) and (17l), approved by the owner; FIX-W49-SHARED).* Three OTA tasks of 4 days join M6 ([`implementation-plan.md`](implementation-plan.md#m6--hardening--launch), the M6 note of the same day): SDK-016 (one refresh shared by the SDK clients derived from one cookie-mode client, 1 day), OBE-102 (a share of the Amadeus buckets kept free for shopping during the booking sync, 1 day, after OBE-088 of Week 39) and OFE-031 (a signed-in customer's phone page kept still, the search form's fallback and the OTA's full name in the footer, 2 days, after OFE-030 of Week 39c). They take a split Week 39d inserted after Week 39c, so that Weeks 1–40 keep their numbers, beside the platform's new Week 30d (PBE-074) in C79; Week 39c's ½ day of buffer goes to the platform's PBE-073, which shares C78 with it ([`../../../docs/mvp/plans/roadmap.md`](../../../docs/mvp/plans/roadmap.md) §1.3, the second re-baseline of 2026-11-11). The plan therefore holds 171 tasks of 189 days (M6 29.5) in 44 weeks, with 15 days of buffer (§1, §5).
 
+*Note (2026-11-13, lead decisions (20f), (20h), (20l) and (20r), approved by the owner; FIX-W51-SHARED).* Three OTA tasks of 2 days join M6 ([`implementation-plan.md`](implementation-plan.md#m6--hardening--launch), the M6 note of the same day): SDK-017 (one refresh per refresh token in the SDK's token and server modes, and the shared cookie-mode refresh with the root client's settings, 1 day, after SDK-016 of Week 39d and before SDK-015 of Week 40 publishes 1.0.0), OFE-032 (the compact signed-in account menu up to the large breakpoint, ½ day, after OFE-031 of Week 39d) and OAD-023 (the booking page keeps the last action's message after it re-renders, ½ day), which runs after the launch ([ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 4). The launch block cannot hold SDK-017 and OFE-032, so they take a split Week 39e inserted after Week 39d, so that Weeks 1–40 keep their numbers, with 1 day of buffer, beside the platform's new Week 30e (PBE-075) in C80 ([`../../../docs/mvp/plans/roadmap.md`](../../../docs/mvp/plans/roadmap.md) §1.3, the re-baseline of 2026-11-13). The plan therefore holds 174 tasks of 191 days (M6 31.5) in 45 weeks, with 16 days of buffer (§1, §5).
+
 ### Week 39a — M6: follow-ups of the reviews (added 2026-11-06)
 
 - **Tasks:** OBE-092 (1), OBE-093 (½), OBE-094 (½), OBE-095 (½), OAD-020 (½), OFE-027 (1), OFE-028 (½), OFE-029 (½; since 2026-11-10, in what was the week's ½ day of buffer).
@@ -427,6 +430,13 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 - **Demo:** two derived clients answered `401 TOKEN_EXPIRED` at once and one refresh in the network log; the booking load test's storefront `429`s in the sync bursts next to OBE-088's; a signed-in customer's results page in a 360 px Lighthouse run.
 - **Overlap:** shares its calendar week (roadmap C79) with platform Week 30d (PBE-074).
 
+### Week 39e — M6: one refresh per refresh token, the compact account menu up to the large breakpoint (added 2026-11-13, split week)
+
+- **Tasks:** SDK-017 (1), OFE-032 (½); 1 day of buffer. OAD-023 (½) runs after the launch.
+- **Deliverables:** in token and server mode, SDK clients that hold the same refresh token share one refresh, and in cookie mode the shared refresh goes out with the root client's settings (SDK-017), before SDK-015 publishes 1.0.0; the compact signed-in account menu below the large breakpoint, so a long first name never wraps the header row (OFE-032).
+- **Demo:** two token-mode clients with the same refresh token answered `401 TOKEN_EXPIRED` at once and one refresh in the network log; a signed-in customer with a long first name at 768 to 1023 px, the header on one row and no shift when the session answers.
+- **Overlap:** shares its calendar week (roadmap C80) with platform Week 30e (PBE-075).
+
 ### Week 40 — M6 exit: SDK 1.0.0, airline-card gate, search budget, stable suites, launch
 
 - **Tasks:** SDK-015 (1), OBE-086 (½), OBE-096 (1, since 2026-11-06), OBE-101 (1, since 2026-11-11, in what was the week's day of buffer), OFE-026 (½); 1 day launch with the platform (OFE-030 used the day of buffer from 2026-11-10 until it moved to Week 39c on 2026-11-11, and OBE-101 took it the same day).
@@ -438,7 +448,7 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 
 | Rule | Why |
 |---|---|
-| Buffer is 15 days: 1½ in Week 1, ½ in Weeks 2, 3, 11, 23, 35 (demo), 37 and 38, 1 in Week 4, 2½ in Weeks 12 and 24, 2 in Week 33, 1 in Week 36, 1 in Week 40 (the launch day; 3 until 2026-11-06, when OBE-096 took one day, and 1 from 2026-11-10, when OFE-030 took the day of buffer, until 2026-11-11, when OFE-030 moved to Week 39c and OBE-101 took that day; Week 39a's ½ day, new on 2026-11-06, went to OFE-029 on 2026-11-10; Week 39c's ½ day, new on 2026-11-11, went the same day to the platform's PBE-073 in the calendar week both weeks share) | Placed at milestone exits and before cross-group gates, where integration surprises appear |
+| Buffer is 16 days: 1½ in Week 1, ½ in Weeks 2, 3, 11, 23, 35 (demo), 37 and 38, 1 in Week 4, 2½ in Weeks 12 and 24, 2 in Week 33, 1 in Week 36, 1 in Week 40 (the launch day; 3 until 2026-11-06, when OBE-096 took one day, and 1 from 2026-11-10, when OFE-030 took the day of buffer, until 2026-11-11, when OFE-030 moved to Week 39c and OBE-101 took that day; Week 39a's ½ day, new on 2026-11-06, went to OFE-029 on 2026-11-10; Week 39c's ½ day, new on 2026-11-11, went the same day to the platform's PBE-073 in the calendar week both weeks share), 1 in Week 39e (since 2026-11-13) | Placed at milestone exits and before cross-group gates, where integration surprises appear |
 | A week that slips moves its unfinished tasks to the next week of the same milestone and uses that milestone's buffer; when the buffer is gone, the developer re-plans the rest of the milestone in the Friday note | Keeps the plan honest without silent drift |
 | Gated weeks (3, 12, 24, 34, 37) are never skipped: if the other side is late, do the next OTA task without the gate and come back; never fake the platform side | The gates protect the platform's PBE-035, PBE-036, PAD-011, PFE-019 and the M5 switches |
 | Human steps (OBE-027 recordings and the Amadeus question, OBE-086 penetration test and ASV scan, SDK-015 npm organisation) are started early: ask Amadeus in Week 6, book the penetration test during M5 | External lead times are the most likely cause of delay |
@@ -465,6 +475,7 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 | 39b | 5 | A calendar week of its own after platform Weeks 30a and 30b (since 2026-11-11) | none |
 | 39c | 2 | Platform Week 30c (PBE-072, PBE-073) and X-041 in the same calendar week (since 2026-11-11) | none |
 | 39d | 4 | Platform Week 30d (PBE-074) in the same calendar week (since the second re-baseline of 2026-11-11) | none |
+| 39e | 2.5 | Platform Week 30e (PBE-075) in the same calendar week (since 2026-11-13) | none |
 | 40 | 5 | Platform Week 31 (shared launch) | shared launch |
 
 In a strictly sequential calendar for one person, the OTA-only blocks (Weeks 4–11, 13–23, 25–33) are the "several OTA-only weeks" that the platform plan expects between its Weeks 17 and 21; the split weeks are where both groups' days meet. The roadmap turns this table into calendar dates.

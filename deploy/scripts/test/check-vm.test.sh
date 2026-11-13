@@ -30,8 +30,9 @@
 # refuses to run on a provisioned Velexis VM. It prints one PASS or FAIL line per check; a check that proves an
 # acceptance criterion of X-020, X-040 or X-037 ends in [X-020 AC<n>], [X-040 AC<n>] or [X-037 AC<n>]; a check of
 # the lead's fix of 2026-11-10 (the AIDE timer, the lockout guard) in [FIX-W47-SHARED AC4] or [FIX-W47-SHARED AC5], of
-# the fix of 2026-11-11 (the SSH source address) in [FIX-W48-SHARED AC5], and the real-nft part that must run (lead
-# decision (17a) of 2026-11-11) in [FIX-W49-SHARED AC4].
+# the fix of 2026-11-11 (the SSH source address) in [FIX-W48-SHARED AC5], the real-nft part that must run (lead
+# decision (17a) of 2026-11-11) in [FIX-W49-SHARED AC4], and the security logs' timers and auditd's syslog plugin (lead
+# decision (20p) of 2026-11-13) in [FIX-W51-SHARED 20p].
 #
 # What it proves:
 #   1. Two runs of provision-vm.sh --steps users,keys,envfiles: the second changes no key, env or secrets file
@@ -45,7 +46,11 @@
 #      or TCP address, the Redis eviction policy, a failing caddy validate, /run/caddy, key and env file modes,
 #      differing key copies, a writable release, the velexis group, the deploy key options and shared env values.
 #      AIDE's daily check (lead decision (13j) of 2026-11-10, [FIX-W47-SHARED AC4]): PASS for an active and enabled
-#      dailyaidecheck.timer, FAIL for one stopped, not enabled or missing.
+#      dailyaidecheck.timer, FAIL for one stopped, not enabled or missing. The security logs of X-038 (lead decision
+#      (20p) of 2026-11-13, [FIX-W51-SHARED 20p]): PASS for active and enabled velexis-ship-logs.timer and
+#      velexis-log-review.timer and for auditd's syslog plugin as provision-vm.sh writes it (its text read from
+#      provision-vm.sh), FAIL for a timer stopped, not enabled or missing, and for the plugin's file missing, switched
+#      off, sending the other way or naming no executable audisp-syslog.
 #   4. With a variable removed from a test copy of an env file, check-vm.sh reports FAIL naming the variable, and
 #      provision-vm.sh --steps envfiles warns about it by name and leaves the file as it is (AC3).
 #   5. A master-key rotation (X-040): NEW_MASTER_KEY=v2 with the step keys creates master-v2.key once, as copies with
@@ -283,6 +288,19 @@ install -D -m 0644 "$PREFIX/fstab" "$ROOT/etc/fstab"
 install -d "$ROOT/etc/apt/apt.conf.d" "$ROOT/var/lib/aide"
 printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' >"$ROOT/etc/apt/apt.conf.d/20auto-upgrades"
 printf 'AIDE test database\n' >"$ROOT/var/lib/aide/aide.db"
+# auditd's syslog plugin as provision-vm.sh's step scripts writes it (X-038): the text of its function
+# audit_records_to_journal, read from provision-vm.sh, and the plugin's program, which the auditd package installs.
+sed -n "/<<'PLUGIN'\$/,/^PLUGIN\$/{/PLUGIN/d;p}" "$PROVISION" >"$PREFIX/audit-syslog.conf"
+if ! grep -qx 'active = yes' "$PREFIX/audit-syslog.conf" || ! grep -qx 'path = /sbin/audisp-syslog' "$PREFIX/audit-syslog.conf"; then
+  die "provision-vm.sh's syslog plugin settings (heredoc PLUGIN of audit_records_to_journal) were not found"
+fi
+install -d -m 0750 "$ROOT/etc/audit/plugins.d"
+audit_plugin_healthy() { # the plugin's file and program as provision-vm.sh and the auditd package leave them
+  cmp -s "$PREFIX/audit-syslog.conf" "$ROOT/etc/audit/plugins.d/syslog.conf" \
+    || install -m 0640 "$PREFIX/audit-syslog.conf" "$ROOT/etc/audit/plugins.d/syslog.conf"
+  [ -x "$ROOT/sbin/audisp-syslog" ] || install -D -m 0755 /dev/null "$ROOT/sbin/audisp-syslog"
+}
+audit_plugin_healthy
 # One release, handed over the way velexis-deploy does it, and the current symlink.
 REL="$ROOT/srv/velexis/releases/0123456789abcdef0123456789abcdef01234567"
 mkdir -p "$REL/ota-backend/dist" "$REL/storefront"
@@ -576,7 +594,10 @@ chrony active enabled
 apport inactive masked
 velexis-egress-refresh.timer active enabled
 velexis-egress-refresh inactive enabled
+velexis-ship-logs.timer active enabled
+velexis-log-review.timer active enabled
 EOF
+  audit_plugin_healthy
   cat >"$FAKE/ufw" <<'EOF'
 Status: active
 Logging: on (low)
@@ -817,6 +838,9 @@ PASS every apt source of the VM is on the allow-list (apt.postgresql.org:443 arc
 PASS the last refresh of the allow-list did not fail
 PASS velexis-egress-refresh.timer is active and enabled
 PASS velexis-egress-refresh.service is enabled (loads the allow-list at boot)
+PASS velexis-ship-logs.timer is active and enabled (security logs, X-038)
+PASS velexis-log-review.timer is active and enabled (security logs, X-038)
+PASS auditd's syslog plugin is on (/etc/audit/plugins.d/syslog.conf: active = yes, direction = out, path = audisp-syslog)
 EOF
 if [ "$covered" = 1 ]; then
   pass "every item of the task has a PASS line, the SSH methods of both users and the outbound allow-list included [X-020 AC2] [X-037 AC2] [X-041 AC1]"
@@ -876,6 +900,51 @@ if run_check "$OUT/aide-timer.out" --only system && grep -qx "PASS dailyaidechec
 else
   indent "$OUT/aide-timer.out"
   fail "check-vm.sh --only system reports PASS for an active and enabled dailyaidecheck.timer [FIX-W47-SHARED AC4]"
+fi
+# The security logs (X-038; lead decision (20p) of 2026-11-13): both timers, and auditd's syslog plugin.
+for timer in velexis-ship-logs.timer velexis-log-review.timer; do
+  edit units "s/^$timer active enabled/$timer inactive disabled/"
+  broken "$timer stopped" services "$timer is active and enabled \\(found: inactive disabled;" "FIX-W51-SHARED 20p"
+  healthy
+  edit units "s/^$timer active enabled/$timer active disabled/"
+  broken "$timer that does not start at boot" services "$timer is active and enabled \\(found: active disabled;" "FIX-W51-SHARED 20p"
+  healthy
+  edit units "/^$timer /d"
+  broken "$timer missing (provision-vm.sh --steps scripts not run)" services \
+    "$timer is active and enabled \\(found: inactive not-found;" "FIX-W51-SHARED 20p"
+  healthy
+done
+PLUGIN_FILE="$ROOT/etc/audit/plugins.d/syslog.conf"
+sed -i 's/^active = yes$/active = no/' "$PLUGIN_FILE"
+broken "auditd's syslog plugin switched off (the package's default)" services \
+  "auditd's syslog plugin is on .*\\(found: active = no;" "FIX-W51-SHARED 20p"
+healthy
+sed -i 's/^direction = out$/direction = in/' "$PLUGIN_FILE"
+broken "auditd's syslog plugin sending the other way" services \
+  "auditd's syslog plugin is on .*\\(found: direction = in\\)" "FIX-W51-SHARED 20p"
+healthy
+rm -f "$ROOT/sbin/audisp-syslog"
+broken "auditd's syslog plugin without its program (audisp-syslog)" services \
+  "auditd's syslog plugin is on .*not an executable audisp-syslog" "FIX-W51-SHARED 20p"
+healthy
+sed -i 's#^path = /sbin/audisp-syslog$#path = /sbin/audisp-af_unix#' "$PLUGIN_FILE"
+install -m 0755 /dev/null "$ROOT/sbin/audisp-af_unix"
+broken "auditd's syslog.conf naming another program" services \
+  "auditd's syslog plugin is on .*found: path = /sbin/audisp-af_unix, not an executable audisp-syslog" "FIX-W51-SHARED 20p"
+rm -f "$ROOT/sbin/audisp-af_unix"
+healthy
+rm -f "$PLUGIN_FILE"
+broken "auditd's syslog plugin file missing (a VM provisioned before X-038)" services \
+  "auditd's syslog plugin is on .*the file is missing" "FIX-W51-SHARED 20p"
+healthy
+if run_check "$OUT/security-logs.out" --only services &&
+  grep -qx "PASS velexis-ship-logs.timer is active and enabled (security logs, X-038)" "$OUT/security-logs.out" &&
+  grep -qx "PASS velexis-log-review.timer is active and enabled (security logs, X-038)" "$OUT/security-logs.out" &&
+  grep -qx "PASS auditd's syslog plugin is on (/etc/audit/plugins.d/syslog.conf: active = yes, direction = out, path = audisp-syslog)" "$OUT/security-logs.out"; then
+  pass "check-vm.sh --only services reports PASS for both security log timers and for the syslog plugin as provision-vm.sh writes it [FIX-W51-SHARED 20p]"
+else
+  indent "$OUT/security-logs.out"
+  fail "check-vm.sh --only services reports PASS for both security log timers and the syslog plugin [FIX-W51-SHARED 20p]"
 fi
 edit units 's/^postgresql@16-main active/postgresql@16-main failed/'
 broken "a stopped PostgreSQL cluster" services 'postgresql@16-main is active'

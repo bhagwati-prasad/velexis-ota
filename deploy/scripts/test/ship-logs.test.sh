@@ -260,8 +260,9 @@ for i in "${!WAF_RAW[@]}"; do
 done
 # A Caddy line written with other JSON escapes (<, \/) than jq's: still blanked, from its parsed form.
 ship_entry "$(plain caddy.service caddy 3 stdout "{\"level\":\"error\",\"ts\":1794510757.5,\"logger\":\"http.handlers.waf\",\"msg\":\"[client \\\"198.51.100.23\\\"] Coraza: Warning. XSS [id \\\"941100\\\"] [data \\\"ARGS:q\\\"] [uri \\\"\\/api\\/v?q=\\u003cscript\\u003eESC$MARK&sig=ESCSIG$MARK\\\"] [unique_id \\\"UIDESC\\\"]\"}")" waf
-# Caddy's other lines are never shipped: the environment its package's unit prints at each start (caddy run
-# --environ), its error log (the request's whole query and headers, unfiltered) and its TLS messages.
+# Caddy's other lines are never shipped: the environment its package's unit printed at each start (caddy run
+# --environ, which the repository's drop-in drops since lead decision (20q) of 2026-11-13), its error log (here as it
+# was before the same decision filtered it: the request's whole query and headers) and its TLS messages.
 add_entry "$(plain caddy.service caddy 6 stdout "caddy.HomeDir=/var/lib/caddy")"                                  # not shipped
 add_entry "$(plain caddy.service caddy 6 stdout "VELEXIS_EDGE_SECRET=EDGE$MARK")"                                 # not shipped
 add_entry "$(plain caddy.service caddy 3 stdout '{"level":"error","ts":1794510757.7,"logger":"http.log.error.log1","msg":"dial tcp 127.0.0.1:3200: connect: connection refused","request":{"client_ip":"198.51.100.23","method":"GET","host":"api.ota.example.com","uri":"/v1/documents/d1?sig=ERRSIG'"$MARK"'","headers":{"X-Api-Key":["KEY'"$MARK"'"]}},"status":502}')" # not shipped

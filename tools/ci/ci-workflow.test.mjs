@@ -259,18 +259,118 @@ describe("workflow shape", () => {
       "ota-worker",
       "ota-admin",
     ];
-    // velexis-egress-refresh since lead decision (17a) of 2026-11-11 (FIX-W49-SHARED AC4).
+    // velexis-egress-refresh since lead decision (17a) of 2026-11-11 (FIX-W49-SHARED AC4), velexis-ship-logs and
+    // velexis-log-review since lead decision (20p) of 2026-11-13 (FIX-W51-SHARED).
     assert.deepEqual(units, [
       ...apps.map((app) => `deploy/systemd/velexis-${app}.service`),
       "deploy/systemd/velexis-alert@.service",
       "deploy/systemd/velexis-healthcheck.service",
       "deploy/systemd/velexis-egress-refresh.service",
+      "deploy/systemd/velexis-ship-logs.service",
+      "deploy/systemd/velexis-log-review.service",
     ]);
     for (const unit of units) {
       assert.ok(readFileSync(join(ROOT, unit), "utf8").includes("[Service]"), `${unit} exists`);
     }
     assert.match(sandbox.name, /velexis-healthcheck/);
     assert.match(sandbox.name, /velexis-egress-refresh/);
+    assert.match(sandbox.name, /velexis-ship-logs and velexis-log-review/);
+    assert.match(sandbox.run, /--threshold=20 /, "the same threshold for every unit of the loop");
+  });
+
+  it("[FIX-W51-SHARED 20p] Verify systemd units accepts a missing /usr/local/sbin/velexis-<name> with hyphens, and nothing else", () => {
+    // Lead decision (20p) of 2026-11-13, approved by the owner: the X-038 commands may keep their names, and a helper
+    // named velexis-ship-logs passes as velexis-shiplogs does. The step runs as GitHub runs it (bash -e), with a
+    // systemd-analyze stand-in that prints what the real one prints off the VM.
+    const verify = JOBS.get("deploy-files").steps.find((s) => s.name === "Verify systemd units");
+    assert.ok(verify, "deploy-files has the step Verify systemd units");
+    assert.equal(verify.if, undefined, "it always runs");
+    assert.equal(verify["continue-on-error"], undefined, "a refused line fails the job");
+    const bin = join(scratch, `fake-systemd-analyze-${(count += 1)}`);
+    mkdirSync(bin);
+    writeFileSync(
+      join(bin, "systemd-analyze"),
+      '#!/usr/bin/env bash\nprintf "%s\\n" "$FAKE_VERIFY_OUTPUT" >&2\nexit 1\n',
+      { mode: 0o755 },
+    );
+    const runVerify = (script, lines) => {
+      const file = join(scratch, `verify-${(count += 1)}.sh`);
+      writeFileSync(file, `${script}\n`);
+      return spawnSync("bash", ["-e", file], {
+        cwd: scratch,
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_VERIFY_OUTPUT: lines.join("\n") },
+      }).status;
+    };
+    const missing = (unit, command) =>
+      `${unit}: Command ${command} is not executable: No such file or directory`;
+    const offVm = [
+      missing("velexis-ship-logs.service", "/usr/local/sbin/velexis-ship-logs"),
+      missing("velexis-log-review.service", "/usr/local/sbin/velexis-logreview"),
+      missing("velexis-egress-refresh.service", "/usr/local/sbin/velexis-egress"),
+      missing("velexis-portal.service", "/usr/bin/node"),
+    ];
+    assert.equal(
+      runVerify(verify.run, offVm),
+      0,
+      "the missing node and velexis-<name> helpers pass, hyphens included",
+    );
+    for (const refused of [
+      missing("velexis-x.service", "/usr/local/sbin/velexis-ship-logs.sh"),
+      missing("velexis-x.service", "/usr/local/bin/velexis-ship-logs"),
+      missing("velexis-x.service", "/usr/local/sbin/other-tool"),
+      missing("velexis-x.service", "/usr/local/sbin/velexis-Ship"),
+      "velexis-x.service: Unknown key name 'Foo' in section 'Service', ignoring.",
+    ]) {
+      assert.equal(runVerify(verify.run, [...offVm, refused]), 1, `refused: ${refused}`);
+    }
+    // The pattern before the decision, velexis-[a-z]+, refused the same lines: the change is what lets them pass.
+    const before = verify.run.replace("velexis-[a-z-]+", "velexis-[a-z]+");
+    assert.notEqual(before, verify.run, "the step uses velexis-[a-z-]+");
+    assert.equal(runVerify(before, offVm), 1, "velexis-[a-z]+ refused /usr/local/sbin/velexis-ship-logs");
+    assert.equal(runVerify(before, offVm.slice(1)), 0, "and accepted the names without a hyphen");
+  });
+
+  it("[FIX-W51-SHARED 20p] deploy-files runs ship-logs.test.sh and log-review.test.sh with rclone and zstd from apt", () => {
+    // Lead decision (20p) of 2026-11-13, approved by the owner (X-038's tests had not run in CI before).
+    const steps = JOBS.get("deploy-files").steps;
+    const at = steps.findIndex((s) => /ship-logs\.test\.sh/.test(s.run ?? ""));
+    assert.ok(at >= 0, "deploy-files has a step that runs ship-logs.test.sh");
+    const step = steps[at];
+    const lines = step.run.split("\n");
+    for (const line of [
+      "for tool in jq age zstd rclone; do",
+      "bash deploy/scripts/test/ship-logs.test.sh",
+      "bash deploy/scripts/test/log-review.test.sh",
+    ]) {
+      assert.ok(
+        lines.some((l) => l.trim() === line),
+        `the step runs: ${line}`,
+      );
+    }
+    assert.match(
+      step.run,
+      /apt-get install -y --no-install-recommends "\$\{missing\[@\]\}"/,
+      "a missing tool from apt",
+    );
+    assert.equal(step.if, undefined, "the step always runs");
+    assert.equal(step["continue-on-error"], undefined, "a failing test fails the job");
+    const install = lines.findIndex((l) => /apt-get install/.test(l));
+    const firstTest = lines.findIndex((l) => l.trim() === "bash deploy/scripts/test/ship-logs.test.sh");
+    assert.ok(install >= 0 && install < firstTest, "the tools are installed before the tests run");
+    // The tools the two tests check for are the ones the step makes sure of (or the runner image always has).
+    for (const test of ["ship-logs.test.sh", "log-review.test.sh"]) {
+      const text = readFileSync(join(ROOT, "deploy/scripts/test", test), "utf8");
+      const tools = /for tool in ([^;]+); do/.exec(text)?.[1].split(/\s+/) ?? [];
+      assert.ok(tools.length > 0, `${test} names its tools`);
+      for (const tool of tools) {
+        const covered =
+          ["jq", "age", "zstd", "rclone"].includes(tool) ||
+          tool === "age-keygen" ||
+          ["flock", "sha256sum", "awk", "openssl", "base64", "truncate"].includes(tool);
+        assert.ok(covered, `${test} needs ${tool}, which the step or the runner image provides`);
+      }
+    }
   });
 
   it("[FIX-W47-SHARED AC6] build-test lints and tests tools/perf with the CI checks, before the tests", () => {

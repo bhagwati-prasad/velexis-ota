@@ -298,8 +298,22 @@ if "${caddy_env[@]}" "$CADDY" adapt --config "$CADDYFILE" --adapter caddyfile >"
     };
     wafs(cfg.apps?.http);
     const modeList = Object.keys(modes).sort().map((k) => `${k}=${modes[k]}`).join(" ");
+    // The own log of Caddy (lead decision (20q) of 2026-11-13): the default logger filters every field of the request
+    // as the access log of each site does (its `request>…` fields, Location aside), plus the rewritten `uri` of a debug
+    // line.
+    const logs = cfg.logging?.logs ?? {};
+    const reqFields = (enc) => JSON.stringify(Object.entries(enc?.fields ?? {})
+      .filter(([k]) => k.startsWith("request>")).sort(([a], [b]) => a.localeCompare(b)));
+    const def = logs.default?.encoder;
+    const access = Object.entries(logs).filter(([k]) => k !== "default").map(([, l]) => l.encoder);
+    const defaultLog = !def ? "no default log"
+      : def.format !== "filter" || def.wrap?.format !== "json" ? "default log not a JSON filter"
+      : access.length === 0 ? "no access log"
+      : !access.every((e) => reqFields(e) === reqFields(def)) ? "request fields differ from those of the access logs"
+      : JSON.stringify(def.fields.uri) !== JSON.stringify(def.fields["request>uri"]) ? "uri not filtered as request>uri"
+      : `filtered as ${access.length} access logs: ${Object.keys(def.fields).filter((k) => k.startsWith("request>")).length} request fields and uri`;
     process.stdout.write(`${cfg.admin?.listen ?? ""}\n${[...hosts].sort().join(" ")}\n${[...roots].sort().join(" ")}\n` +
-      `${[...includes].sort().join(" ")}\n${modeList}\n${limits.sort().join(" ")}\n`);
+      `${[...includes].sort().join(" ")}\n${modeList}\n${limits.sort().join(" ")}\n${defaultLog}\n`);
   ' "$TMP/prod.json")"
   same "with an empty environment the host names are the placeholders of decisions.md §4 [X-022 AC3]" \
     "$(sed -n 2p <<<"$prod_facts")" "$PLACEHOLDER_HOSTS"
@@ -317,9 +331,60 @@ if "${caddy_env[@]}" "$CADDY" adapt --config "$CADDYFILE" --adapter caddyfile >"
   # written to a temporary file.
   same "each WAF reads a body up to its own limit: 256 KiB (in memory) on the storefront, just above Caddy's request_body limit elsewhere [X-039 AC2]" \
     "$(sed -n 6p <<<"$prod_facts")" "$PROD_WAF_LIMITS"
+  # Lead decision (20q) of 2026-11-13: Caddy's own log, its error log above all, deletes what the access logs delete.
+  same "Caddy's own log (the default logger: its error log) filters the request as every site's access log does [FIX-W51-SHARED 20q]" \
+    "$(sed -n 7p <<<"$prod_facts")" "filtered as 7 access logs: 8 request fields and uri"
 else
   cat "$TMP/adapt.log"
   fail "caddy adapt failed on the production Caddyfile [X-022 AC3]"
+fi
+
+# ---- 1b. the caddy unit: no --environ (lead decision (20q) of 2026-11-13) -------------------------------------------
+step "The caddy unit's drop-in: Caddy starts without --environ"
+# The caddy package starts Caddy with `caddy run --environ`, which prints Caddy's whole environment, the edge secret of
+# caddy.env among it, to the journal at every start. deploy/systemd/caddy.service.d/velexis.conf empties the package's
+# ExecStart= and sets its own. systemd does not run the unit here: the file is read as systemd reads it (an empty
+# ExecStart= drops the commands before it, each further line adds one), and where systemd-analyze is installed it loads
+# the drop-in on top of the package's unit and refuses the same drop-in without its empty ExecStart=.
+DROPIN="$DEPLOY/systemd/caddy.service.d/velexis.conf"
+PACKAGE_EXECSTART="/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile" # the caddy package's unit (2.8)
+WANT_EXECSTART="/usr/bin/caddy run --config /etc/caddy/Caddyfile"
+effective_execstart() { # drop-in -> the ExecStart= commands left after the package's one and the drop-in, one per line
+  awk -v pkg="$PACKAGE_EXECSTART" '
+    BEGIN { n = 1; cmd[1] = pkg }
+    /^[[:space:]]*\[/ { section = $0; gsub(/[[:space:]]/, "", section); next }
+    section == "[Service]" && /^[[:space:]]*ExecStart[[:space:]]*=/ {
+      v = $0; sub(/^[[:space:]]*ExecStart[[:space:]]*=[[:space:]]*/, "", v); sub(/[[:space:]]+$/, "", v)
+      if (v == "") { n = 0 } else { cmd[++n] = v }
+    }
+    END { for (i = 1; i <= n; i++) print cmd[i] }
+  ' "$1"
+}
+same "the drop-in leaves exactly one ExecStart=, Caddy's run without --environ [FIX-W51-SHARED 20q]" \
+  "$(effective_execstart "$DROPIN" | paste -sd'|' -)" "$WANT_EXECSTART"
+no_environ_setting() { # no line of the drop-in folder but a comment names --environ (its comment says why it is gone)
+  ! grep -rhv '^[[:space:]]*[#;]' "$DEPLOY/systemd/caddy.service.d" | grep -qF -- --environ
+}
+check "no setting of deploy/systemd/caddy.service.d names --environ [FIX-W51-SHARED 20q]" no_environ_setting
+if command -v systemd-analyze >/dev/null 2>&1; then
+  UNITS="$TMP/units"
+  mkdir -p "$UNITS/caddy.service.d" "$UNITS/control.service.d"
+  # The caddy package's unit, as far as systemd's check reads it (its Type= and ExecStart= decide).
+  printf '[Unit]\nDescription=Caddy\n\n[Service]\nType=notify\nUser=caddy\nGroup=caddy\nExecStart=%s\nExecReload=/usr/bin/caddy reload --config /etc/caddy/Caddyfile --force\n\n[Install]\nWantedBy=multi-user.target\n' \
+    "$PACKAGE_EXECSTART" >"$UNITS/caddy.service"
+  cp "$UNITS/caddy.service" "$UNITS/control.service"
+  cp "$DROPIN" "$UNITS/caddy.service.d/velexis.conf"
+  grep -v '^ExecStart=$' "$DROPIN" >"$UNITS/control.service.d/velexis.conf"
+  cp "$DEPLOY/systemd/velexis-alert@.service" "$UNITS/"
+  verify_unit() { # unit -> systemd-analyze verify's lines, but the missing /usr/bin/caddy (not installed here)
+    systemd-analyze verify --man=no "$UNITS/$1" 2>&1 | grep -v 'Command /usr/bin/caddy is not executable' || true
+  }
+  same "systemd loads the drop-in on top of the package's unit without a complaint [FIX-W51-SHARED 20q]" \
+    "$(verify_unit caddy.service)" ""
+  check "control: without its empty ExecStart= systemd refuses the drop-in (two commands for a Type=notify unit) [FIX-W51-SHARED 20q]" \
+    grep -q 'more than one ExecStart=' <<<"$(verify_unit control.service)"
+else
+  echo "NOTE systemd-analyze is not installed: the drop-in is checked as a file only"
 fi
 
 # ---- 2. the test copy and the fixture folders ------------------------------------------------------------
@@ -348,8 +413,10 @@ awk -v sock="unix/$SOCK" -v prod="$PROD_ADMIN" -v http_port="$HTTP_PORT" -v http
   { print }
   END { if (state != 2 || !admin) { print "no global options block with an admin line" > "/dev/stderr"; exit 3 } }
 ' "$CADDYFILE" >"$TEST_COPY" || die "cannot build the test copy from $CADDYFILE"
-after_global() { awk 'state == 2 { print } state == 0 && /^\{$/ { state = 1 } state == 1 && /^\}$/ { state = 2 }' "$1"; }
-same_body() { cmp -s <(after_global "$CADDYFILE") <(after_global "$TEST_COPY"); }
+outside_global() { # Caddyfile -> its lines outside the global options block (the log snippets come before it)
+  awk 'state == 0 && /^\{$/ { state = 1; next } state == 1 { if (/^\}$/) state = 2; next } { print }' "$1"
+}
+same_body() { cmp -s <(outside_global "$CADDYFILE") <(outside_global "$TEST_COPY"); }
 check "the test copy keeps every snippet and site block of the production file byte for byte" same_body
 
 ROOT="$TMP/root"
@@ -1108,6 +1175,43 @@ same "api.$PLATFORM: the same arguments pass uninspected on a detection host, wi
 check "api.$PLATFORM: the WAF logged rule 200008 (not inspected) for it [X-039 AC2]" \
   retry 20 waf_logged "smkwaf$WAF_MARK-big-detect" 200008
 
+# The WAF's 400 (lead decision (20j) of 2026-11-13): a body it cannot parse (rule 200002) and a request with 1,000
+# arguments or more (rule 200007, `&ARGS @ge 1000`) get the same answer, whose message names both causes: Caddy cannot
+# tell them apart, because coraza-caddy hands the error route only the status, a random transaction id ({err.id}) and
+# the message "interruption triggered" ({err.message}). Each request's waf=<marker> is one of its arguments.
+WAF_400_MESSAGE="The request body could not be read, or it has 1,000 fields or more."
+query_args() { # n -> a query of n arguments a0=1&a1=1&...
+  # shellcheck disable=SC2016 # JavaScript, not shell
+  "$NODE" -e 'process.stdout.write(Array.from({ length: Number(process.argv[1]) }, (_, i) => `a${i}=1`).join("&"))' "$1"
+}
+ARGS_999="$(query_args 999)" # with waf=<marker>: 1,000 arguments
+ARGS_998="$(query_args 998)" # with waf=<marker>: 999 arguments
+printf '{"travelers":[{"firstName":"Ana"' >"$TMP/cut.json"
+refused_400() { # label: the last response is the WAF's 400 in the API's error envelope, answered by Caddy
+  same "$1 answers 400 INVALID_REQUEST, whose message names both causes [FIX-W51-SHARED 20j]" \
+    "$STATUS $(header Content-Type) $(json error.code) $(json error.status) | $(json error.message)" \
+    "400 application/json INVALID_REQUEST 400 | $WAF_400_MESSAGE"
+  same "$1 never reaches the upstream [FIX-W51-SHARED 20j]" "$(json port)" ""
+}
+for target in "$TENANT /api/v1/checkouts" "api.$STOREFRONT /v1/checkouts"; do
+  read -r host path <<<"$target"
+  fetch "$host" "$path?waf=smkwaf$WAF_MARK-parse-$host" -X POST -H "Content-Type: application/json" \
+    --data-binary "@$TMP/cut.json"
+  refused_400 "$host$path with a JSON body that cannot be parsed"
+  check "$host$path: the WAF log names rule 200002 for the body [FIX-W51-SHARED 20j]" \
+    retry 20 waf_logged "smkwaf$WAF_MARK-parse-$host" 200002
+  fetch "$host" "$path?$ARGS_999&waf=smkwaf$WAF_MARK-args-$host"
+  refused_400 "$host$path with 1,000 query arguments"
+  check "$host$path: the WAF log names rule 200007 for the 1,000 arguments [FIX-W51-SHARED 20j]" \
+    retry 20 waf_logged "smkwaf$WAF_MARK-args-$host" 200007
+  fetch "$host" "$path?$ARGS_998&waf=smkwaf$WAF_MARK-args999-$host"
+  passed_to "$host$path with 999 query arguments (rule 200007 is @ge 1000)" 4000
+done
+fetch "$TENANT" "/checkout/complete.html?$ARGS_999&waf=smkwaf$WAF_MARK-args-page"
+same "$TENANT/checkout/complete.html with 1,000 arguments answers 400 as text [FIX-W51-SHARED 20j]" \
+  "$STATUS $(header Content-Type) $(cat "$BODY")" \
+  "400 text/plain; charset=utf-8 The request was refused by the web application firewall."
+
 # How much of a body the WAF reads (its body limit, rule 200006): it runs before request_body, so on the storefront it
 # stops at 256 KiB, in memory, and refuses the rest itself; on a detection host it logs and Caddy's own limit refuses.
 send_body "$TENANT" "/api$UPLOAD?waf=smkwaf$WAF_MARK-limit" 300000
@@ -1307,6 +1411,92 @@ for monitor in "${MONITORS[@]}"; do
   fetch "$host" "$path" -H "User-Agent: $MONITOR_UA"
   same "with its app stopped, the monitor of https://$host$path sees $want [X-029 AC2]" "$STATUS" "$want"
 done
+
+# ---- 9b. Caddy's error log (lead decision (20q) of 2026-11-13) ---------------------------------------------------
+step "Caddy's error log: no secret or personal value of a request whose upstream is down"
+# Each request below meets its stopped upstream. Caddy logs the error as http.log.error.<the site's logger> with the
+# request that caused it; the Caddyfile's error pages answer every such error, and Caddy then logs it at debug level
+# (at its default level, the production one, such a line appears only when an error page itself fails). So the test
+# copy turns `debug` on for this step: the lines exist, and the global options' log filter must hold at every level.
+# With debug, the reverse proxy also logs the request it sends upstream (the edge secret among its headers).
+ERR_MARK="$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+err_value() { printf 'smkerr%s%s' "${1//[_-]/}" "$ERR_MARK"; } # parameter or header -> its marker value
+ERR_KEEP="smkerrkeep$ERR_MARK"
+ERR_QUERY="keep=$ERR_KEEP"
+for name in "${LOG_PARAMS[@]}"; do ERR_QUERY+="&$name=$(err_value "$name")"; done
+ERR_ROUTER="%5B%22%22%2C%7B%22children%22%3A%5B%22__PAGE__%3F%7B%5C%22q%5C%22%3A%5C%22$(err_value router)%5C%22%7D%22%2C%7B%7D%5D%7D%5D"
+ERR_HEADERS=(-H "X-Api-Key: sk_test_$(err_value X-Api-Key)" -H "Authorization: Bearer $(err_value Authorization)"
+  -H "Cookie: __Host-vx_rt=$(err_value Cookie)" -H "X-Csrf-Token: $(err_value X-Csrf-Token)"
+  -H "X-Booking-Token: bt_$(err_value X-Booking-Token)" -H "X-Velexis-Edge: $(err_value X-Velexis-Edge)"
+  -H "X-Velexis-Service-Key: $(err_value X-Velexis-Service-Key)" -H "Next-Router-State-Tree: $ERR_ROUTER")
+ERR_SECRETS=() # every marker that no line of Caddy's log may hold
+for name in "${LOG_PARAMS[@]}" X-Api-Key Authorization Cookie X-Csrf-Token X-Booking-Token X-Velexis-Edge \
+  X-Velexis-Service-Key router; do
+  ERR_SECRETS+=("$name $(err_value "$name")")
+done
+debug_copy() { # on|off -> the test copy with or without `debug` in its global options block
+  sed -i '/^\tdebug$/d' "$TEST_COPY"
+  if [ "$1" = on ]; then sed -i 's/^\t# caddy-smoke.sh: local CA.*$/&\n\tdebug/' "$TEST_COPY"; fi
+}
+debug_copy on
+check "caddy reload with debug on succeeds [FIX-W51-SHARED 20q]" waf_reload
+ERR_TARGETS=("$PLATFORM /hello 3000" "admin.$PLATFORM /hello 3001" "admin.$STOREFRONT /hello 3002"
+  "api.$PLATFORM /v1/x 3100" "api.$STOREFRONT /v1/x 4000" "$TENANT /api/v1/x 4000")
+ERR_REQUESTS=() # "<request id> <host> <path> <port>"
+n=0
+for target in "${ERR_TARGETS[@]}"; do
+  read -r host path port <<<"$target"
+  n=$((n + 1))
+  id="smoke-err-$n-$ERR_MARK"
+  ERR_REQUESTS+=("$id $host $path $port")
+  fetch "$host" "$path?$ERR_QUERY" -H "X-Request-Id: $id" "${ERR_HEADERS[@]}" \
+    -H "Referer: https://$host:$HTTPS_PORT/page?$ERR_QUERY&ref=$ERR_KEEP"
+  same "$host$path with its upstream down answers 503 (an error page) [FIX-W51-SHARED 20q]" "$STATUS" 503
+done
+error_line() { grep -F "\"$1\"" "$TMP/caddy.log" | grep -F '"logger":"http.log.error.' | head -n 1; }
+error_logged_all() { local e; for e in "${ERR_REQUESTS[@]}"; do [ -n "$(error_line "${e%% *}")" ] || return 1; done; }
+check "Caddy wrote an error line (http.log.error.*) for each of the six requests [FIX-W51-SHARED 20q]" retry 20 error_logged_all
+error_facts() { # request id -> "<status> | <the upstream named in msg> | <keeps keep=> | <request id kept>"
+  # shellcheck disable=SC2016 # JavaScript, not shell
+  error_line "$1" | "$NODE" -e '
+    const line = JSON.parse(require("fs").readFileSync(0, "utf8") || "{}");
+    const [id, keep] = process.argv.slice(1);
+    const port = /127\.0\.0\.1:(\d+)/.exec(line.msg ?? "")?.[1] ?? "none";
+    process.stdout.write(`${line.status} | ${port} | ${String(line.request?.uri ?? "").includes(`keep=${keep}`)} | ` +
+      `${(line.request?.headers?.["X-Request-Id"] ?? [])[0] === id}`);
+  ' "$1" "$ERR_KEEP"
+}
+for entry in "${ERR_REQUESTS[@]}"; do
+  read -r id host path port <<<"$entry"
+  same "$host$path: its error line names the dead upstream (502, $port) and keeps the other values and the request id [FIX-W51-SHARED 20q]" \
+    "$(error_facts "$id")" "502 | $port | true | true"
+done
+for secret in "${ERR_SECRETS[@]}"; do
+  read -r name value <<<"$secret"
+  check "no line of Caddy's log holds the request's $name value (error log, debug lines) [FIX-W51-SHARED 20q]" \
+    not grep -qF -- "$value" "$TMP/caddy.log"
+done
+proxy_line() { # request id -> the reverse proxy's debug line of the request it sent upstream
+  grep -F "\"$1\"" "$TMP/caddy.log" | grep -F '"logger":"http.handlers.reverse_proxy' | grep -F '"upstream roundtrip"' | head -n 1
+}
+proxy_edge() { # request id -> "<line found> <X-Velexis-Host kept> <X-Velexis-Edge kept>"
+  # shellcheck disable=SC2016 # JavaScript, not shell
+  proxy_line "$1" | "$NODE" -e '
+    const text = require("fs").readFileSync(0, "utf8");
+    const h = text ? JSON.parse(text).request?.headers ?? {} : {};
+    process.stdout.write(`${Boolean(text)} ${"X-Velexis-Host" in h} ${"X-Velexis-Edge" in h}`);
+  '
+}
+same "the reverse proxy's debug line of $TENANT/api (the request sent upstream) keeps X-Velexis-Host but not the edge secret's header [FIX-W51-SHARED 20q]" \
+  "$(proxy_edge "smoke-err-6-$ERR_MARK")" "true true false"
+debug_copy off
+check "caddy reload without debug succeeds [FIX-W51-SHARED 20q]" waf_reload
+id="smoke-err-info-$ERR_MARK"
+fetch "api.$STOREFRONT" /v1/x -H "X-Request-Id: $id"
+same "api.$STOREFRONT with its upstream down still answers 503 [FIX-W51-SHARED 20q]" "$STATUS" 503
+fetch "api.$STOREFRONT" "/v1/x?after=$ERR_MARK" # a later request: the line of the one before is written by now
+check "at Caddy's default level (the production file's) a handled error writes no error line [FIX-W51-SHARED 20q]" \
+  not grep -qF "\"$id\"" <<<"$(grep -F '"logger":"http.log.error.' "$TMP/caddy.log")"
 
 # ---- 10. logs -----------------------------------------------------------------------------------------------------
 step "Caddy's log"

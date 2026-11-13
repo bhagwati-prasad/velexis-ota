@@ -2,7 +2,8 @@
 # Jobs: plan-lint (no install), deploy-files (shellcheck, the Velexis Caddy build with the web application firewall
 # (deploy/caddy/build/build-caddy.sh, checked against its pinned SHA-256; task X-039), Caddyfile validation and its
 # end-to-end smoke test, the velexis-deploy test with a fake systemctl, the velexis-healthcheck test with fake
-# endpoints, systemd units and their sandbox exposure), systemd-units (the real units run a stand-in app under systemd;
+# endpoints, the velexis-shiplogs and velexis-logreview tests with a fake journal and a local rclone remote (lead
+# decision (20p) of 2026-11-13), systemd units and their sandbox exposure), systemd-units (the real units run a stand-in app under systemd;
 # a failure alert reaches Mailpit, and velexis-egress-refresh.service loads the outbound allow-list in a network
 # namespace of its own; lead decision (17a) of 2026-11-11), check-vm (check-vm.test.sh as root with a real sshd and a
 # real nft; lead decisions (13l) of 2026-11-10 and (17a) of 2026-11-11, approved by the owner), dev-setup
@@ -102,21 +103,41 @@ jobs:
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
           fi
           bash deploy/scripts/test/healthcheck.test.sh
+      - name: velexis-shiplogs and velexis-logreview tests (fake journal, a local rclone remote, no root)
+        # X-038: ship-logs.sh and log-review.sh unchanged against a fake journal export, a local rclone remote behind a
+        # wrapper that refuses every delete and a stand-in for velexis-alert; see the headers of ship-logs.test.sh and
+        # log-review.test.sh. Lead decision (20p) of 2026-11-13, approved by the owner. rclone and zstd come from the
+        # runner's apt, as do jq and age (with age-keygen) when the image lacks them.
+        run: |
+          missing=()
+          for tool in jq age zstd rclone; do
+            command -v "$tool" > /dev/null || missing+=("$tool")
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            sudo apt-get update -y
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${missing[@]}"
+          fi
+          bash deploy/scripts/test/ship-logs.test.sh
+          bash deploy/scripts/test/log-review.test.sh
       - name: Verify systemd units
         run: |
-          # Off the VM only the missing /usr/bin/node and helper paths are reported; anything else fails.
+          # Off the VM only the missing /usr/bin/node and helper paths are reported; anything else fails. A helper's
+          # name may hold hyphens (/usr/local/sbin/velexis-<name>) since lead decision (20p) of 2026-11-13 (approved by
+          # the owner).
           out="$(systemd-analyze verify --man=no deploy/systemd/*.service deploy/systemd/*.timer 2>&1 || true)"
           echo "$out"
-          if echo "$out" | grep -v -E "Command /usr/(bin/node|local/sbin/velexis-[a-z]+) is not executable|velexis-alert@|caddy.service" | grep -q .; then
+          if echo "$out" | grep -v -E "Command /usr/(bin/node|local/sbin/velexis-[a-z-]+) is not executable|velexis-alert@|caddy.service" | grep -q .; then
             exit 1
           fi
-      - name: Unit sandboxing (every app unit, velexis-alert@, velexis-healthcheck and velexis-egress-refresh at exposure 2.0 or lower)
+      - name: Unit sandboxing (every app unit, velexis-alert@, velexis-healthcheck, velexis-egress-refresh, velexis-ship-logs and velexis-log-review at exposure 2.0 or lower)
         run: |
           # --threshold counts in tenths: 20 is 2.0 ("OK"); systemd-analyze exits non-zero above it.
-          # velexis-egress-refresh since lead decision (17a) of 2026-11-11 (approved by the owner).
+          # velexis-egress-refresh since lead decision (17a) of 2026-11-11, velexis-ship-logs and velexis-log-review
+          # (X-038's security logs) since lead decision (20p) of 2026-11-13 (both approved by the owner).
           for unit in deploy/systemd/velexis-{platform-api,platform-worker,portal,platform-admin,ota-api,ota-worker,ota-admin}.service \
                       deploy/systemd/velexis-alert@.service deploy/systemd/velexis-healthcheck.service \
-                      deploy/systemd/velexis-egress-refresh.service; do
+                      deploy/systemd/velexis-egress-refresh.service \
+                      deploy/systemd/velexis-ship-logs.service deploy/systemd/velexis-log-review.service; do
             if ! out="$(systemd-analyze security --offline=true --threshold=20 --no-pager "$unit" 2>&1)"; then
               echo "$out"
               echo "::error::$unit is above exposure 2.0"

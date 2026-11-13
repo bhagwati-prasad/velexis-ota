@@ -21,10 +21,10 @@
 # "securityEvent" field the backends log). Each becomes one JSON line {"ts","rt","host","cat","unit","ident","pid",
 # "uid","prio","msg"} (cat: ssh, sudo, login, auditd, egress, caddy, waf, fail2ban, aide, security, velexis, systemd).
 # Of Caddy only its access lines (loggers http.log.access.*, whose secrets and personal query values the Caddyfile's
-# filter deletes) and the WAF's lines are shipped, never its other lines: the environment that the caddy package's unit
-# prints at every start (`caddy run --environ`; VELEXIS_EDGE_SECRET among it), and its error log (http.log.error.*: a
-# handler's error, such as an unreachable upstream, with the request's whole query and headers, X-Api-Key included,
-# which no Caddyfile filter touches). A Caddy line longer than journald's LineMax (48K) reaches the journal in parts
+# filter deletes) and the WAF's lines are shipped, never its other lines: its error log (http.log.error.*: a handler's
+# error, such as an unreachable upstream, with the request that caused it, filtered as the access lines are since lead
+# decision (20q) of 2026-11-13) and, on a VM whose Caddy still runs with the caddy package's `caddy run --environ`, the
+# environment it prints at start (VELEXIS_EDGE_SECRET among it; the repository's drop-in drops --environ). A Caddy line longer than journald's LineMax (48K) reaches the journal in parts
 # that are no JSON; the first part of an access or WAF line is shipped as a note with its length, the others not at
 # all. journalctl runs with --all: without it, its JSON output turns every field of 4096 bytes or more into null, and
 # a long access or WAF line would be shipped empty.
