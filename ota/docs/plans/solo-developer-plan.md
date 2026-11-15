@@ -66,7 +66,7 @@ Related: [`implementation-plan.md`](implementation-plan.md), [`agent-tasks.md`](
 | 39b | M6 | Follow-ups of 2026-11-11: CORS, offers per search, closing a Reconciliation review | OBE-097, OBE-098, OAD-021, OBE-099, OAD-022 | 5 | Calendar week of its own after platform Weeks 30a and 30b (added 2026-11-11; roadmap C77) |
 | 39c | M6 | `secrets:rewrap`, layout shifts on phones | OBE-100, OFE-030 | 2 (split; its ½ day of buffer went to platform Week 30c on 2026-11-11) | **Split week** with platform Week 30c (PBE-072, PBE-073) and X-041 (added 2026-11-11; roadmap C78) |
 | 39d | M6 | Follow-ups of the lead's second set of 2026-11-11: the SDK's shared refresh, the Amadeus buckets kept for shopping, a signed-in customer's phone page | SDK-016, OBE-102, OFE-031 | 4 (split) | **Split week** with platform Week 30d (PBE-074) (added 2026-11-11, second set; roadmap C79) |
-| 39e | M6 | Follow-ups of 2026-11-13: one refresh per refresh token in the SDK, the compact account menu up to the large breakpoint | SDK-017, OFE-032 | 2.5 (split; 1 day of buffer) | **Split week** with platform Week 30e (PBE-075) (added 2026-11-13; roadmap C80); SDK-017 before SDK-015 (Week 40) publishes 1.0.0 |
+| 39e | M6 | Follow-ups of 2026-11-13: one refresh per refresh token in the SDK, the compact account menu up to the large breakpoint | SDK-017, OFE-032 | 2.5 (split; 1 day of buffer) | **Split week** with platform Week 30e (PBE-075 and, since 2026-11-15, PFE-031) (added 2026-11-13; roadmap C80); SDK-017 before SDK-015 (Week 40) publishes 1.0.0 |
 | 40 | M6 exit | SDK 1.0.0, airline-card gate, search budget, Redis's completed jobs, stable suites, launch | SDK-015, OBE-086, OBE-096, OBE-101, OFE-026 | 5 | Shared launch week with platform Week 31 |
 
 ```mermaid
@@ -435,7 +435,7 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 - **Tasks:** SDK-017 (1), OFE-032 (½); 1 day of buffer. OAD-023 (½) runs after the launch.
 - **Deliverables:** in token and server mode, SDK clients that hold the same refresh token share one refresh, and in cookie mode the shared refresh goes out with the root client's settings (SDK-017), before SDK-015 publishes 1.0.0; the compact signed-in account menu below the large breakpoint, so a long first name never wraps the header row (OFE-032).
 - **Demo:** two token-mode clients with the same refresh token answered `401 TOKEN_EXPIRED` at once and one refresh in the network log; a signed-in customer with a long first name at 768 to 1023 px, the header on one row and no shift when the session answers.
-- **Overlap:** shares its calendar week (roadmap C80) with platform Week 30e (PBE-075).
+- **Overlap:** shares its calendar week (roadmap C80) with platform Week 30e (PBE-075 and, since 2026-11-15, PFE-031).
 
 ### Week 40 — M6 exit: SDK 1.0.0, airline-card gate, search budget, stable suites, launch
 
@@ -475,7 +475,7 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 | 39b | 5 | A calendar week of its own after platform Weeks 30a and 30b (since 2026-11-11) | none |
 | 39c | 2 | Platform Week 30c (PBE-072, PBE-073) and X-041 in the same calendar week (since 2026-11-11) | none |
 | 39d | 4 | Platform Week 30d (PBE-074) in the same calendar week (since the second re-baseline of 2026-11-11) | none |
-| 39e | 2.5 | Platform Week 30e (PBE-075) in the same calendar week (since 2026-11-13) | none |
+| 39e | 2.5 | Platform Week 30e (PBE-075 and, since 2026-11-15, PFE-031) in the same calendar week (since 2026-11-13) | none |
 | 40 | 5 | Platform Week 31 (shared launch) | shared launch |
 
 In a strictly sequential calendar for one person, the OTA-only blocks (Weeks 4–11, 13–23, 25–33) are the "several OTA-only weeks" that the platform plan expects between its Weeks 17 and 21; the split weeks are where both groups' days meet. The roadmap turns this table into calendar dates.

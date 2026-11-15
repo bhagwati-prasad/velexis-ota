@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (solo developer driving AI coding agents, plain Markdown plans in two styles), lead architect (task format, branch and PR rules, review gates)
-**Revisions:** 2026-10-12 (planning review): one status rule with ` ✅` on merged task headings ([ADR-0025](0025-roadmap-scheduling-and-tracking.md) item 6); registry files and folder entries do not block parallel work; the second-agent review pass becomes a written procedure (X-036).
+**Revisions:** 2026-10-12 (planning review): one status rule with ` ✅` on merged task headings ([ADR-0025](0025-roadmap-scheduling-and-tracking.md) item 6); registry files and folder entries do not block parallel work; the second-agent review pass becomes a written procedure (X-036). 2026-11-15 (lead decisions (23i), (23j) and (23k) of 2026-11-15, approved by the owner the same day; FIX-W54-DOCS; [ADR-0001](0001-record-architecture-decisions.md) item 4, refinement exception): step 6 and "Gates and permissions" say how work reaches `main` from then on. The integration branch `claude/intelligent-bardeen-90hhu7` is merged into `main` once with a merge commit, not a squash, so every task commit with its `Task:` footer stays in `main`'s history (the ancestry check of the airline-card go-live precondition P21 works as written), and `main` then becomes the default branch; later waves reach `main` as one pull request per wave from the integration branch, which the developer reviews and merges with a merge commit, while a task done outside a wave still opens its own pull request; `main`'s protection allows merge commits, does not require linear history, keeps blocking force pushes and keeps the six required checks, and requires no approval while the developer is the only person with write access (one once a second person with write access joins). One task, one branch and the developer's review and merge stay as they were.
 
 ## Context
 
@@ -66,12 +66,14 @@ Rules:
    - docs or ADRs touched;
    - security checklist;
    - open questions.
+
+   *Revised 2026-11-15 (lead decision (23j), approved by the owner; FIX-W54-DOCS).* In a wave (several tasks handed out together, then integrated), each task keeps its own branch and the integrator squash-merges it into the integration branch with its `Task:` footer; the integration branch reaches `main` as **one pull request per wave**, which the developer reviews and merges with a merge commit, so every task commit stays in `main`'s history. The integration branch `claude/intelligent-bardeen-90hhu7` reaches `main` the first time the same way, once, with a merge commit, not a squash (decision (23i)); `main` then becomes the repository's default branch, so the nightly E2E schedule and Dependabot run on it. A task done outside a wave still opens its own pull request, as above.
 7. **Update the plan** in the same PR (status `done (PR #n)` and ` ✅` on the heading) and any doc the change makes stale.
 
 ### Gates and permissions
 
 - **The developer reviews and merges every PR.** Agents never merge, never push to `main`, never force-push a branch another agent uses, and never change CI, branch protection or agent configuration unless the task is about exactly that.
-- `main` is protected: CI green, one approval (the developer), squash merge, linear history.
+- `main` is protected: the six required checks green (**Plan lint**, **Deploy files**, **Build and test**, **Integration tests**, **VM check test**, **Integration tests on other hosts and ports**; [`tools/ci/README.md`](../../../tools/ci/README.md#human-steps-the-developer)), merge commits allowed, linear history not required, force pushes blocked. Required approvals: **0** while the developer is the only person with write access, because GitHub does not let a pull request's author approve it; the required checks and, where the [second-agent review runbook](../runbooks/second-agent-review.md) asks for one, the second-agent review comment (X-036) are then the review record. It becomes **1** when a second person with write access joins. *Revised 2026-11-15 (lead decisions (23j) and (23k), approved by the owner; FIX-W54-DOCS); until then this line read "CI green, one approval (the developer), squash merge, linear history".*
 - **No production access for agents:** no SSH to the VM, no production secrets, no live Stripe or Amadeus credentials. Deploys are a manual `workflow_dispatch` by the developer ([ADR-0007](0007-single-vm-without-docker.md)).
 - **Never weaken tests** to pass ([ADR-0015](0015-testing-strategy.md)).
 - **Stop and ask instead of guessing.** If a task conflicts with `decisions.md` or an ADR, or is ambiguous, the agent stops and writes the question in the PR (or in its final message) instead of choosing silently. If a new decision is unavoidable, it writes a `Proposed` ADR ([ADR-0001](0001-record-architecture-decisions.md)).

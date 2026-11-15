@@ -1630,6 +1630,7 @@ Checkout, customer accounts in cookies, Stripe on the Velexis account, the airli
   - The journey passes nightly with the storefront guards of OFE-008 active [OF-04 AC1].
   - The sold-out test ends with the authorisation voided [OF-04 AC2].
 - **Verify:** `E2E_WITH_OTA=1 E2E_STRIPE=1 pnpm test:e2e -- --project=storefront-stripe specs/storefront/checkout-stripe.e2e.ts`, with the Stripe test keys that tools/e2e/README.md lists for the `storefront-stripe` project (nightly in `.github/workflows/e2e.yml`)
+- **Note (2026-11-15, lead decision (23o) of 2026-11-15, approved by the owner; FIX-W54-DOCS):** the secret key of the pending nightly run is the repository secret `E2E_STRIPE_SECRET_KEY`, a test-mode secret key (`sk_test_…`, never a live key), which the workflow gives the stack as `STRIPE_SECRET_KEY` and as step 1's `STRIPE_SECRET_KEY_TEST`; the OTA's own pattern would take a restricted `rk_test_…` key, but `tools/e2e/support/stack.ts` refuses one as `STRIPE_SECRET_KEY`, so the roadmap's "restricted test key" for these secrets became a test-mode secret key ([`tools/e2e/README.md`](../../../tools/e2e/README.md#ci-githubworkflowse2eyml), human steps). This Note changes no Status.
 
 ### OFE-018 · Write the airline-card journey with leak checks ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
