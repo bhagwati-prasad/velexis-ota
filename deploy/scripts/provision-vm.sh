@@ -92,6 +92,8 @@
 # least once on the VM (in one run or in several, in any order) aideinit runs once more, so that the files the steps
 # after harden install become ordinary entries of AIDE's database. It runs once only (/var/lib/velexis/provision/
 # aide-rebaseline records it, also a failed attempt); later runs never change the database (see aide_rebaseline_once).
+# Once it is recorded, the step harden never makes a new database either: with /var/lib/aide/aide.db missing it warns,
+# names deployment §12 and leaves it missing (aide_database_at_harden, lead decision (23b) of 2026-11-15).
 #
 # Tests only: VELEXIS_ROOT=<absolute folder> moves every Velexis path (/etc/velexis, /srv/velexis, /var/lib/velexis,
 # /var/log/velexis, /var/backups/velexis, /usr/local/sbin and the deploy sudoers file), /var/lib/aide/aide.db, /etc/ssh
@@ -381,11 +383,10 @@ report_level=added_removed_entries
 /var/lib/apt/lists/[^/]+$ f VarFile
 AIDE
   # The files of the later steps join the database once, at the end of the first run after which every step has
-  # completed (aide_rebaseline_once, lead decision (22d) of 2026-11-15).
-  if [ ! -f "$AIDE_DB" ]; then
-    log "Initialising the AIDE database (takes a few minutes)"
-    aideinit -y -f >/dev/null || warn "aideinit failed; run it manually"
-  fi
+  # completed (aide_rebaseline_once, lead decision (22d) of 2026-11-15). harden makes a database only before that
+  # re-baseline: once it is recorded, a missing database is warned about and left missing (aide_database_at_harden,
+  # lead decision (23b) of 2026-11-15).
+  aide_database_at_harden
   # AIDE's daily check (PCI DSS 11.5.2): the package aide-common's timer, enabled by the package; a re-run repairs a
   # disabled one. check-vm.sh checks it (lead decision (13j) of 2026-11-10).
   systemctl enable --now dailyaidecheck.timer >/dev/null 2>&1 \
@@ -1439,12 +1440,30 @@ EOF
 # attempt, never repeated automatically, so no later run can accept a changed file silently, also not after a failed or
 # interrupted attempt. A deliberate re-baseline later is a manual step after reviewing the aide-change alerts
 # (docs/mvp/deployment-single-vm.md §12), which appends its own line to the record. check-vm.sh (group system) reports
-# the record's state. BASELINE_STEPS is every step but summary, which only prints; ssh and egress are parts of harden.
+# the record's state and, since lead decision (23b) of 2026-11-15, compares /var/lib/aide/aide.db with the SHA-256 on
+# the record's last "rebaselined" or "manual" line. BASELINE_STEPS is every step but summary, which only prints; ssh and
+# egress are parts of harden.
 PROVISION_STATE="$LIB/provision"
 BASELINE_STEPS="${ALL_STEPS% summary}"
 AIDE_REBASELINE="$PROVISION_STATE/aide-rebaseline"
 AIDE_DB="$VELEXIS_ROOT/var/lib/aide/aide.db"
 utc_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# harden's AIDE database (lead decision (23b) of 2026-11-15). Before the one-time re-baseline, harden makes AIDE's
+# database when none exists (the first provisioning). Once the re-baseline is recorded ($AIDE_REBASELINE exists, in any
+# state), no run of this script creates or replaces /var/lib/aide/aide.db by itself: a new database would accept every
+# file as it is at that moment without a person looking, so a database missing then is a finding to explain. harden
+# warns (stderr and provision.log), names deployment §12 and leaves it missing, and the step otherwise completes;
+# check-vm.sh (group system) reports FAIL until a re-baseline by hand (§12) installs a reviewed database and records it.
+aide_database_at_harden() {
+  [ ! -f "$AIDE_DB" ] || return 0
+  if [ -e "$AIDE_REBASELINE" ] || [ -L "$AIDE_REBASELINE" ]; then
+    warn "AIDE's database $AIDE_DB is missing, and AIDE's one-time re-baseline is recorded ($AIDE_REBASELINE), so this script makes no new one: find out why it is missing, then make one by hand after review and record it (docs/mvp/deployment-single-vm.md §12)"
+    return 0
+  fi
+  log "Initialising the AIDE database (takes a few minutes)"
+  aideinit -y -f >/dev/null || warn "aideinit failed; run it manually"
+}
 
 step_completed() { # step: its record, once
   [ -d "$LIB" ] || install -d -m 0711 -o root -g root "$LIB"

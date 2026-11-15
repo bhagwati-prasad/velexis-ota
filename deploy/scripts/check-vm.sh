@@ -22,7 +22,9 @@
 #             /etc/aide/aide.conf.d/90_velexis holds the lines report_level=added_removed_entries and
 #             /var/lib/apt/lists/[^/]+$ f VarFile as provision-vm.sh's step harden writes them (lead decision (21l) of
 #             2026-11-13); AIDE's database re-baselined once after the first full provisioning, or later by hand
-#             (/var/lib/velexis/provision/aide-rebaseline; lead decision (22d) of 2026-11-15)
+#             (/var/lib/velexis/provision/aide-rebaseline; lead decision (22d) of 2026-11-15), and from then on
+#             /var/lib/aide/aide.db present with the SHA-256 of the record's last "rebaselined" or "manual" line
+#             (lead decision (23b) of 2026-11-15)
 #   services  postgresql, redis-server, caddy, velexis-backup.timer and velexis-healthcheck.timer active and enabled,
 #             the cluster postgresql@16-main active; fail2ban, auditd and chrony active and enabled; Node.js 22; the
 #             security logs of task X-038 (lead decision (20p) of 2026-11-13): velexis-ship-logs.timer and
@@ -220,6 +222,37 @@ aide_rebaseline() {
   esac
 }
 
+# AIDE's database against the record of its last re-baseline (lead decision (23b) of 2026-11-15). Once the re-baseline
+# is recorded (the record exists, in any state), provision-vm.sh never makes or replaces /var/lib/aide/aide.db by
+# itself, and aide-common's daily check never replaces it either (COPYNEWDB=no): the database must be the one whose
+# SHA-256 the record's last "rebaselined" or "manual" line holds (its third field). FAIL, naming §12, when it is missing
+# or differs, or when that line holds no SHA-256. No item before the record exists, nor while the record holds no such
+# line ("started", "failed": aide_rebaseline reports FAIL for those, with the same way out).
+aide_database() {
+  local record="$R/var/lib/velexis/provision/aide-rebaseline" db="$R/var/lib/aide/aide.db" line kind want got
+  local what="AIDE's database is the one its last recorded re-baseline installed"
+  local way="find out why, then re-baseline by hand after review: deployment-single-vm.md §12"
+  [ -e "$record" ] || [ -L "$record" ] || return 0
+  if [ ! -f "$db" ]; then
+    fail "$what (/var/lib/aide/aide.db is missing, and provision-vm.sh makes no new one after the re-baseline; $way)"
+    return
+  fi
+  line="$(grep -E '^(rebaselined|manual) ' "$record" 2>/dev/null | tail -n 1)"
+  [ -n "$line" ] || return 0
+  kind="${line%% *}"
+  want="$(printf '%s\n' "$line" | cut -d' ' -f3)"
+  if ! [[ "$want" =~ ^[0-9a-f]{64}$ ]]; then
+    fail "$what (the record's last '$kind' line holds no SHA-256; $way)"
+    return
+  fi
+  got="$(sha256sum <"$db" 2>/dev/null | cut -d' ' -f1)"
+  if [ "$got" = "$want" ]; then
+    pass "$what (/var/lib/aide/aide.db has the SHA-256 of the record's last '$kind' line, $want)"
+  else
+    fail "$what (/var/lib/aide/aide.db has the SHA-256 ${got:-(unreadable)}, the record's last '$kind' line $want: it changed outside a recorded re-baseline; $way)"
+  fi
+}
+
 group_system() {
   local os tz swaps fstab state v
   # shellcheck disable=SC1091
@@ -254,9 +287,17 @@ group_system() {
   else
     fail "unattended-upgrades runs daily (/etc/apt/apt.conf.d/20auto-upgrades)"
   fi
-  if [ -s "$R/var/lib/aide/aide.db" ]; then pass "the AIDE database exists"; else fail "the AIDE database exists (/var/lib/aide/aide.db; run aideinit)"; fi
+  if [ -s "$R/var/lib/aide/aide.db" ]; then
+    pass "the AIDE database exists"
+  elif [ -e "$R/var/lib/velexis/provision/aide-rebaseline" ] || [ -L "$R/var/lib/velexis/provision/aide-rebaseline" ]; then
+    # After the one-time re-baseline a new database is made only by hand, after review (lead decision (23b)).
+    fail "the AIDE database exists (/var/lib/aide/aide.db; after the re-baseline only by hand: deployment-single-vm.md §12)"
+  else
+    fail "the AIDE database exists (/var/lib/aide/aide.db; run aideinit)"
+  fi
   aide_settings
   aide_rebaseline
+  aide_database
   # AIDE's daily check (PCI DSS 11.5.2) runs from the timer of the package aide-common, which provision-vm.sh enables.
   state="$(unit_state dailyaidecheck.timer)"
   if [ "$state" = "active enabled" ]; then

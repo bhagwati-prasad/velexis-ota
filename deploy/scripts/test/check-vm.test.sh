@@ -34,8 +34,9 @@
 # the fix of 2026-11-11 (the SSH source address) in [FIX-W48-SHARED AC5], the real-nft part that must run (lead
 # decision (17a) of 2026-11-11) in [FIX-W49-SHARED AC4], and the security logs' timers and auditd's syslog plugin (lead
 # decision (20p) of 2026-11-13) in [FIX-W51-SHARED 20p], AIDE's settings in 90_velexis (lead decision (21l) of
-# 2026-11-13) in [FIX-W52-SHARED 21l], and AIDE's one-time re-baseline and provision-vm.sh's record of Caddy's drop-in
-# (lead decisions (22d) and (22b) of 2026-11-15) in [FIX-W53-SHARED 22d] and [FIX-W53-SHARED 22b].
+# 2026-11-13) in [FIX-W52-SHARED 21l], AIDE's one-time re-baseline and provision-vm.sh's record of Caddy's drop-in
+# (lead decisions (22d) and (22b) of 2026-11-15) in [FIX-W53-SHARED 22d] and [FIX-W53-SHARED 22b], and AIDE's database
+# after that re-baseline (lead decision (23b) of 2026-11-15) in [FIX-W54-SHARED 23b].
 #
 # What it proves:
 #   1. Two runs of provision-vm.sh --steps users,keys,envfiles: the second changes no key, env or secrets file
@@ -124,6 +125,17 @@
 #      restarts Caddy only through restart_caddy (in the steps caddy, scripts and caddyconf), which, run as it is with a
 #      stand-in for systemctl, records "restarting" before the restart and the drop-in's SHA-256 ("none" without one)
 #      only after it succeeded; a restart that fails leaves "restarting".
+#      AIDE's database after the re-baseline (lead decision (23b) of 2026-11-15, [FIX-W54-SHARED 23b]): harden's AIDE part,
+#      aide_database_at_harden (the only aideinit of harden, read from provision-vm.sh, which calls aideinit in that
+#      function and in aide_rebaseline_once only), runs as it is with the fake aideinit on the roots above: with the
+#      re-baseline recorded ("rebaselined" by provision-vm.sh's own loop, or "failed") and aide.db missing it calls no
+#      aideinit, warns on stderr and in provision.log naming deployment §12, leaves the database missing and lets the
+#      step go on; before the re-baseline it still makes the database once, and with a database it does nothing.
+#      check-vm.sh (group system, section 3 and the roots above) reports PASS when aide.db has the SHA-256 of the
+#      record's last "rebaselined" or "manual" line (also a manual line after an earlier re-baseline, and the record
+#      provision-vm.sh wrote), and FAIL, naming §12, for a missing database (after "rebaselined" or "failed"), a
+#      changed one and a last line without a SHA-256; it reports no such item before the record exists or while the
+#      record holds only "started" or "failed" with a database, and the database item keeps its result.
 # =====================================================================================================
 set -euo pipefail
 umask 022
@@ -340,6 +352,8 @@ aide_conf_healthy
 AIDE_REBASELINE="$ROOT/var/lib/velexis/provision/aide-rebaseline"
 aide_rebaseline_healthy() {
   install -d -m 0700 "$ROOT/var/lib/velexis/provision"
+  # The database the record names (lead decision (23b) of 2026-11-15): section 3 removes and changes it.
+  [ "$(cat "$ROOT/var/lib/aide/aide.db" 2>/dev/null)" = 'AIDE test database' ] || printf 'AIDE test database\n' >"$ROOT/var/lib/aide/aide.db"
   printf 'rebaselined 2026-01-02T03:04:05Z %s\n' "$(sha256sum <"$ROOT/var/lib/aide/aide.db" | cut -d' ' -f1)" >"$AIDE_REBASELINE"
 }
 aide_rebaseline_healthy
@@ -862,6 +876,7 @@ PASS the AIDE database exists
 PASS dailyaidecheck.timer is active and enabled (AIDE's daily check)
 PASS AIDE's 90_velexis details added entries and relaxes apt's lists (report_level=added_removed_entries; /var/lib/apt/lists/[^/]+$ f VarFile)
 PASS AIDE's database was re-baselined once after the first full provisioning (2026-01-02T03:04:05Z
+PASS AIDE's database is the one its last recorded re-baseline installed (/var/lib/aide/aide.db has the SHA-256 of the record's last 'rebaselined' line,
 PASS sshd -T: AllowUsers $ADMIN_TEST_USER $DEPLOY_TEST_USER
 PASS sshd -T -C user=$ADMIN_TEST_USER: second factor FIDO2 (publickey with sk-ssh-ed25519@openssh.com only, pubkeyauthoptions touch-required verify-required)
 PASS sshd -T -C user=$ADMIN_TEST_USER: keys only from .ssh/authorized_keys
@@ -1004,6 +1019,24 @@ broken "no re-baseline yet, steps still to run" system \
 for s in redis caddy keys database envfiles scripts caddyconf; do date -u +%Y-%m-%dT%H:%M:%SZ >"$RB_STEPS/$s"; done
 broken "no re-baseline yet, every step completed" system \
   "$REBASELINED \\(not yet: every step has completed, so the next provision-vm.sh run makes it\\)$" "FIX-W53-SHARED 22d"
+# AIDE's database against the record (lead decision (23b) of 2026-11-15): nothing to compare before the record exists,
+# and a missing database then keeps its item's result and its advice (harden still makes one).
+DB_ITEM="AIDE's database is the one its last recorded re-baseline installed"
+DB_WAY="find out why, then re-baseline by hand after review: deployment-single-vm.md §12\\)$"
+if grep -q "PASS the AIDE database exists" "$OUT/broken-$N-system.out" && ! grep -qF "$DB_ITEM" "$OUT/broken-$N-system.out"; then
+  pass "before the re-baseline is recorded check-vm.sh compares no database with it (no item) [FIX-W54-SHARED 23b]"
+else
+  indent "$OUT/broken-$N-system.out"
+  fail "before the re-baseline is recorded check-vm.sh compares no database with it [FIX-W54-SHARED 23b]"
+fi
+mv "$ROOT/var/lib/aide/aide.db" "$PREFIX/aide.db.away"
+broken "no AIDE database before the re-baseline" system "the AIDE database exists \\(/var/lib/aide/aide.db; run aideinit\\)$" "FIX-W54-SHARED 23b"
+if grep -qF "$DB_ITEM" "$OUT/broken-$N-system.out"; then
+  fail "no AIDE database before the re-baseline: no comparison with a record that does not exist [FIX-W54-SHARED 23b]"
+else
+  pass "no AIDE database before the re-baseline: no comparison with a record that does not exist (harden still makes one) [FIX-W54-SHARED 23b]"
+fi
+mv "$PREFIX/aide.db.away" "$ROOT/var/lib/aide/aide.db"
 mv "$RB_STEPS" "$PREFIX/steps.test"
 [ "$RB_SAVED" = 0 ] || mv "$PREFIX/steps.saved" "$RB_STEPS"
 printf 'started 2026-01-02T03:04:05Z\n' >"$AIDE_REBASELINE"
@@ -1014,6 +1047,17 @@ printf 'failed 2026-01-02T03:04:05Z\n' >"$AIDE_REBASELINE"
 broken "a failed re-baseline" system \
   "$REBASELINED \\(aideinit failed 2026-01-02T03:04:05Z, and provision-vm.sh never repeats it; re-baseline it by hand" \
   "FIX-W53-SHARED 22d"
+if grep -q "PASS the AIDE database exists" "$OUT/broken-$N-system.out" && ! grep -qF "$DB_ITEM" "$OUT/broken-$N-system.out"; then
+  pass "a record of a failed re-baseline and a database: no SHA-256 to compare with, so no item beside the re-baseline's FAIL [FIX-W54-SHARED 23b]"
+else
+  indent "$OUT/broken-$N-system.out"
+  fail "a record of a failed re-baseline and a database: no comparison without a SHA-256 [FIX-W54-SHARED 23b]"
+fi
+mv "$ROOT/var/lib/aide/aide.db" "$PREFIX/aide.db.away"
+broken "a failed re-baseline and no AIDE database (harden makes none after the record)" system \
+  "$DB_ITEM \\(/var/lib/aide/aide.db is missing, and provision-vm.sh makes no new one after the re-baseline; $DB_WAY" \
+  "FIX-W54-SHARED 23b"
+mv "$PREFIX/aide.db.away" "$ROOT/var/lib/aide/aide.db"
 printf 'rebaselined\n' >"$AIDE_REBASELINE"
 broken "a record without its time and checksum" system "$REBASELINED \\(/var/lib/velexis/provision/aide-rebaseline holds no state it knows; " \
   "FIX-W53-SHARED 22d"
@@ -1027,12 +1071,62 @@ else
   indent "$OUT/aide-manual.out"
   fail "check-vm.sh --only system reports PASS for a manual re-baseline appended after a failed one [FIX-W53-SHARED 22d]"
 fi
+DB_SHA="$(sha256sum <"$ROOT/var/lib/aide/aide.db" | cut -d' ' -f1)"
+if grep -qxF "PASS $DB_ITEM (/var/lib/aide/aide.db has the SHA-256 of the record's last 'manual' line, $DB_SHA)" "$OUT/aide-manual.out"; then
+  pass "check-vm.sh --only system reports PASS for a database with the SHA-256 of that manual line [FIX-W54-SHARED 23b]"
+else
+  indent "$OUT/aide-manual.out"
+  fail "check-vm.sh --only system reports PASS for a database with the SHA-256 of the manual line [FIX-W54-SHARED 23b]"
+fi
+# AIDE's database against the record's last "rebaselined" or "manual" line (lead decision (23b) of 2026-11-15): a
+# re-baseline by hand after provision-vm.sh's own installed a newer database, which the last line names, not the first.
+OLD_SHA="$(printf 'the database of the one-time re-baseline\n' | sha256sum | cut -d' ' -f1)"
+printf 'rebaselined 2026-01-02T03:04:05Z %s\nmanual 2026-02-01T10:00:00Z %s ops: the January reports reviewed (package updates)\n' \
+  "$OLD_SHA" "$DB_SHA" >"$AIDE_REBASELINE"
+if run_check "$OUT/aide-db-manual.out" --only system &&
+  grep -qxF "PASS $DB_ITEM (/var/lib/aide/aide.db has the SHA-256 of the record's last 'manual' line, $DB_SHA)" "$OUT/aide-db-manual.out"; then
+  pass "check-vm.sh --only system compares the database with the record's last line, a manual re-baseline after provision-vm.sh's one-time re-baseline [FIX-W54-SHARED 23b]"
+else
+  indent "$OUT/aide-db-manual.out"
+  fail "check-vm.sh --only system compares the database with the record's last 'rebaselined' or 'manual' line [FIX-W54-SHARED 23b]"
+fi
+printf 'rebaselined 2026-01-02T03:04:05Z %s\nmanual 2026-02-01T10:00:00Z %s ops: the January reports reviewed\n' \
+  "$DB_SHA" "$OLD_SHA" >"$AIDE_REBASELINE"
+broken "a database that is the one-time re-baseline's, not the manual one's after it" system \
+  "$DB_ITEM \\(/var/lib/aide/aide.db has the SHA-256 $DB_SHA, the record's last 'manual' line $OLD_SHA: it changed outside a recorded re-baseline; $DB_WAY" \
+  "FIX-W54-SHARED 23b"
+printf 'rebaselined 2026-01-02T03:04:05Z %s\nmanual 2026-02-01T10:00:00Z ops: the January reports reviewed\n' "$DB_SHA" >"$AIDE_REBASELINE"
+broken "a manual line without its SHA-256" system "$DB_ITEM \\(the record's last 'manual' line holds no SHA-256; $DB_WAY" \
+  "FIX-W54-SHARED 23b"
+healthy
+printf 'AIDE database changed after the re-baseline\n' >>"$ROOT/var/lib/aide/aide.db"
+broken "an AIDE database changed after the re-baseline" system \
+  "$DB_ITEM \\(/var/lib/aide/aide.db has the SHA-256 [0-9a-f]{64}, the record's last 'rebaselined' line $DB_SHA: it changed outside a recorded re-baseline; $DB_WAY" \
+  "FIX-W54-SHARED 23b"
+healthy
+mv "$ROOT/var/lib/aide/aide.db" "$PREFIX/aide.db.away"
+broken "no AIDE database after the re-baseline" system \
+  "$DB_ITEM \\(/var/lib/aide/aide.db is missing, and provision-vm.sh makes no new one after the re-baseline; $DB_WAY" \
+  "FIX-W54-SHARED 23b"
+if grep -qxF "FAIL the AIDE database exists (/var/lib/aide/aide.db; after the re-baseline only by hand: deployment-single-vm.md §12)" "$OUT/broken-$N-system.out"; then
+  pass "no AIDE database after the re-baseline: the database item keeps its FAIL and names §12 instead of aideinit [FIX-W54-SHARED 23b]"
+else
+  indent "$OUT/broken-$N-system.out"
+  fail "no AIDE database after the re-baseline: the database item keeps its FAIL and names §12 [FIX-W54-SHARED 23b]"
+fi
+mv "$PREFIX/aide.db.away" "$ROOT/var/lib/aide/aide.db"
 healthy
 if run_check "$OUT/aide-rebaselined.out" --only system && grep -qF "PASS $REBASELINED (2026-01-02T03:04:05Z " "$OUT/aide-rebaselined.out"; then
   pass "check-vm.sh --only system reports PASS for the re-baseline as provision-vm.sh records it [FIX-W53-SHARED 22d]"
 else
   indent "$OUT/aide-rebaselined.out"
   fail "check-vm.sh --only system reports PASS for the re-baseline as provision-vm.sh records it [FIX-W53-SHARED 22d]"
+fi
+if grep -qxF "PASS $DB_ITEM (/var/lib/aide/aide.db has the SHA-256 of the record's last 'rebaselined' line, $DB_SHA)" "$OUT/aide-rebaselined.out"; then
+  pass "check-vm.sh --only system reports PASS for a database with the SHA-256 of the 'rebaselined' line [FIX-W54-SHARED 23b]"
+else
+  indent "$OUT/aide-rebaselined.out"
+  fail "check-vm.sh --only system reports PASS for a database with the SHA-256 of the 'rebaselined' line [FIX-W54-SHARED 23b]"
 fi
 # The security logs (X-038; lead decision (20p) of 2026-11-13): both timers, and auditd's syslog plugin.
 for timer in velexis-ship-logs.timer velexis-log-review.timer; do
@@ -2258,6 +2352,12 @@ else
   indent "$OUT/rb-first-check.out"
   fail "check-vm.sh reports PASS for the record provision-vm.sh wrote [FIX-W53-SHARED 22d]"
 fi
+if grep -qxF "PASS $DB_ITEM (/var/lib/aide/aide.db has the SHA-256 of the record's last 'rebaselined' line, $(sha256sum <"$RA/var/lib/aide/aide.db" | cut -d' ' -f1))" "$OUT/rb-first-check.out"; then
+  pass "check-vm.sh reports PASS for the database aideinit wrote at that re-baseline: its SHA-256 is the record's [FIX-W54-SHARED 23b]"
+else
+  indent "$OUT/rb-first-check.out"
+  fail "check-vm.sh reports PASS for the database aideinit wrote at the re-baseline [FIX-W54-SHARED 23b]"
+fi
 cp -p "$RA/var/lib/aide/aide.db" "$PREFIX/rb-first.db" 2>/dev/null || : >"$PREFIX/rb-first.db"
 RA_RECORD="$(rb_record "$RA")"
 # b. Later runs, of every step or of one, leave the database alone.
@@ -2350,6 +2450,106 @@ if [ "$rc" = 137 ] && [ "$(rb_calls "$RK")" = 1 ] && [ "$(cut -d' ' -f1 <<<"$(rb
 else
   indent "$OUT/rb-killed-1.log"
   fail "a run killed during the re-baseline: never repeated (exit $rc, aideinit calls: $(rb_calls "$RK"), record: $(rb_record "$RK")) [FIX-W53-SHARED 22d]"
+fi
+
+step "harden's AIDE database: made before the one-time re-baseline, never by itself after it (lead decision (23b) of 2026-11-15)"
+# The step harden needs the real VM. Its AIDE part is aide_database_at_harden, read from provision-vm.sh with the
+# script's own to_log, log and warn, and run here as it is, under set -e as in the script, with the fake aideinit above,
+# on the roots of the scenarios above: RA (re-baselined by provision-vm.sh's own loop), RE (its re-baseline failed, so
+# no database) and new roots without a record.
+hd_ok=1
+# harden calls aideinit only through aide_database_at_harden, and provision-vm.sh calls it there and in
+# aide_rebaseline_once only.
+[ "$(grep -cE '^[^#]*aideinit -y -f' "$PROVISION")" = 2 ] || hd_ok=0
+for f in aide_database_at_harden aide_rebaseline_once; do
+  sed -n "/^$f() {/,/^}/p" "$PROVISION" | grep -qE '^[^#]*aideinit -y -f' || hd_ok=0
+done
+sed -n '/^step_harden() {/,/^}/p' "$PROVISION" | grep -qxE '[[:space:]]*aide_database_at_harden' || hd_ok=0
+if [ "$hd_ok" = 1 ]; then
+  pass "the step harden makes AIDE's database only through aide_database_at_harden; provision-vm.sh runs aideinit there and in aide_rebaseline_once only [FIX-W54-SHARED 23b]"
+else
+  grep -n 'aideinit\|aide_database_at_harden' "$PROVISION" | indent
+  fail "the step harden makes AIDE's database only through aide_database_at_harden [FIX-W54-SHARED 23b]"
+fi
+HD_SRC="$(sed -n '/^to_log() { /p; /^log() { /p; /^warn() { /p; /^aide_database_at_harden() {/,/^}/p' "$PROVISION")"
+grep -q '^aide_database_at_harden() {' <<<"$HD_SRC" || fail "aide_database_at_harden() not found in provision-vm.sh [FIX-W54-SHARED 23b]"
+harden_aide_run() { # root name -> aide_database_at_harden as it is on that root; stdout, stderr and the exit code in $OUT
+  local root="$1" name="$2" rc=0
+  install -d -m 0750 "$root/var/log/velexis"
+  # Not inside a condition (if, ||, &&), where bash ignores set -e: the subshell stops at a failing function as
+  # provision-vm.sh's step loop would.
+  set +e
+  (
+    set -euo pipefail
+    export VELEXIS_ROOT="$root" PATH="$RB_BIN:$PATH"
+    # shellcheck disable=SC2034 # read by the evaluated functions
+    LOG_FILE="$root/var/log/velexis/provision.log"
+    # shellcheck disable=SC2034
+    AIDE_DB="$root/var/lib/aide/aide.db"
+    # shellcheck disable=SC2034
+    AIDE_REBASELINE="$root/var/lib/velexis/provision/aide-rebaseline"
+    eval "$HD_SRC"
+    aide_database_at_harden
+    echo "the step harden goes on"
+  ) >"$OUT/harden-aide-$name.out" 2>"$OUT/harden-aide-$name.err"
+  rc=$?
+  set -e
+  echo "$rc" >"$OUT/harden-aide-$name.rc"
+}
+HD_WARN="WARNING: AIDE's database $RA/var/lib/aide/aide.db is missing, and AIDE's one-time re-baseline is recorded ($RA/var/lib/velexis/provision/aide-rebaseline), so this script makes no new one: find out why it is missing, then make one by hand after review and record it (docs/mvp/deployment-single-vm.md §12)"
+# After the re-baseline (RA), aide.db missing: no aideinit, the warning on stderr and in provision.log, the step goes on.
+RA_CALLS="$(rb_calls "$RA")"
+mv "$RA/var/lib/aide/aide.db" "$PREFIX/rb-first-moved.db"
+harden_aide_run "$RA" after-missing
+if [ "$(cat "$OUT/harden-aide-after-missing.rc")" = 0 ] && [ "$(rb_calls "$RA")" = "$RA_CALLS" ] && [ ! -e "$RA/var/lib/aide/aide.db" ] &&
+  grep -qxF "$HD_WARN" "$OUT/harden-aide-after-missing.err" && [ "$(cut -d' ' -f2- "$RA/var/log/velexis/provision.log" | grep -cxF "$HD_WARN")" = 1 ] &&
+  grep -qx 'the step harden goes on' "$OUT/harden-aide-after-missing.out" && [ "$(rb_record "$RA")" = "$RA_RECORD" ]; then
+  pass "harden after the re-baseline with aide.db missing: no aideinit, the database left missing, a warning naming §12 on stderr and in provision.log, the step goes on [FIX-W54-SHARED 23b]"
+else
+  for f in out err rc; do indent "$OUT/harden-aide-after-missing.$f"; done
+  fail "harden after the re-baseline with aide.db missing: no aideinit, a warning naming §12 (aideinit calls: $(rb_calls "$RA"), was $RA_CALLS) [FIX-W54-SHARED 23b]"
+fi
+rb_check "$RA" "$OUT/rb-missing-check.out"
+if grep -qF "FAIL $DB_ITEM (/var/lib/aide/aide.db is missing, and provision-vm.sh makes no new one after the re-baseline; find out why, then re-baseline by hand after review: deployment-single-vm.md §12)" "$OUT/rb-missing-check.out"; then
+  pass "check-vm.sh reports FAIL, naming §12, for the database that harden left missing [FIX-W54-SHARED 23b]"
+else
+  indent "$OUT/rb-missing-check.out"
+  fail "check-vm.sh reports FAIL, naming §12, for the database that harden left missing [FIX-W54-SHARED 23b]"
+fi
+# After the re-baseline with the database in place: nothing at all.
+mv "$PREFIX/rb-first-moved.db" "$RA/var/lib/aide/aide.db"
+harden_aide_run "$RA" after-present
+if [ "$(cat "$OUT/harden-aide-after-present.rc")" = 0 ] && [ "$(rb_calls "$RA")" = "$RA_CALLS" ] &&
+  cmp -s "$PREFIX/rb-first.db" "$RA/var/lib/aide/aide.db" && [ ! -s "$OUT/harden-aide-after-present.err" ] &&
+  [ "$(cat "$OUT/harden-aide-after-present.out")" = "the step harden goes on" ]; then
+  pass "harden after the re-baseline with the database in place: no aideinit, no message, the database unchanged [FIX-W54-SHARED 23b]"
+else
+  for f in out err rc; do indent "$OUT/harden-aide-after-present.$f"; done
+  fail "harden after the re-baseline with the database in place changes nothing [FIX-W54-SHARED 23b]"
+fi
+# After a failed re-baseline (RE: no database, since the fake aideinit failed before writing one): no aideinit either.
+RE_CALLS="$(rb_calls "$RE")"
+harden_aide_run "$RE" after-failed
+if [ "$(cat "$OUT/harden-aide-after-failed.rc")" = 0 ] && [ "$(rb_calls "$RE")" = "$RE_CALLS" ] && [ ! -e "$RE/var/lib/aide/aide.db" ] &&
+  grep -qF "is missing, and AIDE's one-time re-baseline is recorded ($RE/var/lib/velexis/provision/aide-rebaseline), so this script makes no new one" "$OUT/harden-aide-after-failed.err" &&
+  grep -qx 'the step harden goes on' "$OUT/harden-aide-after-failed.out"; then
+  pass "harden after a failed re-baseline with aide.db missing: no aideinit either, the same warning [FIX-W54-SHARED 23b]"
+else
+  for f in out err rc; do indent "$OUT/harden-aide-after-failed.$f"; done
+  fail "harden after a failed re-baseline with aide.db missing: no aideinit (aideinit calls: $(rb_calls "$RE"), was $RE_CALLS) [FIX-W54-SHARED 23b]"
+fi
+# Before the re-baseline (a new root, no record): harden still makes the database, once; with one it does nothing.
+RN="$PREFIX/rb-harden-first"
+harden_aide_run "$RN" before-missing
+harden_aide_run "$RN" before-present
+if [ "$(cat "$OUT/harden-aide-before-missing.rc")" = 0 ] && [ "$(rb_calls "$RN")" = 1 ] && [ "$(cat "$RN.aideinit")" = "-y -f" ] &&
+  [ -s "$RN/var/lib/aide/aide.db" ] && grep -qF 'Initialising the AIDE database' "$OUT/harden-aide-before-missing.out" &&
+  grep -qF 'Initialising the AIDE database' "$RN/var/log/velexis/provision.log" && [ ! -s "$OUT/harden-aide-before-missing.err" ] &&
+  [ "$(cat "$OUT/harden-aide-before-present.rc")" = 0 ] && [ ! -s "$OUT/harden-aide-before-present.err" ] && [ -z "$(rb_record "$RN")" ]; then
+  pass "harden before the re-baseline still makes AIDE's database (one aideinit -y -f), and a second harden with it calls none [FIX-W54-SHARED 23b]"
+else
+  for f in before-missing.out before-missing.err before-present.err; do indent "$OUT/harden-aide-$f"; done
+  fail "harden before the re-baseline makes AIDE's database once (aideinit calls: $(rb_calls "$RN")) [FIX-W54-SHARED 23b]"
 fi
 
 step "provision-vm.sh's Caddy restarts record the drop-in Caddy started with (lead decision (22b) of 2026-11-15)"
