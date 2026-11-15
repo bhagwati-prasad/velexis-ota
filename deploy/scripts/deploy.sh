@@ -21,9 +21,9 @@
 #   transient units with a dynamic user (run_transient), and between them the fan-out report published as the OTA
 #   zone (velexis-run ota ... tenants:report-migrations) -> switch the `current` symlink -> restart workers, APIs,
 #   front ends one at a time with health checks -> put the staged Caddy files live and reload Caddy (restart it when
-#   its binary or its drop-in changed) -> prune old releases (never the active one nor the --rollback target). Any
-#   failed health check rolls back: the previous release's snapshot (units, Caddyfile, rule files, Caddy build) is
-#   re-installed, then `current` is switched back and the units restart.
+#   its binary changed or its drop-in is not the one it was last started with) -> prune old releases (never the active
+#   one nor the --rollback target). Any failed health check rolls back: the previous release's snapshot (units,
+#   Caddyfile, rule files, Caddy build) is re-installed, then `current` is switched back and the units restart.
 #
 # The Velexis Caddy build (task X-039, docs/mvp/deployment-single-vm.md §6): a release's caddy/bin/caddy (Caddy 2.8.4
 # with the Coraza web application firewall, deploy/caddy/build/build-caddy.sh) is installed root-owned as
@@ -33,11 +33,17 @@
 #
 # The caddy drop-in (deploy/systemd/caddy.service.d/velexis.conf: caddy.env, /run/caddy, Caddy started without
 # --environ) is installed with the units, and systemd applies a changed one only when Caddy starts again. So Caddy is
-# restarted, not reloaded, when the drop-in that a run leaves installed differs from the one installed when it began:
-# after the daemon-reload and after the new Caddyfile was validated and put in place, with the units healthy, and only
-# where the caddy service runs the Velexis build (until then the restart waits for provision-vm.sh --steps caddy,
+# restarted, not reloaded, when the drop-in that a run leaves installed differs from the one Caddy was last (re)started
+# with: after the daemon-reload and after the new Caddyfile was validated and put in place, with the units healthy, and
+# only where the caddy service runs the Velexis build (until then the restart waits for provision-vm.sh --steps caddy,
 # which restarts Caddy). An automatic rollback that puts the running release's drop-in back restarts nothing, as for the
-# build (lead decision (21k) of 2026-11-13, docs/mvp/deployment-single-vm.md §8 and §12).
+# build (lead decision (21k) of 2026-11-13, docs/mvp/deployment-single-vm.md §8 and §12). The drop-in Caddy was last
+# (re)started with is a record of its own, /var/lib/velexis/caddy-dropin.sha256 (lead decision (22b) of 2026-11-15):
+# the drop-in's SHA-256 (or "none"), written by this script after each Caddy restart it makes, deploys and --rollback
+# alike, and by provision-vm.sh after each of its own; "restarting" while a restart runs, so a restart that failed or was
+# cut off is made again by the next deploy. A run cut off between its staging and the activation therefore loses no
+# restart: the next deploy restarts Caddy even when it changes nothing itself. Without a record (a VM provisioned before
+# that decision) a deploy compares with the drop-in installed when it began, as before, and then writes the record.
 #
 # Tests only (deploy/scripts/test/deploy.test.sh). With VELEXIS_ROOT=<absolute folder> every path of this script
 # (/srv/velexis, /etc/velexis, /var/lib/velexis, /var/lib/velexis-migrate, /var/log/velexis, /usr/local/sbin,
@@ -101,6 +107,7 @@ CADDY_WAF="$CADDY_DIR/waf"                        # the web application firewall
 CADDY_BIN="$R/usr/local/bin/caddy-velexis"        # the Velexis Caddy build (X-039)
 CADDY_SERVICE_BIN="$R/usr/bin/caddy"              # what caddy.service runs: a link to CADDY_BIN (provision-vm.sh)
 CADDY_DROPIN="$SYSTEMD_DIR/caddy.service.d/velexis.conf"  # applied at Caddy's next start only (restart, not reload)
+CADDY_STARTED="$LIB/caddy-dropin.sha256"          # the drop-in Caddy was last (re)started with (lead decision (22b))
 LOCK_FILE="$R/run/velexis-deploy.lock"
 KEEP_RELEASES=5
 
@@ -394,12 +401,25 @@ stage_system_files() { # root-owned snapshot dir (never a folder the deploy user
   install_if_changed "$src/maintenance/index.html" "$BASE/maintenance/index.html" 0644 || true
 }
 
+record_caddy_start() { # value -> CADDY_STARTED holds it (a new file renamed over the old one)
+  printf '%s\n' "$1" >"$CADDY_STARTED.new" || die "could not write $CADDY_STARTED"
+  mv -f "$CADDY_STARTED.new" "$CADDY_STARTED" || die "could not write $CADDY_STARTED"
+}
+
 activate_caddyfile() { # after the units are healthy: the staged Caddy build, rule files and Caddyfile go live
-  local dropin_changed=0 why what
-  # The drop-in this run leaves installed (loaded by the daemon-reload of stage_system_files) against the one installed
-  # when it began, which the running Caddy was started with: a deploy that brings a new one, or a --rollback to a
-  # release with another one, differs; an automatic rollback that put the running release's drop-in back does not.
-  if [ "$(file_sha "$CADDY_DROPIN")" != "$DROPIN_AT_START" ]; then
+  local dropin_changed=0 why what started
+  # The drop-in this run leaves installed (loaded by the daemon-reload of stage_system_files) against the one the
+  # running Caddy was last (re)started with, as recorded (lead decision (22b) of 2026-11-15): a deploy that brings a new
+  # one, a --rollback to a release with another one, or a run after one cut off before it restarted Caddy differs; an
+  # automatic rollback that put the running release's drop-in back does not. Without a record (a VM provisioned before
+  # that decision), the one installed when this run began stands in for it ((21k)), and the record is written below.
+  if [ -f "$CADDY_STARTED" ]; then
+    started="$(head -n 1 "$CADDY_STARTED")"
+  else
+    started="$DROPIN_AT_START"
+    log "no record of the drop-in Caddy last started with ($CADDY_STARTED): compared with the one installed when this run began"
+  fi
+  if [ "$(file_sha "$CADDY_DROPIN")" != "$started" ]; then
     if caddy_service_runs_build; then
       dropin_changed=1
     else
@@ -427,14 +447,19 @@ activate_caddyfile() { # after the units are healthy: the staged Caddy build, ru
     elif [ "$dropin_changed" -eq 0 ]; then why="the new build $CADDY_BIN"; what="build"
     else why="the new build $CADDY_BIN and the changed drop-in $CADDY_DROPIN"; what="build and drop-in"
     fi
+    # The record says "restarting" until Caddy has started: a restart that fails or is cut off leaves it so, and the
+    # next deploy (or --rollback) restarts Caddy again whatever drop-in it installs.
+    record_caddy_start restarting
     "$SYSTEMCTL" restart caddy ||
       die "Caddy did not start with $why; run: sudo velexis-deploy --rollback (the previous release's $what)"
-    DROPIN_AT_START="$(file_sha "$CADDY_DROPIN")"
+    record_caddy_start "$(file_sha "$CADDY_DROPIN")"
     log "Caddy restarted (new $what)"
   elif [ "$WAF_CHANGED$CADDY_CHANGED" != 00 ]; then
     "$SYSTEMCTL" reload caddy
     log "Caddyfile reloaded"
   fi
+  # Without a record, and without a restart here, Caddy still runs the drop-in installed when this run began.
+  [ -f "$CADDY_STARTED" ] || record_caddy_start "$started"
   BINARY_CHANGED=0
   WAF_CHANGED=0
   CADDY_CHANGED=0
@@ -474,10 +499,12 @@ rollback_to() { # sha
 }
 
 # ---- commands ----------------------------------------------------------------------------------------------
-# The caddy drop-in installed when this run begins, taken as the one the running Caddy was started with: a run that
-# changed it restarted Caddy, left the restart to provision-vm.sh --steps caddy, or stopped with the way back
-# (--rollback). A run cut off between its staging and activate_caddyfile (killed, or stopped by an unexpected error)
-# leaves its new drop-in to Caddy's next start. activate_caddyfile compares with it.
+# The caddy drop-in installed when this run begins. activate_caddyfile compares the drop-in it leaves installed with
+# the record of the one Caddy was last (re)started with (CADDY_STARTED, lead decision (22b) of 2026-11-15), and with
+# this one only on a VM without that record (provisioned before the decision, (21k)), which it then writes. A run cut
+# off between its staging and activate_caddyfile (killed, or stopped by an unexpected error) leaves its new drop-in
+# installed and the record as it was, so the next deploy restarts Caddy, even one that changes nothing itself; on a VM
+# without the record such a drop-in waited for Caddy's next start.
 DROPIN_AT_START="$(file_sha "$CADDY_DROPIN")"
 case "${1:-}" in
   --status)

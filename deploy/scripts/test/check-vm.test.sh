@@ -12,7 +12,8 @@
 #   - provision-vm.sh runs only its steps users, keys, envfiles, ssh and egress, under a temporary VELEXIS_ROOT (the
 #     five zone users, the group velexis, a test deploy user and a test admin user are real, as in
 #     deploy/systemd/test/units-smoke.sh; /etc/ssh, /etc/pam.d/sshd, /etc/apt, /etc/systemd/system and
-#     /run/systemd/resolve are test copies under VELEXIS_ROOT);
+#     /run/systemd/resolve are test copies under VELEXIS_ROOT), and, for the step records and the one-time AIDE
+#     re-baseline, every other step as a stub (PROVISION_TEST_STUBS) with a fake aideinit;
 #   - check-vm.sh runs with that VELEXIS_ROOT and fake system tools first on PATH (systemctl, ufw, nft, sshd, swapon,
 #     ss, sysctl, timedatectl, runuser, psql, redis-cli, caddy, node; getent and chronyc for velexis-egress). Each fake
 #     answers from a fixture file that the test edits, logs its command line, and records as a violation any call that
@@ -32,8 +33,9 @@
 # the lead's fix of 2026-11-10 (the AIDE timer, the lockout guard) in [FIX-W47-SHARED AC4] or [FIX-W47-SHARED AC5], of
 # the fix of 2026-11-11 (the SSH source address) in [FIX-W48-SHARED AC5], the real-nft part that must run (lead
 # decision (17a) of 2026-11-11) in [FIX-W49-SHARED AC4], and the security logs' timers and auditd's syslog plugin (lead
-# decision (20p) of 2026-11-13) in [FIX-W51-SHARED 20p], and AIDE's settings in 90_velexis (lead decision (21l) of
-# 2026-11-13) in [FIX-W52-SHARED 21l].
+# decision (20p) of 2026-11-13) in [FIX-W51-SHARED 20p], AIDE's settings in 90_velexis (lead decision (21l) of
+# 2026-11-13) in [FIX-W52-SHARED 21l], and AIDE's one-time re-baseline and provision-vm.sh's record of Caddy's drop-in
+# (lead decisions (22d) and (22b) of 2026-11-15) in [FIX-W53-SHARED 22d] and [FIX-W53-SHARED 22b].
 #
 # What it proves:
 #   1. Two runs of provision-vm.sh --steps users,keys,envfiles: the second changes no key, env or secrets file
@@ -107,6 +109,21 @@
 #      or unit names GitHub. With a real nft, the same table loads, a second run changes nothing, and check-vm.sh
 #      passes on it and names changes made by hand; without a working nft the test fails ([FIX-W49-SHARED AC4]).
 #      Neither the SMTP password nor the bucket key that velexis-egress reads hosts beside reaches an output (step 7).
+#   9. AIDE's one-time re-baseline (lead decision (22d) of 2026-11-15, [FIX-W53-SHARED 22d]), with provision-vm.sh's own
+#      step loop, the step keys real and every other step a stub, and a fake aideinit: the first run of every step ends
+#      with one aideinit -y -f, after its last step, recorded as "rebaselined <time> <SHA-256 of the database>"; later
+#      runs of every step or of one call no aideinit and change neither the database nor the record; steps in three runs
+#      in another order (summary never) re-baseline once, at the end of the run that completes the last of them, and
+#      until then provision.log and check-vm.sh name the steps it waits for; a step that fails (keys) records neither
+#      itself nor the steps after it, and only the later run that completes them re-baselines; aideinit failing, or the
+#      run killed while aideinit runs, is recorded ("failed", "started") and never repeated. check-vm.sh (group system)
+#      reports PASS for the record provision-vm.sh writes and for a manual re-baseline appended to it (deployment §12),
+#      and FAIL, naming why, while steps are waiting, when every step completed but no run has re-baselined yet, for
+#      "started", "failed" and a record it cannot read; it waits for the same steps as provision-vm.sh (every step but
+#      summary). The Caddy restart record (lead decision (22b) of 2026-11-15, [FIX-W53-SHARED 22b]): provision-vm.sh
+#      restarts Caddy only through restart_caddy (in the steps caddy, scripts and caddyconf), which, run as it is with a
+#      stand-in for systemctl, records "restarting" before the restart and the drop-in's SHA-256 ("none" without one)
+#      only after it succeeded; a restart that fails leaves "restarting".
 # =====================================================================================================
 set -euo pipefail
 umask 022
@@ -318,6 +335,14 @@ aide_conf_healthy() { # 90_velexis as provision-vm.sh leaves it
     || install -m 0644 "$PREFIX/aide-90_velexis" "$ROOT/etc/aide/aide.conf.d/90_velexis"
 }
 aide_conf_healthy
+# AIDE's one-time re-baseline as provision-vm.sh records it at the end of the first full provisioning (lead decision
+# (22d) of 2026-11-15): the record's state, its time and the new database's SHA-256.
+AIDE_REBASELINE="$ROOT/var/lib/velexis/provision/aide-rebaseline"
+aide_rebaseline_healthy() {
+  install -d -m 0700 "$ROOT/var/lib/velexis/provision"
+  printf 'rebaselined 2026-01-02T03:04:05Z %s\n' "$(sha256sum <"$ROOT/var/lib/aide/aide.db" | cut -d' ' -f1)" >"$AIDE_REBASELINE"
+}
+aide_rebaseline_healthy
 # One release, handed over the way velexis-deploy does it, and the current symlink.
 REL="$ROOT/srv/velexis/releases/0123456789abcdef0123456789abcdef01234567"
 mkdir -p "$REL/ota-backend/dist" "$REL/storefront"
@@ -616,6 +641,7 @@ velexis-log-review.timer active enabled
 EOF
   audit_plugin_healthy
   aide_conf_healthy
+  aide_rebaseline_healthy
   cat >"$FAKE/ufw" <<'EOF'
 Status: active
 Logging: on (low)
@@ -835,6 +861,7 @@ PASS /usr/local/sbin/velexis-healthcheck is root:root 755
 PASS the AIDE database exists
 PASS dailyaidecheck.timer is active and enabled (AIDE's daily check)
 PASS AIDE's 90_velexis details added entries and relaxes apt's lists (report_level=added_removed_entries; /var/lib/apt/lists/[^/]+$ f VarFile)
+PASS AIDE's database was re-baselined once after the first full provisioning (2026-01-02T03:04:05Z
 PASS sshd -T: AllowUsers $ADMIN_TEST_USER $DEPLOY_TEST_USER
 PASS sshd -T -C user=$ADMIN_TEST_USER: second factor FIDO2 (publickey with sk-ssh-ed25519@openssh.com only, pubkeyauthoptions touch-required verify-required)
 PASS sshd -T -C user=$ADMIN_TEST_USER: keys only from .ssh/authorized_keys
@@ -962,6 +989,50 @@ if run_check "$OUT/aide-settings.out" --only system &&
 else
   indent "$OUT/aide-settings.out"
   fail "check-vm.sh --only system reports PASS for 90_velexis as provision-vm.sh writes it [FIX-W52-SHARED 21l]"
+fi
+# AIDE's one-time re-baseline (lead decision (22d) of 2026-11-15): the last line of provision-vm.sh's record.
+RB_STEPS="$ROOT/var/lib/velexis/provision/steps"
+REBASELINED="AIDE's database was re-baselined once after the first full provisioning"
+rm -f "$AIDE_REBASELINE"
+RB_SAVED=0 # the records of section 1's runs (users, keys, envfiles), put back below
+if [ -d "$RB_STEPS" ]; then mv "$RB_STEPS" "$PREFIX/steps.saved"; RB_SAVED=1; fi
+install -d -m 0700 "$RB_STEPS"
+for s in packages node harden users postgres; do date -u +%Y-%m-%dT%H:%M:%SZ >"$RB_STEPS/$s"; done
+broken "no re-baseline yet, steps still to run" system \
+  "$REBASELINED \\(not yet: it waits for the first completion of the provision-vm.sh steps: redis caddy keys database envfiles scripts caddyconf\\)$" \
+  "FIX-W53-SHARED 22d"
+for s in redis caddy keys database envfiles scripts caddyconf; do date -u +%Y-%m-%dT%H:%M:%SZ >"$RB_STEPS/$s"; done
+broken "no re-baseline yet, every step completed" system \
+  "$REBASELINED \\(not yet: every step has completed, so the next provision-vm.sh run makes it\\)$" "FIX-W53-SHARED 22d"
+mv "$RB_STEPS" "$PREFIX/steps.test"
+[ "$RB_SAVED" = 0 ] || mv "$PREFIX/steps.saved" "$RB_STEPS"
+printf 'started 2026-01-02T03:04:05Z\n' >"$AIDE_REBASELINE"
+broken "a re-baseline cut off while aideinit ran" system \
+  "$REBASELINED \\(an attempt that began 2026-01-02T03:04:05Z did not finish, and provision-vm.sh never repeats it; re-baseline it by hand after reviewing the aide-change alerts: deployment-single-vm.md §12\\)$" \
+  "FIX-W53-SHARED 22d"
+printf 'failed 2026-01-02T03:04:05Z\n' >"$AIDE_REBASELINE"
+broken "a failed re-baseline" system \
+  "$REBASELINED \\(aideinit failed 2026-01-02T03:04:05Z, and provision-vm.sh never repeats it; re-baseline it by hand" \
+  "FIX-W53-SHARED 22d"
+printf 'rebaselined\n' >"$AIDE_REBASELINE"
+broken "a record without its time and checksum" system "$REBASELINED \\(/var/lib/velexis/provision/aide-rebaseline holds no state it knows; " \
+  "FIX-W53-SHARED 22d"
+# The manual re-baseline of deployment §12 appends its own line; the last line counts.
+printf 'failed 2026-01-02T03:04:05Z\nmanual 2026-01-09T10:00:00Z %s ops: alerts of 2026-01-03 to 2026-01-09 reviewed\n' \
+  "$(sha256sum <"$ROOT/var/lib/aide/aide.db" | cut -d' ' -f1)" >"$AIDE_REBASELINE"
+if run_check "$OUT/aide-manual.out" --only system &&
+  grep -qxF "PASS AIDE's database was last re-baselined by hand (2026-01-09T10:00:00Z $(sha256sum <"$ROOT/var/lib/aide/aide.db" | cut -d' ' -f1) ops: alerts of 2026-01-03 to 2026-01-09 reviewed)" "$OUT/aide-manual.out"; then
+  pass "check-vm.sh --only system reports PASS for a manual re-baseline appended after a failed one (the last line counts) [FIX-W53-SHARED 22d]"
+else
+  indent "$OUT/aide-manual.out"
+  fail "check-vm.sh --only system reports PASS for a manual re-baseline appended after a failed one [FIX-W53-SHARED 22d]"
+fi
+healthy
+if run_check "$OUT/aide-rebaselined.out" --only system && grep -qF "PASS $REBASELINED (2026-01-02T03:04:05Z " "$OUT/aide-rebaselined.out"; then
+  pass "check-vm.sh --only system reports PASS for the re-baseline as provision-vm.sh records it [FIX-W53-SHARED 22d]"
+else
+  indent "$OUT/aide-rebaselined.out"
+  fail "check-vm.sh --only system reports PASS for the re-baseline as provision-vm.sh records it [FIX-W53-SHARED 22d]"
 fi
 # The security logs (X-038; lead decision (20p) of 2026-11-13): both timers, and auditd's syslog plugin.
 for timer in velexis-ship-logs.timer velexis-log-review.timer; do
@@ -2111,6 +2182,233 @@ else
   # Lead decision (17a) of 2026-11-11 (owner-approved): without a working nft the allow-list's table is never loaded by
   # the kernel, so the test fails, and its last line says why (the real-sshd part only says so, below).
   fail "the real-nft checks of step 6b did not run: no nft that works in a private network namespace at $REAL_NFT ($(head -n 1 "$OUT/nft-probe.out" 2>/dev/null || echo 'not installed')); install nftables or set CHECKVM_NFT=<nft command> [FIX-W49-SHARED AC4]"
+fi
+
+# ---- 9. the one-time AIDE re-baseline and the Caddy restart record (lead decisions (22d) and (22b) of 2026-11-15) ----
+step "AIDE's one-time re-baseline: once, at the end of the first run after which every step has completed"
+# provision-vm.sh runs as on the VM, each scenario under a VELEXIS_ROOT of its own: the step keys for real (it can fail,
+# below), every other step as a stub (PROVISION_TEST_STUBS), and a fake aideinit first on PATH that records its
+# arguments, writes a new database where aideinit installs it (/var/lib/aide/aide.db under VELEXIS_ROOT), fails while
+# <root>.aideinit-fails exists and, while <root>.aideinit-kills exists, kills provision-vm.sh (SIGKILL) as a lost session
+# would during the minutes aideinit takes.
+RB_BIN="$PREFIX/rebaseline-bin"
+install -d -m 0755 "$RB_BIN"
+cat >"$RB_BIN/aideinit" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$VELEXIS_ROOT.aideinit"
+if [ -e "$VELEXIS_ROOT.aideinit-kills" ]; then
+  tr '\0' ' ' <"/proc/$PPID/cmdline" | grep -q 'provision-vm\.sh' || { echo "aideinit: no provision-vm.sh above it" >&2; exit 1; }
+  kill -KILL "$PPID"
+  exit 1
+fi
+[ ! -e "$VELEXIS_ROOT.aideinit-fails" ] || { echo "aideinit: fake failure" >&2; exit 1; }
+mkdir -p "$VELEXIS_ROOT/var/lib/aide"
+printf 'fake AIDE database, aideinit call %s\n' "$(wc -l <"$VELEXIS_ROOT.aideinit")" >"$VELEXIS_ROOT/var/lib/aide/aide.db"
+SH
+chmod 0755 "$RB_BIN/aideinit"
+RB_ALL="$(sed -n 's/^ALL_STEPS="\(.*\)"$/\1/p' "$PROVISION")"
+RB_STUBS="$(tr ' ' '\n' <<<"$RB_ALL" | grep -vx keys | paste -sd, -)"
+provision_rb() { # root log steps: provision-vm.sh with the stubs and the fake aideinit, as root on the VM runs it
+  local root="$1" log="$2" steps="$3"
+  install -d -m 0755 "$root"
+  env -u SUDO_USER PATH="$RB_BIN:$PATH" VELEXIS_ROOT="$root" PROVISION_TEST_STUBS="$RB_STUBS" \
+    bash "$PROVISION" --steps "$steps" >"$log" 2>&1
+}
+rb_calls() { if [ -f "$1.aideinit" ]; then grep -c . "$1.aideinit"; else echo 0; fi; }
+rb_record() { cat "$1/var/lib/velexis/provision/aide-rebaseline" 2>/dev/null || true; }
+rb_steps() { find "$1/var/lib/velexis/provision/steps" -mindepth 1 -maxdepth 1 -printf '%f\n' 2>/dev/null | sort | paste -sd' ' -; }
+rb_sorted() { tr ' ' '\n' <<<"$1" | sort | paste -sd' ' -; }
+rb_check() { # root output-file: check-vm.sh --only system on that root (its AIDE re-baseline line is what counts)
+  env PATH="$CHECK_PATH:$PATH" CHECKVM_FAKE="$FAKE" VELEXIS_ROOT="$1" DEPLOY_USER="$DEPLOY_TEST_USER" \
+    bash "$CHECK" --only system >"$2" 2>&1 || true
+}
+# The steps whose first completion the re-baseline waits for: every step but summary, the same list in check-vm.sh.
+# shellcheck disable=SC2016 # provision-vm.sh's own line, not expanded
+if [ "${RB_ALL##* }" = summary ] &&
+  [ "${RB_ALL% summary}" = "$(sed -n 's/^BASELINE_STEPS="\(.*\)"$/\1/p' "$CHECK")" ] &&
+  grep -qxF 'BASELINE_STEPS="${ALL_STEPS% summary}"' "$PROVISION"; then
+  pass "the re-baseline waits for every step but summary, and check-vm.sh names the same steps ($(wc -w <<<"${RB_ALL% summary}") steps) [FIX-W53-SHARED 22d]"
+else
+  fail "the re-baseline waits for every step but summary, and check-vm.sh names the same steps [FIX-W53-SHARED 22d]"
+fi
+
+# a. The first run of every step: one aideinit, after the last step, and its record.
+RA="$PREFIX/rb-first"
+if provision_rb "$RA" "$OUT/rb-first-1.log" "${RB_ALL// /,}"; then rc=0; else rc=$?; fi
+rb_order_ok() { # the re-baseline comes after the last step of the run
+  local last re
+  last="$(grep -n 'test stub of the step summary' "$OUT/rb-first-1.log" | cut -d: -f1)"
+  re="$(grep -n 'Re-baselining AIDE once' "$OUT/rb-first-1.log" | cut -d: -f1)"
+  [ -n "$last" ] && [ -n "$re" ] && [ "$re" -gt "$last" ]
+}
+if [ "$rc" = 0 ] && [ "$(rb_calls "$RA")" = 1 ] && [ "$(cat "$RA.aideinit")" = "-y -f" ] && rb_order_ok &&
+  [ "$(rb_record "$RA")" = "rebaselined $(cut -d' ' -f2 <<<"$(rb_record "$RA")") $(sha256sum <"$RA/var/lib/aide/aide.db" | cut -d' ' -f1)" ] &&
+  [ "$(rb_steps "$RA")" = "$(rb_sorted "$RB_ALL")" ] &&
+  [ "$(stat -c '%U:%G %a' "$RA/var/lib/velexis/provision")" = "root:root 700" ]; then
+  pass "the first run of every step ends with one aideinit -y -f, after its last step, and records 'rebaselined <time> <SHA-256 of the new database>' (root 0700 folder) [FIX-W53-SHARED 22d]"
+else
+  indent "$OUT/rb-first-1.log"
+  fail "the first run of every step ends with one aideinit and records it (exit $rc, aideinit calls: $(rb_calls "$RA"), record: $(rb_record "$RA")) [FIX-W53-SHARED 22d]"
+fi
+rb_check "$RA" "$OUT/rb-first-check.out"
+if grep -qF "PASS AIDE's database was re-baselined once after the first full provisioning ($(cut -d' ' -f2- <<<"$(rb_record "$RA")"))" "$OUT/rb-first-check.out"; then
+  pass "check-vm.sh reports PASS for the record provision-vm.sh wrote [FIX-W53-SHARED 22d]"
+else
+  indent "$OUT/rb-first-check.out"
+  fail "check-vm.sh reports PASS for the record provision-vm.sh wrote [FIX-W53-SHARED 22d]"
+fi
+cp -p "$RA/var/lib/aide/aide.db" "$PREFIX/rb-first.db" 2>/dev/null || : >"$PREFIX/rb-first.db"
+RA_RECORD="$(rb_record "$RA")"
+# b. Later runs, of every step or of one, leave the database alone.
+if provision_rb "$RA" "$OUT/rb-first-2.log" "${RB_ALL// /,}" && provision_rb "$RA" "$OUT/rb-first-3.log" keys &&
+  [ "$(rb_calls "$RA")" = 1 ] && cmp -s "$PREFIX/rb-first.db" "$RA/var/lib/aide/aide.db" &&
+  [ "$(rb_record "$RA")" = "$RA_RECORD" ] && ! grep -q 'Re-baselining' "$OUT/rb-first-2.log" "$OUT/rb-first-3.log"; then
+  pass "a second run of every step and a run of one step call no aideinit: the database and the record stay as they are [FIX-W53-SHARED 22d]"
+else
+  indent "$OUT/rb-first-2.log"
+  fail "later runs call no aideinit and leave the database alone (aideinit calls: $(rb_calls "$RA")) [FIX-W53-SHARED 22d]"
+fi
+
+# c. Steps in separate runs, in another order (summary never): the re-baseline comes at the end of the run that
+# completes the last of them, and not before.
+RC="$PREFIX/rb-separate"
+rb_waiting_ok=1
+provision_rb "$RC" "$OUT/rb-separate-1.log" scripts,caddyconf,keys || rb_waiting_ok=0
+[ "$(rb_calls "$RC")" = 0 ] && [ -z "$(rb_record "$RC")" ] || rb_waiting_ok=0
+grep -qF "AIDE's one-time re-baseline waits for the first completion of the steps: packages node harden users postgres redis caddy database envfiles" \
+  "$RC/var/log/velexis/provision.log" || rb_waiting_ok=0
+rb_check "$RC" "$OUT/rb-separate-check.out"
+grep -qF "FAIL AIDE's database was re-baselined once after the first full provisioning (not yet: it waits for the first completion of the provision-vm.sh steps: packages node harden users postgres redis caddy database envfiles)" \
+  "$OUT/rb-separate-check.out" || rb_waiting_ok=0
+provision_rb "$RC" "$OUT/rb-separate-2.log" harden,packages,users,node || rb_waiting_ok=0
+[ "$(rb_calls "$RC")" = 0 ] && [ -z "$(rb_record "$RC")" ] || rb_waiting_ok=0
+if [ "$rb_waiting_ok" = 1 ] && provision_rb "$RC" "$OUT/rb-separate-3.log" database,redis,envfiles,caddy,postgres &&
+  [ "$(rb_calls "$RC")" = 1 ] && [ "$(cut -d' ' -f1 <<<"$(rb_record "$RC")")" = rebaselined ] &&
+  provision_rb "$RC" "$OUT/rb-separate-4.log" caddyconf && [ "$(rb_calls "$RC")" = 1 ]; then
+  pass "steps in three runs in another order, summary never: no aideinit while a step waits (provision.log and check-vm.sh name them), one at the end of the run that completes the last, none after [FIX-W53-SHARED 22d]"
+else
+  for f in rb-separate-1.log rb-separate-2.log rb-separate-3.log rb-separate-check.out; do [ ! -f "$OUT/$f" ] || indent "$OUT/$f"; done
+  fail "steps in separate runs: one aideinit, at the end of the run that completes the last step (aideinit calls: $(rb_calls "$RC")) [FIX-W53-SHARED 22d]"
+fi
+
+# d. A failed step: the run stops before its record and the records of the steps after it; no re-baseline until a later
+# run completes them.
+RD="$PREFIX/rb-failed-step"
+install -d -m 0755 "$RD/etc/velexis/keys/platform"
+: >"$RD/etc/velexis/keys/platform/master-vx.key" # a key file the step keys refuses
+if provision_rb "$RD" "$OUT/rb-failed-1.log" "${RB_ALL// /,}"; then rc=0; else rc=$?; fi
+rb_failed_ok=0
+if [ "$rc" = 1 ] && grep -q 'master-vx.key is not named master-v<N>.key' "$OUT/rb-failed-1.log" &&
+  [ "$(rb_steps "$RD")" = "$(rb_sorted "packages node harden users postgres redis caddy")" ] &&
+  [ "$(rb_calls "$RD")" = 0 ] && [ -z "$(rb_record "$RD")" ]; then
+  rb_failed_ok=1
+fi
+rm -f "$RD/etc/velexis/keys/platform/master-vx.key"
+if [ "$rb_failed_ok" = 1 ] && provision_rb "$RD" "$OUT/rb-failed-2.log" keys && [ "$(rb_calls "$RD")" = 0 ] &&
+  provision_rb "$RD" "$OUT/rb-failed-3.log" database,envfiles,scripts,caddyconf && [ "$(rb_calls "$RD")" = 1 ] &&
+  [ "$(cut -d' ' -f1 <<<"$(rb_record "$RD")")" = rebaselined ]; then
+  pass "a step that fails (keys): exit 1, no record for it nor for the steps after it, no aideinit; keys alone later still waits for those, and the run that completes them re-baselines once [FIX-W53-SHARED 22d]"
+else
+  for f in rb-failed-1.log rb-failed-2.log rb-failed-3.log; do [ ! -f "$OUT/$f" ] || indent "$OUT/$f"; done
+  fail "a failed step: no record, no aideinit until a later run completes it (exit $rc, steps: $(rb_steps "$RD"), aideinit calls: $(rb_calls "$RD")) [FIX-W53-SHARED 22d]"
+fi
+
+# e. aideinit fails: the record says so, the run warns, and no later run tries again.
+RE="$PREFIX/rb-aideinit-fails"
+install -d -m 0755 "$RE"
+: >"$RE.aideinit-fails"
+if provision_rb "$RE" "$OUT/rb-fails-1.log" "${RB_ALL// /,}"; then rc=0; else rc=$?; fi
+rm -f "$RE.aideinit-fails"
+if [ "$rc" = 0 ] && [ "$(rb_calls "$RE")" = 1 ] && [ "$(cut -d' ' -f1 <<<"$(rb_record "$RE")")" = failed ] &&
+  grep -q "aideinit failed, so AIDE's one-time re-baseline is not done, and no later run tries again" "$OUT/rb-fails-1.log" &&
+  provision_rb "$RE" "$OUT/rb-fails-2.log" "${RB_ALL// /,}" && [ "$(rb_calls "$RE")" = 1 ] &&
+  [ "$(cut -d' ' -f1 <<<"$(rb_record "$RE")")" = failed ]; then
+  pass "aideinit failing: the run warns and records 'failed', and the next run of every step calls no aideinit [FIX-W53-SHARED 22d]"
+else
+  indent "$OUT/rb-fails-1.log"
+  fail "aideinit failing: recorded once, never repeated (exit $rc, aideinit calls: $(rb_calls "$RE"), record: $(rb_record "$RE")) [FIX-W53-SHARED 22d]"
+fi
+rb_check "$RE" "$OUT/rb-fails-check.out"
+if grep -qF "FAIL AIDE's database was re-baselined once after the first full provisioning (aideinit failed " "$OUT/rb-fails-check.out"; then
+  pass "check-vm.sh reports FAIL for that record, with the manual re-baseline [FIX-W53-SHARED 22d]"
+else
+  indent "$OUT/rb-fails-check.out"
+  fail "check-vm.sh reports FAIL for a failed re-baseline [FIX-W53-SHARED 22d]"
+fi
+
+# f. A run killed while aideinit runs: the record says "started", and no later run tries again either.
+RK="$PREFIX/rb-killed"
+install -d -m 0755 "$RK"
+: >"$RK.aideinit-kills"
+if provision_rb "$RK" "$OUT/rb-killed-1.log" "${RB_ALL// /,}"; then rc=0; else rc=$?; fi
+rm -f "$RK.aideinit-kills"
+if [ "$rc" = 137 ] && [ "$(rb_calls "$RK")" = 1 ] && [ "$(cut -d' ' -f1 <<<"$(rb_record "$RK")")" = started ] &&
+  provision_rb "$RK" "$OUT/rb-killed-2.log" "${RB_ALL// /,}" && [ "$(rb_calls "$RK")" = 1 ] &&
+  [ "$(cut -d' ' -f1 <<<"$(rb_record "$RK")")" = started ]; then
+  pass "a run killed during the re-baseline leaves 'started', and the next run of every step calls no aideinit [FIX-W53-SHARED 22d]"
+else
+  indent "$OUT/rb-killed-1.log"
+  fail "a run killed during the re-baseline: never repeated (exit $rc, aideinit calls: $(rb_calls "$RK"), record: $(rb_record "$RK")) [FIX-W53-SHARED 22d]"
+fi
+
+step "provision-vm.sh's Caddy restarts record the drop-in Caddy started with (lead decision (22b) of 2026-11-15)"
+# The steps caddy, scripts and caddyconf need the real VM: their restarts all go through restart_caddy (read from
+# provision-vm.sh), which runs here as it is, with a stand-in for systemctl.
+rc_restarts_ok=1
+[ "$(grep -c 'systemctl restart caddy' "$PROVISION")" = 1 ] || rc_restarts_ok=0
+sed -n '/^restart_caddy() {/,/^}/p' "$PROVISION" | grep -q 'systemctl restart caddy' || rc_restarts_ok=0
+for f in step_caddy step_scripts step_caddyconf; do
+  sed -n "/^$f() {/,/^}/p" "$PROVISION" | grep -qE '(^|[^_])restart_caddy$|(^|[^_])restart_caddy;' || rc_restarts_ok=0
+done
+if [ "$rc_restarts_ok" = 1 ]; then
+  pass "provision-vm.sh restarts Caddy only through restart_caddy, in the steps caddy, scripts and caddyconf [FIX-W53-SHARED 22b]"
+else
+  grep -n 'restart_caddy\|systemctl restart caddy' "$PROVISION" | indent
+  fail "provision-vm.sh restarts Caddy only through restart_caddy, in the steps caddy, scripts and caddyconf [FIX-W53-SHARED 22b]"
+fi
+RC_SRC="$(sed -n '/^record_caddy_start() {/,/^}/p; /^restart_caddy() {/,/^}/p' "$PROVISION")"
+[ -n "$RC_SRC" ] || die "record_caddy_start() and restart_caddy() not found in provision-vm.sh"
+RCR="$PREFIX/caddy-record"
+install -d -m 0755 "$RCR/dropin"
+printf '[Service]\nEnvironmentFile=/etc/velexis/caddy.env\n' >"$RCR/dropin/velexis.conf"
+caddy_restart_run() { # outcome (ok, fail) -> restart_caddy as it is, in a subshell; prints the record after it
+  local outcome="$1"
+  (
+    # shellcheck disable=SC2034 # read by the evaluated functions
+    LIB="$RCR/lib"
+    # shellcheck disable=SC2034
+    CADDY_STARTED="$LIB/caddy-dropin.sha256"
+    # shellcheck disable=SC2034
+    CADDY_DROPIN="$RCR/dropin/velexis.conf"
+    # shellcheck disable=SC2317,SC2329 # called by the evaluated restart_caddy
+    die() { printf 'die: %s\n' "$*" >>"$RCR/out"; exit 1; }
+    # shellcheck disable=SC2317,SC2329 # the stand-in: records the call and the record at that moment, then succeeds or fails
+    systemctl() {
+      printf 'systemctl %s (record: %s)\n' "$*" "$(cat "$CADDY_STARTED" 2>/dev/null)" >>"$RCR/out"
+      [ "$outcome" = ok ]
+    }
+    eval "$RC_SRC"
+    restart_caddy
+  ) || true
+  cat "$RCR/lib/caddy-dropin.sha256" 2>/dev/null || true
+}
+: >"$RCR/out"
+RC_OK="$(caddy_restart_run ok)"
+RC_OUT_OK="$(cat "$RCR/out")"
+: >"$RCR/out"
+RC_FAIL="$(caddy_restart_run fail)"
+RC_OUT_FAIL="$(cat "$RCR/out")"
+mv "$RCR/dropin/velexis.conf" "$RCR/velexis.conf.away"
+RC_NONE="$(caddy_restart_run ok)"
+if [ "$RC_OK" = "$(sha256sum <"$RCR/velexis.conf.away" | cut -d' ' -f1)" ] &&
+  [ "$RC_OUT_OK" = "systemctl restart caddy (record: restarting)" ] &&
+  [ "$RC_FAIL" = restarting ] && [[ "$RC_OUT_FAIL" == *"die: Caddy did not start"* ]] && [ "$RC_NONE" = none ] &&
+  [ "$(stat -c '%U:%G %a' "$RCR/lib")" = "root:root 711" ]; then
+  pass "restart_caddy records 'restarting' before the restart and the drop-in's SHA-256 after it ('none' without one); a restart that fails leaves 'restarting', so the next deploy restarts Caddy [FIX-W53-SHARED 22b]"
+else
+  printf '%s\n' "ok: $RC_OK" "$RC_OUT_OK" "fail: $RC_FAIL" "$RC_OUT_FAIL" "none: $RC_NONE" | indent
+  fail "restart_caddy records the drop-in Caddy started with only after the restart [FIX-W53-SHARED 22b]"
 fi
 
 # ---- 7. no secret in any output ------------------------------------------------------------------------------

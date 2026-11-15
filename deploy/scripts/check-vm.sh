@@ -21,7 +21,8 @@
 #             daily check, is active and enabled (PCI DSS 11.5.2; lead decision (13j) of 2026-11-10); AIDE's
 #             /etc/aide/aide.conf.d/90_velexis holds the lines report_level=added_removed_entries and
 #             /var/lib/apt/lists/[^/]+$ f VarFile as provision-vm.sh's step harden writes them (lead decision (21l) of
-#             2026-11-13)
+#             2026-11-13); AIDE's database re-baselined once after the first full provisioning, or later by hand
+#             (/var/lib/velexis/provision/aide-rebaseline; lead decision (22d) of 2026-11-15)
 #   services  postgresql, redis-server, caddy, velexis-backup.timer and velexis-healthcheck.timer active and enabled,
 #             the cluster postgresql@16-main active; fail2ban, auditd and chrony active and enabled; Node.js 22; the
 #             security logs of task X-038 (lead decision (20p) of 2026-11-13): velexis-ship-logs.timer and
@@ -189,6 +190,36 @@ aide_settings() {
   fi
 }
 
+# AIDE's one-time re-baseline of provision-vm.sh (lead decision (22d) of 2026-11-15): the last line of its record,
+# /var/lib/velexis/provision/aide-rebaseline. PASS once aideinit re-baselined the database after the first full
+# provisioning ("rebaselined") or a person did it by hand later ("manual", deployment §12); FAIL while it waits for
+# steps that have not completed yet (named from /var/lib/velexis/provision/steps/), after a failed or interrupted
+# attempt ("failed", "started"), which provision-vm.sh never repeats, and for a record it cannot read.
+# BASELINE_STEPS is provision-vm.sh's (every step but summary); check-vm.test.sh checks that both lists agree.
+BASELINE_STEPS="packages node harden users postgres redis caddy keys database envfiles scripts caddyconf"
+aide_rebaseline() {
+  local state="$R/var/lib/velexis/provision" last step waiting=""
+  local what="AIDE's database was re-baselined once after the first full provisioning"
+  local manual="re-baseline it by hand after reviewing the aide-change alerts: deployment-single-vm.md §12"
+  if [ ! -f "$state/aide-rebaseline" ]; then
+    for step in $BASELINE_STEPS; do [ -e "$state/steps/$step" ] || waiting="$waiting $step"; done
+    if [ -n "$waiting" ]; then
+      fail "$what (not yet: it waits for the first completion of the provision-vm.sh steps:$waiting)"
+    else
+      fail "$what (not yet: every step has completed, so the next provision-vm.sh run makes it)"
+    fi
+    return
+  fi
+  last="$(tail -n 1 "$state/aide-rebaseline" 2>/dev/null)"
+  case "$last" in
+    "rebaselined "?*) pass "$what (${last#rebaselined })" ;;
+    "manual "?*) pass "AIDE's database was last re-baselined by hand (${last#manual })" ;;
+    "started "*) fail "$what (an attempt that began ${last#started } did not finish, and provision-vm.sh never repeats it; $manual)" ;;
+    "failed "*) fail "$what (aideinit failed ${last#failed }, and provision-vm.sh never repeats it; $manual)" ;;
+    *) fail "$what (/var/lib/velexis/provision/aide-rebaseline holds no state it knows; $manual)" ;;
+  esac
+}
+
 group_system() {
   local os tz swaps fstab state v
   # shellcheck disable=SC1091
@@ -225,6 +256,7 @@ group_system() {
   fi
   if [ -s "$R/var/lib/aide/aide.db" ]; then pass "the AIDE database exists"; else fail "the AIDE database exists (/var/lib/aide/aide.db; run aideinit)"; fi
   aide_settings
+  aide_rebaseline
   # AIDE's daily check (PCI DSS 11.5.2) runs from the timer of the package aide-common, which provision-vm.sh enables.
   state="$(unit_state dailyaidecheck.timer)"
   if [ "$state" = "active enabled" ]; then

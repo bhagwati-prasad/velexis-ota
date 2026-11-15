@@ -81,6 +81,16 @@
 #       start stops the deploy with the way back, and --rollback restores the previous one and restarts Caddy; on a VM
 #       whose caddy service does not run the Velexis build the restart waits for provision-vm.sh; a new build and a
 #       changed drop-in together restart Caddy once. fake-systemctl.sh records the loaded drop-in with each restart;
+#       since lead decision (22b) of 2026-11-15 ([FIX-W53-SHARED 22b], [FIX-W53-SHARED 22a]) they also check
+#       /var/lib/velexis/caddy-dropin.sha256, the record of the drop-in Caddy was last (re)started with: written after
+#       each restart, unchanged without one and after the automatic rollback, "restarting" after a restart that failed
+#       (the same release deployed again restarts Caddy again), and written by --rollback;
+#   16. the record of the drop-in Caddy last started with (lead decision (22b) of 2026-11-15, [FIX-W53-SHARED 22b]): a
+#       deploy killed (SIGKILL, by the fake migration) after it installed and loaded a new drop-in, then a deploy that
+#       changes nothing restarts Caddy once and records it, and a third restarts nothing; without the record a deploy
+#       compares with the drop-in installed when it began (no restart for an unchanged one, one for a new one, none for
+#       an unhealthy release's automatic rollback, [FIX-W53-SHARED 22a]) and writes the record; --rollback records the
+#       drop-in it restarted Caddy with;
 #   and over the whole run: no DSN or secret of the env files in any output, command line or log, no unit used
 #   without a daemon-reload after its file changed, and no call that fake-systemctl.sh does not know.
 #
@@ -178,6 +188,9 @@ mkdir -p "$ETC" "$ROOT/etc/caddy" "$UNITS" "$SRV/incoming" "$SRV/releases" "$SRV
 cp "$DEPLOY/caddy/Caddyfile" "$CADDYFILE"
 cp "$DEPLOY/caddy/maintenance/index.html" "$SRV/maintenance/index.html"
 install -D -m 0644 "$DEPLOY/systemd/caddy.service.d/velexis.conf" "$UNITS/caddy.service.d/velexis.conf" # step scripts
+# provision-vm.sh records the drop-in each of its Caddy restarts started with (lead decision (22b) of 2026-11-15).
+CADDY_RECORD="$LIB/caddy-dropin.sha256"
+sha256sum "$UNITS/caddy.service.d/velexis.conf" | cut -c1-64 >"$CADDY_RECORD"
 for tpl in "$DEPLOY"/env/*.env.example; do
   grep -qE '^[A-Z][A-Z0-9_]*=' "$tpl" || continue # only comments: an optional file that the VM does not have
   install -m 0600 "$tpl" "$ETC/$(basename "$tpl" .example)"
@@ -357,6 +370,28 @@ fs.appendFileSync(
   `migrate argv=${args.join(" ")} cwd=${process.cwd()} migrator-dsn=${has("DATABASE_MIGRATOR_URL")} ` +
     `platform-dsn=${has("DATABASE_URL")} node-env=${process.env.NODE_ENV ?? ""}\n`,
 );
+// A run cut off between its staging and the activation (case 16): with the flag FAKE_KILL_DEPLOY in the state folder,
+// the first migration removes the flag and kills deploy.sh and its migration subshell with SIGKILL, as a dropped
+// session or the OOM killer would. run-transient execs this process, so its parent is that subshell and the
+// subshell's parent is deploy.sh; anything else is refused instead of killed.
+const killFlag = path.join(process.env.FAKE_STATE, "FAKE_KILL_DEPLOY");
+if (fs.existsSync(killFlag)) {
+  fs.unlinkSync(killFlag);
+  const parentOf = (pid) => {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    return Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[1]);
+  };
+  const subshell = process.ppid;
+  const deploySh = parentOf(subshell);
+  const cmdline = fs.readFileSync(`/proc/${deploySh}/cmdline`, "utf8").split("\0");
+  if (!cmdline.some((arg) => arg.endsWith("/deploy.sh"))) {
+    process.stderr.write(`migrate: FAKE_KILL_DEPLOY found no deploy.sh above it (pid ${deploySh}: ${cmdline.join(" ")})\n`);
+    process.exit(1);
+  }
+  process.kill(deploySh, "SIGKILL");
+  process.kill(subshell, "SIGKILL");
+  process.exit(137);
+}
 let fail = "";
 try {
   fail = fs.readFileSync(path.join(process.cwd(), "..", "FAKE_MIGRATE_FAIL"), "utf8").trim();
@@ -1097,10 +1132,12 @@ check "the snapshot holds the release's build (0755) and its rule files [X-039 A
 check "the rule files are installed from the snapshot (they need no build) [X-039 AC3]" \
   diff -r -q "$REL15/deploy/caddy/waf" "$WAF"
 
-# provision-vm.sh --steps caddy (X-039): the build installed once, /usr/bin/caddy diverted to a link to it.
+# provision-vm.sh --steps caddy (X-039): the build installed once, /usr/bin/caddy diverted to a link to it, and Caddy
+# restarted, which records the drop-in it started with (22b).
 mkdir -p "$ROOT/usr/bin" "$ROOT/usr/local/bin"
 install -m 0755 "$REL15/caddy/bin/caddy" "$CADDY_BIN"
 ln -s /usr/local/bin/caddy-velexis "$ROOT/usr/bin/caddy"
+sha256sum "$UNITS/caddy.service.d/velexis.conf" | cut -c1-64 >"$CADDY_RECORD"
 upload "$R15"
 INODE_BEFORE="$(stat -c '%i %Y' "$CADDY_BIN")"
 deploy "$R15"
@@ -1236,6 +1273,9 @@ reloaded_before_caddy_restart() { # the last daemon-reload of this run comes bef
   r="$(last_line_of '^restart caddy ')"
   [ -n "$d" ] && [ -n "$r" ] && [ "$d" -lt "$r" ]
 }
+# The record of the drop-in Caddy was last (re)started with (lead decision (22b) of 2026-11-15).
+record_is() { [ "$(cat "$CADDY_RECORD" 2>/dev/null)" = "$1" ]; }
+record_is_installed() { record_is "$(sha_file "$CADDY_DROPIN")"; }
 
 make_release r21 caddy-bin=b1 caddy=r21 dropin=r21
 R21="$BUILT"
@@ -1250,6 +1290,9 @@ check "a deploy with a changed drop-in installs and loads it (daemon-reload); it
   r21_live
 check "Caddy is restarted once, after the daemon-reload and the units, with the new drop-in and Caddyfile, and not also reloaded [FIX-W52-SHARED 21k]" \
   all_of reloaded_before_caddy_restart restarted_after_units
+check "after the restart, /var/lib/velexis/caddy-dropin.sha256 records r21's drop-in, the one Caddy started with [FIX-W53-SHARED 22b]" \
+  record_is_installed
+R21_DROPIN_SHA="$(sha_file "$CADDY_DROPIN")"
 
 make_release r22 caddy-bin=b1 caddy=r22 dropin=r21
 R22="$BUILT"
@@ -1261,6 +1304,7 @@ r22_reloaded() {
 }
 check "a deploy whose drop-in is the installed one (only the Caddyfile changed): no daemon-reload, no Caddy restart, one reload [FIX-W52-SHARED 21k]" \
   r22_reloaded
+check "without a restart the record stays r21's drop-in [FIX-W53-SHARED 22b]" record_is "$R21_DROPIN_SHA"
 
 # An unhealthy release with a new drop-in: it is installed and loaded before the units restart, the automatic rollback
 # puts r22's back and loads it again, so the running Caddy, which never had r23's, is neither restarted nor reloaded.
@@ -1279,6 +1323,9 @@ r23_no_restart() {
 check "an unhealthy release with a new drop-in: exit 1, rolled back to r22 [FIX-W52-SHARED 21k]" r23_rolled_back
 check "its drop-in was loaded, then r22's put back and loaded again; Caddy neither restarted nor reloaded [FIX-W52-SHARED 21k]" \
   r23_no_restart
+r23_record_kept() { record_is_installed && record_is "$R21_DROPIN_SHA"; }
+check "after that automatic rollback the record equals the installed drop-in (r22's, which Caddy runs), so nothing restarts later either [FIX-W53-SHARED 22a]" \
+  r23_record_kept
 
 # A drop-in with which Caddy does not start: the deploy stops like a failed reload, with the way back; --rollback puts
 # r22's drop-in back from its snapshot and restarts Caddy with it.
@@ -1293,6 +1340,17 @@ r24_stopped() {
 }
 check "a drop-in with which Caddy does not start: exit 1 with the way back (--rollback), the release stays current [FIX-W52-SHARED 21k]" \
   r24_stopped
+check "the record says 'restarting', never r24's drop-in, which Caddy did not start with [FIX-W53-SHARED 22b]" record_is restarting
+# The same release again (deploy.yml run once more, the cause not fixed): the record still says Caddy has not started,
+# so the deploy restarts it again and fails the same way, instead of reporting success with Caddy down.
+upload "$R24"
+deploy "$R24"
+r24_tries_again() {
+  rc_is 1 && current_is "$R24" && [ "$(calls_matching '^restart caddy ')" = 1 ] && no_call '^daemon-reload' &&
+    output_has "Caddy did not start with the changed drop-in" && record_is restarting
+}
+check "deploying r24 again restarts Caddy again (no daemon-reload, nothing else changed) and stops the same way [FIX-W53-SHARED 22b]" \
+  r24_tries_again
 deploy --rollback
 r24_back() {
   rc_is 0 && current_is "$R22" && dropin_marker_is r21 && loaded_dropin_marker_is r21 && caddy_marker_is r22 &&
@@ -1301,6 +1359,7 @@ r24_back() {
 check "--rollback then re-installs r22's drop-in and Caddyfile from its snapshot [FIX-W52-SHARED 21k]" r24_back
 check "and restarts Caddy once, after the daemon-reload and the units, with r22's drop-in, not also reloaded [FIX-W52-SHARED 21k]" \
   all_of reloaded_before_caddy_restart restarted_after_units
+check "--rollback records the drop-in Caddy restarted with (r22's) [FIX-W53-SHARED 22b]" record_is "$R21_DROPIN_SHA"
 
 # A VM whose caddy service does not run the Velexis build yet (no link from provision-vm.sh --steps caddy): the drop-in is
 # installed and loaded, and Caddy's restart waits for that step, which restarts Caddy.
@@ -1316,7 +1375,10 @@ r25_waits() {
 }
 check "a VM whose caddy service does not run the Velexis build: the changed drop-in is loaded, Caddy not restarted, the restart waits for provision-vm.sh [FIX-W52-SHARED 21k]" \
   r25_waits
+check "the record stays the drop-in the running Caddy started with (r22's) [FIX-W53-SHARED 22b]" record_is "$R21_DROPIN_SHA"
+# provision-vm.sh --steps caddy: the link, and Caddy restarted with r25's drop-in, which it records.
 ln -s /usr/local/bin/caddy-velexis "$ROOT/usr/bin/caddy"
+sha_file "$CADDY_DROPIN" >"$CADDY_RECORD"
 
 make_release r26 caddy-bin=b4 dropin=r26
 R26="$BUILT"
@@ -1328,6 +1390,84 @@ r26_once() {
 }
 check "a new build and a changed drop-in together: one Caddy restart for both, after the units, not also reloaded [FIX-W52-SHARED 21k]" \
   all_of r26_once reloaded_before_caddy_restart restarted_after_units
+check "and the record names r26's drop-in [FIX-W53-SHARED 22b]" record_is_installed
+R26_DROPIN_SHA="$(sha_file "$CADDY_DROPIN")"
+
+# ---- 16. the record of the drop-in Caddy last started with (lead decision (22b) of 2026-11-15) -----------------------
+step "16. The drop-in Caddy last started with: a run cut off before the activation loses no restart; without a record the run start stands in"
+LOCK="$ROOT/run/velexis-deploy.lock"
+# A run cut off between its staging and the activation: r27's new drop-in is installed and loaded (daemon-reload), then
+# deploy.sh is killed (SIGKILL, during its first migration) before it switches or restarts anything.
+make_release r27 caddy-bin=b4 dropin=r27
+R27="$BUILT"
+upload "$R27"
+: >"$STATE/FAKE_KILL_DEPLOY"
+deploy "$R27"
+flock -w 10 "$LOCK" true || die "the killed deploy's lock was not released"
+r27_cut_off() {
+  rc_is 137 && [ ! -e "$STATE/FAKE_KILL_DEPLOY" ] && current_is "$R26" && dropin_marker_is r27 &&
+    loaded_dropin_marker_is r27 && [ -z "$(caddy_calls)" ] && record_is "$R26_DROPIN_SHA" &&
+    not output_has "deploy $R27 done"
+}
+check "a run killed during its migrations: r27's drop-in installed and loaded, no switch, no Caddy restart, the record still r26's [FIX-W53-SHARED 22b]" \
+  r27_cut_off
+# The next run changes nothing itself (r27 again, from its snapshot): its drop-in is already installed, so with the run
+# start alone ((21k)) nothing would restart Caddy, which still runs r26's.
+upload "$R27"
+deploy "$R27"
+r27_restarted() {
+  rc_is 0 && current_is "$R27" && output_has "release $R27 is already on the VM" && no_call '^daemon-reload' &&
+    output_has "Caddy restarted (new drop-in)" && record_is_installed && dropin_marker_is r27
+}
+check "the next deploy, which changes nothing (no daemon-reload), restarts Caddy once with r27's drop-in, after the units, not also reloaded, and records it [FIX-W53-SHARED 22b]" \
+  all_of r27_restarted restarted_after_units
+upload "$R27"
+deploy "$R27"
+r27_settled() { rc_is 0 && [ -z "$(caddy_calls)" ] && record_is_installed; }
+check "a third deploy of r27 restarts nothing: the record equals the installed drop-in [FIX-W53-SHARED 22b]" r27_settled
+
+# A VM without the record (provisioned before the decision): the drop-in installed when the run began stands in for it,
+# and the run writes the record.
+R27_DROPIN_SHA="$(sha_file "$CADDY_DROPIN")"
+rm -f "$CADDY_RECORD"
+upload "$R27"
+deploy "$R27"
+no_record_unchanged() {
+  rc_is 0 && [ -z "$(caddy_calls)" ] && record_is "$R27_DROPIN_SHA" &&
+    output_has "no record of the drop-in Caddy last started with"
+}
+check "without a record, a deploy that changes no drop-in restarts nothing and writes the record (the installed drop-in) [FIX-W53-SHARED 22b]" \
+  no_record_unchanged
+rm -f "$CADDY_RECORD"
+make_release r28 caddy-bin=b4 dropin=r28
+R28="$BUILT"
+upload "$R28"
+deploy "$R28"
+no_record_changed() {
+  rc_is 0 && current_is "$R28" && dropin_marker_is r28 && output_has "Caddy restarted (new drop-in)" && record_is_installed
+}
+check "without a record, a deploy that brings a new drop-in compares with the run start: one Caddy restart, after the units, and the record names it [FIX-W53-SHARED 22b]" \
+  all_of no_record_changed reloaded_before_caddy_restart restarted_after_units
+R28_DROPIN_SHA="$(sha_file "$CADDY_DROPIN")"
+rm -f "$CADDY_RECORD"
+make_release r29 caddy-bin=b4 dropin=r29 unhealthy
+R29="$BUILT"
+upload "$R29"
+deploy "$R29"
+no_record_rolled_back() {
+  rc_is 1 && output_has "deploy of $R29 failed health checks; rolled back to $R28" && current_is "$R28" &&
+    dropin_marker_is r28 && loaded_dropin_marker_is r28 && [ -z "$(caddy_calls)" ] && record_is "$R28_DROPIN_SHA"
+}
+check "without a record, an unhealthy release's automatic rollback restarts nothing and writes the record: the installed drop-in (r28's) [FIX-W53-SHARED 22a]" \
+  no_record_rolled_back
+# --rollback (to r27, the release before r28) records the drop-in it restarted Caddy with.
+deploy --rollback
+rollback_recorded() {
+  rc_is 0 && current_is "$R27" && dropin_marker_is r27 && output_has "Caddy restarted (new drop-in)" &&
+    record_is "$R27_DROPIN_SHA"
+}
+check "--rollback to r27 restarts Caddy once with r27's drop-in, after the daemon-reload and the units, and records it [FIX-W53-SHARED 22b]" \
+  all_of rollback_recorded reloaded_before_caddy_restart restarted_after_units
 
 # ---- over the whole run -----------------------------------------------------------------------------------------------------
 step "Over the whole run"

@@ -83,12 +83,24 @@
 # VELEXIS-EGRESS-DENY; an open SSH session is a reply and stays allowed), and enables the service (boot) and the timer
 # (every 2 minutes). A second run changes nothing. ufw keeps the inbound rules and "allow outgoing" (see step_egress).
 #
+# Caddy's restarts (lead decision (22b) of 2026-11-15): every Caddy restart of the steps caddy, scripts and caddyconf
+# records the SHA-256 of the caddy drop-in Caddy started with in /var/lib/velexis/caddy-dropin.sha256, the record that
+# velexis-deploy compares with the drop-in a deploy leaves installed (deploy.sh's header).
+#
+# The one-time AIDE re-baseline (lead decision (22d) of 2026-11-15): each step that completes records it in
+# /var/lib/velexis/provision/steps/, and at the end of the first run after which every step but summary has completed at
+# least once on the VM (in one run or in several, in any order) aideinit runs once more, so that the files the steps
+# after harden install become ordinary entries of AIDE's database. It runs once only (/var/lib/velexis/provision/
+# aide-rebaseline records it, also a failed attempt); later runs never change the database (see aide_rebaseline_once).
+#
 # Tests only: VELEXIS_ROOT=<absolute folder> moves every Velexis path (/etc/velexis, /srv/velexis, /var/lib/velexis,
-# /var/log/velexis, /var/backups/velexis, /usr/local/sbin and the deploy sudoers file) and /etc/ssh and /etc/pam.d/sshd
-# under that folder, and allows only the steps users, keys, envfiles, ssh and egress (deploy/systemd/test/units-smoke.sh,
-# deploy/scripts/test/check-vm.test.sh, which also puts fake sshd and systemctl first on PATH for the step ssh, and fake
-# nft, getent and chronyc for the step egress, which then also reads /etc/apt, /etc/systemd/system and
-# /run/systemd/resolve under that folder). The system users are real.
+# /var/log/velexis, /var/backups/velexis, /usr/local/sbin and the deploy sudoers file), /var/lib/aide/aide.db, /etc/ssh
+# and /etc/pam.d/sshd under that folder, and allows only the steps users, keys, envfiles, ssh and egress
+# (deploy/systemd/test/units-smoke.sh, deploy/scripts/test/check-vm.test.sh, which also puts fake sshd and systemctl
+# first on PATH for the step ssh, and fake nft, getent and chronyc for the step egress, which then also reads /etc/apt,
+# /etc/systemd/system and /run/systemd/resolve under that folder), and the steps PROVISION_TEST_STUBS names as stubs
+# that only log their name (check-vm.test.sh, with a fake aideinit, for the step records and the re-baseline). The
+# system users are real.
 # =====================================================================================================
 set -euo pipefail
 
@@ -190,7 +202,11 @@ if [ -n "$VELEXIS_ROOT" ]; then
   for step in $STEPS; do
     case "$step" in
       users | keys | envfiles | ssh | egress) ;;
-      *) die "with VELEXIS_ROOT only the steps users, keys, envfiles, ssh and egress run, not $step" ;;
+      *)
+        case " ${PROVISION_TEST_STUBS//,/ } " in
+          *" $step "*) ;;   # a test stub (PROVISION_TEST_STUBS, below)
+          *) die "with VELEXIS_ROOT only the steps users, keys, envfiles, ssh and egress run, not $step" ;;
+        esac ;;
     esac
   done
 fi
@@ -364,7 +380,9 @@ report_level=added_removed_entries
 # so apt-daily's refresh of them would otherwise fall under 99_aide_root's Full and change on most days.
 /var/lib/apt/lists/[^/]+$ f VarFile
 AIDE
-  if [ ! -f /var/lib/aide/aide.db ]; then
+  # The files of the later steps join the database once, at the end of the first run after which every step has
+  # completed (aide_rebaseline_once, lead decision (22d) of 2026-11-15).
+  if [ ! -f "$AIDE_DB" ]; then
     log "Initialising the AIDE database (takes a few minutes)"
     aideinit -y -f >/dev/null || warn "aideinit failed; run it manually"
   fi
@@ -1038,6 +1056,24 @@ step_redis() {
 
 # ---- caddy: Caddy 2.8, the Velexis build with the web application firewall (X-039) -------------------------------
 CADDY_BUILD=/usr/local/bin/caddy-velexis
+# The record of the caddy drop-in that Caddy was last (re)started with (lead decision (22b) of 2026-11-15), which
+# velexis-deploy compares with the drop-in a deploy leaves installed: its SHA-256 ("none" without a drop-in), and
+# "restarting" while a restart runs, so that one which fails or is cut off is made again by the next deploy. Every
+# Caddy restart of this script goes through restart_caddy (the steps caddy, scripts and caddyconf).
+CADDY_DROPIN=/etc/systemd/system/caddy.service.d/velexis.conf
+CADDY_STARTED="$LIB/caddy-dropin.sha256"
+record_caddy_start() { # value
+  [ -d "$LIB" ] || install -d -m 0711 -o root -g root "$LIB"
+  printf '%s\n' "$1" >"$CADDY_STARTED.new" || die "could not write $CADDY_STARTED"
+  mv -f "$CADDY_STARTED.new" "$CADDY_STARTED" || die "could not write $CADDY_STARTED"
+}
+restart_caddy() { # restarts Caddy, then records the drop-in it started with (systemd's, as of the last daemon-reload)
+  local sha=none
+  record_caddy_start restarting
+  systemctl restart caddy || die "Caddy did not start (journalctl -u caddy -n 50); velexis-deploy restarts it again at the next deploy"
+  if [ -f "$CADDY_DROPIN" ]; then sha="$(sha256sum "$CADDY_DROPIN" | cut -d' ' -f1)"; fi
+  record_caddy_start "$sha"
+}
 step_caddy() {
   log "Caddy 2.8: the package, and the Velexis build with the web application firewall as /usr/bin/caddy"
   apt_install caddy
@@ -1066,7 +1102,7 @@ step_caddy() {
   caddy version | grep -q '^v2\.8\.' || warn "Caddy 2.8 expected, got $(caddy version)"
   grep -qx http.handlers.waf <<<"$(caddy list-modules)" || die "/usr/bin/caddy has no web application firewall (http.handlers.waf)"
   # A running Caddy keeps its old binary until a restart; the build runs any Caddyfile the package's binary runs.
-  if [ "$changed" = 1 ] && is_active caddy; then systemctl restart caddy; fi
+  if [ "$changed" = 1 ] && is_active caddy; then restart_caddy; fi
 }
 
 # ---- keys: one key folder per backend zone (ADR-0010, ADR-0026) ----------------------------------------------
@@ -1272,13 +1308,12 @@ step_scripts() {
   install -m 0644 -o root -g root "$DEPLOY_DIR"/systemd/*.service "$DEPLOY_DIR"/systemd/*.timer /etc/systemd/system/
   install -d -m 0755 /etc/systemd/system/caddy.service.d
   local dropin_changed=0
-  if install_changed 0644 root:root "$DEPLOY_DIR/systemd/caddy.service.d/velexis.conf" \
-      /etc/systemd/system/caddy.service.d/velexis.conf; then
+  if install_changed 0644 root:root "$DEPLOY_DIR/systemd/caddy.service.d/velexis.conf" "$CADDY_DROPIN"; then
     dropin_changed=1
   fi
   systemctl daemon-reload
   # A running Caddy picks up a changed drop-in (environment, /run/caddy) only on a restart.
-  if [ "$dropin_changed" = 1 ] && is_active caddy; then systemctl restart caddy; fi
+  if [ "$dropin_changed" = 1 ] && is_active caddy; then restart_caddy; fi
   # App units are enabled by velexis-deploy when a release contains the app. Backups start now.
   systemctl enable --now velexis-backup.timer
   # The on-VM health check (X-030), every 5 minutes. Until alert.env has the SMTP settings its alerts cannot be sent
@@ -1353,7 +1388,7 @@ step_caddyconf() {
     mv -T /etc/caddy/waf.new /etc/caddy/waf
     rm -rf /etc/caddy/waf.old
     mv /etc/caddy/Caddyfile.new /etc/caddy/Caddyfile
-    systemctl restart caddy
+    restart_caddy
   fi
 }
 
@@ -1391,10 +1426,70 @@ Next steps (docs/mvp/deployment-single-vm.md §3):
 EOF
 }
 
+# ---- the one-time AIDE re-baseline (lead decision (22d) of 2026-11-15) ---------------------------------------------
+# harden makes AIDE's database (aideinit) before the steps that install PostgreSQL, Redis, Caddy, the root-owned
+# scripts, units and env files and the Caddyfile, so AIDE would list each of their files as an added entry, with its
+# detail, in every daily report. Each step that completes leaves a record, $PROVISION_STATE/steps/<step> (the time of
+# its first completion, never rewritten), written only after the step returned: a step that fails stops the run before
+# its record. At the end of a run, which only a run whose every step completed reaches, aide_rebaseline_once checks
+# first the record of the re-baseline, $AIDE_REBASELINE, and does nothing at all once it exists; then, when every step
+# of BASELINE_STEPS has its record, from this run or from earlier ones in any order, it re-runs aideinit, which writes
+# the new database and installs it as /var/lib/aide/aide.db, and records the result. The record is written before
+# aideinit starts ("started") and holds "rebaselined <time> <SHA-256 of the database>" or "failed <time>" afterwards: one
+# attempt, never repeated automatically, so no later run can accept a changed file silently, also not after a failed or
+# interrupted attempt. A deliberate re-baseline later is a manual step after reviewing the aide-change alerts
+# (docs/mvp/deployment-single-vm.md §12), which appends its own line to the record. check-vm.sh (group system) reports
+# the record's state. BASELINE_STEPS is every step but summary, which only prints; ssh and egress are parts of harden.
+PROVISION_STATE="$LIB/provision"
+BASELINE_STEPS="${ALL_STEPS% summary}"
+AIDE_REBASELINE="$PROVISION_STATE/aide-rebaseline"
+AIDE_DB="$VELEXIS_ROOT/var/lib/aide/aide.db"
+utc_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+step_completed() { # step: its record, once
+  [ -d "$LIB" ] || install -d -m 0711 -o root -g root "$LIB"
+  [ -d "$PROVISION_STATE/steps" ] || install -d -m 0700 -o root -g root "$PROVISION_STATE" "$PROVISION_STATE/steps"
+  [ -e "$PROVISION_STATE/steps/$1" ] || utc_now >"$PROVISION_STATE/steps/$1"
+}
+
+aide_rebaseline_once() {
+  local step waiting="" sha
+  [ ! -e "$AIDE_REBASELINE" ] && [ ! -L "$AIDE_REBASELINE" ] || return 0   # once: then never again
+  for step in $BASELINE_STEPS; do
+    [ -e "$PROVISION_STATE/steps/$step" ] || waiting="$waiting $step"
+  done
+  if [ -n "$waiting" ]; then
+    to_log "AIDE's one-time re-baseline waits for the first completion of the steps:$waiting"
+    return 0
+  fi
+  log "Re-baselining AIDE once, now that every step has completed (aideinit; takes a few minutes)"
+  printf 'started %s\n' "$(utc_now)" >"$AIDE_REBASELINE"
+  if aideinit -y -f >/dev/null && [ -s "$AIDE_DB" ]; then
+    sha="$(sha256sum "$AIDE_DB" | cut -d' ' -f1)"
+    printf 'rebaselined %s %s\n' "$(utc_now)" "$sha" >"$AIDE_REBASELINE"
+    log "AIDE's database is re-baselined ($AIDE_DB $sha); no later run of this script changes it"
+  else
+    printf 'failed %s\n' "$(utc_now)" >"$AIDE_REBASELINE"
+    warn "aideinit failed, so AIDE's one-time re-baseline is not done, and no later run tries again: review the aide-change alerts, then re-baseline by hand (docs/mvp/deployment-single-vm.md §12)"
+  fi
+}
+
+# Tests only (check-vm.test.sh): with VELEXIS_ROOT, PROVISION_TEST_STUBS names steps (comma- or space-separated) that run
+# as stubs which only log their name, so that the step records and the one-time AIDE re-baseline can be tested with the
+# steps that need the real VM. Without VELEXIS_ROOT it has no effect.
+if [ -n "$VELEXIS_ROOT" ] && [ -n "${PROVISION_TEST_STUBS:-}" ]; then
+  for step in ${PROVISION_TEST_STUBS//,/ }; do
+    case " $ALL_STEPS $NAMED_STEPS " in *" $step "*) ;; *) die "PROVISION_TEST_STUBS: unknown step $step" ;; esac
+    eval "step_${step}() { log 'test stub of the step ${step}'; }"
+  done
+fi
+
 # The lockout guard, before any step changes anything: whoever runs this through sudo stays in AllowUsers, and the SSH
 # login behind the run (sudo or root) stays inside SSH_ALLOW_FROM (lead decision (15d) of 2026-11-11).
 case " $STEPS " in *" harden "* | *" ssh "*) runner_in_allowusers; ssh_source_in_allow_from ;; esac
 for step in $STEPS; do
   "step_${step}"
+  step_completed "$step"
 done
+aide_rebaseline_once
 to_log "provision-vm.sh finished: steps $STEPS"
