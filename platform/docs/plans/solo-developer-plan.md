@@ -350,7 +350,7 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 - **Tasks:** PBE-075 (1 day); since 2026-11-15 PFE-031 (½ day, in what was ½ day of the week's buffer; it starts when the product owner hands over the approved text); 1 day of buffer.
 - **Deliverables:** a platform command that creates the demo OTA with the reserved key `demo` for an existing portal account with MFA, through `createTenant`'s own transaction and with the portal path's audit rows and one naming the command, kept out of billing; the portal and `createTenant` still answer `409 TENANT_KEY_UNAVAILABLE` for `demo`. The platform launch checklist's demo OTA item runs it ([`../runbooks/launch-checklist.md`](../runbooks/launch-checklist.md) §6). Since 2026-11-15: the product owner's approved terms of service and privacy notice on `/legal/terms` and `/legal/privacy` under a new `termsVersion` that sign-up sends (PFE-031; the launch checklist's §5 item).
 - **Demo:** the command creates `demo` with `APP_ENV=production` on the local stack and the OTA is provisioned, while creating an OTA with the key `demo` through the portal is still refused; the legal pages without placeholder text, and a sign-up that sends the new version (PFE-031).
-- **Overlap:** shares its calendar week (roadmap C80) with OTA Week 39e (SDK-017, OFE-032).
+- **Overlap:** shares its calendar week (roadmap C80) with OTA Week 39e (SDK-017, OFE-032 and, since 2026-11-15, SDK-018).
 
 ### Week 31 — M6 exit: suites, switch removal and launch
 

@@ -67,6 +67,7 @@ Every plan uses exactly these ids and meanings.
 | [0025](adr/0025-roadmap-scheduling-and-tracking.md) Roadmap scheduling and tracking | Calendars with and without agents, batches and gates, launch exceptions, the ` ✅` status rule, where demos run. |
 | [0026](adr/0026-system-users-per-trust-zone.md) System users per trust zone | One OS user per backend zone and per Next.js app, per-zone key folders, env files read by systemd only. |
 | [0027](adr/0027-pci-scope-and-vm-controls.md) PCI DSS scope and controls on the single VM | The whole VM is the CDE; each applicable requirement with its control and owning task. |
+| [0028](adr/0028-how-work-reaches-main.md) How work reaches main | The integration branch's one merge into `main` with a merge commit, one pull request per wave, squash merging for a single task's pull request, approvals and the review record, who may merge what; supersedes ADR-0020's points on merging and approvals. |
 
 ## 4. Component documents
 

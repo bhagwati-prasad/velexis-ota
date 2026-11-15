@@ -1,6 +1,6 @@
 <!--
 Title: <type>(<scope>): <title> [<TASK-ID>]   e.g. feat(ota-backend): add API key guard [OBE-014]
-One task = one branch (task/<TASK-ID>-<slug>) = one PR. Do not merge: the developer reviews and squash-merges.
+One task = one branch (task/<TASK-ID>-<slug>) = one PR. Do not merge: the developer reviews and merges a wave's pull request with a merge commit and a single task's pull request with a squash (docs/mvp/adr/0028-how-work-reaches-main.md).
 Definition of done: AGENTS.md §5. Conventions: docs/mvp/conventions.md §11–§12.
 -->
 
