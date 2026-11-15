@@ -26,7 +26,8 @@
 //      not wrap; and (FIX-W52-OTA, lead decision (21h) of 2026-11-13) the contract's longest first name (60
 //      characters) at 1024 and 1100 px for both storefronts: the greeting cut with an ellipsis at its cap (12rem),
 //      whole in the DOM, the accessibility tree and its title, the row not wrapping when the session answers (nothing
-//      moves up or down; the wider navigation moves along its line, as from lg before), axe.
+//      moves up or down; the wider navigation moves along its line, as from lg before, and since lead decision (22e)
+//      of 2026-11-15 the session's whole shift stays at or below 0.01), axe.
 //
 // What the stack cannot answer on demand is answered in the browser (`page.route`), and only that: the shared states
 // of `storefront.get` (the API's error envelope) and, for parts 3 and 6, storefront.get's own answer with the OTA's
@@ -1113,6 +1114,14 @@ const LONGEST_FIRST_NAME = "Maximiliana-Alexandrina Wilhelmina Konstantinopoulou
 const CAP_WIDTHS = Object.freeze([1024, 1100]);
 /** The greeting's cap from lg, in CSS pixels: 12rem (`lg:max-w-48` of lib/session.js `GREETING_CAP_CLASSES`). */
 const GREETING_CAP_PX = 192;
+/**
+ * The most the session's answer may move home from lg, every shift counted (lead decision (22e) of 2026-11-15): the
+ * navigation grows to the left when "Sign in" becomes the greeting, "My account" and "Sign out", moving its other
+ * links (and the currency selector) along the line, 0.0025 to 0.0050 with the longest first name
+ * (storefront-accessibility.md §3.8). The decision accepts that sideways shift, as OFE-032 did, and reserves no width
+ * for the signed-in links; the row never wraps and nothing moves up or down (the checks beside this bound).
+ */
+const SESSION_SHIFT_FROM_LG_MAX = 0.01;
 
 test.describe("a signed-in customer with the longest first name, from the large breakpoint (FIX-W52-OTA)", () => {
   test.describe.configure({ mode: "serial" });
@@ -1148,7 +1157,7 @@ test.describe("a signed-in customer with the longest first name, from the large 
   });
 
   for (const storefront of STOREFRONTS) {
-    test(`home on ${storefront.label} at 1024 and 1100 px with a 60-character first name: the greeting cut at its cap and whole in the DOM, the accessibility tree and its title; the row does not wrap when the session answers; axe [FIX-W52-OTA AC2]`, async () => {
+    test(`home on ${storefront.label} at 1024 and 1100 px with a 60-character first name: the greeting cut at its cap and whole in the DOM, the accessibility tree and its title; the row does not wrap when the session answers, which moves home along the line by at most 0.01; axe [FIX-W52-OTA AC2] [FIX-W53-OTA AC1]`, async () => {
       const { page, guards } = customers.get(storefront.fullest) as Browsing;
       const parts = header(page);
       const whole = `Hi, ${LONGEST_FIRST_NAME}`;
@@ -1174,7 +1183,8 @@ test.describe("a signed-in customer with the longest first name, from the large 
         expect(await page.getByRole("navigation", { name: "Main" }).ariaSnapshot()).toContain(whole);
         // One row, which did not wrap when the session answered: the header and the navigation kept their height
         // and main its start, and nothing moved up or down; the wider navigation only moves along its line (its
-        // neighbours to the left, as from lg before), and nothing moved before the session answered.
+        // neighbours to the left, as from lg before), by at most SESSION_SHIFT_FROM_LG_MAX in all, and nothing moved
+        // before the session answered.
         expectOneRow(await navigationRow(page), width);
         expect(after, `${width} px: the header's and the navigation's height, where main starts`).toEqual(
           before,
@@ -1183,6 +1193,10 @@ test.describe("a signed-in customer with the longest first name, from the large 
           signedIn.filter((shift) => shift.vertical),
           `${width} px: shifts up or down when the session answered`,
         ).toEqual([]);
+        expect(
+          scoreOf(signedIn),
+          `${width} px: the session's shift, every shift counted (lead decision (22e))`,
+        ).toBeLessThanOrEqual(SESSION_SHIFT_FROM_LG_MAX);
         expect(
           scoreOf([...withoutFontSwaps(painted), ...withoutFontSwaps(configured)]),
           `${width} px: shifts before the session answered, but the font's swap`,
