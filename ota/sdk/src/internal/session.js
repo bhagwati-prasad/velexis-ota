@@ -29,7 +29,8 @@
 //   cookie jar, and some edge runtimes refuse the field). `secretKey` is refused where `globalThis.document` exists.
 //   `environment` sends `X-Velexis-Environment` on console operations (in any mode; internal/client.js adds it).
 //
-// Automatic refresh (token and server mode with `refreshToken`, always in cookie mode): a call refused with `401
+// Automatic refresh (token and server mode with a `refreshToken` other than `""` and `null`, always in cookie mode;
+// lead decision (24m) of 2026-11-15: an empty string as `refreshToken` is no refresh token): a call refused with `401
 // TOKEN_EXPIRED` waits for one refresh and is sent once more; a call whose attempt went out before its session moved
 // on (in cookie mode: a refresh of the family has finished since; in token and server mode: the client now sends
 // another access token than the attempt did) is sent again without another one. In token and server mode the clients
@@ -62,22 +63,22 @@
 // above; an old access token presented with no refresh token, with another session's or with an unknown one is sent
 // as it is (the API answers `401 TOKEN_EXPIRED`), so a client whose token functions serve several visitors never
 // turns one visitor's expired access token into a valid one. The one exception (lead decision (22g) of 2026-11-15): a
-// client given a non-empty string `accessToken` and no `refreshToken` (neither a string nor a function) sends the
-// access token of its own latest `auth.signIn`, `auth.refresh` or `auth.changePassword` result, as under SDK-008; it
-// never refreshes, and no other client's tokens reach it. Everything is keyed by the token's value, so clients with
-// different tokens (a server's per-visitor clients, or one client whose token functions give each request's visitor)
-// never share a refresh or a token. A token function's value is read before every request (the refresh token's only
-// where the access token sent depends on it) and at every refresh. Token and server mode refresh through
-// `auth.refresh`, or `console.auth.refresh` with `sessionKind: "staff"`, with the settings, host and end user of the
-// client and the call that started the refresh, and the API key only (never the expired access token). The result is
-// reported once, by the client whose call started the refresh: its `onSessionRefreshed` gets the new tokens (and its
-// `onStaffSessionRefreshed` the whole staff session), or, for a refresh the API refuses with 401
+// client given a non-empty string `accessToken` and no `refreshToken` (neither a non-empty string nor a function)
+// sends the access token of its own latest `auth.signIn`, `auth.refresh` or `auth.changePassword` result, as under
+// SDK-008; it never refreshes, and no other client's tokens reach it. Everything is keyed by the token's value, so
+// clients with different tokens (a server's per-visitor clients, or one client whose token functions give each
+// request's visitor) never share a refresh or a token. A token function's value is read before every request (the
+// refresh token's only where the access token sent depends on it) and at every refresh. Token and server mode refresh
+// through `auth.refresh`, or `console.auth.refresh` with `sessionKind: "staff"`, with the settings, host and end user
+// of the client and the call that started the refresh, and the API key only (never the expired access token). The
+// result is reported once, by the client whose call started the refresh: its `onSessionRefreshed` gets the new tokens
+// (and its `onStaffSessionRefreshed` the whole staff session), or, for a refresh the API refuses with 401
 // (`REFRESH_TOKEN_INVALID`, `REFRESH_TOKEN_REUSED` …), its `onSessionExpired` is called, and every call waiting for
 // that refresh throws its `AuthenticationError`. Every client that took part keeps the new tokens: a string source
 // sends them from then on; a token function that still gives the tokens they replaced gets the new ones within the
-// window (the integrator stores the new tokens through `onSessionRefreshed`). A call with its own
-// `options.accessToken` (or an `Authorization` header of the call or the client, which wins over the session's) is not
-// the client's session and is not refreshed. Hook failures are ignored, as `onResponse`'s are.
+// window (the integrator stores the new tokens through `onSessionRefreshed`). A call with its own `options.accessToken`
+// (or an `Authorization` header of the call or the client, which wins over the session's) is not the client's session
+// and is not refreshed. Hook failures are ignored, as `onResponse`'s are.
 //
 // Session results (token and server mode, SDK-008): what `auth.signIn`, `auth.refresh` and `auth.changePassword`
 // resolve with (an `AuthSessionResult` with tokens) becomes the client's session through `adopt`, as an automatic
@@ -88,17 +89,20 @@
 // `onSessionRefreshed` gets the new tokens. The client holds the result's refresh token as of the moment the result
 // arrived, before `adopt` reads its token sources (lead decision (23g) of 2026-11-15), so a rotation of it that another
 // holder makes while a slow token function answers is followed at any later time; and when that read has already
-// followed the family's rotation of the result's refresh token to newer tokens, the client keeps those. A client
-// without `accessToken` and `refreshToken` keeps nothing: it never starts sending a token it was not given, so a server
-// client shared by every visitor holds no visitor's session; an empty string as `accessToken` is no access token, here
-// and everywhere else (lead decision (23h) of 2026-11-15). A call with its own credential (`options.accessToken`, or an
-// `Authorization` header of the call or the client) is not the client's session, as for the automatic refresh: its
-// result feeds nothing and calls no hook. What the API rotated for such a result is also recorded in the family
-// (`noteRotation`, SDK-017) when the client holds tokens: the refresh token `auth.refresh` and `console.auth.refresh`
-// presented, and the refresh token of the session `auth.changePassword` rotated (the client's own, or the newest the
-// family knows for it when the client presents a rotated one as it is), so no client that follows them presents them
-// again; `auth.signIn` rotates nothing, and its session stays the calling client's. Cookie mode stores nothing (the
-// session is in httpOnly cookies, and the result carries no token).
+// followed the family's rotation of the result's refresh token to newer tokens, the client keeps those, and
+// `onSessionRefreshed` gets them in the result's session: `accessToken` and `refreshToken` are the newer pair, every
+// other field (`accessTokenExpiresAt`, `refreshTokenExpiresAt`, `tokenType`, `subject`) the result's (lead decision
+// (24l) of 2026-11-15); in every other case it gets `result.session` itself. A client without `accessToken` and
+// `refreshToken` keeps nothing: it never starts sending a token it was not given, so a server client shared by every
+// visitor holds no visitor's session; an empty string as `accessToken` is no access token, and as `refreshToken` no
+// refresh token, here and everywhere else (lead decisions (23h) and (24m) of 2026-11-15). A call with its own
+// credential (`options.accessToken`, or an `Authorization` header of the call or the client) is not the client's
+// session, as for the automatic refresh: its result feeds nothing and calls no hook. What the API rotated for such a
+// result is also recorded in the family (`noteRotation`, SDK-017) when the client holds tokens: the refresh token
+// `auth.refresh` and `console.auth.refresh` presented, and the refresh token of the session `auth.changePassword`
+// rotated (the client's own, or the newest the family knows for it when the client presents a rotated one as it is),
+// so no client that follows them presents them again; `auth.signIn` rotates nothing, and its session stays the
+// calling client's. Cookie mode stores nothing (the session is in httpOnly cookies, and the result carries no token).
 //
 // A call is sent again after `TOKEN_EXPIRED` or `CSRF_TOKEN_INVALID` (the API refused it before doing anything) with
 // the same `Idempotency-Key`. The one exception is an operation the route table marks `retry: "never"` although it
@@ -203,7 +207,8 @@ import { op } from "./operations.js";
  *   the family that this client follows, `resolveRefresh`) replaced by the current ones (what `withOptions` starts
  *   from); a string access token only together with the string refresh token of its session (`resolveAccess`), or,
  *   for a client without a refresh token, by the access token of its own latest session result (lead decision (22g));
- *   an empty access token is no access token and is never replaced (lead decision (23h))
+ *   an empty access token is no access token and is never replaced (lead decision (23h)), nor is an empty refresh
+ *   token, which is no refresh token (lead decision (24m))
  * @property {(options: Readonly<RequestOptions>) => void} checkCall throws a `TypeError` on a per-call option the mode
  *   refuses (cookie mode: tokens and credential headers)
  * @property {(request: HttpRequest) => Promise<unknown>} send sends one call with the mode's credentials, the CSRF
@@ -212,9 +217,10 @@ import { op } from "./operations.js";
  *   operation that takes it (console operations) when the client has `environment`, else no header
  * @property {(result: unknown, presentedRefreshToken: string | undefined, requestOptions?: RequestOptions) => Promise<void>} adopt
  *   token and server mode: makes the tokens of a session result (`auth.signIn`, `auth.refresh`, `auth.changePassword`)
- *   the client's session and reports them to `onSessionRefreshed`; nothing for a result without tokens, for a call
- *   with its own credential (`requestOptions`) or in cookie mode; never throws (the API has already rotated the
- *   session, so the caller must get the result)
+ *   the client's session and reports to `onSessionRefreshed` `result.session`, or the result's session with the newer
+ *   `accessToken` and `refreshToken` the client keeps (lead decision (24l)); nothing for a result without tokens, for
+ *   a call with its own credential (`requestOptions`) or in cookie mode; never throws (the API has already rotated
+ *   the session, so the caller must get the result)
  */
 
 /** The CSRF cookie of cookie mode (OADR-0006 point 2), not httpOnly: its value goes into `X-CSRF-Token`. */
@@ -626,13 +632,24 @@ export function createSession(options, transport, family) {
   const accessString =
     typeof options.accessToken === "string" && options.accessToken !== "" ? options.accessToken : undefined;
   /**
-   * Whether the client was given a non-empty string access token and no refresh token (neither a string nor a
-   * function): the one client whose own session results (`adopt`) replace its access token without a refresh token
+   * The client's configured refresh token when it is a non-empty string, else `undefined`: an empty string counts as no
+   * refresh token everywhere, as `tokenOf` reads it and as `accessString` does for the access token (lead decision
+   * (24m) of 2026-11-15), so a client made with `refreshToken: ""` behaves exactly as one made without it
+   * (`accessOnly`, `refreshes`, `resolveRefresh`, `sessionAccessToken`, `holdsTokens`, `options`).
+   */
+  const refreshString =
+    typeof options.refreshToken === "string" && options.refreshToken !== ""
+      ? options.refreshToken
+      : undefined;
+  /** Whether the client has a refresh-token source: a non-empty string or a function (`null` and `""` are none). */
+  const refreshSource = refreshString !== undefined || typeof options.refreshToken === "function";
+  /**
+   * Whether the client was given a non-empty string access token and no refresh token (neither a non-empty string nor
+   * a function): the one client whose own session results (`adopt`) replace its access token without a refresh token
    * (lead decision (22g) of 2026-11-15, as under SDK-008; `resolveAccess`). It never refreshes, and no other client
    * reaches its tokens.
    */
-  const accessOnly =
-    accessString !== undefined && (options.refreshToken === undefined || options.refreshToken === null);
+  const accessOnly = accessString !== undefined && !refreshSource;
   /**
    * The tokens that replaced token values of this client's own: the access and refresh tokens its calls sent before a
    * refresh they took part in, and those a session result replaced (see `adopt`). Per client, so the access tokens in
@@ -676,7 +693,7 @@ export function createSession(options, transport, family) {
     if (value === undefined) {
       return { refreshToken: undefined, newer: undefined };
     }
-    const ownString = value === options.refreshToken;
+    const ownString = value === refreshString;
     let held = value;
     /** @type {Tokens | undefined} */
     let newer;
@@ -742,8 +759,8 @@ export function createSession(options, transport, family) {
    */
   async function sessionAccessToken() {
     const value = await tokenOf(options.accessToken, "accessToken");
-    if (typeof options.refreshToken === "string") {
-      return resolveAccess(value, resolveRefresh(options.refreshToken).refreshToken);
+    if (refreshString !== undefined) {
+      return resolveAccess(value, resolveRefresh(refreshString).refreshToken);
     }
     if (value === undefined || !replaces(value)) {
       return value;
@@ -1040,23 +1057,19 @@ export function createSession(options, transport, family) {
 
   /**
    * Whether a call that failed with `TOKEN_EXPIRED` is refreshed: always in cookie mode; in token and server mode when
-   * the client has a refresh token and the call sent the session's access token, not its own.
+   * the client has a refresh token (a non-empty string or a function, `refreshSource`) and the call sent the session's
+   * access token, not its own.
    * @param {HttpRequest} request
    */
   const refreshes = (request) =>
-    mode === "cookie" ||
-    (options.refreshToken !== undefined &&
-      options.refreshToken !== null &&
-      !presentsOwnCredential(request.options));
+    mode === "cookie" || (refreshSource && !presentsOwnCredential(request.options));
 
   /**
    * Whether the client has token sources of its own, which a session result can replace: an access token other than
-   * `""` (`accessString`, or a function), or a refresh token.
+   * `""` (`accessString`, or a function), or a refresh token other than `""` (`refreshSource`).
    */
   const holdsTokens =
-    accessString !== undefined ||
-    typeof options.accessToken === "function" ||
-    (options.refreshToken !== undefined && options.refreshToken !== null);
+    accessString !== undefined || typeof options.accessToken === "function" || refreshSource;
 
   /**
    * The value a token source gives now; a source that throws gives nothing here: the call whose result is being
@@ -1131,10 +1144,13 @@ export function createSession(options, transport, family) {
    * result arrived, before it reads its token sources (`arrived`, lead decision (23g) of 2026-11-15), so a rotation of
    * that token by another holder while a slow token function answers is followed at any later time; and when reading
    * them has already followed the family's rotation of the result's refresh token to newer tokens (`resolveRefresh`),
-   * the client keeps those newer tokens instead of the result's. A client without token sources keeps nothing, a staff
-   * client (`sessionKind: "staff"`) keeps its staff session (a customer's result is not its session), a call with its
-   * own credential changes nothing and calls no hook (its session is not the client's, as for the automatic refresh),
-   * and cookie mode has nothing to keep. What the API rotated is recorded in the family by `noteRotation`, not here.
+   * the client keeps those newer tokens instead of the result's, and `onSessionRefreshed` gets them in the result's
+   * session: its `accessToken` and `refreshToken` are the newer pair, every other field is the result's (lead
+   * decision (24l) of 2026-11-15); otherwise the hook gets `result.session` itself. A client without token sources
+   * keeps nothing, a staff client (`sessionKind: "staff"`) keeps its staff session (a customer's result is not its
+   * session), a call with its own credential changes nothing and calls no hook (its session is not the client's, as
+   * for the automatic refresh), and cookie mode has nothing to keep. What the API rotated is recorded in the family by
+   * `noteRotation`, not here.
    * @param {unknown} result what `auth.signIn`, `auth.refresh` or `auth.changePassword` resolved with
    * @param {string | undefined} presentedRefreshToken the refresh token the call sent (`auth.refresh`)
    * @param {RequestOptions} [requestOptions] the request options the call was sent with
@@ -1146,6 +1162,11 @@ export function createSession(options, transport, family) {
     if (session === undefined || presentsOwnCredential(requestOptions ?? {})) {
       return;
     }
+    /**
+     * What `onSessionRefreshed` gets: `result.session` itself, unless the client keeps newer tokens of its session.
+     * @type {Schemas["Session"]}
+     */
+    let reported = session;
     if (holdsTokens) {
       // Taken before the first await: the family's count of rotations when the result arrived.
       const arrived = family.replaced.count();
@@ -1160,13 +1181,15 @@ export function createSession(options, transport, family) {
       const newest = family.replaced.get(session.refreshToken)?.tokens;
       if (newest !== undefined && latest !== undefined && newest.refreshToken === latest.refreshToken) {
         // `heldTokens` followed the rotation of the result's refresh token past it: the client keeps those newer
-        // tokens, and the values it held lead to them.
+        // tokens, and the values it held lead to them. The hook gets them too, in the result's session (lead decision
+        // (24l) of 2026-11-15): a store it writes never ends with the rotated pair the result carried.
         own.record(replaced, latest);
+        reported = { ...session, accessToken: latest.accessToken, refreshToken: latest.refreshToken };
       } else {
         take(session, replaced, arrived);
       }
     }
-    await callHook(options.onSessionRefreshed, session);
+    await callHook(options.onSessionRefreshed, reported);
   }
 
   /**
@@ -1184,11 +1207,9 @@ export function createSession(options, transport, family) {
     mode,
     options() {
       // A string access token is replaced only together with the string refresh token of its session; `""` is no
-      // access token (lead decision (23h)), so it stays as it is.
+      // access token (lead decision (23h)) and no refresh token (lead decision (24m)), so it stays as it is.
       const refreshToken =
-        typeof options.refreshToken === "string"
-          ? resolveRefresh(options.refreshToken).refreshToken
-          : undefined;
+        refreshString === undefined ? undefined : resolveRefresh(refreshString).refreshToken;
       const now = {
         refreshToken,
         accessToken: accessString === undefined ? undefined : resolveAccess(accessString, refreshToken),

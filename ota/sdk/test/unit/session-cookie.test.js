@@ -1,10 +1,11 @@
 // @vitest-environment happy-dom
 // Cookie mode, the hosted storefront's session (ota/sdk/README.md §4.1, OADR-0006 points 3 and 5, OADR-0016 points 5
-// and 6, task SDK-004): keys, tokens and credential headers are refused with a TypeError before any request; fetch runs
-// same-origin with cookies; writes copy the __Host-vx_csrf cookie into X-CSRF-Token, fetching it with GET /v1/storefront
-// when it is missing and once more after 403 CSRF_TOKEN_INVALID; 401 TOKEN_EXPIRED refreshes through POST
-// /v1/auth/refresh with an empty body, once for concurrent calls. `document.cookie` is a jar the fake API writes to,
-// as the browser would apply its Set-Cookie (only the CSRF cookie is readable by scripts; the others are httpOnly).
+// and 6, task SDK-004): keys, tokens (an empty string included, task SDK-018) and credential headers are refused with a
+// TypeError before any request; fetch runs same-origin with cookies; writes copy the __Host-vx_csrf cookie into
+// X-CSRF-Token, fetching it with GET /v1/storefront when it is missing and once more after 403 CSRF_TOKEN_INVALID; 401
+// TOKEN_EXPIRED refreshes through POST /v1/auth/refresh with an empty body, once for concurrent calls.
+// `document.cookie` is a jar the fake API writes to, as the browser would apply its Set-Cookie (only the CSRF cookie is
+// readable by scripts; the others are httpOnly).
 // The clients derived from one cookie-mode client with `withOptions` share its refresh state (task SDK-016): their
 // calls answered 401 TOKEN_EXPIRED together send one refresh, and their writes one CSRF fetch, while every other
 // option stays each client's own.
@@ -180,6 +181,31 @@ describe("cookie mode: refused options", () => {
       expect(tokenSource).not.toHaveBeenCalled();
     },
   );
+
+  it('refuses every token option that is set, an empty string included (accessToken: "", refreshToken: "", bookingToken: ""), at construction and in withOptions [SDK-018 AC3]', async () => {
+    // Token and server mode read an empty token as none (lead decisions (23h) and (24m)); cookie mode still refuses
+    // the option itself, whatever its value (lead decision (24n) of 2026-11-15).
+    const { fake, client } = setup();
+
+    for (const name of ["accessToken", "refreshToken", "bookingToken"]) {
+      const refusal = `Velexis SDK: option "${name}" cannot be used with session "cookie"; the browser sends the session cookies`;
+      expect(
+        await typeErrorOf(
+          () => createVelexisClient({ session: "cookie", fetch: fake.fetch, [name]: "" }),
+          "tok_",
+        ),
+      ).toBe(refusal);
+      expect(await typeErrorOf(() => client.withOptions({ [name]: "" }), "tok_")).toBe(refusal);
+    }
+    // A call's own empty access or booking token is refused too, as in every mode (`RequestOptions` takes non-empty
+    // strings only).
+    for (const name of ["accessToken", "bookingToken"]) {
+      expect(await typeErrorOf(() => client.storefront.get({}, { [name]: "" }), "tok_")).toBe(
+        `Velexis SDK: request option "${name}" must be a non-empty string`,
+      );
+    }
+    expect(fake.requests).toHaveLength(0);
+  });
 
   it.each([
     ["X-Api-Key", "pk_test_sdk004_fake", "X-Api-Key"],

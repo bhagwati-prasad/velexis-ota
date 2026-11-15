@@ -14,7 +14,10 @@
 // a shared refresh holds its new refresh token from that moment (FIX-W53-SDK, lead decisions (22g), (22h) and (22i) of
 // 2026-11-15; the three blocks after the window's). A client that adopts its own session result holds the result's
 // refresh token from the moment the result arrived and keeps newer tokens it already follows, and an empty string as
-// `accessToken` is no access token (FIX-W54-SDK, lead decisions (23g) and (23h) of 2026-11-15; the last two blocks).
+// `accessToken` is no access token (FIX-W54-SDK, lead decisions (23g) and (23h) of 2026-11-15; the two blocks after
+// those). When such a client keeps newer tokens, its onSessionRefreshed gets them in the result's session, and an empty
+// string as `refreshToken` is no refresh token (task SDK-018, lead decisions (24l) and (24m) of 2026-11-15; the last
+// two blocks).
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1858,7 +1861,7 @@ function slowSource(value) {
  * explicit `auth.refresh`. While its `adopt` waits for the access-token function, `holder` (another client of the
  * family, made with a's first tokens) follows that rotation and, the result's access token having expired, refreshes
  * the result's refresh token, rt_w52_a_1, into rt_w52_a_2. Resolves once the client's call has resolved, at least 1 s
- * after that second rotation and well within its window.
+ * after that second rotation and well within its window, with what the call resolved with.
  * @param {{ api: ReturnType<typeof rotatingApi>, holder: import("../../src/index.js").VelexisClient, client: import("../../src/index.js").VelexisClient, access: ReturnType<typeof slowSource>, asked?: number }} clients
  *   `asked`: how many times the access-token function has been called once adopt asks it (2 for a new client)
  */
@@ -1874,6 +1877,7 @@ async function rotatedWhileAdopting({ api, holder, client, access, asked = 2 }) 
   await expect(adopting).resolves.toMatchObject({
     session: { accessToken: "at_w52_a_1", refreshToken: "rt_w52_a_1" },
   });
+  return adopting;
 }
 
 describe("token and server mode: a client holds its own session result's refresh token from the moment the result arrived, and keeps newer tokens it already follows", () => {
@@ -2072,5 +2076,253 @@ describe('token and server mode: accessToken: "" is no access token', () => {
         expect(empty.reported[0]).toEqual([opened(1)]);
       });
     }
+  }
+});
+
+/**
+ * The answers of `api` with every session in them carrying the contract's other `Session` fields, as the backend's
+ * customer refresh gives them (ota/backend/src/identity/sessions.service.ts): the n-th access token of a session
+ * expires at minute n, every refresh token of a session at the session's absolute end (`family_expires_at`), and the
+ * subject is the session's customer.
+ * @param {ReturnType<typeof rotatingApi>} api
+ * @param {number} count
+ * @returns {import("../helpers/fake-fetch.js").Answer[]}
+ */
+function detailedAnswers(api, count) {
+  return api.answers(count).map((answer) => async (/** @type {any} */ request) => {
+    const response = await /** @type {Function} */ (answer)(request);
+    const session = response.body?.session;
+    if (session === undefined) {
+      return response;
+    }
+    const [, , customer, n] = session.accessToken.split("_");
+    return {
+      ...response,
+      body: {
+        ...response.body,
+        session: {
+          ...session,
+          accessTokenExpiresAt: `2026-11-15T10:${n.padStart(2, "0")}:00Z`,
+          refreshTokenExpiresAt: "2026-11-15T22:00:00Z",
+          tokenType: "Bearer",
+          subject: { type: "customer", id: `cus_${customer}` },
+        },
+      },
+    };
+  });
+}
+
+/** Visitor a's second session fields (the result of the client's auth.refresh in `rotatedWhileAdopting`). */
+const A1_DETAILS = /** @type {const} */ ({
+  accessTokenExpiresAt: "2026-11-15T10:01:00Z",
+  refreshTokenExpiresAt: "2026-11-15T22:00:00Z",
+  tokenType: "Bearer",
+  subject: { type: "customer", id: "cus_a" },
+});
+
+describe("token and server mode: onSessionRefreshed gets the newer tokens a client keeps over its own session result", () => {
+  for (const [modeName, key] of Object.entries(MODES)) {
+    it(`${modeName}: a store that every client's onSessionRefreshed writes (the guide's §8.2 pattern) ends with the newer pair, and the visitor's next request after the window succeeds instead of REFRESH_TOKEN_REUSED [SDK-018 AC1]`, async () => {
+      vi.useFakeTimers();
+      const api = rotatingApi();
+      const fake = createFakeFetch(api.answers(12));
+      const root = createVelexisClient({ ...key, fetch: fake.fetch });
+      /** The integrator's store of visitor a's tokens (the guide's cookies), written by every client's hook. */
+      const store = { ...A0 };
+      const write = (/** @type {{ accessToken: string, refreshToken: string }} */ session) => {
+        store.accessToken = session.accessToken;
+        store.refreshToken = session.refreshToken;
+      };
+      const expired = vi.fn();
+      const holder = root.withOptions({ ...A0, onSessionRefreshed: write, onSessionExpired: expired });
+      const access = slowSource(A0.accessToken);
+      // It holds a's first refresh token as its own string: adopt's read of its tokens follows the family's record of
+      // that token past the result's to the newest tokens, which the client keeps (lead decision (23g)).
+      const client = root.withOptions({
+        accessToken: access.source,
+        refreshToken: A0.refreshToken,
+        onSessionRefreshed: write,
+        onSessionExpired: expired,
+      });
+      await rotatedWhileAdopting({ api, holder, client, access });
+
+      // The holder's hook wrote a's newest pair while the client's adopt waited; the client's hook ran last.
+      expect(store).toEqual({ accessToken: "at_w52_a_2", refreshToken: "rt_w52_a_2" });
+
+      // The visitor's next request, 11 s later and outside the window of a's second rotation, after its access token
+      // has expired: a request's client made from the store, as the guide's sample makes one from the cookies.
+      vi.advanceTimersByTime(11_000);
+      api.expire("a");
+      const next = root.withOptions({ ...store, onSessionRefreshed: write, onSessionExpired: expired });
+
+      expect(await next.account.get().catch((caught) => caught)).toEqual({ customer: "a" });
+      expect(api.presented).toEqual([A0.refreshToken, "rt_w52_a_1", "rt_w52_a_2"]);
+      expect(store).toEqual({ accessToken: "at_w52_a_3", refreshToken: "rt_w52_a_3" });
+      expect(expired).not.toHaveBeenCalled();
+      expect(api.revoked("a")).toBe(false);
+    });
+
+    it(`${modeName}: the hook gets the result's session with the newer accessToken and refreshToken and every other field the result's, and the result itself is unchanged [SDK-018 AC1]`, async () => {
+      vi.useFakeTimers();
+      const api = rotatingApi();
+      const fake = createFakeFetch(detailedAnswers(api, 12));
+      const root = createVelexisClient({ ...key, fetch: fake.fetch });
+      const holder = root.withOptions({ ...A0 });
+      const access = slowSource(A0.accessToken);
+      const onSessionRefreshed = vi.fn();
+      const client = root.withOptions({
+        accessToken: access.source,
+        refreshToken: A0.refreshToken,
+        onSessionRefreshed,
+      });
+      const result = /** @type {{ session: object }} */ (
+        await rotatedWhileAdopting({ api, holder, client, access })
+      );
+
+      // The tokens are a's newest, which the client keeps; the access token's expiry, the refresh token's (the
+      // session's absolute end, the same for every pair of the session), the type and the subject are the result's.
+      expect(onSessionRefreshed.mock.calls).toEqual([
+        [{ accessToken: "at_w52_a_2", refreshToken: "rt_w52_a_2", ...A1_DETAILS }],
+      ]);
+      expect(result.session).toEqual({
+        accessToken: "at_w52_a_1",
+        refreshToken: "rt_w52_a_1",
+        ...A1_DETAILS,
+      });
+      expect(onSessionRefreshed.mock.calls[0]?.[0]).not.toBe(result.session);
+    });
+
+    it(`${modeName}: the hook gets result.session itself when the client takes its result: a plain auth.refresh, auth.signIn and auth.changePassword [SDK-018 AC1]`, async () => {
+      const api = rotatingApi();
+      const [rotating] = api.answers(1);
+      /** @type {import("../helpers/fake-fetch.js").Answer} */
+      const answer = (request) =>
+        request.path === "/v1/auth/sign-in" || request.path === "/v1/auth/password/change"
+          ? {
+              body: {
+                session: opened(request.path === "/v1/auth/sign-in" ? 1 : 2),
+                customer: { id: "cus_a" },
+              },
+            }
+          : /** @type {NonNullable<typeof rotating>} */ (rotating)(request);
+      const fake = createFakeFetch(Array.from({ length: 4 }, () => answer));
+      const onSessionRefreshed = vi.fn();
+      const client = createVelexisClient({ ...key, fetch: fake.fetch, ...A0, onSessionRefreshed });
+
+      const results = [
+        await client.auth.refresh({ refreshToken: A0.refreshToken }),
+        await client.auth.signIn({ email: "visitor@example.com", password: "Visitor-password-1" }),
+        await client.auth.changePassword({
+          currentPassword: "Visitor-password-1",
+          newPassword: "Visitor-password-2",
+        }),
+      ];
+
+      expect(onSessionRefreshed).toHaveBeenCalledTimes(3);
+      results.forEach((result, index) => {
+        expect(onSessionRefreshed.mock.calls[index]?.[0]).toBe(
+          /** @type {{ session: object }} */ (result).session,
+        );
+      });
+    });
+
+    it(`${modeName}: the hook gets result.session itself when a client that follows newer tokens of another session takes its result, also when another holder rotated the result's refresh token while adopt waited [SDK-018 AC1]`, async () => {
+      vi.useFakeTimers();
+      const api = rotatingApi();
+      const fake = createFakeFetch(api.answers(12));
+      const root = createVelexisClient({ ...key, fetch: fake.fetch });
+      const holder = root.withOptions({ ...A0 });
+      const access = slowSource(B0.accessToken);
+      const onSessionRefreshed = vi.fn();
+      // Visitor b's client: its first auth.refresh gives it b's newer tokens (the function is asked twice); b's tokens
+      // are not newer tokens of the session of its later auth.refresh of a's first refresh token.
+      const client = root.withOptions({
+        accessToken: access.source,
+        refreshToken: B0.refreshToken,
+        onSessionRefreshed,
+      });
+      const own = client.auth.refresh({ refreshToken: B0.refreshToken }).catch((caught) => caught);
+      await vi.advanceTimersByTimeAsync(2 * SLOW_SOURCE_MS);
+      const first = /** @type {{ session: object }} */ (await own);
+      const result = /** @type {{ session: object }} */ (
+        await rotatedWhileAdopting({ api, holder, client, access, asked: 4 })
+      );
+
+      expect(onSessionRefreshed.mock.calls.map(([session]) => session)).toEqual([
+        first.session,
+        result.session,
+      ]);
+      expect(onSessionRefreshed.mock.calls[1]?.[0]).toBe(result.session);
+    });
+  }
+});
+
+describe('token and server mode: refreshToken: "" is no refresh token', () => {
+  for (const [modeName, key] of Object.entries(MODES)) {
+    for (const [variant, accessTokens] of Object.entries({
+      "and no accessToken": {},
+      "and a string access token": { accessToken: GIVEN },
+      "and an access-token function": { accessToken: () => GIVEN },
+    })) {
+      it(`${modeName}: a client with refreshToken: "" ${variant} behaves exactly as one without refreshToken, before and after its own sign-in, on its next call, through withOptions and in what the family learns from its auth.refresh [SDK-018 AC2]`, async () => {
+        const empty = await sessionCallsWith(key, { refreshToken: "", ...accessTokens });
+        const none = await sessionCallsWith(key, { ...accessTokens });
+
+        expect(empty).toEqual(none);
+        // Neither refreshes on its own: the only refresh tokens presented are the auth.refresh call's and those of the
+        // sibling, which holds visitor a's first tokens.
+        expect(
+          empty.requests
+            .filter(([path, , token]) => path === "/v1/auth/refresh" && token !== A0.refreshToken)
+            .map(([, , token]) => token),
+        ).toEqual([]);
+      });
+    }
+
+    it(`${modeName}: a call refused with 401 TOKEN_EXPIRED is neither refreshed nor sent again with refreshToken: "", as without refreshToken or with null, also when the access-token function has moved on [SDK-018 AC2]`, async () => {
+      for (const refreshTokens of [{ refreshToken: "" }, {}, { refreshToken: null }]) {
+        const fake = createFakeFetch([errorResponse(401, "TOKEN_EXPIRED"), { body: { ok: true } }]);
+        const access = vi.fn().mockReturnValueOnce("at_sdk018_old").mockReturnValue("at_sdk018_new");
+        const onSessionExpired = vi.fn();
+        const onSessionRefreshed = vi.fn();
+        const client = createVelexisClient({
+          ...key,
+          fetch: fake.fetch,
+          accessToken: access,
+          ...refreshTokens,
+          onSessionExpired,
+          onSessionRefreshed,
+        });
+
+        const error = await client.account.get().catch((caught) => caught);
+
+        expect(error).toBeInstanceOf(AuthenticationError);
+        expect(error).toMatchObject({ code: "TOKEN_EXPIRED" });
+        expect(fake.requests.map((request) => request.headers["authorization"])).toEqual([
+          "Bearer at_sdk018_old",
+        ]);
+        expect(access).toHaveBeenCalledTimes(1);
+        expect(onSessionExpired).not.toHaveBeenCalled();
+        expect(onSessionRefreshed).not.toHaveBeenCalled();
+      }
+    });
+
+    it(`${modeName}: withOptions starts a client with refreshToken: "" from the access token of its own latest session result, and gives it no refresh token, as for a client without one [SDK-018 AC2]`, async () => {
+      const fake = createFakeFetch([{ body: { session: opened(1), customer: { id: "cus_a" } } }]);
+      const client = createVelexisClient({ ...key, fetch: fake.fetch, accessToken: GIVEN, refreshToken: "" });
+
+      await client.auth.signIn({ email: "visitor@example.com", password: "Visitor-password-1" });
+      const derived = client.withOptions({ locale: "es-ES" });
+      fake.enqueue(errorResponse(401, "TOKEN_EXPIRED"));
+
+      expect(await derived.account.get().catch((caught) => caught)).toMatchObject({ code: "TOKEN_EXPIRED" });
+      // The derived client sends the sign-in's access token and never refreshes: no refresh token reached it.
+      expect(
+        fake.requests.map((request) => [request.path, request.headers["authorization"] ?? null]),
+      ).toEqual([
+        ["/v1/auth/sign-in", `Bearer ${GIVEN}`],
+        ["/v1/account", "Bearer at_w53_1"],
+      ]);
+    });
   }
 });

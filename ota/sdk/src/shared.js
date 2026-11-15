@@ -77,7 +77,8 @@ export { Page } from "./internal/pagination.js";
  * @property {TokenSource} [bookingToken] guest booking token (`X-Booking-Token`)
  * @property {(session: Schemas["Session"]) => void | Promise<void>} [onSessionRefreshed] called after the SDK refreshed the session
  * @property {() => void | Promise<void>} [onSessionExpired] called when the refresh token is rejected
- * @property {TokenSource} [refreshToken] refresh token source; when set, an expired access token is refreshed once
+ * @property {TokenSource} [refreshToken] refresh token source; when set (a non-empty string or a function; `""` is no
+ *   refresh token, as `null` is: lead decision (24m)), an expired access token is refreshed once
  * @property {string} [locale] default locale (`Accept-Language`)
  * @property {string} [currency] default display currency (`X-Currency`)
  * @property {typeof fetch} [fetch] custom fetch; default `globalThis.fetch`, looked up at each request

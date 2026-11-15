@@ -21,11 +21,12 @@
 // refresh token send one refresh, and clients with different tokens share nothing. A rotated refresh token leads to
 // those tokens only for a client that held it as its own string before the rotation (a call that started or joined its
 // refresh holds the new one from that moment, and a client its own session result's from the moment the result
-// arrived, keeping newer tokens it already follows), or within 10 s of it (a clock set back by at most 10 s keeps it
-// inside), and an old access token only together with its session's refresh token, except that a client given only a
-// non-empty string access token sends the access token of its own latest session result; `accessToken: ""` is no
-// access token (FIX-W52-SDK, lead decisions (21d) and (21e) of 2026-11-13; FIX-W53-SDK, lead decisions (22g) to (22i),
-// and FIX-W54-SDK, (23g) and (23h), of 2026-11-15; internal/session.js).
+// arrived, keeping newer tokens it already follows and reporting those to `onSessionRefreshed`), or within 10 s of it
+// (a clock set back by at most 10 s keeps it inside), and an old access token only together with its session's refresh
+// token, except that a client given only a non-empty string access token sends the access token of its own latest
+// session result; `accessToken: ""` is no access token and `refreshToken: ""` no refresh token (FIX-W52-SDK, lead
+// decisions (21d) and (21e) of 2026-11-13; FIX-W53-SDK, lead decisions (22g) to (22i), FIX-W54-SDK, (23g) and (23h),
+// and SDK-018, (24l) and (24m), of 2026-11-15; internal/session.js).
 
 import { isPageBody, Page } from "./pagination.js";
 import { createFamily, createSession } from "./session.js";
@@ -67,7 +68,8 @@ const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
  *   rotation the API made for any client of the family that this client follows) replaced by the current ones; a
  *   string access token only together with the string refresh token of its session, or, for a client without a
  *   refresh token, by the access token of its own latest session result; an empty access token (`""`) is no access
- *   token and is never replaced, so a client made with it derives clients as one made without it does
+ *   token and an empty refresh token (`""`) no refresh token, and neither is ever replaced, so a client made with
+ *   either derives clients as one made without it does
  * @property {"cookie" | "token" | "server"} mode the session mode (README §4)
  * @property {(overrides: unknown) => VelexisClientOptions} derive the options of `withOptions(overrides)`: these
  *   options with the overrides applied (validated when the new client is created); a cookie-mode client cannot be
@@ -81,7 +83,8 @@ const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
  * @property {(result: unknown, presentedRefreshToken?: string, requestOptions?: RequestOptions) => Promise<void>} adoptSession
  *   token and server mode: makes the tokens of a session result (`auth.signIn`, `auth.refresh`, `auth.changePassword`)
  *   the client's session, holding its refresh token from the moment the result arrived and keeping newer tokens the
- *   client already follows, and reports them to `onSessionRefreshed` (internal/session.js); nothing for a call sent
+ *   client already follows, and reports to `onSessionRefreshed` `result.session`, or the result's session with those
+ *   newer `accessToken` and `refreshToken` when the client keeps them (internal/session.js); nothing for a call sent
  *   with its own credential (`requestOptions.accessToken`, an `Authorization` header) or in cookie mode; never throws
  */
 
