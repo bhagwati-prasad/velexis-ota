@@ -93,7 +93,9 @@
 # after harden install become ordinary entries of AIDE's database. It runs once only (/var/lib/velexis/provision/
 # aide-rebaseline records it, also a failed attempt); later runs never change the database (see aide_rebaseline_once).
 # Once it is recorded, the step harden never makes a new database either: with /var/lib/aide/aide.db missing it warns,
-# names deployment §12 and leaves it missing (aide_database_at_harden, lead decision (23b) of 2026-11-15).
+# names deployment §12 and leaves it missing (aide_database_at_harden, lead decision (23b) of 2026-11-15). harden's auditd
+# rules watch AIDE's folder /var/lib/aide/ and that record with the key velexis-aide (task X-045, lead decision (24c) of
+# 2026-11-15), so every write to the database or the record is recorded, and velexis-logreview's daily summary lists it.
 #
 # Tests only: VELEXIS_ROOT=<absolute folder> moves every Velexis path (/etc/velexis, /srv/velexis, /var/lib/velexis,
 # /var/log/velexis, /var/backups/velexis, /usr/local/sbin and the deploy sudoers file), /var/lib/aide/aide.db, /etc/ssh
@@ -345,8 +347,21 @@ APT::Periodic::Unattended-Upgrade "1";
 APT::Periodic::AutocleanInterval "7";
 EOF
 
-  # auditd: watch configuration, keys, units and privileged files (PCI controls, ADR-0011).
-  cat > /etc/audit/rules.d/velexis.rules <<'EOF'
+  # auditd: watch configuration, keys, units and privileged files (PCI controls, ADR-0011), and AIDE's own baseline:
+  # its folder (the database aide.db) and the record of its one-time re-baseline, with a key of their own, velexis-aide
+  # (X-045, lead decision (24c) of 2026-11-15), whose events velexis-logreview's daily summary counts and lists and
+  # whose watches check-vm.sh (group audit) checks; check-vm.test.sh reads the two lines from this heredoc. auditctl
+  # (augenrules --load) refuses a watch whose folder does not exist, and then loads none of the rules after it: on a new
+  # VM /etc/velexis does not exist yet at this step, so the watch of /etc/velexis/keys/ failed and none of the rules
+  # after it were loaded until the next boot (found by X-045). So the folders this script owns are made first, with the
+  # owners and modes of the steps users, keys and the step records (the record itself may be missing: its watch takes
+  # effect when it is made), and the two watches of AIDE's baseline come last. /etc/caddy and caddy-velexis come with
+  # the step caddy; their folders exist.
+  [ -d "$ETC" ] || install -d -m 0711 -o root -g root "$ETC"
+  [ -d "$ETC/keys" ] || install -d -m 0711 -o root -g root "$ETC/keys"
+  [ -d "$LIB" ] || install -d -m 0711 -o root -g root "$LIB"
+  [ -d "$PROVISION_STATE" ] || install -d -m 0700 -o root -g root "$PROVISION_STATE"
+  cat > /etc/audit/rules.d/velexis.rules <<'AUDIT'
 -w /etc/velexis/ -p wa -k velexis-config
 -w /etc/velexis/keys/ -p wa -k velexis-keys
 -w /etc/caddy/ -p wa -k caddy-config
@@ -356,7 +371,9 @@ EOF
 -w /etc/sudoers -p wa -k sudoers
 -w /etc/sudoers.d/ -p wa -k sudoers
 -w /etc/ssh/sshd_config.d/ -p wa -k sshd
-EOF
+-w /var/lib/aide/ -p wa -k velexis-aide
+-w /var/lib/velexis/provision/aide-rebaseline -p wa -k velexis-aide
+AUDIT
   augenrules --load >/dev/null || warn "augenrules failed; check auditd"
   systemctl enable --now auditd
 

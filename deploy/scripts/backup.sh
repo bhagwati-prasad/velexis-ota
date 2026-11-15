@@ -11,9 +11,14 @@
 #   globals.sql.age            roles and grants without passwords (pg_dumpall --globals-only --no-role-passwords)
 #   storage.tar.zst.age        /var/lib/velexis/storage (documents, exports)
 #   redis-aof.tar.zst.age      the Redis AOF directory (queues, schedules; PostgreSQL stays the record)
-#   config.tar.zst.age         /etc/velexis incl. the master key, encrypted to a DIFFERENT age key
+#   config.tar.zst.age         /etc/velexis incl. the master key, encrypted to a DIFFERENT age key, and AIDE's baseline
+#                              beside it in aide-baseline/ (task X-045): aide.db (a copy of /var/lib/aide/aide.db),
+#                              aide.db.sha256 (its SHA-256, as `sha256sum aide.db` prints it) and aide-rebaseline (a
+#                              copy of the record /var/lib/velexis/provision/aide-rebaseline); one missing on the VM is
+#                              left out with a warning, and the backup goes on
 #   MANIFEST.txt               sizes, SHA-256 of the encrypted files, versions and the figures that the restore
-#                              drill prints (no secrets)
+#                              drill prints, and aide_db=<SHA-256 of aide.db> (or missing) and aide_rebaseline=included
+#                              (or missing) (no secrets)
 # Every file is encrypted with `age` to public keys whose private halves are kept OFF the VM. The script refuses to
 # run when the data and config recipients share a key, or when a private age key is in a recipients file or
 # anywhere in /etc/velexis. An uploaded set is never replaced (rclone --immutable): a second run on the same day
@@ -30,7 +35,9 @@
 #   REDIS_AOF_DIR    the Redis AOF directory (default /var/lib/redis/appendonlydir)
 #   SKIP_REDIS=1     no Redis archive (machines without an AOF directory); the MANIFEST says redis=skipped
 #   CONFIG_DIR       the configuration folder (default /etc/velexis)
-#   PG_RUNAS         the command prefix of pg_dump, pg_dumpall and psql (default `runuser -u postgres --`: peer
+#   AIDE_DB          AIDE's database (default /var/lib/aide/aide.db)
+#   AIDE_REBASELINE  the record of AIDE's re-baseline (default /var/lib/velexis/provision/aide-rebaseline)
+#   PG_RUNAS        the command prefix of pg_dump, pg_dumpall and psql (default `runuser -u postgres --`: peer
 #                    authentication as the superuser). `env` runs them as the calling user with the PG* environment
 #                    (PGHOST, PGUSER, PGPASSFILE, ...); only with another PG_RUNAS may the script run without root.
 # =====================================================================================================
@@ -57,6 +64,8 @@ DEFAULT_PG_RUNAS="runuser -u postgres --"
 : "${SKIP_REDIS:=0}"
 : "${STORAGE_DIR:=/var/lib/velexis/storage}"
 : "${CONFIG_DIR:=/etc/velexis}"
+: "${AIDE_DB:=/var/lib/aide/aide.db}"
+: "${AIDE_REBASELINE:=/var/lib/velexis/provision/aide-rebaseline}"
 : "${BACKUP_MARKER_FILE:=/var/lib/velexis/backup-last-success}"
 export RCLONE_CONFIG
 read -r -a PG_RUNAS_CMD <<<"$PG_RUNAS"
@@ -163,9 +172,40 @@ else
   REDIS_STATE=included
 fi
 
-# ---- 4. /etc/velexis (master key, env files) — separate key -----------------------------------------------
+# ---- 4. /etc/velexis (master key, env files) and AIDE's baseline — separate key -----------------------------
+# AIDE's baseline (task X-045, lead decision (24c) of 2026-11-15): its database, the database's SHA-256 and the record
+# of its re-baseline, copied into a staging folder beside the sets (removed again, never uploaded) and archived beside
+# /etc/velexis as aide-baseline/. The SHA-256 is that of the copy, the file archived; restore.sh config checks it and
+# compares it with the record's last "rebaselined" or "manual" line. Off the VM, the immutable copies let a database
+# replaced or removed on the VM be put back after review, and show what the record said each night
+# (docs/mvp/deployment-single-vm.md §12). A database or record missing on the VM is left out, with a warning and a
+# MANIFEST line that says so; the backup itself goes on (velexis-logreview and check-vm.sh report the missing database).
+AIDE_STAGE="$(mktemp -d "$BACKUP_DIR/.aide-baseline.XXXXXX")"
+AIDE_STAGE="$(cd "$AIDE_STAGE" && pwd -P)"
+trap 'rm -rf --one-file-system "$AIDE_STAGE"' EXIT
+mkdir "$AIDE_STAGE/aide-baseline"
+AIDE_DB_STATE=missing
+if [ -f "$AIDE_DB" ]; then
+  cp --preserve=mode,timestamps "$AIDE_DB" "$AIDE_STAGE/aide-baseline/aide.db"
+  (cd "$AIDE_STAGE/aide-baseline" && sha256sum aide.db >aide.db.sha256)
+  AIDE_DB_STATE="$(cut -d' ' -f1 "$AIDE_STAGE/aide-baseline/aide.db.sha256")"
+  log "AIDE's database $AIDE_DB (SHA-256 $AIDE_DB_STATE)"
+else
+  log "WARNING: AIDE's database $AIDE_DB is missing: this config backup holds none (deployment-single-vm.md §12)"
+fi
+AIDE_RECORD_STATE=missing
+if [ -f "$AIDE_REBASELINE" ]; then
+  cp --preserve=mode,timestamps "$AIDE_REBASELINE" "$AIDE_STAGE/aide-baseline/aide-rebaseline"
+  AIDE_RECORD_STATE=included
+  log "AIDE's re-baseline record $AIDE_REBASELINE"
+else
+  log "WARNING: AIDE's re-baseline record $AIDE_REBASELINE is missing: this config backup holds none"
+fi
 log "config $CONFIG_DIR"
-tar -C "$(dirname "$CONFIG_DIR")" -cf - "$(basename "$CONFIG_DIR")" | zstd -q -T0 | encrypt_config "$WORK/config.tar.zst.age"
+tar -cf - -C "$(dirname "$CONFIG_DIR")" "$(basename "$CONFIG_DIR")" -C "$AIDE_STAGE" aide-baseline \
+  | zstd -q -T0 | encrypt_config "$WORK/config.tar.zst.age"
+rm -rf --one-file-system "$AIDE_STAGE"
+trap - EXIT
 
 # ---- 5. Manifest -------------------------------------------------------------------------------------------
 {
@@ -176,6 +216,8 @@ tar -C "$(dirname "$CONFIG_DIR")" -cf - "$(basename "$CONFIG_DIR")" | zstd -q -T
   echo "database=$PG_DATABASE"
   echo "$FIGURES"
   echo "redis=$REDIS_STATE"
+  echo "aide_db=$AIDE_DB_STATE"
+  echo "aide_rebaseline=$AIDE_RECORD_STATE"
   ( cd "$WORK" && sha256sum ./*.age && du -b ./*.age )
 } > "$WORK/MANIFEST.txt"
 

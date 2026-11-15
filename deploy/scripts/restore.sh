@@ -20,6 +20,12 @@
 #                                                                (old one kept as <folder>.before-restore-<stamp>)
 #   velexis-restore redis <dir> --identity <key>                 replace Redis data (stops Redis briefly)
 #   velexis-restore config <dir> --identity <config-key>         unpack /etc/velexis into /root/velexis-config.restore
+#                                                                (velexis/), AIDE's baseline beside it (aide-baseline/:
+#                                                                aide.db, aide.db.sha256, aide-rebaseline; X-045), and
+#                                                                check that aide.db has its SHA-256 and the one on the
+#                                                                record's last "rebaselined" or "manual" line (an
+#                                                                aide-baseline/ of an earlier config restore there is
+#                                                                kept as aide-baseline.before-restore-<stamp>)
 #   velexis-restore drill <dir> --identity <key>                 restore into a scratch db, run checks, drop it;
 #                                                                appends the set, the figures (also the live
 #                                                                database's), the duration and the result to
@@ -213,6 +219,43 @@ swap_in() { # live-folder: moves the live folder aside and the unpacked one (unp
   log "$live replaced; the previous one is kept as $before"
 }
 
+# AIDE's baseline in a config backup (task X-045, lead decision (24c) of 2026-11-15): what the set holds, whether aide.db
+# has the SHA-256 of aide.db.sha256 and of the record's last "rebaselined" or "manual" line (the database that
+# re-baseline installed), and where the way to put it back is. It never touches /var/lib/aide: putting a database back
+# is a step by hand, after review (docs/mvp/deployment-single-vm.md §12).
+aide_baseline_report() { # folder (CONFIG_RESTORE_DIR/aide-baseline)
+  local d="$1" got="" line want
+  if [ ! -d "$d" ]; then
+    log "the set holds no aide-baseline/ (a backup made before X-045)"
+    return 0
+  fi
+  if [ -f "$d/aide.db" ]; then
+    got="$(sha256sum <"$d/aide.db" | cut -d' ' -f1)"
+    if (cd "$d" && sha256sum --quiet --strict -c aide.db.sha256 >/dev/null 2>&1); then
+      log "aide-baseline/aide.db: SHA-256 $got, as aide-baseline/aide.db.sha256 says"
+    else
+      log "WARNING: aide-baseline/aide.db (SHA-256 $got) does not match aide-baseline/aide.db.sha256: do not use it"
+      got=""
+    fi
+  else
+    log "aide-baseline/ holds no aide.db: AIDE's database was missing on the VM when this backup ran"
+  fi
+  if [ ! -f "$d/aide-rebaseline" ]; then
+    log "aide-baseline/ holds no aide-rebaseline: the record was missing on the VM when this backup ran"
+  else
+    line="$(grep -E '^(rebaselined|manual) ' "$d/aide-rebaseline" | tail -n 1 || true)"
+    want="$(printf '%s\n' "$line" | cut -d' ' -f3)"
+    if [ -z "$line" ]; then
+      log "aide-baseline/aide-rebaseline holds no 'rebaselined' or 'manual' line (last line: $(tail -n 1 "$d/aide-rebaseline" | cut -d' ' -f1-2))"
+    elif [ -n "$got" ] && [ "$got" = "$want" ]; then
+      log "aide-baseline/aide.db has the SHA-256 of the record's last '${line%% *}' line ($(printf '%s\n' "$line" | cut -d' ' -f2)): the database that re-baseline installed"
+    elif [ -n "$got" ]; then
+      log "WARNING: aide-baseline/aide.db differs from the record's last '${line%% *}' line ($want): it changed outside a recorded re-baseline before this backup ran"
+    fi
+  fi
+  log "putting AIDE's database back after review: docs/mvp/deployment-single-vm.md §12, \"When the database is missing after the re-baseline\""
+}
+
 case "$CMD" in
   list)
     log "daily sets on $RCLONE_REMOTE:"
@@ -284,8 +327,17 @@ SQL
     log "redis restored" ;;
   config)
     mkdir -p "$CONFIG_RESTORE_DIR"
+    # An aide-baseline/ of an earlier config restore into the same folder is moved aside first: a set without aide.db
+    # (or without the record) would otherwise leave the earlier set's file there, and the report below would take it
+    # for this set's (X-045).
+    if [ -e "$CONFIG_RESTORE_DIR/aide-baseline" ]; then
+      earlier="$CONFIG_RESTORE_DIR/aide-baseline.before-restore-$(date -u +%Y%m%d%H%M%S)"
+      mv "$CONFIG_RESTORE_DIR/aide-baseline" "$earlier"
+      log "the aide-baseline/ of an earlier config restore is kept as $earlier"
+    fi
     decrypt "$DIR/config.tar.zst.age" | zstd -dq | tar -C "$CONFIG_RESTORE_DIR" -xf -
-    log "config unpacked into $CONFIG_RESTORE_DIR (compare, then copy what you need into /etc/velexis)" ;;
+    log "config unpacked into $CONFIG_RESTORE_DIR (compare, then copy what you need into /etc/velexis)"
+    aide_baseline_report "$CONFIG_RESTORE_DIR/aide-baseline" ;;
   drill)
     # The day's log keeps every drill of that day (appended, never replaced): the set it restored, the figures, the
     # live database's figures beside them, the duration and the result; a failed drill leaves a FAILED line (on_exit).

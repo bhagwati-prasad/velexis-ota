@@ -36,7 +36,8 @@
 # decision (20p) of 2026-11-13) in [FIX-W51-SHARED 20p], AIDE's settings in 90_velexis (lead decision (21l) of
 # 2026-11-13) in [FIX-W52-SHARED 21l], AIDE's one-time re-baseline and provision-vm.sh's record of Caddy's drop-in
 # (lead decisions (22d) and (22b) of 2026-11-15) in [FIX-W53-SHARED 22d] and [FIX-W53-SHARED 22b], and AIDE's database
-# after that re-baseline (lead decision (23b) of 2026-11-15) in [FIX-W54-SHARED 23b].
+# after that re-baseline (lead decision (23b) of 2026-11-15) in [FIX-W54-SHARED 23b], and auditd's watches of AIDE's
+# own baseline (task X-045, lead decision (24c) of 2026-11-15) in [X-045 AC2].
 #
 # What it proves:
 #   1. Two runs of provision-vm.sh --steps users,keys,envfiles: the second changes no key, env or secrets file
@@ -58,6 +59,14 @@
 #      2026-11-13, [FIX-W52-SHARED 21l]): PASS for /etc/aide/aide.conf.d/90_velexis as provision-vm.sh's step harden
 #      writes it (its text read from provision-vm.sh), FAIL for report_level=added_removed_entries or the apt lists'
 #      rule missing, changed or commented out, for both missing and for the file missing.
+#      auditd's watches of AIDE's own baseline (task X-045, [X-045 AC2]), the group audit: PASS for
+#      /etc/audit/rules.d/velexis.rules as provision-vm.sh's step harden writes it (its text read from provision-vm.sh)
+#      and for auditctl -l listing its rules as the auditd package's auditctl 3.1.2 does (a folder's trailing slash
+#      dropped); FAIL, naming the watch, for the folder's or the record's watch missing or commented out in the file, the
+#      file missing, a watch not loaded, loaded without attribute changes or under another key, no rule loaded, and
+#      auditctl -l failing. provision-vm.sh's step harden (not runnable here) makes /etc/velexis, /etc/velexis/keys and
+#      /var/lib/velexis/provision before augenrules --load and puts the two watches last (read from provision-vm.sh;
+#      its lines that make the folders run as they are on a new root).
 #   4. With a variable removed from a test copy of an env file, check-vm.sh reports FAIL naming the variable, and
 #      provision-vm.sh --steps envfiles warns about it by name and leaves the file as it is (AC3).
 #   5. A master-key rotation (X-040): NEW_MASTER_KEY=v2 with the step keys creates master-v2.key once, as copies with
@@ -347,6 +356,40 @@ aide_conf_healthy() { # 90_velexis as provision-vm.sh leaves it
     || install -m 0644 "$PREFIX/aide-90_velexis" "$ROOT/etc/aide/aide.conf.d/90_velexis"
 }
 aide_conf_healthy
+# auditd's rules as provision-vm.sh's step harden writes them (X-045, lead decision (24c) of 2026-11-15): the text of
+# its heredoc AUDIT, read from provision-vm.sh, as /etc/audit/rules.d/velexis.rules; and what `auditctl -l` of the
+# auditd package (3.1.2, Ubuntu 24.04) lists once augenrules has loaded them: each watch with its folder's trailing
+# slash dropped (seen with the package's auditctl and the kernel, over a scratch tree).
+sed -n "/velexis.rules <<'AUDIT'\$/,/^AUDIT\$/p" "$PROVISION" | sed '1d;$d' >"$PREFIX/audit-velexis.rules"
+AIDE_WATCH_DIR='-w /var/lib/aide/ -p wa -k velexis-aide'
+AIDE_WATCH_RECORD='-w /var/lib/velexis/provision/aide-rebaseline -p wa -k velexis-aide'
+if ! grep -qxF -- "$AIDE_WATCH_DIR" "$PREFIX/audit-velexis.rules" || ! grep -qxF -- "$AIDE_WATCH_RECORD" "$PREFIX/audit-velexis.rules" ||
+  grep -q '<<' "$PREFIX/audit-velexis.rules"; then
+  die "provision-vm.sh's auditd rules (heredoc AUDIT of the step harden, /etc/audit/rules.d/velexis.rules) with the two watches of the key velexis-aide were not found"
+fi
+cat >"$PREFIX/auditctl-l" <<'EOF'
+-w /etc/velexis -p wa -k velexis-config
+-w /etc/velexis/keys -p wa -k velexis-keys
+-w /etc/caddy -p wa -k caddy-config
+-w /etc/systemd/system -p wa -k systemd-units
+-w /usr/local/sbin -p wa -k velexis-scripts
+-w /usr/local/bin/caddy-velexis -p wa -k caddy-binary
+-w /etc/sudoers -p wa -k sudoers
+-w /etc/sudoers.d -p wa -k sudoers
+-w /etc/ssh/sshd_config.d -p wa -k sshd
+-w /var/lib/aide -p wa -k velexis-aide
+-w /var/lib/velexis/provision/aide-rebaseline -p wa -k velexis-aide
+EOF
+if [ "$(sed -E 's#^(-w /[^ ]*[^/ ])/* #\1 #' "$PREFIX/audit-velexis.rules")" != "$(cat "$PREFIX/auditctl-l")" ]; then
+  die "the auditctl -l fixture does not list provision-vm.sh's auditd rules (heredoc AUDIT): change both together"
+fi
+install -d -m 0750 "$ROOT/etc/audit/rules.d"
+audit_rules_healthy() { # the rules file as provision-vm.sh writes it, and auditctl -l with them loaded
+  cmp -s "$PREFIX/audit-velexis.rules" "$ROOT/etc/audit/rules.d/velexis.rules" \
+    || install -m 0640 "$PREFIX/audit-velexis.rules" "$ROOT/etc/audit/rules.d/velexis.rules"
+  cp "$PREFIX/auditctl-l" "$FAKE/auditctl"
+  rm -f "$FAKE/auditctl-fails"
+}
 # AIDE's one-time re-baseline as provision-vm.sh records it at the end of the first full provisioning (lead decision
 # (22d) of 2026-11-15): the record's state, its time and the new database's SHA-256.
 AIDE_REBASELINE="$ROOT/var/lib/velexis/provision/aide-rebaseline"
@@ -423,6 +466,12 @@ EOF
 fake ufw <<'EOF'
 [ "$*" = "status verbose" ] || refuse "$@"
 cat "$F/ufw"
+EOF
+fake auditctl <<'EOF'
+# -l only (list the loaded rules), from the fixture; while auditctl-fails exists it fails as it does without root.
+[ "$*" = "-l" ] || refuse "$@"
+if [ -e "$F/auditctl-fails" ]; then echo "You must be root to run this program." >&2; exit 4; fi
+cat "$F/auditctl"
 EOF
 fake sshd <<'EOF'
 # -T [-f config] [-C user=<u>]: the fixture sshd, or sshd-user-<u> for one user's logins (the Match blocks applied).
@@ -656,6 +705,7 @@ EOF
   audit_plugin_healthy
   aide_conf_healthy
   aide_rebaseline_healthy
+  audit_rules_healthy
   cat >"$FAKE/ufw" <<'EOF'
 Status: active
 Logging: on (low)
@@ -902,6 +952,8 @@ PASS velexis-egress-refresh.service is enabled (loads the allow-list at boot)
 PASS velexis-ship-logs.timer is active and enabled (security logs, X-038)
 PASS velexis-log-review.timer is active and enabled (security logs, X-038)
 PASS auditd's syslog plugin is on (/etc/audit/plugins.d/syslog.conf: active = yes, direction = out, path = audisp-syslog)
+PASS auditd's rules file holds the watches of AIDE's database and its record (key velexis-aide)
+PASS auditd watches AIDE's database and its record (auditctl -l, key velexis-aide)
 EOF
 if [ "$covered" = 1 ]; then
   pass "every item of the task has a PASS line, the SSH methods of both users and the outbound allow-list included [X-020 AC2] [X-037 AC2] [X-041 AC1]"
@@ -1172,6 +1224,86 @@ if run_check "$OUT/security-logs.out" --only services &&
 else
   indent "$OUT/security-logs.out"
   fail "check-vm.sh --only services reports PASS for both security log timers and the syslog plugin [FIX-W51-SHARED 20p]"
+fi
+# auditd's watches of AIDE's own baseline (X-045, lead decision (24c) of 2026-11-15): the group audit.
+RULES_FILE="$ROOT/etc/audit/rules.d/velexis.rules"
+LOADED_DIR='-w /var/lib/aide -p wa -k velexis-aide'
+LOADED_RECORD='-w /var/lib/velexis/provision/aide-rebaseline -p wa -k velexis-aide'
+if run_check "$OUT/audit.out" --only audit &&
+  grep -qxF "PASS auditd's rules file holds the watches of AIDE's database and its record (key velexis-aide) (/etc/audit/rules.d/velexis.rules: $AIDE_WATCH_DIR; $AIDE_WATCH_RECORD)" "$OUT/audit.out" &&
+  grep -qxF "PASS auditd watches AIDE's database and its record (auditctl -l, key velexis-aide) ($LOADED_DIR; $LOADED_RECORD)" "$OUT/audit.out" &&
+  [ "$(grep -c '^PASS' "$OUT/audit.out")" = 2 ] && ! grep -q '^FAIL' "$OUT/audit.out"; then
+  pass "check-vm.sh --only audit reports PASS for both watches of the key velexis-aide, in the rules file as provision-vm.sh writes it and loaded as auditctl -l lists them [X-045 AC2]"
+else
+  indent "$OUT/audit.out"
+  fail "check-vm.sh --only audit reports PASS for both watches of the key velexis-aide in the rules file and loaded [X-045 AC2]"
+fi
+grep -vxF -- "$AIDE_WATCH_DIR" "$PREFIX/audit-velexis.rules" >"$RULES_FILE"
+broken "the rules file without the watch of /var/lib/aide/" audit \
+  "rules file holds the watches of AIDE's database .*lacks: -w /var/lib/aide/ -p wa -k velexis-aide; sudo bash .*--steps harden" "X-045 AC2"
+healthy
+grep -vxF -- "$AIDE_WATCH_RECORD" "$PREFIX/audit-velexis.rules" >"$RULES_FILE"
+broken "the rules file without the watch of the re-baseline record" audit \
+  "rules file holds the watches .*lacks: -w /var/lib/velexis/provision/aide-rebaseline -p wa -k velexis-aide;" "X-045 AC2"
+healthy
+sed -i 's#^-w /var/lib/aide/ -p wa -k velexis-aide$#\# -w /var/lib/aide/ -p wa -k velexis-aide#' "$RULES_FILE"
+broken "the folder's watch commented out in the rules file" audit "lacks: -w /var/lib/aide/ -p wa -k velexis-aide;" "X-045 AC2"
+healthy
+rm -f "$RULES_FILE"
+broken "the rules file missing" audit "rules file holds the watches .*velexis.rules is missing; sudo bash" "X-045 AC2"
+healthy
+grep -vxF -- "$LOADED_RECORD" "$PREFIX/auditctl-l" >"$FAKE/auditctl"
+broken "the record's watch in the file but not loaded (no augenrules --load since)" audit \
+  "auditd watches AIDE's database and its record .*not loaded: -w /var/lib/velexis/provision/aide-rebaseline -p wa -k velexis-aide; sudo augenrules --load" "X-045 AC2"
+healthy
+sed -i 's#^-w /var/lib/aide -p wa -k velexis-aide$#-w /var/lib/aide -p w -k velexis-aide#' "$FAKE/auditctl"
+broken "the folder's watch loaded without attribute changes (-p w)" audit \
+  "not loaded: -w /var/lib/aide -p wa -k velexis-aide; sudo augenrules" "X-045 AC2"
+healthy
+sed -i 's#-k velexis-aide$#-k velexis-config#' "$FAKE/auditctl"
+broken "both watches loaded under another key" audit \
+  "not loaded: -w /var/lib/aide -p wa -k velexis-aide; -w /var/lib/velexis/provision/aide-rebaseline -p wa -k velexis-aide; sudo" "X-045 AC2"
+healthy
+echo 'No rules' >"$FAKE/auditctl"
+broken "no rule loaded at all (auditctl -l: No rules)" audit "not loaded: -w /var/lib/aide -p wa" "X-045 AC2"
+healthy
+touch "$FAKE/auditctl-fails"
+broken "auditctl -l failing" audit "auditctl -l failed: You must be root to run this program\\.\\)" "X-045 AC2"
+healthy
+# provision-vm.sh's step harden (not runnable under VELEXIS_ROOT): the two watches come last, and the folders of the
+# watches it owns are made before augenrules --load, which stops at the first watch whose folder is missing (on a new VM
+# /etc/velexis does not exist yet at that step). The four lines that make them run as they are on a fresh root.
+HARDEN_SRC="$(sed -n '/^step_harden() {/,/^}/p' "$PROVISION")"
+harden_line() { { grep -nxF -- "$1" <<<"$HARDEN_SRC" || true; } | cut -d: -f1 | head -n 1; } # line -> its number, or nothing
+# shellcheck disable=SC2016 # the lines as provision-vm.sh holds them, expanded only where they run (harden_dirs_run)
+MKDIRS=('  [ -d "$ETC" ] || install -d -m 0711 -o root -g root "$ETC"'
+  '  [ -d "$ETC/keys" ] || install -d -m 0711 -o root -g root "$ETC/keys"'
+  '  [ -d "$LIB" ] || install -d -m 0711 -o root -g root "$LIB"'
+  '  [ -d "$PROVISION_STATE" ] || install -d -m 0700 -o root -g root "$PROVISION_STATE"')
+load_at="$(harden_line '  augenrules --load >/dev/null || warn "augenrules failed; check auditd"')"
+order_ok=1
+[ -n "$load_at" ] || order_ok=0
+for l in "${MKDIRS[@]}"; do
+  at="$(harden_line "$l")"
+  if [ -z "$at" ] || [ -z "$load_at" ] || [ "$at" -ge "$load_at" ]; then order_ok=0; echo "     not before augenrules --load: $l"; fi
+done
+[ "$(tail -n 2 "$PREFIX/audit-velexis.rules")" = "$(printf '%s\n%s' "$AIDE_WATCH_DIR" "$AIDE_WATCH_RECORD")" ] || order_ok=0
+if [ "$order_ok" = 1 ]; then
+  pass "harden makes /etc/velexis, /etc/velexis/keys and /var/lib/velexis/provision before augenrules --load, and the two watches of velexis-aide come last [X-045 AC2]"
+else
+  fail "harden makes the watched folders before augenrules --load, and the two watches of velexis-aide come last [X-045 AC2]"
+fi
+HR="$PREFIX/harden-dirs"
+harden_dirs_run() { # harden's four lines, as they are, on the new root $HR -> 0 when they made the folders as expected
+  local ETC="$HR/etc/velexis" LIB="$HR/var/lib/velexis" PROVISION_STATE="$HR/var/lib/velexis/provision" l
+  mkdir -p "$HR/etc" "$HR/var/lib"
+  for l in "${MKDIRS[@]}"; do eval "$l" || return 1; done
+  [ "$(stat -c '%U:%G %a' "$ETC" "$ETC/keys" "$LIB" "$PROVISION_STATE" | paste -sd' ' -)" = "root:root 711 root:root 711 root:root 711 root:root 700" ]
+}
+if harden_dirs_run; then
+  pass "those lines, run as they are on a new VM's root, make the folders root-owned, 0711 (0700 for the step records) [X-045 AC2]"
+else
+  fail "those lines, run as they are on a new VM's root, make the folders root-owned, 0711 (0700 for the step records) [X-045 AC2]"
 fi
 edit units 's/^postgresql@16-main active/postgresql@16-main failed/'
 broken "a stopped PostgreSQL cluster" services 'postgresql@16-main is active'

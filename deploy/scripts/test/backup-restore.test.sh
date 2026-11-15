@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =====================================================================================================
 # backup-restore.test.sh — tests deploy/scripts/backup.sh (velexis-backup) and restore.sh (velexis-restore) against
-# the local development PostgreSQL, without a VM, a bucket or systemd (task X-024).
+# the local development PostgreSQL, without a VM, a bucket or systemd (tasks X-024 and X-045).
 #
 #   bash deploy/scripts/test/backup-restore.test.sh
 #
@@ -20,9 +20,10 @@
 #   PG_DATABASE      scratch databases velexis_bkt_<run>_*: the source is made like the local development database
 #                    (the Database section of bootstrap.sql, schemas.sql, the platform and reference migrations, two
 #                    tenant schemas created by the migration CLI, a few rows); all are dropped at the end
-#   BACKUP_DIR, STORAGE_DIR, REDIS_AOF_DIR, CONFIG_DIR, BACKUP_MARKER_FILE, CONFIG_RESTORE_DIR, LOG_DIR
-#                    folders under a temporary folder: a fake /etc/velexis (the deploy/env templates as provisioning
-#                    installs them, random stand-in keys and env values) and fake storage and AOF files
+#   BACKUP_DIR, STORAGE_DIR, REDIS_AOF_DIR, CONFIG_DIR, BACKUP_MARKER_FILE, CONFIG_RESTORE_DIR, LOG_DIR, AIDE_DB,
+#   AIDE_REBASELINE  folders under a temporary folder: a fake /etc/velexis (the deploy/env templates as provisioning
+#                    installs them, random stand-in keys and env values), fake storage and AOF files, and a stand-in
+#                    for AIDE's database and the record of its re-baseline
 #   SYSTEMCTL        a stand-in that only records its arguments
 # (and, for the two monthly runs only, a `date` stand-in first on PATH that moves backup.sh's run stamp to the 1st of
 # a month).
@@ -56,6 +57,14 @@
 #       of bootstrap.sql;
 #    7. restore.sh storage (beside the live folder, and --replace-live, where a wrong key changes nothing) and config
 #       (the data key cannot open it);
+#   and AIDE's baseline (task X-045, lead decision (24c) of 2026-11-15; those checks end with [X-045 AC3]): the config
+#   backup holds aide-baseline/ beside /etc/velexis, with a stand-in aide.db, aide.db.sha256 (sha256sum's line) and the
+#   re-baseline record, byte for byte, and the MANIFEST names the database's SHA-256 and the record (case 1); with both
+#   missing on the VM the backup goes on, with an empty aide-baseline/, warnings and MANIFEST lines that say so (case 4,
+#   the second run); config unpacks aide-baseline/ and reports a database that has its SHA-256 and the record's, one
+#   that changed outside a recorded re-baseline (case 4's first monthly run, made after the database was replaced), a
+#   set without either (into the folder of the restore before, whose aide-baseline/ it moves aside first), and a
+#   database that does not match its aide.db.sha256 (re-encrypted, its MANIFEST line fixed) (case 7);
 #   and over the whole run: no password, stand-in key or private age key in any output, log or MANIFEST, every
 #   upload with --immutable, and no rclone call refused.
 #
@@ -257,8 +266,20 @@ head -c 4096 /dev/urandom >"$AOF/appendonly.aof.1.base.rdb"
 printf "*2\r\n\$6\r\nSELECT\r\n\$1\r\n0\r\n" >"$AOF/appendonly.aof.1.incr.aof" # RESP: SELECT 0
 printf 'file appendonly.aof.1.base.rdb seq 1 type b\nfile appendonly.aof.1.incr.aof seq 1 type i\n' >"$AOF/appendonly.aof.manifest"
 
+# AIDE's baseline on the fake VM (X-045): a stand-in database (random bytes) and the record of its re-baseline with the
+# database's SHA-256, as provision-vm.sh writes it.
+AIDE_DB_FILE="$PREFIX/var/lib/aide/aide.db"
+AIDE_RECORD="$PREFIX/var/lib/velexis/provision/aide-rebaseline"
+mkdir -p "$(dirname "$AIDE_DB_FILE")" "$(dirname "$AIDE_RECORD")"
+head -c 50000 /dev/urandom >"$AIDE_DB_FILE"
+chmod 0600 "$AIDE_DB_FILE"
+AIDE_SHA="$(sha256sum <"$AIDE_DB_FILE" | cut -d' ' -f1)"
+printf 'rebaselined 2026-01-02T03:04:05Z %s\n' "$AIDE_SHA" >"$AIDE_RECORD"
+cp -p "$AIDE_DB_FILE" "$PREFIX/aide.db.original"
+
 BACKUP_DIR="$PREFIX/var/backups/velexis"
 export BACKUP_DIR STORAGE_DIR="$STORAGE" REDIS_AOF_DIR="$AOF" CONFIG_DIR="$CONFIG" PG_RUNAS=env \
+  AIDE_DB="$AIDE_DB_FILE" AIDE_REBASELINE="$AIDE_RECORD" \
   AGE_RECIPIENTS_FILE="$CONFIG/backup/data-recipients.txt" AGE_CONFIG_RECIPIENTS_FILE="$CONFIG/backup/config-recipients.txt" \
   RCLONE_CONFIG="$CONFIG/backup/rclone.conf" RCLONE_REMOTE="offsite:$BUCKET" \
   BACKUP_MARKER_FILE="$PREFIX/var/lib/velexis/backup-last-success" REDIS_PASSWORD="$REDIS_PASSWORD_VALUE" \
@@ -465,6 +486,29 @@ check "redis-aof.tar.zst.age holds the AOF directory [X-024 AC1]" \
   unpacks_to "$LOCAL1/redis-aof.tar.zst.age" "$OFFLINE/data.key" "$AOF"
 check "config.tar.zst.age holds the configuration folder (keys, env files, recipients) [X-024 AC1]" \
   unpacks_to "$LOCAL1/config.tar.zst.age" "$OFFLINE/config.key" "$CONFIG"
+aide_baseline_of() { # age-file -> the archive's aide-baseline/ unpacked into $PREFIX/unpack/aide-<n>; its path
+  local into
+  into="$PREFIX/unpack/aide-$RUNS-$(basename "$(dirname "$1")")"
+  mkdir -p "$into"
+  age -d -i "$OFFLINE/config.key" "$1" | zstd -dq | tar -C "$into" -xf - aide-baseline 2>/dev/null || true
+  printf '%s' "$into/aide-baseline"
+}
+AB1="$(aide_baseline_of "$LOCAL1/config.tar.zst.age")"
+aide_baseline_ok() {
+  [ "$(listing "$AB1")" = "aide-rebaseline aide.db aide.db.sha256 " ] &&
+    cmp -s "$AB1/aide.db" "$AIDE_DB_FILE" && cmp -s "$AB1/aide-rebaseline" "$AIDE_RECORD" &&
+    (cd "$AB1" && sha256sum --quiet --strict -c aide.db.sha256) &&
+    [ "$(cat "$AB1/aide.db.sha256")" = "$AIDE_SHA  aide.db" ] &&
+    [ "$(stat -c %a "$AB1/aide.db")" = 600 ]
+}
+check "config.tar.zst.age also holds AIDE's baseline: aide-baseline/aide.db, its SHA-256 (sha256sum's line) and the re-baseline record, byte for byte [X-045 AC3]" \
+  aide_baseline_ok
+manifest_aide_ok() { grep -qx "aide_db=$AIDE_SHA" "$LOCAL1/MANIFEST.txt" && grep -qx 'aide_rebaseline=included' "$LOCAL1/MANIFEST.txt"; }
+check "the MANIFEST names the database's SHA-256 and the record as included [X-045 AC3]" manifest_aide_ok
+logged_aide() { output_has "AIDE's database $AIDE_DB_FILE (SHA-256 $AIDE_SHA)" && output_has "AIDE's re-baseline record $AIDE_RECORD" && not output_has "WARNING: AIDE"; }
+check "the run logs both, with no warning [X-045 AC3]" logged_aide
+check "no staging folder of AIDE's baseline is left in BACKUP_DIR [X-045 AC3]" \
+  test -z "$(find "$BACKUP_DIR" -mindepth 1 -maxdepth 1 -name '.aide-baseline.*')"
 marker_ok() { [ "$(cat "$BACKUP_MARKER_FILE")" -ge "$STARTED_AT" ]; }
 check "the marker file holds the time of this run [X-024 AC1]" marker_ok
 check "no unencrypted file is left in BACKUP_DIR [X-024 AC1]" \
@@ -551,7 +595,12 @@ no_delete_commands() {
 check "backup.sh and restore.sh contain no rclone delete, deletefile, purge, rmdir(s), cleanup, sync, move or --delete* [X-024 AC1]" \
   no_delete_commands
 BEFORE2="$(inventory)"
+# AIDE's database and record missing on the VM (X-045): the backup goes on without them.
+mv "$AIDE_DB_FILE" "$PREFIX/aide.db.away"
+mv "$AIDE_RECORD" "$PREFIX/aide-rebaseline.away"
 SKIP_REDIS=1 PG_DATABASE="$SRC" run backup-2 "$BACKUP_SH"
+mv "$PREFIX/aide.db.away" "$AIDE_DB_FILE"
+mv "$PREFIX/aide-rebaseline.away" "$AIDE_RECORD"
 SET2="$(local_sets | tail -n 1)"
 DAY2="${SET2%%T*}"
 DEST2="daily/$DAY2"
@@ -563,6 +612,17 @@ second_ok() {
     grep -qx 'redis=skipped' "$BUCKET/$DEST2/MANIFEST.txt"
 }
 check "it uploads four .age files and a MANIFEST with redis=skipped to $DEST2, beside the first set [X-024 AC1]" second_ok
+SET2_LOG="$LAST_LOG"
+missing_ok() {
+  local ab
+  ab="$(aide_baseline_of "$BACKUP_DIR/$SET2/config.tar.zst.age")"
+  [ -d "$ab" ] && [ -z "$(listing "$ab")" ] &&
+    grep -qx 'aide_db=missing' "$BACKUP_DIR/$SET2/MANIFEST.txt" && grep -qx 'aide_rebaseline=missing' "$BACKUP_DIR/$SET2/MANIFEST.txt" &&
+    grep -qF "WARNING: AIDE's database $AIDE_DB_FILE is missing: this config backup holds none" "$SET2_LOG" &&
+    grep -qF "WARNING: AIDE's re-baseline record $AIDE_RECORD is missing: this config backup holds none" "$SET2_LOG"
+}
+check "with AIDE's database and record missing on the VM the backup goes on: an empty aide-baseline/, the MANIFEST and two warnings say so [X-045 AC3]" \
+  missing_ok
 kept_everything() { [ -z "$(comm -23 <(printf '%s\n' "$BEFORE2") <(inventory))" ]; }
 check "every object uploaded before (the first set, the old set) is still there, unchanged: size, time, inode, SHA-256 [X-024 AC1]" \
   kept_everything
@@ -590,8 +650,11 @@ monthly_run() { # name: a backup.sh run (SKIP_REDIS=1) stamped on FAKE_DAY; its 
   while [ -n "$MSET" ] && [ "$(date -u +%H%M%S)" = "${MSET:11:6}" ]; do sleep 0.2; done
 }
 BEFORE_MONTHLY="$(inventory)"
+# AIDE's database replaced on the VM without a recorded re-baseline (X-045): this set holds that database.
+head -c 50000 /dev/urandom >"$AIDE_DB_FILE"
 monthly_run backup-monthly-1
 SET3="$MSET"
+cp -p "$PREFIX/aide.db.original" "$AIDE_DB_FILE"
 monthly_first() {
   rc_is 0 && [ -n "$SET3" ] && same_files "$BACKUP_DIR/$SET3" "$BUCKET/daily/$FAKE_DAY" &&
     same_files "$BACKUP_DIR/$SET3" "$BUCKET/monthly/${FAKE_DAY%-*}" && output_has "monthly copy offsite:$BUCKET/monthly/${FAKE_DAY%-*}"
@@ -732,6 +795,54 @@ check "config with the data key is refused (one stolen key never opens both) [X-
 run config "$RESTORE_SH" config "$FETCHED" --identity "$OFFLINE/config.key"
 config_restored() { rc_is 0 && diff -r "$CONFIG" "$CONFIG_RESTORE_DIR/velexis" >/dev/null; }
 check "config with the config key unpacks /etc/velexis into CONFIG_RESTORE_DIR [X-024 AC1]" config_restored
+aide_restored() {
+  local d="$CONFIG_RESTORE_DIR/aide-baseline"
+  rc_is 0 && cmp -s "$d/aide.db" "$PREFIX/aide.db.original" && cmp -s "$d/aide-rebaseline" "$AIDE_RECORD" &&
+    output_has "aide-baseline/aide.db: SHA-256 $AIDE_SHA, as aide-baseline/aide.db.sha256 says" &&
+    output_has "aide-baseline/aide.db has the SHA-256 of the record's last 'rebaselined' line (2026-01-02T03:04:05Z): the database that re-baseline installed" &&
+    output_has "putting AIDE's database back after review: docs/mvp/deployment-single-vm.md §12" && not output_has WARNING
+}
+check "config also unpacks AIDE's baseline beside it and finds the database and its SHA-256 and the record's last line agreeing [X-045 AC3]" \
+  aide_restored
+CONFIG_RESTORE_DIR="$PREFIX/root/config-set3" run config-changed-aide "$RESTORE_SH" config "$BACKUP_DIR/$SET3" \
+  --identity "$OFFLINE/config.key"
+check "a set whose database changed outside a recorded re-baseline: config says so, naming the record's SHA-256 [X-045 AC3]" \
+  output_has "WARNING: aide-baseline/aide.db differs from the record's last 'rebaselined' line ($AIDE_SHA): it changed outside a recorded re-baseline"
+# Into the folder of the restore above, which holds that set's aide-baseline/ (aide.db and the record): the earlier
+# files are moved aside, so the report is about this set's, not about files left there.
+CONFIG_RESTORE_DIR="$PREFIX/root/config-set3" run config-no-aide "$RESTORE_SH" config "$BACKUP_DIR/$SET2" \
+  --identity "$OFFLINE/config.key"
+no_aide_said() {
+  rc_is 0 && output_has "aide-baseline/ holds no aide.db: AIDE's database was missing on the VM when this backup ran" &&
+    output_has "aide-baseline/ holds no aide-rebaseline: the record was missing on the VM when this backup ran" &&
+    not output_has "aide-baseline/aide.db: SHA-256" && not output_has WARNING
+}
+check "a set made while both were missing: config says so, also in a folder an earlier config restore left its aide-baseline/ in [X-045 AC3]" \
+  no_aide_said
+earlier_kept() {
+  local kept
+  kept="$(find "$PREFIX/root/config-set3" -mindepth 1 -maxdepth 1 -name 'aide-baseline.before-restore-*')"
+  output_has "the aide-baseline/ of an earlier config restore is kept as $kept" && [ -f "$kept/aide.db" ] &&
+    [ -z "$(listing "$PREFIX/root/config-set3/aide-baseline")" ]
+}
+check "the earlier restore's aide-baseline/ is kept aside, and this set's is empty [X-045 AC3]" earlier_kept
+# A config backup whose aide.db.sha256 does not match its aide.db (re-encrypted to the config key, its MANIFEST line
+# fixed): config says not to use that database.
+copy_set "$FETCHED" "$SETS/aide-sha-wrong"
+mkdir -p "$PREFIX/unpack/aide-sha-wrong"
+age -d -i "$OFFLINE/config.key" "$SETS/aide-sha-wrong/config.tar.zst.age" | zstd -dq | tar -C "$PREFIX/unpack/aide-sha-wrong" -xf -
+printf '%064d  aide.db\n' 0 >"$PREFIX/unpack/aide-sha-wrong/aide-baseline/aide.db.sha256"
+tar -C "$PREFIX/unpack/aide-sha-wrong" -cf - velexis aide-baseline | zstd -q \
+  | age -R "$CONFIG/backup/config-recipients.txt" -o "$SETS/aide-sha-wrong/config.tar.zst.age.new"
+mv "$SETS/aide-sha-wrong/config.tar.zst.age.new" "$SETS/aide-sha-wrong/config.tar.zst.age"
+reseal "$SETS/aide-sha-wrong" config.tar.zst.age
+CONFIG_RESTORE_DIR="$PREFIX/root/config-sha-wrong" run config-aide-sha-wrong "$RESTORE_SH" config "$SETS/aide-sha-wrong" \
+  --identity "$OFFLINE/config.key"
+sha_wrong_said() {
+  rc_is 0 && output_has "WARNING: aide-baseline/aide.db (SHA-256 $AIDE_SHA) does not match aide-baseline/aide.db.sha256: do not use it" &&
+    not output_has "has the SHA-256 of the record"
+}
+check "a database that does not match its aide.db.sha256: config says not to use it [X-045 AC3]" sha_wrong_said
 
 # ---- over the whole run -------------------------------------------------------------------------------------------
 step "Over the whole run"

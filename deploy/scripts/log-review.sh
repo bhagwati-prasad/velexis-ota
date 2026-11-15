@@ -30,6 +30,11 @@
 #                  new values of its "Detailed information about changes": hashes, size, times, permissions, owner)
 #                  differs from the previous report's: a file that a deploy changed and that changed again (X-044);
 #                  new times alone count for a directory, not for a file (a timer's stamp is touched at every run)
+#   aide-error     AIDE's latest daily check gave no result (dailyaidecheck stopped before AIDE's exit code, for example
+#                  "database not present.") or AIDE ended it with an error exit code (14 and above); once per check,
+#                  also after a deploy or a provisioning run, which never explain it (X-045, lead decision (24c) of
+#                  2026-11-15). Such a check leaves the AIDE state alone: the next check with a result is compared
+#                  with the last one that had a result
 #   shipment       the log shipment failed, or the last verified shipment is older than two hours (state of
 #                  velexis-ship-logs); once when it starts, and once when it recovers
 #   egress-burst   30 or more refused outbound connections (X-041's VELEXIS-EGRESS-DENY lines; the kernel logs at
@@ -41,16 +46,19 @@
 #
 # The daily summary (one message, also on a quiet day) covers the last 24 hours: the log shipment and the security
 # log folder; accepted SSH logins by user, source and method; refused SSH logins by user and source; root logins; sudo
-# commands by user and command, sudo refusals and su sessions; auditd events on each watched key; AIDE's last check;
+# commands by user and command, sudo refusals and su sessions; auditd events on each watched key, and those of the key
+# velexis-aide (AIDE's database and its re-baseline record, X-045) on the database, the record or elsewhere apart from
+# the daily check's own work files (aide.db.new, dailyaidecheck/), each listed; AIDE's last check;
 # unit failures; the WAF's matches by rule (requests matched, and refused with 403); 4xx and 5xx answers on the
 # airline-card route (/v1/checkouts/{id}/airline-card-completion, through Caddy); refused outbound connections by
 # destination and user; fail2ban's bans; the apps' security events and the velexis-* units' warnings and errors.
 # Neither the summary nor an alert quotes a WAF line's [uri] (a body line that holds one is dropped before sending).
 #
-# State: /var/lib/velexis/log-review/ (cursor, ssh-keys, aide, shipment, egress-burst, folder-size, summary-day). The
-# file aide holds the last report reviewed: "run <start>", its entries ("<section> <path>") and, since X-044, the
-# detail of each ("detail<TAB><section> <path><TAB><type><TAB><attribute>=<new value>..."); a file without detail lines
-# (X-038's format) compares entries only, once, and gets them with that run.
+# State: /var/lib/velexis/log-review/ (cursor, ssh-keys, aide, aide-error, shipment, egress-burst, folder-size,
+# summary-day). The file aide holds the last report with a result reviewed: "run <start>", its entries ("<section>
+# <path>") and, since X-044, the detail of each ("detail<TAB><section> <path><TAB><type><TAB><attribute>=<new
+# value>..."); a file without detail lines (X-038's format) compares entries only, once, and gets them with that run.
+# The file aide-error holds the start of the last check without a result that was alerted (X-045).
 #
 # Tests only (deploy/scripts/test/log-review.test.sh). With VELEXIS_ROOT=<absolute folder> the paths of this script
 # (/etc/velexis, /var/lib/velexis, /var/log/velexis, /var/log/aide and every home folder) move under that folder, it
@@ -98,7 +106,7 @@ EGRESS_BURST=30                            # refused outbound connections logged
 SUMMARY_HOUR=6                             # the daily summary: the first run at or after 06:00 UTC
 FIRST_RUN_WINDOW=3600                      # the first run looks one hour back
 # The keys of provision-vm.sh's auditd rules (deployment-single-vm.md §2): each gets a line in the summary.
-WATCHED_KEYS="velexis-config velexis-keys caddy-config systemd-units velexis-scripts caddy-binary sudoers sshd"
+WATCHED_KEYS="velexis-config velexis-keys caddy-config systemd-units velexis-scripts caddy-binary sudoers sshd velexis-aide"
 KEY_TYPES_RE='^(ssh-(ed25519|rsa|dss)|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh[.]com|sk-ecdsa-sha2-nistp256@openssh[.]com)$'
 
 log() { printf '%s\n' "$*"; }
@@ -127,6 +135,7 @@ if [ "$MODE" = status ]; then
   done
   printf '%-13s %s\n' summary-day "$(cat "$STATE_DIR/summary-day" 2>/dev/null || echo none)"
   printf '%-13s %s\n' aide-check "$(head -n 1 "$STATE_DIR/aide" 2>/dev/null || echo none)"
+  printf '%-13s %s\n' aide-error "$(cat "$STATE_DIR/aide-error" 2>/dev/null || echo none)"
   printf '%-13s %s\n' ssh-keys "$(wc -l <"$STATE_DIR/ssh-keys" 2>/dev/null || echo 0) known"
   printf '%-13s %s\n' cursor "$([ -s "$STATE_DIR/cursor" ] && echo saved || echo none)"
   exit 0
@@ -238,19 +247,28 @@ else
   log "first run: $(wc -l <"$WORK/state/ssh-keys") SSH key(s) recorded as known"
 fi
 
-# Changes under /etc/velexis/keys (auditd key velexis-keys), one line per audit event with its paths.
-# shellcheck disable=SC2016 # jq's $names
-jq -rn '[inputs | select(.cat == "auditd")
+# The audit events of one auditd key ($key), one object each: {ts, id, who, names, items}. The records of an event share
+# its id (audit(<time>:<id>)): its SYSCALL record carries the key, the command and the users, its PATH records the paths
+# (items: each PATH record's name and nametype, such as PARENT, CREATE, DELETE or NORMAL).
+# event_line prints one: "<ts> audit event <id>: comm=... exe=... auid=... uid=... paths: <name>...".
+# shellcheck disable=SC2016 # a jq program
+AUDIT_EVENTS='
+def event_line: "\(.ts) audit event \(.id): \(.who)" + (if .names == [] then "" else " paths: \(.names | join(" "))" end);
+def key_events: [inputs | select(.cat == "auditd")
     | . + {id: ((.msg | capture("audit\\([0-9.]+:(?<i>[0-9]+)\\)") | .i) // .audit_id // .rt)}] as $all
-  | ($all | map(select(.msg | test("key=\"?velexis-keys\"?(\\s|$)")) | .id) | unique) as $ids
-  | $ids[] as $id
-  | ($all | map(select(.id == $id))) as $r
+  | ([$all[] | select(.msg | test("key=\"?" + $key + "\"?(\\s|$)")) | {key: .id, value: true}] | from_entries) as $ids
+  | [$all[] | select($ids[.id])] | group_by(.id)[] as $r
   | (($r | map(select(.msg | test("SYSCALL"))) | first) // $r[0]) as $s
-  | ([$r[] | .msg | capture("(?:^|\\s)name=(?<n>\"[^\"]*\"|\\S+)") | .n] | unique | join(" ")) as $names
-  | ([["comm", "exe", "auid", "uid"][] as $f
-      | $s.msg | capture("(?:^|\\s)" + $f + "=(?<v>\"[^\"]*\"|\\S+)") | "\($f)=\(.v)"] | join(" ")) as $who
-  | "\($s.ts) audit event \($id): \($who)" + (if $names == "" then "" else " paths: \($names)" end)' \
-  "$WORK/new.jsonl" >"$WORK/keys-changes"
+  | {ts: $s.ts, id: $r[0].id,
+     names: ([$r[] | .msg | capture("(?:^|\\s)name=(?<n>\"[^\"]*\"|\\S+)") | .n] | unique),
+     items: [$r[] | .msg | select(test("(?:^|\\s)item=[0-9]+\\s"))
+       | {name: ((capture("(?:^|\\s)name=(?<n>\"[^\"]*\"|\\S+)") | .n) // ""),
+          type: ((capture("(?:^|\\s)nametype=(?<t>\\S+)") | .t) // "")}],
+     who: ([["comm", "exe", "auid", "uid"][] as $f
+       | $s.msg | capture("(?:^|\\s)" + $f + "=(?<v>\"[^\"]*\"|\\S+)") | "\($f)=\(.v)"] | join(" "))};'
+
+# Changes under /etc/velexis/keys (auditd key velexis-keys), one line per audit event with its paths.
+jq -rn --arg key velexis-keys "$AUDIT_EVENTS key_events | event_line" "$WORK/new.jsonl" >"$WORK/keys-changes"
 if [ -s "$WORK/keys-changes" ]; then
   {
     echo "Files under /etc/velexis/keys changed ($(wc -l <"$WORK/keys-changes") audit event(s)). Only a master key"
@@ -335,13 +353,76 @@ $1 == "detail" && ($2 in prev) && prev[$2] != $0 {
   print $2 " (again: " substr(names, 3) (count == 1 ? " differs" : " differ") " from the previous report)"
 }
 function differs(k) { names = names ", " k; count++; if (k !~ /^(Mtime|Ctime|Atime)$/) others = 1 }'
+# AIDE's log -> what aide-common 0.18's dailyaidecheck says about a check without AIDE's result: the texts of its
+# frames of asterisks ("database not present.", "the daily aide check was interrupted before AIDE could return an exit
+# code.", "AIDE returned with exit code 17. Invalid configuration!"; not the frame "script errors"), then the lines of
+# its "script errors" section (it joins a note and the next error with a literal \n, and can end the section on the
+# last error's line) and of "AIDE error output (<n> lines):". At most 20 lines of each.
+# shellcheck disable=SC2016 # an awk program
+AIDE_WHY='
+function out(s) { if (s != "" && n[sec]++ < 20) print s }
+/^\*+$/ { next }
+/^\*.*\*$/ { t = substr($0, 2, length($0) - 2); gsub(/^ +| +$/, "", t); if (t == "script errors") sec = "script"; else { sec = "frame"; out(t) }; next }
+sec == "script" {
+  line = $0; done = sub(/End of script errors.*$/, "", line); k = split(line, p, /\\n/)
+  for (i = 1; i <= k; i++) out(p[i])
+  if (done) sec = ""
+  next
+}
+/^AIDE error output \([0-9]+ lines\):$/ { sec = "aide"; next }
+/^End of AIDE error output/ { sec = ""; next }
+sec == "aide" { out($0) }'
+# A daily check without a result (lead decision (24c) of 2026-11-15, X-045): dailyaidecheck stopped before AIDE
+# returned (no database: "database not present."; a fatal error; a signal), or AIDE ended it with an error exit code
+# (14 and above: an invalid configuration, an error writing, an input/output error, ...). No file was compared with
+# AIDE's database that day, so the immediate alert aide-error goes out once per check, and the summary names it. No
+# deploy or provisioning run makes it expected: neither removes the database (since lead decision (23b) the step
+# harden leaves a missing one missing) nor explains an AIDE error, and a missing database is exactly what someone who
+# covers a change would leave. The AIDE state stays that of the last check with a result, so the next check with one
+# is compared with that one (its window from that check's start, with the deploys and provisioning runs since).
+aide_error() { # start code
+  local start="$1" code="$2" why meaning
+  why="$(LC_ALL=C awk "$AIDE_WHY" "$AIDE_LOG")"
+  if [ -n "$code" ]; then
+    meaning="$(printf '%s\n' "$why" | sed -n 's/^AIDE returned with exit code [0-9]*\. *//p' | awk 'NR == 1')"
+    AIDE_NOTE="last check $start: no result, AIDE's error exit code $code${meaning:+ ($meaning)}"
+  else
+    meaning="$(printf '%s\n' "$why" | awk 'NR == 1' | cut -c1-120)"
+    AIDE_NOTE="last check $start: no result (${meaning:-its log holds nothing after its start})"
+  fi
+  AIDE_NOTE="$AIDE_NOTE; the immediate alert aide-error was sent for it"
+  echo "$start" >"$WORK/state/aide-error"
+  [ "$(cat "$STATE_DIR/aide-error" 2>/dev/null || true)" != "$start" ] || return 0   # alerted already
+  {
+    if [ -n "$code" ]; then
+      echo "AIDE's daily check of $start gave no result: AIDE ended it with the error exit code $code${meaning:+ ($meaning)}."
+    else
+      echo "AIDE's daily check of $start gave no result: it stopped before AIDE returned an exit code."
+    fi
+    echo "That day has no comparison with AIDE's database to rely on, and the next days will have none until the cause"
+    echo "is fixed. No deploy or provisioning run explains it. Find out why at once: a database missing after the one-time"
+    echo "re-baseline is a finding (docs/mvp/deployment-single-vm.md §12, \"When the database is missing after the"
+    echo "re-baseline\"), and AIDE's error output below names the cause of an error code (sudo aide"
+    echo "--config=/etc/aide/aide.conf --config-check). Full report: sudo less /var/log/aide/aide.log"
+    echo
+    echo "What AIDE's log says:"
+    if [ -n "$why" ]; then printf '%s\n' "$why"; else echo "(nothing but its start)"; fi
+  } | add_alert aide-error "security alert: AIDE's daily check gave no result"
+}
 aide_check() {
   local start code entries prev_start window_start changes since
   [ -r "$AIDE_LOG" ] || return 0
   start="$(sed -n 's/^aide run on .* started at \([0-9]\{4\}-[0-9][0-9]-[0-9][0-9]\) \([0-9][0-9]:[0-9][0-9]:[0-9][0-9]\)\.$/\1T\2Z/p' "$AIDE_LOG" | awk 'NR == 1')"
   [ -n "$start" ] || { AIDE_NOTE="AIDE's log has no run"; return 0; }
-  code="$(sed -n 's/^AIDE returned with exit code \([0-9][0-9]*\)\..*/\1/p' "$AIDE_LOG" | awk 'NR == 1')"
+  # AIDE's result: dailyaidecheck writes "AIDE returned with exit code <n>. <meaning>" (or "... with a zero exit
+  # code. ..."), for an error code (14 and above) inside its frame of asterisks ("*    AIDE returned with exit code 17.
+  # Invalid configuration!    *"). A check it stopped before AIDE returned has no such line.
+  code="$(sed -nE 's/^(\*[[:space:]]*)?AIDE returned with exit code ([0-9]+)\..*/\2/p' "$AIDE_LOG" | awk 'NR == 1')"
   if grep -q '^AIDE returned with a zero exit code' "$AIDE_LOG"; then code=0; fi
+  case "$code" in
+    [0-7]) ;;
+    *) aide_error "$start" "$code"; return 0 ;;
+  esac
   # The entries of the report's Added, Removed and Changed sections (never its detailed section).
   awk '/^(Added|Removed|Changed) entries:$/ { sec = tolower($1); next }
        /^-+$/ || /^$/ { next }
@@ -349,11 +430,9 @@ aide_check() {
        sec != "" && /: \// { p = $0; sub(/^[^:]*: /, "", p); print sec " " p }' "$AIDE_LOG" | LC_ALL=C sort -u >"$WORK/aide-entries"
   if [ ! -s "$WORK/aide-entries" ] && [[ "${code:-0}" =~ ^[1-7]$ ]]; then echo "changes (exit code $code)" >"$WORK/aide-entries"; fi
   entries="$(wc -l <"$WORK/aide-entries")"
-  case "${code:-}" in
+  case "$code" in
     0) AIDE_NOTE="last check $start: no changes" ;;
-    [1-7]) AIDE_NOTE="last check $start: $entries change(s) since AIDE's database was made (exit code $code)" ;;
-    "") AIDE_NOTE="last check $start: no result in its log" ;;
-    *) AIDE_NOTE="last check $start: AIDE reported an error (exit code $code)" ;;
+    *) AIDE_NOTE="last check $start: $entries change(s) since AIDE's database was made (exit code $code)" ;;
   esac
   : >"$WORK/aide-detail"
   [ ! -s "$WORK/aide-entries" ] || LC_ALL=C awk "$AIDE_DETAIL" "$WORK/aide-entries" "$AIDE_LOG" >"$WORK/aide-detail"
@@ -476,6 +555,31 @@ fi
 FROM=$((NOW - 86400))
 export_entries --since "$FROM" --until "$NOW" >"$WORK/day.jsonl" || die "could not read the journal for the summary"
 
+# The auditd key velexis-aide (X-045: provision-vm.sh's watches of /var/lib/aide/ and the re-baseline record). Its
+# events on /var/lib/aide/aide.db or the record, and those on any other path, are listed: after the one-time
+# re-baseline only a re-baseline by hand writes them (deployment-single-vm.md §12). A path is matched by its last part,
+# so a relative name counts too. Those on AIDE's work files alone, aide.db.new and the folder dailyaidecheck/ (written by
+# every daily check: aide-common's COMMAND=update and its temporary files), are only counted: an event is one of those
+# when each of its paths but the PARENT items is a work file. dailyaidecheck removes its folder at the end of each check
+# with rm -rf from its working folder /run/aide, which removes each file by a name relative to the folder: the kernel
+# then logs the bare name (errorlog) and, as the PARENT item, rm's working folder (/run/aide), not the folder the file
+# was in. So the bare names of dailyaidecheck's own temporary files (aide-common 0.18.6's mytempfile calls) are work
+# files too; any other relative name is listed.
+# shellcheck disable=SC2016 # a jq program
+AIDE_AUDIT='
+def plain: ltrimstr("\"") | rtrimstr("\"");
+def work: plain | test("(^|/)(aide[.]db[.]new|dailyaidecheck([.]old[.][^/]*)?)(/|$)")
+  or test("^(errorlog|mailfile|arunlog|aerrlog|postrunlog|dbchecklog|noisetmp2?|aidemail|pkg_file_list|filteredmail|aidenoise[12])$");
+def kind: if any(.names[]; plain | rtrimstr("/") | sub("^.*/"; "") | . == "aide.db" or . == "aide-rebaseline") then "baseline"
+  else [.items[] | select(.type != "PARENT") | .name] as $n
+  | if any($n[]; work) and all($n[]; work or plain == "(null)") then "work" else "other" end end;
+[key_events | . + {kind: kind}] as $e
+| ($e | map(select(.kind != "work"))) as $l
+| "velexis-aide events (AIDE database and re-baseline record): \($e | length) in all; \($e | map(select(.kind == "baseline")) | length) on /var/lib/aide/aide.db or /var/lib/velexis/provision/aide-rebaseline and \($e | map(select(.kind == "other")) | length) elsewhere, listed below; \($e | map(select(.kind == "work")) | length) only on the work files of the daily AIDE check (aide.db.new, dailyaidecheck/):",
+  (if $l == [] then "  none" else ($l[0:30][] | "  " + event_line), (if ($l | length) > 30 then "  ... and \(($l | length) - 30) more" else empty end) end)'
+jq -rn --arg key velexis-aide "$AUDIT_EVENTS $AIDE_AUDIT" "$WORK/day.jsonl" >"$WORK/aide-audit" \
+  || die "could not build the summary"
+
 # shellcheck disable=SC2016 # a jq program: its $names are jq's
 SUMMARY='
 def bump(f; k): f[k] += 1;
@@ -564,6 +668,7 @@ reduce inputs as $e (
   "auditd events by watched key (count, key):",
   (($watched | split(" ") | map({key: ., value: ($s.audit[.] // {} | length)}) | from_entries)
     + ($s.audit | map_values(length)) | to_entries | sort_by(.key) | map("  \(.value)  \(.key)") | .[]),
+  ($aideaudit | rtrimstr("\n") | split("\n")[]),
   "AIDE: \($aide)",
   "Unit failures (count, unit):", rows($s.units; 30)[],
   "Web application firewall: \($reqs | length) request(s) matched a rule, \($refused) refused with 403 (count matched, refused, rule):",
@@ -575,7 +680,8 @@ reduce inputs as $e (
   "Security events of the apps (count, event, unit):", rows($s.sec; 30)[],
   "Warnings and errors of the velexis-* units (count, unit):", rows($s.warn; 30)[]
 '
-jq -rn --argjson users "$users_json" --arg watched "$WATCHED_KEYS" --arg aide "$AIDE_NOTE" "$SUMMARY" \
+jq -rn --argjson users "$users_json" --arg watched "$WATCHED_KEYS" --arg aide "$AIDE_NOTE" \
+  --rawfile aideaudit "$WORK/aide-audit" "$SUMMARY" \
   "$WORK/day.jsonl" >"$WORK/summary-lines" || die "could not build the summary"
 sec_files="$(find "$SEC_DIR" -maxdepth 1 -type f -name 'security-*.jsonl.zst' 2>/dev/null | wc -l)"
 {

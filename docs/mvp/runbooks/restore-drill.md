@@ -139,6 +139,8 @@ cp -a /etc/velexis /root/restore/etc-velexis.scratch
 rsync -a --exclude=/backup/ --exclude=/backup.env /root/velexis-config.restore/velexis/ /etc/velexis/
 ```
 
+**AIDE's baseline of production** (X-045). The same `config` command unpacks it beside the configuration, in `/root/velexis-config.restore/aide-baseline/` (`aide.db`, `aide.db.sha256`, `aide-rebaseline`), and checks it: note its lines, `aide-baseline/aide.db: SHA-256 …, as aide-baseline/aide.db.sha256 says` and `… has the SHA-256 of the record's last 'rebaselined' line (…): the database that re-baseline installed` (or `manual`), in the drill log. The `rsync` above copies only `velexis/`, so the scratch VM keeps the AIDE database its own provisioning made; production's is a baseline of production's files only. A `WARNING` line (a database that does not match its `aide.db.sha256`, or differs from the record's last line) is a finding of the drill: tell the developer, who checks production's `aide.db` and record ([§12](../deployment-single-vm.md#aides-one-time-re-baseline-and-re-baselining-by-hand) of the guide).
+
 **Black holes, in the restored env files, before any unit starts.** The OTA backend sends every Amadeus request of a connection to `AMADEUS_BASE_URL_TEST` or `_LIVE`, so both point at a closed loopback port. The platform backend accepts only the official Amadeus hosts with `APP_ENV=production` (PBE-053), so its values stay; its only Amadeus caller is the masked worker, and ufw refuses the hosts. Mail goes to a loopback port where nothing listens (`SMTP_URL`, and `alert.env` for `velexis-alert`), so it stays in the outbox. Every Stripe key and webhook secret is emptied, and the platform's Stripe switches go off: with `APP_ENV=production` the platform refuses a test-mode `STRIPE_SECRET_KEY` and a switch that is on without its key, and the OTA backend's `_LIVE` variables take only live keys, so test-mode values cannot replace them. The Sentry DSNs are emptied, so no error of the drill reaches production's error tracking.
 
 ```bash
@@ -366,6 +368,7 @@ Filled in by the developer after every drill (human step of X-031; the first one
 | Tenant schemas: MANIFEST / restored / live | — |
 | Reference airports: MANIFEST / restored / live | — |
 | Last audit time: MANIFEST / restored / live | — |
+| Step 3: AIDE's baseline in the set (`config`'s two lines on `aide-baseline/`, X-045) | — |
 | Step 7: both refusals, live database unchanged, units active | — |
 | Step 8: tenant, commands as in §4, durations | — |
 | Step 9: refused destinations (Amadeus, Stripe), `supplier_requests` unchanged | — |

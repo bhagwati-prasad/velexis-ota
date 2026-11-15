@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =====================================================================================================
 # log-review.test.sh — tests deploy/scripts/log-review.sh (velexis-logreview) without root, systemd, a journal or SMTP
-# (tasks X-038 and X-044).
+# (tasks X-038, X-044 and X-045).
 #
 #   bash deploy/scripts/test/log-review.test.sh
 #
@@ -47,6 +47,17 @@
 #       hashes) raises aide-change, naming what differs, once; a directory whose only new detail is its times follows
 #       the same rule; changes after a later deploy raise nothing, and the day after neither; an added entry, which
 #       AIDE details with report_level=added_removed_entries (its new values alone), is compared the same way;
+#    9. AIDE's own baseline (task X-045, lead decision (24c) of 2026-11-15; its checks end in [X-045 AC<n>]), with AIDE's
+#       logs in the layouts aide-common 0.18.6's dailyaidecheck writes (checked with the Ubuntu package's binary and
+#       script): a daily check without a database ("database not present.", no exit code) after a deploy and a
+#       provisioning run raises aide-error once, with dailyaidecheck's reason and script error, and the summary's AIDE
+#       line names it; a check that AIDE ended with the error exit code 17 (its line inside dailyaidecheck's frame of
+#       asterisks) raises it with AIDE's error output; neither changes the review's AIDE state, so the next check with a
+#       result is compared with the last one that had a result (nothing new: no alert; a change the day after: the
+#       aide-change alert); the summary counts the auditd key velexis-aide and lists its events on aide.db, the
+#       re-baseline record and other paths (relative names too), not those on the daily check's own work files
+#       (aide.db.new, dailyaidecheck/, and its rm -rf of that folder, logged with bare file names and rm's working
+#       folder as the PARENT item);
 #   and over the whole run: no summary or alert holds a value of a WAF line's query, or any [uri] (AC2, lead decision
 #   (17i) of 2026-11-11).
 #
@@ -346,6 +357,73 @@ aide_report() { # "YYYY-MM-DD HH:MM:SS" exit-code [f|d|t|a path version]... -> A
   } >"$AIDE_LOG"
 }
 
+frame() { # text... -> the texts in the frame of asterisks of aide-common 0.18.6's dailyaidecheck: a border of 78
+  # asterisks, then each text without its leading and trailing blanks (its frame reads it with `read`) centred between
+  # two asterisks in 76 columns, one space less on the left than the centre (so a text of 77 characters loses its first
+  # one), then the border again
+  local border text half
+  border="$(printf '%78s' '' | tr ' ' '*')"
+  printf '%s\n' "$border"
+  for text in "$@"; do
+    text="$(sed 's/^[[:space:]]*//; s/[[:space:]]*$//' <<<"$text")"
+    half=$(((78 - ${#text}) / 2))
+    if [ "$half" -gt 0 ]; then text="$(printf '%*s' "$half" '')$text"; fi
+    printf '*%-76.76s*\n' "${text:1}"
+  done
+  printf '%s\n' "$border"
+}
+DOTLOCK_NOTE='no dotlockfile binary in path, not checking for already running daily aide check' # aide-common's note
+aide_report_nodb() { # "YYYY-MM-DD HH:MM:SS" -> AIDE's log of a daily check without a database, as dailyaidecheck of
+  # aide-common 0.18.6 writes it (checked with the Ubuntu package): no "AIDE returned" line, its reasons in frames, and
+  # its script errors (it joins its lock note and the next error with a literal \n)
+  {
+    printf 'aide run on vm-test.example.com started at %s.\n' "$1"
+    frame 'database not present.'
+    echo
+    frame ' the daily aide check was interrupted before AIDE could return an exit code.'
+    echo
+    frame 'script errors'
+    printf '%s\\n%s\n' "$DOTLOCK_NOTE" "Fatal error: The AIDE database '/var/lib/aide/aide.db' does not exist!"
+    echo "This may mean you haven't created it or that the initialization process is still running, or it may mean that someone has removed it."
+    echo 'End of script errors'
+    echo 'AIDE produced no errors.'
+    echo 'AIDE detected no changes.'
+    echo
+    printf 'End of AIDE daily aide check at %s, run time 0 seconds\n' "${1%:*}"
+    echo 'funny, AIDE did not leave a log.'
+  } >"$AIDE_LOG"
+}
+aide_report_error() { # "YYYY-MM-DD HH:MM:SS" code meaning error-line -> AIDE's log of a daily check that AIDE ended
+  # with an error exit code, as dailyaidecheck of aide-common 0.18.6 writes it (checked with the Ubuntu package: an
+  # invalid line in a configuration file gives 17): its "AIDE returned" line in a frame, then AIDE's error output
+  {
+    printf 'aide run on vm-test.example.com started at %s.\n' "$1"
+    frame "AIDE returned with exit code $2. $3"
+    echo
+    frame 'script errors'
+    printf '%s\\nEnd of script errors\n' "$DOTLOCK_NOTE"
+    echo 'AIDE error output (1 lines):'
+    printf '  %s\n' "$4"
+    echo 'End of AIDE error output'
+    printf 'AIDE output (1 lines):\nbegin timestamp %s\nEnd of AIDE output.\n\n' "$1"
+    printf 'End of AIDE daily aide check at %s, run time 1 seconds\n' "${1%:*}"
+  } >"$AIDE_LOG"
+}
+audit_event() { # epoch id comm exe auid uid nametype:path... -> one auditd event of the key velexis-aide as
+  # audisp-syslog puts it into the journal: its SYSCALL record, its CWD record, then a PATH record per path with its
+  # nametype (PARENT, CREATE, DELETE, NORMAL). As the kernel writes them (seen with this machine's kernel and a watch on a
+  # scratch tree): a PARENT of a path given as a relative name is the process's working folder, not the folder the name
+  # is in (rm -rf removes the files of a folder by names relative to that folder)
+  local at="$1" id="$2" comm="$3" exe="$4" auid="$5" uid="$6" i=0 p
+  shift 6
+  add_entry "$at" "$(plain auditd.service audisp-syslog 6 syslog "type=SYSCALL msg=audit($at.123:$id): arch=c000003e syscall=257 success=yes exit=3 auid=$auid uid=$uid tty=pts0 comm=\"$comm\" exe=\"$exe\" key=\"velexis-aide\"")"
+  add_entry "$at" "$(plain auditd.service audisp-syslog 6 syslog "type=CWD msg=audit($at.123:$id): cwd=\"/root\"")"
+  for p in "$@"; do
+    add_entry "$at" "$(plain auditd.service audisp-syslog 6 syslog "type=PATH msg=audit($at.123:$id): item=$i name=\"${p#*:}\" inode=$((4000 + i)) dev=fe:00 mode=0100600 ouid=0 ogid=0 rdev=00:00 nametype=${p%%:*} cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0")"
+    i=$((i + 1))
+  done
+}
+
 TODAY="$(date -u +%F)"
 TOMORROW="$(date -u -d "$TODAY +1 day" +%F)"
 T0="$(date -u -d "$TODAY 07:20:00" +%s)" # the first run: 07:20 UTC today
@@ -390,6 +468,13 @@ quiet_sections() { # every section of the summary, with none or 0
   done
 }
 check "the summary has every section, with none or 0 on a quiet day [X-038 AC3]" quiet_sections
+quiet_aide_key() { # the key velexis-aide: counted, and its listing empty
+  local b
+  b="$(body_of "security log review")"
+  grep -qxF "  0  velexis-aide" <<<"$b" &&
+    grep -A1 -F 'velexis-aide events (AIDE database and re-baseline record): 0 in all;' <<<"$b" | grep -qxF '  none'
+}
+check "the summary counts the auditd key velexis-aide, and lists none of its events on a quiet day [X-045 AC2]" quiet_aide_key
 check "the first run records the SSH keys it finds as known (no alert)" test "$(wc -l <"$STATE/ssh-keys")" -eq 2
 check "the run logs the summary as a security event" grep -qF '{"security":true,"event":"log_review.summary","day":"'"$TODAY"'"}' "$LAST_OUT"
 
@@ -629,6 +714,100 @@ same "the added script rewritten in place outside a deploy: one message, the AID
 check "it names the added script and what differs [X-044 AC1]" body_has "security alert: AIDE" \
   "added $SCRIPT (again: Size, Mtime, Ctime, SHA256, SHA512 differ from the previous report)"
 check "and nothing else" not body_has "security alert: AIDE" "$UNIT"
+
+# ---- 9. AIDE's daily check without a result, and the auditd key velexis-aide (X-045) ---------------------------------
+step "X-045: a daily check without a database raises aide-error once, also after a deploy and a provisioning run [X-045 AC1]"
+AIDE_STATE_GOOD="$(cat "$STATE/aide")" # the review's state after the last check with a result (day 10)
+printf '%s deploy-5555555\n' "$(day 11)T01:00:00Z" >>"$LIB/deploy-history"
+printf '%s provision-vm.sh started by ubuntu: steps harden\n' "$(day 11)T01:30:00Z" >>"$ROOT/var/log/velexis/provision.log"
+aide_report_nodb "$(day 11) 02:13:14"
+review_day 11
+NO_RESULT="security alert: AIDE's daily check gave no result"
+same "one message, the aide-error alert, although a deploy and a provisioning run came before the check [X-045 AC1]" \
+  "$RC $(new_subjects)" "0 $NO_RESULT"
+check "it says the check stopped before AIDE returned an exit code [X-045 AC1]" \
+  body_has "$NO_RESULT" "AIDE's daily check of $(day 11)T02:13:14Z gave no result: it stopped before AIDE returned an exit code."
+alert_lines() { body_of "$NO_RESULT" | grep -qxF -- "$1"; }
+check "with dailyaidecheck's reason from its frame [X-045 AC1]" alert_lines "database not present."
+check "and its script error, apart from the note dailyaidecheck joined it to [X-045 AC1]" \
+  alert_lines "Fatal error: The AIDE database '/var/lib/aide/aide.db' does not exist!"
+check "and the way out: deployment §12 [X-045 AC1]" body_has "$NO_RESULT" "When the database is missing after the"
+check "the alert is logged as a security event of the kind aide-error [X-045 AC1]" \
+  grep -qF '{"security":true,"event":"log_review.alert","kind":"aide-error",' "$LAST_OUT"
+same "the review's AIDE state is still that of the last check with a result [X-045 AC1]" "$(cat "$STATE/aide")" "$AIDE_STATE_GOOD"
+review_day 11 3600
+same "the next run repeats nothing: that check was alerted [X-045 AC1]" "$RC $(new_count)" "0 0"
+shipped_ok "$(at_day 11 7200)"
+run_review "$(at_day 11 7200)" --summary
+check "the daily summary's AIDE line names it and the alert [X-045 AC1]" body_has "security log review $(day 11)" \
+  "AIDE: last check $(day 11)T02:13:14Z: no result (database not present.); the immediate alert aide-error was sent for it"
+same "and that run sends nothing else" "$RC $(new_count)" "0 1"
+run_review "$(at_day 11 7200)" --status
+check "--status names the last check without a result that was alerted" grep -q "^aide-error *$(day 11)T02:13:14Z" "$LAST_OUT"
+
+step "X-045: a check that AIDE ended with an error exit code raises aide-error, with AIDE's error output [X-045 AC1]"
+CONF_ERROR="ERROR: /etc/aide/aide.conf.d/90_velexis:18: unknown config option: 'this' (line: 'this line is no rule')"
+aide_report_error "$(day 12) 02:13:14" 17 'Invalid configuration!' "$CONF_ERROR"
+review_day 12
+same "one message, the aide-error alert [X-045 AC1]" "$RC $(new_subjects)" "0 $NO_RESULT"
+check "it names the exit code and its meaning, read from dailyaidecheck's frame [X-045 AC1]" body_has "$NO_RESULT" \
+  "AIDE's daily check of $(day 12)T02:13:14Z gave no result: AIDE ended it with the error exit code 17 (Invalid configuration!)."
+check "and AIDE's error output [X-045 AC1]" alert_lines "  $CONF_ERROR"
+same "the review's AIDE state is still that of the last check with a result [X-045 AC1]" "$(cat "$STATE/aide")" "$AIDE_STATE_GOOD"
+review_day 12 3600
+same "the next run repeats nothing [X-045 AC1]" "$RC $(new_count)" "0 0"
+
+step "X-045: the next check with a result is compared with the last check that had one [X-045 AC1]"
+aide_report "$(day 13) 02:13:14" 5 f "$SSHD_CONF" 2 f "$UNIT" 3 d "$SBIN" 3 t "$STAMP" 13 a "$SCRIPT" 2
+review_day 13
+same "day 10's entries and detail again (the timer's stamp only touched): no message [X-045 AC1]" "$RC $(new_count)" "0 0"
+check "the review's AIDE state is that check's [X-045 AC1]" grep -q "^run $(day 13)T02:13:14Z$" "$STATE/aide"
+aide_report "$(day 14) 02:13:14" 5 f "$SSHD_CONF" 2 f "$UNIT" 4 d "$SBIN" 3 t "$STAMP" 14 a "$SCRIPT" 2
+review_day 14
+same "a change the day after, outside a deploy: the aide-change alert, as before [X-045 AC1]" \
+  "$RC $(new_subjects)" "0 security alert: AIDE found changes outside a deploy"
+
+step "X-045: the summary counts the key velexis-aide and lists its events on AIDE's database, the record and other paths [X-045 AC2]"
+A="$(at_day 14 600)"
+audit_event $((A + 1)) 9001 cp /usr/bin/cp 1000 0 PARENT:/var/lib/aide/ NORMAL:/var/lib/aide/aide.db
+audit_event $((A + 2)) 9002 tee /usr/bin/tee 1000 0 NORMAL:/var/lib/velexis/provision/aide-rebaseline
+audit_event $((A + 3)) 9003 aide /usr/bin/aide 4294967295 105 PARENT:/var/lib/aide/ CREATE:/var/lib/aide/aide.db.new
+audit_event $((A + 4)) 9004 dailyaidecheck /usr/bin/bash 4294967295 105 PARENT:/var/lib/aide/dailyaidecheck/ \
+  CREATE:/var/lib/aide/dailyaidecheck/mailfile
+audit_event $((A + 5)) 9005 sh /usr/bin/dash 1000 0 PARENT:/var/lib/aide/ CREATE:/var/lib/aide/dropped
+# dailyaidecheck's own clean-up, rm -rf /var/lib/aide/dailyaidecheck from its working folder /run/aide (lock): each
+# file by a name relative to the folder, the PARENT item the working folder; then the folder itself
+audit_event $((A + 6)) 9006 rm /usr/bin/rm 4294967295 105 PARENT:/run/aide DELETE:errorlog
+audit_event $((A + 7)) 9007 rm /usr/bin/rm 4294967295 105 PARENT:/var/lib/aide/ DELETE:/var/lib/aide/dailyaidecheck
+# relative names of another kind: a file made in /var/lib/aide from that folder, and the database removed from it
+audit_event $((A + 8)) 9008 sh /usr/bin/dash 1000 0 PARENT:/var/lib/aide CREATE:planted
+audit_event $((A + 9)) 9009 rm /usr/bin/rm 1000 0 PARENT:/var/lib/aide DELETE:aide.db
+shipped_ok "$(at_day 14 1200)"
+run_review "$(at_day 14 1200)" --summary
+same "no immediate alert for them, the summary only [X-045 AC2]" "$RC $(new_count)" "0 1"
+SUMMARY="$(body_of "security log review $(day 14)")"
+check "the key's count among the watched keys [X-045 AC2]" summary_has "  9  velexis-aide"
+check "how many touched the database or the record, other paths and AIDE's work files [X-045 AC2]" summary_has \
+  "velexis-aide events (AIDE database and re-baseline record): 9 in all; 3 on /var/lib/aide/aide.db or /var/lib/velexis/provision/aide-rebaseline and 2 elsewhere, listed below; 4 only on the work files of the daily AIDE check (aide.db.new, dailyaidecheck/):"
+listed() { grep -E "^  \S+ audit event $1: " <<<"$SUMMARY" | grep -qF -- "$2"; } # id text
+check "the database replaced by hand: its command, users and paths [X-045 AC2]" \
+  listed 9001 'comm="cp" exe="/usr/bin/cp" auid=1000 uid=0 paths: "/var/lib/aide/" "/var/lib/aide/aide.db"'
+check "the record appended to [X-045 AC2]" listed 9002 'comm="tee" exe="/usr/bin/tee" auid=1000 uid=0 paths: "/var/lib/velexis/provision/aide-rebaseline"'
+check "a file dropped elsewhere in /var/lib/aide [X-045 AC2]" listed 9005 'paths: "/var/lib/aide/" "/var/lib/aide/dropped"'
+check "a file made there by a relative name [X-045 AC2]" listed 9008 'paths: "/var/lib/aide" "planted"'
+check "the database removed by a relative name [X-045 AC2]" listed 9009 'comm="rm" exe="/usr/bin/rm" auid=1000 uid=0 paths: "/var/lib/aide" "aide.db"'
+check "not the daily check's aide.db.new, its work folder or its clean-up of that folder (names relative to it) [X-045 AC2]" \
+  not grep -qE 'audit event 900[3467]:' <<<"$SUMMARY"
+
+step "X-045: a log that holds only the check's start raises aide-error, and the summary says so [X-045 AC1]"
+printf 'aide run on vm-test.example.com started at %s.\n' "$(day 15) 02:13:14" >"$AIDE_LOG"
+review_day 15
+same "one message, the aide-error alert [X-045 AC1]" "$RC $(new_subjects)" "0 $NO_RESULT"
+check "its body says the log holds nothing but the start [X-045 AC1]" alert_lines "(nothing but its start)"
+shipped_ok "$(at_day 15 7200)"
+run_review "$(at_day 15 7200)" --summary
+check "the summary's AIDE line says the log holds nothing after the start [X-045 AC1]" body_has "security log review $(day 15)" \
+  "AIDE: last check $(day 15)T02:13:14Z: no result (its log holds nothing after its start); the immediate alert aide-error was sent for it"
 
 step "Over the whole run"
 ALL="$(cat "$FAKE"/alerts/*.subject "$FAKE"/alerts/*.body)"

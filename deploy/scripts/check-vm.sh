@@ -8,7 +8,7 @@
 #
 # It prints one PASS or FAIL line per item and a total, and exits 0 when every item passes, 1 when one fails and 2
 # on a usage error. It changes nothing and writes no file: it reads files and asks systemctl, ufw, nft (list only), sshd,
-# swapon, sysctl, timedatectl, ss, psql (as postgres), redis-cli and caddy (as caddy). It never prints a value of an env
+# swapon, sysctl, timedatectl, ss, psql (as postgres), redis-cli, caddy (as caddy) and auditctl (-l only). It never prints a value of an env
 # file, a key file or .provision-secrets: env files are compared with their templates by variable name only, key
 # copies with cmp, the Redis password reaches redis-cli through its environment, and caddy's messages are shown only
 # with every value of caddy.env replaced by <redacted> (bash's own errors about a malformed caddy.env line are dropped).
@@ -31,6 +31,10 @@
 #             velexis-log-review.timer active and enabled, and auditd's syslog plugin on as provision-vm.sh writes it
 #             (/etc/audit/plugins.d/syslog.conf: active = yes, direction = out, path = an executable audisp-syslog), so
 #             that auditd's records reach the journal and leave the VM
+#   audit     auditd watches AIDE's own baseline (task X-045, lead decision (24c) of 2026-11-15): the rules file
+#             /etc/audit/rules.d/velexis.rules holds provision-vm.sh's two watches with the key velexis-aide (the folder
+#             /var/lib/aide/ and the record /var/lib/velexis/provision/aide-rebaseline, writes and attribute changes),
+#             and auditctl -l shows both loaded
 #   firewall  ufw active, incoming denied by default, and only 22, 80 and 443 allowed (each of them allowed); the
 #             outbound allow-list of task X-041 (nft list table inet velexis_egress, read through egress.sh parse):
 #             outgoing denied by default (chain output, policy drop), the chain's rules exactly those of egress.sh,
@@ -81,7 +85,7 @@ TEMPLATES="$DEPLOY_DIR/env"
 : "${DB_NAME:=velexis}"
 : "${PG_MAJOR:=16}"
 : "${VELEXIS_ROOT:=}"
-ALL_GROUPS="system services firewall ssh database redis caddy users files envfiles"
+ALL_GROUPS="system services audit firewall ssh database redis caddy users files envfiles"
 SELECTED="$ALL_GROUPS"
 
 R="$VELEXIS_ROOT"
@@ -360,6 +364,42 @@ audit_syslog_plugin() {
     fail "$what (found: path = ${path:-unset}, not an executable audisp-syslog)"
   else
     pass "$what"
+  fi
+}
+
+# ---- audit ------------------------------------------------------------------------------------------------
+# auditd's watches of AIDE's own baseline (task X-045, lead decision (24c) of 2026-11-15): provision-vm.sh's step harden
+# writes them into /etc/audit/rules.d/velexis.rules, which augenrules loads at every boot, and loads them; their events
+# carry the key velexis-aide, which velexis-logreview's daily summary counts and lists. auditctl -l lists a folder's
+# watch without its trailing slash. check-vm.test.sh reads the two lines from provision-vm.sh.
+AIDE_WATCHES=('-w /var/lib/aide/ -p wa -k velexis-aide' '-w /var/lib/velexis/provision/aide-rebaseline -p wa -k velexis-aide')
+group_audit() {
+  local rules="$R/etc/audit/rules.d/velexis.rules" w listed loaded missing="" shown=""
+  local harden="sudo bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps harden, with the VM's own settings"
+  local what="auditd's rules file holds the watches of AIDE's database and its record (key velexis-aide)"
+  if [ ! -f "$rules" ]; then
+    fail "$what (/etc/audit/rules.d/velexis.rules is missing; $harden)"
+  else
+    for w in "${AIDE_WATCHES[@]}"; do grep -qxF -- "$w" "$rules" || missing="$missing; $w"; done
+    if [ -z "$missing" ]; then
+      pass "$what (/etc/audit/rules.d/velexis.rules: ${AIDE_WATCHES[0]}; ${AIDE_WATCHES[1]})"
+    else
+      fail "$what (/etc/audit/rules.d/velexis.rules lacks: ${missing#; }; $harden)"
+    fi
+  fi
+  what="auditd watches AIDE's database and its record (auditctl -l, key velexis-aide)"
+  if ! have auditctl; then fail "$what: auditctl is missing (package auditd)"; return; fi
+  if ! listed="$(auditctl -l 2>&1)"; then fail "$what (auditctl -l failed: $(first_line "$listed"))"; return; fi
+  missing=""
+  for w in "${AIDE_WATCHES[@]}"; do
+    loaded="$(printf '%s\n' "$w" | sed -E 's#^-w (/[^ ]*[^/ ])/* #-w \1 #')"
+    shown="$shown; $loaded"
+    grep -qxF -- "$loaded" <<<"$listed" || missing="$missing; $loaded"
+  done
+  if [ -z "$missing" ]; then
+    pass "$what (${shown#; })"
+  else
+    fail "$what (not loaded: ${missing#; }; sudo augenrules --load when the rules file holds them, else $harden)"
   fi
 }
 
