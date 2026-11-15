@@ -9,7 +9,10 @@
 // only for a client that held it as its own string before the rotation, or within 10 s of the rotation; any other
 // client presents it, and the API's reuse detection answers; and a client's own record maps an old access token to a
 // newer one only together with the same session's refresh token (FIX-W52-SDK, lead decisions (21d) and (21e) of
-// 2026-11-13; in token and in server mode, at the end of this file).
+// 2026-11-13; in token and in server mode, at the end of this file). A client given only a string access token adopts
+// its own session results, a clock set back by at most 10 s keeps a rotation inside the window, and a call that joins
+// a shared refresh holds its new refresh token from that moment (FIX-W53-SDK, lead decisions (22g), (22h) and (22i) of
+// 2026-11-15; the last three blocks).
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1338,14 +1341,15 @@ describe("token and server mode: a rotated refresh token leads to the family's n
     expect(api.presented).toEqual([A0.refreshToken, A0.refreshToken]);
   });
 
-  it("never stretches the window when the clock goes back: a rotation from before the clock's change is outside it [FIX-W52-SDK AC1]", async () => {
+  it("never stretches the window when the clock goes back a minute: a rotation from before the clock's change is outside it [FIX-W52-SDK AC1]", async () => {
     vi.useFakeTimers();
     const api = rotatingApi();
     const fake = createFakeFetch(api.answers(8));
     const root = createVelexisClient({ publishableKey: PK, fetch: fake.fetch });
     await root.withOptions({ ...A0 }).account.get();
 
-    // The system clock is set back a minute, 1 s after the rotation: the rotation's age is negative, not 1 s.
+    // The system clock is set back a minute, 1 s after the rotation: the rotation's age is -59 s, not 1 s, beyond the
+    // 10 s a clock set back may take (lead decision (22h) of 2026-11-15; the FIX-W53-SDK tests at the end of this file).
     vi.advanceTimersByTime(1_000);
     vi.setSystemTime(Date.now() - 60_000);
     const error = await root
@@ -1476,6 +1480,341 @@ describe("token and server mode: a client's own record replaces an old access to
         "Bearer at_w52_a_2",
       ]);
       expect(api.presented).toEqual([A0.refreshToken, "rt_w52_a_1"]);
+    });
+  }
+});
+
+/**
+ * The calls whose session result a client adopts (SDK-008), each resolving with a session the fake API opens or
+ * rotates.
+ * @type {Record<string, (client: import("../../src/index.js").VelexisClient) => Promise<unknown>>}
+ */
+const SESSION_CALLS = {
+  "auth.signIn": (client) =>
+    client.auth.signIn({ email: "visitor@example.com", password: "Visitor-password-1" }),
+  "auth.refresh": (client) => client.auth.refresh({ refreshToken: "rt_w53_from_the_integrators_store" }),
+  "auth.changePassword": (client) =>
+    client.auth.changePassword({ currentPassword: "Old-password-1", newPassword: "New-password-22" }),
+};
+
+/** The access token a client is given, and the n-th session a session call resolves with. */
+const GIVEN = "at_w53_given";
+const opened = (/** @type {number} */ n) => ({ accessToken: `at_w53_${n}`, refreshToken: `rt_w53_${n}` });
+
+describe("token and server mode: a client given only a string access token adopts its own session results", () => {
+  for (const [modeName, key] of Object.entries(MODES)) {
+    for (const [variant, noRefreshToken] of Object.entries({
+      "without a refreshToken option": {},
+      "with refreshToken: null": { refreshToken: null },
+    })) {
+      it(`${modeName}, ${variant}: sends the access token of its own auth.signIn, auth.refresh and auth.changePassword result on its next call, and withOptions starts from it [FIX-W53-SDK AC1]`, async () => {
+        const fake = createFakeFetch([
+          { body: { session: opened(1), customer: { id: "cus_a" } } },
+          { body: { customer: "a" } },
+          { body: { session: opened(2), customer: { id: "cus_a" } } },
+          { body: { customer: "a" } },
+          { body: { session: opened(3), customer: { id: "cus_a" } } },
+          { body: { customer: "a" } },
+          { body: { customer: "a" } },
+        ]);
+        const onSessionRefreshed = vi.fn();
+        // No refreshToken: neither a string nor a function (lead decision (22g) of 2026-11-15).
+        const client = createVelexisClient({
+          ...key,
+          fetch: fake.fetch,
+          accessToken: GIVEN,
+          ...noRefreshToken,
+          onSessionRefreshed,
+        });
+
+        for (const call of Object.values(SESSION_CALLS)) {
+          await call(client);
+          await client.account.get();
+        }
+        await client.withOptions({ locale: "es-ES" }).account.get();
+
+        expect(fake.requests.map((request) => [request.path, request.headers["authorization"]])).toEqual([
+          ["/v1/auth/sign-in", `Bearer ${GIVEN}`],
+          ["/v1/account", "Bearer at_w53_1"],
+          ["/v1/auth/refresh", "Bearer at_w53_1"],
+          ["/v1/account", "Bearer at_w53_2"],
+          ["/v1/auth/password/change", "Bearer at_w53_2"],
+          ["/v1/account", "Bearer at_w53_3"],
+          ["/v1/account", "Bearer at_w53_3"],
+        ]);
+        expect(onSessionRefreshed.mock.calls).toEqual([[opened(1)], [opened(2)], [opened(3)]]);
+        // It still never refreshes: its next 401 TOKEN_EXPIRED is the caller's.
+        expect(
+          fake.requests.filter((request) => request.json?.refreshToken === opened(1).refreshToken),
+        ).toEqual([]);
+      });
+    }
+
+    for (const [method, call] of Object.entries(SESSION_CALLS)) {
+      it(`${modeName}: sends ${method}'s new access token on its very next call [FIX-W53-SDK AC1]`, async () => {
+        const fake = createFakeFetch([
+          { body: { session: opened(1), customer: { id: "cus_a" } } },
+          { body: { customer: "a" } },
+        ]);
+        const client = createVelexisClient({ ...key, fetch: fake.fetch, accessToken: GIVEN });
+
+        await call(client);
+        await client.account.get();
+
+        expect(fake.lastRequest?.headers["authorization"]).toBe("Bearer at_w53_1");
+      });
+    }
+
+    /**
+     * Clients that keep lead decision (21e) of 2026-11-13: an access token that a session result replaced is sent as
+     * it is unless the call's refresh-token source gives the new session's refresh token. Each is made from what the
+     * test's store says (`signedIn` turns true once the sign-in has resolved).
+     * @type {Record<string, (store: { signedIn: boolean }) => Partial<import("../../src/index.js").VelexisClientOptions>>}
+     */
+    const KEEP_21E = {
+      "a string access token and a refresh-token function that gives nothing": () => ({
+        accessToken: GIVEN,
+        refreshToken: () => undefined,
+      }),
+      "a string access token and a refresh-token function that gives another session's refresh token after it":
+        (store) => ({
+          accessToken: GIVEN,
+          // Nothing at the sign-in (so its result replaced no refresh token of the client), another session's after.
+          refreshToken: () => (store.signedIn ? "rt_w53_another_session" : undefined),
+        }),
+      "token functions that still give the old access token and no refresh token": () => ({
+        accessToken: () => GIVEN,
+        refreshToken: () => undefined,
+      }),
+      "an access-token function and no refresh token": () => ({ accessToken: () => GIVEN }),
+    };
+
+    for (const [clientName, tokensOf] of Object.entries(KEEP_21E)) {
+      it(`${modeName}: a client with ${clientName} sends the access token it was given after its own sign-in, as (21e) says [FIX-W53-SDK AC1]`, async () => {
+        const fake = createFakeFetch([
+          { body: { session: opened(1), customer: { id: "cus_a" } } },
+          { body: { customer: "a" } },
+        ]);
+        const onSessionRefreshed = vi.fn();
+        const store = { signedIn: false };
+        const client = createVelexisClient({
+          ...key,
+          fetch: fake.fetch,
+          ...tokensOf(store),
+          onSessionRefreshed,
+        });
+
+        await client.auth.signIn({ email: "visitor@example.com", password: "Visitor-password-1" });
+        store.signedIn = true;
+        await client.account.get();
+
+        expect(fake.lastRequest?.headers["authorization"]).toBe(`Bearer ${GIVEN}`);
+        // The new tokens reach the integrator, who stores them for the token sources.
+        expect(onSessionRefreshed).toHaveBeenCalledExactlyOnceWith(opened(1));
+      });
+    }
+
+    it(`${modeName}: a client with a string access token and a string refresh token sends the new session's access token together with its refresh token, which it took [FIX-W53-SDK AC1]`, async () => {
+      const fake = createFakeFetch([
+        { body: { session: opened(1), customer: { id: "cus_a" } } },
+        { body: { customer: "a" } },
+        { body: { customer: "a" } },
+      ]);
+      const client = createVelexisClient({
+        ...key,
+        fetch: fake.fetch,
+        accessToken: GIVEN,
+        refreshToken: "rt_w53_0",
+      });
+
+      await client.auth.signIn({ email: "visitor@example.com", password: "Visitor-password-1" });
+      await client.account.get();
+      await client.withOptions({ locale: "es-ES" }).account.get();
+
+      expect(fake.requests.slice(1).map((request) => request.headers["authorization"])).toEqual([
+        "Bearer at_w53_1",
+        "Bearer at_w53_1",
+      ]);
+    });
+  }
+
+  it("never gives another client of the family that holds the old access token alone the session result of the client that signed in: neither one derived from the root with it nor one derived from that client before its sign-in [FIX-W53-SDK AC1]", async () => {
+    const fake = createFakeFetch([
+      { body: { session: opened(1), customer: { id: "cus_a" } } },
+      { body: { customer: "a" } },
+      { body: { customer: "a" } },
+      { body: { customer: "a" } },
+    ]);
+    const root = createVelexisClient({ publishableKey: PK, fetch: fake.fetch });
+    const signedIn = root.withOptions({ accessToken: GIVEN });
+    // Derived from the root with the same old access token, and from the signing-in client before its sign-in: both
+    // hold the old access token only, as their own strings.
+    const sibling = root.withOptions({ accessToken: GIVEN });
+    const child = signedIn.withOptions({ currency: "EUR" });
+
+    await signedIn.auth.signIn({ email: "visitor@example.com", password: "Visitor-password-1" });
+    await sibling.account.get();
+    await child.account.get();
+    await signedIn.account.get();
+
+    expect(fake.requests.slice(1).map((request) => request.headers["authorization"])).toEqual([
+      `Bearer ${GIVEN}`,
+      `Bearer ${GIVEN}`,
+      "Bearer at_w53_1",
+    ]);
+  });
+});
+
+describe("token and server mode: a clock set back by at most 10 s keeps a rotation inside the window", () => {
+  for (const [modeName, key] of Object.entries(MODES)) {
+    for (const [lateName, makeLate] of Object.entries(LATE)) {
+      it(`${modeName}, ${lateName}: with the clock set back 5 s right after the rotation, takes the newest tokens without presenting it [FIX-W53-SDK AC2]`, async () => {
+        vi.useFakeTimers();
+        const api = rotatingApi();
+        const fake = createFakeFetch(api.answers(8));
+        const { refresh, late, expired } = makeLate({ key, fetch: fake.fetch });
+        await expect(refresh()).resolves.toEqual({ customer: "a" });
+        // The fake clock stood still during the refresh: now is the rotation's time. The rotation's age becomes -5 s.
+        vi.setSystemTime(Date.now() - 5_000);
+
+        await expect(late()).resolves.toEqual({ customer: "a" });
+
+        expect(api.presented).toEqual([A0.refreshToken]);
+        expect(fake.lastRequest?.headers["authorization"]).toBe("Bearer at_w52_a_1");
+        expect(expired).not.toHaveBeenCalled();
+        expect(api.revoked("a")).toBe(false);
+      });
+
+      it(`${modeName}, ${lateName}: with the clock set back 15 s right after the rotation, presents it as it is and gets REFRESH_TOKEN_REUSED [FIX-W53-SDK AC2]`, async () => {
+        vi.useFakeTimers();
+        const api = rotatingApi();
+        const fake = createFakeFetch(api.answers(8));
+        const { refresh, late, expired } = makeLate({ key, fetch: fake.fetch });
+        await expect(refresh()).resolves.toEqual({ customer: "a" });
+        vi.setSystemTime(Date.now() - 15_000);
+        const sentBefore = fake.requests.length;
+
+        const error = await late().catch((caught) => caught);
+
+        expect(error).toBeInstanceOf(AuthenticationError);
+        expect(error.code).toBe("REFRESH_TOKEN_REUSED");
+        expect(expired).toHaveBeenCalledTimes(1);
+        expect(
+          fake.requests.slice(sentBefore).map((request) => request.headers["authorization"] ?? request.json),
+        ).toEqual([`Bearer ${A0.accessToken}`, { refreshToken: A0.refreshToken }]);
+        expect(api.presented).toEqual([A0.refreshToken, A0.refreshToken]);
+        expect(api.revoked("a")).toBe(true);
+      });
+    }
+
+    it(`${modeName}: token functions that still give the tokens a sign-in replaced get the new session's with the clock set back 5 s, and their own value with it set back 15 s [FIX-W53-SDK AC2]`, async () => {
+      vi.useFakeTimers();
+      const signedIn = { accessToken: "at_w53_signed_in", refreshToken: "rt_w53_signed_in" };
+      const fake = createFakeFetch([
+        { body: { session: signedIn, customer: { id: "cus_a" } } },
+        { body: {} },
+        { body: {} },
+      ]);
+      const client = createVelexisClient({
+        ...key,
+        fetch: fake.fetch,
+        accessToken: () => A0.accessToken,
+        refreshToken: () => A0.refreshToken,
+      });
+      await client.auth.signIn({ email: "visitor@example.com", password: "Visitor-password-1" });
+      const signedInAt = Date.now();
+
+      vi.setSystemTime(signedInAt - 5_000);
+      await client.account.get();
+      vi.setSystemTime(signedInAt - 15_000);
+      await client.account.get();
+
+      expect(fake.requests.slice(1).map((request) => request.headers["authorization"])).toEqual([
+        `Bearer ${signedIn.accessToken}`,
+        `Bearer ${A0.accessToken}`,
+      ]);
+    });
+  }
+
+  it("keeps a rotation inside the window with the clock set back 10 000 ms and not 1 ms more: ROTATION_WINDOW_MS bounds both sides [FIX-W53-SDK AC2]", async () => {
+    vi.useFakeTimers();
+    const api = rotatingApi();
+    const fake = createFakeFetch(api.answers(8));
+    const root = createVelexisClient({ publishableKey: PK, fetch: fake.fetch });
+    await root.withOptions({ ...A0 }).account.get();
+    const rotatedAt = Date.now();
+
+    vi.setSystemTime(rotatedAt - ROTATION_WINDOW_MS);
+    await expect(root.withOptions({ ...A0 }).account.get()).resolves.toEqual({ customer: "a" });
+    vi.setSystemTime(rotatedAt - ROTATION_WINDOW_MS - 1);
+    const error = await root
+      .withOptions({ ...A0 })
+      .account.get()
+      .catch((caught) => caught);
+
+    expect(error).toMatchObject({ code: "REFRESH_TOKEN_REUSED" });
+    expect(api.presented).toEqual([A0.refreshToken, A0.refreshToken]);
+  });
+});
+
+describe("token and server mode: a call that joins a shared refresh holds its new refresh token from that moment", () => {
+  for (const [modeName, key] of Object.entries(MODES)) {
+    it(`${modeName}: the clients of a refresh whose hook still ran while another holder rotated the brand-new refresh token follow that rotation 19 s later and an hour later (wave 52's N14 case) [FIX-W53-SDK AC3]`, async () => {
+      vi.useFakeTimers();
+      const api = rotatingApi();
+      const [answer] = api.answers(1);
+      /** Every refresh answers 50 ms late, so a second client's refusal arrives while the first's refresh is in flight. */
+      /** @type {import("../helpers/fake-fetch.js").Answer} */
+      const slowRefresh = async (request) => {
+        const response = /** @type {import("../helpers/fake-fetch.js").CannedResponse} */ (
+          await /** @type {NonNullable<typeof answer>} */ (answer)(request)
+        );
+        return request.path === "/v1/auth/refresh" ? { ...response, delayMs: 50 } : response;
+      };
+      const fake = createFakeFetch(Array.from({ length: 16 }, () => slowRefresh));
+      const root = createVelexisClient({ ...key, fetch: fake.fetch });
+      // The starting client stores the new tokens slowly: its hook takes 20 s. The waiter is derived from it before
+      // the refresh (it holds the same string; only the starting client's hook runs).
+      const slowHook = vi.fn(() => new Promise((resolve) => setTimeout(resolve, 20_000)));
+      const starter = root.withOptions({ ...A0, onSessionRefreshed: slowHook });
+      const waiter = starter.withOptions({ currency: "EUR" });
+      // Another client of the family made with visitor a's first tokens before the refresh: it holds them too.
+      const other = root.withOptions({ ...A0 });
+
+      const both = Promise.all([
+        starter.account.get().catch((caught) => caught),
+        waiter.account.get().catch((caught) => caught),
+      ]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      // 1 s later the starter's hook still runs. The session's new access token expires, and the other client follows
+      // the rotation and refreshes the brand-new refresh token, rt_w52_a_1.
+      api.expire("a");
+      const fromOther = other.account.get();
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(fromOther).resolves.toEqual({ customer: "a" });
+      // The hook ends 20 s after the first rotation, 19 s after the second: outside its window.
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(await both).toEqual([{ customer: "a" }, { customer: "a" }]);
+      expect(fake.requests.slice(-2).map((request) => request.headers["authorization"])).toEqual([
+        "Bearer at_w52_a_2",
+        "Bearer at_w52_a_2",
+      ]);
+      // An hour later the newest access token expires: the waiter presents the newest refresh token, never rt_w52_a_1
+      // (its refresh runs the hook it took from the starter, 20 s again).
+      vi.advanceTimersByTime(3_600_000);
+      api.expire("a");
+      const later = waiter.account.get().catch((caught) => caught);
+      await vi.advanceTimersByTimeAsync(20_100);
+
+      expect(await later).toEqual({ customer: "a" });
+      expect(api.presented).toEqual([A0.refreshToken, "rt_w52_a_1", "rt_w52_a_2"]);
+      expect(fake.lastRequest?.headers["authorization"]).toBe("Bearer at_w52_a_3");
+      expect(slowHook.mock.calls).toEqual([
+        [{ accessToken: "at_w52_a_1", refreshToken: "rt_w52_a_1" }],
+        [{ accessToken: "at_w52_a_3", refreshToken: "rt_w52_a_3" }],
+      ]);
+      expect(api.revoked("a")).toBe(false);
     });
   }
 });

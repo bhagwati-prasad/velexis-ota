@@ -42,9 +42,14 @@
 // - a client that held the value as its own string `refreshToken` before the family recorded its rotation (the string
 //   it was made or derived with, or the refresh token it took from a refresh or session result it took part in, or
 //   from an earlier rotation it followed), at any later time and along any chain of later rotations, so a client
-//   derived before a refresh, or derived with the same string before it, never presents the rotated token;
+//   derived before a refresh, or derived with the same string before it, never presents the rotated token; a call
+//   that started or joined a refresh holds its new refresh token as of the moment it did, not once the starting
+//   client's hooks have run (lead decision (22i) of 2026-11-15), so a rotation of that token by another holder while
+//   the hooks run is followed too;
 // - any client, a token function's value included, within `ROTATION_WINDOW_MS` (10 s) of the rotation, the window of
-//   the build-your-own-frontend guide's §8.2 (a late request of the same visitor that still carries the old token).
+//   the build-your-own-frontend guide's §8.2 (a late request of the same visitor that still carries the old token);
+//   a clock set back since the rotation by at most 10 s keeps it inside, by more puts it outside (lead decision (22h)
+//   of 2026-11-15), so the window spans at most 20 s of the clock's readings.
 // Any other client that presents a rotated refresh token later (a server's per-request client made with a visitor's
 // rotated cookie after the window, a token function that still gives it) sends it to the API as it is: the API's
 // reuse detection answers `401 REFRESH_TOKEN_REUSED` and revokes the session, and the SDK reports it as any refused
@@ -55,7 +60,10 @@
 // call's refresh-token source gives that session's newest refresh token, or a value that leads to it under the rules
 // above; an old access token presented with no refresh token, with another session's or with an unknown one is sent
 // as it is (the API answers `401 TOKEN_EXPIRED`), so a client whose token functions serve several visitors never
-// turns one visitor's expired access token into a valid one. Everything is keyed by the token's value, so clients with
+// turns one visitor's expired access token into a valid one. The one exception (lead decision (22g) of 2026-11-15): a
+// client given a string `accessToken` and no `refreshToken` (neither a string nor a function) sends the access token
+// of its own latest `auth.signIn`, `auth.refresh` or `auth.changePassword` result, as under SDK-008; it never
+// refreshes, and no other client's tokens reach it. Everything is keyed by the token's value, so clients with
 // different tokens (a server's per-visitor clients, or one client whose token functions give each request's visitor)
 // never share a refresh or a token. A token function's value is read before every request (the refresh token's only
 // where the access token sent depends on it) and at every refresh. Token and server mode refresh through
@@ -74,7 +82,8 @@
 // resolve with (an `AuthSessionResult` with tokens) becomes the client's session through `adopt`, as an automatic
 // refresh's result does: the tokens the client held when the result arrived and the refresh token the call presented
 // count as replaced for this client, so it sends the new tokens wherever a token source still gives a replaced one
-// (a token function within the window; an access token together with the session's refresh token, as above), and
+// (a token function within the window; an access token together with the session's refresh token, as above, or alone
+// for a client given a string access token and no refresh token), and
 // `onSessionRefreshed` gets the new tokens. A client without `accessToken` and `refreshToken` keeps nothing: it
 // never starts sending a token it was not given, so a server client shared by every visitor holds no visitor's
 // session. A call with its own credential (`options.accessToken`, or an `Authorization` header of the call or the
@@ -187,7 +196,8 @@ import { op } from "./operations.js";
  * @property {() => Readonly<VelexisClientOptions>} options the client's options, with string tokens that have been
  *   replaced (by this client, or, for the client's string refresh token, by a rotation the API made for any client of
  *   the family that this client follows, `resolveRefresh`) replaced by the current ones (what `withOptions` starts
- *   from); a string access token only together with the string refresh token of its session (`resolveAccess`)
+ *   from); a string access token only together with the string refresh token of its session (`resolveAccess`), or,
+ *   for a client without a refresh token, by the access token of its own latest session result (lead decision (22g))
  * @property {(options: Readonly<RequestOptions>) => void} checkCall throws a `TypeError` on a per-call option the mode
  *   refuses (cookie mode: tokens and credential headers)
  * @property {(request: HttpRequest) => Promise<unknown>} send sends one call with the mode's credentials, the CSRF
@@ -237,7 +247,9 @@ export const FAMILY_TOKENS_KEPT = 512;
  * tokens of its session instead, in ms, inclusive (lead decision (21d) of 2026-11-13): the 10 s for which the
  * build-your-own-frontend guide's §8.2 sample shares a refresh, for a late request of the same visitor that still
  * carries the old token. After it only a client that held the token as its own string before the rotation follows it
- * (`resolveRefresh`); any other presents it, and the API's reuse detection answers.
+ * (`resolveRefresh`); any other presents it, and the API's reuse detection answers. A clock set back since the
+ * rotation by at most this much keeps it inside the window, by more puts it outside (lead decision (22h) of
+ * 2026-11-15, `withinWindow`).
  */
 export const ROTATION_WINDOW_MS = 10_000;
 /** The paths of the operations that rotate the refresh token in their body (`auth.refresh`, `console.auth.refresh`). */
@@ -501,13 +513,15 @@ const pairOf = (session) =>
 const isToken = (value) => value !== undefined;
 
 /**
- * Whether a replacement happened at most `ROTATION_WINDOW_MS` ago. A clock that went back gives a negative age, which
- * counts as outside: the window never grows.
+ * Whether a replacement happened at most `ROTATION_WINDOW_MS` ago. A clock set back since gives a negative age, which
+ * counts as inside while it is at most `ROTATION_WINDOW_MS` and outside beyond that (lead decision (22h) of
+ * 2026-11-15): a normal clock correction never revokes a visitor's session, and the window never spans more than 20 s
+ * of the clock's readings.
  * @param {Replacement} replacement
  */
 function withinWindow(replacement) {
   const age = Date.now() - replacement.at;
-  return age >= 0 && age <= ROTATION_WINDOW_MS;
+  return age >= -ROTATION_WINDOW_MS && age <= ROTATION_WINDOW_MS;
 }
 
 /**
@@ -592,11 +606,20 @@ export function createSession(options, transport, family) {
   let latest;
   /**
    * The family's count of rotations (`Replacements.count`) when this client began to hold the refresh token it holds
-   * as its own string: `latest.refreshToken` since the client took it, else the configured string since the client was
-   * made or derived. A rotation of that value recorded later (a greater `seq`) is followed at any time
-   * (`resolveRefresh`).
+   * as its own string: `latest.refreshToken` since the client took it (from a refresh its call started or joined,
+   * since the call joined it: lead decision (22i) of 2026-11-15), else the configured string since the client was made
+   * or derived. A rotation of that value recorded later (a greater `seq`) is followed at any time (`resolveRefresh`).
    */
   let heldSince = family.replaced.count();
+  /**
+   * Whether the client was given a string access token and no refresh token (neither a string nor a function): the
+   * one client whose own session results (`adopt`) replace its access token without a refresh token (lead decision
+   * (22g) of 2026-11-15, as under SDK-008; `resolveAccess`). It never refreshes, and no other client reaches its
+   * tokens.
+   */
+  const accessOnly =
+    typeof options.accessToken === "string" &&
+    (options.refreshToken === undefined || options.refreshToken === null);
   /**
    * The tokens that replaced token values of this client's own: the access and refresh tokens its calls sent before a
    * refresh they took part in, and those a session result replaced (see `adopt`). Per client, so the access tokens in
@@ -607,14 +630,17 @@ export function createSession(options, transport, family) {
   /**
    * Makes tokens this client's newest: from a refresh it started or joined, a session result, or a rotation of the
    * family it follows (`resolveRefresh`). The values the client's call sent (`replaced`) lead to them from now on, for
-   * this client only, and the client holds their refresh token from now on.
+   * this client only, and the client holds their refresh token from now on (or, for a refresh its call started or
+   * joined, from when it did: `since`).
    * @param {Tokens} tokens
    * @param {(string | undefined)[]} replaced
+   * @param {number} [since] the family's count of rotations as of which the client holds their refresh token
+   *   (`heldSince`): now by default; the count when the call joined the refresh that gave them (`refreshTokens`)
    */
-  function take(tokens, replaced) {
+  function take(tokens, replaced, since = family.replaced.count()) {
     own.record(replaced, tokens);
     latest = pairOf(tokens);
-    heldSince = family.replaced.count();
+    heldSince = since;
   }
 
   /**
@@ -665,14 +691,16 @@ export function createSession(options, transport, family) {
    * the value in (`latest` for its string `accessToken`, else its own record), followed to that session's newest
    * tokens, only when `refreshToken` is that session's newest refresh token; else the value as it is. So an old access
    * token never leads to newer tokens without the same session's refresh token: alone, with another session's refresh
-   * token or with an unknown one it is sent as it is.
+   * token or with an unknown one it is sent as it is. The one exception (lead decision (22g) of 2026-11-15): a client
+   * given a string access token and no refresh token (`accessOnly`) sends the access token of its own latest session
+   * result (`latest`, which only `adopt` sets for it) instead of the configured string, as under SDK-008.
    * @param {string | undefined} value what the source gave
    * @param {string | undefined} refreshToken the refresh token the call presents
    * @returns {string | undefined}
    */
   function resolveAccess(value, refreshToken) {
     if (value === undefined || refreshToken === undefined) {
-      return value;
+      return accessOnly && value === options.accessToken ? (latest?.accessToken ?? value) : value;
     }
     const replacement = (value === options.accessToken ? latest : undefined) ?? own.get(value)?.tokens;
     if (replacement === undefined) {
@@ -975,8 +1003,12 @@ export function createSession(options, transport, family) {
       take(newer, [attempt.accessToken, refreshValue]);
       return true;
     }
+    // The call holds the new refresh token as of now, when it joins or starts the refresh, not once the starting
+    // client's hooks have run: a rotation of that token by another holder in the meantime is followed at any later
+    // time (lead decision (22i) of 2026-11-15).
+    const joined = family.replaced.count();
     const flight = family.refreshing.get(held) ?? startRefresh(request, held);
-    take(await untilSettled(flight, request), [attempt.accessToken, refreshValue, held]);
+    take(await untilSettled(flight, request), [attempt.accessToken, refreshValue, held], joined);
     return true;
   }
 
