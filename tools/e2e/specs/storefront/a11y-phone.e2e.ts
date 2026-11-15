@@ -25,9 +25,10 @@
 //      open at 800 and 1023 px; from lg (1024 and 1280 px) the signed-in links in the navigation's row, which does
 //      not wrap; and (FIX-W52-OTA, lead decision (21h) of 2026-11-13) the contract's longest first name (60
 //      characters) at 1024 and 1100 px for both storefronts: the greeting cut with an ellipsis at its cap (12rem),
-//      whole in the DOM, the accessibility tree and its title, the row not wrapping when the session answers (nothing
-//      moves up or down; the wider navigation moves along its line, as from lg before, and since lead decision (22e)
-//      of 2026-11-15 the session's whole shift stays at or below 0.01), axe.
+//      whole in the DOM, the accessibility tree and its title, the row not wrapping when the session answers, axe.
+//      From lg both hold the bar of lead decision (22e) of 2026-11-15 (OFE-032's own test since lead decision (23e)
+//      of 2026-11-15): when the session answers nothing moves up or down (the wider navigation moves along its line,
+//      as from lg before) and the session's whole shift stays at or below 0.01.
 //
 // What the stack cannot answer on demand is answered in the browser (`page.route`), and only that: the shared states
 // of `storefront.get` (the API's error envelope) and, for parts 3 and 6, storefront.get's own answer with the OTA's
@@ -905,6 +906,32 @@ const AXE_WIDTHS: readonly number[] = Object.freeze([800, 1023]);
 /** From lg: the signed-in links in the navigation's row, as they have always been. */
 const FROM_LG_WIDTHS = Object.freeze([1024, 1280]);
 /**
+ * The most the session's answer may move home from lg, every shift counted (lead decision (22e) of 2026-11-15): the
+ * navigation grows to the left when "Sign in" becomes the greeting, "My account" and "Sign out", moving its other
+ * links (and the currency selector) along the line, 0.0024 to 0.0048 with a 23-character first name (OFE-032) and
+ * 0.0025 to 0.0050 with the longest (storefront-accessibility.md §3.8). The decision accepts that sideways shift, as
+ * OFE-032 did, and reserves no width for the signed-in links; the row never wraps and nothing moves up or down.
+ */
+const SESSION_SHIFT_FROM_LG_MAX = 0.01;
+
+/**
+ * The bar of lead decision (22e) from lg for `signedIn`, the shifts of the session's answer (`homeWithLateSession`):
+ * no shift moved anything up or down (the wider navigation only moves along its line), and the session's whole shift,
+ * every shift counted (a font's swap included), is at most SESSION_SHIFT_FROM_LG_MAX. Part 6's tests from lg check it
+ * beside their no-wrap checks: OFE-032's own (lead decision (23e) of 2026-11-15) and its FIX-W52-OTA sibling.
+ */
+function expectAlongTheLineFromLg(signedIn: readonly RecordedShift[], width: number): void {
+  expect(
+    signedIn.filter((shift) => shift.vertical),
+    `${width} px: shifts up or down when the session answered`,
+  ).toEqual([]);
+  expect(
+    scoreOf(signedIn),
+    `${width} px: the session's shift, every shift counted (lead decision (22e))`,
+  ).toBeLessThanOrEqual(SESSION_SHIFT_FROM_LG_MAX);
+}
+
+/**
  * A first name of 23 characters: with it the signed-in links wrapped the navigation's row when the session answered
  * at 768 px, and up to 850 px with a long OTA name and two currencies, before OFE-032 (storefront-accessibility.md
  * §3.8).
@@ -1072,11 +1099,11 @@ test.describe("a signed-in customer with a long first name, from md to the large
       }
     });
 
-    test(`home on ${storefront.label} at 1024 and 1280 px: the signed-in links in the navigation's row as before, which does not wrap when the session answers [OFE-032 AC2]`, async () => {
+    test(`home on ${storefront.label} at 1024 and 1280 px: the signed-in links in the navigation's row as before; when the session answers the row does not wrap and home moves along the line by at most 0.01 [OFE-032 AC2] [FIX-W54-OTA AC1]`, async () => {
       const { page, guards } = customers.get(storefront.fullest) as Browsing;
       const parts = header(page);
       for (const width of FROM_LG_WIDTHS) {
-        const { painted, configured, before, after } = await homeWithLateSession(page, width);
+        const { painted, configured, signedIn, before, after } = await homeWithLateSession(page, width);
         // No compact menu: its button is there but not shown, and the greeting, "My account" and "Sign out" are in
         // the row.
         const toggle = page.locator("body > header [data-account-menu-toggle]");
@@ -1088,10 +1115,12 @@ test.describe("a signed-in customer with a long first name, from md to the large
         // One row: every link's middle within the navigation, which kept its one line's height.
         expectOneRow(await navigationRow(page), width);
         // The row does not wrap when the session answers: the header and the navigation keep their height and main
-        // its start (the wider navigation only moves sideways, as before OFE-032); nothing moved before it either.
+        // its start, and nothing moves up or down; the wider navigation only moves along its line, as before OFE-032,
+        // by at most SESSION_SHIFT_FROM_LG_MAX in all (lead decision (23e)); nothing moved before it either.
         expect(after, `${width} px: the header's and the navigation's height, where main starts`).toEqual(
           before,
         );
+        expectAlongTheLineFromLg(signedIn, width);
         expect(
           scoreOf([...withoutFontSwaps(painted), ...withoutFontSwaps(configured)]),
           `${width} px: shifts before the session answered, but the font's swap`,
@@ -1114,14 +1143,6 @@ const LONGEST_FIRST_NAME = "Maximiliana-Alexandrina Wilhelmina Konstantinopoulou
 const CAP_WIDTHS = Object.freeze([1024, 1100]);
 /** The greeting's cap from lg, in CSS pixels: 12rem (`lg:max-w-48` of lib/session.js `GREETING_CAP_CLASSES`). */
 const GREETING_CAP_PX = 192;
-/**
- * The most the session's answer may move home from lg, every shift counted (lead decision (22e) of 2026-11-15): the
- * navigation grows to the left when "Sign in" becomes the greeting, "My account" and "Sign out", moving its other
- * links (and the currency selector) along the line, 0.0025 to 0.0050 with the longest first name
- * (storefront-accessibility.md §3.8). The decision accepts that sideways shift, as OFE-032 did, and reserves no width
- * for the signed-in links; the row never wraps and nothing moves up or down (the checks beside this bound).
- */
-const SESSION_SHIFT_FROM_LG_MAX = 0.01;
 
 test.describe("a signed-in customer with the longest first name, from the large breakpoint (FIX-W52-OTA)", () => {
   test.describe.configure({ mode: "serial" });
@@ -1189,14 +1210,7 @@ test.describe("a signed-in customer with the longest first name, from the large 
         expect(after, `${width} px: the header's and the navigation's height, where main starts`).toEqual(
           before,
         );
-        expect(
-          signedIn.filter((shift) => shift.vertical),
-          `${width} px: shifts up or down when the session answered`,
-        ).toEqual([]);
-        expect(
-          scoreOf(signedIn),
-          `${width} px: the session's shift, every shift counted (lead decision (22e))`,
-        ).toBeLessThanOrEqual(SESSION_SHIFT_FROM_LG_MAX);
+        expectAlongTheLineFromLg(signedIn, width);
         expect(
           scoreOf([...withoutFontSwaps(painted), ...withoutFontSwaps(configured)]),
           `${width} px: shifts before the session answered, but the font's swap`,
