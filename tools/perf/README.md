@@ -18,6 +18,19 @@ node --test tools/perf/*.test.mjs        # plain Node 22, no running API, about 
 
 `platform-smoke.test.mjs` imports the helpers that `platform-smoke.mjs` exports (the options and their usage errors, `accountsNeeded` and `phaseRequests`, `percentile`, the error keys, the verdicts and `problemsOf`, `table`, `publicOptions`) and checks them without a network: the 33 accounts of the defaults and the 8 of `--duration 10`, nearest-rank percentiles, a remote `--base` refused, and the BFF key in neither an error nor the JSON options. Importing the script measures nothing: it runs only when Node runs the file itself.
 
+## The units' heap flags
+
+`unit-node-options.mjs` (X-050, [ADR-0029](../../docs/mvp/adr/0029-nodejs-24-runtime.md) item 5) reads a systemd unit file's `NODE_OPTIONS` as systemd reads it: each `Environment=` line of `[Service]` split into words at unquoted whitespace, quotes removed, a word that is no `NAME=value` assignment ignored, the last assignment winning and an empty `Environment=` resetting the list. It returns the flags, and prints them on one line when Node runs it with a unit file:
+
+```bash
+node tools/perf/unit-node-options.mjs deploy/systemd/velexis-platform-api.service
+# --max-old-space-size=640 --max-semi-space-size=16
+```
+
+It refuses, with the file and the line (exit 1), a unit without `NODE_OPTIONS` and an `Environment=` word that systemd would ignore: unquoted, `Environment=NODE_OPTIONS=--max-old-space-size=640 --max-semi-space-size=16` gives systemd the assignment `NODE_OPTIONS=--max-old-space-size=640` and the word `--max-semi-space-size=16`, which it drops with only a warning in the journal. So every app unit writes its flags as one quoted assignment, `Environment="NODE_OPTIONS=--max-old-space-size=<MiB> --max-semi-space-size=<MiB>"`. The OTA load tests ([`ota/backend/test/load/`](../../ota/backend/test/load/README.md)) and step 4 below start their processes with these flags instead of copies.
+
+`unit-node-options.test.mjs` checks the seven app units: each `NODE_OPTIONS` is one quoted assignment, alone on one physical line as the units smoke test reads it (no indentation, no continued line), that sets `--max-old-space-size` and `--max-semi-space-size` (0 counts as unset, as V8 reads it) to the values of [`deployment-single-vm.md`](../../docs/mvp/deployment-single-vm.md) §14, V8's heap limit with them, old + 3 × semi MiB, is below the unit's `MemoryMax`, and the Node that runs the test reports exactly that heap limit for each unit's flags. A scratch unit whose line is unquoted fails with its file and line. Under systemd itself, the units smoke test checks the same in each real unit ([`deploy/systemd/test/units-smoke.sh`](../../deploy/systemd/test/units-smoke.sh), step 5).
+
 ## Run it
 
 You need the local setup of [`docs/mvp/local-development.md`](../../docs/mvp/local-development.md) §2: PostgreSQL 16 with the roles of `dev-setup.sh` (`velexis_test_admin` among them), `redis-server` and Mailpit. No other test suite may run on the machine during a run you record. The end-to-end stack uses the same ports (3100 and 3101), and the CPU is what the test measures.
@@ -70,17 +83,19 @@ EOF
 
 `SMTP_URL` is Mailpit's SMTP port, because the set-up reads the verification e-mails from Mailpit. The Amadeus lines are the official hosts, the only ones `APP_ENV=production` accepts; the run calls neither. `DNS_RESOLVERS` is a loopback port where nothing answers, so no lookup leaves the machine.
 
-**4. The worker and the API, as their systemd units start them.** The units are [`deploy/systemd/velexis-platform-worker.service`](../../deploy/systemd/velexis-platform-worker.service) and [`velexis-platform-api.service`](../../deploy/systemd/velexis-platform-api.service). Each gets a clean environment, `NODE_ENV=production`, its `--max-old-space-size` and `--enable-source-maps`. The ports are the units' defaults: 3100 for the API and 3101 for the worker's health server.
+**4. The worker and the API, as their systemd units start them.** The units are [`deploy/systemd/velexis-platform-worker.service`](../../deploy/systemd/velexis-platform-worker.service) and [`velexis-platform-api.service`](../../deploy/systemd/velexis-platform-api.service). Each gets a clean environment, `NODE_ENV=production`, the `NODE_OPTIONS` of its unit (its old and young generation, read from the unit file with [`unit-node-options.mjs`](#the-units-heap-flags), never copied) and `--enable-source-maps`. The ports are the units' defaults: 3100 for the API and 3101 for the worker's health server.
 
 ```bash
-start() {   # <entry> <max-old-space-size MB> <log file>; prints the pid
-  nohup env -i PATH="$PATH" HOME="$HOME" NODE_ENV=production NODE_OPTIONS="--max-old-space-size=$2" \
+start() {   # <entry> <systemd unit> <log file>; prints the pid
+  local flags
+  flags=$(node tools/perf/unit-node-options.mjs "deploy/systemd/$2.service") || return 1
+  nohup env -i PATH="$PATH" HOME="$HOME" NODE_ENV=production NODE_OPTIONS="$flags" \
     bash -c 'cd platform/backend && set -a && . "$0" && set +a && exec node --enable-source-maps "$1"' \
     "$ENV_FILE" "$1" > "$3" 2>&1 < /dev/null &
   echo $!
 }
-WORKER_PID=$(start dist/worker.js 400 /tmp/platform-worker.log)
-API_PID=$(start dist/main.js 640 /tmp/platform-api.log)
+WORKER_PID=$(start dist/worker.js velexis-platform-worker /tmp/platform-worker.log)
+API_PID=$(start dist/main.js velexis-platform-api /tmp/platform-api.log)
 until curl -fsS -o /dev/null http://127.0.0.1:3100/health/ready \
   && curl -fsS -o /dev/null http://127.0.0.1:3101/health/ready; do sleep 1; done
 ```

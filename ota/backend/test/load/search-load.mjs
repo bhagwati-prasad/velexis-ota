@@ -26,12 +26,13 @@
 //      ota/docs/performance.md §5), so `--offers 250` gives answers of 150 offers at a storefront without its own
 //      `maxResults`, which is every tenant of the run;
 //   3. the built API (`ota/backend/dist/main.js`) in a child process on a free port, started as the VM starts it
-//      (APP_ENV and NODE_ENV production, `--enable-source-maps`, `--max-old-space-size=640 --max-semi-space-size=32`,
-//      the NODE_OPTIONS of deploy/systemd/velexis-ota-api.service; --app-env test turns on the development checks such
-//      as the search_path leak guard), with random key files, edge secret and service key of its own, Redis database
-//      --redis-db, and a preload (written into the run's temporary folder) that measures without changing anything:
-//      the INSERT and UPDATE statements of the shopping tables, the waits for a connection of the API's pool, the RSS,
-//      the event-loop delay and the API process's CPU time;
+//      (APP_ENV and NODE_ENV production, `--enable-source-maps` and the flags of the NODE_OPTIONS of
+//      deploy/systemd/velexis-ota-api.service, read from the unit file by tools/perf/unit-node-options.mjs since
+//      X-050; --app-env test turns on the development checks such as the search_path leak guard), with random key
+//      files, edge secret and service key of its own, Redis database --redis-db, and a preload (written into the
+//      run's temporary folder) that measures without changing anything: the INSERT and UPDATE statements of the
+//      shopping tables, the waits for a connection of the API's pool, the RSS, the event-loop delay and the API
+//      process's CPU time;
 //   4. --warmup journeys per visitor at the measured concurrency and at every tenant (not counted, so the API's pool
 //      has its connections and the code is compiled; then a pause for the buckets to refill), then --visitors concurrent visitors run
 //      --searches journeys in all. A journey is one storefront visitor with an address of their own (X-Forwarded-For in 198.18.0.0/15, the
@@ -80,6 +81,8 @@ import { performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs, parseEnv } from "node:util";
+
+import { unitNodeOptions } from "../../../../tools/perf/unit-node-options.mjs";
 
 const SCRIPT = fileURLToPath(import.meta.url);
 /** ota/backend (this file is ota/backend/test/load/search-load.mjs). */
@@ -988,10 +991,11 @@ export async function startService(run, { name, entry, nodeOptions, env, pool, b
 }
 
 /**
- * The NODE_OPTIONS of deploy/systemd/velexis-ota-api.service: the young generation of 32 MiB per semi-space is lead
- * decision (11h) of 2026-11-06 (ota/docs/performance.md §4).
+ * The OTA API's systemd unit. The API starts with the flags of its NODE_OPTIONS, read from the file (X-050): the heap
+ * of the VM, with the young generation of 32 MiB per semi-space of lead decision (11h) of 2026-11-06
+ * (ota/docs/performance.md §4) and ADR-0029 item 5.
  */
-export const API_NODE_OPTIONS = Object.freeze(["--max-old-space-size=640", "--max-semi-space-size=32"]);
+export const API_UNIT = join(REPO_ROOT, "deploy", "systemd", "velexis-ota-api.service");
 
 /** Starts the built API with the preload; resolves once GET /health/ready answers 200. */
 export async function startApi(options, run) {
@@ -999,7 +1003,7 @@ export async function startApi(options, run) {
   const service = await startService(run, {
     name: "api",
     entry: "main.js",
-    nodeOptions: API_NODE_OPTIONS,
+    nodeOptions: unitNodeOptions(API_UNIT),
     env: apiEnv(options, run),
     pool: API_POOL,
     readyUrl: `${url}/health/ready`,

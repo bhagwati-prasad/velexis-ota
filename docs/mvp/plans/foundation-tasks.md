@@ -810,7 +810,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 - **Verify:** `node --test tools/ci/*.test.mjs && shellcheck -S style deploy/scripts/provision-vm.sh deploy/scripts/check-vm.sh deploy/scripts/test/check-vm.test.sh && sudo env PATH="$PATH" bash deploy/scripts/test/check-vm.test.sh && pnpm exec turbo run build --dry=json | grep -q '"\.nvmrc"'`
 
 ### X-050 · Pin every app unit's young generation and prove its heap limit under systemd
-- **Status:** todo
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: AC2, the heap and constrained-memory checks of CI's `systemd-units` job on the pushed integration branch, which this machine cannot run without systemd as PID 1)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-001

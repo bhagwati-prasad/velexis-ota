@@ -25,9 +25,10 @@
 //      for it) for every --timeout-every-th, else the stub's normal answer (an issued order);
 //   3. an SMTP sink in a child process that takes every e-mail and keeps only its count and size;
 //   4. the built API and the built worker, each started as its systemd unit starts it (APP_ENV and NODE_ENV production,
-//      `--enable-source-maps`; the API with `--max-old-space-size=640 --max-semi-space-size=32`, the worker with
-//      `--max-old-space-size=400`) with search-load.mjs's measuring preload; the worker's copy also times every BullMQ
-//      job: how long it waited from due to its first attempt, and how long each attempt ran;
+//      `--enable-source-maps` and the flags of the NODE_OPTIONS of deploy/systemd/velexis-ota-api.service and
+//      velexis-ota-worker.service, read from the unit files by tools/perf/unit-node-options.mjs since X-050) with
+//      search-load.mjs's measuring preload; the worker's copy also times every BullMQ job: how long it waited from due
+//      to its first attempt, and how long each attempt ran;
 //   5. a warm-up per tenant (one journey of each kind), then --minutes of mixed traffic at fixed rates (an open model:
 //      a journey starts at its time whatever the others do, at most --max-in-flight at once), the tenants in turn:
 //        - shoppers (--shoppers-per-minute): `flights.search`, `flights.listResults` (first page of 20) and
@@ -73,6 +74,8 @@ import { join, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+
+import { unitNodeOptions } from "../../../../tools/perf/unit-node-options.mjs";
 import {
   apiEnv,
   ask,
@@ -94,6 +97,7 @@ import {
   out,
   pauseFor,
   PRICE_INCLUDE,
+  REPO_ROOT,
   RESULTS_LIMIT,
   round1,
   rounded,
@@ -125,8 +129,8 @@ const MAIL_ROLE = "mail";
 /** The worker's pool (OTA_POOL_MAX of src/tenancy/tenancy.module.ts) and the API's, by `application_name`. */
 const WORKER_POOL = "ota-worker";
 const POOL_MAX = Object.freeze({ "ota-api": 20, "ota-worker": 10 });
-/** NODE_OPTIONS of deploy/systemd/velexis-ota-worker.service. */
-const WORKER_NODE_OPTIONS = Object.freeze(["--max-old-space-size=400"]);
+/** The OTA worker's systemd unit: the worker starts with the flags of its NODE_OPTIONS, read from the file (X-050). */
+const WORKER_UNIT = join(REPO_ROOT, "deploy", "systemd", "velexis-ota-worker.service");
 /** `MemoryMax` of the units (deploy/systemd), in bytes: docs/mvp/architecture.md §3. */
 const MEMORY_MAX = Object.freeze({ api: 768 * 1_048_576, worker: 512 * 1_048_576 });
 /** The VM's PostgreSQL `max_connections` and Redis `maxmemory` (docs/mvp/deployment-single-vm.md §5). */
@@ -2126,7 +2130,7 @@ async function run(options) {
     const worker = await startService(run, {
       name: "worker",
       entry: "worker.js",
-      nodeOptions: WORKER_NODE_OPTIONS,
+      nodeOptions: unitNodeOptions(WORKER_UNIT),
       env: workerEnv(options, run),
       pool: WORKER_POOL,
       bullmq: true,

@@ -23,7 +23,9 @@ Environment=NODE_ENV=production
 Environment=PORT=3002
 Environment=HOSTNAME=127.0.0.1
 Environment=NEXT_TELEMETRY_DISABLED=1
-Environment=NODE_OPTIONS=--max-old-space-size=384
+# V8's heap: old generation 384 MiB, young generation pinned at 1 MiB per semi-space (ADR-0029 item 5), heap
+# limit 384 + 3 x 1 = 387 MiB. One quoted assignment: unquoted, systemd drops the second flag silently.
+Environment="NODE_OPTIONS=--max-old-space-size=384 --max-semi-space-size=1"
 ExecStart=/usr/bin/node ota/admin/server.js
 Restart=always
 RestartSec=3

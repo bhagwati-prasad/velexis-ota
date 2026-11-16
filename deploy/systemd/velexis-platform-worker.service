@@ -22,7 +22,9 @@ EnvironmentFile=/etc/velexis/platform-backend.env
 EnvironmentFile=-/etc/velexis/platform-worker.env
 Environment=NODE_ENV=production
 Environment=HEALTH_PORT=3101
-Environment=NODE_OPTIONS=--max-old-space-size=400
+# V8's heap: old generation 400 MiB, young generation pinned at 1 MiB per semi-space (ADR-0029 item 5), heap
+# limit 400 + 3 x 1 = 403 MiB. One quoted assignment: unquoted, systemd drops the second flag silently.
+Environment="NODE_OPTIONS=--max-old-space-size=400 --max-semi-space-size=1"
 ExecStart=/usr/bin/node --enable-source-maps dist/worker.js
 Restart=always
 RestartSec=3

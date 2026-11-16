@@ -36,7 +36,11 @@
 #      and Redis (a protocol round trip), DNS and an HTTPS host outside the VM, os.cpus() and os.networkInterfaces().
 #      It also tries the paths of SMOKE_FORBIDDEN (every env file, root's files, the other zones' keys), which must
 #      fail with EACCES ("Permission denied") or ENOENT ("No such file") (X-021). It reports the names of the
-#      variables it sees, never their values, and every unit sees every variable of its env files (X-033).
+#      variables it sees, never their values, and every unit sees every variable of its env files (X-033). It also
+#      reports V8's heap limit and Node's constrained memory: in each unit, NODE_OPTIONS is the one quoted assignment
+#      of its unit file as systemd gave it to the process, V8's heap limit is old + 3 x semi MiB of its
+#      --max-old-space-size and --max-semi-space-size (688, 736, 403 and 387), and the constrained memory is the
+#      unit's MemoryMax (X-050, ADR-0029 item 5).
 #   6. Cross-zone, from inside the units: the portal stand-in is denied the OTA API's /proc/<pid>/environ and
 #      /proc/<pid>/root/etc/velexis/keys/ota/master-v1.key (ENOENT: its ProtectProc=invisible /proc has no such
 #      process) and every env file, and the platform API stand-in cannot list the OTA key folder (X-033).
@@ -348,10 +352,15 @@ F_FORBIDDEN=("${ENV_FILES[@]}" "${ROOT_FILES[@]}" "$ETC/keys" "$ETC/keys/platfor
 # and listens only after its start-up checks. `node standin.js --probe <path>` only tries to read the path.
 STANDIN="$(cat <<'JS'
 'use strict';
-// Stand-in for a Velexis app, written by deploy/systemd/test/units-smoke.sh (X-021, X-033).
+// Stand-in for a Velexis app, written by deploy/systemd/test/units-smoke.sh (X-021, X-033, X-050).
 const fs = require('fs'), os = require('os'), net = require('net'), http = require('http');
-const https = require('https'), dns = require('dns').promises;
+const https = require('https'), dns = require('dns').promises, v8 = require('v8');
 const env = process.env, results = {};
+// V8's heap limit and the memory limit Node sees (its cgroup's memory.max under a unit), in bytes (X-050).
+const memory = {
+  heapSizeLimit: v8.getHeapStatistics().heap_size_limit,
+  constrainedMemory: typeof process.constrainedMemory === 'function' ? process.constrainedMemory() : null,
+};
 // Reads a file or lists a folder: READABLE, LISTED or the error code (EACCES, ENOENT, ...). Never the content.
 const probe = (p) => {
   try { fs.readFileSync(p); return 'READABLE'; } catch (e) { if (e.code !== 'EISDIR') return e.code || 'ERROR'; }
@@ -407,7 +416,7 @@ const checks = {
   }),
 };
 const serve = async () => {
-  console.log(JSON.stringify({ level: 30, msg: 'stand-in starting', pid: process.pid }));
+  console.log(JSON.stringify({ level: 30, msg: 'stand-in starting', pid: process.pid, memory }));
   for (const [name, check] of Object.entries(checks)) {
     try {
       results[name] = { ok: true, detail: await check() };
@@ -427,7 +436,7 @@ const serve = async () => {
     if (url.pathname === '/probe') return res.end(probe(url.searchParams.get('path') || ''));
     if (url.pathname !== '/health/ready') return res.writeHead(404).end();
     res.writeHead(ok ? 200 : 503, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok, checks: results, envNames }, null, 1));
+    res.end(JSON.stringify({ ok, checks: results, envNames, memory }, null, 1));
   }).listen(Number(env.PORT || env.HEALTH_PORT), env.HOSTNAME || '127.0.0.1');
 };
 if (process.argv[2] === '--probe') process.stdout.write(probe(process.argv[3]));
@@ -672,6 +681,62 @@ for s in "${SMOKE_UNITS[@]}"; do
   done < <(unit_values "/etc/systemd/system/$s" EnvironmentFile)
   check "$s sees all $count variables of$files [X-033 AC3]" test -z "$missing"
   [ -z "$missing" ] || echo "     missing:$missing"
+done
+
+step "Every unit's heap (ADR-0029 item 5): V8's heap limit is old + 3 x semi of its NODE_OPTIONS, Node sees MemoryMax"
+MIB=1048576
+size_bytes() { # a size of systemd (768M, 512M, 1G or bytes) -> bytes, base 1024; nothing for any other value
+  [[ "$1" =~ ^([0-9]+)([KMGT]?)$ ]] || return 0
+  local n=$((10#${BASH_REMATCH[1]}))
+  case "${BASH_REMATCH[2]}" in
+    K) n=$((n * 1024)) ;;
+    M) n=$((n * MIB)) ;;
+    G) n=$((n * 1024 * MIB)) ;;
+    T) n=$((n * 1024 * 1024 * MIB)) ;;
+  esac
+  echo "$n"
+}
+environ_value() { # pid name -> the variable's value in the process's environment (read by root), last one
+  { tr '\0' '\n' <"/proc/$1/environ" 2>/dev/null || true; } | sed -n "s/^$2=//p" | tail -n 1
+}
+flag_mib() { # flag-name flag... -> the value of the last --<flag-name>=<n> (V8 takes the last, _ as -); nothing without
+  local name="$1" value="" f
+  shift
+  for f in "$@"; do
+    case "${f//_/-}" in --"$name"=*) value="${f#*=}" ;; esac
+  done
+  case "$value" in "" | *[!0-9]*) ;; *) echo "$value" ;; esac
+}
+same() { [ -n "$1" ] && [ "$1" = "$2" ]; } # a b -> both set and equal
+for s in "${SMOKE_UNITS[@]}"; do
+  file="/etc/systemd/system/$s"
+  pid="$(systemctl show -P MainPID "$s")"
+  # The unit file's line must be one quoted assignment: unquoted, systemd drops every flag after the first.
+  line="$(sed -n '/^Environment=.*NODE_OPTIONS=/p' "$file" | tail -n 1)"
+  want=""
+  if [[ "$line" =~ ^Environment=\"NODE_OPTIONS=([^\"]*)\"$ ]]; then want="${BASH_REMATCH[1]}"; fi
+  got="$(environ_value "$pid" NODE_OPTIONS)"
+  check "$s: NODE_OPTIONS is one quoted assignment of the unit, and the process got exactly it: '$got' [X-050 AC2]" \
+    same "$want" "$got"
+  read -r -a flags <<<"$got"
+  old="$(flag_mib max-old-space-size "${flags[@]}")"
+  semi="$(flag_mib max-semi-space-size "${flags[@]}")"
+  heap="$(printf '%s' "${READY[$s]}" | json 'v.memory?.heapSizeLimit')"
+  if [ -n "$old" ] && [ -n "$semi" ]; then
+    check "$s: V8's heap limit is $heap bytes, old + 3 x semi = $((old + 3 * semi)) MiB ($old + 3 x $semi) [X-050 AC2]" \
+      same "$heap" "$(((old + 3 * semi) * MIB))"
+  else
+    absent="$([ -n "$old" ] || printf -- '--max-old-space-size ')$([ -n "$semi" ] || printf -- '--max-semi-space-size')"
+    fail "$s: NODE_OPTIONS '$got' sets no ${absent% } [X-050 AC2]"
+  fi
+  memory_max="$(unit_value "$file" MemoryMax)"
+  max_bytes="$(size_bytes "$memory_max")"
+  constrained="$(printf '%s' "${READY[$s]}" | json 'v.memory?.constrainedMemory')"
+  check "$s: systemd's MemoryMax is the unit's MemoryMax=$memory_max, $max_bytes bytes" \
+    same "$(systemctl show -P MemoryMax "$s")" "$max_bytes"
+  # If this fails, stop and report (X-050 step 5): the heap analysis of ADR-0029 assumed cgroup-based sizing.
+  check "$s: Node's constrained memory is $constrained bytes, the unit's MemoryMax=$memory_max [X-050 AC2]" \
+    same "$constrained" "$max_bytes"
 done
 
 # ---- 6. cross-zone checks from inside the units ----------------------------------------------------------------

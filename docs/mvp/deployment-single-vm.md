@@ -675,6 +675,17 @@ Rough limits for the 4 vCPU / 8 GB start. Measure in the M6 performance sanity c
 | Disk | 160 GB | Storage documents + dumps + journald | Resize disk, move documents to S3 (`STORAGE_DRIVER=s3`) |
 | New certificates | ~50 per week | Let's Encrypt rate limit | DNS-01 wildcard certificate |
 
+**Each app unit's heap** ([ADR-0029](adr/0029-nodejs-24-runtime.md) item 5, X-050). V8 sizes its young generation from the memory limit it sees (on the VM the unit's `MemoryMax`, in a load test the whole machine), and the defaults change between Node majors. So every app unit sets both generations itself, in one quoted assignment: `Environment="NODE_OPTIONS=--max-old-space-size=<MiB> --max-semi-space-size=<MiB>"`. Unquoted, systemd splits the line at the space and drops the second flag with only a warning in the journal. With both flags set, V8's heap limit is old + 3 × semi MiB, on Node 22 and 24 alike:
+
+| Units | Old generation | Young generation (per semi-space) | Heap limit | `MemoryMax` |
+|---|---|---|---|---|
+| `velexis-platform-api` | 640 MiB | 16 MiB | 688 MiB | 768M |
+| `velexis-ota-api` | 640 MiB | 32 MiB (lead decision (11h) of 2026-11-06, [`performance.md`](../../ota/docs/performance.md) §4) | 736 MiB | 768M |
+| `velexis-platform-worker`, `velexis-ota-worker` | 400 MiB | 1 MiB | 403 MiB | 512M |
+| `velexis-portal`, `velexis-platform-admin`, `velexis-ota-admin` | 384 MiB | 1 MiB | 387 MiB | 512M |
+
+Except for the OTA API's, the young generations are what Node 24 picks under each unit's `MemoryMax`; under Node 22's defaults the platform API had 4 MiB (heap limit 652 MiB). `tools/perf/unit-node-options.test.mjs` checks the unit files ([`tools/perf/README.md`](../../tools/perf/README.md#the-units-heap-flags); CI's build-test job). The units smoke test checks every real unit under systemd ([`deploy/systemd/test/units-smoke.sh`](../../deploy/systemd/test/units-smoke.sh) step 5; CI's systemd-units job): the process got the unit's `NODE_OPTIONS`, V8 reports old + 3 × semi as its heap limit, and Node's constrained memory is the unit's `MemoryMax`. The load tests start the APIs and workers with the same flags, read from the unit files. A value changes only with a measurement and a lead decision. A drop-in that sets `NODE_OPTIONS` (such as the context-loss lever of ADR-0029 item 10, `--no-async-context-frame`) replaces the unit's whole value, so it repeats both flags in the same quoted assignment.
+
 ## 15. Moving to managed PostgreSQL and Redis
 
 The apps reach PostgreSQL, Redis and every other service through configuration only ([`decisions.md`](decisions.md) §2, [ADR-0007](adr/0007-single-vm-without-docker.md)): DSNs and URLs in the env files, `STORAGE_DRIVER` for the `StorageAdapter`, and the `KeyProvider` for the master key. Two checks of task X-032 keep it so ([`tools/ci/README.md`](../../tools/ci/README.md)):
