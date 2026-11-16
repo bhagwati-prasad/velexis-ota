@@ -4,16 +4,17 @@
 // line through the generated route table (internal/operations.js), which also gives every POST its generated
 // `Idempotency-Key`; `AuthApi` in identity.js is inferred from this factory. None of them calls Amadeus.
 //
-// - Session results: `signIn`, `refresh` and `changePassword` resolve with `AuthSessionResult` (the tokens) in token and
-//   server mode and with `AuthSessionInfo` (no token fields) in cookie mode, where the session lives in httpOnly
+// - Session results: `signIn`, `refresh` and `changePassword` resolve with `AuthSessionResult` (the tokens) in token
+//   and server mode and with `AuthSessionInfo` (no token fields) in cookie mode, where the session lives in httpOnly
 //   cookies; the SDK types them as the union, the approved deviation of OADR-0006 (test/contract/deviations.ts,
 //   ota/sdk/docs/extensions.md §6). In token and server mode the result becomes the client's session
-//   (internal/session.js `adopt`): `onSessionRefreshed` gets `result.session`, and the client sends the new tokens
-//   wherever its token sources still give the replaced ones, so it never presents a rotated refresh token again
-//   (reuse revokes the family). A client without token options only reports them: a server client shared by every
-//   visitor never starts sending one visitor's token. A call with its own credential (`options.accessToken`, or an
-//   `Authorization` header of the call or the client) is not the client's session and feeds nothing. Cookie mode
-//   stores nothing.
+//   (internal/session.js `adopt`): `onSessionRefreshed` gets `result.session` (or, once another client of the family
+//   has rotated the result's refresh token, the result's session with the family's newest tokens of it, which the
+//   client keeps: FIX-W56-SDK), and the client sends the new tokens wherever its token sources still give the replaced
+//   ones, so it never presents a rotated refresh token again (reuse revokes the family). A client without token options
+//   only reports them: a server client shared by every visitor never starts sending one visitor's token. A call with
+//   its own credential (`options.accessToken`, or an `Authorization` header of the call or the client) is not the
+//   client's session and feeds nothing. Cookie mode stores nothing.
 // - Cookie mode hands page code no token, whatever a response says: `signIn`, `refresh` and `changePassword` resolve
 //   without `session.accessToken` and `session.refreshToken`, `signUp` and `resetPassword` with `session: null`
 //   (OADR-0006 point 4). `refresh` sends an empty body there (the refresh token is the `__Host-vx_rt` cookie), and a
@@ -209,13 +210,14 @@ export function createAuthApi(core) {
     resendVerification: (params, options) => core.call(op.auth_resendVerification, params, live(options)),
 
     /**
-     * Signs a customer in with e-mail and password (`rememberMe`, default true: a 30-day session, else 12 hours).
-     * Token and server mode: resolves with `AuthSessionResult` (the 15-minute access token, the rotating refresh token
-     * and the customer), which becomes the client's session: `onSessionRefreshed` gets `result.session`, and a client
-     * with token options sends the new tokens from now on. Call it from a server action or route handler and keep the
-     * tokens in httpOnly cookies. Cookie mode: resolves with `AuthSessionInfo`, without token fields (the session is in
-     * httpOnly cookies, the CSRF cookie is rotated). `POST /v1/auth/sign-in` with a generated `Idempotency-Key`; key
-     * only, anonymous.
+     * Signs a customer in with e-mail and password (`rememberMe`, default true: a 30-day session, else 12 hours). Token
+     * and server mode: resolves with `AuthSessionResult` (the 15-minute access token, the rotating refresh token and
+     * the customer), which becomes the client's session: `onSessionRefreshed` gets `result.session` (or the newest
+     * tokens of its session once another client of the family has rotated its refresh token), and a client with token
+     * options sends the new tokens from now on. Call it from a server action or route handler and keep the tokens in
+     * httpOnly cookies. Cookie mode: resolves with `AuthSessionInfo`, without token fields (the session is in httpOnly
+     * cookies, the CSRF cookie is rotated). `POST /v1/auth/sign-in` with a generated `Idempotency-Key`; key only,
+     * anonymous.
      * @param {Schemas["SignInRequest"]} params
      * @param {RequestOptions} [options] pass `endUser` from server code (lockouts and limits per visitor)
      * @returns {Promise<Schemas["AuthSessionResult"] | Schemas["AuthSessionInfo"]>}

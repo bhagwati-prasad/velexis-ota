@@ -83,26 +83,29 @@
 // Session results (token and server mode, SDK-008): what `auth.signIn`, `auth.refresh` and `auth.changePassword`
 // resolve with (an `AuthSessionResult` with tokens) becomes the client's session through `adopt`, as an automatic
 // refresh's result does: the tokens the client held when the result arrived and the refresh token the call presented
-// count as replaced for this client, so it sends the new tokens wherever a token source still gives a replaced one
-// (a token function within the window; an access token together with the session's refresh token, as above, or alone
-// for a client given a non-empty string access token and no refresh token), and
-// `onSessionRefreshed` gets the new tokens. The client holds the result's refresh token as of the moment the result
-// arrived, before `adopt` reads its token sources (lead decision (23g) of 2026-11-15), so a rotation of it that another
-// holder makes while a slow token function answers is followed at any later time; and when that read has already
-// followed the family's rotation of the result's refresh token to newer tokens, the client keeps those, and
-// `onSessionRefreshed` gets them in the result's session: `accessToken` and `refreshToken` are the newer pair, every
-// other field (`accessTokenExpiresAt`, `refreshTokenExpiresAt`, `tokenType`, `subject`) the result's (lead decision
-// (24l) of 2026-11-15); in every other case it gets `result.session` itself. A client without `accessToken` and
-// `refreshToken` keeps nothing: it never starts sending a token it was not given, so a server client shared by every
-// visitor holds no visitor's session; an empty string as `accessToken` is no access token, and as `refreshToken` no
-// refresh token, here and everywhere else (lead decisions (23h) and (24m) of 2026-11-15). A call with its own
-// credential (`options.accessToken`, or an `Authorization` header of the call or the client) is not the client's
-// session, as for the automatic refresh: its result feeds nothing and calls no hook. What the API rotated for such a
-// result is also recorded in the family (`noteRotation`, SDK-017) when the client holds tokens: the refresh token
-// `auth.refresh` and `console.auth.refresh` presented, and the refresh token of the session `auth.changePassword`
-// rotated (the client's own, or the newest the family knows for it when the client presents a rotated one as it is),
-// so no client that follows them presents them again; `auth.signIn` rotates nothing, and its session stays the
-// calling client's. Cookie mode stores nothing (the session is in httpOnly cookies, and the result carries no token).
+// count as replaced for this client, so it sends the new tokens wherever a token source still gives a replaced one (a
+// token function within the window; an access token together with the session's refresh token, as above, or alone for a
+// client given a non-empty string access token and no refresh token), and `onSessionRefreshed` gets the new tokens. The
+// client holds the result's refresh token as of the moment the result arrived, before `adopt` reads its token sources
+// (lead decision (23g) of 2026-11-15), so a rotation of it that another holder makes while a slow token function
+// answers is followed at any later time: when the family has rotated the result's refresh token by the time
+// `onSessionRefreshed` is called, whatever the client's token sources and whether or not reading them followed that
+// rotation, the client keeps the family's newest tokens of the result's session, and `onSessionRefreshed` gets them in
+// the result's session: `accessToken` and `refreshToken` are the newest pair, every other field
+// (`accessTokenExpiresAt`, `refreshTokenExpiresAt`, `tokenType`, `subject`) the result's, so the access token's expiry
+// is early, never late (lead decisions (24l) of 2026-11-15, (25k) and (25l) of 2026-11-16); in every other case it gets
+// `result.session` itself. (The automatic refresh calls the hook as soon as the family has recorded its rotation,
+// before any client can present the new refresh token, so it always reports the newest pair.) A client without
+// `accessToken` and `refreshToken` keeps nothing: it never starts sending a token it was not given, so a server client
+// shared by every visitor holds no visitor's session; an empty string as `accessToken` is no access token, and as
+// `refreshToken` no refresh token, here and everywhere else (lead decisions (23h) and (24m) of 2026-11-15). A call with
+// its own credential (`options.accessToken`, or an `Authorization` header of the call or the client) is not the
+// client's session, as for the automatic refresh: its result feeds nothing and calls no hook. What the API rotated for
+// such a result is also recorded in the family (`noteRotation`, SDK-017) when the client holds tokens: the refresh
+// token `auth.refresh` and `console.auth.refresh` presented, and the refresh token of the session `auth.changePassword`
+// rotated (the client's own, or the newest the family knows for it when the client presents a rotated one as it is), so
+// no client that follows them presents them again; `auth.signIn` rotates nothing, and its session stays the calling
+// client's. Cookie mode stores nothing (the session is in httpOnly cookies, and the result carries no token).
 //
 // A call is sent again after `TOKEN_EXPIRED` or `CSRF_TOKEN_INVALID` (the API refused it before doing anything) with
 // the same `Idempotency-Key`. The one exception is an operation the route table marks `retry: "never"` although it
@@ -217,10 +220,11 @@ import { op } from "./operations.js";
  *   operation that takes it (console operations) when the client has `environment`, else no header
  * @property {(result: unknown, presentedRefreshToken: string | undefined, requestOptions?: RequestOptions) => Promise<void>} adopt
  *   token and server mode: makes the tokens of a session result (`auth.signIn`, `auth.refresh`, `auth.changePassword`)
- *   the client's session and reports to `onSessionRefreshed` `result.session`, or the result's session with the newer
- *   `accessToken` and `refreshToken` the client keeps (lead decision (24l)); nothing for a result without tokens, for
- *   a call with its own credential (`requestOptions`) or in cookie mode; never throws (the API has already rotated
- *   the session, so the caller must get the result)
+ *   the client's session and reports to `onSessionRefreshed` `result.session`, or, once the family has rotated the
+ *   result's refresh token, the result's session with the family's newest `accessToken` and `refreshToken` of it, which
+ *   a client that holds tokens keeps (lead decisions (24l) and (25k)); nothing for a result without tokens, for a call
+ *   with its own credential (`requestOptions`) or in cookie mode; never throws (the API has already rotated the
+ *   session, so the caller must get the result)
  */
 
 /** The CSRF cookie of cookie mode (OADR-0006 point 2), not httpOnly: its value goes into `X-CSRF-Token`. */
@@ -619,9 +623,11 @@ export function createSession(options, transport, family) {
   /**
    * The family's count of rotations (`Replacements.count`) when this client began to hold the refresh token it holds
    * as its own string: `latest.refreshToken` since the client took it (from a refresh its call started or joined,
-   * since the call joined it: lead decision (22i) of 2026-11-15; from its own session result, since the result
-   * arrived: lead decision (23g) of 2026-11-15), else the configured string since the client was made or derived. A
-   * rotation of that value recorded later (a greater `seq`) is followed at any time (`resolveRefresh`).
+   * since the call joined it: lead decision (22i) of 2026-11-15; from its own session result, the family's newest
+   * refresh token of the result's session as of the end of `adopt`, which stands for holding the result's own since it
+   * arrived: lead decisions (23g) of 2026-11-15 and (25k) of 2026-11-16), else the configured string since the client
+   * was made or derived. A rotation of that value recorded later (a greater `seq`) is followed at any time
+   * (`resolveRefresh`).
    */
   let heldSince = family.replaced.count();
   /**
@@ -665,8 +671,7 @@ export function createSession(options, transport, family) {
    * @param {Tokens} tokens
    * @param {(string | undefined)[]} replaced
    * @param {number} [since] the family's count of rotations as of which the client holds their refresh token
-   *   (`heldSince`): now by default; the count when the call joined the refresh that gave them (`refreshTokens`), or
-   *   when the session result that gave them arrived (`adopt`)
+   *   (`heldSince`): now by default; the count when the call joined the refresh that gave them (`refreshTokens`)
    */
   function take(tokens, replaced, since = family.replaced.count()) {
     own.record(replaced, tokens);
@@ -1138,19 +1143,20 @@ export function createSession(options, transport, family) {
   }
 
   /**
-   * Makes the tokens of a session result the client's session (token and server mode; see the file header): the
-   * tokens the client holds now and the refresh token the call presented are replaced for this client from now on,
-   * and `onSessionRefreshed` gets the new tokens. The client holds the result's refresh token as of the moment the
-   * result arrived, before it reads its token sources (`arrived`, lead decision (23g) of 2026-11-15), so a rotation of
-   * that token by another holder while a slow token function answers is followed at any later time; and when reading
-   * them has already followed the family's rotation of the result's refresh token to newer tokens (`resolveRefresh`),
-   * the client keeps those newer tokens instead of the result's, and `onSessionRefreshed` gets them in the result's
-   * session: its `accessToken` and `refreshToken` are the newer pair, every other field is the result's (lead
-   * decision (24l) of 2026-11-15); otherwise the hook gets `result.session` itself. A client without token sources
-   * keeps nothing, a staff client (`sessionKind: "staff"`) keeps its staff session (a customer's result is not its
-   * session), a call with its own credential changes nothing and calls no hook (its session is not the client's, as
-   * for the automatic refresh), and cookie mode has nothing to keep. What the API rotated is recorded in the family by
-   * `noteRotation`, not here.
+   * Makes the tokens of a session result the client's session (token and server mode; see the file header): the tokens
+   * the client holds now and the refresh token the call presented are replaced for this client from now on, and
+   * `onSessionRefreshed` gets the new tokens. The client holds the result's refresh token as of the moment the result
+   * arrived, before it reads its token sources (lead decision (23g) of 2026-11-15), so a rotation of that token by
+   * another holder while a slow token function answers is followed: when the family has rotated the result's refresh
+   * token by the time the hook is called, whatever the client's token sources and whether or not reading them followed
+   * that rotation (`resolveRefresh`), the client keeps the family's newest tokens of the result's session instead of
+   * the result's, and `onSessionRefreshed` gets them in the result's session: its `accessToken` and `refreshToken` are
+   * the newest pair, every other field is the result's (lead decisions (24l) of 2026-11-15, (25k) and (25l) of
+   * 2026-11-16); otherwise the hook gets `result.session` itself. A client without token sources keeps nothing (its
+   * hook is called the same way), a staff client (`sessionKind: "staff"`) keeps its staff session (a customer's result
+   * is not its session), a call with its own credential changes nothing and calls no hook (its session is not the
+   * client's, as for the automatic refresh), and cookie mode has nothing to keep. What the API rotated is recorded in
+   * the family by `noteRotation`, not here.
    * @param {unknown} result what `auth.signIn`, `auth.refresh` or `auth.changePassword` resolved with
    * @param {string | undefined} presentedRefreshToken the refresh token the call sent (`auth.refresh`)
    * @param {RequestOptions} [requestOptions] the request options the call was sent with
@@ -1162,34 +1168,33 @@ export function createSession(options, transport, family) {
     if (session === undefined || presentsOwnCredential(requestOptions ?? {})) {
       return;
     }
-    /**
-     * What `onSessionRefreshed` gets: `result.session` itself, unless the client keeps newer tokens of its session.
-     * @type {Schemas["Session"]}
-     */
-    let reported = session;
-    if (holdsTokens) {
-      // Taken before the first await: the family's count of rotations when the result arrived.
-      const arrived = family.replaced.count();
-      const held = await heldTokens();
-      const replaced = [
+    const held = holdsTokens ? await heldTokens() : undefined;
+    // From here on nothing awaits until the hook is called. The family's newest tokens of the result's session: the
+    // result's own, or, once a holder has rotated the result's refresh token (while `heldTokens` waited for a token
+    // function, whether or not reading the sources followed that rotation), the tokens the family recorded for it
+    // (lead decisions (24l) of 2026-11-15 and (25k) of 2026-11-16).
+    const newest = family.replaced.get(session.refreshToken)?.tokens;
+    if (held !== undefined) {
+      // The client keeps the newest tokens, and every value it held leads to them. It has held the result's refresh
+      // token since the result arrived (lead decision (23g) of 2026-11-15): every rotation of it since then is in
+      // `newest`, so it holds the newest refresh token as of now and follows any later rotation of it.
+      take(newest ?? session, [
         held.accessValue,
         held.accessToken,
         held.refreshValue,
         held.refreshToken,
         presentedRefreshToken,
-      ];
-      const newest = family.replaced.get(session.refreshToken)?.tokens;
-      if (newest !== undefined && latest !== undefined && newest.refreshToken === latest.refreshToken) {
-        // `heldTokens` followed the rotation of the result's refresh token past it: the client keeps those newer
-        // tokens, and the values it held lead to them. The hook gets them too, in the result's session (lead decision
-        // (24l) of 2026-11-15): a store it writes never ends with the rotated pair the result carried.
-        own.record(replaced, latest);
-        reported = { ...session, accessToken: latest.accessToken, refreshToken: latest.refreshToken };
-      } else {
-        take(session, replaced, arrived);
-      }
+      ]);
     }
-    await callHook(options.onSessionRefreshed, reported);
+    // The hook gets `result.session` itself, or the result's session with the newest `accessToken` and `refreshToken`
+    // and every other field the result's (lead decision (25l) of 2026-11-16): a store it writes never ends with a pair
+    // the family has rotated, so the visitor's next request after the window does not present a rotated refresh token.
+    await callHook(
+      options.onSessionRefreshed,
+      newest === undefined
+        ? session
+        : { ...session, accessToken: newest.accessToken, refreshToken: newest.refreshToken },
+    );
   }
 
   /**

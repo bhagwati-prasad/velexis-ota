@@ -20,13 +20,14 @@
 // each refresh-token value and the tokens that replaced each rotated one (SDK-017), so clients that present the same
 // refresh token send one refresh, and clients with different tokens share nothing. A rotated refresh token leads to
 // those tokens only for a client that held it as its own string before the rotation (a call that started or joined its
-// refresh holds the new one from that moment, and a client its own session result's from the moment the result
-// arrived, keeping newer tokens it already follows and reporting those to `onSessionRefreshed`), or within 10 s of it
-// (a clock set back by at most 10 s keeps it inside), and an old access token only together with its session's refresh
-// token, except that a client given only a non-empty string access token sends the access token of its own latest
-// session result; `accessToken: ""` is no access token and `refreshToken: ""` no refresh token (FIX-W52-SDK, lead
-// decisions (21d) and (21e) of 2026-11-13; FIX-W53-SDK, lead decisions (22g) to (22i), FIX-W54-SDK, (23g) and (23h),
-// and SDK-018, (24l) and (24m), of 2026-11-15; internal/session.js).
+// refresh holds the new one from that moment, and a client its own session result's from the moment the result arrived,
+// keeping the family's newest tokens of the result's session once the family has rotated the result's refresh token and
+// reporting those to `onSessionRefreshed`, with the result's other fields), or within 10 s of it (a clock set back by
+// at most 10 s keeps it inside), and an old access token only together with its session's refresh token, except that a
+// client given only a non-empty string access token sends the access token of its own latest session result;
+// `accessToken: ""` is no access token and `refreshToken: ""` no refresh token (FIX-W52-SDK, lead decisions (21d) and
+// (21e) of 2026-11-13; FIX-W53-SDK, lead decisions (22g) to (22i), FIX-W54-SDK, (23g) and (23h), and SDK-018, (24l) and
+// (24m), of 2026-11-15; FIX-W56-SDK, (25k) and (25l) of 2026-11-16; internal/session.js).
 
 import { isPageBody, Page } from "./pagination.js";
 import { createFamily, createSession } from "./session.js";
@@ -82,10 +83,12 @@ const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
  *   the low-level escape hatch for an API path (`/v1/…`)
  * @property {(result: unknown, presentedRefreshToken?: string, requestOptions?: RequestOptions) => Promise<void>} adoptSession
  *   token and server mode: makes the tokens of a session result (`auth.signIn`, `auth.refresh`, `auth.changePassword`)
- *   the client's session, holding its refresh token from the moment the result arrived and keeping newer tokens the
- *   client already follows, and reports to `onSessionRefreshed` `result.session`, or the result's session with those
- *   newer `accessToken` and `refreshToken` when the client keeps them (internal/session.js); nothing for a call sent
- *   with its own credential (`requestOptions.accessToken`, an `Authorization` header) or in cookie mode; never throws
+ *   the client's session, holding its refresh token from the moment the result arrived, and reports to
+ *   `onSessionRefreshed` `result.session`, or, once the family has rotated the result's refresh token (whatever the
+ *   client's token sources), the result's session with the family's newest `accessToken` and `refreshToken` of it and
+ *   the result's other fields, and a client that holds tokens keeps those newest tokens (internal/session.js); nothing
+ *   for a call sent with its own credential (`requestOptions.accessToken`, an `Authorization` header) or in cookie
+ *   mode; never throws
  */
 
 /** @param {string} message */

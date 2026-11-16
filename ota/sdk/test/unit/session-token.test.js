@@ -16,8 +16,11 @@
 // refresh token from the moment the result arrived and keeps newer tokens it already follows, and an empty string as
 // `accessToken` is no access token (FIX-W54-SDK, lead decisions (23g) and (23h) of 2026-11-15; the two blocks after
 // those). When such a client keeps newer tokens, its onSessionRefreshed gets them in the result's session, and an empty
-// string as `refreshToken` is no refresh token (task SDK-018, lead decisions (24l) and (24m) of 2026-11-15; the last
-// two blocks).
+// string as `refreshToken` is no refresh token (task SDK-018, lead decisions (24l) and (24m) of 2026-11-15; the two
+// blocks after those). Whenever the family has rotated the result's refresh token by the time the hook is called,
+// whatever the client's token sources, the client keeps the family's newest tokens of the result's session and its
+// onSessionRefreshed gets them, with the result's other fields (FIX-W56-SDK, lead decisions (25k) and (25l) of
+// 2026-11-16; the last block).
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1040,7 +1043,9 @@ const B0 = /** @type {const} */ ({ accessToken: "at_w52_b_0", refreshToken: "rt_
  * per customer (`a`, `b`) whose refresh token rotates on every refresh. A refresh token the session has rotated,
  * presented again, answers `401 REFRESH_TOKEN_REUSED` and revokes the session, whose newest tokens stop working too;
  * an unknown one answers `401 REFRESH_TOKEN_INVALID`. A call answers 200 with its customer when it carries that
- * customer's current access token, else `401 TOKEN_EXPIRED`. Every presented refresh token is in `presented`.
+ * customer's current access token, else `401 TOKEN_EXPIRED`; `POST /v1/auth/password/change` with it rotates that
+ * session's refresh token as a refresh does (ota/backend/src/identity/password.service.ts: the request's own session
+ * gets new tokens, and its old refresh token stops working). Every presented refresh token is in `presented`.
  */
 function rotatingApi() {
   /** @type {Map<string, { accessToken: string | null, refreshToken: string | null, n: number, rotated: Set<string> }>} */
@@ -1052,6 +1057,21 @@ function rotatingApi() {
   );
   /** @type {string[]} */
   const presented = [];
+  /**
+   * Rotates a session's refresh token: its next token pair.
+   * @param {string} customer
+   * @param {{ accessToken: string | null, refreshToken: string | null, n: number, rotated: Set<string> }} session
+   */
+  const rotate = (customer, session) => {
+    session.rotated.add(/** @type {string} */ (session.refreshToken));
+    session.n += 1;
+    const tokens = {
+      accessToken: `at_w52_${customer}_${session.n}`,
+      refreshToken: `rt_w52_${customer}_${session.n}`,
+    };
+    Object.assign(session, tokens);
+    return { body: { session: tokens, customer: { id: `cus_${customer}` } } };
+  };
   /** @type {import("../helpers/fake-fetch.js").Answer} */
   const answer = (request) => {
     if (request.path === "/v1/auth/refresh") {
@@ -1059,14 +1079,7 @@ function rotatingApi() {
       presented.push(token);
       for (const [customer, session] of sessions) {
         if (session.refreshToken === token) {
-          session.rotated.add(token);
-          session.n += 1;
-          const tokens = {
-            accessToken: `at_w52_${customer}_${session.n}`,
-            refreshToken: `rt_w52_${customer}_${session.n}`,
-          };
-          Object.assign(session, tokens);
-          return { body: { session: tokens, customer: { id: `cus_${customer}` } } };
+          return rotate(customer, session);
         }
         if (session.rotated.has(token)) {
           // Reuse revokes the session: its newest tokens stop working too.
@@ -1081,7 +1094,12 @@ function rotatingApi() {
       ([, each]) =>
         each.accessToken !== null && request.headers["authorization"] === `Bearer ${each.accessToken}`,
     )?.[0];
-    return customer === undefined ? errorResponse(401, "TOKEN_EXPIRED") : { body: { customer } };
+    if (customer === undefined) {
+      return errorResponse(401, "TOKEN_EXPIRED");
+    }
+    return request.path === "/v1/auth/password/change"
+      ? rotate(customer, /** @type {NonNullable<ReturnType<typeof sessions.get>>} */ (sessions.get(customer)))
+      : { body: { customer } };
   };
   return {
     presented,
@@ -1830,7 +1848,7 @@ const SLOW_SOURCE_MS = 1_000;
 /**
  * An access-token function that gives `value` after `SLOW_SOURCE_MS` of the fake clock (a token store on another
  * machine), and `asked(n)`, which resolves once the function has been called `n` times.
- * @param {string} value
+ * @param {string | (() => string)} value the token, or a function that reads it when the answer leaves the store
  */
 function slowSource(value) {
   /** @type {{ n: number, resolve: () => void }[]} */
@@ -1842,7 +1860,9 @@ function slowSource(value) {
       for (const each of waiting.filter((waiter) => waiter.n <= calls)) {
         each.resolve();
       }
-      return new Promise((resolve) => setTimeout(() => resolve(value), SLOW_SOURCE_MS));
+      return new Promise((resolve) =>
+        setTimeout(() => resolve(typeof value === "function" ? value() : value), SLOW_SOURCE_MS),
+      );
     },
     /** @param {number} n */
     asked: (n) =>
@@ -2226,7 +2246,7 @@ describe("token and server mode: onSessionRefreshed gets the newer tokens a clie
       });
     });
 
-    it(`${modeName}: the hook gets result.session itself when a client that follows newer tokens of another session takes its result, also when another holder rotated the result's refresh token while adopt waited [SDK-018 AC1]`, async () => {
+    it(`${modeName}: a client that follows newer tokens of another session gives the hook result.session itself for a result nothing rotated, and the result's session with the family's newest tokens of it once another holder rotated the result's refresh token while adopt waited [FIX-W56-SDK AC1]`, async () => {
       vi.useFakeTimers();
       const api = rotatingApi();
       const fake = createFakeFetch(api.answers(12));
@@ -2235,7 +2255,9 @@ describe("token and server mode: onSessionRefreshed gets the newer tokens a clie
       const access = slowSource(B0.accessToken);
       const onSessionRefreshed = vi.fn();
       // Visitor b's client: its first auth.refresh gives it b's newer tokens (the function is asked twice); b's tokens
-      // are not newer tokens of the session of its later auth.refresh of a's first refresh token.
+      // are not newer tokens of the session of its later auth.refresh of a's first refresh token, but the holder's
+      // rotation of that result's refresh token while adopt waited is (lead decision (25k) of 2026-11-16; before it,
+      // the hook got the result's rotated pair).
       const client = root.withOptions({
         accessToken: access.source,
         refreshToken: B0.refreshToken,
@@ -2250,9 +2272,10 @@ describe("token and server mode: onSessionRefreshed gets the newer tokens a clie
 
       expect(onSessionRefreshed.mock.calls.map(([session]) => session)).toEqual([
         first.session,
-        result.session,
+        { ...result.session, accessToken: "at_w52_a_2", refreshToken: "rt_w52_a_2" },
       ]);
-      expect(onSessionRefreshed.mock.calls[1]?.[0]).toBe(result.session);
+      expect(onSessionRefreshed.mock.calls[0]?.[0]).toBe(first.session);
+      expect(result.session).toEqual({ accessToken: "at_w52_a_1", refreshToken: "rt_w52_a_1" });
     });
   }
 });
@@ -2323,6 +2346,206 @@ describe('token and server mode: refreshToken: "" is no refresh token', () => {
         ["/v1/auth/sign-in", `Bearer ${GIVEN}`],
         ["/v1/account", "Bearer at_w53_1"],
       ]);
+    });
+  }
+});
+
+/**
+ * The integrator's store of visitor a's tokens (the build-your-own-frontend guide's §8.2 cookies), starting with a's
+ * first tokens, and `write`, an `onSessionRefreshed` that stores the session's pair.
+ */
+function visitorStore() {
+  const store = { accessToken: A0.accessToken, refreshToken: A0.refreshToken };
+  return {
+    store,
+    write: (/** @type {{ accessToken: string, refreshToken: string }} */ session) => {
+      store.accessToken = session.accessToken;
+      store.refreshToken = session.refreshToken;
+    },
+  };
+}
+
+/**
+ * The clients whose onSessionRefreshed SDK-018 gave the result's already-rotated pair when another holder rotated the
+ * result's refresh token while their adopt of an explicit `auth.refresh` of visitor a's first refresh token waited
+ * (`rotatedWhileAdopting`): neither holds a string refresh token that its read of its token sources follows to the
+ * newer tokens, which was SDK-018's condition. One's token functions read the integrator's store (a function's value
+ * follows a rotation within the window only, and the client keeps no string); the other has a string refresh token it
+ * did not hold and refreshes the store's token explicitly. These are the cases of SDK-018's questions and of its
+ * review's probe (lead decision (25k) of 2026-11-16). Each gets a slow access-token function (`access`) and the token
+ * options to make it with.
+ * @type {Record<string, (store: { accessToken: string, refreshToken: string }) => { access: ReturnType<typeof slowSource>, tokens: Partial<import("../../src/index.js").VelexisClientOptions> }>}
+ */
+const REPORTED_THE_ROTATED_PAIR = {
+  "a client whose token functions read the integrator's store": (store) => {
+    const access = slowSource(() => store.accessToken);
+    return { access, tokens: { accessToken: access.source, refreshToken: () => store.refreshToken } };
+  },
+  "a client with a string refresh token it did not hold, which refreshes the store's explicitly": () => {
+    const access = slowSource(A0.accessToken);
+    return { access, tokens: { accessToken: access.source, refreshToken: "rt_w56_configured" } };
+  },
+};
+
+describe("token and server mode: onSessionRefreshed gets the family's newest tokens of its result's session whenever the family has rotated the result's refresh token", () => {
+  for (const [modeName, key] of Object.entries(MODES)) {
+    for (const [kind, makeClient] of Object.entries(REPORTED_THE_ROTATED_PAIR)) {
+      it(`${modeName}, ${kind}: a store that both clients' onSessionRefreshed write ends with the newer pair, and the visitor's next request after the window succeeds instead of REFRESH_TOKEN_REUSED [FIX-W56-SDK AC1]`, async () => {
+        vi.useFakeTimers();
+        const api = rotatingApi();
+        const fake = createFakeFetch(api.answers(12));
+        const root = createVelexisClient({ ...key, fetch: fake.fetch });
+        const { store, write } = visitorStore();
+        const expired = vi.fn();
+        const holder = root.withOptions({ ...A0, onSessionRefreshed: write, onSessionExpired: expired });
+        const { access, tokens } = makeClient(store);
+        const client = root.withOptions({ ...tokens, onSessionRefreshed: write, onSessionExpired: expired });
+        await rotatedWhileAdopting({ api, holder, client, access });
+
+        // The holder's hook wrote a's newest pair while the client's adopt waited; the client's hook ran last and
+        // wrote that pair too, not the rotated one its result carries.
+        expect(store).toEqual({ accessToken: "at_w52_a_2", refreshToken: "rt_w52_a_2" });
+
+        // The visitor's next request, 11 s later and outside the window of a's second rotation, after its access token
+        // has expired: a request's client made from the store, as the guide's sample makes one from the cookies.
+        vi.advanceTimersByTime(11_000);
+        api.expire("a");
+        const next = root.withOptions({ ...store, onSessionRefreshed: write, onSessionExpired: expired });
+
+        expect(await next.account.get().catch((caught) => caught)).toEqual({ customer: "a" });
+        expect(api.presented).toEqual([A0.refreshToken, "rt_w52_a_1", "rt_w52_a_2"]);
+        expect(store).toEqual({ accessToken: "at_w52_a_3", refreshToken: "rt_w52_a_3" });
+        expect(expired).not.toHaveBeenCalled();
+        expect(api.revoked("a")).toBe(false);
+      });
+
+      it(`${modeName}, ${kind}: the hook gets the result's session with the family's newest accessToken and refreshToken and every other field the result's, and the result itself is unchanged [FIX-W56-SDK AC2]`, async () => {
+        vi.useFakeTimers();
+        const api = rotatingApi();
+        const fake = createFakeFetch(detailedAnswers(api, 12));
+        const root = createVelexisClient({ ...key, fetch: fake.fetch });
+        const { store } = visitorStore();
+        const holder = root.withOptions({ ...A0 });
+        const onSessionRefreshed = vi.fn();
+        const { access, tokens } = makeClient(store);
+        const client = root.withOptions({ ...tokens, onSessionRefreshed });
+        const result = /** @type {{ session: object }} */ (
+          await rotatedWhileAdopting({ api, holder, client, access })
+        );
+
+        // The access token's expiry stays the result's (minute 1, although a's newest access token expires at minute
+        // 2: early, never late), and so do the refresh token's (the session's absolute end), the type and the subject
+        // (lead decision (25l) of 2026-11-16).
+        expect(onSessionRefreshed.mock.calls).toEqual([
+          [{ accessToken: "at_w52_a_2", refreshToken: "rt_w52_a_2", ...A1_DETAILS }],
+        ]);
+        expect(result.session).toEqual({
+          accessToken: "at_w52_a_1",
+          refreshToken: "rt_w52_a_1",
+          ...A1_DETAILS,
+        });
+      });
+
+      it(`${modeName}, ${kind}: the hook gets result.session itself when nothing rotated the result's refresh token [FIX-W56-SDK AC1]`, async () => {
+        vi.useFakeTimers();
+        const api = rotatingApi();
+        const fake = createFakeFetch(api.answers(2));
+        const root = createVelexisClient({ ...key, fetch: fake.fetch });
+        const { store } = visitorStore();
+        const onSessionRefreshed = vi.fn();
+        const { tokens } = makeClient(store);
+        const client = root.withOptions({ ...tokens, onSessionRefreshed });
+
+        const refreshing = client.auth.refresh({ refreshToken: A0.refreshToken });
+        await vi.advanceTimersByTimeAsync(2 * SLOW_SOURCE_MS);
+        const result = /** @type {{ session: object }} */ (await refreshing);
+
+        expect(onSessionRefreshed).toHaveBeenCalledTimes(1);
+        expect(onSessionRefreshed.mock.calls[0]?.[0]).toBe(result.session);
+      });
+    }
+
+    it(`${modeName}: a client whose token functions read the integrator's store gives the hook the newest pair after its auth.changePassword when another holder rotated the result's refresh token while adopt waited, and the visitor's next request after the window succeeds [FIX-W56-SDK AC1]`, async () => {
+      vi.useFakeTimers();
+      const api = rotatingApi();
+      const fake = createFakeFetch(api.answers(12));
+      const root = createVelexisClient({ ...key, fetch: fake.fetch });
+      const { store, write } = visitorStore();
+      const expired = vi.fn();
+      const holder = root.withOptions({ ...A0, onSessionRefreshed: write, onSessionExpired: expired });
+      const access = slowSource(() => store.accessToken);
+      const client = root.withOptions({
+        accessToken: access.source,
+        refreshToken: () => store.refreshToken,
+        onSessionRefreshed: write,
+        onSessionExpired: expired,
+      });
+      // The holder refreshes a's first tokens: the store holds a's second pair.
+      await expect(holder.account.get()).resolves.toEqual({ customer: "a" });
+      expect(store).toEqual({ accessToken: "at_w52_a_1", refreshToken: "rt_w52_a_1" });
+
+      const changing = client.auth.changePassword({
+        currentPassword: "Visitor-password-1",
+        newPassword: "Visitor-password-2",
+      });
+      // The call reads its access token (1 s), the API rotates a's second pair into the third, the family records it
+      // once the client's tokens have been read again (1 s), and adopt asks the function a third time.
+      await vi.advanceTimersByTimeAsync(2 * SLOW_SOURCE_MS);
+      await access.asked(3);
+      api.expire("a");
+      // The holder follows the change's rotation and, the result's access token having expired, refreshes the
+      // result's refresh token: its hook writes a's fourth pair.
+      await expect(holder.account.get()).resolves.toEqual({ customer: "a" });
+      expect(store).toEqual({ accessToken: "at_w52_a_3", refreshToken: "rt_w52_a_3" });
+      // The function answers adopt.
+      await vi.advanceTimersByTimeAsync(SLOW_SOURCE_MS);
+      await expect(changing).resolves.toMatchObject({
+        session: { accessToken: "at_w52_a_2", refreshToken: "rt_w52_a_2" },
+      });
+      expect(store).toEqual({ accessToken: "at_w52_a_3", refreshToken: "rt_w52_a_3" });
+
+      vi.advanceTimersByTime(11_000);
+      api.expire("a");
+      const next = root.withOptions({ ...store, onSessionRefreshed: write, onSessionExpired: expired });
+
+      expect(await next.account.get().catch((caught) => caught)).toEqual({ customer: "a" });
+      expect(api.presented).toEqual([A0.refreshToken, "rt_w52_a_2", "rt_w52_a_3"]);
+      expect(store).toEqual({ accessToken: "at_w52_a_4", refreshToken: "rt_w52_a_4" });
+      expect(expired).not.toHaveBeenCalled();
+      expect(api.revoked("a")).toBe(false);
+    });
+
+    it(`${modeName}: a client whose token functions read the integrator's store keeps the family's newest tokens of its result's session, so its own call whose access token expired refreshes the newest refresh token after the window of the result's rotation, never going back to the result's rotated pair [FIX-W56-SDK AC1]`, async () => {
+      vi.useFakeTimers();
+      const api = rotatingApi();
+      const fake = createFakeFetch(api.answers(12));
+      const root = createVelexisClient({ ...key, fetch: fake.fetch });
+      const { store, write } = visitorStore();
+      const expired = vi.fn();
+      const holder = root.withOptions({ ...A0, onSessionRefreshed: write, onSessionExpired: expired });
+      const access = slowSource(() => store.accessToken);
+      const client = root.withOptions({
+        accessToken: access.source,
+        refreshToken: () => store.refreshToken,
+        onSessionRefreshed: write,
+        onSessionExpired: expired,
+      });
+      // The holder rotates the result's refresh token 1 s before adopt ends.
+      await rotatedWhileAdopting({ api, holder, client, access });
+
+      // 7.5 s later the client's call reads its access token (1 s), is refused as expired and reads it once more for
+      // the refresh (1 s): it decides 10.5 s after that rotation, outside its window but 9.5 s after adopt. A client
+      // that kept the result's pair would lead the store's newest refresh token back to it there and fail.
+      vi.advanceTimersByTime(7_500);
+      api.expire("a");
+      const late = client.account.get().catch((caught) => caught);
+      await vi.advanceTimersByTimeAsync(5 * SLOW_SOURCE_MS);
+
+      expect(await late).toEqual({ customer: "a" });
+      expect(api.presented).toEqual([A0.refreshToken, "rt_w52_a_1", "rt_w52_a_2"]);
+      expect(store).toEqual({ accessToken: "at_w52_a_3", refreshToken: "rt_w52_a_3" });
+      expect(expired).not.toHaveBeenCalled();
+      expect(api.revoked("a")).toBe(false);
     });
   }
 });
