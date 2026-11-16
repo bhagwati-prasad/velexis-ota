@@ -4,8 +4,11 @@
 //
 // - **Origins** (publishable keys only; a secret key has none, the CHECK `api_keys_origins_ck` of the baseline): exact
 //   browser origins `scheme://host[:port]` exactly as a browser sends them in `Origin` (lower case, no default port,
-//   no path, no trailing slash, no user info); `https` only, except `http://localhost:<port>` and
-//   `http://127.0.0.1:<port>` on test keys; no wildcard; at most 20. An empty list means no browser origin is accepted.
+//   no path, no trailing slash, no user info); a host whose `xn--` labels decode and encode back to themselves
+//   (`punycodeLabelsRoundTrip` of domains/hostname-rules.ts, checked right after the parse: Node 24's URL parser
+//   accepts `https://xn--zz.example`, which Node 22's refused, and both accept `https://xn--ab-.example`; ADR-0029
+//   item 7, PBE-077); `https` only, except `http://localhost:<port>` and `http://127.0.0.1:<port>` on test keys; no
+//   wildcard; at most 20. An empty list means no browser origin is accepted.
 // - **Scopes** (secret keys only; a publishable key has customer scope and no scopes): values of the OTA contract's
 //   `ConsoleApiKeyScope` and `StaffPermission`. No scopes (absent or empty) means the default `["storefront"]`, the
 //   least privilege of the three set-ups. `storefront` excludes every other scope; `console:automation` needs at
@@ -19,6 +22,7 @@
 import type { components as OtaComponents } from "@velexis/api-types";
 import type { components } from "@velexis/api-types/platform";
 import { AppError, type FieldError } from "@velexis/errors";
+import { punycodeLabelsRoundTrip } from "../domains/hostname-rules";
 
 /** `ConsoleApiKeyScope` of the OTA contract: `storefront`, `console`, `console:automation`. */
 export type ConsoleApiKeyScope = OtaComponents["schemas"]["ConsoleApiKeyScope"];
@@ -85,6 +89,10 @@ function originProblem(origin: string, environment: ApiKeyEnvironment, path: str
   try {
     url = new URL(origin);
   } catch {
+    return { path, code: "origin", message: "Must be an origin: scheme://host or scheme://host:port." };
+  }
+  // Node 24's URL parser accepts a punycode label that does not decode, where Node 22's threw (ADR-0029 item 7).
+  if (!punycodeLabelsRoundTrip(url.hostname)) {
     return { path, code: "origin", message: "Must be an origin: scheme://host or scheme://host:port." };
   }
   if (

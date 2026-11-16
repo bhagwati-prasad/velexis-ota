@@ -106,6 +106,66 @@ describe("origins of publishable keys", () => {
     ]);
   });
 
+  // ADR-0029 item 7: Node 24's URL parser (ada 4.0.0) accepts a host whose punycode label does not decode, where Node
+  // 22's (ada 2.9.2) threw ERR_INVALID_URL. These cases run on Node 22 and on Node 24 (PBE-077's Verify) and answer the
+  // same on both: the origin error, also for an upper-case prefix (not notCanonical).
+  it.each([
+    ["https://xn--zz.example", "live"],
+    ["https://xn--zz.example", "test"],
+    ["https://XN--zz.example", "live"],
+    ["https://XN--zz.example", "test"],
+  ] as const)(
+    "[PBE-077 AC1] refuses %s on a %s key (origin): its punycode label does not decode and encode back to itself",
+    (origin, environment) => {
+      const problems = originProblems(["https://ok.example.com", origin], environment);
+
+      expect(problems).toEqual([
+        {
+          path: "/allowedOrigins/1",
+          code: "origin",
+          message: "Must be an origin: scheme://host or scheme://host:port.",
+        },
+      ]);
+    },
+  );
+
+  it.each(["live", "test"] as const)(
+    "[PBE-077 AC1] accepts https://xn--bcher-kva.example on a %s key: its punycode label decodes and encodes back to itself",
+    (environment) => {
+      expect(originProblems(["https://xn--bcher-kva.example"], environment)).toEqual([]);
+      expect(
+        checkedApiKeyAccess({
+          kind: "publishable",
+          environment,
+          allowedOrigins: ["https://xn--bcher-kva.example"],
+        }).allowedOrigins,
+      ).toEqual(["https://xn--bcher-kva.example"]);
+    },
+  );
+
+  // Node 22's URL parser threw on `xn--zz` before any other origin rule, so the check comes right after the parse and a
+  // path or plain http answers the same origin error on Node 22 and 24. `xn--ab-` decodes (to `ab`) but does not encode
+  // back to itself: both URL parsers accept it, so before PBE-077 it was stored on Node 22 too.
+  it.each([
+    ["https://xn--ab-.example", "live"],
+    ["https://xn--ab-.example", "test"],
+    ["http://xn--ab-.example", "live"],
+    ["https://xn--zz.example/x", "live"],
+    ["http://xn--zz.example", "live"],
+    ["http://xn--zz.example:8080", "test"],
+  ] as const)(
+    "[PBE-077 AC1] refuses %s on a %s key (origin) before the rules on paths and schemes",
+    (origin, environment) => {
+      expect(originProblems([origin], environment)).toEqual([
+        {
+          path: "/allowedOrigins/0",
+          code: "origin",
+          message: "Must be an origin: scheme://host or scheme://host:port.",
+        },
+      ]);
+    },
+  );
+
   it("never echoes a refused origin in a message", () => {
     const refused = [
       "https://*.secret-value-1.example.com",

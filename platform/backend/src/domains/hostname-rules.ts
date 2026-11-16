@@ -10,7 +10,10 @@
 //    host parser behind `domainToASCII` stops at `/`, `\`, `?` or `#` and would keep only what comes before them
 //    (`travel.acme.com/x` would become `travel.acme.com`);
 // 4. `domainToASCII` of `node:url` lower-cases the name and turns IDN labels into punycode (UTS #46 mapping, so
-//    `Bücher.example.net` is stored as `xn--bcher-kva.example.net`); a name it cannot convert is refused;
+//    `Bücher.example.net` is stored as `xn--bcher-kva.example.net`); a name it cannot convert is refused, and so is a
+//    converted name with an `xn--` label that does not decode and encode back to itself (`punycodeLabelsRoundTrip`:
+//    `xn--zz.example.com`, `xn--ab-.com`), because Node 24's URL parser (ada 4.0.0) returns such a label unchanged
+//    where Node 22's (ada 2.9.2) answered "" (ADR-0029 item 7, PBE-077);
 // 5. one trailing dot is dropped (`Travel.Acme.com.` is stored as `travel.acme.com`).
 //
 // The result must then:
@@ -26,7 +29,7 @@
 //   nothing about the zone.
 import { randomBytes } from "node:crypto";
 import { isIP } from "node:net";
-import { domainToASCII } from "node:url";
+import { domainToASCII, domainToUnicode } from "node:url";
 import { AppError } from "@velexis/errors";
 import type { PlatformBackendConfig } from "../config";
 
@@ -158,6 +161,33 @@ export function isAtOrBelow(host: string, zone: string): boolean {
   return host === zone || host.endsWith(`.${zone}`);
 }
 
+/** The ACE prefix of a punycode label (RFC 5890), in any case. */
+const ACE_PREFIX = "xn--";
+
+/**
+ * True when every label of the ASCII host name `hostname` that starts with `xn--` (in any case) decodes and encodes
+ * back to itself: `domainToUnicode` of the label no longer starts with `xn--`, and `domainToASCII` of what it decoded
+ * to is the label again, in lower case. Labels without the prefix pass, so does a host name without such labels.
+ *
+ * ADR-0029 item 7 (PBE-077): Node 22's URL parser (ada 2.9.2) refused a label that does not decode (`domainToASCII`
+ * answered "", `new URL()` threw `ERR_INVALID_URL`); Node 24's (ada 4.0.0) returns it unchanged and accepts the URL.
+ * Both accept a label that decodes but does not encode back to itself (`xn--ab-`, which decodes to `ab`). The
+ * custom-domain rules (`checkCustomHostname`) and the API-key origin rules (`originProblems` of api-key-rules.ts) store
+ * what they accept, so they check this themselves and answer the same on Node 22 and 24. A label that only ada 4.0.0
+ * refuses to decode (`xn--9hbcd`, Arabic-Indic digits, under the bidi rule) passes on Node 22 and fails on Node 24, as
+ * item 7 accepts. Pure; never logs.
+ */
+export function punycodeLabelsRoundTrip(hostname: string): boolean {
+  return hostname.split(".").every((label) => {
+    const lower = label.toLowerCase();
+    if (!lower.startsWith(ACE_PREFIX)) {
+      return true;
+    }
+    const decoded = domainToUnicode(lower);
+    return !decoded.startsWith(ACE_PREFIX) && domainToASCII(decoded) === lower;
+  });
+}
+
 /** ASCII characters other than letters, digits, `-` and `.`; non-ASCII characters are left to the IDN mapping. */
 const REFUSED_ASCII = /[^A-Za-z0-9.\-\u0080-\u{10ffff}]/u;
 
@@ -180,7 +210,7 @@ export function checkCustomHostname(input: string, rules: HostnameRules): Hostna
     return { ok: false, problem: "syntax" };
   }
   const ascii = domainToASCII(trimmed);
-  if (ascii.length === 0) {
+  if (ascii.length === 0 || !punycodeLabelsRoundTrip(ascii)) {
     return { ok: false, problem: "syntax" };
   }
   const hostname = ascii.endsWith(".") ? ascii.slice(0, -1) : ascii;

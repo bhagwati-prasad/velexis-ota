@@ -13,6 +13,7 @@ import {
   isAtOrBelow,
   MAX_HOSTNAME_LENGTH,
   newVerificationToken,
+  punycodeLabelsRoundTrip,
   SHARED_SUFFIX_DENY_LIST,
   velexisHostsOf,
   VERIFICATION_TOKEN_PATTERN,
@@ -166,6 +167,18 @@ describe("checkCustomHostname: refusals", () => {
     expect(outcome(input)).toBe("refused: syntax");
   });
 
+  // ADR-0029 item 7: Node 24's URL parser (ada 4.0.0) returns a punycode label that does not decode unchanged, where
+  // Node 22's (ada 2.9.2) answered ""; `xn--ab-` decodes on Node 22 (to `ab`) but does not encode back to itself. These
+  // cases run on Node 22 and on Node 24 (PBE-077's Verify) and answer the same on both.
+  it.each([["xn--zz.example.com"], ["xn--a.com"], ["xn--ab-.com"], ["a.xn--zz"]])(
+    "[PBE-077 AC1] refuses %j, whose punycode label does not decode and encode back to itself, as syntax",
+    (input) => {
+      expect(outcome(input)).toBe("refused: syntax");
+      expect(outcome(input, VM_RULES)).toBe("refused: syntax");
+      expect(errorCode(input, DEV_RULES)).toBe("DOMAIN_INVALID");
+    },
+  );
+
   it("accepts 253 characters and refuses 254, also when IDN labels grow into punycode", () => {
     const longest = `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(57)}.net`;
     const tooLong = `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(58)}.net`;
@@ -278,6 +291,44 @@ describe("checkCustomHostname: refusals", () => {
     expect(outcome("mygithub.io")).toBe("mygithub.io");
     expect(outcome("github.io.example.net")).toBe("github.io.example.net");
   });
+});
+
+// ADR-0029 item 7 (PBE-077): the host names whose punycode labels decode and encode back to themselves are stored as
+// before; `punycodeLabelsRoundTrip` itself, in any case and with the trailing dot `checkCustomHostname` checks it with.
+describe("punycode labels", () => {
+  it.each([["xn--bcher-kva.example.net"], ["XN--BCHER-KVA.example.net"], ["Bücher.example.net"]])(
+    "[PBE-077 AC1] stores %j, whose punycode label decodes and encodes back to itself, as xn--bcher-kva.example.net",
+    (input) => {
+      expect(outcome(input)).toBe("xn--bcher-kva.example.net");
+      expect(customHostnameOrThrow(input, VM_RULES)).toBe("xn--bcher-kva.example.net");
+    },
+  );
+
+  it.each([
+    ["travel.acme.com", true],
+    ["localhost", true],
+    ["192.0.2.10", true],
+    ["[2001:db8::1]", true],
+    ["xn--bcher-kva.example.net", true],
+    ["XN--BCHER-KVA.example.net", true],
+    ["xn--bcher-kva.example.net.", true],
+    ["reisen.xn--mnchen-3ya.de", true],
+    ["xn--zz.example.com", false],
+    ["xn--zz.example.com.", false],
+    ["xn--a.com", false],
+    ["xn--ab-.com", false],
+    ["a.xn--zz", false],
+    ["XN--zz.example", false],
+    ["Xn--zz.example", false],
+    ["xn--.example", false],
+    ["xn--xn--a-.example", false],
+    ["travel.xn--bcher-kva-.example", false],
+  ] as const)(
+    "[PBE-077 AC1] punycodeLabelsRoundTrip(%j) is %j: every xn-- label decodes and encodes back to itself",
+    (hostname, roundTrips) => {
+      expect(punycodeLabelsRoundTrip(hostname)).toBe(roundTrips);
+    },
+  );
 });
 
 describe("the deny list and the Velexis hosts", () => {

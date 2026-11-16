@@ -91,8 +91,8 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - The config test refuses a missing `PLATFORM_API_URL`.
 - **Verify:** `pnpm --filter @velexis/platform-admin build && pnpm --filter @velexis/platform-admin test`
 
-### PBE-077 · Refuse host names whose punycode labels do not decode, in custom domains and API-key origins, on Node 22 and 24
-- **Status:** todo
+### PBE-077 · Refuse host names whose punycode labels do not decode, in custom domains and API-key origins, on Node 22 and 24 ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M0
 - **Depends on:** PBE-021, PBE-049
