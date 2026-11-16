@@ -309,7 +309,9 @@ function createConsoleAuthApi(core) {
      * Rotates a staff refresh token: a new access token, a new refresh token (the old one is revoked; presenting it
      * again revokes the whole family) and the current role and permissions. A client with `sessionKind: "staff"` and
      * a `refreshToken` calls this by itself on `TOKEN_EXPIRED` and reports the result to `onSessionRefreshed`
-     * (`result.session`) and `onStaffSessionRefreshed`; an explicit call does not change the client's tokens.
+     * (`result.session`) and `onStaffSessionRefreshed` (the whole result, with the family's newest tokens of its
+     * session once another client of the family has rotated its refresh token; README §4.3); an explicit call does not
+     * change the client's tokens.
      * `POST /v1/console/auth/refresh` with a generated `Idempotency-Key`; secret key only, no access token.
      * @param {ConsoleRefreshParams} params
      * @param {RequestOptions} [options]

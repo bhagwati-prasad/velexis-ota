@@ -72,13 +72,14 @@
 // through `auth.refresh`, or `console.auth.refresh` with `sessionKind: "staff"`, with the settings, host and end user
 // of the client and the call that started the refresh, and the API key only (never the expired access token). The
 // result is reported once, by the client whose call started the refresh: its `onSessionRefreshed` gets the new tokens
-// (and its `onStaffSessionRefreshed` the whole staff session), or, for a refresh the API refuses with 401
-// (`REFRESH_TOKEN_INVALID`, `REFRESH_TOKEN_REUSED` …), its `onSessionExpired` is called, and every call waiting for
-// that refresh throws its `AuthenticationError`. Every client that took part keeps the new tokens: a string source
-// sends them from then on; a token function that still gives the tokens they replaced gets the new ones within the
-// window (the integrator stores the new tokens through `onSessionRefreshed`). A call with its own `options.accessToken`
-// (or an `Authorization` header of the call or the client, which wins over the session's) is not the client's session
-// and is not refreshed. Hook failures are ignored, as `onResponse`'s are.
+// (and then its `onStaffSessionRefreshed` the whole staff session, with the family's newest tokens of it when another
+// holder has rotated its refresh token while `onSessionRefreshed` ran: lead decision (26j) of 2026-11-16), or, for a
+// refresh the API refuses with 401 (`REFRESH_TOKEN_INVALID`, `REFRESH_TOKEN_REUSED` …), its `onSessionExpired` is
+// called, and every call waiting for that refresh throws its `AuthenticationError`. Every client that took part keeps
+// the new tokens: a string source sends them from then on; a token function that still gives the tokens they replaced
+// gets the new ones within the window (the integrator stores the new tokens through `onSessionRefreshed`). A call with
+// its own `options.accessToken` (or an `Authorization` header of the call or the client, which wins over the session's)
+// is not the client's session and is not refreshed. Hook failures are ignored, as `onResponse`'s are.
 //
 // Session results (token and server mode, SDK-008): what `auth.signIn`, `auth.refresh` and `auth.changePassword`
 // resolve with (an `AuthSessionResult` with tokens) becomes the client's session through `adopt`, as an automatic
@@ -94,8 +95,9 @@
 // the result's session: `accessToken` and `refreshToken` are the newest pair, every other field
 // (`accessTokenExpiresAt`, `refreshTokenExpiresAt`, `tokenType`, `subject`) the result's, so the access token's expiry
 // is early, never late (lead decisions (24l) of 2026-11-15, (25k) and (25l) of 2026-11-16); in every other case it gets
-// `result.session` itself. (The automatic refresh calls the hook as soon as the family has recorded its rotation,
-// before any client can present the new refresh token, so it always reports the newest pair.) A client without
+// `result.session` itself. (The automatic refresh calls `onSessionRefreshed` as soon as the family has recorded its
+// rotation, before any client can present the new refresh token, so it always reports the newest pair; it calls
+// `onStaffSessionRefreshed` once that hook has finished, by the rule above: lead decision (26j).) A client without
 // `accessToken` and `refreshToken` keeps nothing: it never starts sending a token it was not given, so a server client
 // shared by every visitor holds no visitor's session; an empty string as `accessToken` is no access token, and as
 // `refreshToken` no refresh token, here and everywhere else (lead decisions (23h) and (24m) of 2026-11-15). A call with
@@ -520,6 +522,20 @@ function tokensOf(result) {
  */
 const pairOf = (session) =>
   Object.freeze({ accessToken: session.accessToken, refreshToken: session.refreshToken });
+
+/**
+ * A session of the API as a hook reports it: `session` itself without newer tokens (nothing has rotated its refresh
+ * token), else a copy with the family's newest `accessToken` and `refreshToken` of it and every other field
+ * (`accessTokenExpiresAt`, `refreshTokenExpiresAt`, `tokenType`, `subject`) `session`'s, so the access token's
+ * expiry is early, never late (lead decisions (25l) and (26j) of 2026-11-16).
+ * @param {Schemas["Session"]} session
+ * @param {Tokens | undefined} newest the family's newest tokens of the session, when it has rotated its refresh token
+ * @returns {Schemas["Session"]}
+ */
+const withNewest = (session, newest) =>
+  newest === undefined
+    ? session
+    : { ...session, accessToken: newest.accessToken, refreshToken: newest.refreshToken };
 
 /**
  * Whether a token value is there.
@@ -952,9 +968,11 @@ export function createSession(options, transport, family) {
   /**
    * Token and server mode: one refresh of a refresh token, started by this client's call. It goes out with this
    * client's settings, records in the family that the new tokens replaced the refresh token presented (and then calls
-   * `recorded`), and reports them to this client's `onSessionRefreshed` (and `onStaffSessionRefreshed`), once for every
-   * client that waits for it; a 401 calls this client's `onSessionExpired`, once, and the error reaches every waiting
-   * call. Every waiting call, this one's included, takes the new tokens (`refreshTokens`).
+   * `recorded`), and reports them to this client's `onSessionRefreshed` (and then `onStaffSessionRefreshed`, with the
+   * family's newest tokens of the session once another holder has rotated the new refresh token meanwhile: lead
+   * decision (26j) of 2026-11-16), once for every client that waits for it; a 401 calls this client's
+   * `onSessionExpired`, once, and the error reaches every waiting call. Every waiting call, this one's included, takes
+   * the new tokens (`refreshTokens`).
    * @param {HttpRequest} request the call that started the refresh
    * @param {string} presented the refresh token to present
    * @param {() => void} recorded called once the family has recorded the rotation, before the hooks
@@ -973,9 +991,16 @@ export function createSession(options, transport, family) {
       recorded();
       await callHook(options.onSessionRefreshed, session);
       if (refreshOperation === op.console_auth_refresh) {
+        // `onSessionRefreshed` may have run for a while, and another holder of the new refresh token may have rotated
+        // it meanwhile (lead decision (22i) of 2026-11-15). Read right before the hook, with no await in between: the
+        // staff hook gets the whole result, or, once the family has rotated its refresh token, the result with the
+        // family's newest tokens of its session and every other field the result's (lead decision (26j) of 2026-11-16),
+        // so the cookies it writes never end with a rotated pair.
+        const staff = /** @type {Schemas["ConsoleStaffSession"]} */ (result);
+        const newest = family.replaced.get(tokens.refreshToken)?.tokens;
         await callHook(
           options.onStaffSessionRefreshed,
-          /** @type {Schemas["ConsoleStaffSession"]} */ (result),
+          newest === undefined ? staff : { ...staff, session: withNewest(session, newest) },
         );
       }
       return tokens;
@@ -1189,12 +1214,7 @@ export function createSession(options, transport, family) {
     // The hook gets `result.session` itself, or the result's session with the newest `accessToken` and `refreshToken`
     // and every other field the result's (lead decision (25l) of 2026-11-16): a store it writes never ends with a pair
     // the family has rotated, so the visitor's next request after the window does not present a rotated refresh token.
-    await callHook(
-      options.onSessionRefreshed,
-      newest === undefined
-        ? session
-        : { ...session, accessToken: newest.accessToken, refreshToken: newest.refreshToken },
-    );
+    await callHook(options.onSessionRefreshed, withNewest(session, newest));
   }
 
   /**

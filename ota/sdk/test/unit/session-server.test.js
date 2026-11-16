@@ -6,7 +6,10 @@
 // staff clients holding one refresh token send one refresh and never present a rotated one (task SDK-017). A rotated
 // staff refresh token leads to the family's newest tokens only for a client that held it as its own string before the
 // rotation, or within 10 s of it, and an old staff access token is replaced only together with its session's refresh
-// token (FIX-W52-SDK, lead decisions (21d) and (21e) of 2026-11-13; at the end of this file).
+// token (FIX-W52-SDK, lead decisions (21d) and (21e) of 2026-11-13; the block after the family's). In token and in
+// server mode, onStaffSessionRefreshed gets the family's newest tokens of the staff session whenever its refresh token
+// has been rotated by the time it is called, with the result's other fields, and the OTA admin's staff clients with an
+// access token only run no hook (FIX-W57-SDK, lead decision (26j) of 2026-11-16; the last block).
 import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -630,5 +633,249 @@ describe("server mode: a rotated staff refresh token leads to the newest tokens 
       { refreshToken: STAFF_TOKENS.refreshToken },
     ]);
     expect(expired).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * The staff sessions of the tests below in token mode (a publishable key) and in server mode (a secret key): the
+ * automatic staff refresh works the same in both (the API refuses a publishable key on console operations, which the
+ * fake API does not check).
+ */
+const STAFF_MODES = /** @type {const} */ ({
+  "token mode": { publishableKey: "pk_test_w57_fake" },
+  "server mode": { secretKey: SK },
+});
+
+/** The first tokens of the staff member `stf_1` of `staffApi`: the access token has expired. */
+const STF_1_FIRST = /** @type {const} */ ({
+  accessToken: "at_sdk017_stf_1_0",
+  refreshToken: "rt_sdk017_stf_1_0",
+});
+
+/** How long the starting client's `onSessionRefreshed` runs below (a slow store or log), in ms of the fake clock. */
+const SLOW_HOOK_MS = 20_000;
+
+/**
+ * The details of the n-th staff session of `stf_1` besides its tokens, as the backend's staff refresh gives them: the
+ * n-th access token expires at minute n, every refresh token at the session's absolute end, and the role and
+ * permissions are the current ones of each refresh (role changes apply at refresh, console.d.ts): the staff member
+ * became an admin before the second refresh.
+ * @param {number} n
+ */
+const detailsOf = (n) => ({
+  session: {
+    accessTokenExpiresAt: `2026-11-16T10:${String(n).padStart(2, "0")}:00Z`,
+    refreshTokenExpiresAt: "2026-11-16T22:00:00Z",
+    tokenType: "Bearer",
+    subject: { type: "staff", id: "stf_1", roles: n >= 2 ? ["admin"] : ["agent"] },
+  },
+  permissions: n >= 2 ? ["bookings:read", "bookings:issue"] : ["bookings:read"],
+});
+
+/**
+ * The n-th `ConsoleStaffSession` of `stf_1` with the details of `detailsOf`.
+ * @param {number} n
+ */
+const staffDetailed = (n) => {
+  const base = staffRefreshed(n);
+  const details = detailsOf(n);
+  return { ...base, ...details, session: { ...base.session, ...details.session } };
+};
+
+/**
+ * The answers of `api` with every staff session in them carrying the details of its own refresh (`staffDetailed`).
+ * @param {ReturnType<typeof staffApi>} api
+ * @param {number} count
+ * @returns {import("../helpers/fake-fetch.js").Answer[]}
+ */
+function detailedStaffAnswers(api, count) {
+  return api.answers(count).map((answer) => async (/** @type {any} */ request) => {
+    const response = await /** @type {Function} */ (answer)(request);
+    const accessToken = response.body?.session?.accessToken;
+    return typeof accessToken === "string"
+      ? { ...response, body: staffDetailed(Number(accessToken.split("_").at(-1))) }
+      : response;
+  });
+}
+
+/**
+ * The (22i) scenario for a staff session (lead decision (22i) of 2026-11-15): `starter`'s call refreshes stf_1's first
+ * refresh token, and its `onSessionRefreshed` runs for `SLOW_HOOK_MS`. 1 s in, stf_1's new access token expires and
+ * `other`, another client of the family made with the first tokens before the refresh (so it holds them), follows the
+ * rotation and refreshes the brand-new refresh token rt_sdk017_stf_1_1 into rt_sdk017_stf_1_2. Resolves once the
+ * starter's call has resolved, after its hooks, 19 s after that second rotation.
+ * @param {{ api: ReturnType<typeof staffApi>, starter: import("../../src/index.js").VelexisClient, other: import("../../src/index.js").VelexisClient }} clients
+ */
+async function rotatedWhileStaffHookRan({ api, starter, other }) {
+  const pending = starter.console.auth.me();
+  await vi.advanceTimersByTimeAsync(1_000);
+  api.expireAccessToken("stf_1");
+  await expect(other.console.auth.me()).resolves.toEqual({ member: "stf_1", client: "second" });
+  await vi.advanceTimersByTimeAsync(SLOW_HOOK_MS);
+  await expect(pending).resolves.toEqual({ member: "stf_1", client: "first" });
+}
+
+/** A hook that runs for `SLOW_HOOK_MS` of the fake clock. */
+const slowHook = () => vi.fn(() => new Promise((resolve) => setTimeout(resolve, SLOW_HOOK_MS)));
+
+describe("token and server mode: onStaffSessionRefreshed gets the family's newest tokens of the staff session whenever its refresh token has been rotated by the time it is called", () => {
+  for (const [modeName, key] of Object.entries(STAFF_MODES)) {
+    it(`${modeName}: a store that both staff clients' onStaffSessionRefreshed write ends with the newest pair when another holder rotated the brand-new refresh token while the starting client's onSessionRefreshed ran, and the staff member's next request after the window succeeds instead of REFRESH_TOKEN_REUSED [FIX-W57-SDK AC1]`, async () => {
+      vi.useFakeTimers();
+      const api = staffApi();
+      const fake = createFakeFetch(api.answers(12));
+      const root = createVelexisClient({
+        ...key,
+        fetch: fake.fetch,
+        sessionKind: "staff",
+        environment: "test",
+      });
+      // The staff cookies, which every client's onStaffSessionRefreshed writes (OADR-0018 point 3).
+      const store = { ...STF_1_FIRST };
+      const write = (/** @type {{ session: { accessToken: string, refreshToken: string } }} */ result) => {
+        store.accessToken = result.session.accessToken;
+        store.refreshToken = result.session.refreshToken;
+      };
+      const expired = vi.fn();
+      const starter = root.withOptions({
+        ...STF_1_FIRST,
+        onSessionRefreshed: slowHook(),
+        onStaffSessionRefreshed: write,
+        onSessionExpired: expired,
+      });
+      const other = root.withOptions({
+        ...STF_1_FIRST,
+        headers: { "X-Client": "second" },
+        onStaffSessionRefreshed: write,
+        onSessionExpired: expired,
+      });
+      await rotatedWhileStaffHookRan({ api, starter, other });
+
+      // The other client's hook wrote stf_1's third pair while the starter's onSessionRefreshed ran; the starter's
+      // onStaffSessionRefreshed ran last and wrote that pair too, not the rotated one its result carries.
+      expect(store).toEqual({ accessToken: "at_sdk017_stf_1_2", refreshToken: "rt_sdk017_stf_1_2" });
+
+      // The staff member's next request, 11 s later and outside the window of the second rotation, after the access
+      // token has expired: a request's client made from the cookies.
+      vi.advanceTimersByTime(11_000);
+      api.expireAccessToken("stf_1");
+      const next = root.withOptions({ ...store, onStaffSessionRefreshed: write, onSessionExpired: expired });
+
+      expect(await next.console.auth.me().catch((caught) => caught)).toEqual({
+        member: "stf_1",
+        client: "first",
+      });
+      expect(api.presented).toEqual([STF_1_FIRST.refreshToken, "rt_sdk017_stf_1_1", "rt_sdk017_stf_1_2"]);
+      expect(api.counts.reused).toBe(0);
+      expect(store).toEqual({ accessToken: "at_sdk017_stf_1_3", refreshToken: "rt_sdk017_stf_1_3" });
+      expect(expired).not.toHaveBeenCalled();
+    });
+
+    it(`${modeName}: the staff hook gets the whole result with the family's newest accessToken and refreshToken and every other field the result's (the session's expiries, type and subject, the staff member, the OTA and the permissions), while onSessionRefreshed got result.session [FIX-W57-SDK AC2]`, async () => {
+      vi.useFakeTimers();
+      const api = staffApi();
+      const fake = createFakeFetch(detailedStaffAnswers(api, 8));
+      const root = createVelexisClient({
+        ...key,
+        fetch: fake.fetch,
+        sessionKind: "staff",
+        environment: "test",
+      });
+      const onSessionRefreshed = slowHook();
+      const onStaffSessionRefreshed = vi.fn();
+      const otherHook = vi.fn();
+      const starter = root.withOptions({ ...STF_1_FIRST, onSessionRefreshed, onStaffSessionRefreshed });
+      const other = root.withOptions({
+        ...STF_1_FIRST,
+        headers: { "X-Client": "second" },
+        onStaffSessionRefreshed: otherHook,
+      });
+      await rotatedWhileStaffHookRan({ api, starter, other });
+
+      // The access token's expiry stays the first result's (minute 1, although the newest access token expires at
+      // minute 2: early, never late), and so do the refresh token's, the type, the subject and the role and
+      // permissions of the first refresh (lead decision (26j) of 2026-11-16, as (25l) for onSessionRefreshed).
+      const result = staffDetailed(1);
+      expect(onStaffSessionRefreshed.mock.calls).toEqual([
+        [
+          {
+            ...result,
+            session: {
+              ...result.session,
+              accessToken: "at_sdk017_stf_1_2",
+              refreshToken: "rt_sdk017_stf_1_2",
+            },
+          },
+        ],
+      ]);
+      expect(onSessionRefreshed.mock.calls).toEqual([[result.session]]);
+      // The second refresh's own hook got its result as it is.
+      expect(otherHook.mock.calls).toEqual([[staffDetailed(2)]]);
+    });
+
+    it(`${modeName}: the staff hook gets the result itself when nothing rotated its refresh token, also after a slow onSessionRefreshed [FIX-W57-SDK AC2]`, async () => {
+      vi.useFakeTimers();
+      const api = staffApi();
+      const fake = createFakeFetch(detailedStaffAnswers(api, 4));
+      const root = createVelexisClient({
+        ...key,
+        fetch: fake.fetch,
+        sessionKind: "staff",
+        environment: "test",
+      });
+      const onSessionRefreshed = slowHook();
+      const onStaffSessionRefreshed = vi.fn();
+      const client = root.withOptions({ ...STF_1_FIRST, onSessionRefreshed, onStaffSessionRefreshed });
+
+      const pending = client.console.auth.me();
+      await vi.advanceTimersByTimeAsync(SLOW_HOOK_MS);
+
+      await expect(pending).resolves.toEqual({ member: "stf_1", client: "first" });
+      expect(onStaffSessionRefreshed.mock.calls).toEqual([[staffDetailed(1)]]);
+      // The same session object reaches both hooks: the staff hook's argument is the result, not a copy of it.
+      expect(onStaffSessionRefreshed.mock.calls[0]?.[0].session).toBe(onSessionRefreshed.mock.calls[0]?.[0]);
+    });
+  }
+
+  it("the OTA admin's staff clients, with an access token only, never refresh by themselves nor call a hook, and its explicit console.auth.refresh resolves with the API's result as it is [FIX-W57-SDK AC3]", async () => {
+    const api = staffApi();
+    const fake = createFakeFetch(detailedStaffAnswers(api, 4));
+    const hooks = { onSessionRefreshed: vi.fn(), onStaffSessionRefreshed: vi.fn() };
+    // createConsoleClient of ota/admin/src/lib/velexis.ts: a client per request with the service key, sessionKind
+    // "staff", the environment and the request's staff access token or none (here with hooks, to see that none runs).
+    const adminClient = (/** @type {string | null} */ accessToken) =>
+      createVelexisClient({
+        secretKey: SK,
+        fetch: fake.fetch,
+        sessionKind: "staff",
+        environment: "test",
+        ...(accessToken === null ? {} : { accessToken }),
+        ...hooks,
+      }).console;
+
+    // A server component's call with the expired access token: the admin gets the refusal (and redirects to
+    // /auth/refresh); the SDK sends no refresh.
+    const refused = await adminClient(STF_1_FIRST.accessToken)
+      .auth.me()
+      .catch((caught) => caught);
+    // refreshStaffSession: a client without tokens refreshes explicitly, twice in a row as two de-duplicated
+    // refreshes would (the second presents the first's new refresh token).
+    const first = await adminClient(null).auth.refresh({ refreshToken: STF_1_FIRST.refreshToken });
+    const second = await adminClient(null).auth.refresh({ refreshToken: first.session.refreshToken });
+    // The next request's client, with the newest access token.
+    const me = await adminClient(second.session.accessToken).auth.me();
+
+    expect(refused).toMatchObject({ code: "TOKEN_EXPIRED" });
+    expect([first, second]).toEqual([staffDetailed(1), staffDetailed(2)]);
+    expect(me).toEqual({ member: "stf_1", client: "first" });
+    expect(fake.requests.map((request) => request.path)).toEqual([
+      "/v1/console/auth/me",
+      "/v1/console/auth/refresh",
+      "/v1/console/auth/refresh",
+      "/v1/console/auth/me",
+    ]);
+    expect(api.presented).toEqual([STF_1_FIRST.refreshToken, "rt_sdk017_stf_1_1"]);
+    expect(hooks.onSessionRefreshed).not.toHaveBeenCalled();
+    expect(hooks.onStaffSessionRefreshed).not.toHaveBeenCalled();
   });
 });

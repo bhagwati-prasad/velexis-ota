@@ -25,9 +25,11 @@
 // reporting those to `onSessionRefreshed`, with the result's other fields), or within 10 s of it (a clock set back by
 // at most 10 s keeps it inside), and an old access token only together with its session's refresh token, except that a
 // client given only a non-empty string access token sends the access token of its own latest session result;
-// `accessToken: ""` is no access token and `refreshToken: ""` no refresh token (FIX-W52-SDK, lead decisions (21d) and
-// (21e) of 2026-11-13; FIX-W53-SDK, lead decisions (22g) to (22i), FIX-W54-SDK, (23g) and (23h), and SDK-018, (24l) and
-// (24m), of 2026-11-15; FIX-W56-SDK, (25k) and (25l) of 2026-11-16; internal/session.js).
+// `accessToken: ""` is no access token and `refreshToken: ""` no refresh token; and the automatic staff refresh gives
+// `onStaffSessionRefreshed` the family's newest tokens of the staff session once another holder has rotated its refresh
+// token, every other field the result's (FIX-W52-SDK, lead decisions (21d) and (21e) of 2026-11-13; FIX-W53-SDK, lead
+// decisions (22g) to (22i), FIX-W54-SDK, (23g) and (23h), and SDK-018, (24l) and (24m), of 2026-11-15; FIX-W56-SDK,
+// (25k) and (25l), and FIX-W57-SDK, (26j), of 2026-11-16; internal/session.js).
 
 import { isPageBody, Page } from "./pagination.js";
 import { createFamily, createSession } from "./session.js";
