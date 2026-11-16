@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-11-16
 **Deciders:** Product owner (Node.js 24, the request of 2026-11-15; on 2026-11-16 the owner approved the plan's decisions D1–D18 as recommended, with "yes to all", recorded as lead decision (25n) by FIX-W56-PLAN), lead architect (how the move is made and proven: the upgrade plan of 2026-11-16, its decisions D1–D18 and its nine tasks)
+**Revisions:** 2026-11-16 (lead decision (26d) of 2026-11-16, approved by the owner; FIX-W57-DOCS): the upgrade plan's five open questions are settled ([below](#open-questions-settled-on-2026-11-16)), and items 3, 5 and 9 say what holds now: the lead checks the personal cloud environment's network before proposing it, OBE-103 and PBE-076 measure Node 22 on the installed 22.23.4 and name the exact versions, X-050 AC2 proves the cgroup v2 path in CI, and the SDK's floor stays 22.12 with the `require(esm)` `ExperimentalWarning` before 22.13 documented.
 
 ## Context
 
@@ -77,7 +78,7 @@ A study on 2026-11-15 covered six dimensions. A second agent verified each one, 
 
    There is no CI matrix of both majors. The switch's CI and E2E runs on the integration branch are the A/B run against the commit before it.
 
-   The agents' machine changes to Node 24 between the switch's wave and the next one, and no wave spans the switch. The plan runs the first wave as wave 57 (PBE-077, X-046, X-047, X-050), the switch alone as wave 58 (X-048) and the rest as wave 59 (X-049, SDK-019, OBE-103, PBE-076). After X-048 the integrator puts a verified newest Node 24 first on the agents' machine's `PATH` and keeps `/opt/node22` for the measurements of OBE-103 and PBE-076; for future sessions, a personal cloud environment for the repository, whose setup script does the same, is proposed to the owner (D17).
+   The agents' machine changes to Node 24 between the switch's wave and the next one, and no wave spans the switch. The plan runs the first wave as wave 57 (PBE-077, X-046, X-047, X-050), the switch alone as wave 58 (X-048) and the rest as wave 59 (X-049, SDK-019, OBE-103, PBE-076). After X-048 the integrator puts a verified newest Node 24 first on the agents' machine's `PATH` and keeps `/opt/node22` for the measurements of OBE-103 and PBE-076; for future sessions, a personal cloud environment for the repository, whose setup script does the same, is proposed to the owner (D17). Since 2026-11-16 ((26d), [below](#open-questions-settled-on-2026-11-16)): the lead checks that environment's network before proposing it, and OBE-103 and PBE-076 measure Node 22 on the installed `/opt/node22` (v22.23.4, not updated first) and name the exact versions of both runtimes.
 
    Every task with a pending step on a VM carries a dated note: that step runs after X-048, on Node 24, with the runbook's VM checklist. The tasks are X-020, X-021, X-023, X-024, X-030, X-037, X-038, X-039 and X-041. The note is not a dependency, so plan-lint's remaining critical path stays at 32 agent-hours (X-021 → X-020 → X-023 → X-024 → X-030 → X-038), while the effective path to the first VM rehearsal is about 48 h: X-046, X-047 or X-050 (8 h), X-048 (8 h), then that chain (D2).
 4. **Build cache.** `.nvmrc` is a Turborepo global dependency. A change of the major misses every cached task, and a revert finds the old entries again. Patch updates within 24.x replay, as they did within 22.x.
@@ -88,7 +89,7 @@ A study on 2026-11-15 covered six dimensions. A second agent verified each one, 
 
    On Node 22 this changes two things: the platform API under its limit goes from 4 to 16 MiB, and, outside a limit, the workers and Next.js servers go from 16 to 1 MiB. No VM ran 22.
 
-   The load scripts read each unit's `NODE_OPTIONS` instead of copying them. Inside each real unit under systemd, the units smoke test asserts that V8's heap limit equals old + 3 × semi of that unit's flags, and that Node's constrained memory equals `MemoryMax`. A value changes only with a measurement and a lead decision.
+   The load scripts read each unit's `NODE_OPTIONS` instead of copying them. Inside each real unit under systemd, the units smoke test asserts that V8's heap limit equals old + 3 × semi of that unit's flags, and that Node's constrained memory equals `MemoryMax`. That run, CI's `systemd-units` job (X-050 AC2), is also the proof of the cgroup v2 path inside real units, which the study could not check (2026-11-16, (26d)). A value changes only with a measurement and a lead decision.
 6. **`NODE_MAJOR` moves both ways.** Step `node`:
    - writes the NodeSource line for `node_${NODE_MAJOR}.x`
    - pins `nodejs` to `${NODE_MAJOR}.*` at priority 1001
@@ -104,6 +105,7 @@ A study on 2026-11-15 covered six dimensions. A second agent verified each one, 
    - A peer that fails means a change of provider. Lowering the level (`@SECLEVEL=1`) needs a dated note in this ADR.
    - The root-store change affects only peers chained to the two removed roots. The custom-domain TLS probe judges certificates from Caddy's ACME issuers, which are not among them.
 9. **The SDK.** The SDK supports Node.js 22.12 and later and 24, evergreen browsers and edge runtimes, and says so in its `engines` field.
+   - The floor stays 22.12, not 22.13 (2026-11-16, (26d)): `require()` of the SDK's ES module build is on by default from 22.12.0, and 22.12.x still prints an `ExperimentalWarning` when the requiring file is outside `node_modules`, which 22.13.0 drops. SDK-019 documents that warning where it states the range.
    - A non-required CI job, `sdk-node22`, runs its tests on Node 22.12.0 until Node 22's end of life on 2027-04-30. The owner approved its exact lines on 2026-11-16 (D5, [below](#approved-workflow-lines-d5)); SDK-019 adds them. Without that approval the SDK would have supported Node.js 24 and later.
 10. **Operations and rollback.**
     - **Patches.** NodeSource is not an origin of unattended-upgrades. The weekly `apt list --upgradable` review installs Node patches (`apt-get install --only-upgrade nodejs`) and restarts the app units. The files a patch replaces raise one `aide-change` alert at the next daily check. `/var/log/dpkg.log` explains it, and it is handled as [`deployment-single-vm.md`](../deployment-single-vm.md) §12 says for package updates.
@@ -148,6 +150,18 @@ The owner approved the upgrade plan's decisions as recommended. Where each one l
 | D16 | The SDK declares its range in `engines` | Item 9 (SDK-019) |
 | D17 | X-048 runs alone in its wave; the agents' machine changes to Node 24 after it, and a personal cloud environment is proposed for future sessions | Item 3 |
 | D18 | Each task re-points the PCI evidence pack's file:line references its own diff moves; the integrator's post-merge pass handles shifts from the merge order | Item 3 (the task blocks) |
+
+## Open questions settled on 2026-11-16
+
+*Note (2026-11-16, lead decision (26d) of 2026-11-16, approved by the owner with "yes to all"; FIX-W57-DOCS).* The upgrade plan left five questions open beside D1–D18. They are settled as follows. None of them changes an approved decision, a task's size or the calendars.
+
+| Question | Settled | Where |
+|---|---|---|
+| The SDK's floor: Node.js 22.12 or 22.13 | **22.12 stays**, as approved (D5). `require()` of the SDK's ES module build is on by default from 22.12.0; 22.12.x still prints an `ExperimentalWarning` when the requiring file is outside `node_modules`, which 22.13.0 drops (`CHANGELOG_V22.md`). SDK-019 documents that warning where it states the range, and `sdk-node22` stays on 22.12.0. | Item 9 (SDK-019) |
+| NodeSource's corepack and the external TLS peers: a NodeSource CI job now, or first on the throwaway VM | **First on the throwaway VM**, as approved (D11, the upgrade plan's option (a); D13): no CI job installs nodejs from NodeSource for Node 24. After the switch, the runbook's VM checklist (`docs/mvp/runbooks/node-upgrade.md` §5) proves NodeSource's corepack and pnpm 9.15.9, and the TLS handshakes of item 8, before production. | Items 8 and 11 (X-048, the runbook's VM checklist) |
+| The personal cloud environment's network: does it reach nodejs.org by default | **The lead checks it before proposing the environment** (D17): the proposal is made only once the lead knows whether the environment's network reaches the host its setup script downloads Node 24 from, and it lists that host when the network does not allow it by default. | Item 3 (after X-048) |
+| Node 22 for OBE-103 and PBE-076: the installed 22.23.4, or 22.23.5 first | **The installed `/opt/node22` (v22.23.4)**, not updated first. Each measurement names the exact versions of both runtimes it ran (`node --version`). | Item 3 (OBE-103, PBE-076) |
+| The cgroup v2 path inside real systemd units, which the study could not check | **Proven by X-050 AC2 in CI**: CI's `systemd-units` job asserts, inside each real unit, that V8's heap limit equals old + 3 × semi of the unit's flags and that Node's constrained memory equals its `MemoryMax`. X-050 is not done before that job passes; a constrained memory other than `MemoryMax` stops X-050 for a report (its step 5). | Item 5 (X-050) |
 
 ## Results
 
