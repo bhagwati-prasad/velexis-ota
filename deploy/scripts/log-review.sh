@@ -35,6 +35,11 @@
 #                  also after a deploy or a provisioning run, which never explain it (X-045, lead decision (24c) of
 #                  2026-11-15). Such a check leaves the AIDE state alone: the next check with a result is compared
 #                  with the last one that had a result
+#   aide-stale     AIDE's daily check is overdue or switched off: its newest report started more than 27 hours ago (or
+#                  there is none 27 hours after the step harden of provision-vm.sh first completed), or
+#                  dailyaidecheck.timer is not active or not enabled; once per condition (a newer report that is late
+#                  again is a new one), and once when none is left; no deploy or provisioning run explains it (lead
+#                  decision (25g) of 2026-11-16, a fix under X-045)
 #   shipment       the log shipment failed, or the last verified shipment is older than two hours (state of
 #                  velexis-ship-logs); once when it starts, and once when it recovers
 #   egress-burst   30 or more refused outbound connections (X-041's VELEXIS-EGRESS-DENY lines; the kernel logs at
@@ -48,23 +53,29 @@
 # log folder; accepted SSH logins by user, source and method; refused SSH logins by user and source; root logins; sudo
 # commands by user and command, sudo refusals and su sessions; auditd events on each watched key, and those of the key
 # velexis-aide (AIDE's database and its re-baseline record, X-045) on the database, the record or elsewhere apart from
-# the daily check's own work files (aide.db.new, dailyaidecheck/), each listed; AIDE's last check;
+# the daily check's own work files (aide.db.new, dailyaidecheck/), each listed; AIDE's last check; the age of its
+# newest report and the state of dailyaidecheck.timer (lead decision (25g));
 # unit failures; the WAF's matches by rule (requests matched, and refused with 403); 4xx and 5xx answers on the
 # airline-card route (/v1/checkouts/{id}/airline-card-completion, through Caddy); refused outbound connections by
 # destination and user; fail2ban's bans; the apps' security events and the velexis-* units' warnings and errors.
 # Neither the summary nor an alert quotes a WAF line's [uri] (a body line that holds one is dropped before sending).
 #
-# State: /var/lib/velexis/log-review/ (cursor, ssh-keys, aide, aide-error, shipment, egress-burst, folder-size,
-# summary-day). The file aide holds the last report with a result reviewed: "run <start>", its entries ("<section>
-# <path>") and, since X-044, the detail of each ("detail<TAB><section> <path><TAB><type><TAB><attribute>=<new
-# value>..."); a file without detail lines (X-038's format) compares entries only, once, and gets them with that run.
-# The file aide-error holds the start of the last check without a result that was alerted (X-045).
+# State: /var/lib/velexis/log-review/ (cursor, ssh-keys, aide, aide-error, aide-stale, shipment, egress-burst,
+# folder-size, summary-day). The file aide holds the last report with a result reviewed: "run <start>", its entries
+# ("<section> <path>") and, since X-044, the detail of each ("detail<TAB><section> <path><TAB><type><TAB><attribute>=
+# <new value>..."); a file without detail lines (X-038's format) compares entries only, once, and gets them with that
+# run.
+# The file aide-error holds the start of the last check without a result that was alerted (X-045). The file aide-stale
+# holds "ok", or the conditions of aide-stale alerted, one a line ("report <start>", "report none", "timer-not-active",
+# "timer-not-enabled").
 #
 # Tests only (deploy/scripts/test/log-review.test.sh). With VELEXIS_ROOT=<absolute folder> the paths of this script
 # (/etc/velexis, /var/lib/velexis, /var/log/velexis, /var/log/aide and every home folder) move under that folder, it
 # runs without root, and it takes these overrides:
 #   VELEXIS_ALERT  a command that replaces /usr/local/sbin/velexis-alert (required with VELEXIS_ROOT)
 #   SHIP_LOGS      the ship-logs.sh to read the entries with (required; it gets VELEXIS_ROOT and JOURNALCTL as well)
+#   SYSTEMCTL      a command that replaces systemctl (required), asked only `is-active dailyaidecheck.timer` and
+#                  `is-enabled dailyaidecheck.timer`
 #   PASSWD_FILE    a passwd file instead of `getent passwd` (accounts and their home folders, user names of UIDs)
 #   REVIEW_NOW     the time of the run (epoch seconds) instead of the clock
 # Without VELEXIS_ROOT (the VM) they have no effect.
@@ -81,11 +92,13 @@ if [ -n "$R" ]; then
   [ -d "$R" ] || { echo "$NAME: VELEXIS_ROOT $R is not a folder" >&2; exit 2; }
   [ -n "${VELEXIS_ALERT:-}" ] || { echo "$NAME: with VELEXIS_ROOT, VELEXIS_ALERT must name the stand-in for velexis-alert" >&2; exit 2; }
   [ -n "${SHIP_LOGS:-}" ] || { echo "$NAME: with VELEXIS_ROOT, SHIP_LOGS must name the ship-logs.sh to read with" >&2; exit 2; }
+  [ -n "${SYSTEMCTL:-}" ] || { echo "$NAME: with VELEXIS_ROOT, SYSTEMCTL must name the stand-in for systemctl" >&2; exit 2; }
   PASSWD_FILE="${PASSWD_FILE:-}"
   NOW="${REVIEW_NOW:-$(date -u +%s)}"
 else
   VELEXIS_ALERT=/usr/local/sbin/velexis-alert
   SHIP_LOGS=/usr/local/sbin/velexis-shiplogs
+  SYSTEMCTL=systemctl
   PASSWD_FILE=""
   NOW="$(date -u +%s)"
 fi
@@ -98,6 +111,7 @@ SEC_DIR="$R/var/log/velexis/security"
 DEPLOY_HISTORY="$LIB/deploy-history"
 PROVISION_LOG="$R/var/log/velexis/provision.log"
 AIDE_LOG="$R/var/log/aide/aide.log"
+HARDEN_DONE="$LIB/provision/steps/harden" # provision-vm.sh's record of the step harden's first completion (UTC time)
 
 # Thresholds (X-038 steps 3 and 4, X-041's note of 2026-11-10); not settings.
 SHIP_MAX_AGE=7200                          # the last verified shipment may be two hours old
@@ -105,6 +119,7 @@ SEC_DIR_MAX_BYTES=$((5 * 1024 * 1024 * 1024)) # /var/log/velexis/security/ above
 EGRESS_BURST=30                            # refused outbound connections logged since the last run (about an hour)
 SUMMARY_HOUR=6                             # the daily summary: the first run at or after 06:00 UTC
 FIRST_RUN_WINDOW=3600                      # the first run looks one hour back
+AIDE_MAX_AGE=$((27 * 3600))                # AIDE's newest daily report may be 27 hours old (lead decision (25g))
 # The keys of provision-vm.sh's auditd rules (deployment-single-vm.md §2): each gets a line in the summary.
 WATCHED_KEYS="velexis-config velexis-keys caddy-config systemd-units velexis-scripts caddy-binary sudoers sshd velexis-aide"
 KEY_TYPES_RE='^(ssh-(ed25519|rsa|dss)|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh[.]com|sk-ecdsa-sha2-nistp256@openssh[.]com)$'
@@ -136,6 +151,7 @@ if [ "$MODE" = status ]; then
   printf '%-13s %s\n' summary-day "$(cat "$STATE_DIR/summary-day" 2>/dev/null || echo none)"
   printf '%-13s %s\n' aide-check "$(head -n 1 "$STATE_DIR/aide" 2>/dev/null || echo none)"
   printf '%-13s %s\n' aide-error "$(cat "$STATE_DIR/aide-error" 2>/dev/null || echo none)"
+  printf '%-13s %s\n' aide-stale "$(awk 'NR > 1 { printf "; " } { printf "%s", $0 }' "$STATE_DIR/aide-stale" 2>/dev/null || echo unknown)"
   printf '%-13s %s\n' ssh-keys "$(wc -l <"$STATE_DIR/ssh-keys" 2>/dev/null || echo 0) known"
   printf '%-13s %s\n' cursor "$([ -s "$STATE_DIR/cursor" ] && echo saved || echo none)"
   exit 0
@@ -409,11 +425,13 @@ aide_error() { # start code
     if [ -n "$why" ]; then printf '%s\n' "$why"; else echo "(nothing but its start)"; fi
   } | add_alert aide-error "security alert: AIDE's daily check gave no result"
 }
+AIDE_START="" # the start of AIDE's newest daily report (aide_check), read again by aide_stale_check
 aide_check() {
   local start code entries prev_start window_start changes since
   [ -r "$AIDE_LOG" ] || return 0
   start="$(sed -n 's/^aide run on .* started at \([0-9]\{4\}-[0-9][0-9]-[0-9][0-9]\) \([0-9][0-9]:[0-9][0-9]:[0-9][0-9]\)\.$/\1T\2Z/p' "$AIDE_LOG" | awk 'NR == 1')"
   [ -n "$start" ] || { AIDE_NOTE="AIDE's log has no run"; return 0; }
+  AIDE_START="$start"
   # AIDE's result: dailyaidecheck writes "AIDE returned with exit code <n>. <meaning>" (or "... with a zero exit
   # code. ..."), for an error code (14 and above) inside its frame of asterisks ("*    AIDE returned with exit code 17.
   # Invalid configuration!    *"). A check it stopped before AIDE returned has no such line.
@@ -473,6 +491,89 @@ aide_check() {
   } | add_alert aide-change "security alert: AIDE found changes outside a deploy"
 }
 aide_check
+
+# AIDE's daily check overdue or switched off (lead decision (25g) of 2026-11-16, a fix under X-045). aide-error needs a
+# report to read, but a daily check that never starts (its timer stopped, disabled or gone), or that stops before
+# dailyaidecheck writes its log (it writes it at its end; a check stopped that early tells only the journal), leaves the
+# last report in place, and every review reads that report again. So the immediate alert aide-stale goes out when AIDE's
+# newest report started more than 27 hours before this review (dailyaidecheck.timer runs the check daily at 01:50 UTC
+# plus a random delay of up to 2 hours, so reports start at most 26 hours apart, and the check itself takes minutes),
+# when there is no report 27 hours after the step harden first completed (provision-vm.sh's record; without the record,
+# at once), or when dailyaidecheck.timer is not active or not enabled (a disabled timer does not start again after a
+# reboot). Once per condition, as the other alerts: the file aide-stale holds the conditions alerted ("report <start>",
+# "report none", "timer-not-active", "timer-not-enabled"); a run alerts when one is new (a newer report that is late
+# again is a new one), naming every current one, and sends one recovery message when none is left. No deploy or
+# provisioning run explains it: neither stops the timer (provision-vm.sh's step harden enables it).
+AIDE_STALE_NOTE=""
+duration() { printf '%d h %d min' $(($1 / 3600)) $(($1 % 3600 / 60)); } # seconds -> "<h> h <m> min"
+aide_stale_check() {
+  local age="" first active enabled i new=0 lines=""
+  local -a keys=() whys=()
+  if [ -n "$AIDE_START" ]; then
+    age=$((NOW - $(date -u -d "$AIDE_START" +%s)))
+    AIDE_STALE_NOTE="the newest report started $AIDE_START, $(duration "$age") before this review (alert above 27 h)"
+    if [ "$age" -gt "$AIDE_MAX_AGE" ]; then
+      keys+=("report $AIDE_START")
+      whys+=("its newest report ($(show "$AIDE_LOG")) started $AIDE_START, $(duration "$age") before this review: more than 27 hours")
+    fi
+  else
+    first="$(head -n 1 "$HARDEN_DONE" 2>/dev/null || true)"
+    if [[ "$first" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+      age=$((NOW - $(date -u -d "$first" +%s)))
+      first="provision-vm.sh's step harden first completed $first, $(duration "$age") before this review"
+    else
+      first="no record says when provision-vm.sh's step harden first completed ($(show "$HARDEN_DONE"))"
+    fi
+    AIDE_STALE_NOTE="no report in $(show "$AIDE_LOG"), and $first (alert above 27 h)"
+    if [ -z "$age" ] || [ "$age" -gt "$AIDE_MAX_AGE" ]; then
+      keys+=("report none")
+      whys+=("there is no report in $(show "$AIDE_LOG"), and $first")
+    fi
+  fi
+  active="$("$SYSTEMCTL" is-active dailyaidecheck.timer 2>/dev/null || true)"
+  enabled="$("$SYSTEMCTL" is-enabled dailyaidecheck.timer 2>/dev/null || true)"
+  active="${active%%$'\n'*}" enabled="${enabled%%$'\n'*}"
+  active="${active:-unknown}" enabled="${enabled:-unknown}"
+  AIDE_STALE_NOTE="$AIDE_STALE_NOTE; dailyaidecheck.timer $active, $enabled"
+  if [ "$active" != active ]; then
+    keys+=(timer-not-active)
+    whys+=("dailyaidecheck.timer is $active, not active: no daily check starts")
+  fi
+  if [ "$enabled" != enabled ]; then
+    keys+=(timer-not-enabled)
+    whys+=("dailyaidecheck.timer is $enabled, not enabled: no daily check starts after the next reboot")
+  fi
+  if [ "${#keys[@]}" -eq 0 ]; then
+    echo ok >"$WORK/state/aide-stale"
+    if [ -s "$STATE_DIR/aide-stale" ] && [ "$(cat "$STATE_DIR/aide-stale")" != ok ]; then
+      echo "AIDE's daily check is current again: $AIDE_STALE_NOTE." | add_alert aide-stale "AIDE's daily check is current again"
+    fi
+    return 0
+  fi
+  AIDE_STALE_NOTE="$AIDE_STALE_NOTE; overdue or switched off: the immediate alert aide-stale was sent for it"
+  printf '%s\n' "${keys[@]}" >"$WORK/state/aide-stale"
+  for i in "${!keys[@]}"; do
+    if grep -qxF -- "${keys[i]}" "$STATE_DIR/aide-stale" 2>/dev/null; then
+      lines="$lines- ${whys[i]}"$'\n'
+    else
+      new=1
+      lines="$lines- ${whys[i]} (new)"$'\n'
+    fi
+  done
+  [ "$new" = 1 ] || return 0   # every condition was alerted already
+  {
+    echo "AIDE's daily check (PCI DSS 11.5.2) is overdue or switched off:"
+    printf '%s' "$lines"
+    echo
+    echo "Until it runs again no change to the system files is found, and no aide-change or aide-error alert can come. No"
+    echo "deploy or provisioning run explains it. Find out why at once: sudo systemctl status dailyaidecheck.timer"
+    echo "dailyaidecheck.service, and sudo journalctl -u dailyaidecheck -n 50 (a check that stops before it writes its log"
+    echo "tells only the journal). Then sudo systemctl enable --now dailyaidecheck.timer, sudo systemctl start"
+    echo "dailyaidecheck.service, and review its report (sudo less /var/log/aide/aide.log). If nobody stopped it on purpose,"
+    echo "treat it as an incident (docs/mvp/deployment-single-vm.md §12 and §16)."
+  } | add_alert aide-stale "security alert: AIDE's daily check is overdue or switched off"
+}
+aide_stale_check
 
 # The log shipment.
 SHIP_NOTE=""
@@ -670,6 +771,7 @@ reduce inputs as $e (
     + ($s.audit | map_values(length)) | to_entries | sort_by(.key) | map("  \(.value)  \(.key)") | .[]),
   ($aideaudit | rtrimstr("\n") | split("\n")[]),
   "AIDE: \($aide)",
+  "Daily AIDE check: \($aidestale)",
   "Unit failures (count, unit):", rows($s.units; 30)[],
   "Web application firewall: \($reqs | length) request(s) matched a rule, \($refused) refused with 403 (count matched, refused, rule):",
   (if ($byrule | length) == 0 then "  none" else ($byrule[0:30][] | "  \(.n)  \(.x)  \(.id) \($s.rules[.id] // "")") end),
@@ -680,7 +782,7 @@ reduce inputs as $e (
   "Security events of the apps (count, event, unit):", rows($s.sec; 30)[],
   "Warnings and errors of the velexis-* units (count, unit):", rows($s.warn; 30)[]
 '
-jq -rn --argjson users "$users_json" --arg watched "$WATCHED_KEYS" --arg aide "$AIDE_NOTE" \
+jq -rn --argjson users "$users_json" --arg watched "$WATCHED_KEYS" --arg aide "$AIDE_NOTE" --arg aidestale "$AIDE_STALE_NOTE" \
   --rawfile aideaudit "$WORK/aide-audit" "$SUMMARY" \
   "$WORK/day.jsonl" >"$WORK/summary-lines" || die "could not build the summary"
 sec_files="$(find "$SEC_DIR" -maxdepth 1 -type f -name 'security-*.jsonl.zst' 2>/dev/null | wc -l)"

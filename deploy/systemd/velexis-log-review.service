@@ -1,8 +1,10 @@
 # velexis-log-review.service — the automated review of the security logs (task X-038; PCI DSS 10.4.1, 10.4.1.1, 10.4.2,
 # 11.5), started every hour by velexis-log-review.timer. Runs the root-owned copy of deploy/scripts/log-review.sh
 # installed as /usr/local/sbin/velexis-logreview: an immediate alert, through velexis-alert, for a root login, a new SSH
-# key, a change under /etc/velexis/keys, an AIDE change outside a deploy, a failing or late log shipment, a burst of
-# refused outbound connections and a security log folder above 5 GB; and once a day (the first run at or after 06:00
+# key, a change under /etc/velexis/keys, an AIDE change outside a deploy, a daily AIDE check without a result (X-045),
+# a daily AIDE check overdue or switched off (its newest report older than 27 hours, or dailyaidecheck.timer not active
+# or not enabled, which it asks systemctl; lead decision (25g) of 2026-11-16), a failing or late log shipment, a burst
+# of refused outbound connections and a security log folder above 5 GB; and once a day (the first run at or after 06:00
 # UTC) the summary of the last 24 hours. It exits 1 only when an alert or the summary could not be sent (the next run
 # sends it again), and then OnFailure= reports the unit itself.
 # Docs: docs/mvp/deployment-single-vm.md §12 and §13. Test: deploy/scripts/test/log-review.test.sh.
@@ -29,7 +31,9 @@ StateDirectoryMode=0700
 
 # Sandboxing, as velexis-healthcheck, with one capability: CAP_DAC_READ_SEARCH, to read AIDE's log (owner _aide) and
 # every account's ~/.ssh/authorized_keys (the new-key check), which root does not own. Home folders stay read-only. The
-# network is used for SMTP (velexis-alert, which it runs for its alerts).
+# network is used for SMTP (velexis-alert, which it runs for its alerts). AF_UNIX also carries its read-only questions
+# to systemd (systemctl is-active and is-enabled dailyaidecheck.timer, as root over /run/systemd/private), which need no
+# capability; a refused question reads as "unknown" and raises aide-stale, never a silent pass.
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only

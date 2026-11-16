@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =====================================================================================================
 # log-review.test.sh — tests deploy/scripts/log-review.sh (velexis-logreview) without root, systemd, a journal or SMTP
-# (tasks X-038, X-044 and X-045).
+# (tasks X-038, X-044 and X-045, and lead decision (25g) of 2026-11-16).
 #
 #   bash deploy/scripts/test/log-review.test.sh
 #
@@ -22,6 +22,9 @@
 #                  JSON output makes it (the summary's 5xx on the airline-card route is such a long access line)
 #   VELEXIS_ALERT  a stand-in for velexis-alert that records every `message <subject> <body>` (and refuses them all
 #                  while the flag file alert-fails exists, as an SMTP outage would)
+#   SYSTEMCTL      a stand-in for systemctl that answers `is-active` and `is-enabled` of dailyaidecheck.timer from the
+#                  file fake/timer ("active enabled" unless a case changes it), with systemctl's exit codes, and refuses
+#                  every other call
 #   PASSWD_FILE    a passwd file with root, ubuntu, deploy and velexis-ota
 #   REVIEW_NOW     the time of each run: the runs walk through a day, from 07:20 UTC of today to 06:20 of tomorrow
 #
@@ -58,6 +61,14 @@
 #       re-baseline record and other paths (relative names too), not those on the daily check's own work files
 #       (aide.db.new, dailyaidecheck/, and its rm -rf of that folder, logged with bare file names and rm's working
 #       folder as the PARENT item);
+#   10. AIDE's daily check overdue or switched off (lead decision (25g) of 2026-11-16, a fix under X-045; its checks end
+#       in [FIX-W56-SHARED 25g]), with AIDE 0.18.6's report in the layout of case 8: a fresh report and an active,
+#       enabled timer raise nothing, also when the report is exactly 27 hours old; at 28 hours one aide-stale alert
+#       names the report, and the day's summary says so; the same report raises nothing again; a newer report is one
+#       recovery message; a timer that is not active, then active but not enabled, raises aide-stale for each, once,
+#       and the timer active and enabled again is one recovery message; no report at all raises it once 27 hours after
+#       the step harden first completed (provision-vm.sh's record), and at once without that record; a newer report
+#       that is late as well, while the older one's alert is still open, is one new aide-stale alert;
 #   and over the whole run: no summary or alert holds a value of a WAF line's query, or any [uri] (AC2, lead decision
 #   (17i) of 2026-11-11).
 #
@@ -165,6 +176,19 @@ cat "$out"
 if [ -n "$cursor_file" ] && [ -s "$out" ]; then tail -n 1 "$out" | jq -r .__CURSOR >"$cursor_file"; fi
 rm -f "$out"
 SH
+cat >"$FAKEBIN/systemctl" <<'SH'
+#!/usr/bin/env bash
+# systemctl stand-in: is-active and is-enabled of dailyaidecheck.timer, from $FAKE_STATE/timer ("<active> <enabled>"),
+# with systemctl's exit codes (0 for active or enabled, else 3 or 1); every other call is refused.
+set -euo pipefail
+read -r active enabled <"$FAKE_STATE/timer"
+printf '%s\n' "$*" >>"$FAKE_STATE/systemctl.calls"
+case "$*" in
+  "is-active dailyaidecheck.timer") echo "$active"; [ "$active" = active ] || exit 3 ;;
+  "is-enabled dailyaidecheck.timer") echo "$enabled"; [ "$enabled" = enabled ] || exit 1 ;;
+  *) echo "fake systemctl: unexpected arguments: $*" >&2; exit 2 ;;
+esac
+SH
 cat >"$FAKEBIN/velexis-alert" <<'SH'
 #!/usr/bin/env bash
 # velexis-alert stand-in: records `message <subject> <body-file>`; refuses while $FAKE_STATE/alert-fails exists.
@@ -176,7 +200,8 @@ printf '%s\n' "$2" >"$FAKE_STATE/alerts/$n.subject"
 cat "$3" >"$FAKE_STATE/alerts/$n.body"
 echo "$n" >"$FAKE_STATE/alerts.count"
 SH
-chmod +x "$FAKEBIN/journalctl" "$FAKEBIN/velexis-alert"
+chmod +x "$FAKEBIN/journalctl" "$FAKEBIN/systemctl" "$FAKEBIN/velexis-alert"
+echo "active enabled" >"$FAKE/timer"
 cat >"$PREFIX/passwd" <<'PW'
 root:x:0:0:root:/root:/bin/bash
 ubuntu:x:1000:1000:Ubuntu:/home/ubuntu:/bin/bash
@@ -197,7 +222,8 @@ run_review() { # epoch [args...] -> RC, LAST_OUT; the messages of the run are th
   SEEN="$(cat "$FAKE/alerts.count")"
   RC=0
   env VELEXIS_ROOT="$ROOT" VELEXIS_ALERT="$FAKEBIN/velexis-alert" SHIP_LOGS="$SHIP" JOURNALCTL="$FAKEBIN/journalctl" \
-    PASSWD_FILE="$PREFIX/passwd" REVIEW_NOW="$at" FAKE_STATE="$FAKE" bash "$REVIEW" "$@" >"$LAST_OUT" 2>&1 || RC=$?
+    SYSTEMCTL="$FAKEBIN/systemctl" PASSWD_FILE="$PREFIX/passwd" REVIEW_NOW="$at" FAKE_STATE="$FAKE" bash "$REVIEW" "$@" \
+    >"$LAST_OUT" 2>&1 || RC=$?
 }
 new_count() { echo $(($(cat "$FAKE/alerts.count") - SEEN)); }
 new_subjects() { local i; for ((i = SEEN + 1; i <= $(cat "$FAKE/alerts.count"); i++)); do cat "$FAKE/alerts/$i.subject"; done; }
@@ -808,6 +834,119 @@ shipped_ok "$(at_day 15 7200)"
 run_review "$(at_day 15 7200)" --summary
 check "the summary's AIDE line says the log holds nothing after the start [X-045 AC1]" body_has "security log review $(day 15)" \
   "AIDE: last check $(day 15)T02:13:14Z: no result (its log holds nothing after its start); the immediate alert aide-error was sent for it"
+
+# ---- 10. AIDE's daily check overdue or switched off (lead decision (25g) of 2026-11-16) ----------------------------
+step "FIX-W56-SHARED (25g): a fresh report and an active, enabled timer raise nothing [FIX-W56-SHARED 25g]"
+STALE="security alert: AIDE's daily check is overdue or switched off"
+CURRENT="AIDE's daily check is current again"
+stale_line() { body_of "$STALE" | grep -qxF -- "$1"; } # one line of the run's aide-stale alert
+R16="$(day 16)T02:13:14Z"
+R16_AT="$(date -u -d "$R16" +%s)"
+at16() { echo $((R16_AT + $1 * H)); } # hours after the day-16 report started
+review16() { shipped_ok "$(at16 "$1")"; shift; run_review "$(at16 "$1")" "${@:2}"; }
+# The report of day 16, in AIDE 0.18.6's layout: day 14's entries and detail again (the timer's stamp only touched).
+aide_report "$(day 16) 02:13:14" 5 f "$SSHD_CONF" 2 f "$UNIT" 4 d "$SBIN" 3 t "$STAMP" 16 a "$SCRIPT" 2
+: >"$FAKE/systemctl.calls"
+review16 1 1
+same "the report an hour old, dailyaidecheck.timer active and enabled: no message [FIX-W56-SHARED 25g]" "$RC $(new_count)" "0 0"
+same "the review asks systemctl only whether dailyaidecheck.timer is active and enabled [FIX-W56-SHARED 25g]" \
+  "$(LC_ALL=C sort -u "$FAKE/systemctl.calls" | paste -sd'|' -)" "is-active dailyaidecheck.timer|is-enabled dailyaidecheck.timer"
+review16 2 2 --summary
+check "the summary says how old the newest report is and the timer's state [FIX-W56-SHARED 25g]" \
+  body_has "security log review $(day 16)" "Daily AIDE check: the newest report started $R16, 2 h 0 min before this review (alert above 27 h); dailyaidecheck.timer active, enabled"
+review16 27 27
+same "exactly 27 hours after the report started (the bound): no message [FIX-W56-SHARED 25g]" "$RC $(new_count)" "0 0"
+
+step "FIX-W56-SHARED (25g): a 28-hour-old report raises aide-stale once, and the summary says so [FIX-W56-SHARED 25g]"
+review16 28 28 # 06:13 the next day: also that day's summary
+same "28 hours: the aide-stale alert and the day's summary [FIX-W56-SHARED 25g]" "$RC $(new_subjects | LC_ALL=C sort | paste -sd'|' -)" \
+  "0 $STALE|security log review $(day 17): 0 SSH login(s), 0 as root, 0 sudo command(s), 0 WAF match(es) (0 refused), 0 refused outbound connection(s)"
+check "it names the report, its age and the bound [FIX-W56-SHARED 25g]" \
+  stale_line "- its newest report (/var/log/aide/aide.log) started $R16, 28 h 0 min before this review: more than 27 hours (new)"
+check "and no timer problem: the timer is active and enabled [FIX-W56-SHARED 25g]" not body_has "$STALE" "dailyaidecheck.timer is "
+check "and what to do (deployment §12) [FIX-W56-SHARED 25g]" body_has "$STALE" "sudo systemctl enable --now dailyaidecheck.timer"
+check "the alert is logged as a security event of the kind aide-stale [FIX-W56-SHARED 25g]" \
+  grep -qF '{"security":true,"event":"log_review.alert","kind":"aide-stale",' "$LAST_OUT"
+check "the day's summary says so [FIX-W56-SHARED 25g]" body_has "security log review $(day 17)" \
+  "Daily AIDE check: the newest report started $R16, 28 h 0 min before this review (alert above 27 h); dailyaidecheck.timer active, enabled; overdue or switched off: the immediate alert aide-stale was sent for it"
+review16 29 29
+same "the same report an hour later: no message [FIX-W56-SHARED 25g]" "$RC $(new_count)" "0 0"
+run_review "$(at16 29)" --status
+check "--status shows the condition alerted [FIX-W56-SHARED 25g]" grep -qx "aide-stale *report $R16" "$LAST_OUT"
+review16 30 30
+same "and two hours later neither [FIX-W56-SHARED 25g]" "$RC $(new_count)" "0 0"
+
+step "FIX-W56-SHARED (25g): a newer report is one recovery message [FIX-W56-SHARED 25g]"
+aide_report "$(day 17) 07:30:00" 5 f "$SSHD_CONF" 2 f "$UNIT" 4 d "$SBIN" 3 t "$STAMP" 17 a "$SCRIPT" 2 # a check that ran late
+review16 31 31 # 09:13
+same "one message, the recovery [FIX-W56-SHARED 25g]" "$RC $(new_subjects)" "0 $CURRENT"
+check "it names the new report [FIX-W56-SHARED 25g]" body_has "$CURRENT" \
+  "AIDE's daily check is current again: the newest report started $(day 17)T07:30:00Z, 1 h 43 min before this review (alert above 27 h); dailyaidecheck.timer active, enabled."
+review16 32 32
+same "and the next run sends nothing [FIX-W56-SHARED 25g]" "$RC $(new_count)" "0 0"
+
+step "FIX-W56-SHARED (25g): dailyaidecheck.timer not active, then not enabled: aide-stale for each, once [FIX-W56-SHARED 25g]"
+echo "inactive enabled" >"$FAKE/timer"
+review16 33 33
+same "a timer that is not active: one message, aide-stale [FIX-W56-SHARED 25g]" "$RC $(new_subjects)" "0 $STALE"
+check "it names the timer's state [FIX-W56-SHARED 25g]" stale_line "- dailyaidecheck.timer is inactive, not active: no daily check starts (new)"
+check "and not the report, which is fresh [FIX-W56-SHARED 25g]" not body_has "$STALE" "newest report"
+review16 34 34
+same "the timer still not active an hour later: no message [FIX-W56-SHARED 25g]" "$RC $(new_count)" "0 0"
+echo "active disabled" >"$FAKE/timer"
+review16 35 35
+same "active again but not enabled: one message, aide-stale [FIX-W56-SHARED 25g]" "$RC $(new_subjects)" "0 $STALE"
+check "it names the timer not enabled [FIX-W56-SHARED 25g]" \
+  stale_line "- dailyaidecheck.timer is disabled, not enabled: no daily check starts after the next reboot (new)"
+echo "inactive disabled" >"$FAKE/timer"
+review16 36 36
+same "stopped too: one message, for the condition that is new again [FIX-W56-SHARED 25g]" "$RC $(new_subjects)" "0 $STALE"
+check "it marks the new condition, and names the one alerted before without the mark [FIX-W56-SHARED 25g]" eval \
+  'stale_line "- dailyaidecheck.timer is inactive, not active: no daily check starts (new)" && stale_line "- dailyaidecheck.timer is disabled, not enabled: no daily check starts after the next reboot"'
+review16 37 37
+same "both still there an hour later: no message [FIX-W56-SHARED 25g]" "$RC $(new_count)" "0 0"
+echo "active enabled" >"$FAKE/timer"
+review16 38 38
+same "the timer active and enabled again: one message, the recovery [FIX-W56-SHARED 25g]" "$RC $(new_subjects)" "0 $CURRENT"
+
+step "FIX-W56-SHARED (25g): no report at all raises aide-stale 27 hours after the step harden first completed [FIX-W56-SHARED 25g]"
+mv "$AIDE_LOG" "$PREFIX/aide.log.away"
+HARDEN_DONE="$LIB/provision/steps/harden" # provision-vm.sh's record of the step's first completion
+mkdir -p "$LIB/provision/steps"
+date -u -d "@$(at16 12)" +%Y-%m-%dT%H:%M:%SZ >"$HARDEN_DONE"
+review16 39 39
+same "no report, the step harden first completed exactly 27 hours ago: no message [FIX-W56-SHARED 25g]" "$RC $(new_count)" "0 0"
+review16 40 40
+same "28 hours after it: one message, aide-stale [FIX-W56-SHARED 25g]" "$RC $(new_subjects)" "0 $STALE"
+check "it says there is no report, and since when the step harden completed [FIX-W56-SHARED 25g]" stale_line \
+  "- there is no report in /var/log/aide/aide.log, and provision-vm.sh's step harden first completed $(date -u -d "@$(at16 12)" +%Y-%m-%dT%H:%M:%SZ), 28 h 0 min before this review (new)"
+mv "$PREFIX/aide.log.away" "$AIDE_LOG"
+review16 41 41
+same "the report back: one message, the recovery [FIX-W56-SHARED 25g]" "$RC $(new_subjects)" "0 $CURRENT"
+mv "$AIDE_LOG" "$PREFIX/aide.log.away"
+mv "$HARDEN_DONE" "$PREFIX/harden.away"
+review16 42 42
+same "no report and no record of the step harden: aide-stale at once [FIX-W56-SHARED 25g]" "$RC $(new_subjects)" "0 $STALE"
+check "it says no record tells when the step harden completed [FIX-W56-SHARED 25g]" stale_line \
+  "- there is no report in /var/log/aide/aide.log, and no record says when provision-vm.sh's step harden first completed (/var/lib/velexis/provision/steps/harden) (new)"
+mv "$PREFIX/aide.log.away" "$AIDE_LOG"
+
+step "FIX-W56-SHARED (25g): a newer report that is late as well is a new condition, alerted once [FIX-W56-SHARED 25g]"
+review16 43 43 # day 17, 21:13: the report of day 17 back, 13 h 43 min old
+same "the report back: one message, the recovery [FIX-W56-SHARED 25g]" "$RC $(new_subjects)" "0 $CURRENT"
+review16 57 57 # day 18, 11:13: the report of day 17 is 27 h 43 min old (and day 18's summary goes out)
+same "the report of day 17 late: two messages, aide-stale and day 18's summary [FIX-W56-SHARED 25g]" "$RC $(new_count)" "0 2"
+check "aide-stale names the report of day 17 [FIX-W56-SHARED 25g]" stale_line \
+  "- its newest report (/var/log/aide/aide.log) started $(day 17)T07:30:00Z, 27 h 43 min before this review: more than 27 hours (new)"
+# A newer report that is late already when it appears (a check that ran for hours), while the older one's alert is
+# still open: the condition is the report, so the newer one is alerted, once.
+aide_report "$(day 17) 08:30:00" 5 f "$SSHD_CONF" 2 f "$UNIT" 4 d "$SBIN" 3 t "$STAMP" 17 a "$SCRIPT" 2
+review16 58 58
+same "a newer report that is late as well: one message, aide-stale [FIX-W56-SHARED 25g]" "$RC $(new_subjects)" "0 $STALE"
+check "it names the newer report as new [FIX-W56-SHARED 25g]" stale_line \
+  "- its newest report (/var/log/aide/aide.log) started $(day 17)T08:30:00Z, 27 h 43 min before this review: more than 27 hours (new)"
+review16 59 59
+same "the newer report an hour later: no message [FIX-W56-SHARED 25g]" "$RC $(new_count)" "0 0"
 
 step "Over the whole run"
 ALL="$(cat "$FAKE"/alerts/*.subject "$FAKE"/alerts/*.body)"

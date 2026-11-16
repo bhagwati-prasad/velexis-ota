@@ -37,7 +37,8 @@
 # 2026-11-13) in [FIX-W52-SHARED 21l], AIDE's one-time re-baseline and provision-vm.sh's record of Caddy's drop-in
 # (lead decisions (22d) and (22b) of 2026-11-15) in [FIX-W53-SHARED 22d] and [FIX-W53-SHARED 22b], and AIDE's database
 # after that re-baseline (lead decision (23b) of 2026-11-15) in [FIX-W54-SHARED 23b], and auditd's watches of AIDE's
-# own baseline (task X-045, lead decision (24c) of 2026-11-15) in [X-045 AC2].
+# own baseline (task X-045, lead decision (24c) of 2026-11-15) in [X-045 AC2], and the step caddy's reload of auditd's
+# rules (lead decision (25h) of 2026-11-16) in [FIX-W56-SHARED 25h].
 #
 # What it proves:
 #   1. Two runs of provision-vm.sh --steps users,keys,envfiles: the second changes no key, env or secrets file
@@ -145,6 +146,10 @@
 #      provision-vm.sh wrote), and FAIL, naming §12, for a missing database (after "rebaselined" or "failed"), a
 #      changed one and a last line without a SHA-256; it reports no such item before the record exists or while the
 #      record holds only "started" or "failed" with a database, and the database item keeps its result.
+#      auditd's rules after the step caddy (lead decision (25h) of 2026-11-16, [FIX-W56-SHARED 25h]): step_caddy, read
+#      from provision-vm.sh and run as it is with stand-ins (the caddy package's install makes /etc/caddy), runs
+#      augenrules --load once, after /etc/caddy exists, so that the watch caddy-config covers the folder and its files
+#      from the first run; augenrules failing there warns and the step goes on.
 # =====================================================================================================
 set -euo pipefail
 umask 022
@@ -2741,6 +2746,76 @@ if [ "$RC_OK" = "$(sha256sum <"$RCR/velexis.conf.away" | cut -d' ' -f1)" ] &&
 else
   printf '%s\n' "ok: $RC_OK" "$RC_OUT_OK" "fail: $RC_FAIL" "$RC_OUT_FAIL" "none: $RC_NONE" | indent
   fail "restart_caddy records the drop-in Caddy started with only after the restart [FIX-W53-SHARED 22b]"
+fi
+
+step "the step caddy loads auditd's rules again once the caddy package has made /etc/caddy (lead decision (25h) of 2026-11-16)"
+# The step caddy needs the real VM (apt, dpkg-divert, the Velexis Caddy build). step_caddy runs here as it is, read from
+# provision-vm.sh, under set -e as in the script, in a subshell with stand-ins for what it calls: apt_install makes
+# <root>/etc/caddy as the caddy package does, augenrules records each call and whether <root>/etc/caddy existed at that
+# moment, and the rest answers as on a VM whose Caddy build is installed and diverted already (nothing to restart). On a
+# new VM the step harden loads the rules before this step, when /etc/caddy does not exist yet, and auditctl 3.1.2 then
+# loads -w /etc/caddy/ as a watch of that one path (AUDIT_WATCH), not of the folder and every file below it (AUDIT_DIR):
+# seen in the rule auditctl sends to the kernel. auditctl -l lists both alike, so check-vm.sh cannot tell them apart.
+SC_SRC="$(sed -n '/^step_caddy() {/,/^}/p' "$PROVISION")"
+grep -q '^step_caddy() {' <<<"$SC_SRC" || die "step_caddy() not found in provision-vm.sh"
+SCR="$PREFIX/step-caddy"
+install -d -m 0755 "$SCR/deploy/caddy/build"
+cp "$DEPLOY/caddy/build/versions.env" "$SCR/deploy/caddy/build/versions.env"
+caddy_step_run() { # name augenrules-exit-code -> step_caddy as it is, on a new root; its calls in <root>/calls, exit in <root>/rc
+  local root="$SCR/$1" aug_rc="$2" rc
+  install -d -m 0755 "$root/etc"
+  printf '#!/bin/sh\n' >"$root/caddy-velexis"
+  chmod 0755 "$root/caddy-velexis"
+  : >"$root/calls"
+  # Not inside a condition (if, ||, &&), where bash ignores set -e: the subshell stops where provision-vm.sh would.
+  set +e
+  (
+    set -euo pipefail
+    # shellcheck disable=SC2034 # read by the evaluated step_caddy
+    DEPLOY_DIR="$SCR/deploy" CADDY_BINARY="" CADDY_BUILD="$root/caddy-velexis"
+    # shellcheck disable=SC2317,SC2329 # the stand-ins, called by the evaluated step_caddy
+    {
+      log() { printf 'log: %s\n' "$*" >>"$root/calls"; }
+      warn() { printf 'warn: %s\n' "$*" >>"$root/calls"; }
+      die() { printf 'die: %s\n' "$*" >>"$root/calls"; exit 1; }
+      apt_install() { printf 'apt_install %s\n' "$*" >>"$root/calls"; install -d -m 0755 "$root/etc/caddy"; }
+      augenrules() {
+        printf 'augenrules %s (/etc/caddy %s)\n' "$*" "$(if [ -d "$root/etc/caddy" ]; then echo present; else echo missing; fi)" >>"$root/calls"
+        return "$aug_rc"
+      }
+      install_changed() { printf 'install_changed %s\n' "$*" >>"$root/calls"; return 1; }
+      dpkg-divert() { echo "local diversion of /usr/bin/caddy to /usr/bin/caddy.distrib"; }
+      readlink() { echo "$CADDY_BUILD"; }
+      caddy() { case "$1" in version) echo 'v2.8.4 h1:test' ;; list-modules) echo http.handlers.waf ;; esac; }
+      is_active() { return 1; }
+      restart_caddy() { echo restart_caddy >>"$root/calls"; }
+    }
+    eval "$SC_SRC"
+    step_caddy
+    echo "the step caddy completed" >>"$root/calls"
+  ) >"$OUT/step-caddy-$1.out" 2>&1
+  rc=$?
+  set -e
+  echo "$rc" >"$root/rc"
+}
+caddy_step_run reload 0
+SC_CALLS="$(grep -v '^log: ' "$SCR/reload/calls" || true)"
+if [ "$(cat "$SCR/reload/rc")" = 0 ] &&
+  [ "$SC_CALLS" = "$(printf '%s\n' 'apt_install caddy' 'augenrules --load (/etc/caddy present)' 'the step caddy completed')" ]; then
+  pass "the step caddy runs augenrules --load once, after the caddy package made /etc/caddy, and completes [FIX-W56-SHARED 25h]"
+else
+  indent "$SCR/reload/calls"
+  indent "$OUT/step-caddy-reload.out"
+  fail "the step caddy runs augenrules --load once, after the caddy package made /etc/caddy (exit $(cat "$SCR/reload/rc")) [FIX-W56-SHARED 25h]"
+fi
+caddy_step_run reload-fails 1
+if [ "$(cat "$SCR/reload-fails/rc")" = 0 ] && grep -qx 'warn: augenrules failed; check auditd' "$SCR/reload-fails/calls" &&
+  grep -qx 'the step caddy completed' "$SCR/reload-fails/calls"; then
+  pass "augenrules failing there warns, as in the step harden, and the step goes on [FIX-W56-SHARED 25h]"
+else
+  indent "$SCR/reload-fails/calls"
+  indent "$OUT/step-caddy-reload-fails.out"
+  fail "augenrules failing in the step caddy warns and the step goes on (exit $(cat "$SCR/reload-fails/rc")) [FIX-W56-SHARED 25h]"
 fi
 
 # ---- 7. no secret in any output ------------------------------------------------------------------------------

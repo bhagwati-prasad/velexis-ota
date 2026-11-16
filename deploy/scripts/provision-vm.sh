@@ -96,6 +96,8 @@
 # names deployment §12 and leaves it missing (aide_database_at_harden, lead decision (23b) of 2026-11-15). harden's auditd
 # rules watch AIDE's folder /var/lib/aide/ and that record with the key velexis-aide (task X-045, lead decision (24c) of
 # 2026-11-15), so every write to the database or the record is recorded, and velexis-logreview's daily summary lists it.
+# The step caddy loads those rules again once the caddy package has made /etc/caddy, so that the watch caddy-config
+# covers its files from the first run (lead decision (25h) of 2026-11-16).
 #
 # Tests only: VELEXIS_ROOT=<absolute folder> moves every Velexis path (/etc/velexis, /srv/velexis, /var/lib/velexis,
 # /var/log/velexis, /var/backups/velexis, /usr/local/sbin and the deploy sudoers file), /var/lib/aide/aide.db, /etc/ssh
@@ -356,7 +358,8 @@ EOF
   # after it were loaded until the next boot (found by X-045). So the folders this script owns are made first, with the
   # owners and modes of the steps users, keys and the step records (the record itself may be missing: its watch takes
   # effect when it is made), and the two watches of AIDE's baseline come last. /etc/caddy and caddy-velexis come with
-  # the step caddy; their folders exist.
+  # the step caddy; their parent folders exist. A watch of a folder that does not exist yet loads as a watch of that one
+  # path, so the step caddy loads the rules again once the package has made /etc/caddy (lead decision (25h)).
   [ -d "$ETC" ] || install -d -m 0711 -o root -g root "$ETC"
   [ -d "$ETC/keys" ] || install -d -m 0711 -o root -g root "$ETC/keys"
   [ -d "$LIB" ] || install -d -m 0711 -o root -g root "$LIB"
@@ -1095,6 +1098,12 @@ restart_caddy() { # restarts Caddy, then records the drop-in it started with (sy
 step_caddy() {
   log "Caddy 2.8: the package, and the Velexis build with the web application firewall as /usr/bin/caddy"
   apt_install caddy
+  # auditd's rules again, now that the package has made /etc/caddy (lead decision (25h) of 2026-11-16, a fix under
+  # X-045). On a new VM the step harden loads them before this step, when /etc/caddy does not exist yet, and auditctl
+  # (3.1.2, Ubuntu 24.04) makes a folder watch of -w /etc/caddy/ only when it finds the folder: for a missing one it
+  # loads a watch of that one path, which does not cover the files in the folder. Loaded again here, the watch
+  # caddy-config covers /etc/caddy and every file below it from the first run, not only from the next boot.
+  augenrules --load >/dev/null || warn "augenrules failed; check auditd"
   local src="$CADDY_BINARY" want got changed=0
   if [ -z "$src" ] && [ -f "$DEPLOY_DIR/../caddy/bin/caddy" ]; then src="$DEPLOY_DIR/../caddy/bin/caddy"; fi
   want="$(sed -n 's/^CADDY_SHA256=\([0-9a-f]\{64\}\)$/\1/p' "$DEPLOY_DIR/caddy/build/versions.env")"
