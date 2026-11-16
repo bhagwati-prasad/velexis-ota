@@ -25,12 +25,12 @@
 #             (/var/lib/velexis/provision/aide-rebaseline; lead decision (22d) of 2026-11-15), and from then on
 #             /var/lib/aide/aide.db present with the SHA-256 of the record's last "rebaselined" or "manual" line
 #             (lead decision (23b) of 2026-11-15)
-#   services  postgresql, redis-server, caddy, velexis-backup.timer and velexis-healthcheck.timer active and enabled,
-#             the cluster postgresql@16-main active; fail2ban, auditd and chrony active and enabled; Node.js 22; the
-#             security logs of task X-038 (lead decision (20p) of 2026-11-13): velexis-ship-logs.timer and
-#             velexis-log-review.timer active and enabled, and auditd's syslog plugin on as provision-vm.sh writes it
-#             (/etc/audit/plugins.d/syslog.conf: active = yes, direction = out, path = an executable audisp-syslog), so
-#             that auditd's records reach the journal and leave the VM
+#   services  postgresql, redis-server, caddy, velexis-backup.timer and velexis-healthcheck.timer active and enabled, the
+#             cluster postgresql@16-main active; fail2ban, auditd and chrony active and enabled; Node.js, its apt pin and
+#             its NodeSource line of provision-vm.sh's NODE_MAJOR (X-047); the security logs of X-038 (lead decision (20p)
+#             of 2026-11-13): velexis-ship-logs.timer and velexis-log-review.timer active and enabled, and auditd's syslog
+#             plugin on as provision-vm.sh writes it (/etc/audit/plugins.d/syslog.conf: active = yes, direction = out,
+#             path = an executable audisp-syslog), so its records reach the journal and leave the VM
 #   audit     auditd watches AIDE's own baseline (task X-045, lead decision (24c) of 2026-11-15): the rules file
 #             /etc/audit/rules.d/velexis.rules holds provision-vm.sh's two watches with the key velexis-aide (the folder
 #             /var/lib/aide/ and the record /var/lib/velexis/provision/aide-rebaseline, writes and attribute changes),
@@ -71,8 +71,8 @@
 #             secret, ota-backend.env and ota-admin.env the same service key (compared, never printed)
 #
 # Options: --only <group,...>; --templates <folder> (the env templates; default: env/ of this script's deploy/ folder).
-# Environment: DEPLOY_USER (deploy), DB_NAME (velexis), PG_MAJOR (16), the same values as for provision-vm.sh. The
-# admin users need no setting: they are the users of sshd's AllowUsers other than DEPLOY_USER.
+# Environment: DEPLOY_USER (deploy), DB_NAME (velexis), PG_MAJOR (16) and NODE_MAJOR: the values and defaults of
+# provision-vm.sh. The admin users need no setting: they are the users of sshd's AllowUsers other than DEPLOY_USER.
 # Tests only: VELEXIS_ROOT=<absolute folder> reads every file under that folder instead of / (the switch of
 # provision-vm.sh); deploy/scripts/test/check-vm.test.sh also puts fake system tools first on PATH.
 # =====================================================================================================
@@ -313,7 +313,7 @@ group_system() {
 
 # ---- services ---------------------------------------------------------------------------------------------
 group_services() {
-  local u s v
+  local u s v major
   if ! have systemctl; then fail "systemctl is installed"; return; fi
   for u in postgresql redis-server caddy velexis-backup.timer velexis-healthcheck.timer fail2ban auditd chrony; do
     s="$(unit_state "$u")"
@@ -333,7 +333,46 @@ group_services() {
   s="$(systemctl is-active "postgresql@${PG_MAJOR}-main" 2>/dev/null)"
   if [ "$s" = active ]; then pass "postgresql@${PG_MAJOR}-main is active"; else fail "postgresql@${PG_MAJOR}-main is active (found: ${s:-unknown})"; fi
   v="$(node --version 2>/dev/null)"
-  case "$v" in v22.*) pass "Node.js $v" ;; *) fail "Node.js 22 (found: ${v:-none})" ;; esac
+  major="${NODE_MAJOR:-22}"; case "$v" in "v$major".*) pass "Node.js $v" ;; *) fail "Node.js $major (found: ${v:-none})" ;; esac
+  nodejs_pin "$major"
+  nodesource_line "$major"
+}
+
+# Node.js's major on apt's side (task X-047, ADR-0029 item 6): provision-vm.sh's step node pins nodejs to NODE_MAJOR
+# at priority 1001 and writes NodeSource's line for it, so that apt keeps that major, also against a newer one, until a
+# run with another NODE_MAJOR moves both. check-vm.sh compares with the NODE_MAJOR it is given: after such a move, run
+# it with the same one (sudo NODE_MAJOR=<n> bash check-vm.sh). Neither file holds a secret.
+NODEJS_PIN="$R/etc/apt/preferences.d/velexis-nodejs"
+NODESOURCE_LIST="$R/etc/apt/sources.list.d/nodesource.list"
+node_way() { # major -> what to do about a pin or a line of another major
+  printf "check-vm.sh compares with NODE_MAJOR=%s: give it the VM's NODE_MAJOR, or move the VM with sudo NODE_MAJOR=%s bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps node" "$1" "$1"
+}
+active_lines() { grep -vE '^[[:space:]]*(#|$)' "$1"; } # a file's lines without comments and blank lines
+nodejs_pin() { # major
+  local want found what
+  what="nodejs is pinned to Node.js $1 ($(show "$NODEJS_PIN"): Pin: version $1.*, Pin-Priority: 1001)"
+  want="$(printf 'Package: nodejs\nPin: version %s.*\nPin-Priority: 1001' "$1")"
+  if [ ! -f "$NODEJS_PIN" ]; then
+    fail "$what: the file is missing (sudo NODE_MAJOR=$1 bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps node)"
+  elif [ "$(active_lines "$NODEJS_PIN")" = "$want" ]; then
+    pass "$what"
+  else
+    found="$(active_lines "$NODEJS_PIN" | awk '{ printf "%s%s", (NR > 1 ? "; " : ""), $0 }')"
+    fail "$what (found: ${found:-no setting}; $(node_way "$1"))"
+  fi
+}
+nodesource_line() { # major
+  local want found what
+  what="apt takes nodejs from NodeSource's node_$1.x ($(show "$NODESOURCE_LIST"))"
+  want="deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$1.x nodistro main"
+  if [ ! -f "$NODESOURCE_LIST" ]; then
+    fail "$what: the file is missing (sudo NODE_MAJOR=$1 bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps node)"
+  elif [ "$(active_lines "$NODESOURCE_LIST")" = "$want" ]; then
+    pass "$what"
+  else
+    found="$(active_lines "$NODESOURCE_LIST" | grep -oE 'https?://[^ ]+' | paste -sd' ' -)"
+    fail "$what (found: ${found:-no repository}; $(node_way "$1"))"
+  fi
 }
 
 # auditd's syslog plugin (X-038): the settings provision-vm.sh writes (audit_records_to_journal). The package ships the

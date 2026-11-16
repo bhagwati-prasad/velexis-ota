@@ -38,7 +38,8 @@
 # (lead decisions (22d) and (22b) of 2026-11-15) in [FIX-W53-SHARED 22d] and [FIX-W53-SHARED 22b], and AIDE's database
 # after that re-baseline (lead decision (23b) of 2026-11-15) in [FIX-W54-SHARED 23b], and auditd's watches of AIDE's
 # own baseline (task X-045, lead decision (24c) of 2026-11-15) in [X-045 AC2], and the step caddy's reload of auditd's
-# rules (lead decision (25h) of 2026-11-16) in [FIX-W56-SHARED 25h].
+# rules (lead decision (25h) of 2026-11-16) in [FIX-W56-SHARED 25h], and the Node.js major (task X-047) in [X-047 AC3]
+# and [X-047 AC4].
 #
 # What it proves:
 #   1. Two runs of provision-vm.sh --steps users,keys,envfiles: the second changes no key, env or secrets file
@@ -150,6 +151,18 @@
 #      from provision-vm.sh and run as it is with stand-ins (the caddy package's install makes /etc/caddy), runs
 #      augenrules --load once, after /etc/caddy exists, so that the watch caddy-config covers the folder and its files
 #      from the first run; augenrules failing there warns and the step goes on.
+#  10. The Node.js major (task X-047, ADR-0029 item 6): check-vm.sh (group services) reports PASS for the Node item, the
+#      nodejs pin (/etc/apt/preferences.d/velexis-nodejs: Pin: version <major>.*, Pin-Priority: 1001) and NodeSource's
+#      line (node_<major>.x) of provision-vm.sh's NODE_MAJOR default, unset or given, and FAIL, naming the expected and
+#      the found major, for a node --version, a pin or a line of another major, no Node.js, a pin or a list missing, a
+#      pin of a lower priority, for another package or commented out, a second NodeSource line, and for all three items
+#      when it is given another NODE_MAJOR than the VM's ([X-047 AC3]). step_node, read from provision-vm.sh and run as
+#      it is with a stand-in apt-get that picks nodejs's version as apt_preferences(5) says, writes the line the step
+#      packages writes and the pin, runs apt-get update only when either changed and installs with --allow-downgrades:
+#      on a new VM it installs the default major, a second run changes no file, another NODE_MAJOR moves nodejs up and
+#      the default back down (which apt does only for a pin above priority 999 and with --allow-downgrades), and
+#      check-vm.sh passes with the same NODE_MAJOR each time; it refuses a malformed NODE_MAJOR and a missing NodeSource
+#      key before it writes anything ([X-047 AC4]).
 # =====================================================================================================
 set -euo pipefail
 umask 022
@@ -169,9 +182,15 @@ indent() { sed 's/^/     /' "$@"; }
 
 [ "$(id -u)" -eq 0 ] || die "run as root (sudo)"
 [ ! -e /etc/velexis ] || die "/etc/velexis exists: this looks like a provisioned Velexis VM; run the test on a CI runner or a development machine"
-for tool in openssl visudo python3 useradd userdel groupdel gpasswd getent sha256sum; do
+for tool in openssl visudo python3 useradd userdel groupdel gpasswd getent sha256sum dpkg; do
   command -v "$tool" >/dev/null || die "$tool is missing"
 done
+# provision-vm.sh's NODE_MAJOR default (task X-047): the major of the healthy VM below. Both scripts read NODE_MAJOR from
+# the environment, so it is set only where a case says so.
+# shellcheck disable=SC2016 # provision-vm.sh's own line, not expanded
+PROVISION_NODE_MAJOR="$(sed -n 's/^: "\${NODE_MAJOR:=\([1-9][0-9]*\)}"$/\1/p' "$PROVISION")"
+[ -n "$PROVISION_NODE_MAJOR" ] || die "provision-vm.sh's NODE_MAJOR default (: \"\${NODE_MAJOR:=<major>}\") was not found"
+unset NODE_MAJOR
 
 PREFIX="$(mktemp -d "${CHECKVM_TMPDIR:-/tmp}/velexis-checkvm.XXXXXX")"
 chmod 0755 "$PREFIX"
@@ -763,6 +782,12 @@ EOF
   echo 7.4.2 >"$FAKE/redis-version"
   printf '%s\n' 'maxmemory-policy noeviction' 'maxmemory 536870912' 'appendonly yes' >"$FAKE/redis-config"
   rm -f "$FAKE/redis-open" "$FAKE/caddy-invalid" "$FAKE/nft-fails"
+  # provision-vm.sh's step node (X-047): nodejs pinned to its NODE_MAJOR default, and NodeSource's line (below).
+  printf 'Package: nodejs\nPin: version %s.*\nPin-Priority: 1001\n' "$PROVISION_NODE_MAJOR" >"$PREFIX/velexis-nodejs"
+  cmp -s "$PREFIX/velexis-nodejs" "$ROOT/etc/apt/preferences.d/velexis-nodejs" \
+    || install -D -m 0644 "$PREFIX/velexis-nodejs" "$ROOT/etc/apt/preferences.d/velexis-nodejs"
+  [ ! -f "$PREFIX/nodesource.list" ] || cmp -s "$PREFIX/nodesource.list" "$ROOT/etc/apt/sources.list.d/nodesource.list" \
+    || install -m 0644 "$PREFIX/nodesource.list" "$ROOT/etc/apt/sources.list.d/nodesource.list"
   # The table the step egress loaded (X-041), once it has run below.
   rm -rf "$FAKE/nft"
   [ ! -d "$FAKE/nft.healthy" ] || cp -a "$FAKE/nft.healthy" "$FAKE/nft"
@@ -799,6 +824,7 @@ Components: main
 Enabled: no
 EOF
 echo 'deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main' >"$ROOT/etc/apt/sources.list.d/nodesource.list"
+cp "$ROOT/etc/apt/sources.list.d/nodesource.list" "$PREFIX/nodesource.list" # healthy() puts it back (X-047)
 echo 'deb [signed-by=/etc/apt/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' >"$ROOT/etc/apt/sources.list.d/pgdg.list"
 echo 'deb [signed-by=/etc/apt/keyrings/redis.gpg] https://packages.redis.io/deb noble main' >"$ROOT/etc/apt/sources.list.d/redis.list"
 echo 'deb [signed-by=/etc/apt/keyrings/caddy.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main' >"$ROOT/etc/apt/sources.list.d/caddy.list"
@@ -959,6 +985,9 @@ PASS velexis-log-review.timer is active and enabled (security logs, X-038)
 PASS auditd's syslog plugin is on (/etc/audit/plugins.d/syslog.conf: active = yes, direction = out, path = audisp-syslog)
 PASS auditd's rules file holds the watches of AIDE's database and its record (key velexis-aide)
 PASS auditd watches AIDE's database and its record (auditctl -l, key velexis-aide)
+PASS Node.js v$PROVISION_NODE_MAJOR.
+PASS nodejs is pinned to Node.js $PROVISION_NODE_MAJOR (/etc/apt/preferences.d/velexis-nodejs: Pin: version $PROVISION_NODE_MAJOR.*, Pin-Priority: 1001)
+PASS apt takes nodejs from NodeSource's node_$PROVISION_NODE_MAJOR.x (/etc/apt/sources.list.d/nodesource.list)
 EOF
 if [ "$covered" = 1 ]; then
   pass "every item of the task has a PASS line, the SSH methods of both users and the outbound allow-list included [X-020 AC2] [X-037 AC2] [X-041 AC1]"
@@ -2816,6 +2845,270 @@ else
   indent "$SCR/reload-fails/calls"
   indent "$OUT/step-caddy-reload-fails.out"
   fail "augenrules failing in the step caddy warns and the step goes on (exit $(cat "$SCR/reload-fails/rc")) [FIX-W56-SHARED 25h]"
+fi
+
+step "the Node.js major: check-vm.sh's Node item, the nodejs pin and NodeSource's line against NODE_MAJOR (task X-047)"
+# check-vm.sh (group services) compares node --version, /etc/apt/preferences.d/velexis-nodejs and
+# /etc/apt/sources.list.d/nodesource.list with the NODE_MAJOR it is given, provision-vm.sh's default when it is given
+# none: the healthy fixture is a VM that provision-vm.sh's step node left on that default. NODE_OTHER is another major.
+healthy
+NODE_OTHER=$((PROVISION_NODE_MAJOR + 2))
+NODE_PIN="$ROOT/etc/apt/preferences.d/velexis-nodejs"
+NODE_LIST="$ROOT/etc/apt/sources.list.d/nodesource.list"
+node_items() { # major node-version -> the three PASS lines of a VM on that major
+  printf '%s\n' "PASS Node.js $2" \
+    "PASS nodejs is pinned to Node.js $1 (/etc/apt/preferences.d/velexis-nodejs: Pin: version $1.*, Pin-Priority: 1001)" \
+    "PASS apt takes nodejs from NodeSource's node_$1.x (/etc/apt/sources.list.d/nodesource.list)"
+}
+node_lines() { grep -E '^(PASS|FAIL) (Node\.js|nodejs is pinned|apt takes nodejs)' "$1" || true; } # output -> its three items
+HEALTHY_NODE="$(cat "$FAKE/node-version")"
+for given in unset "$PROVISION_NODE_MAJOR"; do
+  out="$OUT/node-major-$given.out"
+  if [ "$given" = unset ]; then
+    if run_check "$out" --only services; then rc=0; else rc=$?; fi
+  elif NODE_MAJOR="$given" run_check "$out" --only services; then rc=0; else rc=$?; fi
+  if [ "$rc" = 0 ] && [ "$(node_lines "$out")" = "$(node_items "$PROVISION_NODE_MAJOR" "$HEALTHY_NODE")" ]; then
+    pass "NODE_MAJOR $given: the Node item, the nodejs pin and NodeSource's line pass for provision-vm.sh's major ($PROVISION_NODE_MAJOR) [X-047 AC3]"
+  else
+    indent "$out"
+    fail "NODE_MAJOR $given: the Node item, the nodejs pin and NodeSource's line pass for provision-vm.sh's major (exit $rc) [X-047 AC3]"
+  fi
+done
+NODE_WAY="check-vm.sh compares with NODE_MAJOR=$PROVISION_NODE_MAJOR: give it the VM's NODE_MAJOR, or move the VM with sudo NODE_MAJOR=$PROVISION_NODE_MAJOR bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps node"
+# shellcheck disable=SC2016 # a sed program
+NODE_WAY_RE="$(printf '%s' "$NODE_WAY" | sed 's/[][\.*^$()+?{}|]/\\&/g')"
+PIN_ITEM="nodejs is pinned to Node.js $PROVISION_NODE_MAJOR \\(/etc/apt/preferences\\.d/velexis-nodejs: Pin: version $PROVISION_NODE_MAJOR\\.\\*, Pin-Priority: 1001\\)"
+LIST_ITEM="apt takes nodejs from NodeSource's node_$PROVISION_NODE_MAJOR\\.x \\(/etc/apt/sources\\.list\\.d/nodesource\\.list\\)"
+echo "v$NODE_OTHER.1.0" >"$FAKE/node-version"
+broken "a Node.js of another major than provision-vm.sh's" services "Node\\.js $PROVISION_NODE_MAJOR \\(found: v$NODE_OTHER\\.1\\.0\\)\$" "X-047 AC3"
+: >"$FAKE/node-version"
+broken "no Node.js" services "Node\\.js $PROVISION_NODE_MAJOR \\(found: none\\)\$" "X-047 AC3"
+healthy
+mv "$NODE_PIN" "$PREFIX/velexis-nodejs.away"
+broken "no nodejs pin" services "$PIN_ITEM: the file is missing \\(sudo NODE_MAJOR=$PROVISION_NODE_MAJOR bash /srv/velexis/current/deploy/scripts/provision-vm\\.sh --steps node\\)\$" "X-047 AC3"
+healthy
+printf 'Package: nodejs\nPin: version %s.*\nPin-Priority: 1001\n' "$NODE_OTHER" >"$NODE_PIN"
+broken "a nodejs pin of another major" services \
+  "$PIN_ITEM \\(found: Package: nodejs; Pin: version $NODE_OTHER\\.\\*; Pin-Priority: 1001; $NODE_WAY_RE\\)\$" "X-047 AC3"
+healthy
+sed -i 's/^Pin-Priority: 1001$/Pin-Priority: 500/' "$NODE_PIN"
+broken "a nodejs pin of the right major at priority 500 (apt would not go back to it)" services \
+  "$PIN_ITEM \\(found: Package: nodejs; Pin: version $PROVISION_NODE_MAJOR\\.\\*; Pin-Priority: 500; " "X-047 AC3"
+healthy
+sed -i 's/^/# /' "$NODE_PIN"
+broken "a nodejs pin commented out" services "$PIN_ITEM \\(found: no setting; $NODE_WAY_RE\\)\$" "X-047 AC3"
+healthy
+sed -i 's/^Package: nodejs$/Package: nodejs-doc/' "$NODE_PIN"
+broken "a pin of the right major for another package than nodejs" services \
+  "$PIN_ITEM \\(found: Package: nodejs-doc; Pin: version $PROVISION_NODE_MAJOR\\.\\*; Pin-Priority: 1001; $NODE_WAY_RE\\)\$" "X-047 AC3"
+healthy
+sed -i "s#/node_$PROVISION_NODE_MAJOR\\.x #/node_$NODE_OTHER.x #" "$NODE_LIST"
+broken "NodeSource's line of another major" services \
+  "$LIST_ITEM \\(found: https://deb\\.nodesource\\.com/node_$NODE_OTHER\\.x; $NODE_WAY_RE\\)\$" "X-047 AC3"
+healthy
+sed "s#/node_$PROVISION_NODE_MAJOR\\.x #/node_$NODE_OTHER.x #" "$PREFIX/nodesource.list" >>"$NODE_LIST"
+broken "a second NodeSource line, of another major" services \
+  "$LIST_ITEM \\(found: https://deb\\.nodesource\\.com/node_$PROVISION_NODE_MAJOR\\.x https://deb\\.nodesource\\.com/node_$NODE_OTHER\\.x; " "X-047 AC3"
+healthy
+mv "$NODE_LIST" "$PREFIX/nodesource.list.away"
+broken "no NodeSource list" services "$LIST_ITEM: the file is missing \\(sudo NODE_MAJOR=$PROVISION_NODE_MAJOR bash " "X-047 AC3"
+healthy
+# Given another NODE_MAJOR than the VM's (after a move, check-vm.sh runs with the same NODE_MAJOR): all three fail.
+out="$OUT/node-major-other-given.out"
+if NODE_MAJOR="$NODE_OTHER" run_check "$out" --only services; then rc=0; else rc=$?; fi
+OTHER_WAY="check-vm.sh compares with NODE_MAJOR=$NODE_OTHER: give it the VM's NODE_MAJOR, or move the VM with sudo NODE_MAJOR=$NODE_OTHER bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps node"
+if [ "$rc" = 1 ] && [ "$(node_lines "$out")" = "$(printf '%s\n' "FAIL Node.js $NODE_OTHER (found: $HEALTHY_NODE)" \
+  "FAIL nodejs is pinned to Node.js $NODE_OTHER (/etc/apt/preferences.d/velexis-nodejs: Pin: version $NODE_OTHER.*, Pin-Priority: 1001) (found: Package: nodejs; Pin: version $PROVISION_NODE_MAJOR.*; Pin-Priority: 1001; $OTHER_WAY)" \
+  "FAIL apt takes nodejs from NodeSource's node_$NODE_OTHER.x (/etc/apt/sources.list.d/nodesource.list) (found: https://deb.nodesource.com/node_$PROVISION_NODE_MAJOR.x; $OTHER_WAY)")" ]; then
+  pass "NODE_MAJOR=$NODE_OTHER on a VM of $PROVISION_NODE_MAJOR: the Node item, the pin and the line fail, naming both majors [X-047 AC3]"
+else
+  indent "$out"
+  fail "NODE_MAJOR=$NODE_OTHER on a VM of $PROVISION_NODE_MAJOR: the Node item, the pin and the line fail, naming both majors (exit $rc) [X-047 AC3]"
+fi
+
+step "provision-vm.sh's step node moves nodejs to NODE_MAJOR in either direction (task X-047)"
+# The step node needs the real VM (apt, NodeSource, corepack). step_node runs here as it is, read from provision-vm.sh
+# with node_apt_file, install_changed and apt_install, under set -e as in the script, in a subshell on a root of its own
+# (VELEXIS_ROOT) with stand-ins: apt-get update takes the major of NodeSource's line as the one the repository offers
+# (<major>.30.0-1nodesource1); apt-get install picks nodejs's version as apt_preferences(5) says (the highest priority,
+# then the highest version: 500 for Ubuntu's 18.19.1 and NodeSource's, 100 for the installed one, the pin's for the
+# versions it matches; an installed newer version stays unless the priority is 1000 or more) and refuses a downgrade
+# without --allow-downgrades, as apt-get install -y does; node prints the installed version; corepack records its calls.
+SN_SRC="$(sed -n '/^APT_OPTS=(/p; /^apt_install() { /p; /^install_changed() {/,/^}/p; /^node_apt_file() {/,/^}/p; /^step_node() {/,/^}/p' "$PROVISION")"
+for f in 'step_node() {' 'node_apt_file() {' 'apt_install() { '; do
+  grep -q "^$f" <<<"$SN_SRC" || die "${f%% *} not found in provision-vm.sh"
+done
+# shellcheck disable=SC2016 # provision-vm.sh's own lines, not expanded
+PNPM_DEFAULT="$(sed -n 's/^: "\${PNPM_VERSION:=\([0-9.]*\)}"$/\1/p' "$PROVISION")"
+# The line the step packages writes (its echo, read from provision-vm.sh): step_node must write the same line.
+PACKAGES_LINE="$(sed -n '/^step_packages() {/,/^}/p' "$PROVISION" | grep -A1 'https://deb.nodesource.com/node_' | head -n 1 | sed 's/ \\$//')"
+# shellcheck disable=SC2016 # the step packages' own line, expanded by packages_line
+case "$PACKAGES_LINE" in *'echo "deb '*'node_${NODE_MAJOR}.x'*) ;; *) die "the step packages' NodeSource line was not found in provision-vm.sh" ;; esac
+packages_line() { ( NODE_MAJOR="$1"; eval "$PACKAGES_LINE" ); } # major -> the line the step packages writes for it
+SNR="$PREFIX/step-node"
+node_step_run() { # root major -> step_node as it is on that root; its calls in <root>/calls, its exit code in <root>/rc
+  local root="$1" major="$2" rc
+  : >"$root/calls"
+  # Not inside a condition (if, ||, &&), where bash ignores set -e: the subshell stops where provision-vm.sh would.
+  set +e
+  (
+    set -euo pipefail
+    # shellcheck disable=SC2034 # read by the evaluated step_node
+    VELEXIS_ROOT="$root" NODE_MAJOR="$major" PNPM_VERSION="$PNPM_DEFAULT"
+    # shellcheck disable=SC2317,SC2329 # the stand-ins, called by the evaluated step_node
+    {
+      log() { printf 'log: %s\n' "$*" >>"$root/calls"; }
+      die() { printf 'die: %s\n' "$*" >>"$root/calls"; exit 1; }
+      corepack() { printf 'corepack %s\n' "$*" >>"$root/calls"; }
+      node() { [ "$*" = --version ] && printf 'v%s\n' "$(cut -d- -f1 <"$root/apt/installed")"; }
+      apt-get() {
+        local pin="$root/etc/apt/preferences.d/velexis-nodejs" installed pin_major="" pin_prio=0 v p best="" best_p=-1
+        case "${1:-}" in
+          update)
+            printf 'apt-get %s\n' "$*" >>"$root/calls"
+            sed -n 's#^deb .*https://deb\.nodesource\.com/node_\([0-9]*\)\.x .*#\1#p' "$root/etc/apt/sources.list.d/nodesource.list" >"$root/apt/lists"
+            return 0 ;;
+          install) printf 'apt-get %s (DEBIAN_FRONTEND=%s)\n' "$*" "${DEBIAN_FRONTEND:-}" >>"$root/calls" ;;
+          *) printf 'apt-get %s: not a call of the step node\n' "$*" >>"$root/calls"; return 100 ;;
+        esac
+        installed="$(cat "$root/apt/installed")"
+        if [ -f "$pin" ] && grep -qx 'Package: nodejs' "$pin"; then
+          pin_major="$(sed -n 's/^Pin: version \([0-9]*\)\.\*$/\1/p' "$pin")"
+          pin_prio="$(sed -n 's/^Pin-Priority: \([0-9]*\)$/\1/p' "$pin")"
+        fi
+        {
+          echo "18.19.1+dfsg-6ubuntu5 500" # Ubuntu's own nodejs
+          [ ! -s "$root/apt/lists" ] || echo "$(cat "$root/apt/lists").30.0-1nodesource1 500"
+          [ -z "$installed" ] || echo "$installed 100"
+        } >"$root/apt/versions"
+        while read -r v p; do
+          if [ -n "$pin_major" ] && [ "${v%%.*}" = "$pin_major" ]; then p="$pin_prio"; fi
+          if [ "$p" -gt "$best_p" ] || { [ "$p" -eq "$best_p" ] && dpkg --compare-versions "$v" gt "$best"; }; then
+            best="$v" best_p="$p"
+          fi
+        done <"$root/apt/versions"
+        if [ -n "$installed" ] && dpkg --compare-versions "$best" lt "$installed"; then
+          if [ "$best_p" -lt 1000 ]; then
+            best="$installed"
+          elif [[ " $* " != *" --allow-downgrades "* ]]; then
+            echo "E: Packages were downgraded and -y was used without --allow-downgrades." >>"$root/calls"
+            return 100
+          fi
+        fi
+        printf '%s\n' "$best" >"$root/apt/installed"
+        printf 'installed nodejs %s\n' "$best" >>"$root/calls"
+      }
+    }
+    eval "$SN_SRC"
+    step_node
+    echo "the step node completed" >>"$root/calls"
+  ) >"$root/out" 2>&1
+  rc=$?
+  set -e
+  echo "$rc" >"$root/rc"
+}
+node_step_new_vm() { # root [nokey] -> what the step packages leaves on a new VM: the key, its NodeSource line, apt's lists
+  install -d -m 0755 "$1/etc/apt/keyrings" "$1/etc/apt/sources.list.d" "$1/apt"
+  [ "${2:-}" = nokey ] || printf 'NodeSource test key\n' >"$1/etc/apt/keyrings/nodesource.gpg"
+  packages_line "$PROVISION_NODE_MAJOR" >"$1/etc/apt/sources.list.d/nodesource.list"
+  echo "$PROVISION_NODE_MAJOR" >"$1/apt/lists"
+  : >"$1/apt/installed"
+}
+node_calls() { grep -v '^log: ' "$1/calls" || true; } # root -> the calls of its last run, without the log lines
+node_install_call() { # what apt_install sends for the step node
+  printf 'apt-get install -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold --no-install-recommends --allow-downgrades nodejs (DEBIAN_FRONTEND=noninteractive)'
+}
+node_step_check() { # root major -> check-vm.sh --only services with that NODE_MAJOR on the pin, the line and node of the root
+  install -m 0644 "$1/etc/apt/preferences.d/velexis-nodejs" "$NODE_PIN"
+  install -m 0644 "$1/etc/apt/sources.list.d/nodesource.list" "$NODE_LIST"
+  printf 'v%s\n' "$(cut -d- -f1 <"$1/apt/installed")" >"$FAKE/node-version"
+  NODE_MAJOR="$2" run_check "$OUT/step-node-check-$2.out" --only services || true
+  node_lines "$OUT/step-node-check-$2.out"
+}
+SNV="$SNR/vm"
+node_step_new_vm "$SNV"
+LIST_BEFORE="$(fingerprint "$SNV/etc/apt/sources.list.d")"
+# 1. A new VM, after the step packages: the pin is new, the line already the one step_node writes.
+node_step_run "$SNV" "$PROVISION_NODE_MAJOR"
+if [ "$(cat "$SNV/rc")" = 0 ] && [ "$(cat "$SNV/etc/apt/preferences.d/velexis-nodejs")" = "$(printf 'Package: nodejs\nPin: version %s.*\nPin-Priority: 1001' "$PROVISION_NODE_MAJOR")" ] &&
+  [ "$(stat -c '%U:%G %a' "$SNV/etc/apt/preferences.d/velexis-nodejs")" = "root:root 644" ] &&
+  [ "$(fingerprint "$SNV/etc/apt/sources.list.d")" = "$LIST_BEFORE" ] &&
+  [ "$(node_calls "$SNV")" = "$(printf '%s\n' 'apt-get update -y' "$(node_install_call)" "installed nodejs $PROVISION_NODE_MAJOR.30.0-1nodesource1" \
+    'corepack enable' "corepack prepare pnpm@$PNPM_DEFAULT --activate" 'the step node completed')" ]; then
+  pass "the step node on a new VM: pins nodejs to Node.js $PROVISION_NODE_MAJOR (root:root 644), keeps the step packages' NodeSource line, runs apt-get update once and installs with --allow-downgrades [X-047 AC4]"
+else
+  indent "$SNV/calls" "$SNV/out"
+  fail "the step node on a new VM pins nodejs, keeps the step packages' line, runs apt-get update once and installs with --allow-downgrades (exit $(cat "$SNV/rc")) [X-047 AC4]"
+fi
+# 2. The same NODE_MAJOR again: no file changes, no apt-get update.
+APT_BEFORE="$(fingerprint_all "$SNV/etc/apt")"
+node_step_run "$SNV" "$PROVISION_NODE_MAJOR"
+if [ "$(cat "$SNV/rc")" = 0 ] && [ "$(fingerprint_all "$SNV/etc/apt")" = "$APT_BEFORE" ] &&
+  [ "$(node_calls "$SNV")" = "$(printf '%s\n' "$(node_install_call)" "installed nodejs $PROVISION_NODE_MAJOR.30.0-1nodesource1" \
+    'corepack enable' "corepack prepare pnpm@$PNPM_DEFAULT --activate" 'the step node completed')" ]; then
+  pass "a second run of the step node with the same NODE_MAJOR changes no file and runs no apt-get update [X-047 AC4]"
+else
+  indent "$SNV/calls" "$SNV/out"
+  fail "a second run of the step node with the same NODE_MAJOR changes no file and runs no apt-get update (exit $(cat "$SNV/rc")) [X-047 AC4]"
+fi
+if [ "$(node_step_check "$SNV" "$PROVISION_NODE_MAJOR")" = "$(node_items "$PROVISION_NODE_MAJOR" "v$PROVISION_NODE_MAJOR.30.0")" ]; then
+  pass "check-vm.sh passes the Node item, the pin and the line the step node left for Node.js $PROVISION_NODE_MAJOR [X-047 AC4]"
+else
+  indent "$OUT/step-node-check-$PROVISION_NODE_MAJOR.out"
+  fail "check-vm.sh passes the Node item, the pin and the line the step node left for Node.js $PROVISION_NODE_MAJOR [X-047 AC4]"
+fi
+# 3. Up to another major and 4. back down to the default, each with check-vm.sh run with the same NODE_MAJOR.
+for move in "$NODE_OTHER up" "$PROVISION_NODE_MAJOR down"; do
+  major="${move% *}"
+  node_step_run "$SNV" "$major"
+  if [ "$(cat "$SNV/rc")" = 0 ] && [ "$(cat "$SNV/etc/apt/sources.list.d/nodesource.list")" = "$(packages_line "$major")" ] &&
+    [ "$(cat "$SNV/etc/apt/preferences.d/velexis-nodejs")" = "$(printf 'Package: nodejs\nPin: version %s.*\nPin-Priority: 1001' "$major")" ] &&
+    [ "$(node_calls "$SNV")" = "$(printf '%s\n' 'apt-get update -y' "$(node_install_call)" "installed nodejs $major.30.0-1nodesource1" \
+      'corepack enable' "corepack prepare pnpm@$PNPM_DEFAULT --activate" 'the step node completed')" ] &&
+    [ "$(node_step_check "$SNV" "$major")" = "$(node_items "$major" "v$major.30.0")" ]; then
+    pass "NODE_MAJOR=$major moves nodejs ${move#* } to Node.js $major: the step packages' line for it, the pin, one apt-get update, --allow-downgrades; check-vm.sh with NODE_MAJOR=$major passes [X-047 AC4]"
+  else
+    indent "$SNV/calls" "$SNV/out"
+    [ ! -f "$OUT/step-node-check-$major.out" ] || indent "$OUT/step-node-check-$major.out"
+    fail "NODE_MAJOR=$major moves nodejs ${move#* } to Node.js $major, and check-vm.sh with the same NODE_MAJOR passes (exit $(cat "$SNV/rc")) [X-047 AC4]"
+  fi
+  if [ "$major" = "$NODE_OTHER" ]; then
+    # A moved VM checked without its NODE_MAJOR: all three items fail (runbook: run check-vm.sh with the same NODE_MAJOR).
+    run_check "$OUT/step-node-check-unset.out" --only services || true
+    if [ "$(node_lines "$OUT/step-node-check-unset.out" | grep -c '^FAIL ')" = 3 ]; then
+      pass "check-vm.sh without NODE_MAJOR on the VM moved to Node.js $NODE_OTHER: the Node item, the pin and the line fail [X-047 AC3]"
+    else
+      indent "$OUT/step-node-check-unset.out"
+      fail "check-vm.sh without NODE_MAJOR on the VM moved to Node.js $NODE_OTHER: the Node item, the pin and the line fail [X-047 AC3]"
+    fi
+  fi
+done
+healthy
+# A malformed NODE_MAJOR, and a VM without NodeSource's key (the step packages not run): refused before anything.
+for refusal in "v$NODE_OTHER:NODE_MAJOR must be the number of a Node.js major version (found: v$NODE_OTHER)" \
+  "$NODE_OTHER.1:NODE_MAJOR must be the number of a Node.js major version (found: $NODE_OTHER.1)" \
+  "nokey:NodeSource's key /etc/apt/keyrings/nodesource.gpg is missing: run the step packages first"; do
+  name="${refusal%%:*}"
+  node_step_new_vm "$SNR/$name" "$name"
+  major="$name"
+  [ "$name" != nokey ] || major="$NODE_OTHER"
+  APT_BEFORE="$(fingerprint_all "$SNR/$name/etc/apt")"
+  node_step_run "$SNR/$name" "$major"
+  if [ "$(cat "$SNR/$name/rc")" = 1 ] && [ "$(node_calls "$SNR/$name")" = "die: ${refusal#*:}" ] &&
+    [ "$(fingerprint_all "$SNR/$name/etc/apt")" = "$APT_BEFORE" ]; then
+    pass "the step node refuses NODE_MAJOR=$major$([ "$name" != nokey ] || echo " without NodeSource's key") before it writes or installs anything: ${refusal#*:} [X-047 AC4]"
+  else
+    indent "$SNR/$name/calls" "$SNR/$name/out"
+    fail "the step node refuses NODE_MAJOR=$major$([ "$name" != nokey ] || echo " without NodeSource's key") before it writes or installs anything (exit $(cat "$SNR/$name/rc")) [X-047 AC4]"
+  fi
+done
+# The step packages is the only other place that names nodejs's source; nothing else pins nodejs.
+if [ "$(grep -c 'deb.nodesource.com/node_' "$PROVISION")" = 2 ] && [ "$(grep -c 'preferences.d/velexis-nodejs' "$PROVISION")" = 1 ] &&
+  sed -n '/^step_node() {/,/^}/p' "$PROVISION" | grep -q 'preferences.d/velexis-nodejs'; then
+  pass "provision-vm.sh writes NodeSource's line in the steps packages and node only, and pins nodejs in the step node only [X-047 AC4]"
+else
+  grep -n 'nodesource\|velexis-nodejs' "$PROVISION" | indent
+  fail "provision-vm.sh writes NodeSource's line in the steps packages and node only, and pins nodejs in the step node only [X-047 AC4]"
 fi
 
 # ---- 7. no secret in any output ------------------------------------------------------------------------------

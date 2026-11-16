@@ -1023,10 +1023,38 @@ step_users() {
   install -d -m 0750 -o root -g adm "$LOGS"
 }
 
-# ---- node: Node.js 22 and pnpm (pnpm only for emergency builds; releases are pre-built) ----------------
+# ---- node: Node.js of NODE_MAJOR from NodeSource, and pnpm (pnpm only for emergency builds; releases are pre-built) ---
+# Self-contained, so that NODE_MAJOR moves a provisioned VM to another major in either direction without the full
+# apt-get upgrade of the step packages (task X-047, ADR-0029 item 6): sudo NODE_MAJOR=<n> bash provision-vm.sh --steps
+# node. It writes NodeSource's line for node_<NODE_MAJOR>.x (the line the step packages writes, from the key that step
+# installs) and pins nodejs to that major at priority 1001, above which apt also installs an older version
+# (apt_preferences(5)); it runs apt-get update when either file changed and installs with --allow-downgrades, which
+# apt-get install -y needs to go back to an older major. A second run with the same NODE_MAJOR changes no file.
+# check-vm.sh checks the version, the pin and the line against the NODE_MAJOR it is given. Paths under VELEXIS_ROOT
+# for check-vm.test.sh only, which runs this function with stand-ins (the step does not run under VELEXIS_ROOT).
+node_apt_file() { # path text -> installs text as path (root:root 0644) unless path holds it already; 0 when it changed
+  local tmp rc=1
+  tmp="$(mktemp)"
+  printf '%s\n' "$2" >"$tmp"
+  if install_changed 0644 root:root "$tmp" "$1"; then rc=0; fi
+  rm -f "$tmp"
+  return "$rc"
+}
 step_node() {
+  local apt="$VELEXIS_ROOT/etc/apt" changed=0
+  [[ "$NODE_MAJOR" =~ ^[1-9][0-9]*$ ]] || die "NODE_MAJOR must be the number of a Node.js major version (found: $NODE_MAJOR)"
   log "Node.js ${NODE_MAJOR} and pnpm ${PNPM_VERSION}"
-  apt_install nodejs
+  [ -s "$apt/keyrings/nodesource.gpg" ] || die "NodeSource's key /etc/apt/keyrings/nodesource.gpg is missing: run the step packages first"
+  if node_apt_file "$apt/sources.list.d/nodesource.list" \
+      "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main"; then
+    changed=1
+  fi
+  if node_apt_file "$apt/preferences.d/velexis-nodejs" \
+      "$(printf 'Package: nodejs\nPin: version %s.*\nPin-Priority: 1001' "$NODE_MAJOR")"; then
+    changed=1
+  fi
+  if [ "$changed" = 1 ]; then apt-get update -y; fi
+  apt_install --allow-downgrades nodejs
   node --version | grep -q "^v${NODE_MAJOR}\." || die "Node.js ${NODE_MAJOR} expected, got $(node --version)"
   corepack enable
   corepack prepare "pnpm@${PNPM_VERSION}" --activate

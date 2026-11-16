@@ -1,7 +1,7 @@
 {
   "$schema": "https://turborepo.com/schema.json",
   "ui": "stream",
-  "globalDependencies": ["tsconfig.base.json", "eslint.config.mjs", ".prettierrc.json"],
+  "globalDependencies": ["tsconfig.base.json", "eslint.config.mjs", ".prettierrc.json", ".nvmrc"],
   "globalEnv": ["NODE_ENV", "APP_ENV", "CI"],
   "tasks": {
     "generate": {

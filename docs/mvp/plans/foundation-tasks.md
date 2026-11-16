@@ -787,8 +787,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - The diff touches only this task's Files: nothing that pins the Node major changes, and no test, timeout or stderr assertion changes.
 - **Verify:** `test -x "$NODE24/node" && PATH="$NODE24:$PATH" node --version | grep -q '^v24\.' && node tools/plan-lint/plan-lint.mjs && pnpm format:check && grep -q '^## 2\. ' docs/mvp/runbooks/node-upgrade.md` (`NODE24` is step 1's `bin` folder)
 
-### X-047 · Keep the Node.js major in step everywhere and make NODE_MAJOR move the VM both ways
-- **Status:** todo
+### X-047 · Keep the Node.js major in step everywhere and make NODE_MAJOR move the VM both ways ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-001
