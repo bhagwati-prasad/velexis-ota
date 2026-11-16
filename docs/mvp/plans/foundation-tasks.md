@@ -765,8 +765,8 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
   - `shellcheck -S style` is clean for every changed script.
 - **Verify:** `shellcheck -S style deploy/scripts/provision-vm.sh deploy/scripts/deploy.sh deploy/scripts/run-as.sh deploy/systemd/test/units-smoke.sh && sudo bash deploy/systemd/test/units-smoke.sh`
 
-### X-046 · Run the whole repository on Node.js 24 without switching it, and record what breaks
-- **Status:** todo
+### X-046 · Run the whole repository on Node.js 24 without switching it, and record what breaks ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-001
