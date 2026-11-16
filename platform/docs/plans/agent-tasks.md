@@ -21,13 +21,13 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
 
 | Milestone | Tasks | Demo at the end |
 |---|---|---|
-| M0 Foundations | PBE-001, PFE-001, PAD-001 | The three platform apps build, start and answer `/health/live`; the release contains them. |
+| M0 Foundations | PBE-001, PFE-001, PAD-001, PBE-077 | The three platform apps build, start and answer `/health/live`; the release contains them. Since 2026-11-16 (lead decision (25n), [ADR-0029](../../../docs/mvp/adr/0029-nodejs-24-runtime.md) item 7): custom domains and API-key origins refuse host names whose punycode labels do not decode, on Node 22 and 24 alike (PBE-077, tagged M0 so that it lands before the switch to Node.js 24, X-048; it needs PBE-021 and PBE-049, both done). |
 | M1 Platform core | PBE-002 … PBE-035, PBE-066, PFE-002 … PFE-015, PAD-002 … PAD-010 | Sign up, verify, MFA, create an OTA that becomes active through the real OTA worker, reveal test keys, manage keys and team; staff sign in to the admin, see the tenant, its job and office, suspend and resume it. |
 | M2 Search & price | PBE-036, PAD-011 | A key created in the portal works on the OTA API and stops working after revocation; a suspension reaches the storefront. |
 | M3 Book & pay | PBE-037, PBE-038, PFE-016 | Owners edit the card statement descriptor of the Velexis payment connection. |
 | M4 OTA admin | PBE-039, PBE-040, PFE-017 … PFE-019 | "Open console" signs a member into the OTA admin; Amadeus office settings are editable. |
 | M5 Monetisation & self-service | PBE-041 … PBE-061, PFE-020 … PFE-027, PAD-012 … PAD-015 | Checkout and Customer Portal, own Stripe (Connect or keys), payout account and settlements, own Amadeus credentials and live office, custom domains with TLS, go-live. |
-| M6 Hardening & launch | PBE-062 … PBE-065, PBE-067 … PBE-075, PFE-028 … PFE-031, PAD-016, PAD-017 | Security review closed, performance measured, end-to-end suite green nightly, launch checklist ready; since 2026-11-11 the platform's `secrets:rewrap` (PBE-072), so a master-key rotation can remove the old key, portal passwords checked against the rule-meeting entries of a list of a million breached passwords (PBE-073, lead decision (17b)), and in production no Velexis Amadeus account outside the official Amadeus hosts (PBE-074, lead decision (17k)); since 2026-11-13 Velexis's production demo OTA, created with its reserved key `demo` by a platform command and kept out of billing, while the key stays reserved for everyone else (PBE-075, lead decision (20a)); since 2026-11-15 the product owner's approved terms of service and privacy notice in place of the portal's placeholder text, under a new `termsVersion` that sign-up sends (PFE-031, lead decision (23n); it waits for the approved text, a human step). The switches are removed after the launch: PBE-064 is a named exception to "every M6 task done" ([ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 4). |
+| M6 Hardening & launch | PBE-062 … PBE-065, PBE-067 … PBE-076, PFE-028 … PFE-031, PAD-016, PAD-017 | Security review closed, performance measured, end-to-end suite green nightly, launch checklist ready; since 2026-11-11 the platform's `secrets:rewrap` (PBE-072), so a master-key rotation can remove the old key, portal passwords checked against the rule-meeting entries of a list of a million breached passwords (PBE-073, lead decision (17b)), and in production no Velexis Amadeus account outside the official Amadeus hosts (PBE-074, lead decision (17k)); since 2026-11-13 Velexis's production demo OTA, created with its reserved key `demo` by a platform command and kept out of billing, while the key stays reserved for everyone else (PBE-075, lead decision (20a)); since 2026-11-15 the product owner's approved terms of service and privacy notice in place of the portal's placeholder text, under a new `termsVersion` that sign-up sends (PFE-031, lead decision (23n); it waits for the approved text, a human step); since 2026-11-16 the platform API and worker measured on Node.js 24 against Node 22 and the VM budget, with their share of time in garbage collection (PBE-076, lead decision (25n)). The switches are removed after the launch: PBE-064 is a named exception to "every M6 task done" ([ADR-0025](../../../docs/mvp/adr/0025-roadmap-scheduling-and-tracking.md) item 4). |
 
 ## M0 — Foundations
 
@@ -90,6 +90,24 @@ Common commands: backend `pnpm --filter @velexis/platform-backend test`, `test:i
   - `pnpm --filter @velexis/platform-admin build` produces `.next/standalone`; `/health/live` answers 200 with `X-Robots-Tag: noindex`.
   - The config test refuses a missing `PLATFORM_API_URL`.
 - **Verify:** `pnpm --filter @velexis/platform-admin build && pnpm --filter @velexis/platform-admin test`
+
+### PBE-077 · Refuse host names whose punycode labels do not decode, in custom domains and API-key origins, on Node 22 and 24
+- **Status:** todo
+- **Component:** platform-backend
+- **Milestone:** M0
+- **Depends on:** PBE-021, PBE-049
+- **Size:** S
+- **Read first:** docs/mvp/adr/0029-nodejs-24-runtime.md (item 7; Accepted on 2026-11-16, the owner's request of 2026-11-15); platform/docs/adr/0004-custom-domain-verification.md item 1 (the host name rules); platform/docs/adr/0005-api-key-format-and-hashing.md item 5 (allowed origins); platform/backend/src/domains/hostname-rules.ts (the file header, `checkCustomHostname`) and its test ("refuses the malformed host %j"); platform/backend/src/api-keys/api-key-rules.ts (`originProblem`) and its test
+- **Files:** `platform/backend/src/domains/hostname-rules.ts`, `platform/backend/src/domains/hostname-rules.test.ts`, `platform/backend/src/api-keys/api-key-rules.ts`, `platform/backend/src/api-keys/api-key-rules.test.ts`, `platform/docs/plans/agent-tasks.md` (its status)
+- **Steps:**
+  1. Added by the lead for the Node.js 24 upgrade (ADR-0029 item 7). Node 24 ships ada 4.0.0 (`process.versions.ada`; 2.9.2 in Node 22.23), whose `url.domainToASCII` returns an invalid punycode label unchanged where Node 22 returned `""`, and whose `new URL()` accepts such a host where Node 22 threw `ERR_INVALID_URL`. On Node 24 `checkCustomHostname` therefore accepts `xn--zz.example.com` (the case `["xn--zz.example.com"]` of "refuses the malformed host %j" fails: it is this bug's failing test) and `originProblem` accepts `https://xn--zz.example`. Both values would be stored: a custom domain row, an API key's allowed origins.
+  2. Export one pure check from hostname-rules.ts: every label of an ASCII host name that starts with `xn--` decodes (`domainToUnicode` of the label no longer starts with `xn--`) and encodes back to itself (`domainToASCII` of the decoded label equals the label). `checkCustomHostname` refuses with `syntax` after the conversion when the check fails (rewrite step 4 of the file header to say so); `originProblem` refuses with its `origin` field error when the URL's `hostname` fails it. No other rule changes. Run the new cases on Node 22 and on Node 24 (`NODE24`: the `bin` folder of a Node 24 build, `/opt/node24/bin` on the agents' machine).
+  3. Tests, tagged `[PBE-077 AC1]`: keep the existing `xn--zz.example.com` case unchanged; add `xn--a.com`, `xn--ab-.com` and `a.xn--zz` (refused, `syntax`) and `xn--bcher-kva.example.net`, `XN--BCHER-KVA.example.net` and `Bücher.example.net` (accepted as `xn--bcher-kva.example.net`) to hostname-rules.test.ts; add `https://xn--zz.example` and `https://XN--zz.example` (refused, `origin`) and `https://xn--bcher-kva.example` (accepted) to api-key-rules.test.ts. The OTA backend's `isSerializedOrigin` (ota/backend/src/common/http/cors.ts) and the OTA admin's `URL.canParse` rules stay as they are: no invalid origin can be stored through the platform, and a link to such a host fails in the browser (ADR-0029 item 7).
+- **Acceptance:**
+  - On Node 22 and on Node 24 alike, `checkCustomHostname` refuses `xn--zz.example.com`, `xn--a.com`, `xn--ab-.com` and `a.xn--zz` with `syntax` and accepts `Bücher.example.net` and `XN--BCHER-KVA.example.net` as `xn--bcher-kva.example.net`; `originProblem` refuses `https://xn--zz.example` and `https://XN--zz.example` with `origin` and accepts `https://xn--bcher-kva.example` (`[PBE-077 AC1]`).
+  - The case at hostname-rules.test.ts:163 is unchanged, and no existing test changes.
+  - `pnpm lint`, `pnpm typecheck` and `pnpm test` pass on Node 22.
+- **Verify:** `pnpm --filter @velexis/platform-backend test -- hostname-rules api-key-rules && test -x "$NODE24/node" && PATH="$NODE24:$PATH" node --version | grep -q '^v24\.' && PATH="$NODE24:$PATH" pnpm --filter @velexis/platform-backend test -- hostname-rules api-key-rules`
 
 ## M1 — Platform core
 
@@ -2305,6 +2323,25 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - The launch checklist's §5 item "Terms of service and privacy notice" points at PFE-031 (since FIX-W54-DOCS) and its evidence names the new `termsVersion`.
 - **Verify:** `pnpm --filter @velexis/platform-frontend exec vitest run "src/app/(marketing)/pricing/pricing.test.tsx" "src/app/(auth)/sign-up/sign-up-form.test.tsx" && ! grep -niE '"Placeholder|placeholder text' platform/frontend/src/lib/strings.ts && pnpm test:e2e -- --project=portal specs/portal-a11y.e2e.ts`
 
+### PBE-076 · Measure the platform API and worker on Node.js 24 against Node 22 and the VM budget
+- **Status:** todo
+- **Component:** platform-backend
+- **Milestone:** M6
+- **Depends on:** X-048, PBE-063
+- **Size:** M
+- **Read first:** docs/mvp/adr/0029-nodejs-24-runtime.md (items 3 and 5); platform/docs/performance.md §1 to §3 and §5; tools/perf/README.md (Run it, Reading the report); docs/mvp/runbooks/node-upgrade.md §2; docs/mvp/architecture.md §3 (memory budget); docs/mvp/deployment-single-vm.md §14; the blocks of PBE-063 and X-050
+- **Files:** `platform/docs/performance.md`, `tools/perf/README.md`, `tools/perf/gc-observer.cjs`, `tools/perf/platform-smoke.mjs` (its report and its header comment), `tools/perf/platform-smoke.test.mjs`, `platform/docs/plans/agent-tasks.md` (its status)
+- **Steps:**
+  1. Added by the lead for the Node.js 24 upgrade (ADR-0029 items 3 and 5). As PBE-063 did, with tools/perf/README.md's steps, on one build: the platform API and worker started with their units' `NODE_OPTIONS` (read from the unit files since X-050), once under Node 22.23.x (`/opt/node22/bin` on the agents' machine) and once under Node 24.22.x or newer, each scenario for 60 seconds; record p50, p95 and errors per scenario, the peak RSS of the API and the worker against 768 and 512 MiB, `nproc` and the load average.
+  2. Garbage collection: add `tools/perf/gc-observer.cjs`, a preload (`--require`) that sums the `gc` entries of a `PerformanceObserver` and prints one JSON line per minute and one at exit (milliseconds in garbage collection, the process's uptime), and start both processes with it; platform-smoke.test.mjs covers its output with a child process that allocates. Record the share of time in garbage collection of the API (16 MiB semi-space) and the worker (1 MiB).
+  3. Write a new section at the end, "§6 Node.js 24 (PBE-076, <date>)", with both runtimes side by side. §3 stays as written, with a dated note that its run gave the processes only `--max-old-space-size`, so V8 sized their young generation for the whole machine, not for the units' `MemoryMax`. Add any follow-up to §5.
+  4. Compare with §2's targets (p95 below 300 ms for reads, below 800 ms for sign-in, below 20 ms for a cached `ask`; RSS within budget) and with Node 22's figures. A missed target, a p95 more than 10 % worse than on Node 22, less than 64 MiB between a peak RSS and its `MemoryMax`, or more than 5 % of the API's or the worker's time in garbage collection is reported with the figures and a proposed task. The "plain Node 22" lines (tools/perf/README.md near lines 5 and 16, platform-smoke.mjs line 7, platform-smoke.test.mjs line 3) say "plain Node (the `.nvmrc` major)".
+- **Acceptance:**
+  - §6 holds both runtimes' figures from the same build and the units' flags, with the garbage-collection share.
+  - §2's targets hold on Node 24, no p95 is more than 10 % worse than on Node 22, every peak RSS stays at least 64 MiB under its `MemoryMax`, and neither process spends more than 5 % of its time in garbage collection; or the pull request names the finding and its proposed task.
+  - `node --test tools/perf/*.test.mjs` passes, and `git grep -n 'Node 22' -- tools/perf` finds nothing.
+- **Verify:** `node --test tools/perf/*.test.mjs && node tools/perf/platform-smoke.mjs --base http://127.0.0.1:3100 --duration 10`
+
 ## Dependency overview
 
 The full graph is printed by `node tools/plan-lint/plan-lint.mjs --graph platform/docs/plans/agent-tasks.md docs/mvp/plans/foundation-tasks.md`. In short:
@@ -2323,7 +2360,8 @@ flowchart LR
   PFE --> M24["M2–M4<br/>PBE-036…PBE-040, PFE-016…PFE-019, PAD-011"]
   PAD --> M24
   M24 --> M5["M5<br/>PBE-041…PBE-061, PFE-020…PFE-027, PAD-012…PAD-015"]
-  M5 --> M6["M6<br/>PBE-062…PBE-065, PFE-028, PAD-016<br/>review findings PBE-067…PBE-070, PFE-029, PAD-017<br/>MFA for live OTAs PBE-071, PFE-030<br/>secrets:rewrap PBE-072<br/>breached list PBE-073, Amadeus host PBE-074<br/>demo OTA command PBE-075<br/>final terms and privacy notice PFE-031<br/>(PBE-064 after launch)"]
+  M5 --> M6["M6<br/>PBE-062…PBE-065, PFE-028, PAD-016<br/>review findings PBE-067…PBE-070, PFE-029, PAD-017<br/>MFA for live OTAs PBE-071, PFE-030<br/>secrets:rewrap PBE-072<br/>breached list PBE-073, Amadeus host PBE-074<br/>demo OTA command PBE-075<br/>final terms and privacy notice PFE-031<br/>Node.js 24 measured PBE-076 (after X-048)<br/>(PBE-064 after launch)"]
+  M5 --> N24["Node.js 24, M0 tag (2026-11-16)<br/>punycode labels PBE-077<br/>(before X-048)"]
   OTA(["OTA plan gates<br/>OF-11 (M1), OF-01 (M2), OF-09 (M4)"]) -.-> LC
   OTA -.-> M24
 ```

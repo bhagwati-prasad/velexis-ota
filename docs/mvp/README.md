@@ -67,7 +67,8 @@ Every plan uses exactly these ids and meanings.
 | [0025](adr/0025-roadmap-scheduling-and-tracking.md) Roadmap scheduling and tracking | Calendars with and without agents, batches and gates, launch exceptions, the ` ✅` status rule, where demos run. |
 | [0026](adr/0026-system-users-per-trust-zone.md) System users per trust zone | One OS user per backend zone and per Next.js app, per-zone key folders, env files read by systemd only. |
 | [0027](adr/0027-pci-scope-and-vm-controls.md) PCI DSS scope and controls on the single VM | The whole VM is the CDE; each applicable requirement with its control and owning task. |
-| [0028](adr/0028-how-work-reaches-main.md) How work reaches main | The integration branch's one merge into `main` with a merge commit, one pull request per wave, squash merging for a single task's pull request, approvals and the review record, who may merge what; supersedes ADR-0020's points on merging and approvals. |
+| [0028](adr/0028-how-work-reaches-main.md) How work reaches main | The integration branch's one merge into `main` with a merge commit, one pull request per wave, squash merging for a single task's pull request, approvals and the review record, who may merge what; supersedes ADR-0020's points on merging and approvals; since 2026-11-16 the integration branch takes in `main` with a merge commit, never a rebase. |
+| [0029](adr/0029-nodejs-24-runtime.md) Node.js 24 LTS as the runtime of Velexis | The move from Node 22 to Node 24 (the owner's request of 2026-11-15, approved 2026-11-16): one major kept in step, the switch in one change before the first VM step, the VM's way back, the SDK's supported versions, Node 26 later. |
 
 ## 4. Component documents
 

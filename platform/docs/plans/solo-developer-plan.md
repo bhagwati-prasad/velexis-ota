@@ -10,10 +10,10 @@ Related: [`implementation-plan.md`](implementation-plan.md), [`agent-tasks.md`](
 |---|---|
 | People | One developer, no agents, five working days a week |
 | Effort per task size | S = ½ day, M = 1 day, L = 2 days, including tests, docs and self-review against the definition of done |
-| Platform work | 123 tasks = 152 days (M0 2.5, M1 79, M2 1.5, M3 1.5, M4 4, M5 42, M6 21.5, of which PBE-064's 1 day falls after the launch; M6's 21.5 days are the first plan's 7.5, the security review's follow-ups, 9.5 days, in Weeks 30a and 30b since 2026-11-06, PBE-072 and PBE-073, 2 days, in Week 30c and PBE-074, 1 day, in Week 30d since 2026-11-11, PBE-075, 1 day, in Week 30e since 2026-11-13, and PFE-031, ½ day, in Week 30e since 2026-11-15, §4) |
+| Platform work | 125 tasks = 153.5 days (M0 3, M1 79, M2 1.5, M3 1.5, M4 4, M5 42, M6 22.5, of which PBE-064's 1 day falls after the launch; M0's 3 days are the scaffolds' 2.5 and, since 2026-11-16, PBE-077's ½ day, which carries the M0 tag but runs in Week 30f; M6's 22.5 days are the first plan's 7.5, the security review's follow-ups, 9.5 days, in Weeks 30a and 30b since 2026-11-06, PBE-072 and PBE-073, 2 days, in Week 30c and PBE-074, 1 day, in Week 30d since 2026-11-11, PBE-075, 1 day, in Week 30e since 2026-11-13, PFE-031, ½ day, in Week 30e since 2026-11-15, and PBE-076, 1 day, in Week 30f since 2026-11-16, §4) |
 | Buffer | 11.5 days inside platform weeks (Weeks 1, 17, 29, 30b, 30e, 31; 12 from 2026-11-13 until PFE-031 took ½ day of Week 30e's on 2026-11-15) |
 | Planning-review shift | The planning review split PBE-007 into PBE-007 and PBE-066 (2 more days) and resized PBE-035 from S to M (½ day more, taken from Week 12's buffer). Every task from PBE-008 in Week 3 to PAD-010 in Week 16 therefore starts two working days later than its week shows. Week 17's buffer drops from five to three days, and the M1 exit week does not move. |
-| Length | **36 platform weeks**: Weeks 1–31, the follow-up Weeks 30a and 30b (added 2026-11-06), the follow-up Weeks 30c and 30d (added 2026-11-11) and the follow-up Week 30e (added 2026-11-13, §4), of which six are split weeks: Weeks 18–20 hold 7 platform days, Week 30c 2, Week 30d 1 and Week 30e 2.5 (1½ task days and 1 day of buffer since 2026-11-15; 1 task day and 1½ days of buffer before) |
+| Length | **37 platform weeks**: Weeks 1–31, the follow-up Weeks 30a and 30b (added 2026-11-06), the follow-up Weeks 30c and 30d (added 2026-11-11), the follow-up Week 30e (added 2026-11-13) and the follow-up Week 30f (added 2026-11-16, §4), of which seven are split weeks: Weeks 18–20 hold 7 platform days, Week 30c 2, Week 30d 1, Week 30e 2.5 (1½ task days and 1 day of buffer since 2026-11-15; 1 task day and 1½ days of buffer before) and Week 30f 1½ |
 | Start | Week 1 starts when the foundation tasks `X-001` to `X-016` are merged (the foundation's own weekly plan schedules them) |
 | Week numbers | Platform-plan weeks. The roadmap maps them to calendar weeks; between Weeks 17 and 21 it places several OTA-only weeks |
 
@@ -58,6 +58,7 @@ Related: [`implementation-plan.md`](implementation-plan.md), [`agent-tasks.md`](
 | 30c | M6 | `secrets:rewrap` for the master-key rotation; the breached-password list | PBE-072, PBE-073 | **Split week** (2 platform days) with OTA Week 39c and X-041 (added 2026-11-11; roadmap C78) |
 | 30d | M6 | The official Amadeus hosts in production | PBE-074 | **Split week** (1 platform day) with OTA Week 39d (added 2026-11-11, second set; roadmap C79) |
 | 30e | M6 | Velexis's production demo OTA with its reserved key; since 2026-11-15 the approved terms of service and privacy notice | PBE-075, PFE-031 | **Split week** (1½ platform days and 1 day of buffer; 1 platform day and 1½ days of buffer until PFE-031 of 2026-11-15) with OTA Week 39e (added 2026-11-13; roadmap C80) |
+| 30f | M0 and M6 | Node.js 24: host names whose punycode labels do not decode refused (before the switch); the platform API and worker measured on Node.js 24 (after it) | PBE-077, PBE-076 | **Split week** (1½ platform days) in the roadmap's Node.js 24 block: PBE-077 in C81, before the switch X-048 (C82), and PBE-076 in C83, with OTA Week 39f (added 2026-11-16) |
 | 31 | M6 exit | E2E suites, launch | PFE-028 (2/2), PAD-016 (PBE-064 runs after the launch) | Shared launch week |
 
 ```mermaid
@@ -75,7 +76,7 @@ timeline
   section Platform-led again
     Weeks 21-29 : M5 billing : domains : Amadeus : payments : settlements : go-live
   section Shared
-    Weeks 30-31 : M6 hardening (Week 30) : security review follow-ups (Weeks 30a and 30b) : secrets:rewrap and the breached list (Week 30c) : the Amadeus hosts (Week 30d) : the demo OTA and the final terms (Week 30e) : launch (Week 31)
+    Weeks 30-31 : M6 hardening (Week 30) : security review follow-ups (Weeks 30a and 30b) : secrets:rewrap and the breached list (Week 30c) : the Amadeus hosts (Week 30d) : the demo OTA and the final terms (Week 30e) : Node.js 24 (Week 30f, in the Node.js 24 block) : launch (Week 31)
 ```
 
 ## 3. Weeks 1 and 2, day by day
@@ -331,6 +332,8 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 
 *Note (2026-11-15, lead decision (23n), approved by the owner; FIX-W54-DOCS).* PFE-031 (S, ½ day: the product owner's approved terms of service and privacy notice replace the portal's placeholder text, under a new `termsVersion` that sign-up sends) joins M6 ([`implementation-plan.md`](implementation-plan.md#m6--hardening--launch), the M6 note of the same day). It takes ½ day of Week 30e's 1½ days of buffer, after nothing but PFE-004 (M1); it waits for the approved text, a human step of the product owner with legal counsel ([`../runbooks/launch-checklist.md`](../runbooks/launch-checklist.md) §5). The calendar does not change ([`../../../docs/mvp/plans/roadmap.md`](../../../docs/mvp/plans/roadmap.md) §1.3, note of 2026-11-15). The plan therefore holds 123 tasks of 152 days (M6 21.5) in 36 weeks, with 11.5 days of buffer (§1, §5).
 
+*Note (2026-11-16, lead decisions (25a) and (25n), approved by the owner; FIX-W56-PLAN).* Two platform tasks of the move to Node.js 24 ([ADR-0029](../../../docs/mvp/adr/0029-nodejs-24-runtime.md)) join the plan ([`implementation-plan.md`](implementation-plan.md#m6--hardening--launch), the notes of the same day under M0 and M6): PBE-077 (S, ½ day: custom domains and API-key origins refuse host names whose punycode labels do not decode, on Node 22 and 24; M0 tag, so that agents take it before the switch, after PBE-021 of Week 8 and PBE-049 of Week 24) and PBE-076 (M, 1 day: the platform API and worker measured on Node.js 24 against Node 22 and the VM budget, with their share of time in garbage collection; after PBE-063 of Week 30 and the switch X-048). They take a split Week 30f, inserted after Week 30e so that Weeks 1–31 keep their numbers; it sits in the roadmap's Node.js 24 block, PBE-077 in C81 and PBE-076 in C83, beside the foundation's tasks and the OTA's Week 39f ([`../../../docs/mvp/plans/roadmap.md`](../../../docs/mvp/plans/roadmap.md) §1.3, re-baseline of 2026-11-16). The plan therefore holds 125 tasks of 153.5 days (M0 3, M6 22.5) in 37 weeks, with 11.5 days of buffer (§1, §5).
+
 ### Week 30c — M6: secrets:rewrap and the breached-password list (added 2026-11-11, split week)
 
 - **Tasks:** PBE-072 (1 day), PBE-073 (1 day, since the second re-baseline of 2026-11-11, in what was the week's ½ day of buffer and the ½ day of buffer of OTA Week 39c).
@@ -351,6 +354,13 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 - **Deliverables:** a platform command that creates the demo OTA with the reserved key `demo` for an existing portal account with MFA, through `createTenant`'s own transaction and with the portal path's audit rows and one naming the command, kept out of billing; the portal and `createTenant` still answer `409 TENANT_KEY_UNAVAILABLE` for `demo`. The platform launch checklist's demo OTA item runs it ([`../runbooks/launch-checklist.md`](../runbooks/launch-checklist.md) §6). Since 2026-11-15: the product owner's approved terms of service and privacy notice on `/legal/terms` and `/legal/privacy` under a new `termsVersion` that sign-up sends (PFE-031; the launch checklist's §5 item).
 - **Demo:** the command creates `demo` with `APP_ENV=production` on the local stack and the OTA is provisioned, while creating an OTA with the key `demo` through the portal is still refused; the legal pages without placeholder text, and a sign-up that sends the new version (PFE-031).
 - **Overlap:** shares its calendar week (roadmap C80) with OTA Week 39e (SDK-017, OFE-032 and, since 2026-11-15, SDK-018).
+
+### Week 30f — Node.js 24: punycode labels, then the platform measured on Node 24 (added 2026-11-16, split week)
+
+- **Tasks:** PBE-077 (½ day, M0 tag, before the switch X-048), PBE-076 (1 day, after X-048 and PBE-063).
+- **Deliverables:** one exported check that every `xn--` label of a host name decodes and encodes back to itself, used by the custom-domain rules and the API-key origin rules, with the same results on Node 22 and 24 (PBE-077); the platform API's and worker's figures on Node.js 24 beside Node 22's, from one build and the units' flags, with their share of time in garbage collection, in [`../performance.md`](../performance.md) (PBE-076).
+- **Demo:** `xn--zz.example.com` refused as a custom domain on both runtimes; both runtimes' p95 and peak RSS side by side.
+- **Overlap:** the roadmap's Node.js 24 block: PBE-077 in C81 with X-046 and X-047, PBE-076 in C83 with OTA Week 39f (OBE-103, SDK-019) and X-029 and X-032.
 
 ### Week 31 — M6 exit: suites, switch removal and launch
 

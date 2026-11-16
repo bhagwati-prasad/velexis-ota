@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-11-15
 **Deciders:** The product owner, who approved the lead's decisions (23i), (23j), (23k), (23l), (24d), (24f) and (24g) on 2026-11-15 (recorded by FIX-W54-DOCS and FIX-W55-DOCS)
+**Revisions:** 2026-11-16 (lead decision (25d) of 2026-11-16, approved by the owner; FIX-W56-PLAN): new item 7, how the integration branch takes in what landed on `main` once `main` is the default branch; the follow-ups and [conventions §11](../conventions.md#11-git-workflow) say the same.
 
 ## Context
 
@@ -28,6 +29,7 @@ This ADR replaces ADR-0020's points on **merging** (squash merge, linear history
 4. **A single task's pull request is squash-merged (24f).** A task done outside a wave opens its own pull request from `task/<ID>-<slug>`, which the developer **squash-merges** ([conventions §11](../conventions.md#11-git-workflow)). `main`'s protection therefore allows both merge commits and squash merging, requires no linear history, blocks force pushes and requires the six checks **Plan lint**, **Deploy files**, **Build and test**, **Integration tests**, **VM check test** and **Integration tests on other hosts and ports** ([`tools/ci/README.md`](../../../tools/ci/README.md#human-steps-the-developer)).
 5. **Approvals and the review record (23k).** `main` requires **0 approvals** while the developer is the only person with write access. The review record of a pull request into `main` is then: the six required checks green, the second-agent review comment where the runbook asks for one (X-036), and the developer's merge. The author (an agent) is never the reviewer (the developer). Once a second person with write access joins, `main` requires **1 approval**, from someone other than the pull request's author.
 6. **Who may merge what (24d).** Agents never merge into `main` and never merge a pull request. Only the wave integrator squash-merges task branches into the integration branch. Only the developer merges into `main`: a wave's pull request with a merge commit, a single task's pull request with a squash. Agents never push to `main` ([CLAUDE.md](../../../CLAUDE.md) rule 2, [AGENTS.md](../../../AGENTS.md) §4 item 9).
+7. **What landed on `main` reaches the integration branch by a merge (25d, 2026-11-16).** Once `main` is the default branch, pull requests can land on `main` between waves, for example Dependabot's, which the developer **squash-merges** on `main`. At the start of a wave the integrator takes them in by merging `main` into the integration branch **with a merge commit, never by a rebase**, so the task commits and their `Task:` footers keep their hashes and stay reachable for P21's ancestry check.
 
 ## Consequences
 
@@ -49,6 +51,7 @@ This ADR replaces ADR-0020's points on **merging** (squash merge, linear history
 
 - Human steps of X-019 (step 5) and [`tools/ci/README.md`](../../../tools/ci/README.md#human-steps-the-developer): protect `main` as item 4 says, do the deep review of item 2, merge the integration branch once with a merge commit, make `main` the default branch, and record the settings in the pull request.
 - When a second person with write access joins, set the required approvals to 1 (item 5).
+- From the first wave after `main` becomes the default branch, the integrator merges `main` into the integration branch at the start of each wave (item 7).
 
 ## Alternatives considered
 

@@ -232,7 +232,7 @@ The strategy and the tools are in [ADR-0015](adr/0015-testing-strategy.md). The 
 
 ## 11. Git workflow
 
-- **Branches:** `task/<TASK-ID>-<short-slug>` for plan tasks (`task/OBE-014-api-key-guard`). For work outside the plans: `fix/<slug>`, `docs/<slug>`, `chore/<slug>`. Branch from the latest `main`. Rebase, never merge `main` into a branch.
+- **Branches:** `task/<TASK-ID>-<short-slug>` for plan tasks (`task/OBE-014-api-key-guard`). For work outside the plans: `fix/<slug>`, `docs/<slug>`, `chore/<slug>`. Branch from the latest `main`. Rebase, never merge `main` into a branch. *Note (2026-11-16, lead decision (25d), approved by the owner; FIX-W56-PLAN):* the integration branch is the one exception ([ADR-0028](adr/0028-how-work-reaches-main.md) item 7). Once `main` is the default branch, the wave integrator takes in what landed on `main` (for example Dependabot pull requests, which the developer squash-merges on `main`) by merging `main` into the integration branch with a merge commit at the start of a wave, never by a rebase, so the task commits and their `Task:` footers keep their hashes.
 - **Commits:** Conventional Commits.
   - `<type>(<scope>): <imperative summary>`, at most 72 characters.
   - Types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `build`, `ci`, `chore`.

@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner, lead architect
-**Revisions:** 2026-10-12 (planning review): component ADRs are named PADR-/OADR-; the planning-review rule of item 4. 2026-10-21 (lead decision): item 4 gains the refinement exception: after the first merged M0 task an accepted ADR may still be revised in place, with a dated line in its **Revisions** field, when the revision records a decision of the lead (or of the product owner) that refines the ADR without reversing it, as the revisions of [OADR-0007](../../../ota/docs/adr/0007-tenant-migration-runner-and-provisioning-worker.md) of 2026-10-18 and of [OADR-0003](../../../ota/docs/adr/0003-booking-orchestration-and-supplier-timeout-recovery.md), [OADR-0011](../../../ota/docs/adr/0011-console-access-staff-sessions-and-environments.md) and [ADR-0008](0008-identity-accounts-customers-sessions.md) of 2026-10-21 did; reversing a decision still needs a new ADR that supersedes it. This revision is itself one.
+**Revisions:** 2026-10-12 (planning review): component ADRs are named PADR-/OADR-; the planning-review rule of item 4. 2026-10-21 (lead decision): item 4 gains the refinement exception: after the first merged M0 task an accepted ADR may still be revised in place, with a dated line in its **Revisions** field, when the revision records a decision of the lead (or of the product owner) that refines the ADR without reversing it, as the revisions of [OADR-0007](../../../ota/docs/adr/0007-tenant-migration-runner-and-provisioning-worker.md) of 2026-10-18 and of [OADR-0003](../../../ota/docs/adr/0003-booking-orchestration-and-supplier-timeout-recovery.md), [OADR-0011](../../../ota/docs/adr/0011-console-access-staff-sessions-and-environments.md) and [ADR-0008](0008-identity-accounts-customers-sessions.md) of 2026-10-21 did; reversing a decision still needs a new ADR that supersedes it. This revision is itself one. 2026-11-16 (lead decision (25c) of 2026-11-16, approved by the owner; FIX-W56-PLAN): item 4 defines **superseded in part** and the status that says so, as [ADR-0028](0028-how-work-reaches-main.md) and [ADR-0020](0020-ai-agent-development-workflow.md) have used it since 2026-11-15 (the same decision accepts ADR-0028 as Accepted and ADR-0020 as "Accepted; superseded in part by ADR-0028"); the template's status line lists it.
 
 ## Context
 
@@ -21,6 +21,7 @@ The product owner's answers are recorded in [`../decisions.md`](../decisions.md)
 4. **Changing a decision:**
    - A product owner decision changes in `decisions.md` first, then in the ADR that records it, then in the plans.
    - An accepted ADR is not rewritten. A new ADR supersedes it. The old one gets `Status: Superseded by ADR-NNNN` and keeps its text.
+   - **Superseded in part** (2026-11-16, lead decision (25c)). When a later ADR replaces only some named points of an accepted ADR, the earlier ADR is superseded in part: the points the later ADR names are replaced by it, and the rest of the earlier ADR stands. The earlier ADR's status reads `Accepted; superseded in part by ADR-NNNN`, a dated line in its **Revisions** field names the replaced points, and its text stays, with a marker at each replaced point that names the later ADR. The later ADR says in its Decision which points it replaces. Example: [ADR-0028](0028-how-work-reaches-main.md) replaces ADR-0020's points on merging and approvals.
    - Typos, links and clarifications that do not change the decision may be edited in place.
    - **Planning review exception.** Until the first M0 task is merged, an accepted ADR may be revised in place when a planning review finds a contradiction or a gap, so that readers do not have to chase superseding records for decisions nobody has implemented yet. Each such revision adds a dated line to the ADR's **Revisions** field that says what changed. From the first merged M0 task on, the superseding rule above applies, with the one exception below.
    - **Refinement exception** (from 2026-10-21). An accepted ADR may be revised in place when the revision records a decision of the lead (or of the product owner) that refines the ADR without reversing it: it narrows, completes or clarifies a point, or aligns it with what the implementation settled or with another ADR. The revision adds a dated line to the ADR's **Revisions** field that names the decision and the points it changed, and the changed points say what holds now. Reversing a decision, that is replacing what an ADR chose with something else, still needs a new ADR that supersedes it.
@@ -31,7 +32,7 @@ The product owner's answers are recorded in [`../decisions.md`](../decisions.md)
    ```markdown
    # ADR-NNNN: Title
 
-   **Status:** Proposed | Accepted | Superseded by ADR-NNNN
+   **Status:** Proposed | Accepted | Accepted; superseded in part by ADR-NNNN | Superseded by ADR-NNNN
    **Date:** YYYY-MM-DD
    **Deciders:** …
    **Revisions:** (optional) YYYY-MM-DD: what changed

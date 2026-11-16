@@ -8,8 +8,8 @@ Related: [`../scope.md`](../scope.md) (features PF-01 … PF-98), [`../architect
 
 | Item | Value |
 |---|---|
-| Agent tasks | 123: 75 backend (`PBE-`), 31 portal (`PFE-`), 17 admin (`PAD-`) |
-| Estimate | 608 agent-hours by the plan-lint sizes (S 2 h, M 4 h, L 8 h, review included); about 152 developer-days without agents (S ½ day, M 1 day, L 2 days) |
+| Agent tasks | 125: 77 backend (`PBE-`), 31 portal (`PFE-`), 17 admin (`PAD-`) |
+| Estimate | 614 agent-hours by the plan-lint sizes (S 2 h, M 4 h, L 8 h, review included); about 153.5 developer-days without agents (S ½ day, M 1 day, L 2 days) |
 | Foundation dependencies | `X-001` … `X-028` ([`foundation-tasks.md`](../../../docs/mvp/plans/foundation-tasks.md)); the platform never re-does them |
 | Validation | `node tools/plan-lint/plan-lint.mjs docs/mvp/plans/foundation-tasks.md platform/docs/plans/agent-tasks.md` (0 errors) |
 | Reference material reused | Baseline DDL [`platform.sql`](../../../docs/velexis-sdk/db/platform.sql) and [`reference.sql`](../../../docs/velexis-sdk/db/reference.sql) as `0001`, the exact `0002` SQL in [`../data-model-migration-0002.md`](../data-model-migration-0002.md) (parts 1–3), the OTA contract's `ConsoleApiKeyScope`, `StaffPermission`, error envelope and `consoleSignIn` grant in [`velexis-ota-booking-api.openapi.yaml`](../../../docs/velexis-sdk/openapi/velexis-ota-booking-api.openapi.yaml) |
@@ -36,27 +36,27 @@ Rules that shape the order of the tasks:
 | E8 | Amadeus connections | Velexis accounts and office pool, connection reads and settings, own credentials, live offices | PBE-020, PBE-027, PBE-040, PBE-052 … PBE-054, PFE-013, PFE-018, PFE-023, PAD-007, PAD-014 |
 | E9 | Payments and settlements | Velexis-mode rows, statement descriptor, Connect Standard, API-key connections, payout accounts, monthly settlements | PBE-038, PBE-055 … PBE-060, PFE-016, PFE-024, PFE-025, PAD-013 |
 | E10 | Billing | Plans and pricing, manual trials, Stripe inbox, Checkout, Customer Portal, event processing, invoices, dunning, admin billing | PBE-033, PBE-043 … PBE-048, PFE-004, PFE-020, PFE-021, PAD-008, PAD-012 |
-| E11 | Domains and TLS | Sub-domain, `ask` endpoint, custom domains, DNS verification, TLS probe, re-check, admin domains | PBE-027, PBE-049 … PBE-051, PFE-022, PAD-014 |
+| E11 | Domains and TLS | Sub-domain, `ask` endpoint, custom domains, DNS verification, TLS probe, re-check, admin domains; since 2026-11-16 host names whose punycode labels do not decode refused, in custom domains and API-key origins (Node.js 24) | PBE-027, PBE-049 … PBE-051, PFE-022, PAD-014, PBE-077 |
 | E12 | Platform admin | Admin sign-in, dashboard, tenants, suspend and resume, jobs, queues, accounts, admins, audit | PBE-028 … PBE-032, PAD-002 … PAD-006, PAD-009, PAD-011 |
 | E13 | Go-live | Live preconditions, the environment switch, live keys | PBE-061, PFE-026 |
-| E14 | Quality and launch | End-to-end harness and journeys, cross-backend tests, security review and its follow-ups, performance, switch removal, runbooks | PFE-014, PFE-015, PFE-027, PFE-028, PAD-010, PAD-015, PAD-016, PBE-062 … PBE-065; the security review's follow-ups PBE-067 … PBE-071, PFE-029, PFE-030, PAD-017; since 2026-11-11, PBE-072 (`secrets:rewrap`), PBE-073 (the breached-password list) and PBE-074 (the official Amadeus hosts in production); since 2026-11-13, PBE-075 (the production demo OTA with its reserved key); since 2026-11-15, PFE-031 (the approved terms of service and privacy notice) |
+| E14 | Quality and launch | End-to-end harness and journeys, cross-backend tests, security review and its follow-ups, performance, switch removal, runbooks | PFE-014, PFE-015, PFE-027, PFE-028, PAD-010, PAD-015, PAD-016, PBE-062 … PBE-065; the security review's follow-ups PBE-067 … PBE-071, PFE-029, PFE-030, PAD-017; since 2026-11-11, PBE-072 (`secrets:rewrap`), PBE-073 (the breached-password list) and PBE-074 (the official Amadeus hosts in production); since 2026-11-13, PBE-075 (the production demo OTA with its reserved key); since 2026-11-15, PFE-031 (the approved terms of service and privacy notice); since 2026-11-16, PBE-076 (the platform measured on Node.js 24) |
 
 ## 3. Milestones at a glance
 
 | Milestone | Platform goal | Tasks | Agent-hours | Solo days | What the OTA group does in the same milestone |
 |---|---|---|---|---|---|
-| M0 Foundations | Three apps scaffolded and in the release | 3 | 10 | 2.5 | Foundation work is shared (`X-` tasks); OTA scaffolds |
+| M0 Foundations | Three apps scaffolded and in the release; since 2026-11-16 punycode host names refused before the switch to Node.js 24 (PBE-077) | 4 | 12 | 3 | Foundation work is shared (`X-` tasks); OTA scaffolds |
 | M1 Platform core | Sign-up to active OTA, keys, team, admin basics | 58 | 316 | 79 | OTA backend scaffold and the provisioning worker (OF-11) |
 | M2 Search & price | Platform data proven on the OTA side | 2 | 6 | 1.5 | Tenancy, Amadeus client, shopping, SDK, storefront (OF-01, OF-02) |
 | M3 Book & pay | Card statement descriptor | 3 | 6 | 1.5 | Checkout, customer auth, Stripe and airline-card payments, orders, e-mails (OF-03 … OF-08) |
 | M4 OTA admin | Console SSO, Amadeus office settings | 5 | 16 | 4 | OTA admin, console, settings (OF-09, OF-10) |
 | M5 Monetisation & self-service | Billing, own Stripe, settlements, own Amadeus, custom domains, go-live | 33 | 168 | 42 | Gateways that follow the account mode and credential source (OF-12), Connect webhooks, live environment |
-| M6 Hardening & launch | Security review and its follow-ups (PBE-067 … PBE-071, PFE-029, PFE-030, PAD-017), performance, full end-to-end suite, runbooks, `secrets:rewrap` (PBE-072), the breached-password list (PBE-073), the official Amadeus hosts in production (PBE-074), the production demo OTA (PBE-075), the approved terms of service and privacy notice (PFE-031); switch removal after the launch (PBE-064) | 19 | 86 | 21.5 | PCI controls of the airline-card flow, OTA end-to-end suite; foundation monitoring and restore drill |
-| **Total** | | **123** | **608** | **152** | |
+| M6 Hardening & launch | Security review and its follow-ups (PBE-067 … PBE-071, PFE-029, PFE-030, PAD-017), performance, full end-to-end suite, runbooks, `secrets:rewrap` (PBE-072), the breached-password list (PBE-073), the official Amadeus hosts in production (PBE-074), the production demo OTA (PBE-075), the approved terms of service and privacy notice (PFE-031), the platform measured on Node.js 24 (PBE-076, since 2026-11-16); switch removal after the launch (PBE-064) | 20 | 90 | 22.5 | PCI controls of the airline-card flow, OTA end-to-end suite; foundation monitoring and restore drill |
+| **Total** | | **125** | **614** | **153.5** | |
 
 ```mermaid
 flowchart LR
-  F["Foundation<br/>X-001…X-023"] --> M0["M0<br/>3 scaffolds"]
+  F["Foundation<br/>X-001…X-023"] --> M0["M0<br/>3 scaffolds<br/>(and PBE-077, after PBE-049)"]
   M0 --> M1["M1 platform core<br/>58 tasks"]
   OF11(["OTA OF-11<br/>provisioning worker"]) -. gate PBE-035 .-> M1
   M1 --> M2["M2<br/>2 tasks"]
@@ -66,7 +66,8 @@ flowchart LR
   OF09(["OTA OF-09<br/>OTA admin SSO"]) -. gate PFE-019 .-> M4
   M4 --> M5["M5<br/>33 tasks, behind switches"]
   OF12(["OTA OF-12<br/>own Stripe and Amadeus"]) -. needed to switch on .-> M5
-  M5 --> M6["M6<br/>19 tasks<br/>(PBE-064 after launch)"]
+  M5 --> M6["M6<br/>20 tasks<br/>(PBE-064 after launch)"]
+  X48(["X-048 Node.js 24 switch"]) -. PBE-076 .-> M6
 ```
 
 ## 4. Milestones in detail
@@ -76,6 +77,8 @@ flowchart LR
 **Goal.** The platform backend, portal and platform admin exist as workspace packages that build, start, answer health checks and are packed into the release by the foundation pipeline.
 
 **Scope.** E1 (scaffolds only): PBE-001, PFE-001, PAD-001. Everything else of M0 (monorepo, shared packages, baselines, migration runner, CI, VM, Caddy, deploy) is foundation work, `X-001` to `X-023`. Reference data is loaded by the foundation loader `tools/reference-data` ([ADR-0024](../../../docs/mvp/adr/0024-reference-data-sources-and-loader.md)); the backend has no loader of its own, and PBE-001 only adds the `ref:load` shortcut for `pnpm db:seed:reference`.
+
+*Note (2026-11-16, lead decisions (25a) and (25n), approved by the owner; FIX-W56-PLAN).* PBE-077 (S, E11: custom domains and API-key origins refuse host names whose punycode labels do not decode, with one exported check that gives the same results on Node 22 and 24) joins M0, so it holds 4 tasks, 12 agent-hours and 3 solo days. It carries the M0 tag so that agents take it before the switch to Node.js 24 (X-048, [ADR-0029](../../../docs/mvp/adr/0029-nodejs-24-runtime.md) item 7), which waits for it; it depends on PBE-021 (M1) and PBE-049 (M5), both done when it was planned. The [solo plan](solo-developer-plan.md) places it in Week 30f, in the roadmap's Node.js 24 block.
 
 **Demo.** `pnpm build` builds the three apps; started locally they answer `/health/live`, and `/health/ready` reports PostgreSQL and Redis; the release built by `pack-release.sh` contains `dist/main.js`, `dist/worker.js`, `dist/cli.js` and the two Next.js standalone outputs.
 
@@ -283,6 +286,8 @@ The platform gives every row and column these features read (all created by `000
 
 *Note (2026-11-15, lead decision (23n), approved by the owner; FIX-W54-DOCS).* PFE-031 (S: the product owner's approved terms of service and privacy notice replace the placeholder text that `/legal/terms` and `/legal/privacy` have shown since PFE-004, under a new `termsVersion` that sign-up sends, so the acceptance the API stores names the final text) joins M6, so it holds 19 tasks, 86 agent-hours and 21.5 solo days. It waits for the approved text, a human step of the product owner with legal counsel, and the platform launch checklist's §5 item points at it ([`../runbooks/launch-checklist.md`](../runbooks/launch-checklist.md) §5); if the terms carry the OTAs' acknowledgement of Velexis's PCI DSS responsibility, they also meet precondition P23 of the airline-card go-live ([`../../../ota/docs/runbooks/airline-card-go-live.md`](../../../ota/docs/runbooks/airline-card-go-live.md) §2). It belongs to E14 (and E4, for PF-01's acceptance of the terms); the [solo plan](solo-developer-plan.md) places it in ½ day of Week 30e's buffer, in C80 ([`../../../docs/mvp/plans/roadmap.md`](../../../docs/mvp/plans/roadmap.md) §1.3).
 
+*Note (2026-11-16, lead decisions (25a) and (25n), approved by the owner; FIX-W56-PLAN).* PBE-076 (M, E14: the platform API and worker measured on Node.js 24 against Node 22 and the VM budget, from one build and the units' flags, with a garbage-collection preload and the share of time in garbage collection; [ADR-0029](../../../docs/mvp/adr/0029-nodejs-24-runtime.md) items 3 and 5) joins M6, so it holds 20 tasks, 90 agent-hours and 22.5 solo days. It waits for the switch to Node.js 24 (X-048, foundation, M0) and for PBE-063; a missed target or threshold becomes a proposed task for the lead. The [solo plan](solo-developer-plan.md) places it in Week 30f, in C83 of the roadmap's Node.js 24 block ([`../../../docs/mvp/plans/roadmap.md`](../../../docs/mvp/plans/roadmap.md) §1.3, re-baseline of 2026-11-16).
+
 **Demo.** Walk through `platform/docs/security-review.md` and `platform/docs/performance.md`; show three consecutive green nightly runs of the portal and admin projects; walk through the launch checklist on the VM with the developer.
 
 **Exit criteria.**
@@ -335,9 +340,9 @@ Every feature of [`../scope.md`](../scope.md) §3, the data-model deltas and the
 | PF-20 Invitations | M1 | E7 | PBE-026, PFE-012, PFE-015 |
 | PF-21 Roles and removal | M1 | E7 | PBE-025, PFE-012, PFE-015; reach into the OTA admin: PBE-036, PFE-019 |
 | PF-22 Open console | M4 | E7 | PBE-039, PFE-017, PFE-019 |
-| PF-30 API keys | M1, M5 | E6 | PBE-021, PFE-011, PFE-015, PBE-036; live keys: PBE-061, PFE-026 |
+| PF-30 API keys | M1, M5 | E6 | PBE-021, PFE-011, PFE-015, PBE-036; live keys: PBE-061, PFE-026; origins whose punycode labels do not decode refused: PBE-077 (M0, 2026-11-16) |
 | PF-40 Sub-domain | M1 | E11 | PBE-018, PBE-027, PFE-013 |
-| PF-41 Custom domains | M5 | E11 | PBE-049, PBE-050, PBE-051, PFE-022, PFE-027 |
+| PF-41 Custom domains | M5 | E11 | PBE-049, PBE-050, PBE-051, PFE-022, PFE-027; host names whose punycode labels do not decode refused: PBE-077 (M0, 2026-11-16) |
 | PF-42 TLS ask | M1 | E11 | PBE-027 (positive answers in Redis, negative in a bounded in-process cache, [PADR-0004](../adr/0004-custom-domain-verification.md) item 6; Caddy side: X-022) |
 | PF-50 Shared test office | M1 | E8 | PBE-020, PBE-022, PFE-013, PAD-010 |
 | PF-51 Live office | M5 | E8 | PBE-054, PFE-023, PAD-014, PAD-015 |
@@ -375,7 +380,7 @@ Every feature of [`../scope.md`](../scope.md) §3, the data-model deltas and the
 | Platform OpenAPI document | M1, M3, M5 | E1 | PBE-005, PBE-006, PBE-007, PBE-066, PBE-037, PBE-041, PBE-042 |
 | Job messages and invalidation events | M1 | E1 | PBE-004 |
 | Milestone switches ([PADR-0015](../adr/0015-milestone-feature-switches.md)) | M1, M6 | E3 | PBE-012, PBE-064 |
-| Security, performance, operations | M6 | E14 | PBE-062, PBE-063, PBE-065, PFE-028, PAD-016; the security review's follow-ups (2026-11-06, FIX-W45-PLATFORM): PBE-067 … PBE-071, PFE-029, PFE-030, PAD-017; master-key rotation (2026-11-11, FIX-W48-SHARED): PBE-072; the lead's second set of 2026-11-11 (FIX-W49-SHARED): PBE-073 and PBE-074; the production demo OTA (2026-11-13, FIX-W51-SHARED): PBE-075; the approved terms of service and privacy notice (2026-11-15, FIX-W54-DOCS): PFE-031 |
+| Security, performance, operations | M6 | E14 | PBE-062, PBE-063, PBE-065, PFE-028, PAD-016; the security review's follow-ups (2026-11-06, FIX-W45-PLATFORM): PBE-067 … PBE-071, PFE-029, PFE-030, PAD-017; master-key rotation (2026-11-11, FIX-W48-SHARED): PBE-072; the lead's second set of 2026-11-11 (FIX-W49-SHARED): PBE-073 and PBE-074; the production demo OTA (2026-11-13, FIX-W51-SHARED): PBE-075; the approved terms of service and privacy notice (2026-11-15, FIX-W54-DOCS): PFE-031; the platform measured on Node.js 24 (2026-11-16, FIX-W56-PLAN): PBE-076 |
 
 **Endpoint coverage.** All 150 operations of the three inventory parts appear in [`agent-tasks.md`](agent-tasks.md) in the task that implements them, and each user-facing one also in a portal or admin task. The check is mechanical: every `operationId` in the first column of the inventory tables is found in the plan, and at run time the route parity test with its pending list ([PADR-0016](../adr/0016-contract-rollout-per-milestone-and-route-parity.md)) ends empty at the M5 exit.
 
