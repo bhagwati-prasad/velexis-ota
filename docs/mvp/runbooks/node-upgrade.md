@@ -261,7 +261,9 @@ The integrator's ([ADR-0028](../adr/0028-how-work-reaches-main.md); agents never
 - the `systemd-units` job's heap check of X-050 passes under systemd on Node 24, for the seven units: 688 MiB (platform API), 736 MiB (OTA API), 403 MiB (each worker) and 387 MiB (each Next.js server), each with its `MemoryMax` as constrained memory;
 - E2E runs the four projects and the SDK's smoke tests.
 
-Otherwise the integrator reverts the commit on the integration branch (§6.1) and dispatches CI again. ADR-0029's Results record the run ids. The nightly E2E run on the default branch then proves the `storefront-stripe` and `portal-stripe` projects, which need the Stripe test secrets (§2.8).
+Otherwise the integrator reverts the commit on the integration branch (§6.1) and dispatches CI again. ADR-0029's Results record the run ids.
+
+**Result (2026-11-17, wave 58's integrator).** CI run [44016005952](https://github.com/bhagwati-prasad/velexis-ota/actions/runs/44016005952) and E2E run [44016009706](https://github.com/bhagwati-prasad/velexis-ota/actions/runs/44016009706), dispatched on the squash commit `68c0412`, were green: every `actions/setup-node` step logged `node: v24.22.2` (the runner image's cached 24.x); no Turborepo cache hit came from the restored Node 22 cache (Lint 0 of 29 cached, each integration job 0 of 17, and the 12 hits of `build-test`'s later steps are tasks its own Lint step had just run); the `systemd-units` job's heap check passed at 688, 736, 403, 403, 387, 387 and 387 MiB with each unit's `MemoryMax` as constrained memory; E2E passed 387 tests in the four projects and the SDK's 24 smoke tests. Job times: `build-test` 11.9 min, `integration` 12.3 min, `alt-hosts` 16.9 min, E2E 15.6 min. The nightly E2E run on the default branch then proves the `storefront-stripe` and `portal-stripe` projects, which need the Stripe test secrets (§2.8).
 
 ## 4. The developer's machine
 
