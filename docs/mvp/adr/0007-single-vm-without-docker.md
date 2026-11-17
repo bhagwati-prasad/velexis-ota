@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (single VM, no Docker, systemd, Caddy, nightly off-VM backups), lead architect (layout, deploy and backup details)
-**Revisions:** 2026-10-12 (planning review): uploads go to `incoming/` as the `deploy` user ([ADR-0023](0023-release-artefact-and-deploy-user.md)); apps run as one system user per trust zone ([ADR-0026](0026-system-users-per-trust-zone.md)); backup retention is enforced by the bucket; SSH for people needs MFA ([ADR-0027](0027-pci-scope-and-vm-controls.md)).
+**Revisions:** 2026-10-12 (planning review): uploads go to `incoming/` as the `deploy` user ([ADR-0023](0023-release-artefact-and-deploy-user.md)); apps run as one system user per trust zone ([ADR-0026](0026-system-users-per-trust-zone.md)); backup retention is enforced by the bucket; SSH for people needs MFA ([ADR-0027](0027-pci-scope-and-vm-controls.md)). 2026-11-17 ([ADR-0029](0029-nodejs-24-runtime.md), task X-048): the VM runs Node.js 24 LTS from NodeSource (dated note under Host).
 
 ## Context
 
@@ -14,7 +14,8 @@
 ### Host
 
 - **Ubuntu 24.04 LTS**, starting size 4 vCPU, 8 GB RAM and 160 GB SSD. Resize when memory use stays above 70 %.
-- Native packages from the vendors' apt repositories: **Node.js 22 LTS** (NodeSource), **PostgreSQL 16** (PGDG), **Redis 7** (packages.redis.io), **Caddy 2.8** (Caddy's repository). Versions in [`../tech-stack.md`](../tech-stack.md).
+- Native packages from the vendors' apt repositories: **Node.js 24 LTS** (NodeSource), **PostgreSQL 16** (PGDG), **Redis 7** (packages.redis.io), **Caddy 2.8** (Caddy's repository). Versions in [`../tech-stack.md`](../tech-stack.md).
+  - **2026-11-17 ([ADR-0029](0029-nodejs-24-runtime.md) items 1, 6 and 10, task X-048):** Node.js 24 LTS replaces Node.js 22 LTS. `provision-vm.sh`'s `NODE_MAJOR` (default `24`) selects NodeSource's `node_24.x` and pins `nodejs` to that major at priority 1001; `sudo NODE_MAJOR=<n> bash provision-vm.sh --steps node` moves a provisioned VM to another major in either direction, and `check-vm.sh` checks the version, the pin and the source line against the `NODE_MAJOR` it is given. NodeSource is not an origin of `unattended-upgrades`: Node patches are installed in the weekly `apt list --upgradable` review ([`../deployment-single-vm.md`](../deployment-single-vm.md) §2).
 - PostgreSQL and Redis listen on `127.0.0.1` only. Redis requires a password and runs with `maxmemory-policy noeviction` and AOF `appendfsync everysec` ([ADR-0009](0009-background-jobs-bullmq.md)).
 - Firewall (`ufw`): allow 22 (SSH, from the developer's addresses where possible), 80 and 443. Everything else is closed. SSH accepts keys only; people also need a second factor ([ADR-0027](0027-pci-scope-and-vm-controls.md)). `unattended-upgrades` for security patches, `fail2ban` for SSH.
 

@@ -8,8 +8,8 @@ Related: [`AGENTS.md`](../../AGENTS.md) §10 (command cheat sheet), [`architectu
 
 | Tool | Version | Install (Ubuntu 24.04; macOS with Homebrew in brackets) |
 |---|---|---|
-| Node.js | 22 LTS (`.nvmrc`) | `nvm install` in the repository root (`brew install nvm`) |
-| pnpm | 9 (exact version in `package.json` → `packageManager`) | `corepack enable` (ships with Node 22) |
+| Node.js | 24 LTS (`.nvmrc`; [ADR-0029](adr/0029-nodejs-24-runtime.md)) | `nvm install` in the repository root (`brew install nvm`), then `nvm alias default 24`; moving between majors: [`runbooks/node-upgrade.md`](runbooks/node-upgrade.md) §4 |
+| pnpm | 9 (exact version in `package.json` → `packageManager`) | `corepack enable` (corepack ships with Node 24) |
 | PostgreSQL | 16 | PGDG apt repository: `sudo apt install postgresql-16` (`brew install postgresql@16`; keg-only, `dev-setup.sh` finds its `psql` itself) |
 | Redis | 7.4 | packages.redis.io apt repository, pinned to 7.4: `sudo apt install redis-server redis-tools` (`brew install redis`) |
 | Mailpit | 1.2x | `sudo bash < <(curl -sL https://raw.githubusercontent.com/axllent/mailpit/develop/install.sh)` (`brew install mailpit`) |
@@ -23,7 +23,7 @@ The exact commands for the vendor repositories are the same as in [`provision-vm
 
 ```bash
 git clone <repository-url> velexis && cd velexis
-nvm install && corepack enable
+nvm install && corepack enable                 # the .nvmrc major (24); corepack ships with Node 24
 pnpm install                                   # all workspaces, exact versions from pnpm-lock.yaml
 
 cp .env.example .env.local                     # shared local values; never commit .env.local
@@ -162,7 +162,7 @@ Integration tests build one migrated template database per run (platform, refere
 
 ```bash
 VELEXIS_EDGE_SECRET=dev_edge_secret_change_me caddy validate --config deploy/caddy/Caddyfile --adapter caddyfile
-bash deploy/caddy/test/caddy-smoke.sh   # Caddy 2.8.4 and Node 22; no root, no DNS entries
+bash deploy/caddy/test/caddy-smoke.sh   # Caddy 2.8.4 and Node 24; no root, no DNS entries
 ```
 
 The smoke test runs the real Caddyfile on `127.0.0.1:8443` with Caddy's local CA, `*.localhost` host names and an echo server in place of the apps, and checks the edge headers, blocked paths, on-demand TLS, maintenance page and admin socket ([`deploy/caddy/test/README.md`](../../deploy/caddy/test/README.md)). For day-to-day storefront work you do not need Caddy: the storefront's Vite proxy already mimics the edge headers.

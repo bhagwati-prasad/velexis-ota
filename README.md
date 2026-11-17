@@ -74,7 +74,7 @@ These documents were designed and validated before the MVP plans. The MVP builds
 Once M0 has created the workspace:
 
 ```sh
-pnpm install          # Node.js 22, pnpm 9
+pnpm install          # Node.js 24, pnpm 9
 pnpm dev              # all apps in development mode
 pnpm lint && pnpm typecheck && pnpm test
 node tools/plan-lint/plan-lint.mjs   # validate the task plans (works today)

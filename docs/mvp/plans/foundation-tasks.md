@@ -832,7 +832,7 @@ Related: [`../decisions.md`](../decisions.md) (binding), [`../architecture.md`](
 - **Verify:** `node --test tools/perf/*.test.mjs tools/ci/*.test.mjs && shellcheck -S style deploy/systemd/test/units-smoke.sh && node --check ota/backend/test/load/search-load.mjs && node --check ota/backend/test/load/booking-load.mjs && pnpm --filter @velexis/ota-backend lint`
 
 ### X-048 · Switch the repository, CI, the release build and the VM to Node.js 24 in one change
-- **Status:** todo
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: step 8's CI and E2E runs dispatched on the integration branch (the integrator's): every setup-node step on v24, no Turborepo cache hit in the first CI run, the systemd-units heap check on Node 24, E2E with the SDK smoke step (AC2))
 - **Component:** foundation
 - **Milestone:** M0
 - **Depends on:** X-046, X-047, X-050, PBE-077

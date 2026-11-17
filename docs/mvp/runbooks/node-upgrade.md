@@ -1,25 +1,28 @@
 # Moving Velexis to a new Node.js major
 
-This runbook moves the whole repository, CI, the release build and the VM from one Node.js major to the next, as [ADR-0029](../adr/0029-nodejs-24-runtime.md) decided for Node.js 22 → 24. The move has two parts: a **trial** that runs everything on the new major without changing what pins the old one (§2, task X-046), and one **switch** commit that changes every pin at once (§3, task X-048), followed by the developer's machine (§4), the VM (§5) and, if needed, the way back (§6). Task X-046 in [`../plans/foundation-tasks.md`](../plans/foundation-tasks.md) wrote §1 and §2; X-048 fills §3 to §6.
+This runbook moves the whole repository, CI, the release build and the VM from one Node.js major to the next, as [ADR-0029](../adr/0029-nodejs-24-runtime.md) decided for Node.js 22 → 24. The move has two parts: a **trial** that runs everything on the new major without changing what pins the old one (§2, task X-046), and one **switch** commit that changes every pin at once (§3, task X-048), followed by the developer's machine (§4), the VM (§5) and, if needed, the way back (§6). Task X-046 in [`../plans/foundation-tasks.md`](../plans/foundation-tasks.md) wrote §1 and §2; X-048 wrote §3 to §6 and brought §1 to Node 24 (2026-11-17).
 
 Related: [ADR-0029](../adr/0029-nodejs-24-runtime.md) (the decision, items 1 to 11, and the approved decisions D1–D18); [ADR-0002](../adr/0002-monorepo-pnpm-turborepo.md) item 1; [`tech-stack.md`](../tech-stack.md) §1; [`local-development.md`](../local-development.md) §1 and §2; [`deployment-single-vm.md`](../deployment-single-vm.md) §2, §3 and §12; [`tools/e2e/README.md`](../../../tools/e2e/README.md) (running the journeys); [`ota/sdk/README.md`](../../../ota/sdk/README.md) §8.1 (the SDK's smoke tests).
 
 ## 1. What decides the Node version
 
-Only the **major** is compared anywhere; the patch versions of CI, the release build, the VM and a developer's machine may differ. [ADR-0029](../adr/0029-nodejs-24-runtime.md) item 2 names `.nvmrc` the source and lists the places that must name the same major. Until X-048 they all say 22:
+Only the **major** is compared anywhere; the patch versions of CI, the release build, the VM and a developer's machine may differ. [ADR-0029](../adr/0029-nodejs-24-runtime.md) item 2 names `.nvmrc` the source and lists the places that must name the same major. Since X-048 (2026-11-17, §3) they all say 24; until then they said 22, as the trial of §2 found them:
 
 | Place | Today | What reads it |
 |---|---|---|
-| `.nvmrc` | `22` | `nvm install` and `nvm use` in the repository root ([`local-development.md`](../local-development.md) §2); every `actions/setup-node` step of `.github/workflows/ci.yml`, `e2e.yml` and `deploy.yml` (`node-version-file: .nvmrc`), which takes the runner image's cached newest 22.x, so the release build of `deploy.yml` too. |
-| Root `package.json`, `engines.node` | `>=22 <23` | pnpm, which only warns (`WARN  Unsupported engine`, no `engine-strict`) when the running Node is outside the range. |
-| `deploy/scripts/provision-vm.sh`, `NODE_MAJOR` default | `22` | Step `packages` writes NodeSource's source line `node_${NODE_MAJOR}.x`; step `node` installs `nodejs`, refuses another major and enables pnpm through corepack. |
-| `deploy/scripts/check-vm.sh`, its Node item, and the fixture of `deploy/scripts/test/check-vm.test.sh` | `v22.*`; the fixture `v22.12.0` and `node_22.x` | The VM check after provisioning ([`deployment-single-vm.md`](../deployment-single-vm.md) §3). |
-| `@types/node` in the 15 `package.json` files that declare it, and in `pnpm-lock.yaml` | `22.20.5` | `pnpm typecheck`; `.github/dependabot.yml` ignores its major updates ("Node.js 22"). |
-| `deploy/demo-deployment.html` | `ensure_node22` (Part B1) | The owner's demo guide. |
+| `.nvmrc` | `24` | `nvm install` and `nvm use` in the repository root ([`local-development.md`](../local-development.md) §2); every `actions/setup-node` step of `.github/workflows/ci.yml`, `e2e.yml` and `deploy.yml` (`node-version-file: .nvmrc`), which takes the runner image's cached newest 24.x, so the release build of `deploy.yml` too. |
+| Root `package.json`, `engines.node` | `>=24 <25` | pnpm, which only warns (`WARN  Unsupported engine`, no `engine-strict`) when the running Node is outside the range. |
+| `deploy/scripts/provision-vm.sh`, `NODE_MAJOR` default | `24` | Step `packages` writes NodeSource's source line `node_${NODE_MAJOR}.x`; step `node` writes that line and the `nodejs` pin (`/etc/apt/preferences.d/velexis-nodejs`, priority 1001), installs `nodejs` with `--allow-downgrades`, refuses another major and enables pnpm through corepack (X-047; `NODE_MAJOR=<n> --steps node` moves a provisioned VM either way, §5 and §6). |
+| `deploy/scripts/check-vm.sh`, its Node item (`${NODE_MAJOR:-24}`), and the fixture of `deploy/scripts/test/check-vm.test.sh` | `v24.*`, the pin and `node_24.x`; the fixture `v24.22.3` and `node_24.x` | The VM check after provisioning ([`deployment-single-vm.md`](../deployment-single-vm.md) §3): the version, the pin and the source line against the `NODE_MAJOR` it is given (X-047). |
+| `@types/node` in the 15 `package.json` files that declare it, and in `pnpm-lock.yaml` | `24.19.2` (`typeScriptVersion` 5.6) | `pnpm typecheck`; `.github/dependabot.yml` ignores its major updates, so later 24.x types come as patches and minors, each taken only with `typeScriptVersion` 5.6 or lower ([`tools/ci/README.md`](../../../tools/ci/README.md), Dependabot). |
+| `deploy/demo-deployment.html` | `nvm install 24`, `nvm alias default 24`, `nvm use 24` (Part B1); its `start.sh` checks the major of `.nvmrc` (`ensure_node_major`) | The owner's demo guide. |
 | The release | `RELEASE.json` `node` = `process.version` of the build ([`pack-release.sh`](../../../deploy/scripts/pack-release.sh)) | `velexis-deploy` refuses a release whose build major differs from the VM's `node` on its first activation ([`deploy.sh`](../../../deploy/scripts/deploy.sh) step 1); `--rollback` does not check ([ADR-0029](../adr/0029-nodejs-24-runtime.md) item 10, D12). |
-| The agents' machine | `/etc/profile.d/nodejs.sh` puts `/opt/node22/bin` (v22.23.4) first on `PATH` | pnpm (`/opt/node-tools`, 10.28.0, which runs the `packageManager` pnpm 9.15.9) and every script run with `#!/usr/bin/env node` take the first `node` on `PATH`. `/opt/node24` holds v24.22.1, older than the security release v24.22.3, so the trial does not use it. |
+| The agents' machine | `/etc/profile.d/nodejs.sh` puts `/opt/node22/bin` (v22.23.4) first on `PATH`, until the integrator switches it after X-048's wave ([ADR-0029](../adr/0029-nodejs-24-runtime.md) item 3); X-048 itself ran with a verified v24.22.3 first on `PATH` (§3) | pnpm (`/opt/node-tools`, 10.28.0, which runs the `packageManager` pnpm 9.15.9) and every script run with `#!/usr/bin/env node` take the first `node` on `PATH`. `/opt/node24` held v24.22.1, older than the security release v24.22.3, so neither the trial nor the switch used it. |
+| `tools/ci/node-major.test.mjs` (X-047) | the guard | `node --test tools/ci/*.test.mjs` (ci.yml's `build-test`): fails, naming the file, the line and both majors, when any place above names another major than `.nvmrc` (every `@types/node@` entry of the lockfile included), or when a workflow's `actions/setup-node` step stops reading `node-version-file: .nvmrc`; only the jobs of its `EXEMPT_JOBS` (empty; SDK-019 adds `sdk-node22`) may set their own `node-version`. |
+| `turbo.json`, `globalDependencies` | `.nvmrc` (X-047) | Turborepo, which hashes no runtime version: a change of the major misses every cached task, and a revert finds the old entries again ([ADR-0029](../adr/0029-nodejs-24-runtime.md) item 4). |
+| The seven app units' `NODE_OPTIONS` (X-050) | `--max-old-space-size` and `--max-semi-space-size` in one quoted `Environment="NODE_OPTIONS=…"` assignment | Not a copy of the major, but what keeps each unit's heap the same on either one ([ADR-0029](../adr/0029-nodejs-24-runtime.md) item 5): `tools/perf/unit-node-options.test.mjs` checks the unit files (CI's `build-test`), and `deploy/systemd/test/units-smoke.sh` step 5 checks each real unit under systemd (CI's `systemd-units`): V8's heap limit is old + 3 × semi of its flags and Node's constrained memory is its `MemoryMax`. |
 
-Nothing else pins the major. No native addon is rebuilt on install (`pnpm.onlyBuiltDependencies` is empty), and every addon the build and the tests load is N-API (§2.6), so one `node_modules` serves both majors. X-047 adds the guards of ADR-0029 items 2, 4 and 6 (`tools/ci/node-major.test.mjs`, `.nvmrc` as a Turborepo global dependency, `NODE_MAJOR` both ways), and X-048 adds them to this table when it switches.
+Nothing else pins the major. No native addon is rebuilt on install (`pnpm.onlyBuiltDependencies` is empty), and every addon the build and the tests load is N-API (§2.6), so one `node_modules` serves both majors. X-047 added the guards of ADR-0029 items 2, 4 and 6 (`tools/ci/node-major.test.mjs`, `.nvmrc` as a Turborepo global dependency, `NODE_MAJOR` both ways) and X-050 the units' young generation of item 5; the last three rows of the table name them.
 
 ## 2. The trial: the whole repository on the new major, nothing switched
 
@@ -122,7 +125,7 @@ Messages that look like warnings but are not Node's, and print the same on Node 
 | `pnpm typecheck` | Passed: the 19 `tsc` runs, none cached | 70 s |
 | `git checkout -- <the 15 package.json files> pnpm-lock.yaml`, then `pnpm install --frozen-lockfile` | Restored: `git status` shows only this runbook, and the 15 files declare `22.20.5` again | 2 s |
 
-X-048 commits the bump.
+X-048 committed the bump (§3).
 
 ### 2.6 Step 5: the runtime and the native addons
 
@@ -192,16 +195,243 @@ The agents' machine has no systemd as PID 1, no Stripe test secrets, no second h
 
 ## 3. The switch
 
-Written by X-048.
+Task X-048 made the switch on 2026-11-17, in wave 58, alone, as [ADR-0029](../adr/0029-nodejs-24-runtime.md) item 3 and decision D17 require: one commit (`Task: X-048`), which the integrator squash-merges by itself, so that reverting it is the whole rollback in git (§6.1). It was made and proven on Node.js 24, from the worktree of branch `task/X-048-switch-to-node24` (base `f6a0a3c6`, the integration branch after wave 57).
+
+### 3.1 What the commit changes
+
+- **The pins** (§1): `.nvmrc` `24`; the root `engines.node` `>=24 <25` on the same line, the `pnpm` range unchanged (so `package.json`'s line 35, which the PCI pack cites, does not move); `@types/node` 22.20.5 → 24.19.2 in the 15 `package.json` files that declare it. `npm view @types/node@24 version` listed 24.19.2 as the newest 24.x on 2026-11-17, and `npm view @types/node@24.19.2 typeScriptVersion` printed `5.6` (D7). `pnpm install` on Node 24 then regenerated the lockfile: 94 lines changed, `@types/node@24.19.2` and `undici-types@7.24.6` (from 6.21.0) replace the old entries, and the rest are the `(@types/node@…)` peer suffixes; `grep -c '@types/node@22' pnpm-lock.yaml` prints `0` (it printed 40 before).
+- **The VM** (one commit with the pins, because `velexis-deploy` refuses a release whose build major differs from the VM's): `provision-vm.sh`'s `NODE_MAJOR` default `24` (step `node`'s header names no major since X-047, lead decision (27c)), `check-vm.sh`'s `${NODE_MAJOR:-24}`, `check-vm.test.sh`'s healthy fixture `v24.22.3` and `node_24.x`, and the reason of `deb.nodesource.com` in `deploy/egress/allowed-hosts.conf`. Each of these is a one-line change in place, so no file:line reference of the PCI pack moved (the pack's 474 references were checked, 0 problems).
+- **One test**: `platform/backend/src/domains/hostname-rules.test.ts` `[X-048 AC3] refuses ١٢٣.com (Arabic-Indic digits), which Node 22 stored as xn--9hbcd.com, as syntax` (ADR-0029 item 7, D14), and the same host typed as punycode, `xn--9hbcd.com`, which ada 4.0.0 no longer decodes (`punycodeLabelsRoundTrip` refuses it). It passes on v24.22.3 and fails on v22.23.4, where `url.domainToASCII("١٢٣.com")` answers `xn--9hbcd.com` and `xn--9hbcd.com` decodes back to `١٢٣.com`.
+- **Text** that names the major: `.github/dependabot.yml`'s comment of the `@types/node` rule and the title of the `[X-019 AC4]` test of `tools/ci/ci-workflow.test.mjs` (its assertions unchanged); `tools/ci/README.md`; the demo page's Part B1 (`nvm install 24`, `v24.`) and its `start.sh`, whose `ensure_node_major` reads the major from `.nvmrc`; `deploy/README.md`, `README.md`, `AGENTS.md` §10, `architecture.md`, `local-development.md` §1, §2 and §8, `deployment-single-vm.md` §2, §3, §8 and §14, `tech-stack.md` §1, §3 and §4 (the SDK's row is SDK-019's); dated revisions of ADR-0002 item 1, ADR-0007 (Host) and ADR-0023 (Release folder); ADR-0029's Results and a dated note under item 10 (lead decision (27d)); this runbook.
+- **No workflow file**: every `actions/setup-node` step already reads `node-version-file: .nvmrc` (X-047's test checks it), so CI, the E2E runs and `deploy.yml`'s release build take 24 from the commit itself.
+
+The lockfile's other package keys are the same before and after (step 1 of X-048): with the `(@types/node@…)` peer suffixes removed and the keys of `@types/node` and `undici-types` left out, the lockfile of the base commit and the new one list the same 1,284 keys (importers, packages and snapshots), and this prints nothing:
+
+```bash
+keys() { grep -E '^  [^ #].*:( \{\})?$' | sed -E 's/\(@types\/node@[^)]*\)//g' | grep -v -E "^  '?(@types/node|undici-types)@" | sort -u; }
+diff <(git show f6a0a3c6:pnpm-lock.yaml | keys) <(keys < pnpm-lock.yaml)
+```
+
+With every version of the two packages replaced by one placeholder, the whole files differ only in the two `integrity` lines of `@types/node` and `undici-types`.
+
+### 3.2 Its proof on Node 24
+
+| | |
+|---|---|
+| Date | 2026-11-17 (UTC), 02:00 to 02:52 |
+| Machine | The agents' cloud container: Ubuntu 24.04.5 LTS, kernel 6.18.44, 4 CPUs, 15 GiB of memory, root, no systemd as PID 1; X-048 ran alone in its wave, so no other agent's work shared it (load average 0.4 at the start, up to 16 during `pnpm test`) |
+| Node | v24.22.3, the official `node-v24.22.3-linux-x64.tar.xz` of §2.2 put first on `PATH`, checked again with `sha256sum -c` against `SHASUMS256.txt` (`OK`); `https://nodejs.org/dist/latest-v24.x/` still listed v24.22.3 on 2026-11-17 |
+| pnpm, Turborepo | pnpm 9.15.9 on v24.22.3 (`npm_config_user_agent`: `pnpm/9.15.9 npm/? node/v24.22.3 linux x64`); Turborepo 2.11.10, with `TURBO_FORCE=true` for lint, typecheck, test and test:int |
+| Services | PostgreSQL 16, a private Redis 7.0.15 with a password of its own (CI uses 7.4), Mailpit 1.29.7, Chromium of `/opt/pw-browsers` with Playwright 1.65.0 |
+
+| Command | Result | Duration |
+|---|---|---|
+| `pnpm install --frozen-lockfile` (the base commit's lockfile) | Passed, with the expected ` WARN  Unsupported engine` of the old `engines.node` | 26 s |
+| The bump of §3.1, then `pnpm install` | The lockfile of §3.1; no ` WARN  Unsupported engine` any more | 5 s |
+| `pnpm build` | Passed: 19 tasks, none cached (the new `.nvmrc` changed every hash) | 113 s |
+| `pnpm format:check` | Passed | 47 s |
+| `pnpm lint` | Passed: 29 tasks, none cached | 86 s |
+| `pnpm typecheck` | Passed: 19 `tsc` runs with `@types/node` 24.19.2 (28 tasks), none cached | 53 s |
+| `pnpm test` | Passed: 29 tasks, 9,174 tests in 17 packages, the `[X-048 AC3]` case among them | 189 s |
+| `pnpm --filter @velexis/platform-backend exec vitest run src/domains/hostname-rules.test.ts`, on v24.22.3 and on v22.23.4 (`/opt/node22`) | 80 of 80 on 24; on 22 the `[X-048 AC3]` case fails (79 of 80), as the plan expects, so the case lands with the switch | 1 s each |
+| `node --test tools/ci/*.test.mjs tools/perf/*.test.mjs` (the Verify's first part; X-047's `node-major.test.mjs` with `.nvmrc` 24 among them) | Passed: 113 tests | 6 s |
+| `node tools/plan-lint/plan-lint.mjs` | Passed: `ERRORS: 0`, 352 tasks, 1,606 h | < 1 s |
+| `pnpm test:int` (under the machine's end-to-end lock), then the PAN-absence proof of ci.yml's integration job | Passed: all 17 tasks; `packages/db` 78, `tools/reference-data` 7, `packages/testing` 31, `platform/backend` 1,256 and `ota/backend` 1,516 tests (`tenant-0002.int.test.ts` among them, 4.7 s for its 11 tests); the proof: every place scanned, nothing found | 954 s |
+| `pnpm --filter @velexis/platform-backend test:xb`, `pnpm --filter @velexis/ota-backend test:xb` | Passed: 14 and 9 tests | 26 s, 15 s |
+| `bash deploy/scripts/test/deploy.test.sh` | Passed: 133 checks, 51 runs of `deploy.sh` | 82 s |
+| `bash deploy/scripts/test/healthcheck.test.sh` | Passed: 62 checks | 48 s |
+| `bash deploy/scripts/test/log-review.test.sh` | Passed: 161 checks | 11 s |
+| `bash deploy/scripts/test/ship-logs.test.sh` | Passed: 80 checks | 4 s |
+| `bash deploy/scripts/test/backup-restore.test.sh` | Passed: 72 checks, 30 runs of `backup.sh` and `restore.sh` | 20 s |
+| `SMOKE_TMPDIR=/tmp CADDY=<the Velexis Caddy> bash deploy/caddy/test/caddy-smoke.sh` (after `test:int`) | Passed: 792 checks | 19 s |
+| `env PATH="$PATH" bash deploy/scripts/test/check-vm.test.sh` as root (the Verify's `sudo env PATH="$PATH" …`), under the machine's lock for tests that create system users, with the real `sshd -t`/`sshd -T` through `CHECKVM_SSHD` and the real `nft` in a private network namespace | Passed: 419 checks, among them `PASS Node.js v24.22.3` and X-047's cases for `NODE_MAJOR` unset and 24, another major (26) and the step `node` moving a VM up and back | 47 s |
+| `shellcheck -S style` (0.9.0 and 0.11.0) on `deploy/scripts`, `deploy/scripts/test`, `deploy/systemd/test` and `deploy/caddy/test`; `actionlint` | Clean | < 10 s |
+| `pnpm test:e2e -- --project=portal --project=platform-admin --project=storefront --project=ota-admin` (`E2E_WITH_OTA=1`, the built apps started on Node 24, `E2E_CHROMIUM_EXECUTABLE=/opt/pw-browsers/chromium`, under the end-to-end lock) | Passed: 387 tests in 13.4 min (`portal` 87, `platform-admin` 91, `storefront` 163 with the guards' test that must fail, which did, `ota-admin` 46); no process warning in any of the 15 stack logs | 809 s |
+| `E2E_STRIPE=1 pnpm test:e2e -- --project=storefront-stripe --project=portal-stripe --list` | Listed: 16 `storefront-stripe` and 4 `portal-stripe` tests in 3 files; they need the Stripe test secrets, so the nightly run is their proof (§3.3) | 3 s |
+| `pnpm --filter @velexis/ota-sdk test:smoke`, as e2e.yml's step runs it (the Amadeus stub, both `dev:seed` commands and the built OTA API started on Node 24, with a scratch database, never the shared one) | Passed: 24 tests in 2 files; both seeds wrote nothing on stderr, and no log held a Node warning | 12 s |
+
+The release dry run of §2.3 (`pack-release.sh`) was not repeated: its only Node-dependent field, `RELEASE.json`'s `node`, is `process.version` of the build, which §2.3 showed records `v24.22.3`; CI's `deploy-files` job and the first Deploy run (§5 step 4) cover it.
+
+### 3.3 What CI and the E2E run on the integration branch must show
+
+The integrator's ([ADR-0028](../adr/0028-how-work-reaches-main.md); agents never dispatch `deploy.yml`): once the commit is on the integration branch, a CI run and an E2E run dispatched on it are green, and
+
+- every `actions/setup-node` step logs a `v24.` version;
+- the Turborepo runs of that first CI run show no cache hit (`.nvmrc` is a global dependency, and `engines.node` a global input, so every task hash changes once; X-047 counted 85 of 85);
+- the `systemd-units` job's heap check of X-050 passes under systemd on Node 24, for the seven units: 688 MiB (platform API), 736 MiB (OTA API), 403 MiB (each worker) and 387 MiB (each Next.js server), each with its `MemoryMax` as constrained memory;
+- E2E runs the four projects and the SDK's smoke tests.
+
+Otherwise the integrator reverts the commit on the integration branch (§6.1) and dispatches CI again. ADR-0029's Results record the run ids. The nightly E2E run on the default branch then proves the `storefront-stripe` and `portal-stripe` projects, which need the Stripe test secrets (§2.8).
 
 ## 4. The developer's machine
 
-Written by X-048.
+Once the switch is on the branch you work on (the integration branch, or `main` once its wave reached it), in the repository root:
+
+```bash
+nvm install                 # reads .nvmrc (24): the newest Node.js 24
+nvm alias default 24        # new terminals start on 24
+corepack enable             # Node 24's corepack (0.36.0) runs the pnpm of package.json's packageManager
+node --version              # v24.<minor>.<patch>
+pnpm --version              # 9.15.9
+pnpm install                # nothing is rebuilt
+pnpm build && pnpm test
+```
+
+- Nothing to rebuild or delete: `pnpm.onlyBuiltDependencies` is empty and every native addon is an N-API prebuild (§2.6), so the same `node_modules` serves both majors.
+- On the wrong major, `pnpm install` warns ` WARN  Unsupported engine: wanted: {"node":">=24 <25"}`: run `nvm use` in the repository root.
+- Turborepo misses every cached task once, because `.nvmrc` is one of its global dependencies ([ADR-0029](../adr/0029-nodejs-24-runtime.md) item 4); later runs replay as before.
+- pnpm 9 prints one `[DEP0169] DeprecationWarning: url.parse()` line when it builds a registry resolver (`pnpm outdated`, `pnpm dlx`) from outside a `node_modules` folder, as corepack's shim does (§2.4). It is pnpm's own and harmless.
+- After a revert of the switch (§6.1): `nvm use` in the repository root reads `.nvmrc` 22 again (`nvm install` first if Node 22 is gone, `nvm alias default 22`); nothing else changes.
 
 ## 5. The VM
 
-Written by X-048.
+The throwaway-VM steps of X-020 and X-021 run this checklist after the switch, on Node.js 24 (the dated notes of X-020, X-021, X-023, X-024, X-030, X-037, X-038, X-039 and X-041; [ADR-0029](../adr/0029-nodejs-24-runtime.md) items 3, 6, 8 and 10). It adds about 1.5 to 3 hours to the rehearsal. `<deploy>` is the deploy folder the steps run from: the repository's `deploy/` before the first release, `/srv/velexis/current/deploy` after it. Record each result, with no secret, in the rehearsal's notes; a `FAIL` or a missing line stops the rehearsal for a report.
+
+1. **NodeSource's package.** Provision as [`deployment-single-vm.md`](../deployment-single-vm.md) §3 says, with the default `NODE_MAJOR` (24). Then:
+   - `apt-cache policy nodejs`: the installed version and the candidate are a `24.*` from `https://deb.nodesource.com/node_24.x nodistro/main`, and the pin shows priority 1001;
+   - the step `node` completed: `sudo cat /var/lib/velexis/provision/steps/node` holds its time, and `/var/log/velexis/provision.log` has no `ERROR` line for it;
+   - `node --version` prints `v24.*`, `corepack --version` a version (0.36.0 or later), and `/usr/bin/pnpm --version` prints `9.15.9`. pnpm 9 on Node 24 prints one `[DEP0169]` line when it builds a registry resolver from outside a `node_modules` folder (§2.4): expected. `--version` printed none with corepack 0.36.0 on v24.22.3 here (2026-11-17), so any other warning is a finding.
+2. **check-vm.sh, on both runs of the rehearsal** (X-020 provisions twice): `sudo bash <deploy>/scripts/check-vm.sh` prints only `PASS` lines, among them `PASS Node.js v24.<minor>.<patch>`, `PASS nodejs is pinned to Node.js 24 (/etc/apt/preferences.d/velexis-nodejs: Pin: version 24.*, Pin-Priority: 1001)` and `PASS apt takes nodejs from NodeSource's node_24.x (/etc/apt/sources.list.d/nodesource.list)`.
+3. **The units under systemd** (a throwaway VM only, never the production VM): `sudo env SMOKE_NODE=/usr/bin/node bash <deploy>/systemd/test/units-smoke.sh` passes, step 5's heap check of X-050 included (each unit's V8 heap limit is old + 3 × semi of its flags, and its constrained memory is its `MemoryMax`).
+4. **A deploy and a rollback.** A Deploy run of the switch's commit (or a later one) passes `velexis-deploy`'s Node-major check: the release's `RELEASE.json` names `node` `v24.*` and the VM runs `v24.*` (a mismatch stops with `release built with Node v<n>, VM runs v<m>`). After a second deploy, `sudo /usr/local/sbin/velexis-deploy --rollback` switches back and every unit becomes healthy; deploy again afterwards.
+5. **Memory.** After 200 requests to each public host (the portal, the platform admin, the platform API, the OTA admin, the OTA API and a storefront host; the sign-in pages are enough for the admins), each of the seven app units' peak memory is at least 64 MiB under its `MemoryMax`, the portal, the platform admin and the OTA admin included:
+
+   ```bash
+   for u in platform-api platform-worker ota-api ota-worker portal platform-admin ota-admin; do
+     peak="$(systemctl show -p MemoryPeak --value "velexis-$u.service")"
+     max="$(systemctl show -p MemoryMax --value "velexis-$u.service")"
+     echo "velexis-$u: MemoryPeak $((peak / 1048576)) MiB, MemoryMax $((max / 1048576)) MiB, headroom $(((max - peak) / 1048576)) MiB"
+   done
+   ```
+
+   A headroom under 64 MiB stops the rehearsal for a report to the lead (OBE-103 and PBE-076 measure the same units).
+6. **Warnings.** `sudo journalctl -u 'velexis-*' | grep -E 'DEP0|DeprecationWarning'` is reviewed: the trial found none from the repository's code or its dependencies (§2.4), so each line is noted with its source and gets a task if it is ours.
+7. **TLS from Node 24** ([ADR-0029](../adr/0029-nodejs-24-runtime.md) item 8). Node 24 uses OpenSSL's default security level 2 (RSA and DH keys of at least 2048 bits) and its own bundled root certificates, as the apps do. From the VM, as root (the env files are root's), save this script in a scratch folder and run `sudo node tls-check.mjs`: it completes a handshake with the SMTP relays of `SMTP_URL` (`platform-backend.env`, `ota-backend.env`) and `ALERT_SMTP_URL` (`alert.env`) as configured, and with the four API hosts of [`deploy/egress/allowed-hosts.conf`](../../../deploy/egress/allowed-hosts.conf); it prints no credential.
+
+   ```js
+   // tls-check.mjs: TLS handshakes from this Node.js to the peers of deploy/egress/allowed-hosts.conf (ADR-0029 item 8).
+   // Usage: sudo node tls-check.mjs [host:port ...]   (without one: the SMTP relays of the env files and the four APIs)
+   import { readFileSync } from "node:fs";
+   import tls from "node:tls";
+
+   /** host:port of the URL in `name` of an env file, or null when the file or the variable is missing. */
+   function fromEnv(file, name) {
+     let text;
+     let url;
+     try {
+       text = readFileSync(file, "utf8");
+     } catch {
+       return null;
+     }
+     const line = text.split("\n").find((l) => l.startsWith(`${name}=`));
+     if (!line) return null;
+     try {
+       url = new URL(line.slice(name.length + 1).trim().replace(/^(["'])(.*)\1$/, "$2"));
+     } catch {
+       throw new Error(`${name} of ${file} is not a URL`); // never the value: it holds the relay's password
+     }
+     return `${url.hostname}:${url.port || 465}`; // smtps:// (implicit TLS on 465), as the env templates require
+   }
+
+   const peers = process.argv.length > 2 ? process.argv.slice(2) : [
+     ...new Set([
+       fromEnv("/etc/velexis/platform-backend.env", "SMTP_URL"),
+       fromEnv("/etc/velexis/ota-backend.env", "SMTP_URL"),
+       fromEnv("/etc/velexis/alert.env", "ALERT_SMTP_URL"),
+     ].filter(Boolean)),
+     "api.stripe.com:443",
+     "connect.stripe.com:443",
+     "test.travel.api.amadeus.com:443",
+     "travel.api.amadeus.com:443",
+   ];
+
+   console.log(`${process.version}, OpenSSL ${process.versions.openssl}`);
+   let failed = 0;
+   for (const peer of peers) {
+     const [host, port] = peer.split(":");
+     // One line per peer: the promise settles once, so an error or timeout after the handshake (an SMTP relay that
+     // keeps the connection open after its banner) cannot add a FAIL line to a PASS.
+     const result = await new Promise((done) => {
+       const socket = tls.connect({ host, port: Number(port), servername: host, timeout: 10_000 }, () => {
+         const cert = socket.getPeerCertificate();
+         // An EC certificate has `bits` too (256 for P-256), so the curve decides, not `bits`.
+         const key = cert.asn1Curve ? `EC ${cert.asn1Curve}` : `RSA ${cert.bits}`;
+         done(`PASS ${peer}: ${socket.getProtocol()} ${socket.getCipher().name}, ${key}, issuer ${cert.issuer?.O ?? cert.issuer?.CN}`);
+         socket.destroy();
+       });
+       socket.on("timeout", () => {
+         done(`FAIL ${peer}: no answer within 10 s`);
+         socket.destroy();
+       });
+       socket.on("error", (error) => done(`FAIL ${peer}: ${error.code ?? "error"}: ${error.message}`));
+     });
+     console.log(result);
+     if (result.startsWith("FAIL")) failed += 1;
+   }
+   process.exitCode = failed === 0 ? 0 : 1;
+   ```
+
+   Every line must be `PASS`. A `FAIL` such as `EE certificate key too weak` (an RSA key under 2048 bits) or a certificate error (a root removed from Node 24's store) means a change of provider, or a dated `@SECLEVEL=1` note in ADR-0029 before anything is lowered. The script was checked on the agents' machine (2026-11-17, `NODE_EXTRA_CA_CERTS` naming throwaway certificates): v24.22.3 passed an EC P-256 server (`EC prime256v1`), an RSA-2048 server (`TLSv1.3 TLS_AES_256_GCM_SHA384, RSA 2048`) and one that sends an SMTP banner after the handshake and keeps the connection open (one `PASS` line, no late `FAIL`), and refused an RSA-1024 one (`EE certificate key too weak`), which v22.23.4 accepted; an env value that is not a URL stops the script with the variable's name, never its value. External peers cannot be judged there (the agents' proxy re-signs TLS), so this step is their proof.
+8. **The `NODE_MAJOR` round trip** ([ADR-0029](../adr/0029-nodejs-24-runtime.md) item 6), on the throwaway VM after the steps above, with no deploy in between:
+
+   ```bash
+   sudo NODE_MAJOR=22 bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps node
+   sudo NODE_MAJOR=22 bash /srv/velexis/current/deploy/scripts/check-vm.sh      # only PASS: Node.js v22.*, the pin 22.*, node_22.x
+   sudo bash /srv/velexis/current/deploy/scripts/provision-vm.sh --steps node   # the default, 24
+   sudo bash /srv/velexis/current/deploy/scripts/check-vm.sh                    # only PASS: Node.js v24.*, the pin 24.*, node_24.x
+   sudo systemctl restart velexis-platform-worker velexis-ota-worker velexis-platform-api velexis-ota-api \
+     velexis-portal velexis-platform-admin velexis-ota-admin                   # the order of a deploy: workers, APIs, front ends
+   ```
+
+   Each `provision-vm.sh` run writes NodeSource's line and the pin, runs `apt-get update` and installs `nodejs` with `--allow-downgrades`; a second run with the same `NODE_MAJOR` changes nothing. corepack finds pnpm 9.15.9 in root's cache from the first provisioning; if `corepack prepare` is refused a connection to `registry.npmjs.org`, open it for the run as [`outbound-allow-list.md`](outbound-allow-list.md) §4 says. The next daily AIDE check lists `nodejs`'s files (`/usr/bin/node`, `/usr/lib/node_modules/`, `/usr/include/node/`, `/usr/share/doc/nodejs/`): because both runs are in `/var/log/velexis/provision.log` (`provision-vm.sh started by …: steps node`), `velexis-logreview`'s daily summary counts them as expected (`after the <time> provision-vm.sh (expected)`) instead of raising `aide-change`; `/var/log/dpkg.log` names the two versions. Record which of the two the review showed, and explain an `aide-change` alert, if one comes, from those two logs.
 
 ## 6. Rollback
 
-Written by X-048.
+Until Node 22's end of life on 2027-04-30; after it, fix forward on 24. PBE-077, X-047 and X-050 stay in every case: they work on both majors.
+
+### 6.1 In git
+
+The switch is one commit: X-048's squash commit on the integration branch (`Task: X-048`), and the same change once its wave reached `main`. `git revert <that commit>` puts `.nvmrc` 22, `engines.node` `>=22 <23`, `@types/node` 22.20.5 with its lockfile entries, `NODE_MAJOR` 22, check-vm.sh's default and fixture, the demo page and the documents back; it also removes `hostname-rules.test.ts`'s `[X-048 AC3]` case (`١٢٣.com`), which fails on Node 22. On the integration branch the integrator reverts it and dispatches CI again; on `main` it goes through a branch and a pull request ([ADR-0028](../adr/0028-how-work-reaches-main.md)). CI then runs on 22 with no other change, and Turborepo finds its Node 22 entries again where they are still cached (`.nvmrc` is a global dependency). Check the revert on Node 22: `node --test tools/ci/node-major.test.mjs`, `grep -c '@types/node@24' pnpm-lock.yaml` (`0`) and `pnpm install --frozen-lockfile`.
+
+### 6.2 Machines
+
+- A developer's machine: `nvm use` in the repository root (§4).
+- The agents' machine: the integrator puts `/opt/node22/bin` first on `PATH` again in `/etc/profile.d/nodejs.sh`; `/opt/node22` is never removed.
+
+### 6.3 A provisioned VM
+
+In this order, with `<deploy>` the running release's deploy folder (`/srv/velexis/current/deploy`):
+
+1. `sudo NODE_MAJOR=22 bash <deploy>/scripts/provision-vm.sh --steps node`: the pin, the source line and `nodejs` move to 22 (X-047's priority 1001 and `--allow-downgrades`). corepack needs pnpm 9.15.9 in its cache; if it must download it, open `registry.npmjs.org` for the run as [`outbound-allow-list.md`](outbound-allow-list.md) §4 says.
+2. `sudo NODE_MAJOR=22 bash <deploy>/scripts/check-vm.sh`: only `PASS`, with `Node.js v22.*`, the pin `22.*` and `node_22.x`.
+3. Restart the seven app units (the command of §5 step 8): they run on Node 22 from then on.
+4. Deploy the reverted commit. Its release is built on 22, so `velexis-deploy`'s major check passes; a release built on 24 is refused on this VM (`release built with Node v24, VM runs v22.<minor>.<patch>`). Until that deploy, give every run of `provision-vm.sh` and `check-vm.sh` `NODE_MAJOR=22` (the running release's scripts default to 24); after it, their default is 22 again.
+5. Explain the AIDE review of the next daily check from `/var/log/velexis/provision.log` and `/var/log/dpkg.log` (§5 step 8).
+
+`velexis-deploy --rollback` alone, to a release built on another major, is not checked and works, because every native module is N-API ([ADR-0029](../adr/0029-nodejs-24-runtime.md) item 10, decision D12; [ADR-0023](../adr/0023-release-artefact-and-deploy-user.md)). It changes the release, not Node.
+
+### 6.4 Partial levers that keep Node 24
+
+- **Lost request or tenant context** ([ADR-0029](../adr/0029-nodejs-24-runtime.md) item 10, lead decision (27d) of 2026-11-17). Node 24 runs AsyncLocalStorage (nestjs-cls) on AsyncContextFrame; `--no-async-context-frame` restores the previous implementation. The lever is a drop-in of the affected unit whose one quoted `NODE_OPTIONS` assignment repeats the unit's own two heap flags and adds the new one: systemd keeps the last assignment of a variable, so a drop-in with `NODE_OPTIONS=--no-async-context-frame` alone would drop the unit's heap flags ([`deployment-single-vm.md`](../deployment-single-vm.md) §14). For the platform API:
+
+  ```bash
+  sudo install -d -m 0755 /etc/systemd/system/velexis-platform-api.service.d
+  printf '%s\n' '[Service]' \
+    'Environment="NODE_OPTIONS=--max-old-space-size=640 --max-semi-space-size=16 --no-async-context-frame"' \
+    | sudo tee /etc/systemd/system/velexis-platform-api.service.d/90-async-context-frame.conf >/dev/null
+  sudo systemctl daemon-reload && sudo systemctl restart velexis-platform-api
+  sudo cat "/proc/$(systemctl show -p MainPID --value velexis-platform-api)/environ" | tr '\0' '\n' | grep '^NODE_OPTIONS='
+  ```
+
+  The line for each unit, the unit's own `Environment=` line plus the flag:
+
+  | Unit | Drop-in line |
+  |---|---|
+  | `velexis-platform-api` | `Environment="NODE_OPTIONS=--max-old-space-size=640 --max-semi-space-size=16 --no-async-context-frame"` |
+  | `velexis-ota-api` | `Environment="NODE_OPTIONS=--max-old-space-size=640 --max-semi-space-size=32 --no-async-context-frame"` |
+  | `velexis-platform-worker`, `velexis-ota-worker` | `Environment="NODE_OPTIONS=--max-old-space-size=400 --max-semi-space-size=1 --no-async-context-frame"` |
+  | `velexis-portal`, `velexis-platform-admin`, `velexis-ota-admin` | `Environment="NODE_OPTIONS=--max-old-space-size=384 --max-semi-space-size=1 --no-async-context-frame"` |
+
+  Checked on the agents' machine (2026-11-17): on v24.22.3 these three flags give a heap limit of 688 MiB for the platform API's values and AsyncContextFrame off, while `--no-async-context-frame` alone gives Node's default heap (2,240 MiB outside a memory limit); X-050's [`tools/perf/unit-node-options.mjs`](../../../tools/perf/unit-node-options.mjs) reads the platform API's unit with the drop-in's line after it as the three flags, and with `NODE_OPTIONS=--no-async-context-frame` after it as that flag alone. `velexis-deploy` installs only the caddy drop-in, so a deploy keeps this one; the change is an incident with its record, and the auditd and AIDE watches on the systemd units show it. Remove the drop-in (`daemon-reload`, restart) once the cause is fixed.
+- **A TLS peer refused at security level 2**: a change of provider, or a dated `@SECLEVEL=1` note in ADR-0029 before anything is lowered (item 8).
+- **Garbage collection after the pinned young generations**: X-050's values change only with a measurement and a lead decision, on either major (item 5).

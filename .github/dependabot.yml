@@ -56,7 +56,7 @@ updates:
       # The lines docs/mvp/tech-stack.md pins (§1, §2). Keep this list in step with that page.
       - dependency-name: typescript # TypeScript 5.6.x: patches only
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
-      - dependency-name: "@types/node" # Node.js 22
+      - dependency-name: "@types/node" # Node.js 24, the .nvmrc major: 24.x patches and minors, each merged only with typeScriptVersion 5.6 or lower
         update-types: ["version-update:semver-major"]
       - dependency-name: next # Next.js 15
         update-types: ["version-update:semver-major"]

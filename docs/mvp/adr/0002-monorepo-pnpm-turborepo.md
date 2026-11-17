@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (one repository, shared libraries), lead architect (tooling)
-**Revisions:** 2026-10-12 (planning review): the table lists `@velexis/testing` ([ADR-0022](0022-shared-test-support-package.md)) and `@velexis/reference-data` ([ADR-0024](0024-reference-data-sources-and-loader.md)); 17 workspace packages. 2026-11-06 (lead decision (11f) of 2026-11-06, recording FIX-W46-SHARED): the shared root Vitest file is `vitest.config.ts`, a projects config, instead of `vitest.workspace.ts` (dated note under item 6).
+**Revisions:** 2026-10-12 (planning review): the table lists `@velexis/testing` ([ADR-0022](0022-shared-test-support-package.md)) and `@velexis/reference-data` ([ADR-0024](0024-reference-data-sources-and-loader.md)); 17 workspace packages. 2026-11-06 (lead decision (11f) of 2026-11-06, recording FIX-W46-SHARED): the shared root Vitest file is `vitest.config.ts`, a projects config, instead of `vitest.workspace.ts` (dated note under item 6). 2026-11-17 ([ADR-0029](0029-nodejs-24-runtime.md), task X-048): the runtime is Node.js 24, so `engines.node` is `>=24 <25` and `.nvmrc` holds `24` (dated note under item 1), and Node 24 can `require()` ES modules (Negative).
 
 ## Context
 
@@ -11,7 +11,8 @@
 
 ## Decision
 
-1. **pnpm 9 workspaces.** `pnpm-workspace.yaml` lists `platform/*`, `ota/*`, `packages/*` and `tools/*`. The root `package.json` pins `"packageManager": "pnpm@9.x"` (exact version) and `engines.node` `>=22 <23`. `.nvmrc` holds `22`. One `pnpm-lock.yaml` at the root.
+1. **pnpm 9 workspaces.** `pnpm-workspace.yaml` lists `platform/*`, `ota/*`, `packages/*` and `tools/*`. The root `package.json` pins `"packageManager": "pnpm@9.x"` (exact version) and `engines.node` `>=24 <25`. `.nvmrc` holds `24`. One `pnpm-lock.yaml` at the root.
+   - **2026-11-17 ([ADR-0029](0029-nodejs-24-runtime.md) item 1, task X-048):** the Node.js major moved from 22 to 24: until this change `engines.node` was `>=22 <23` and `.nvmrc` held `22`. `.nvmrc` is the source of the major, and `tools/ci/node-major.test.mjs` fails CI when another copy (`engines.node`, every `@types/node`, the VM scripts, the demo page) names a different one (ADR-0029 item 2).
 2. **Turborepo 2** runs the tasks `build`, `dev`, `lint`, `typecheck`, `test`, `test:int` and `generate` across packages, with `dependsOn: ["^build"]` where a package needs its dependencies built first. Local caching is on; remote caching is off in the MVP.
 3. **Workspace layout and package names:**
 
@@ -61,7 +62,7 @@
 ### Negative
 
 - Shared packages must be built before the apps that import them. Turborepo handles the order, but a stale `dist/` can confuse a manual run, so `pnpm build` first.
-- CommonJS for the backends and ESM for the SDK and storefront is two module systems. The boundary is clear (Node services against browser code), and Node 22 can `require()` ES modules if needed.
+- CommonJS for the backends and ESM for the SDK and storefront is two module systems. The boundary is clear (Node services against browser code), and Node 24 can `require()` ES modules if needed.
 
 ### Follow-ups
 

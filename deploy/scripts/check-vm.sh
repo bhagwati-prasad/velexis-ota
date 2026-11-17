@@ -333,7 +333,7 @@ group_services() {
   s="$(systemctl is-active "postgresql@${PG_MAJOR}-main" 2>/dev/null)"
   if [ "$s" = active ]; then pass "postgresql@${PG_MAJOR}-main is active"; else fail "postgresql@${PG_MAJOR}-main is active (found: ${s:-unknown})"; fi
   v="$(node --version 2>/dev/null)"
-  major="${NODE_MAJOR:-22}"; case "$v" in "v$major".*) pass "Node.js $v" ;; *) fail "Node.js $major (found: ${v:-none})" ;; esac
+  major="${NODE_MAJOR:-24}"; case "$v" in "v$major".*) pass "Node.js $v" ;; *) fail "Node.js $major (found: ${v:-none})" ;; esac
   nodejs_pin "$major"
   nodesource_line "$major"
 }

@@ -179,6 +179,19 @@ describe("checkCustomHostname: refusals", () => {
     },
   );
 
+  // ADR-0029 item 7 and decision D14: ada 4.0.0 (Node 24) is stricter about IDN labels than ada 2.9.2 (Node 22), and
+  // the stricter rule is accepted. `١٢٣` (Arabic-Indic digits) became `xn--9hbcd` on Node 22, which stored the host as
+  // `xn--9hbcd.com`; on Node 24 `url.domainToASCII` answers "" and `new URL()` throws. The stored form typed as
+  // punycode is refused too: ada 4.0.0 no longer decodes `xn--9hbcd`, so punycodeLabelsRoundTrip fails. This case fails
+  // on Node 22, so it came with the switch to Node 24 (X-048).
+  it("[X-048 AC3] refuses ١٢٣.com (Arabic-Indic digits), which Node 22 stored as xn--9hbcd.com, as syntax", () => {
+    expect(outcome("١٢٣.com")).toBe("refused: syntax");
+    expect(outcome("١٢٣.com", VM_RULES)).toBe("refused: syntax");
+    expect(errorCode("١٢٣.com", DEV_RULES)).toBe("DOMAIN_INVALID");
+    expect(punycodeLabelsRoundTrip("xn--9hbcd.com")).toBe(false);
+    expect(outcome("xn--9hbcd.com")).toBe("refused: syntax");
+  });
+
   it("accepts 253 characters and refuses 254, also when IDN labels grow into punycode", () => {
     const longest = `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(57)}.net`;
     const tooLong = `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(58)}.net`;

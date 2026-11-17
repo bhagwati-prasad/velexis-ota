@@ -150,7 +150,7 @@ The root scripts are created by the M0 foundation tasks. Until they exist, only 
 
 | Command | What it does |
 |---|---|
-| `pnpm install` | Install all workspace dependencies (Node 22, pnpm 9) |
+| `pnpm install` | Install all workspace dependencies (Node 24, pnpm 9) |
 | `pnpm build` | Build every package and app (Turborepo, cached) |
 | `pnpm dev` | Run every app in development mode |
 | `pnpm --filter @velexis/ota-backend dev` | Run one app (any `@velexis/*` name) |

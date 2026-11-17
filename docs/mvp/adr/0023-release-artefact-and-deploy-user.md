@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Platform/DevOps engineer (foundation plan). Decided during planning; revisit when a second app VM, zero-downtime deploys or a container platform are needed.
-**Revisions:** 2026-10-12 (planning review): build and deploy are separate jobs and the deploy job never runs build code; releases are root-owned; rollback re-installs the target release's units and Caddyfile; env drift is refused; one OS user per trust zone ([ADR-0026](0026-system-users-per-trust-zone.md)) replaces the shared user, and the text says what `InaccessiblePaths=` does and does not protect. 2026-11-15 (lead decision (22c) of 2026-11-15, approved by the owner; FIX-W53-SHARED): a deploy or rollback whose Caddy build or caddy drop-in changed restarts Caddy instead of reloading it; otherwise the rollback item stands (dated note under the rollback item).
+**Revisions:** 2026-10-12 (planning review): build and deploy are separate jobs and the deploy job never runs build code; releases are root-owned; rollback re-installs the target release's units and Caddyfile; env drift is refused; one OS user per trust zone ([ADR-0026](0026-system-users-per-trust-zone.md)) replaces the shared user, and the text says what `InaccessiblePaths=` does and does not protect. 2026-11-15 (lead decision (22c) of 2026-11-15, approved by the owner; FIX-W53-SHARED): a deploy or rollback whose Caddy build or caddy drop-in changed restarts Caddy instead of reloading it; otherwise the rollback item stands (dated note under the rollback item). 2026-11-17 ([ADR-0029](0029-nodejs-24-runtime.md), task X-048): releases are built with the `.nvmrc` major (Node.js 24); their native modules are N-API prebuilds, so the major check is a policy check (dated note under Release folder).
 
 ## Context
 
@@ -15,12 +15,13 @@ It leaves open what exactly is in a release, which SSH user uploads it and where
 
 ### Release folder
 
-- Built on `ubuntu-24.04` with Node 22 (the VM's OS and Node major, so native modules match) by [`deploy/scripts/pack-release.sh`](../../../deploy/scripts/pack-release.sh). It has one folder per part, and **parts that do not exist yet are skipped**, so the same pipeline ships the M0 hello world and the full system.
+- Built on `ubuntu-24.04` with the `.nvmrc` major, Node 24 (the VM's OS and Node major; the major check below is a policy check) by [`deploy/scripts/pack-release.sh`](../../../deploy/scripts/pack-release.sh). It has one folder per part, and **parts that do not exist yet are skipped**, so the same pipeline ships the M0 hello world and the full system.
 - **Backends and tools:** `pnpm deploy --prod`.
 - **Next.js apps:** the `standalone` output with `outputFileTracingRoot` set to the repository root. The entry is `<app path>/server.js`, and `.next/cache` is a symlink to the unit's systemd `CacheDirectory`, so the release stays read-only.
 - **Storefront:** its static `dist/`.
 - **Also included:** the migrations, the migration and reference-data CLIs, and a copy of `deploy/`.
 - `RELEASE.json` (sha, ref, build time, Node version, apps) and `SHA256SUMS` describe the folder. `velexis-deploy` verifies both and refuses a Node major that differs from the VM's.
+  - **2026-11-17 ([ADR-0029](0029-nodejs-24-runtime.md) items 1 and 10, task X-048):** the build runs on the `.nvmrc` major (24 since this change, 22 before it), which `deploy.yml`'s `actions/setup-node` step reads. Every native module a release loads is an N-API prebuild ([`runbooks/node-upgrade.md`](../runbooks/node-upgrade.md) §2.6: none is ABI-bound, and pnpm builds none, `pnpm.onlyBuiltDependencies` being empty), which loads on either major, so the refusal of a release built on another major is a policy check that keeps CI, the release and the VM on one major, no longer what makes native modules match. `velexis-deploy --rollback` to a release built on another major is not checked and works for the same reason (ADR-0029 item 10, decision D12; runbook §6).
 - `velexis-deploy` also refuses a release whose `deploy/env/*.env.example` templates name a variable that the matching `/etc/velexis/<app>.env` lacks (an empty value is fine), before it changes anything. A task that adds a variable therefore comes with a human step: add it on the VM before deploying ([`plans/roadmap.md`](../plans/roadmap.md) §2).
 
 ### Build and deploy jobs

@@ -121,10 +121,10 @@ flowchart LR
 
 | # | Component | Directory | Runtime and framework | Public host | Local port | Talks to |
 |---|---|---|---|---|---|---|
-| 1 | Platform backend | `platform/backend` | Node 22, NestJS 11. Two processes: API and worker | `api.platform.example.com` | 3100 (API), 3101 (worker health) | PostgreSQL (`platform`, `reference`), Redis, Stripe, SMTP, the Amadeus OAuth token endpoint (credential verification only), public DNS resolvers (custom-domain checks) |
+| 1 | Platform backend | `platform/backend` | Node 24, NestJS 11. Two processes: API and worker | `api.platform.example.com` | 3100 (API), 3101 (worker health) | PostgreSQL (`platform`, `reference`), Redis, Stripe, SMTP, the Amadeus OAuth token endpoint (credential verification only), public DNS resolvers (custom-domain checks) |
 | 2 | Platform frontend (portal) | `platform/frontend` | Next.js 15 App Router, React 19 | `platform.example.com` | 3000 | Platform API (server side) |
 | 3 | Platform admin | `platform/admin` | Next.js 15 App Router, React 19 | `admin.platform.example.com` | 3001 | Platform API (server side) |
-| 4 | OTA backend | `ota/backend` | Node 22, NestJS 11. Two processes: API and worker | `api.ota.example.com`, plus `/api/*` on storefront hosts | 4000 (API), 4001 (worker health) | PostgreSQL (tenant schemas, `reference`, platform read-only), Redis, Amadeus, Stripe, SMTP, local storage |
+| 4 | OTA backend | `ota/backend` | Node 24, NestJS 11. Two processes: API and worker | `api.ota.example.com`, plus `/api/*` on storefront hosts | 4000 (API), 4001 (worker health) | PostgreSQL (tenant schemas, `reference`, platform read-only), Redis, Amadeus, Stripe, SMTP, local storage |
 | 5 | OTA frontend (storefront) | `ota/frontend` | Static HTML + Tailwind + vanilla JS, built by Vite | `<key>.ota.example.com`, verified custom domains | none (Caddy `file_server`); 5173 in development | OTA API through the SDK, same origin |
 | 6 | OTA admin | `ota/admin` | Next.js 15 App Router, React 19 | `admin.ota.example.com` | 3002 | OTA API through the SDK (server side) |
 | — | JS SDK | `ota/sdk` | Vanilla JS ES modules + JSDoc, no dependencies | none (library) | none | OTA API |

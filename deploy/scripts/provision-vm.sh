@@ -117,7 +117,7 @@ set -euo pipefail
 : "${DEPLOY_SSH_PUBKEY_FILE:=}"           # public half of the GitHub Actions deploy key (required on first run)
 : "${SSH_ALLOW_FROM:=any}"                # CIDR (IPv4 or IPv6) for SSH; "any" because GitHub-hosted runners have changing IPs
 : "${DB_NAME:=velexis}"
-: "${NODE_MAJOR:=22}"
+: "${NODE_MAJOR:=24}"
 : "${PNPM_VERSION:=9.15.9}"
 : "${PG_MAJOR:=16}"
 : "${REDIS_PIN:=6:7.4*}"                  # packages.redis.io version string of Redis 7.4

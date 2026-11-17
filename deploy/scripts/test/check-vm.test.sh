@@ -773,7 +773,7 @@ LISTEN 0      511        127.0.0.1:4000      0.0.0.0:*
 EOF
   printf '%s\n' 'kernel.core_pattern = |/bin/false' 'fs.suid_dumpable = 0' >"$FAKE/sysctl"
   echo UTC >"$FAKE/timezone"
-  echo v22.12.0 >"$FAKE/node-version"
+  echo v24.22.3 >"$FAKE/node-version"
   printf '%s\n' listen_addresses=localhost log_parameter_max_length=0 max_locks_per_transaction=256 \
     server_version_num=160010 shared_preload_libraries=pg_stat_statements >"$FAKE/psql-settings"
   echo velexis_migrator >"$FAKE/psql-database"
@@ -823,7 +823,7 @@ Suites: noble
 Components: main
 Enabled: no
 EOF
-echo 'deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main' >"$ROOT/etc/apt/sources.list.d/nodesource.list"
+echo 'deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_24.x nodistro main' >"$ROOT/etc/apt/sources.list.d/nodesource.list"
 cp "$ROOT/etc/apt/sources.list.d/nodesource.list" "$PREFIX/nodesource.list" # healthy() puts it back (X-047)
 echo 'deb [signed-by=/etc/apt/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt noble-pgdg main' >"$ROOT/etc/apt/sources.list.d/pgdg.list"
 echo 'deb [signed-by=/etc/apt/keyrings/redis.gpg] https://packages.redis.io/deb noble main' >"$ROOT/etc/apt/sources.list.d/redis.list"

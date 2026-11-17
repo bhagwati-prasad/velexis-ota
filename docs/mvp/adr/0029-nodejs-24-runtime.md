@@ -3,7 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-11-16
 **Deciders:** Product owner (Node.js 24, the request of 2026-11-15; on 2026-11-16 the owner approved the plan's decisions D1–D18 as recommended, with "yes to all", recorded as lead decision (25n) by FIX-W56-PLAN), lead architect (how the move is made and proven: the upgrade plan of 2026-11-16, its decisions D1–D18 and its nine tasks)
-**Revisions:** 2026-11-16 (lead decision (26d) of 2026-11-16, approved by the owner; FIX-W57-DOCS): the upgrade plan's five open questions are settled ([below](#open-questions-settled-on-2026-11-16)), and items 3, 5 and 9 say what holds now: the lead checks the personal cloud environment's network before proposing it, OBE-103 and PBE-076 measure Node 22 on the installed 22.23.4 and name the exact versions, X-050 AC2 proves the cgroup v2 path in CI, and the SDK's floor stays 22.12 with the `require(esm)` `ExperimentalWarning` before 22.13 documented.
+**Revisions:** 2026-11-16 (lead decision (26d) of 2026-11-16, approved by the owner; FIX-W57-DOCS): the upgrade plan's five open questions are settled ([below](#open-questions-settled-on-2026-11-16)), and items 3, 5 and 9 say what holds now: the lead checks the personal cloud environment's network before proposing it, OBE-103 and PBE-076 measure Node 22 on the installed 22.23.4 and name the exact versions, X-050 AC2 proves the cgroup v2 path in CI, and the SDK's floor stays 22.12 with the `require(esm)` `ExperimentalWarning` before 22.13 documented. 2026-11-17 (X-048): the Results below, and a dated note under item 10 on the context-loss lever's drop-in (lead decision (27d) of 2026-11-17, approved by the owner).
 
 ## Context
 
@@ -117,6 +117,7 @@ A study on 2026-11-15 covered six dimensions. A second agent verified each one, 
       4. a deploy of the reverted commit.
     - **`velexis-deploy --rollback`** to a release built on another major is not checked. It works because every native module is N-API.
     - **Context-loss lever.** If request or tenant context is lost, `NODE_OPTIONS=--no-async-context-frame` in a unit drop-in restores the previous AsyncLocalStorage.
+      - *Note (2026-11-17, lead decision (27d) of 2026-11-17, approved by the owner; X-048):* the drop-in's one quoted `NODE_OPTIONS` assignment repeats the unit's own two heap flags (item 5) and adds `--no-async-context-frame`, for example `Environment="NODE_OPTIONS=--max-old-space-size=640 --max-semi-space-size=16 --no-async-context-frame"` for the platform API, because systemd keeps the last assignment of a variable: a drop-in with `--no-async-context-frame` alone would drop the unit's heap flags. On v24.22.3 the three flags gave a heap limit of 688 MiB with AsyncContextFrame off, and the flag alone Node's default heap. [`node-upgrade.md`](../runbooks/node-upgrade.md) §6.4 has each unit's line and the commands.
 11. **The next major.** Node 26 is not adopted now. Move to it once these are in place:
     - Vitest 5
     - a corepack replacement
@@ -165,7 +166,13 @@ The owner approved the upgrade plan's decisions as recommended. Where each one l
 
 ## Results
 
-X-048 adds its results here: X-046's trial record (the runbook's §2), the switch commit, and the CI and E2E runs that prove it on Node 24.
+*Recorded by X-048 on 2026-11-17 (wave 58); the details are in [`node-upgrade.md`](../runbooks/node-upgrade.md) §2 and §3.*
+
+- **The trial** (X-046, 2026-11-16, runbook §2). Every command of CI, the four end-to-end projects, the SDK's smoke tests and the deploy tests ran on v24.22.3 from a worktree still pinned to 22. The one failure was PBE-077's case (`xn--zz.example.com`, item 7), which PBE-077 fixed on both majors before the switch. No warning came from the repository's own code or its dependencies; the eight native addons are N-API and load on both majors; the `@types/node` 24.19.2 bump typechecked and changed only `@types/node`, `undici-types` and the peer suffixes of the lockfile.
+- **The switch** (X-048, runbook §3.1). One commit, which the integrator squash-merges alone in wave 58 (`Task: X-048`): `.nvmrc` `24`; `engines.node` `>=24 <25`; `@types/node` 24.19.2 (`typeScriptVersion` 5.6, still the newest 24.x on 2026-11-17) in the 15 `package.json` files, with a lockfile in which only `@types/node`, `undici-types` (6.21.0 → 7.24.6) and the peer suffixes changed and no `@types/node@22` is left; `NODE_MAJOR` `24`, `check-vm.sh`'s default and its test's fixture; the reason of `deb.nodesource.com`; the documents that named the major; and the `[X-048 AC3]` case of `hostname-rules.test.ts` (`١٢٣.com` refused, D14), which passes on 24 and fails on 22.23.4. No workflow file changed: every `actions/setup-node` step already reads `.nvmrc`.
+- **Its proof on Node 24 on the agents' machine** (v24.22.3, runbook §3.2): format, lint, typecheck, `pnpm test` (9,174 tests), `pnpm build`, `pnpm test:int` (2,888 tests, with the PAN-absence proof), both `test:xb`, the four end-to-end projects (387 tests), the SDK's smoke tests, the deploy scripts' tests, `caddy-smoke.sh`, `check-vm.test.sh` as root with the real `sshd` and `nft`, and X-047's `node-major.test.mjs` all passed.
+- **CI and E2E on the integration branch** (runbook §3.3; the integrator's, as [ADR-0028](0028-how-work-reaches-main.md) has waves reach `main`): every `actions/setup-node` step on a v24.x, no Turborepo cache hit in the first CI run, the `systemd-units` job's heap check of item 5 under systemd, and E2E with the SDK's smoke tests. The integrator records the run ids here once they are green, or reverts the switch (item 10).
+- **Still to come**: the throwaway-VM checklist of runbook §5 in X-020's and X-021's rehearsals (NodeSource's package and its corepack, the TLS peers of item 8, each unit's peak memory, the `NODE_MAJOR` round trip); OBE-103 and PBE-076's measurements on both majors; SDK-019 and X-049.
 
 ## Approved workflow lines (D5)
 

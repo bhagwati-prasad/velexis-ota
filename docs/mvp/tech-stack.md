@@ -12,7 +12,7 @@ Related: [`architecture.md`](architecture.md) (where each piece runs), [`convent
 
 | Technology | Version | Why |
 |---|---|---|
-| Node.js | **22 LTS** (22.x, `.nvmrc`) | Product owner's choice. Long-term support until April 2027, built-in `fetch`, `require(esm)`. Plan the move to Node 24 LTS after the MVP. |
+| Node.js | **24 LTS** (24.x, `.nvmrc`) | Product owner's decision of 2026-11-15 ([ADR-0029](adr/0029-nodejs-24-runtime.md)): Node 22 reaches end of life on 2027-04-30, before the launch. Node 24 has been in maintenance since 2026-10-20 (security and critical fixes only) and reaches end of life on 2028-04-30. Built-in `fetch`, `require(esm)`. The next major, Node 26, follows once ADR-0029 item 11's conditions hold (Vitest 5, a corepack replacement, NodeSource packages for Ubuntu 24.04, Tailwind 4.3, a pnpm that supports it), by 2028-04-30 at the latest. |
 | pnpm | **9** (exact in `packageManager`) | Fast, strict workspaces; `pnpm deploy` builds self-contained app folders for the VM. |
 | Turborepo | **2** (2.x) | Task graph and local caching across 17 workspace packages (six apps and the SDK, seven shared packages including the dev-only `@velexis/testing`, and the tools `@velexis/reference-data`, `@velexis/amadeus-stub`, `@velexis/e2e`; [ADR-0002](adr/0002-monorepo-pnpm-turborepo.md)). |
 | TypeScript | **5.6** (5.6.x) | One compiler version for apps, packages and the SDK's `checkJs`. |
@@ -81,7 +81,7 @@ Related: [`architecture.md`](architecture.md) (where each piece runs), [`convent
 
 | Aspect | Choice |
 |---|---|
-| Runtime | Node.js 22, CommonJS output |
+| Runtime | Node.js 24, CommonJS output |
 | Framework | NestJS 11 (Express 5), `@nestjs/config`, `nestjs-pino`, `nestjs-cls`, `@nestjs/bullmq` |
 | Key libraries | `@velexis/db` (Kysely + pg), `@velexis/crypto`, `@velexis/errors`, `@velexis/api-types`, `ajv`, `argon2`, `jose`, `otplib`, `stripe`, `nodemailer`, `handlebars`, `ioredis`, `helmet`, `cookie-parser`, `@nestjs/throttler`, `decimal.js`, `ulid` |
 | Test tools | Vitest, Supertest, Ajv response checks, signed Stripe fixture events, Mailpit |
@@ -92,7 +92,7 @@ Related: [`architecture.md`](architecture.md) (where each piece runs), [`convent
 
 | Aspect | Choice |
 |---|---|
-| Runtime | Node.js 22 (Next.js server) |
+| Runtime | Node.js 24 (Next.js server) |
 | Framework | Next.js 15 App Router, React 19, TypeScript |
 | Key libraries | Tailwind CSS 4, shadcn/ui, `lucide-react`, `openapi-fetch` + `@velexis/api-types/platform`, `zod`, `server-only`, `qrcode` (server side) |
 | Test tools | Vitest + Testing Library (client components), Playwright journeys in `tools/e2e` |
@@ -103,7 +103,7 @@ Related: [`architecture.md`](architecture.md) (where each piece runs), [`convent
 
 | Aspect | Choice |
 |---|---|
-| Runtime | Node.js 22 (Next.js server) |
+| Runtime | Node.js 24 (Next.js server) |
 | Framework | Next.js 15 App Router, React 19, TypeScript |
 | Key libraries | As the portal, plus `@tanstack/react-table` |
 | Test tools | Vitest + Testing Library, Playwright |
@@ -114,7 +114,7 @@ Related: [`architecture.md`](architecture.md) (where each piece runs), [`convent
 
 | Aspect | Choice |
 |---|---|
-| Runtime | Node.js 22, CommonJS output |
+| Runtime | Node.js 24, CommonJS output |
 | Framework | NestJS 11 (Express 5), `@nestjs/config`, `nestjs-pino`, `nestjs-cls`, `@nestjs/bullmq` |
 | Key libraries | `@velexis/db`, `@velexis/crypto`, `@velexis/errors`, `@velexis/api-types`, `ajv`, `argon2`, `jose`, `stripe`, Node `fetch` (Amadeus), `nodemailer`, `handlebars`, `pdfmake`, `ioredis`, `helmet`, `cookie-parser`, `@nestjs/throttler`, `decimal.js`, `date-fns`, `ulid` |
 | Test tools | Vitest, Supertest, Amadeus stub (`tools/amadeus-stub`), Ajv response checks, signed Stripe fixtures, Mailpit, two-tenant isolation tests |
@@ -136,7 +136,7 @@ Related: [`architecture.md`](architecture.md) (where each piece runs), [`convent
 
 | Aspect | Choice |
 |---|---|
-| Runtime | Node.js 22 (Next.js server) |
+| Runtime | Node.js 24 (Next.js server) |
 | Framework | Next.js 15 App Router, React 19, TypeScript |
 | Key libraries | `@velexis/ota-sdk` (server side, token mode), Tailwind CSS 4, shadcn/ui, `lucide-react`, `@tanstack/react-table`, `zod`, `server-only` |
 | Test tools | Vitest + Testing Library, Playwright |
@@ -158,7 +158,7 @@ Related: [`architecture.md`](architecture.md) (where each piece runs), [`convent
 
 | Aspect | Choice |
 |---|---|
-| Runtime | Node.js 22 (`@velexis/api-types` is also used for types in the SDK and the Next.js apps) |
+| Runtime | Node.js 24 (`@velexis/api-types` is also used for types in the SDK and the Next.js apps) |
 | Build | `tsc -b` to `dist/` (CommonJS + `.d.ts`) |
 | Test tools | Vitest; `@velexis/db` also has integration tests against PostgreSQL |
 
@@ -179,7 +179,7 @@ Related: [`architecture.md`](architecture.md) (where each piece runs), [`convent
 | class-validator, class-transformer | Ajv on the OpenAPI schemas | One source of truth for shapes ([ADR-0006](adr/0006-contract-first-openapi.md)) |
 | Jest | Vitest | Faster, one runner everywhere |
 | Moment.js, Luxon | `Intl`, `date-fns` | Smaller, standard |
-| Axios | `fetch` | Built into Node 22 and browsers |
+| Axios | `fetch` | Built into Node 24 and browsers |
 | jQuery, Alpine, Lit (storefront) | Vanilla ES modules | Product owner's decision ([ADR-0014](adr/0014-frontend-stack-nextjs-tailwind.md)) |
 | Puppeteer | pdfmake | Memory on a single VM ([ADR-0017](adr/0017-email-documents-storage.md)) |
 | `express-session`, Passport | Our JWT + refresh-token guards | One mechanism matching the contract ([ADR-0008](adr/0008-identity-accounts-customers-sessions.md)) |

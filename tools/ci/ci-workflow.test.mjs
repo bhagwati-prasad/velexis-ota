@@ -690,7 +690,7 @@ describe("dependabot.yml", () => {
     assert.match(ignoreRule('"*"'), /version-update:semver-major/);
   });
 
-  it("[X-019 AC4] the ignore rules keep TypeScript 5.6, Node types 22, Next.js 15 and NestJS 11", () => {
+  it("[X-019 AC4] the ignore rules keep TypeScript 5.6, Node types 24, Next.js 15 and NestJS 11", () => {
     assert.match(ignoreRule("typescript"), /semver-major.*semver-minor/);
     for (const name of ['"@types/node"', "next", '"@next/*"', '"@nestjs/*"']) {
       assert.match(ignoreRule(name), /"version-update:semver-major"/, name);
