@@ -487,144 +487,181 @@ async function failure(
 // ---- Tests ------------------------------------------------------------------------------------------------------
 
 describe("tenant migration 0002 on PostgreSQL", () => {
-  it("applies 0001 and 0002 to an empty schema in one transaction; the columns match the generated types [OBE-008 AC1]", async () => {
+  // The set-up of the next two tests runs in their blocks' hooks, so that their bodies stay well within the 5 s of a
+  // test on a loaded machine (FIX-W59-TESTS, lead decision (27a)). Each hook keeps its set-up's outcome and the test
+  // awaits it first: a set-up that fails fails the test itself with its error, as it did in the test's body.
+
+  // From scratch. The provisioning under test (every file on an empty schema, in one transaction) runs in the hook; the
+  // test checks what it returned and the schema it left, which do not depend on where it ran.
+  describe("from scratch", () => {
     const schema = "tenant_m2_scratch";
+    let provisioned: ReturnType<typeof provision>;
 
-    const result = await provision(schema);
+    // One schema provisioned with the release's files: about 0.3 s here alone and 0.6 to 1.1 s beside four busy CPUs;
+    // budgeted for a machine loaded far more than that.
+    beforeAll(async () => {
+      provisioned = provision(schema);
+      await provisioned.catch(() => undefined);
+    }, 60_000);
 
-    expect(result.created).toBe(true);
-    expect(result.applied.map((file) => [file.id, file.phase, file.transaction, file.status])).toEqual([
-      ["0001_baseline", "expand", true, "applied"],
-      [MIGRATION_ID, "expand", true, "applied"],
-      [SYNC_CLAIM_ID, "expand", true, "applied"],
-      [CARD_FEE_LINES_ID, "expand", true, "applied"],
-      [LATEST_ID, "contract", true, "applied"],
-    ]);
-    // Every ledger row comes from the one provisioning transaction.
-    expect(new Set((await ledgerOf(schema)).map((row) => row.xid)).size).toBe(1);
-    const tables = await tablesOf(schema);
-    expect(tables).toHaveLength(44);
-    expect(tables).toEqual(expect.arrayContaining(["storefront_assets", "storefront_pages"]));
+    it("applies 0001 and 0002 to an empty schema in one transaction; the columns match the generated types [OBE-008 AC1]", async () => {
+      const result = await provisioned;
 
-    // The catalogue matches the committed types of `pnpm db:codegen`: the same tables and columns, the same
-    // nullability and the same defaults (CI also regenerates them and fails on a diff).
-    const generated = await generatedColumns();
-    const actual = await databaseColumns(schema);
-    expect(Object.keys(actual).sort()).toEqual(Object.keys(generated).sort());
-    expect(actual).toEqual(generated);
-    expect(actual["payments.provider"]).toEqual({ nullable: false, hasDefault: false });
-    expect(actual["checkouts.pricing_mode"]).toEqual({ nullable: false, hasDefault: true });
-    expect(actual["bookings.reconcile_until"]).toEqual({ nullable: true, hasDefault: false });
-    expect(actual["storefront_settings.booking_queue_number"]).toEqual({ nullable: true, hasDefault: false });
-    // 0003 (FIX-W27-SYNC).
-    expect(actual["bookings.sync_claimed_at"]).toEqual({ nullable: true, hasDefault: false });
-    expect(actual["bookings.sync_changes"]).toEqual({ nullable: false, hasDefault: true });
-    // 0004 (FIX-W28-CANCEL).
-    expect(actual["payments.card_fee_lines"]).toEqual({ nullable: false, hasDefault: true });
-    // 0005 (FIX-W31-OTA).
-    expect(actual["bookings.cancellation_claimed_at"]).toEqual({ nullable: true, hasDefault: false });
+      expect(result.created).toBe(true);
+      expect(result.applied.map((file) => [file.id, file.phase, file.transaction, file.status])).toEqual([
+        ["0001_baseline", "expand", true, "applied"],
+        [MIGRATION_ID, "expand", true, "applied"],
+        [SYNC_CLAIM_ID, "expand", true, "applied"],
+        [CARD_FEE_LINES_ID, "expand", true, "applied"],
+        [LATEST_ID, "contract", true, "applied"],
+      ]);
+      // Every ledger row comes from the one provisioning transaction.
+      expect(new Set((await ledgerOf(schema)).map((row) => row.xid)).size).toBe(1);
+      const tables = await tablesOf(schema);
+      expect(tables).toHaveLength(44);
+      expect(tables).toEqual(expect.arrayContaining(["storefront_assets", "storefront_pages"]));
+
+      // The catalogue matches the committed types of `pnpm db:codegen`: the same tables and columns, the same
+      // nullability and the same defaults (CI also regenerates them and fails on a diff).
+      const generated = await generatedColumns();
+      const actual = await databaseColumns(schema);
+      expect(Object.keys(actual).sort()).toEqual(Object.keys(generated).sort());
+      expect(actual).toEqual(generated);
+      expect(actual["payments.provider"]).toEqual({ nullable: false, hasDefault: false });
+      expect(actual["checkouts.pricing_mode"]).toEqual({ nullable: false, hasDefault: true });
+      expect(actual["bookings.reconcile_until"]).toEqual({ nullable: true, hasDefault: false });
+      expect(actual["storefront_settings.booking_queue_number"]).toEqual({
+        nullable: true,
+        hasDefault: false,
+      });
+      // 0003 (FIX-W27-SYNC).
+      expect(actual["bookings.sync_claimed_at"]).toEqual({ nullable: true, hasDefault: false });
+      expect(actual["bookings.sync_changes"]).toEqual({ nullable: false, hasDefault: true });
+      // 0004 (FIX-W28-CANCEL).
+      expect(actual["payments.card_fee_lines"]).toEqual({ nullable: false, hasDefault: true });
+      // 0005 (FIX-W31-OTA).
+      expect(actual["bookings.cancellation_claimed_at"]).toEqual({ nullable: true, hasDefault: false });
+    });
   });
 
-  it("upgrades a schema at N-1 with baseline rows in payments, checkouts, bookings and storefront_settings: the rows survive and still validate [OBE-008 AC1]", async () => {
-    // An active tenant, so the fan-out targets its schema.
-    await insertTenant("upgrade", "active");
+  // Upgrade. The hook sets up the schema at N-1 with its baseline rows and the reference schema provisioned with the
+  // release's files; the deploy fan-out under test runs in the test, where its result is checked. The fan-out targets
+  // the schemas of platform.tenants' rows only, so the reference schema, which no tenant row names, is the same before
+  // and after it.
+  describe("upgrade from N-1", () => {
     const schema = "tenant_upgrade";
-    await provision(schema, await previousReleaseFolder());
-    expect((await ledgerOf(schema)).map((row) => row.id)).toEqual(["0001_baseline"]);
-    await insertBaselineRows(schema);
-    const before = await upgradedRows(schema);
-    expect(Object.values(before).map((rows) => rows.length)).toEqual([2, 1, 1, 1]);
+    const referenceSchema = "tenant_m2_reference";
+    let setUp: Promise<void>;
 
-    // The deploy fan-out of this release: every schema of an active tenant, as velexis_migrator, no --create.
-    const fanOut = await migrateTenants({ dir: TENANT_MIGRATIONS_DIR, url: db.urlFor("migrator") });
+    // Two schemas provisioned (one with the baseline only) and the baseline rows written: about 0.5 s here alone and
+    // 1.3 to 2.1 s beside four busy CPUs; budgeted for a machine loaded far more than that.
+    beforeAll(async () => {
+      setUp = (async () => {
+        // An active tenant, so the fan-out targets its schema.
+        await insertTenant("upgrade", "active");
+        await provision(schema, await previousReleaseFolder());
+        await insertBaselineRows(schema);
+        await provision(referenceSchema);
+      })();
+      await setUp.catch(() => undefined);
+    }, 60_000);
 
-    expect(fanOut.exitCode).toBe(0);
-    expect(fanOut.report?.target).toBe(LATEST_ID);
-    expect(fanOut.report?.failed).toEqual([]);
-    const upgraded = fanOut.report?.applied.find((entry) => entry.schema === schema);
-    expect(upgraded?.files.map((file) => [file.id, file.status])).toEqual([
-      [MIGRATION_ID, "applied"],
-      [SYNC_CLAIM_ID, "applied"],
-      [CARD_FEE_LINES_ID, "applied"],
-      [LATEST_ID, "applied"],
-    ]);
+    it("upgrades a schema at N-1 with baseline rows in payments, checkouts, bookings and storefront_settings: the rows survive and still validate [OBE-008 AC1]", async () => {
+      await setUp;
+      expect((await ledgerOf(schema)).map((row) => row.id)).toEqual(["0001_baseline"]);
+      const before = await upgradedRows(schema);
+      expect(Object.values(before).map((rows) => rows.length)).toEqual([2, 1, 1, 1]);
 
-    // The rows are all there, unchanged, with the defaults of the new columns.
-    const after = await upgradedRows(schema);
-    // 0004 (FIX-W28-CANCEL): no card fee line stored, so the card fee of these payments counts as kept.
-    expect(after.payments).toEqual(before.payments.map((row) => ({ ...row, card_fee_lines: [] })));
-    expect(after.checkouts).toEqual(
-      before.checkouts.map((row) => ({ ...row, pricing_mode: "markup_rules" })),
-    );
-    expect(after.bookings).toEqual(
-      before.bookings.map((row) => ({
-        ...row,
-        create_order_started_at: null,
-        reconcile_until: null,
-        reconcile_attempts: 0,
-        reconcile_outcome: null,
-        // 0003 (FIX-W27-SYNC): no claim yet, no change recorded.
-        sync_claimed_at: null,
-        sync_changes: [],
-        // 0005 (FIX-W31-OTA): no cancellation claimed.
-        cancellation_claimed_at: null,
-      })),
-    );
-    expect(after.storefrontSettings).toEqual(
-      before.storefrontSettings.map((row) => ({
-        ...row,
-        legal_name: null,
-        time_zone: "UTC",
-        default_market: null,
-        markets: [],
-        support_details: {},
-        seo: {},
-        consent: {},
-        terms_version: null,
-        privacy_version: null,
-        airline_card_enabled_test: false,
-        airline_card_enabled_live: false,
-        booking_queue_number: null,
-        booking_queue_category: 0,
-        ops_alert_email: null,
-        logo_asset_id: null,
-        logo_dark_asset_id: null,
-        logo_square_asset_id: null,
-        favicon_asset_id: null,
-        og_image_asset_id: null,
-      })),
-    );
+      // The deploy fan-out of this release: every schema of an active tenant, as velexis_migrator, no --create.
+      const fanOut = await migrateTenants({ dir: TENANT_MIGRATIONS_DIR, url: db.urlFor("migrator") });
 
-    // Still valid: the replaced CHECKs are validated against the existing rows, and rewriting every row re-checks
-    // each constraint of the four tables.
-    const { rows: constraints } = await sql<{ name: string; validated: boolean }>`
+      expect(fanOut.exitCode).toBe(0);
+      expect(fanOut.report?.target).toBe(LATEST_ID);
+      expect(fanOut.report?.failed).toEqual([]);
+      const upgraded = fanOut.report?.applied.find((entry) => entry.schema === schema);
+      expect(upgraded?.files.map((file) => [file.id, file.status])).toEqual([
+        [MIGRATION_ID, "applied"],
+        [SYNC_CLAIM_ID, "applied"],
+        [CARD_FEE_LINES_ID, "applied"],
+        [LATEST_ID, "applied"],
+      ]);
+
+      // The rows are all there, unchanged, with the defaults of the new columns.
+      const after = await upgradedRows(schema);
+      // 0004 (FIX-W28-CANCEL): no card fee line stored, so the card fee of these payments counts as kept.
+      expect(after.payments).toEqual(before.payments.map((row) => ({ ...row, card_fee_lines: [] })));
+      expect(after.checkouts).toEqual(
+        before.checkouts.map((row) => ({ ...row, pricing_mode: "markup_rules" })),
+      );
+      expect(after.bookings).toEqual(
+        before.bookings.map((row) => ({
+          ...row,
+          create_order_started_at: null,
+          reconcile_until: null,
+          reconcile_attempts: 0,
+          reconcile_outcome: null,
+          // 0003 (FIX-W27-SYNC): no claim yet, no change recorded.
+          sync_claimed_at: null,
+          sync_changes: [],
+          // 0005 (FIX-W31-OTA): no cancellation claimed.
+          cancellation_claimed_at: null,
+        })),
+      );
+      expect(after.storefrontSettings).toEqual(
+        before.storefrontSettings.map((row) => ({
+          ...row,
+          legal_name: null,
+          time_zone: "UTC",
+          default_market: null,
+          markets: [],
+          support_details: {},
+          seo: {},
+          consent: {},
+          terms_version: null,
+          privacy_version: null,
+          airline_card_enabled_test: false,
+          airline_card_enabled_live: false,
+          booking_queue_number: null,
+          booking_queue_category: 0,
+          ops_alert_email: null,
+          logo_asset_id: null,
+          logo_dark_asset_id: null,
+          logo_square_asset_id: null,
+          favicon_asset_id: null,
+          og_image_asset_id: null,
+        })),
+      );
+
+      // Still valid: the replaced CHECKs are validated against the existing rows, and rewriting every row re-checks
+      // each constraint of the four tables.
+      const { rows: constraints } = await sql<{ name: string; validated: boolean }>`
       SELECT conname AS name, convalidated AS validated FROM pg_catalog.pg_constraint
       WHERE conrelid = ${`${schema}.payments`}::regclass AND contype = 'c' AND conname LIKE 'payments\_%'
       ORDER BY conname`.execute(migrator);
-    expect(constraints).toEqual(
-      expect.arrayContaining([
-        { name: "payments_airline_card_ck", validated: true },
-        { name: "payments_method_ck", validated: true },
-        { name: "payments_provider_ck", validated: true },
-      ]),
-    );
-    expect(constraints.map((row) => row.name)).not.toContain("payments_provider_check");
-    expect(constraints.map((row) => row.name)).not.toContain("payments_method_check");
-    const rewritten = await tenantTx(app, schema, async (trx) => {
-      const counts: number[] = [];
-      for (const table of ["payments", "checkouts", "bookings", "storefront_settings"] as const) {
-        const result = await sql`UPDATE ${sql.table(table)} SET version = version + 1`.execute(trx);
-        counts.push(Number(result.numAffectedRows ?? 0n));
-      }
-      return counts;
-    });
-    expect(rewritten).toEqual([2, 1, 1, 1]);
+      expect(constraints).toEqual(
+        expect.arrayContaining([
+          { name: "payments_airline_card_ck", validated: true },
+          { name: "payments_method_ck", validated: true },
+          { name: "payments_provider_ck", validated: true },
+        ]),
+      );
+      expect(constraints.map((row) => row.name)).not.toContain("payments_provider_check");
+      expect(constraints.map((row) => row.name)).not.toContain("payments_method_check");
+      const rewritten = await tenantTx(app, schema, async (trx) => {
+        const counts: number[] = [];
+        for (const table of ["payments", "checkouts", "bookings", "storefront_settings"] as const) {
+          const result = await sql`UPDATE ${sql.table(table)} SET version = version + 1`.execute(trx);
+          counts.push(Number(result.numAffectedRows ?? 0n));
+        }
+        return counts;
+      });
+      expect(rewritten).toEqual([2, 1, 1, 1]);
 
-    // The upgraded schema has exactly the catalogue of a schema provisioned with the release's files.
-    await provision("tenant_m2_reference");
-    const reference = await catalogue("tenant_m2_reference");
-    expect(reference.length).toBeGreaterThan(500);
-    expect(await catalogue(schema)).toEqual(reference);
+      // The upgraded schema has exactly the catalogue of a schema provisioned with the release's files.
+      const reference = await catalogue(referenceSchema);
+      expect(reference.length).toBeGreaterThan(500);
+      expect(await catalogue(schema)).toEqual(reference);
+    });
   });
 
   it("refuses an airline-card payment with an expiry, a PSP reference, 3-D Secure data or the card method, and keeps brand, BIN and last 4 [OBE-008 AC1]", async () => {
