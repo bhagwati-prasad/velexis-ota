@@ -22,6 +22,9 @@
     "README.md",
     "CHANGELOG.md"
   ],
+  "engines": {
+    "node": ">=22.12"
+  },
   "scripts": {
     "generate": "node scripts/generate-operations.mjs",
     "typecheck": "tsc -p tsconfig.json",

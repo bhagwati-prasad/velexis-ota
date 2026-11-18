@@ -11,7 +11,7 @@ Related: [`docs/extensions.md`](docs/extensions.md) (what the SDK adds to the co
 | Package | `@velexis/ota-sdk` (workspace package in `ota/sdk`; published to npm at M6) |
 | Language | ES2022 modules, JSDoc types checked by `tsc --checkJs --strict` (TypeScript 5.6) |
 | Runtime dependencies | **None.** Only platform APIs: `fetch`, `Headers`, `URL`, `AbortController`, `crypto.randomUUID` (with a `getRandomValues` fallback), `FormData`, `Blob` |
-| Runs in | Evergreen browsers (`<script type="module">`, a bundler, or the IIFE), Node.js 22, edge runtimes (Cloudflare Workers, Vercel Edge, Deno, Bun) |
+| Runs in | Evergreen browsers (`<script type="module">`, a bundler, or the IIFE), Node.js 22.12 and later and 24 (`engines.node` `>=22.12`; CI runs the tests on 22.12.0 and on the `.nvmrc` major, 24; on 22.12.x a `require()` of the bundle prints an `ExperimentalWarning`, gone from 22.13.0, §7), edge runtimes (Cloudflare Workers, Vercel Edge, Deno, Bun) |
 | Surface | `createVelexisClient`, `VERSION`, the contract's error classes and `isVelexisError`, 8 namespaces, **129 methods** (96 contract + 33 MVP additions: 32 by the M4 exit, `console.bookings.closeReview` since OBE-099), one per `x-sdk-method` |
 | Contract | [`docs/velexis-sdk/sdk/src/`](../../docs/velexis-sdk/sdk/src/) `index`, `shared`, `identity`, `flights`, `bookings`, `console` (`.d.ts`, never edited) |
 | Outputs | `dist/velexis-sdk.mjs` (ESM), `dist/velexis-sdk.iife.js` (`window.Velexis`), `dist/types/*.d.ts` |
@@ -23,7 +23,7 @@ Related: [`docs/extensions.md`](docs/extensions.md) (what the SDK adds to the co
 **Goals**
 
 - **Framework-agnostic.** Plain functions and objects. No React, no Next.js, no global state, no top-level side effects (`"sideEffects": false`).
-- **Zero dependencies** and no transpilation of the source: `src/` runs as-is in browsers and Node 22, so a page can import it straight from a bundler or a CDN.
+- **Zero dependencies** and no transpilation of the source: `src/` runs as-is in browsers and in Node.js 22.12 and later and 24, so a page can import it straight from a bundler or a CDN.
 - **Contract-exact.** Every method, option, error class and type of the contract declarations exists with a compatible signature. The SDK may **add** optional options and methods; it never removes or narrows ([ADR-0019](../../docs/mvp/adr/0019-vanilla-js-sdk-jsdoc.md)). This is enforced by the contract test (§6).
 - **Safe by default.** No token reaches storefront JavaScript (cookie mode), secret keys are refused in browsers, the airline-card call is never retried or logged, errors never serialise credentials.
 - **Predictable I/O.** Retries only where safe, idempotency keys generated per call, timeouts on every request, one error envelope mapped to typed errors.
@@ -36,7 +36,7 @@ The public modules mirror the contract files one to one ([ADR-0019](../../docs/m
 
 ```
 ota/sdk/
-  package.json             "type": "module", exports, "sideEffects": false, no dependencies
+  package.json             "type": "module", exports, "sideEffects": false, engines (node >=22.12), no dependencies
   tsconfig.json            checkJs project (src/), noEmit
   tsconfig.build.json      declaration-only emit to dist/types/
   vitest.config.js         Node by default; cookie-mode tests opt into happy-dom; unit + contract tests
@@ -242,7 +242,7 @@ The contract files under `docs/velexis-sdk/sdk/src/` are never edited; additions
 | `dist/velexis-sdk.iife.js` + `.map` | IIFE exposing `window.Velexis` | Plain HTML pages: `<script src="/vendor/velexis-sdk.iife.js"></script>`, then `Velexis.createVelexisClient(…)` |
 | `dist/types/*.d.ts` | Declarations | Consumers' type checking |
 
-- `package.json` `exports`: `"."` → `{ types, development: "./src/index.js", import: "./dist/velexis-sdk.mjs", default: "./dist/velexis-sdk.mjs" }`, `"./iife"` → the IIFE; `"sideEffects": false`; `files`: `dist`, `src`, `README.md`, `CHANGELOG.md`. ESM only, no CommonJS build: `default` lets CommonJS code `require()` the ES module bundle (Node 22). Vite's dev server and Vitest use `src/` through the `development` condition; production builds and plain Node import the bundle, so Turborepo builds the SDK before its consumers (`^build`).
+- `package.json` `exports`: `"."` → `{ types, development: "./src/index.js", import: "./dist/velexis-sdk.mjs", default: "./dist/velexis-sdk.mjs" }`, `"./iife"` → the IIFE; `"sideEffects": false`; `files`: `dist`, `src`, `README.md`, `CHANGELOG.md`. ESM only, no CommonJS build: `default` lets CommonJS code `require()` the ES module bundle (Node.js 22.12 and later and 24: `require()` of an ES module is on by default from 22.12.0; on 22.12.x it prints an `ExperimentalWarning` when the requiring file is outside `node_modules`, which 22.13.0 dropped, and `import` never does). `engines.node` (`>=22.12`) declares the supported Node versions ([ADR-0029](../../docs/mvp/adr/0029-nodejs-24-runtime.md) item 9). Vite's dev server and Vitest use `src/` through the `development` condition; production builds and plain Node import the bundle, so Turborepo builds the SDK before its consumers (`^build`).
 - **No top-level side effects:** importing the bundle performs no `fetch`, schedules nothing and touches no global; the IIFE only defines `window.Velexis` (`test/unit/bundle.test.js`).
 - **Size budget:** `scripts/check-size.mjs` fails `build` when the ESM bundle exceeds **25 KB** min+gzip, and prints the size (11.3 KB with the M2 namespaces, SDK-007; 12.2 KB with `checkout`, SDK-009; 12.5 KB with `bookings`, SDK-010; 13.0 KB with the contract methods of `console`, SDK-011; 13.7 KB with `auth` and `account`, SDK-008; 14.6 KB with `console.settings`, `console.payments` and the storefront pages, SDK-012). If `console` ever pushes past it, it moves to a separate entry, `@velexis/ota-sdk/console` (the ADR-0019 follow-up).
 - **Published types are self-contained:** for npm (SDK-015, M6) the build also copies the OTA part of `@velexis/api-types` into `dist/types/` and rewrites the specifier ([OADR-0016](../docs/adr/0016-sdk-packaging-and-type-contract.md)).
@@ -263,6 +263,8 @@ The contract files under `docs/velexis-sdk/sdk/src/` are never edited; additions
 - Tests never use the real network or sleep; they follow [ADR-0015](../../docs/mvp/adr/0015-testing-strategy.md) and [conventions §10](../../docs/mvp/conventions.md#10-testing). The smoke tests (§8.1) call a local OTA API and the Amadeus stub behind it, never Amadeus or Stripe.
 
 Commands (`pnpm --filter @velexis/ota-sdk <script>`): `generate` (route table and contract assertions from `ota/backend/openapi/`; CI and the contract test fail on a diff), `typecheck`, `test` (unit + contract), `test:contract` (the contract project with the `tsc` command line, after a declaration build), `test:smoke` (the smoke tests against a running OTA API, §8.1; SDK-014), `build` (bundles, declarations, size check), `lint`, `clean`. `typecheck`, `build` and `test` (the contract and bundle tests emit declarations) read the types of the built `@velexis/api-types`: Turborepo builds it first; for a single package run `pnpm --filter @velexis/api-types build` once.
+
+**The supported Node versions in CI** ([ADR-0029](../../docs/mvp/adr/0029-nodejs-24-runtime.md) item 9, SDK-019). The SDK supports Node.js 22.12 and later and 24 (§1), and CI runs `test` (unit + contract) on both ends: `build-test` on the `.nvmrc` major, 24, with the rest of the repository, and the job `sdk-node22` ("SDK on Node.js 22.12", not a required check) on Node.js 22.12.0 exactly, with `pnpm exec turbo run test --filter=@velexis/ota-sdk` and no Turborepo cache ([`tools/ci/README.md`](../../tools/ci/README.md)). The same run locally: put an official Node.js 22.12.0 first on `PATH`, then run `pnpm install --frozen-lockfile` (pnpm warns `Unsupported engine` for the root's `engines.node`, `>=24 <25`, and goes on) and `pnpm exec turbo run test --filter=@velexis/ota-sdk --cache=local:,remote:` from the repository root. `--cache=local:,remote:` reads and writes no Turborepo cache, as in the job: Turborepo hashes no Node version, so without it the run would replay a result of another Node version from your local cache and test nothing on 22.12.0, or leave its own result for a later run on 24 to replay. After Node 22's end of life on 2027-04-30 a task removes the job, and the SDK states Node.js 24 and later.
 
 ### 8.1 Smoke tests (SDK-014)
 
@@ -308,7 +310,7 @@ SDK_SMOKE_PUBLISHABLE_KEY=pk_test_… SDK_SMOKE_SECRET_KEY=sk_test_… SDK_SMOKE
 
 **Versioning.** Semantic versioning. `0.x` while the SDK lives only in the workspace (`workspace:*` in the storefront and the OTA admin). `1.0.0` is the first npm release at M6. A change that the contract test would reject is a major version; new methods and options are minor; fixes are patches. `CHANGELOG.md` is kept by hand. A method that will be removed is marked `@deprecated` in JSDoc for at least one minor release first.
 
-**Publishing (M6 launch checklist).** A manual GitHub Actions workflow publishes `@velexis/ota-sdk` to npm with provenance, after build, contract test and size check, from a tag `sdk-vX.Y.Z`. The IIFE is then available at versioned CDN URLs that mirror npm (for example `https://cdn.jsdelivr.net/npm/@velexis/ota-sdk@1.0.0/dist/velexis-sdk.iife.js`); the release notes give its SRI hash, and the [build-your-own-frontend guide](../frontend/docs/build-your-own-frontend.md) §4 recommends self-hosting the file. Until then `package.json` says `"private": true`, so nothing is published by accident; SDK-015 removes it.
+**Publishing (M6 launch checklist).** A manual GitHub Actions workflow publishes `@velexis/ota-sdk` to npm with provenance, after build, contract test and size check, from a tag `sdk-vX.Y.Z`. The IIFE is then available at versioned CDN URLs that mirror npm (for example `https://cdn.jsdelivr.net/npm/@velexis/ota-sdk@1.0.0/dist/velexis-sdk.iife.js`); the release notes give its SRI hash, and the [build-your-own-frontend guide](../frontend/docs/build-your-own-frontend.md) §4 recommends self-hosting the file. Until then `package.json` says `"private": true`, so nothing is published by accident; SDK-015 removes it. The published `package.json` declares the supported Node versions in `engines` (`"node": ">=22.12"`, §1), so npm and pnpm warn a project that installs it on an older Node.
 
 **Deferred (post-MVP):**
 

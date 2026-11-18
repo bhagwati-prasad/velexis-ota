@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { after, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { jobKeyOf, mapOf, parseWorkflow, withOf } from "./workflow-reader.mjs";
+import { jobKeyOf, mapOf, parseWorkflow, scalar, withOf } from "./workflow-reader.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CI_YML = readFileSync(join(ROOT, ".github/workflows/ci.yml"), "utf8");
@@ -642,6 +642,170 @@ describe("workflow shape", () => {
     );
     assert.match(tls.raw.join("\n"), /PG_CONTAINER: \$\{\{ job\.services\.postgres\.id \}\}/);
     assert.ok(existsSync(join(ROOT, "tools/ci/check-no-hardcoded-hosts.mjs")), "the checker exists");
+  });
+
+  it("[SDK-019 AC2] sdk-node22 runs the SDK's unit and contract tests on Node.js 22.12.0, with no Turborepo cache and as no required check", () => {
+    // ADR-0029 item 9; the owner approved the job's exact lines on 2026-11-16 (decision D5).
+    const job = JOBS.get("sdk-node22");
+    assert.ok(job, "ci.yml has an sdk-node22 job");
+    assert.deepEqual(jobKey("sdk-node22", "name"), ["    name: SDK on Node.js 22.12"]);
+    assert.deepEqual(jobKey("sdk-node22", "runs-on"), ["    runs-on: ubuntu-24.04"]);
+    assert.deepEqual(jobKey("sdk-node22", "timeout-minutes"), ["    timeout-minutes: 15"]);
+    for (const key of ["needs", "if", "services", "env", "strategy", "continue-on-error", "permissions"]) {
+      assert.deepEqual(jobKey("sdk-node22", key), [], `no ${key}`);
+    }
+    for (const id of JOBS.keys()) {
+      assert.doesNotMatch(jobKey(id, "needs").join("\n"), /sdk-node22/, `${id} does not wait for it`);
+    }
+
+    // Its steps, in this order and nothing else: build-test's checkout, pnpm and setup-node actions, the install,
+    // then the SDK's tests through Turborepo on exactly 22.12.0.
+    const steps = job.steps;
+    const buildTest = JOBS.get("build-test").steps;
+    const uses = (list, action) => list.find((s) => (s.uses ?? "").startsWith(`${action}@`));
+    const install = steps.find((s) => s.run === "pnpm install --frozen-lockfile");
+    const tests = steps.find(
+      (s) => scalar(s.name ?? "") === "[SDK-019 AC2] The SDK's unit and contract tests on Node.js 22.12.0",
+    );
+    const order = [
+      uses(steps, "actions/checkout"),
+      uses(steps, "pnpm/action-setup"),
+      uses(steps, "actions/setup-node"),
+      install,
+      tests,
+    ];
+    assert.ok(order.every(Boolean), "every step of the sdk-node22 job is there");
+    assert.deepEqual(order, steps, "and nothing else, in this order");
+    for (const action of ["actions/checkout", "pnpm/action-setup", "actions/setup-node"]) {
+      assert.equal(uses(steps, action).uses, uses(buildTest, action).uses, action);
+    }
+    assert.deepEqual(withOf(uses(steps, "actions/checkout")), ["persist-credentials: false"]);
+    assert.deepEqual(withOf(uses(steps, "pnpm/action-setup")), [], "the pnpm version of packageManager");
+    // An exact version, not the .nvmrc major (node-major.test.mjs exempts this job by name), no check-latest and no
+    // dependency cache.
+    assert.deepEqual(withOf(uses(steps, "actions/setup-node")), ["node-version: 22.12.0"]);
+    assert.deepEqual(tests.run.split("\n"), [
+      "node --version | grep -qx v22.12.0",
+      "pnpm exec turbo run test --filter=@velexis/ota-sdk",
+    ]);
+
+    // No Turborepo cache is restored or saved: no cache action, no remote cache, no cache folder.
+    const code = job.lines.filter((line) => !/^\s*#/.test(line)).join("\n");
+    assert.equal(
+      steps.some((s) => /^actions\/cache/.test(s.uses ?? "")),
+      false,
+    );
+    const remoteCache = /TURBO_(?:TOKEN|TEAM|API|REMOTE|CACHE)/;
+    assert.doesNotMatch(code, /actions\/cache|\.turbo|--cache|cache:/);
+    assert.doesNotMatch(code, remoteCache);
+    // Nor does the workflow's own env give every job a remote cache.
+    const workflowEnv = CI_YML.slice(0, CI_YML.indexOf("\njobs:\n"))
+      .split("\n")
+      .filter((line) => !/^\s*#/.test(line))
+      .join("\n");
+    assert.doesNotMatch(workflowEnv, remoteCache);
+    assert.ok(uses(buildTest, "actions/cache"), "build-test keeps its own cache");
+
+    // Not a required check: the six checks the human steps of tools/ci/README.md require are the names of six other
+    // jobs, and this job's name is not among them.
+    const readme = readFileSync(join(ROOT, "tools/ci/README.md"), "utf8");
+    const protect = readme.split("\n").find((line) => line.startsWith("- **Protect `main`**"));
+    assert.ok(protect, "tools/ci/README.md has the Protect main step");
+    const listed = protect.slice(protect.indexOf("require the status checks"), protect.indexOf(" to pass"));
+    const required = [...listed.matchAll(/\*\*([^*]+)\*\*/g)].map((m) => m[1]);
+    const jobOfName = new Map(
+      [...JOBS.keys()].map((id) => [jobKey(id, "name")[0]?.replace(/^ {4}name: /, ""), id]),
+    );
+    assert.deepEqual(
+      required.map((name) => jobOfName.get(name)),
+      ["plan-lint", "deploy-files", "build-test", "integration", "check-vm", "alt-hosts"],
+      required.join(", "),
+    );
+    assert.ok(!required.includes("SDK on Node.js 22.12"));
+  });
+
+  it("[SDK-019 AC2] sdk-node22 is appended after the last job and named in the header's last line, so the lines above keep their numbers", () => {
+    const lines = CI_YML.split("\n");
+    assert.equal([...JOBS.keys()].at(-1), "sdk-node22", "the last job");
+    const at = lines.indexOf("  sdk-node22:");
+    assert.equal(lines[at - 1], "", "one empty line before it");
+    assert.equal(lines[at - 2], "        run: pnpm test:int", "after alt-hosts' last line");
+    // The header names the job by extending the last line of its job list, without a line of its own.
+    const header = lines.slice(0, lines.indexOf("name: CI"));
+    const named = header.filter((line) => line.includes("sdk-node22"));
+    assert.deepEqual(named, [
+      "# names and ports, PostgreSQL over TLS only), sdk-node22 (SDK-019: the SDK's tests on Node.js 22.12.0; not required).",
+    ]);
+    assert.match(header[header.indexOf(named[0]) + 1], /^# Agents never change this file/);
+    // The PCI pack's ci.yml#L<n> references still point at the steps they name (ADR-0029 decision D18).
+    const pci = join(ROOT, "ota/docs/pci");
+    let refs = 0;
+    for (const file of readdirSync(pci).filter((name) => name.endsWith(".md"))) {
+      const text = readFileSync(join(pci, file), "utf8");
+      for (const m of text.matchAll(/\.github\/workflows\/ci\.yml#L(\d+)\)\s+`([^`]+)`/g)) {
+        refs += 1;
+        assert.ok(lines[Number(m[1]) - 1].includes(m[2]), `${file}: ci.yml#L${m[1]} is ${m[2]}`);
+      }
+    }
+    assert.ok(refs > 0, "the PCI pack cites ci.yml");
+  });
+
+  it("[SDK-019 AC1] the SDK's engines, its docs and CI state one range: Node.js 22.12 and later and the .nvmrc major", () => {
+    const sdk = JSON.parse(readFileSync(join(ROOT, "ota/sdk/package.json"), "utf8"));
+    assert.equal(sdk.engines?.node, ">=22.12");
+    const floor = /^>=(\d+)\.(\d+)$/.exec(sdk.engines.node);
+    // sdk-node22 runs the floor itself, the first patch of it.
+    const setupNode = JOBS.get("sdk-node22").steps.find((s) =>
+      (s.uses ?? "").startsWith("actions/setup-node@"),
+    );
+    assert.deepEqual(withOf(setupNode), [`node-version: ${floor[1]}.${floor[2]}.0`]);
+    // The other end is the .nvmrc major, which build-test reads and runs `pnpm test` (the SDK's tests included) on.
+    const major = readFileSync(join(ROOT, ".nvmrc"), "utf8").trim();
+    const buildTestNode = JOBS.get("build-test").steps.find((s) =>
+      (s.uses ?? "").startsWith("actions/setup-node@"),
+    );
+    assert.ok(withOf(buildTestNode).includes("node-version-file: .nvmrc"));
+    assert.ok(JOBS.get("build-test").steps.some((s) => s.run === "pnpm test"));
+    // Each document that states the range states this one, and names no other Node.js version: every "Node <n>" or
+    // "Node.js <n>[.<m>]" is the floor (22.12, 22.12.0) or the .nvmrc major, except "Node 22's end of life" and the
+    // old wording that the ADRs' dated notes quote ("Node 22"). So "Node.js 22", "Node.js 22.13" or "Node.js 20" fails.
+    const range = `Node.js ${floor[1]}.${floor[2]} and later and ${major}`;
+    const otherVersions = (line) =>
+      [
+        ...line
+          .replace(/Node(?:\.js)? \d+'s end of life/g, "")
+          .replace(/"Node \d+"/g, "")
+          .matchAll(/Node(?:\.js)? (\d+)(?:\.(\d+))?/g),
+      ]
+        .filter(([, m, n]) => !(m === floor[1] && n === floor[2]) && !(m === major && n === undefined))
+        .map(([text]) => text);
+    const sdkRow = readFileSync(join(ROOT, "docs/mvp/tech-stack.md"), "utf8")
+      .split("\n")
+      .find((line) => line.startsWith("| Runtime | Browsers (ES2022)"));
+    const docs = {
+      "ota/sdk/README.md": null,
+      "ota/sdk/docs/types-and-builds.md": null,
+      "ota/frontend/docs/build-your-own-frontend.md": null,
+      // tech-stack.md: its SDK runtime row only (its other rows state the .nvmrc major and Node 22's end of life).
+      "docs/mvp/tech-stack.md": sdkRow ?? "",
+      "docs/mvp/adr/0019-vanilla-js-sdk-jsdoc.md": null,
+      "ota/docs/adr/0016-sdk-packaging-and-type-contract.md": null,
+    };
+    for (const [doc, part] of Object.entries(docs)) {
+      const text = part ?? readFileSync(join(ROOT, doc), "utf8");
+      assert.ok(text.includes(range), `${doc} states ${range}`);
+      for (const line of text.split("\n")) {
+        assert.deepEqual(otherVersions(line), [], `${doc}: ${line.slice(0, 120)}`);
+      }
+    }
+    // The filter itself: other versions are found; the floor, the major and the allowed phrases are not.
+    assert.deepEqual(
+      otherVersions(
+        `Node.js 22, Node 22.13, Node.js 20 and Node.js 22.11.0; Node.js 22.12.0 and Node ${major}`,
+      ),
+      ["Node.js 22", "Node 22.13", "Node.js 20", "Node.js 22.11"],
+    );
+    assert.deepEqual(otherVersions(`Node 22's end of life, "Node 22", Node.js ${major} and later`), []);
   });
 
   it("[X-019 AC5] every uses: in .github/workflows is pinned to a 40-character commit SHA", () => {

@@ -1,7 +1,8 @@
 // A fake `fetch` for the SDK's unit tests (ota/sdk/README.md §8): a queue of canned answers, used in call order,
 // that records every request (method, URL, headers, body) for assertions. Tests pass `fake.fetch` as the client's
 // `fetch` option, so no test touches the network (ADR-0015). Answers become real `Response` objects of the
-// runtime (Node 22, or happy-dom in cookie-mode tests), and delays use `setTimeout`, so fake timers drive them.
+// runtime (the supported Node versions (README), or happy-dom in cookie-mode tests), and delays use `setTimeout`, so
+// fake timers drive them.
 //
 //   const fake = createFakeFetch([{ status: 200, body: { data: [] } }, errorResponse(404, "NOT_FOUND")]);
 //   const client = createVelexisClient({ publishableKey: "pk_test_x", fetch: fake.fetch });

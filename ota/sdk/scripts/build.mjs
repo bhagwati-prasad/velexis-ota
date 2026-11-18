@@ -11,9 +11,10 @@
 //   velexis-sdk.iife.js + .map   IIFE that defines `window.Velexis`, for a plain <script> tag
 //   types/*.d.ts + .d.ts.map     `tsc -p tsconfig.build.json`, one declaration per source module
 //
-// Both bundles are ES2022, minified, platform-neutral (the SDK runs in browsers, Node 22 and edge runtimes) and
-// self-contained: the SDK has no runtime dependencies, and `@velexis/api-types` is used in JSDoc types only. Each
-// has an external source map file, linked from its last line (`//# sourceMappingURL=`), so devtools find it.
+// Both bundles are ES2022, minified, platform-neutral (the SDK runs in browsers, the supported Node versions (README)
+// and edge runtimes) and self-contained: the SDK has no runtime dependencies, and `@velexis/api-types` is used in
+// JSDoc types only. Each has an external source map file, linked from its last line (`//# sourceMappingURL=`), so
+// devtools find it.
 // Minifying renames classes and functions; what callers read stays the same, because every error class sets its
 // `name` field explicitly (`error.name === "ValidationError"`, also in `toJSON()`). An esbuild warning fails the
 // build, as an error does, and a bundle is written only when esbuild reported neither.

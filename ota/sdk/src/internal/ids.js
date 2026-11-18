@@ -1,6 +1,7 @@
 // UUID v4 for the `Idempotency-Key` of state-changing calls (ota/sdk/README.md §5.3, OADR-0016 point 6).
-// `crypto.randomUUID` exists in Node 22, edge runtimes and secure browser contexts; a page served over plain HTTP
-// (a non-secure context) has only `crypto.getRandomValues`, so the key is then formatted from 16 random bytes.
+// `crypto.randomUUID` exists in the supported Node versions (README), edge runtimes and secure browser contexts; a
+// page served over plain HTTP (a non-secure context) has only `crypto.getRandomValues`, so the key is then formatted
+// from 16 random bytes.
 
 /**
  * A random UUID version 4 (RFC 9562), for example `0b6f0c51-1f3c-4f5e-9b1e-2d8a4c7e9f10`.

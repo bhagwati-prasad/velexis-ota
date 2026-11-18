@@ -35,7 +35,8 @@ const lines = (...parts) => parts.join("\n");
 
 /** JavaScript fixtures by file name; each is checked alone with the SDK's options. */
 const FIXTURES = {
-  // Browser and Node 22 platform APIs that the SDK uses are declared (lib DOM, DOM.Iterable, ES2022).
+  // The platform APIs of browsers and of the supported Node versions (README) that the SDK uses are declared (lib DOM,
+  // DOM.Iterable, ES2022).
   "platform.js": lines(
     'export const url = new URL("/v1/storefront", "https://api.ota.example.com");',
     "export const controller = new AbortController();",

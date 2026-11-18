@@ -203,12 +203,14 @@ export function createFlightsApi(core) {
     },
     "./iife": "./dist/velexis-sdk.iife.js"
   },
-  "files": ["dist", "src", "README.md", "CHANGELOG.md"]
+  "files": ["dist", "src", "README.md", "CHANGELOG.md"],
+  "engines": { "node": ">=22.12" }
 }
 ```
 
 - The `development` condition lets Vite's dev server use `src/` directly (Vite 6 resolves it in dev, and Vitest in tests); production builds use the bundle, and so does Node without `--conditions=development`. Both are the same ES2022 code, so behaviour does not change between them.
-- **ESM only.** Node 22 can `require()` an ES module where needed; there is no CommonJS build. Node's `require()` does not match the `import` condition, so the `default` condition, last, gives it the same bundle (without it, `require("@velexis/ota-sdk")` fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`).
+- **ESM only.** Node.js 22.12 and later and 24, the versions the SDK supports, `require()` an ES module where needed; there is no CommonJS build. Node's `require()` does not match the `import` condition, so the `default` condition, last, gives it the same bundle (without it, `require("@velexis/ota-sdk")` fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`).
+- **`engines`** (`"node": ">=22.12"`, [ADR-0029](../../../docs/mvp/adr/0029-nodejs-24-runtime.md) item 9, SDK-019): the SDK supports Node.js 22.12 and later and 24, evergreen browsers and edge runtimes. 22.12.0 is the floor because `require()` of an ES module is on by default from it (Node.js `CHANGELOG_V22.md`, 22.12.0: "require(esm) is now enabled by default"); on 22.12.x such a `require()` still prints `ExperimentalWarning: CommonJS module … is loading ES Module … using require()` when the requiring file is outside `node_modules`, and 22.13.0 dropped the warning. `import` never prints it. CI runs the SDK's unit and contract tests on 22.12.0 (the non-required job `sdk-node22`, until Node 22's end of life on 2027-04-30) and on the `.nvmrc` major, 24 ([README §8](../README.md#8-testing)).
 - `"./iife"` is the address of the classic script, for copying it next to a page or for a CDN path (`import.meta.resolve("@velexis/ota-sdk/iife")`); it is loaded with a `<script>` tag, not imported.
 - Turborepo builds the SDK before the storefront and the OTA admin (`dependsOn: ["^build"]`). A single-package run that builds a consumer for production (the storefront's `vite build`) needs `pnpm --filter @velexis/ota-sdk build` first.
 - **No top-level side effects** (`"sideEffects": false` is true of the bundle too): importing it performs no `fetch`, schedules no timer and changes no global or built-in prototype; the IIFE only adds `window.Velexis`.

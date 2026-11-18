@@ -2990,6 +2990,7 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - `npm pack` produces a package whose `dist/types` compile in an empty project without `@velexis/api-types` installed (test in CI).
   - The 1.0.0 release exists with provenance (human step recorded in the PR).
 - **Verify:** `pnpm --filter @velexis/ota-sdk build && cd ota/sdk && npm pack --dry-run`
+- **Note (2026-11-18, ADR-0029 item 9, decisions D5 and D16 approved by the owner on 2026-11-16; SDK-019):** the 1.0.0 package states and declares the Node.js versions the SDK supports, Node.js 22.12 and later and 24: its README (§1 "Runs in", §2, §7 and §8) and `package.json`'s `"engines": { "node": ">=22.12" }`, which `npm pack` carries. CI's non-required job `sdk-node22` runs the SDK's unit and contract tests on 22.12.0 until Node 22's end of life on 2027-04-30; a release after that date states Node.js 24 and later.
 
 ### SDK-016 · Share one refresh between the clients derived from one cookie-mode client ✅
 - **Status:** done (branch claude/intelligent-bardeen-90hhu7)
@@ -3216,7 +3217,7 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 - **Verify:** `node --check ota/backend/test/load/search-load.mjs && node --check ota/backend/test/load/booking-load.mjs && node ota/backend/test/load/booking-load.mjs --tenants 5 --minutes 30`
 
 ### SDK-019 · State the Node.js versions the SDK supports after the move to Node 24, and test the oldest one
-- **Status:** todo
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the first green CI run of the job sdk-node22, which the integrator dispatches)
 - **Component:** ota-sdk
 - **Milestone:** M6
 - **Depends on:** X-048

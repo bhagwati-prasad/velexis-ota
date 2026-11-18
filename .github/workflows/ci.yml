@@ -14,7 +14,7 @@
 # integration (in parallel with build-test: the integration tests with PostgreSQL 16 + Redis 7.4 + Mailpit and the
 # PAN-absence proof that reads their report; lead decision (5o) of 2026-11-05, approved by the owner), alt-hosts (task
 # X-032: tools/ci/check-no-hardcoded-hosts.mjs, then the same integration tests with PostgreSQL and Redis on other host
-# names and ports, PostgreSQL over TLS only).
+# names and ports, PostgreSQL over TLS only), sdk-node22 (SDK-019: the SDK's tests on Node.js 22.12.0; not required).
 # Agents never change this file to get their own change through (AGENTS.md §7). What each guard enforces and how to
 # run it locally: tools/ci/README.md.
 # Third-party actions are pinned to full commit SHAs with the tag as the last thing in the comment, so Dependabot
@@ -843,3 +843,26 @@ jobs:
 
       - name: Integration tests
         run: pnpm test:int
+
+  sdk-node22:
+    # SDK-019 (ADR-0029 item 9, approved by the owner on 2026-11-16): the SDK's unit and contract tests on the oldest
+    # Node.js its README promises, 22.12.0, while every other job runs the .nvmrc major. Not a required check; no
+    # Turborepo cache is restored or saved. A task removes it after Node 22's end of life on 2027-04-30.
+    name: SDK on Node.js 22.12
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      # The pnpm version comes from package.json "packageManager".
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5.0.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.12.0
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: "[SDK-019 AC2] The SDK's unit and contract tests on Node.js 22.12.0"
+        run: |
+          node --version | grep -qx v22.12.0
+          pnpm exec turbo run test --filter=@velexis/ota-sdk

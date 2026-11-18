@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** Product owner (vanilla JS with JSDoc, framework-agnostic, the `docs/velexis-sdk/sdk/src/` declarations as the contract, `next`/`react` helpers post-MVP), lead architect (module layout, type checking, bundles, session modes)
+**Revisions:** 2026-11-18 ([ADR-0029](0029-nodejs-24-runtime.md) item 9, its decisions D5 and D16 approved by the owner on 2026-11-16; task SDK-019): the files run as-is in Node.js 22.12 and later and 24, which the package declares in `engines.node` (`>=22.12`) and CI tests on 22.12.0 and on the `.nvmrc` major (dated note under Source layout).
 
 ## Context
 
@@ -34,7 +35,8 @@ ota/sdk/
   docs/               SDK extensions and usage notes for vanilla JS
 ```
 
-- **ES2022 modules, no runtime dependencies, no transpilation of the source.** The files run as-is in evergreen browsers and Node 22. Only platform APIs are used: `fetch`, `AbortController`, `URL`, `crypto.randomUUID`.
+- **ES2022 modules, no runtime dependencies, no transpilation of the source.** The files run as-is in evergreen browsers, Node.js 22.12 and later and 24, and edge runtimes. Only platform APIs are used: `fetch`, `AbortController`, `URL`, `crypto.randomUUID`.
+  - **2026-11-18 ([ADR-0029](0029-nodejs-24-runtime.md) item 9, task SDK-019):** until this change the files ran in "Node 22", which no CI job ran once the repository moved to Node.js 24. The SDK supports Node.js 22.12 and later and 24 and says so in `engines.node` (`>=22.12`). The floor is 22.12.0 because `require()` of the ES module bundle is on by default from it; on 22.12.x such a `require()` still prints an `ExperimentalWarning` when the requiring file is outside `node_modules`, which 22.13.0 dropped. CI's non-required job `sdk-node22` runs the SDK's unit and contract tests on 22.12.0 until Node 22's end of life on 2027-04-30, and every other job runs the `.nvmrc` major.
 - One method per OpenAPI operation, named by its `x-sdk-method` (96 in total). Every method takes `RequestOptions` as its last argument, as the contract defines.
 
 ### Types
