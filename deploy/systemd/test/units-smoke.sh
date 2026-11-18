@@ -5,12 +5,12 @@
 #
 #   sudo env SMOKE_NODE="$(command -v node)" bash deploy/systemd/test/units-smoke.sh
 #
-# Needs root, systemd as PID 1, Node 22 (SMOKE_NODE; the units run a root-owned copy of it), openssl, nft (package
-# nftables) and ip (iproute2), PostgreSQL and Redis on loopback, outbound DNS and HTTPS, and a Mailpit. CI runs it in
-# the "systemd-units" job of .github/workflows/ci.yml (ubuntu-24.04 runner, PostgreSQL, Redis and Mailpit service
-# containers). On a throwaway VM, start Mailpit first (mailpit --smtp 127.0.0.1:1025 --listen 127.0.0.1:8025). Never
-# run it on the production VM: it stops nothing there, but it creates and removes test units, users and folders.
-# Without systemd as PID 1 it runs steps 1 to 3 and then fails.
+# Needs root, systemd as PID 1, Node of the `.nvmrc` major (SMOKE_NODE; the units run a root-owned copy of it),
+# openssl, nft (package nftables) and ip (iproute2), PostgreSQL and Redis on loopback, outbound DNS and HTTPS, and a
+# Mailpit. CI runs it in the "systemd-units" job of .github/workflows/ci.yml (ubuntu-24.04 runner, PostgreSQL, Redis
+# and Mailpit service containers). On a throwaway VM, start Mailpit first (mailpit --smtp 127.0.0.1:1025 --listen
+# 127.0.0.1:8025). Never run it on the production VM: it stops nothing there, but it creates and removes test units,
+# users and folders. Without systemd as PID 1 it runs steps 1 to 3 and then fails.
 #
 # What it proves (docs/mvp/plans/foundation-tasks.md; a check that proves an acceptance criterion ends in
 # [<task> AC<n>]):

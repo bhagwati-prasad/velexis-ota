@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // dev-keys.mjs: create the local key files of ADR-0010 ("Key material") in the ignored .local/ folder (X-016).
 //
-// Usage (plain Node 22, no dependencies; it writes the repository's .local/ whatever the current folder):
+// Usage (plain Node of the `.nvmrc` major, no dependencies; it writes the repository's .local/ from any folder):
 //   pnpm dev:keys                                 # from the repository root; = node tools/dev/dev-keys.mjs
 //   node tools/dev/dev-keys.mjs --force           # replace existing key files (old local ciphertext is lost)
 //   node tools/dev/dev-keys.mjs --root <dir>      # write <dir>/.local/ instead of the repository's (tests)

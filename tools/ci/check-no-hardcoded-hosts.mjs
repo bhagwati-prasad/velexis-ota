@@ -23,8 +23,8 @@
 // only defaults that hold a loopback address are the two Next.js listen addresses below, which are the VM's own.
 // It also fails when it finds no source file at all, so it never passes by checking nothing.
 //
-// Plain Node 22 with the repository's own TypeScript (the root devDependency), so CI runs it after
-// `pnpm install`. Tests: tools/ci/check-no-hardcoded-hosts.test.mjs. See tools/ci/README.md.
+// Plain Node (the `.nvmrc` major) with the repository's own TypeScript (the root devDependency), so CI runs it
+// after `pnpm install`. Tests: tools/ci/check-no-hardcoded-hosts.test.mjs. See tools/ci/README.md.
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { extname, join, relative, resolve, sep } from "node:path";

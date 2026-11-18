@@ -876,12 +876,12 @@ All `devDependencies`, exact versions ([`tech-stack.md`](../../docs/mvp/tech-sta
 
 | Package | Version | Why |
 |---|---|---|
-| `@playwright/test` | 1.64.1 | The runner and Chromium driver (tech-stack: Playwright 1.6x) |
-| `@axe-core/playwright` | 4.13.0 | axe in the page (tech-stack: 4.x) |
+| `@playwright/test` | 1.65.0 | The runner and Chromium driver (tech-stack: Playwright 1.6x) |
+| `@axe-core/playwright` | 4.14.0 | axe in the page (tech-stack: 4.x) |
 | `otplib` | 12.0.1 | TOTP codes, the library the platform backend uses (tech-stack: 12.x; upstream marks 12 deprecated in favour of 13) |
 | `@velexis/testing`, `@velexis/config`, `@velexis/api-types`, `@velexis/db` | workspace | Mailpit client, builders, test roles and `dropDatabase`; the harness settings; the platform request and response types and the invalidation channel; `tenantTx` for the demo OTA's data (OFE-008) |
 | `pg`, `@types/pg` | 8.23.1 | Creating the stack's database and `withDatabase` (as in `@velexis/db`) |
 | `ioredis` | 5.11.1 | Emptying the stack's Redis database (as in the backends) |
 | `yaml` | 2.9.1 | Reading `e2e.yml` in its test |
 | Stripe CLI (not a package) | 1.53.1 in CI | The forwarders of the `storefront-stripe` (nightly and on demand) and nightly `portal-stripe` journeys: the pinned release binary, checked against its SHA-256 by both Stripe steps (tech-stack: Stripe CLI 1.x) |
-| `vitest`, `typescript`, `eslint`, `@types/node` | 3.2.7, 5.6.3, 9.39.5, 22.20.5 | The unit tests, `typecheck` and `lint` |
+| `vitest`, `typescript`, `eslint`, `@types/node` | 4.1.12, 5.6.3, 9.39.5, 24.19.2 | The unit tests, `typecheck` and `lint` |

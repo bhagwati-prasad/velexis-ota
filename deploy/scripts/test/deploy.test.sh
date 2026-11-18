@@ -5,9 +5,9 @@
 #
 #   bash deploy/scripts/test/deploy.test.sh
 #
-# Needs bash, Node 18 or newer (DEPLOY_TEST_NODE, else node on PATH; CI uses Node 22), curl, flock, setsid and GNU
-# coreutils and findutils (Linux: Ubuntu 24.04 like the VM and the CI runner). No root, no systemd, no network
-# beyond loopback. CI runs it in the "deploy-files" job of .github/workflows/ci.yml.
+# Needs bash, Node 18 or newer (DEPLOY_TEST_NODE, else node on PATH; CI uses the `.nvmrc` major), curl, flock, setsid
+# and GNU coreutils and findutils (Linux: Ubuntu 24.04 like the VM and the CI runner). No root, no systemd, no
+# network beyond loopback. CI runs it in the "deploy-files" job of .github/workflows/ci.yml.
 #
 # deploy.sh runs exactly as it is, with the test overrides of its header:
 #   VELEXIS_ROOT   a temporary folder laid out like a provisioned VM: /etc/velexis/*.env made from the deploy/env

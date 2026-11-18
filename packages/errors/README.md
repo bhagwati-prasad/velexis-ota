@@ -120,6 +120,6 @@ The tests read both `openapi/` folders, so `turbo.json` gives this package's `te
 | `@velexis/api-types` | `workspace:*` | dependency | The envelope types (`ErrorResponse`, `Error`, `FieldError`, `SupplierIssue`); type imports only, nothing at run time |
 | `yaml` | 2.9.1 | dev | The generator parses the documents; the tests read them |
 | `ajv`, `ajv-formats` | 8.20.0, 3.0.1 | dev | The tests validate envelopes against the `ErrorResponse` schema, as the backends' response checks will ([`tech-stack.md`](../../docs/mvp/tech-stack.md) §2) |
-| `typescript`, `@types/node`, `vitest` | 5.6.3, 22.20.5, 3.2.7 | dev | Typecheck, build and tests, as in the other packages. The tests also use the TypeScript compiler API. |
+| `typescript`, `@types/node`, `vitest` | 5.6.3, 24.19.2, 4.1.12 | dev | Typecheck, build and tests, as in the other packages. The tests also use the TypeScript compiler API. |
 
 `dist/` has no runtime dependency: the catalogue is plain data, and the types of `@velexis/api-types` are erased.

@@ -4,7 +4,7 @@
 // passwords are checked against (PBE-073; ADR-0008 "Passwords", the note of 2026-11-11 for lead decision (17b);
 // src/auth/password-policy.ts).
 //
-// Usage (plain Node 22, no dependencies; any working directory):
+// Usage (plain Node of the `.nvmrc` major, no dependencies; any working directory):
 //   node platform/backend/scripts/breached-passwords.mjs --check               check the committed list (offline)
 //   node platform/backend/scripts/breached-passwords.mjs --source <file>       write the list from the pinned source
 // Option: --list <file>, the list to check or write (default: the platform backend's src/auth/breached-passwords.txt).

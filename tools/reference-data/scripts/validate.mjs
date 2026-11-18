@@ -2,7 +2,7 @@
 // @ts-check
 // validate.mjs: offline checks of the vendored reference datasets of @velexis/reference-data (task X-017, ADR-0024).
 //
-// Usage (plain Node 22, no dependencies, no network):
+// Usage (plain Node of the `.nvmrc` major, no dependencies, no network):
 //   node tools/reference-data/scripts/validate.mjs [--data <dir>] [--no-min-rows]
 //   (default <dir>: tools/reference-data/data; fetch.mjs runs the same checks before it writes a snapshot and with --check)
 //

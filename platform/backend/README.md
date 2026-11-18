@@ -8,7 +8,7 @@ Related: [`../docs/api-inventory.md`](../docs/api-inventory.md) (endpoints), [`.
 
 | Item | Value |
 |---|---|
-| Runtime | Node.js 22, TypeScript 5.6 strict, CommonJS output |
+| Runtime | Node.js 24 (the `.nvmrc` major), TypeScript 5.6 strict, CommonJS output |
 | Framework | NestJS 11 (Express 5), `nestjs-pino`, `nestjs-cls`, `@nestjs/bullmq`, `@nestjs/throttler` |
 | Data | PostgreSQL 16 schemas `platform` and `reference` through `@velexis/db` (Kysely), role `velexis_platform_app` |
 | Processes | API `dist/main.js` on `127.0.0.1:3100`; worker `dist/worker.js` with health on `127.0.0.1:3101`; CLI `dist/cli.js` |
@@ -552,7 +552,7 @@ Run from the repository root (`pnpm --filter @velexis/platform-backend <script>`
 
 ## 6. Local development
 
-1. Install Node 22, pnpm 9, PostgreSQL 16, Redis 7, Mailpit and the Stripe CLI natively; run `deploy/scripts/dev-setup.sh` (roles and database) and `pnpm install`.
+1. Install Node 24 (`nvm install` in the repository root reads `.nvmrc`), pnpm 9, PostgreSQL 16, Redis 7, Mailpit and the Stripe CLI natively; run `deploy/scripts/dev-setup.sh` (roles and database) and `pnpm install`.
 2. `pnpm dev:keys`, copy `.env.example` to `.env.local`, then `pnpm db:migrate` and `pnpm db:seed:reference` (the same as `ref:load`).
 3. Start the Amadeus stub (`pnpm stub:amadeus`), then run `pnpm --filter @velexis/platform-backend dev:seed` once (keep the printed password and TOTP URI: they are shown once).
 4. Start the OTA worker when working on provisioning; `pnpm --filter @velexis/platform-backend dev`.

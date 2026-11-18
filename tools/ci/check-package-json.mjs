@@ -15,7 +15,7 @@
 // It also fails when it cannot read what it checks (a pnpm-workspace.yaml without a block list of packages, a
 // package.json that is not JSON, a `uses:` in a flow mapping), so it never passes by checking nothing.
 //
-// Plain Node 22 without dependencies, so CI runs it before `pnpm install`. See tools/ci/README.md.
+// Plain Node (the `.nvmrc` major) without dependencies, so CI runs it before `pnpm install`. See tools/ci/README.md.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";

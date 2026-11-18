@@ -8,7 +8,7 @@ Related: [`../docs/scope.md`](../docs/scope.md), [`../docs/api-changes.md`](../d
 
 | Item | Value |
 |---|---|
-| Runtime | Node.js 22, TypeScript 5.6 strict, CommonJS output |
+| Runtime | Node.js 24 (the `.nvmrc` major), TypeScript 5.6 strict, CommonJS output |
 | Framework | NestJS 11 (Express 5), `nestjs-pino`, `nestjs-cls`, `@nestjs/bullmq`, `@nestjs/throttler`, `helmet`, `cookie-parser` |
 | Data | Tenant schemas `tenant_<key>` (DML, role `velexis_ota_app`), `reference` (read), selected `platform` tables (read-only, cached), through `@velexis/db` (Kysely) |
 | Processes | API `dist/main.js` on `127.0.0.1:4000`; worker `dist/worker.js` with health on `127.0.0.1:4001`; CLI `dist/cli.js` |

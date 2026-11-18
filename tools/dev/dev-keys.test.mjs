@@ -1,4 +1,4 @@
-// Tests of dev-keys.mjs with the Node 22 test runner (no dependencies): node --test tools/dev/dev-keys.test.mjs
+// Tests of dev-keys.mjs with Node's own test runner (no dependencies): node --test tools/dev/dev-keys.test.mjs
 // Each test runs the script as a child process against its own temporary --root.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";

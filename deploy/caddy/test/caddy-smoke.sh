@@ -8,9 +8,9 @@
 #
 # Needs no root and no network beyond loopback: the Velexis Caddy build (CADDY, else /tmp/caddy-build/caddy as
 # build-caddy.sh writes it in the command above, else `caddy` on PATH; it must be Caddy 2.8.4 with the module
-# http.handlers.waf), Node 22 (SMOKE_NODE, else `node`), curl, openssl and awk. The app ports 3000, 3001, 3002, 3100 and
-# 4000 (echo upstream), 8080 and 8443 (Caddy) must be free on 127.0.0.1, and nothing may listen on 2019. CI runs it in
-# the "deploy-files" job of .github/workflows/ci.yml. How to read a failure: deploy/caddy/test/README.md.
+# http.handlers.waf), any `node` (SMOKE_NODE, else `node`), curl, openssl and awk. The app ports 3000, 3001, 3002, 3100
+# and 4000 (echo upstream), 8080 and 8443 (Caddy) must be free on 127.0.0.1, and nothing may listen on 2019. CI runs it
+# in the "deploy-files" job of .github/workflows/ci.yml. How to read a failure: deploy/caddy/test/README.md.
 #
 # The test copy of the Caddyfile differs from the production file only in its global options block: the admin
 # socket moves to the temporary folder, and `local_certs`, `skip_install_trust`, `default_bind 127.0.0.1`,
