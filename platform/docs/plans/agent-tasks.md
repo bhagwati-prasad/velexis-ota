@@ -2324,8 +2324,8 @@ M5 work is merged behind the `FEATURE_*` switches (PADR-0015). The switches are 
   - The launch checklist's §5 item "Terms of service and privacy notice" points at PFE-031 (since FIX-W54-DOCS) and its evidence names the new `termsVersion`.
 - **Verify:** `pnpm --filter @velexis/platform-frontend exec vitest run "src/app/(marketing)/pricing/pricing.test.tsx" "src/app/(auth)/sign-up/sign-up-form.test.tsx" && ! grep -niE '"Placeholder|placeholder text' platform/frontend/src/lib/strings.ts && pnpm test:e2e -- --project=portal specs/portal-a11y.e2e.ts`
 
-### PBE-076 · Measure the platform API and worker on Node.js 24 against Node 22 and the VM budget
-- **Status:** todo
+### PBE-076 · Measure the platform API and worker on Node.js 24 against Node 22 and the VM budget ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** platform-backend
 - **Milestone:** M6
 - **Depends on:** X-048, PBE-063
