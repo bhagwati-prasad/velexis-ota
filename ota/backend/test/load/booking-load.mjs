@@ -48,7 +48,9 @@
 //      (`pg_stat_activity`, by application), Redis's memory, clients and keys, the worker's `/health/ready` queues
 //      (waiting jobs, the oldest wait, failures in the last hour) and the 1-minute load average;
 //   7. the report: p50/p95/p99 per operation, the journeys, the Amadeus calls, the e-mails, the API's and the worker's
-//      CPU and RSS against their `MemoryMax` (768 and 512 MiB), the connections against the pools and
+//      CPU, their RSS against the `MemoryMax` of their units (read from the unit files with X-050's parseUnitMemoryMax,
+//      768 and 512 MiB; a unit that cannot be read stops the run) with the headroom under it, and the time each spent
+//      in garbage collection (OBE-103: per process, per minute and per window), the connections against the pools and
 //      `max_connections`, Redis's memory against the VM's `maxmemory` (512 MiB) and `MEMORY USAGE` of the run's keys
 //      by kind and of its jobs by name at the end (what one completed job holds), what the completed jobs hold at the
 //      run's rate, each queue's for the retention its jobs carry (OBE-101), the queue latency per queue and per
@@ -77,6 +79,7 @@ import { parseArgs } from "node:util";
 
 import { unitNodeOptions } from "../../../../tools/perf/unit-node-options.mjs";
 import {
+  API_UNIT,
   apiEnv,
   ask,
   BACKEND_DIR,
@@ -88,11 +91,15 @@ import {
   commitOf,
   err,
   freePort,
+  GC_SHARE_BOUND_PERCENT,
+  gcFiguresOf,
+  gcText,
   interruption,
   isoDay,
   LOG_TAIL_LINES,
   loadAverage,
   loadPackages,
+  MEMORY_HEADROOM_BYTES,
   mib,
   out,
   pauseFor,
@@ -112,6 +119,7 @@ import {
   tail,
   TENANT_KEYS,
   throwIfInterrupted,
+  unitMemoryMax,
   UsageError,
   visitorAddress,
   writeKeyFiles,
@@ -131,8 +139,9 @@ const WORKER_POOL = "ota-worker";
 const POOL_MAX = Object.freeze({ "ota-api": 20, "ota-worker": 10 });
 /** The OTA worker's systemd unit: the worker starts with the flags of its NODE_OPTIONS, read from the file (X-050). */
 const WORKER_UNIT = join(REPO_ROOT, "deploy", "systemd", "velexis-ota-worker.service");
-/** `MemoryMax` of the units (deploy/systemd), in bytes: docs/mvp/architecture.md §3. */
-const MEMORY_MAX = Object.freeze({ api: 768 * 1_048_576, worker: 512 * 1_048_576 });
+// The units' `MemoryMax` (docs/mvp/architecture.md §3) is read from the unit files at the start of a run
+// (`unitMemoryMax` of search-load.mjs, X-050's parseUnitMemoryMax; lead decision (27g) of 2026-11-17): a unit that
+// cannot be read or sets no limit stops the run before its set-up.
 /** The VM's PostgreSQL `max_connections` and Redis `maxmemory` (docs/mvp/deployment-single-vm.md §5). */
 const VM_MAX_CONNECTIONS = 100;
 const VM_REDIS_MAXMEMORY = 512 * 1_048_576;
@@ -1386,7 +1395,7 @@ const most = (samples, pick) => {
 };
 
 /** The timeline (header step 7): one row per --window-minutes of the measured phase. */
-function timelineOf(options, records, outcomes, samples, jobs, phaseMs) {
+function timelineOf(options, records, outcomes, samples, jobs, phaseMs, gc) {
   const windowMs = options.windowMinutes * 60_000;
   const windows = Math.max(1, Math.ceil(phaseMs / windowMs));
   const rows = [];
@@ -1398,6 +1407,20 @@ function timelineOf(options, records, outcomes, samples, jobs, phaseMs) {
     const samplesIn = samples.filter((s) => inWindow(s.at));
     const p95 = (operation) => summarize(okTimes(recordsIn, operation)).p95;
     const loads = samplesIn.map((s) => s.load1);
+    // The share of the window a process spent in garbage collection, from its preload's sums per minute (they count
+    // from the reset at the phase's start): the window's whole minutes of the phase, over their length. The minute
+    // that holds the phase's end also holds the collections after it, up to the report, and the minutes after it
+    // only those, so none of them counts: a last window without a whole minute of the phase (the seconds of the
+    // journeys still in flight after the last full window) gets none.
+    const gcShareOf = (figures) => {
+      const first = index * options.windowMinutes;
+      const minutes = Math.min(options.windowMinutes, Math.floor(phaseMs / 60_000) - first);
+      if (figures === undefined || minutes <= 0) {
+        return undefined;
+      }
+      const ms = figures.perMinuteMs.slice(first, first + minutes).reduce((total, value) => total + value, 0);
+      return round1((ms / (minutes * 60_000)) * 100);
+    };
     const waitsOf = (queue) =>
       jobs.starts
         .filter(([q, , at, wait]) => q === queue && wait !== null && inWindow(at - jobs.startedAtEpoch))
@@ -1415,6 +1438,8 @@ function timelineOf(options, records, outcomes, samples, jobs, phaseMs) {
       workerRssMiB: mib(most(samplesIn, (s) => s.workerRssBytes)),
       connections: most(samplesIn, (s) => s.connections?.total),
       redisMiB: mib(most(samplesIn, (s) => s.redisUsedBytes)),
+      apiGcPercent: gcShareOf(gc.api),
+      workerGcPercent: gcShareOf(gc.worker),
       maxWaitMs: Object.fromEntries(
         ["ota-ticketing", "ota-bookings", "ota-notifications", "ota-documents", "ota-maintenance"].map(
           (q) => [q, round1(most(waitsOf(q), (value) => value))],
@@ -1532,9 +1557,13 @@ function figuresOf(input) {
       memoryMaxMiB: mib(budget),
       peakShareOfMemoryMax: round1((peak / budget) * 100),
       within: peak <= budget,
+      // The headroom under the unit's MemoryMax at the peak: ADR-0029's measurement keeps at least 64 MiB (OBE-103).
+      headroomMiB: mib(budget - peak),
+      headroomWithinBound: budget - peak >= MEMORY_HEADROOM_BYTES,
       poolWaitMs: rounded(summarize(end.poolWaitsMs)),
       poolMaxWaiting: end.maxWaiting,
       eventLoopDelayMs: rounded(end.eventLoopDelayMs),
+      gc: gcFiguresOf(end.gc, cpuMs),
     };
   };
   const jobs = jobFigures(workerEnd.jobs ?? { starts: [], ends: [] }, options);
@@ -1575,11 +1604,11 @@ function figuresOf(input) {
     }
   }
   const loads = samples.map((s) => s.load1);
-  const api = processFigures(apiStart, apiEnd, MEMORY_MAX.api, "apiRssBytes", "apiHeapBytes");
+  const api = processFigures(apiStart, apiEnd, input.memoryMax.api, "apiRssBytes", "apiHeapBytes");
   const worker = processFigures(
     workerStart,
     workerEnd,
-    MEMORY_MAX.worker,
+    input.memoryMax.worker,
     "workerRssBytes",
     "workerHeapBytes",
   );
@@ -1690,11 +1719,16 @@ function figuresOf(input) {
       samples,
       workerEnd.jobs ?? { starts: [], ends: [] },
       phaseMs,
+      { api: api.gc, worker: worker.gc },
     ),
     verdict: {
       apiWithinMemoryMax: api.within,
       workerWithinMemoryMax: worker.within,
       bookingCriticalQueuesWithinBudget: Object.values(jobs.critical).every((q) => q.within),
+      // ADR-0029's measurement (OBE-103 step 4), reported and not part of the exit code: at least 64 MiB under each
+      // MemoryMax at the peak, and at most 5 % of the phase in garbage collection.
+      headroomWithinBound: api.headroomWithinBound && worker.headroomWithinBound,
+      gcWithinBound: api.gc?.within === true && worker.gc?.within === true,
     },
     unexpected,
   };
@@ -1785,9 +1819,11 @@ function report(run, figures) {
     add(
       `\n${name}: CPU ${p.cpuSeconds} s (${p.cpuShareOfOneCore} % of one core); RSS ${p.rssPhaseStartMiB} MiB at the ` +
         `start of the phase (after the warm-up), ${p.rssPeakMiB} MiB peak (${p.peakShareOfMemoryMax} % of MemoryMax ${p.memoryMaxMiB} MiB: ` +
-        `${p.within ? "within" : "OVER"}), ${p.rssEndMiB} MiB at the end, heap used peak ${p.heapUsedPeakMiB} MiB; ` +
+        `${p.within ? "within" : "OVER"}; ${p.headroomMiB} MiB under it, ${MEMORY_HEADROOM_BYTES / 1_048_576} MiB bound: ` +
+        `${p.headroomWithinBound ? "within" : "OVER"}), ${p.rssEndMiB} MiB at the end, heap used peak ${p.heapUsedPeakMiB} MiB; ` +
         `pool wait p95 ${p.poolWaitMs.p95 ?? "-"} ms, max ${p.poolWaitMs.max ?? "-"} ms, at most ${p.poolMaxWaiting} ` +
-        `waiting; event-loop delay p99 ${p.eventLoopDelayMs.p99} ms, max ${p.eventLoopDelayMs.max} ms\n`,
+        `waiting; event-loop delay p99 ${p.eventLoopDelayMs.p99} ms, max ${p.eventLoopDelayMs.max} ms\n` +
+        `  ${gcText(p.gc)}\n`,
     );
   }
   const pg = figures.postgres;
@@ -1881,13 +1917,15 @@ function report(run, figures) {
   );
   add(
     `  ${"minutes".padEnd(9)}${pad("jrn", 5)}${pad("bkg", 5)}${pad("search", 8)}${pad("price", 7)}${pad("compl", 7)}` +
-      `${pad("con.lst", 8)}${pad("API MiB", 8)}${pad("wrk MiB", 8)}${pad("pg", 4)}${pad("redis", 7)}${pad("tkt", 7)}` +
+      `${pad("con.lst", 8)}${pad("API MiB", 8)}${pad("wrk MiB", 8)}${pad("API gc%", 8)}${pad("wrk gc%", 8)}` +
+      `${pad("pg", 4)}${pad("redis", 7)}${pad("tkt", 7)}` +
       `${pad("bkgq", 7)}${pad("notif", 7)}${pad("docs", 7)}${pad("maint", 7)}${pad("load", 11)}\n`,
   );
   for (const w of figures.timeline) {
     add(
       `  ${w.minutes.padEnd(9)}${pad(w.journeys, 5)}${pad(w.bookings, 5)}${pad(w.searchP95, 8)}${pad(w.priceP95, 7)}` +
         `${pad(w.completionP95, 7)}${pad(w.consoleListP95, 8)}${pad(w.apiRssMiB, 8)}${pad(w.workerRssMiB, 8)}` +
+        `${pad(w.apiGcPercent, 8)}${pad(w.workerGcPercent, 8)}` +
         `${pad(w.connections, 4)}${pad(w.redisMiB, 7)}${pad(w.maxWaitMs["ota-ticketing"], 7)}` +
         `${pad(w.maxWaitMs["ota-bookings"], 7)}${pad(w.maxWaitMs["ota-notifications"], 7)}` +
         `${pad(w.maxWaitMs["ota-documents"], 7)}${pad(w.maxWaitMs["ota-maintenance"], 7)}` +
@@ -1906,6 +1944,14 @@ function report(run, figures) {
     `\nVerdict: API RSS ${v.apiWithinMemoryMax ? "within" : "OVER"} its MemoryMax, worker RSS ` +
       `${v.workerWithinMemoryMax ? "within" : "OVER"} its MemoryMax; ${critical}: ` +
       `${v.bookingCriticalQueuesWithinBudget ? "within" : "OVER"} the budget of ${figures.queues.budgetMs / 1000} s\n`,
+  );
+  add(
+    `ADR-0029's measurement (OBE-103; reported, not part of the exit code): headroom under MemoryMax at the peak ` +
+      `API ${figures.api.headroomMiB} MiB, worker ${figures.worker.headroomMiB} MiB ` +
+      `(${MEMORY_HEADROOM_BYTES / 1_048_576} MiB bound: ${v.headroomWithinBound ? "within" : "OVER"}); ` +
+      `garbage collection API ${figures.api.gc?.shareOfPhasePercent ?? "-"} %, worker ` +
+      `${figures.worker.gc?.shareOfPhasePercent ?? "-"} % of the phase (${GC_SHARE_BOUND_PERCENT} % bound: ` +
+      `${v.gcWithinBound ? "within" : "OVER"})\n`,
   );
   if (figures.unexpected.length > 0) {
     add(`Unexpected: ${figures.unexpected.join("; ")}\n`);
@@ -2069,6 +2115,7 @@ async function run(options) {
   process.on("SIGTERM", onSignal);
 
   try {
+    const memoryMax = { api: unitMemoryMax(API_UNIT), worker: unitMemoryMax(WORKER_UNIT) };
     const keys = writeKeyFiles(runDir);
     const runId = `load_${Date.now().toString(36)}_${randomBytes(3).toString("hex")}`;
     const database = await packages.testing.createTemplateDatabase({
@@ -2303,6 +2350,7 @@ async function run(options) {
       redisEnd,
       redisKinds,
       maxConnections,
+      memoryMax,
       skipped,
       unfinished,
       maxStartLateMs,

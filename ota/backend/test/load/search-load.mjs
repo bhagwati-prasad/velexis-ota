@@ -31,8 +31,9 @@
 //      X-050; --app-env test turns on the development checks such as the search_path leak guard), with random key
 //      files, edge secret and service key of its own, Redis database --redis-db, and a preload (written into the
 //      run's temporary folder) that measures without changing anything: the INSERT and UPDATE statements of the
-//      shopping tables, the waits for a connection of the API's pool, the RSS, the event-loop delay and the API
-//      process's CPU time;
+//      shopping tables, the waits for a connection of the API's pool, the RSS, the event-loop delay, the API
+//      process's CPU time and the time it spends in garbage collection (OBE-103: Node's `gc` entries, summed per
+//      minute);
 //   4. --warmup journeys per visitor at the measured concurrency and at every tenant (not counted, so the API's pool
 //      has its connections and the code is compiled; then a pause for the buckets to refill), then --visitors concurrent visitors run
 //      --searches journeys in all. A journey is one storefront visitor with an address of their own (X-Forwarded-For in 198.18.0.0/15, the
@@ -46,8 +47,10 @@
 //   5. the report: latency per operation (2xx answers), `flights.search` without the stub delay and without the whole
 //      Amadeus call (the search row's `duration_ms`), the 429 answers, the Amadeus calls per second the proxy let
 //      through and the offers the searches asked for and got, the statement times, rows and table sizes, the API's
-//      CPU time per completed journey, RSS, pool waits and event-loop delay, and the run (date, commit, CPUs, load
-//      average before and after). --json <file> writes the same figures as JSON.
+//      CPU time per completed journey, RSS (its peak against the MemoryMax of velexis-ota-api.service, read from the
+//      unit file, and the headroom under it), pool waits, event-loop delay and garbage collection (its share of the
+//      phase, of the API's CPU time and of the worst minute), and the run (date, commit, Node, `nproc`, load average
+//      before and after). --json <file> writes the same figures as JSON.
 // Everything is removed at the end, also after Ctrl-C or a SIGTERM (to the process group or to this process alone):
 // both processes, the database, the Redis database's keys and the temporary folder.
 //
@@ -82,7 +85,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs, parseEnv } from "node:util";
 
-import { unitNodeOptions } from "../../../../tools/perf/unit-node-options.mjs";
+import { parseUnitMemoryMax, unitNodeOptions } from "../../../../tools/perf/unit-node-options.mjs";
 
 const SCRIPT = fileURLToPath(import.meta.url);
 /** ota/backend (this file is ota/backend/test/load/search-load.mjs). */
@@ -320,6 +323,7 @@ export function summarize(values) {
 }
 
 export const round1 = (value) => (value === undefined ? undefined : Math.round(value * 10) / 10);
+export const round2 = (value) => (value === undefined ? undefined : Math.round(value * 100) / 100);
 export const mib = (bytes) => (bytes === undefined ? undefined : Math.round((bytes / 1_048_576) * 10) / 10);
 
 /** A summary with every figure rounded to 0.1. */
@@ -727,15 +731,17 @@ export async function startAmadeus(
  * first attempt (`processedOn`; the delay is the larger of the job's `delay` and the one of its options, which BullMQ
  * keeps when it moves a due job to the wait list), and when an attempt ends (`completed`, `failed`) how long it ran; a retry's wait is
  * not counted (its backoff is not in the job), only that it was one. It samples the RSS and the event-loop delay, reads
- * the process's CPU time since the last `reset` (`process.cpuUsage`, user and system), and answers the load test's
- * `stats`, `sample` and `reset` messages on the IPC channel. Durations, counts, sizes and job names only: never a
- * statement's parameters, a row, a job's data or a connection string.
+ * the process's CPU time since the last `reset` (`process.cpuUsage`, user and system), sums the time the process spent
+ * in garbage collection per minute since the last `reset` (OBE-103: a `PerformanceObserver` on Node's `gc` entries,
+ * each the main-thread pause of one collection, from V8's GC prologue to its epilogue; with their count and time by
+ * kind), and answers the load test's `stats`, `sample` and `reset` messages on the IPC channel. Durations, counts,
+ * sizes and job names only: never a statement's parameters, a row, a job's data or a connection string.
  */
 const PRELOAD_SOURCE = `"use strict";
 // Written by ota/backend/test/load/search-load.mjs (or booking-load.mjs) into the run's temporary folder and preloaded
 // into the API or worker process with node --require. It measures and changes nothing: see PRELOAD_SOURCE in
 // search-load.mjs.
-const { monitorEventLoopDelay, performance } = require("node:perf_hooks");
+const { PerformanceObserver, constants: perfConstants, monitorEventLoopDelay, performance } = require("node:perf_hooks");
 const pg = require(__PG__);
 const TABLES = new Set(__TABLES__);
 const POOL = __POOL__;
@@ -753,6 +759,47 @@ loopDelay.enable();
 setInterval(() => {
   peakRss = Math.max(peakRss, process.memoryUsage.rss());
 }, 200).unref();
+
+// Garbage collection (OBE-103): every collection's main-thread pause (a "gc" entry's duration), summed per minute
+// since the last reset (\`gcSince\`), and counted and summed by kind. The work of V8's helper threads (concurrent
+// marking and sweeping) is not in it, only the time the event loop stood still for a collection.
+const GC_KINDS = new Map([
+  [perfConstants.NODE_PERFORMANCE_GC_MINOR, "minor"],
+  [perfConstants.NODE_PERFORMANCE_GC_MAJOR, "major"],
+  [perfConstants.NODE_PERFORMANCE_GC_INCREMENTAL, "incremental"],
+  [perfConstants.NODE_PERFORMANCE_GC_WEAKCB, "weakcb"],
+]);
+const GC_MINUTE_MS = 60000;
+let gcSince = performance.now();
+let gcPerMinute = [];
+let gcByKind = {};
+new PerformanceObserver((list) => {
+  for (const entry of list.getEntries()) {
+    // An entry is delivered after its collection: one that started before the last reset is not counted.
+    const minute = Math.floor((entry.startTime - gcSince) / GC_MINUTE_MS);
+    if (minute < 0) {
+      continue;
+    }
+    gcPerMinute[minute] = (gcPerMinute[minute] || 0) + entry.duration;
+    const kind = GC_KINDS.get(entry.detail && entry.detail.kind) || "other";
+    const byKind = gcByKind[kind] || (gcByKind[kind] = { count: 0, ms: 0 });
+    byKind.count += 1;
+    byKind.ms += entry.duration;
+  }
+}).observe({ entryTypes: ["gc"] });
+
+function gcFigures() {
+  const elapsedMs = performance.now() - gcSince;
+  const minutes = Math.max(1, Math.ceil(elapsedMs / GC_MINUTE_MS), gcPerMinute.length);
+  const kinds = Object.values(gcByKind);
+  return {
+    elapsedMs,
+    ms: kinds.reduce((total, kind) => total + kind.ms, 0),
+    count: kinds.reduce((total, kind) => total + kind.count, 0),
+    byKind: gcByKind,
+    perMinuteMs: Array.from({ length: minutes }, (_, minute) => gcPerMinute[minute] || 0),
+  };
+}
 
 function record(key, ms, rows) {
   let entry = statements.get(key);
@@ -850,6 +897,7 @@ function snapshot() {
     poolWaitsMs: poolWaits,
     maxWaiting,
     jobs: BULLMQ === null ? undefined : { starts: jobStarts, ends: jobEnds },
+    gc: gcFigures(),
     rssBytes: memory.rss,
     peakRssBytes: peakRss,
     maxRssBytes: process.resourceUsage().maxRSS * 1024,
@@ -876,6 +924,9 @@ if (typeof process.send === "function") {
       jobEnds = [];
       peakRss = process.memoryUsage.rss();
       cpuSince = process.cpuUsage();
+      gcSince = performance.now();
+      gcPerMinute = [];
+      gcByKind = {};
       loopDelay.reset();
       process.send({ id: message.id, body: null });
     } else if (message.type === "stats") {
@@ -996,6 +1047,88 @@ export async function startService(run, { name, entry, nodeOptions, env, pool, b
  * (ota/docs/performance.md §4) and ADR-0029 item 5.
  */
 export const API_UNIT = join(REPO_ROOT, "deploy", "systemd", "velexis-ota-api.service");
+
+/**
+ * `MemoryMax=` of a systemd unit file in bytes, read with X-050's parseUnitMemoryMax (lead decision (27g) of
+ * 2026-11-17), so the reports measure the RSS against the VM's own limit instead of a copy. Throws, naming the file,
+ * when the unit cannot be read or sets no limit (none, or `infinity`): a run never measures against a guess.
+ */
+export function unitMemoryMax(path) {
+  let text;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    throw new Error(
+      `cannot read the systemd unit ${path}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  const bytes = parseUnitMemoryMax(text, path);
+  if (bytes === null) {
+    throw new Error(
+      `${path}: the unit sets no MemoryMax in [Service] (or infinity), so the run has no limit to measure`,
+    );
+  }
+  return bytes;
+}
+
+/** The headroom a process must keep under its unit's `MemoryMax` at its peak RSS (ADR-0029, OBE-103 step 4). */
+export const MEMORY_HEADROOM_BYTES = 64 * 1_048_576;
+/** The share of its time a process may spend in garbage collection (ADR-0029, OBE-103 step 4). */
+export const GC_SHARE_BOUND_PERCENT = 5;
+/** A last, partial minute of the preload's garbage-collection sums counts for the worst minute from this long on. */
+const GC_PARTIAL_MINUTE_MS = 30_000;
+
+/**
+ * The garbage collection of a process over the measured phase (OBE-103), from the `gc` figures of its preload:
+ * `elapsedMs` since the reset at the phase's start (to the snapshot: right after the phase here, up to a minute
+ * after it in booking-load.mjs, once its fixtures' last pause has ended), `ms` and `count` of the collections'
+ * main-thread pauses, `byKind` and `perMinuteMs`. Gives the pauses as a share of that wall time
+ * (`shareOfPhasePercent`, the share ADR-0029's measurement bounds at 5 %) and of the process's CPU time over it
+ * (`cpuMs`; it includes V8's helper threads), the worst minute's share (a last, partial minute only once it is 30 s
+ * long, or when it is the only one), and the collections by kind. `undefined` without figures.
+ */
+export function gcFiguresOf(gc, cpuMs) {
+  if (gc === undefined || gc === null || !(gc.elapsedMs > 0)) {
+    return undefined;
+  }
+  const minuteShares = gc.perMinuteMs
+    .map((ms, minute) => {
+      const length = Math.min(60_000, gc.elapsedMs - minute * 60_000);
+      const counted = length >= GC_PARTIAL_MINUTE_MS || gc.perMinuteMs.length === 1;
+      return counted && length > 0 ? (ms / length) * 100 : undefined;
+    })
+    .filter((share) => share !== undefined);
+  const shareOfPhasePercent = round2((gc.ms / gc.elapsedMs) * 100);
+  return {
+    ms: Math.round(gc.ms),
+    collections: gc.count,
+    shareOfPhasePercent,
+    shareOfCpuPercent: cpuMs > 0 ? round2((gc.ms / cpuMs) * 100) : undefined,
+    worstMinutePercent: minuteShares.length === 0 ? undefined : round2(Math.max(...minuteShares)),
+    within: shareOfPhasePercent <= GC_SHARE_BOUND_PERCENT,
+    byKind: Object.fromEntries(
+      Object.entries(gc.byKind)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([kind, k]) => [kind, { count: k.count, ms: Math.round(k.ms) }]),
+    ),
+    perMinuteMs: gc.perMinuteMs.map((ms) => Math.round(ms)),
+  };
+}
+
+/** One line of a report on a process's garbage collection (gcFiguresOf). */
+export function gcText(gc) {
+  if (gc === undefined) {
+    return "garbage collection not measured";
+  }
+  const kinds = Object.entries(gc.byKind)
+    .map(([kind, k]) => `${kind} ${k.count} (${k.ms} ms)`)
+    .join(", ");
+  return (
+    `garbage collection ${gc.ms} ms in ${gc.collections} collections (${kinds || "none"}): ` +
+    `${gc.shareOfPhasePercent} % of the phase (worst minute ${gc.worstMinutePercent ?? "-"} %; ` +
+    `${GC_SHARE_BOUND_PERCENT} % bound: ${gc.within ? "within" : "OVER"}), ${gc.shareOfCpuPercent ?? "-"} % of its CPU time`
+  );
+}
 
 /** Starts the built API with the preload; resolves once GET /health/ready answers 200. */
 export async function startApi(options, run) {
@@ -1414,7 +1547,18 @@ async function runVisitors(context, tenants, { visitors, journeys, warmup }) {
 }
 
 /** The figures of a run, from what the visitors, the proxy, the API and the database saw. */
-function figuresOf({ options, tenants, phaseMs, context, visits, amadeus, apiStart, apiEnd, database }) {
+function figuresOf({
+  options,
+  tenants,
+  phaseMs,
+  context,
+  visits,
+  amadeus,
+  apiStart,
+  apiEnd,
+  apiMemoryMaxBytes,
+  database,
+}) {
   const { records, outcomes } = visits;
   const ok = (operation) =>
     records.filter((r) => r.operation === operation && r.status >= 200 && r.status < 300).map((r) => r.ms);
@@ -1489,6 +1633,7 @@ function figuresOf({ options, tenants, phaseMs, context, visits, amadeus, apiSta
     ]),
   );
   const p95 = latency["flights.search without the stub delay"].p95;
+  const peakRss = Math.max(apiEnd.peakRssBytes, apiEnd.maxRssBytes);
   return {
     load: {
       visitors: options.visitors,
@@ -1518,12 +1663,19 @@ function figuresOf({ options, tenants, phaseMs, context, visits, amadeus, apiSta
       cpuSystemSeconds: round1(apiEnd.cpuMs.system / 1000),
       cpuMsPerCompletedJourney: completedJourneys === 0 ? undefined : round1(cpuMs / completedJourneys),
       rssAfterStartMiB: mib(apiStart.rssBytes),
-      rssPeakMiB: mib(Math.max(apiEnd.peakRssBytes, apiEnd.maxRssBytes)),
+      rssPeakMiB: mib(peakRss),
       rssEndMiB: mib(apiEnd.rssBytes),
+      // The peak against the unit's MemoryMax, read from deploy/systemd (unitMemoryMax), and the headroom left under
+      // it: ADR-0029's measurement keeps at least 64 MiB (OBE-103).
+      memoryMaxMiB: mib(apiMemoryMaxBytes),
+      peakShareOfMemoryMax: round1((peakRss / apiMemoryMaxBytes) * 100),
+      headroomMiB: mib(apiMemoryMaxBytes - peakRss),
+      headroomWithinBound: apiMemoryMaxBytes - peakRss >= MEMORY_HEADROOM_BYTES,
       heapUsedEndMiB: mib(apiEnd.heapUsedBytes),
       poolWaitMs: rounded(summarize(apiEnd.poolWaitsMs)),
       poolMaxWaiting: apiEnd.maxWaiting,
       eventLoopDelayMs: rounded(apiEnd.eventLoopDelayMs),
+      gc: gcFiguresOf(apiEnd.gc, cpuMs),
     },
     database: { searches: { stored: storedSearches.length, completed: completedSearches }, tables },
     budget: {
@@ -1551,7 +1703,8 @@ function report(run, figures) {
     `  run       ${run.date}, commit ${run.commit}, Node ${run.node}, PostgreSQL ${run.postgres}, Redis ${run.redis}\n`,
   );
   add(
-    `  machine   ${run.machine.cpus} CPUs (${run.machine.cpuModel}), ${run.machine.memoryGiB} GiB, ${run.machine.os}\n`,
+    `  machine   nproc ${run.machine.nproc}, ${run.machine.cpus} CPUs (${run.machine.cpuModel}), ` +
+      `${run.machine.memoryGiB} GiB, ${run.machine.os}\n`,
   );
   add(
     `  load avg  ${run.loadAverage.start.join(" ")} at the start, ${run.loadAverage.end.join(" ")} at the end\n`,
@@ -1604,11 +1757,14 @@ function report(run, figures) {
   add(
     `\nAPI process: CPU ${api.cpuSeconds} s over the phase (user ${api.cpuUserSeconds} s, system ` +
       `${api.cpuSystemSeconds} s), ${api.cpuMsPerCompletedJourney ?? "-"} ms per completed journey; ` +
-      `RSS ${api.rssAfterStartMiB} MiB after start, ${api.rssPeakMiB} MiB peak, ${api.rssEndMiB} MiB at ` +
+      `RSS ${api.rssAfterStartMiB} MiB after start, ${api.rssPeakMiB} MiB peak (${api.peakShareOfMemoryMax} % of ` +
+      `MemoryMax ${api.memoryMaxMiB} MiB, ${api.headroomMiB} MiB under it; ${MEMORY_HEADROOM_BYTES / 1_048_576} MiB ` +
+      `bound: ${api.headroomWithinBound ? "within" : "OVER"}), ${api.rssEndMiB} MiB at ` +
       `the end (heap used ${api.heapUsedEndMiB} MiB); pool wait p95 ${api.poolWaitMs.p95 ?? "-"} ms, max ` +
       `${api.poolWaitMs.max ?? "-"} ms, at most ${api.poolMaxWaiting} waiting; event-loop delay p50 ` +
       `${api.eventLoopDelayMs.p50} ms, p99 ${api.eventLoopDelayMs.p99} ms, max ${api.eventLoopDelayMs.max} ms\n`,
   );
+  add(`  ${gcText(api.gc)}\n`);
   const { stored, completed } = figures.database.searches;
   add(`\nTables after the run (all tenants; ${stored} searches stored, ${completed} completed)\n`);
   add(
@@ -1649,6 +1805,7 @@ async function run(options) {
     commit: commitOf(),
     node: process.version,
     machine: {
+      nproc: os.availableParallelism(),
       cpus: cpus.length,
       cpuModel: (cpus[0]?.model ?? "unknown").trim(),
       memoryGiB: Math.round((os.totalmem() / 1_073_741_824) * 10) / 10,
@@ -1690,6 +1847,7 @@ async function run(options) {
   process.on("SIGTERM", onSignal);
 
   try {
+    const apiMemoryMaxBytes = unitMemoryMax(API_UNIT);
     const keys = writeKeyFiles(runDir);
     const runId = `load_${Date.now().toString(36)}_${randomBytes(3).toString("hex")}`;
     const database = await packages.testing.createTemplateDatabase({
@@ -1793,6 +1951,7 @@ async function run(options) {
       amadeus: amadeusFigures,
       apiStart,
       apiEnd,
+      apiMemoryMaxBytes,
       database: await databaseFigures(packages, run, tenants),
     });
     out(report(runInfo, figures));
