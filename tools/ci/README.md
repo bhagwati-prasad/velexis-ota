@@ -21,7 +21,7 @@ node tools/ci/check-no-hardcoded-hosts.mjs   # X-032's Verify command, after pnp
 pnpm exec eslint tools/ci              # Turborepo lints only workspace packages, so CI lints this folder itself
 node --test tools/ci/*.test.mjs        # after pnpm install: the lint test loads ESLint and eslint.config.mjs
 pnpm exec eslint tools/perf            # the same step lints and tests tools/perf (lead decision (13c) of 2026-11-10)
-node --test tools/perf/*.test.mjs      # the pure helpers of platform-smoke.mjs, and X-050's unit-node-options.mjs with its check of the seven app units' NODE_OPTIONS (tools/perf/README.md)
+node --test tools/perf/*.test.mjs      # the pure helpers of platform-smoke.mjs, PBE-076's gc-observer.cjs run in child processes, and X-050's unit-node-options.mjs with its check of the seven app units' NODE_OPTIONS (tools/perf/README.md)
 ```
 
 The tests need `git`, `bash`, `grep` and `cmp`, and write only to the system temporary folder.
