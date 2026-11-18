@@ -3217,8 +3217,8 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - The earlier sections are unchanged apart from the two dated notes and §9's follow-ups.
 - **Verify:** `node --check ota/backend/test/load/search-load.mjs && node --check ota/backend/test/load/booking-load.mjs && node ota/backend/test/load/booking-load.mjs --tenants 5 --minutes 30`
 
-### SDK-019 · State the Node.js versions the SDK supports after the move to Node 24, and test the oldest one
-- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the first green CI run of the job sdk-node22, which the integrator dispatches)
+### SDK-019 · State the Node.js versions the SDK supports after the move to Node 24, and test the oldest one ✅
+- **Status:** done (branch claude/intelligent-bardeen-90hhu7)
 - **Component:** ota-sdk
 - **Milestone:** M6
 - **Depends on:** X-048
@@ -3234,6 +3234,7 @@ Security review, the PCI controls of the airline-card flow and the gate for live
   - With the approved job: `sdk-node22` runs the SDK's unit and contract tests on Node 22.12.0 with no Turborepo cache and is not a required check, ci-workflow.test.mjs asserts it, node-major.test.mjs exempts it by name, and ci.yml's lines above the job keep their numbers (`[SDK-019 AC2]`). Without it: the docs and `engines` say Node.js 24 and later, and ci.yml is unchanged.
   - Only comments change in the seven code files; `pnpm --filter @velexis/ota-sdk test` and `pnpm --filter @velexis/ota-sdk build` (its size check) pass.
 - **Verify:** `node --test tools/ci/*.test.mjs && pnpm --filter @velexis/ota-sdk test && pnpm --filter @velexis/ota-sdk build`
+- **Note (2026-11-18, wave 59's integrator):** the job's first green run is CI run [44246120851](https://github.com/bhagwati-prasad/velexis-ota/actions/runs/44246120851), dispatched on the integration branch at `b82af44` (job "SDK on Node.js 22.12", 60 s): its `actions/setup-node` step downloaded 22.12.0 and logged `node: v22.12.0`, and `pnpm exec turbo run test --filter=@velexis/ota-sdk` ran 8 of 8 tasks with no cache hit, the SDK's 25 test files and 1,087 tests passed. Every other `actions/setup-node` step of that run and of E2E run [44246124166](https://github.com/bhagwati-prasad/velexis-ota/actions/runs/44246124166) logged `node: v24.22.2`. The run's other eight jobs were green too.
 
 ## Cross-group dependencies at a glance
 
