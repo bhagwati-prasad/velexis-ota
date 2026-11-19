@@ -10,6 +10,7 @@ This page records measured figures of the OTA backend and the decisions taken fr
 - OBE-101 keeps the completed jobs of `ota-maintenance` an hour instead of a day, so Redis no longer holds a day of every active tenant's scheduled jobs, and measured it (§7).
 - OBE-102 keeps half of each Amadeus bucket for the calls a person waits for while the booking sync runs, and measured the shoppers' `429` answers in the sync's bursts before and after (§8).
 - OBE-103 measured the API and the worker on Node.js 22 and 24 with the units' flags, for the move to Node.js 24 ([ADR-0029](../../docs/mvp/adr/0029-nodejs-24-runtime.md)), and added the time spent in garbage collection to the load tests' reports (§10).
+- OBE-104 ran the API and the worker for three hours on Node.js 24, with every heap figure, a table per 30 minutes, least-squares slopes and a rule for whether their memory settles, compared heap snapshots of both, and found that every checkout keeps its search's offers for good (§11).
 
 Related:
 
@@ -699,6 +700,7 @@ The task's review (12 November 2026) made the 10 s of waits a budget per job, al
 | OBE-101 (M6) | Added by OBE-088 (§6 item 4). Every per-tenant job of the schedulers stays in Redis for a day after it completed (ADR-0009 item 7): about 7 MiB a day per active tenant, measured at 1.3 to 1.4 KB a job, so Redis's `maxmemory` of 512 MiB holds those of about 60 tenants, not the ~300 of the capacity table ([deployment §14](../../docs/mvp/deployment-single-vm.md#14-capacity-limits-of-one-vm)). Bound what the completed jobs keep, for example how long the scheduled per-tenant jobs stay, without losing the deduplication their deterministic ids get from the completed jobs, with the dated revision of ADR-0009 item 7 it needs, and measure it with `booking-load.mjs`. **Done (§7):** the completed jobs of `ota-maintenance` are kept an hour (ADR-0009 item 7, revision of 2026-11-11), about 0.3 MiB per active tenant instead of 7 MiB, so 300 tenants keep about 85 MiB; failed jobs stay 30 days and the other queues' completed jobs a day. |
 | OBE-102 (M6) | Added by FIX-W49-SHARED (lead decision (17g) of 2026-11-11, from §6 item 2). The booking sync's order reads take their tokens from the buckets the storefront's searches and prices use (the tenant's 5 a second, burst 10, and the shared account's 20 a second, OADR-0001 point 6), so a sync burst refused shoppers: all four storefront `429` answers of V2 came in the minutes of the two largest bursts. Keep a share of both buckets free for the calls a person waits for (a background call takes a token only while the reserve stays), with the dated revision of OADR-0001 point 6 it needs, and measure it with `booking-load.mjs`: fewer storefront `429`s in the sync bursts, no booking failed by the sync's waits, the `ota-bookings` queue latency within 60 s. **Done (§8):** the sync's order read leaves half of each burst to the calls a person waits for and waits for its token inside the job (OADR-0001 point 6, revision of 2026-11-12). In 30 minutes of the same traffic the shoppers got no `429` (before: 1; V2: 4), none of the sync's reads failed (before: 27 in the largest burst), and the jobs of the largest scan waited at most 15.4 s for a worker. |
 | OBE-103 (M6) | Added by the lead for the move to Node.js 24 ([ADR-0029](../../docs/mvp/adr/0029-nodejs-24-runtime.md) items 3 and 5). Measure the API and the worker on Node 22 and 24 with one build and the units' flags (the young generation pinned since X-050), with the time each spends in garbage collection; a p95 more than 10 % worse on 24, less than 64 MiB under a `MemoryMax` or more than 5 % of a process's time in garbage collection stops for a lead decision. **Done (§10):** Node 24 met all three. Its p95s were lower but one (`checkout.get`, +0.5 %), with 13 to 33 % less CPU; the API peaked 14 MiB higher and the worker 33 MiB higher, at least 297 MiB under their limits; garbage collection took at most 2.1 % of the API's time and 0.3 % of the worker's. No follow-up task: the throwaway VM's checks of [`node-upgrade.md`](../../docs/mvp/runbooks/node-upgrade.md) §5 measure the units' memory under their real limits. |
+| OBE-104 (M6) | Added by the lead on 2026-11-18 (decision (29c)), from §10: run the API and the worker for three hours on Node.js 24 and show whether their memory settles (an RSS slope below 0.02 MiB a minute over minutes 90–180, the heap used's not above it); for a process that does not, compare two heap snapshots 30 minutes apart. **Done (§11):** by the rule neither settles. The API's RSS does (+0.017 MiB a minute) but its heap-used slope (+0.025, r² 0.00) is above the bound; the worker's RSS rises +0.024 MiB a minute (r² 0.94), down from +0.111 in minutes 30–90. Heap snapshots of both at minutes 30 and 60 of a second run show no growing object but V8's compiled code (worker +1.06 of +1.36 MiB, API +0.43 of +0.61 MiB); the rest of the worker's growth is outside its JS heap. **For the lead to decide** (§11): the follow-up of the two processes' memory, and the offers every checkout keeps for good in `flight_offers` (about 0.34 to 0.48 MiB per checkout, never deleted). The units' flags did not change. |
 
 ## 10. Node.js 24 (OBE-103, 18 November 2026)
 
@@ -849,3 +851,137 @@ The 2.4 s after the 30th minute (the journeys still in flight) are in the totals
 | At most 5 % of its time in garbage collection, with the pinned semi-space | API: 1.47–2.11 % (search runs), 0.44 % (booking run, worst minute 0.68 %); worker: 0.20 % (worst minute 0.58 %) | Yes |
 
 **No decision is needed.** Neither the units' flags nor the VM's memory lines change; the follow-ups of the move are the throwaway VM's checks of [`node-upgrade.md`](../../docs/mvp/runbooks/node-upgrade.md) §5.
+
+## 11. Three hours on Node.js 24 (OBE-104, 19 November 2026)
+
+In OBE-103's 30-minute run B24 on Node 24 (§10), the worker's RSS only ever rose, in steps after each 5-minute scan, while its JS heap stayed flat, and the API's RSS rose about 0.23 MiB a minute. Thirty minutes cannot tell memory that settles from a slow leak, and the VM's `MemoryPeak` check takes one reading. So the lead added this task (decision (29c) of 2026-11-18): one run of 180 minutes on Node 24 with every heap figure of `process.memoryUsage()` sampled, a table per 30 minutes, least-squares slopes, and a rule for whether each process's memory settles. No source of the backend changed; `booking-load.mjs` gained the figures, the table, the slopes and the verdict ([`../backend/test/load/README.md`](../backend/test/load/README.md#three-hours-on-nodejs-24-obe-104)).
+
+### Set-up
+
+| Item | Value |
+|---|---|
+| Code | One build of the integration branch head this task started from, `8d14323f0c3a` (CI run 44248907754 and E2E run 44248911084 green on Node 24): `pnpm build` in this task's worktree on 18 November at 16:30 UTC, 19 tasks, none from the cache, with Node 24 first on `PATH`. The SHA-256 of every file in `ota/backend/dist` was recorded during the run; a recompilation of `ota/backend/src` on Node v24.22.3 into a scratch folder afterwards gave the same 277 JavaScript files byte for byte (the source maps differ only in their path to the sources). The scripts are this task's (`8d14323f0c3a+changes`), as committed but for `--heap-snapshots`, added after this run for the second one (it changes nothing when not given); the API and the worker ran unchanged. |
+| Runtime | `/opt/node24`, the official v24.22.3, first on `PATH` for the whole run: the test ran on it, and so did the API, the worker, the stub's proxy and the SMTP sink. The report prints `Node v24.22.3`. |
+| Flags | The units' `NODE_OPTIONS`, read from `deploy/systemd` as in §10: the API `--max-old-space-size=640 --max-semi-space-size=32` under `MemoryMax=768M`, the worker `--max-old-space-size=400 --max-semi-space-size=1` under `MemoryMax=512M`; V8's heap limit is 736 MiB for the API and 403 MiB for the worker. The processes ran outside a cgroup, as in every earlier run. |
+| Traffic | `--tenants 5 --minutes 180` with the defaults of §6, §8 and §10: 120 shopper journeys, 4 bookings and 30 staff journeys a minute on five tenants (2.07 searches a second, 150 offers each), the sync and ticketing fixtures once a minute. |
+| Machine | 4 vCPUs (`nproc` 4; Intel Xeon @ 2.10 GHz), 15.7 GiB RAM, Linux 6.18.44 x64, PostgreSQL 16.15 with the development defaults (autovacuum's scale factor 0.2 and nap time 60 s, against the VM's 0.05 and 30 s in `deploy/postgres/velexis.conf`), Redis 7.0.15 as an instance of the run's own, started as the VM's (`maxmemory 512mb`, `noeviction`, a port and a password of its own), a scratch database dropped at the end. |
+| The lock and the load | The run measures memory, not latency, so it held the machine's soak lock (`/home/user/wt/soak.lock`), not the end-to-end lock: other agents' builds and tests could run beside it, and this task's own `pnpm lint`, `pnpm typecheck` and an uncached `pnpm test` ran in its minutes 2 to 11. The 1-minute load average, sampled every 5 s and printed with `nproc` every 5 minutes, was 6.0 on average and 22.4 at most in minutes 0–30, 3.0 and 15.6 in minutes 30–60 (another agent's work at minute 55), and from minute 60 on at most 2.8 (minutes 60–90) and 1.4 (minutes 90–180). |
+| Samples | Every 5 s, the measuring preload's `process.memoryUsage()` of each process: RSS, heap used, heap total, external and array buffers. With every sample the run takes the preloads' recordings of pool waits and jobs out of the processes, so the measurement's own records do not grow the heaps it measures (README step 7). Beside the run, read-only samplers of the wrapper read `/proc/<pid>/status` of both processes every minute (`VmRSS`, `RssAnon`, `RssFile`), their `smaps` every 5 minutes, and `flight_offers` every 5 minutes (below). |
+| A first run, lost | A first run (M180, phase from 16:46 UTC on 18 November) was lost at its 78th minute when the machine stopped; it wrote no JSON and is not used here. Its progress lines (one sample every 5 minutes) showed the API at 347.6 MiB at minute 5 and 358.6 MiB at minute 75, and the worker at 202.8 and 237.0 MiB; its 1-minute load average reached 19.1 at minute 40 (other work on the machine). Incomplete, it decides nothing. |
+
+### The run
+
+| Run | Node | Started (UTC) | Load avg 1 min: start / end (mean / max over the phase), `nproc` 4 | Journeys completed / started | Bookings: issued at once / by the worker / reconciled | Exit |
+|---|---|---|---|---|---|---|
+| **R180** | 24.22.3 | 06:42:45 | 0.68 / 0.53 (1.8 / 22.4) | 27 720 / 27 720 (21 600 shoppers, 720 bookers, 5 400 staff) | 519 / 169 of the 173 deferred / 28 | 0 |
+
+The phase took 10 802.5 s. Every answer was an expected one, no journey was skipped or still running at the end, and no shopper got a `429`. The longest wait of an `ota-ticketing` job was 1.8 s and of an `ota-bookings` job 16.8 s (the sync's bursts with the reserve of §8), against the 60 s of the plan. Garbage collection took 0.64 % of the API's phase (worst minute 3.07 %, in the busy first quarter of an hour) and 0.29 % of the worker's. The API peaked at 357.3 MiB, 410.7 MiB under its `MemoryMax`, and the worker at 222.1 MiB, 289.9 MiB under its own. Redis's used memory rose from 2.3 to 19.3 MiB, the traffic queues' completed jobs, which stay a day (§7).
+
+### Memory per 30 minutes
+
+Each figure's mean / most / last sample in MiB over the row's 5-second samples (about 360), and the share of the row's whole minutes spent in garbage collection. The last row also holds the run's last sample, 2.5 s after minute 180.
+
+**API**
+
+| Minutes | RSS | Heap used | Heap total | External | Array buffers | GC | Least heap used |
+|---|---|---|---|---|---|---|---|
+| 0–30 | 347.7 / 352.3 / 352.0 | 119.7 / 151.1 / 124.1 | 193.3 / 201.5 / 183.3 | 7.2 / 11.0 / 7.5 | 3.2 / 6.9 / 3.5 | 0.85 % | 88.2 |
+| 30–60 | 353.4 / 354.8 / 354.1 | 122.8 / 160.8 / 121.6 | 197.5 / 205.3 / 201.4 | 7.2 / 10.1 / 6.4 | 3.1 / 6.1 / 2.3 | 0.74 % | 89.4 |
+| 60–90 | 354.5 / 355.4 / 355.0 | 123.0 / 151.8 / 114.5 | 198.7 / 205.2 / 198.7 | 7.2 / 9.4 / 6.3 | 3.1 / 5.3 / 2.3 | 0.55 % | 89.7 |
+| 90–120 | 355.3 / 356.1 / 355.6 | 123.6 / 158.6 / 121.4 | 199.5 / 206.0 / 197.7 | 7.2 / 9.5 / 7.7 | 3.1 / 5.4 / 3.6 | 0.55 % | 90.2 |
+| 120–150 | 355.9 / 356.5 / 356.0 | 124.5 / 156.6 / 135.5 | 200.1 / 207.9 / 200.9 | 7.1 / 9.6 / 7.8 | 3.0 / 5.3 / 3.8 | 0.58 % | 94.0 |
+| 150–180 | 356.3 / 356.9 / 356.3 | 124.8 / 158.0 / 104.8 | 200.2 / 208.3 / 203.2 | 7.1 / 10.1 / 5.7 | 3.0 / 6.1 / 1.6 | 0.58 % | 91.5 |
+
+**Worker**
+
+| Minutes | RSS | Heap used | Heap total | External | Array buffers | GC | Least heap used |
+|---|---|---|---|---|---|---|---|
+| 0–30 | 207.3 / 214.1 / 214.1 | 66.5 / 78.8 / 65.5 | 78.6 / 88.6 / 79.9 | 5.6 / 9.6 / 5.6 | 1.8 / 5.6 / 1.6 | 0.35 % | 58.1 |
+| 30–60 | 215.7 / 218.3 / 218.3 | 68.8 / 93.3 / 67.3 | 82.2 / 100.7 / 81.7 | 5.8 / 10.1 / 5.6 | 1.8 / 6.1 / 1.6 | 0.31 % | 64.2 |
+| 60–90 | 219.3 / 220.1 / 220.1 | 70.5 / 86.3 / 67.9 | 84.3 / 93.7 / 82.7 | 5.8 / 10.3 / 5.6 | 1.8 / 6.3 / 1.6 | 0.26 % | 66.3 |
+| 90–120 | 220.6 / 220.9 / 220.9 | 70.7 / 86.6 / 67.9 | 85.1 / 93.9 / 82.2 | 5.8 / 10.2 / 5.6 | 1.8 / 6.2 / 1.7 | 0.26 % | 66.7 |
+| 120–150 | 221.4 / 221.8 / 221.8 | 71.5 / 87.6 / 68.4 | 85.8 / 95.4 / 82.9 | 5.9 / 10.3 / 5.6 | 1.9 / 6.3 / 1.6 | 0.27 % | 67.1 |
+| 150–180 | 222.0 / 222.1 / 222.1 | 71.3 / 86.3 / 73.1 | 85.7 / 97.2 / 85.7 | 5.8 / 9.5 / 6.1 | 1.8 / 5.5 / 2.1 | 0.27 % | 67.6 |
+
+The last column, the least heap used of the row's samples (the heap just after a collection), is not in the report; it comes from the samples of the JSON, as do the standard errors below.
+
+**Outside the JS heap.** `/proc/<pid>/status` at the 30-minute marks, in MiB (`VmRSS` / `RssAnon` / `RssFile`): the API 352.0 / 291.8 / 60.1 at minute 30, 355.1 / 295.0 / 60.1 at minute 90 and 356.6 / 296.5 / 60.1 at minute 180; the worker 214.6 / 154.4 / 60.2, 220.5 / 160.4 / 60.2 and 222.5 / 162.4 / 60.2. All the growth is anonymous memory; the mapped files stay. In the worker's `smaps` from minute 90 to minute 180, the main allocator arena (`[heap]`) grew by 0.5 MiB (15.0 to 15.5 MiB) and the other anonymous mappings (V8's pages, the other allocator arenas, the thread stacks) by 1.5 MiB (145.0 to 146.5 MiB), while its least heap used rose by about 1 MiB (66.7 to 67.6 over the rows above). In the API the main arena stayed at 18.6 MiB and the other anonymous mappings grew by 1.7 MiB.
+
+### The slopes
+
+The least-squares slope of each figure over its 5-second samples, in MiB per minute, with r² in brackets; minutes of the phase. A slope with r² near 0 is the saw-tooth of the collections around a flat line, not a trend.
+
+| Process | Window (samples) | RSS | Heap used | Heap total | External | Array buffers |
+|---|---|---|---|---|---|---|
+| API | 30–90 (719) | +0.0432 (0.79) | +0.0176 (0.00) | +0.0603 (0.05) | +0.0000 (0.00) | −0.0004 (0.00) |
+| API | **90–180** (1 079) | **+0.0166** (0.83) | **+0.0250** (0.00) | +0.0157 (0.01) | −0.0009 (0.00) | −0.0008 (0.00) |
+| API | last 60: 120–180 (719) | +0.0141 (0.62) | +0.0219 (0.00) | +0.0188 (0.01) | −0.0001 (0.00) | −0.0001 (0.00) |
+| Worker | 30–90 (719) | +0.1112 (0.95) | +0.0512 (0.07) | +0.0692 (0.19) | +0.0006 (0.00) | +0.0006 (0.00) |
+| Worker | **90–180** (1 079) | **+0.0241** (0.94) | **+0.0100** (0.01) | +0.0113 (0.01) | +0.0001 (0.00) | +0.0001 (0.00) |
+| Worker | last 60: 120–180 (719) | +0.0207 (0.87) | −0.0049 (0.00) | +0.0008 (0.00) | −0.0006 (0.00) | −0.0006 (0.00) |
+
+Over minutes 90–180 the standard error of the API's heap-used slope is 0.016 MiB a minute (the slope is 1.5 of them from 0), and the slope of its least heap used per 5 minutes is +0.035 ± 0.029 (r² 0.08). The worker's RSS slope has a standard error of 0.0002, its heap-used slope 0.004, and the slope of its least heap used per 5 minutes is +0.011 ± 0.002 (r² 0.61).
+
+### The verdict (step 4)
+
+A process's memory settles if its RSS slope over minutes 90–180 is below 0.02 MiB a minute and its heap used's slope over the same window is not above that.
+
+| Process | RSS slope, 90–180 | Heap used slope, 90–180 | Settles |
+|---|---|---|---|
+| API | +0.0166: below 0.02 | +0.0250: above 0.02 (r² 0.00) | **No**, on its heap slope |
+| Worker | +0.0241: above 0.02 (r² 0.94) | +0.0100: not above | **No**, on its RSS slope |
+
+By the rule neither process settles, so step 4's heap snapshots follow (below). The two cases differ:
+
+- **The API's RSS settles; its heap slope is noise.** Its RSS slope fell from 0.043 (minutes 30–90) to 0.017 (90–180) and 0.014 (the last hour), about 1 MiB an hour. Its heap used swings between about 90 and 160 MiB with each collection, and the fit's r² of 0.00 and its standard error of 0.016 say the +0.025 is not a trend. Its least heap used per 30 minutes stayed within 88 to 94 MiB.
+- **The worker grows slowly and slows down.** Its RSS slope fell from 0.111 to 0.024 and 0.021 MiB a minute (1.4 and 1.2 MiB an hour), with r² 0.87 to 0.95: a real rise, about half of it in its JS heap (its least heap used rose 1 MiB in the last 90 minutes) and half outside it. At the 90–180 rate the worker would use its 289.9 MiB of headroom in about 8 days, if it never slowed further and never restarted; every deploy restarts the units.
+
+### Heap snapshots (step 4)
+
+A second run, **D65b** (`--tenants 5 --minutes 65 --heap-snapshots api,worker`, phase 10:38–11:43 UTC, the same build, flags and Redis, exit 0, every answer expected), took a heap snapshot of both processes at minutes 30 and 60 of its phase (`--heapsnapshot-signal`). A heap snapshot collects the whole heap first, so it holds only live objects. A small script beside the run's outputs compared each pair by constructor: the objects' count, their own size and their retained size (the DevTools Summary's grouping, with retained sizes from the dominator tree of the snapshot's strong edges).
+
+| Process | Live heap at minute 30 → 60 | Largest growers (minute 30 → 60) |
+|---|---|---|
+| Worker | 65.6 → 67.0 MiB (+1.36 MiB) | `(compiled code)` 166 410 → 169 839 objects, +1.06 MiB; `(hidden)` +0.13 MiB; `(array)` +0.12 MiB; `Object` +520 objects (+24 KiB own size); `PerformanceResourceTiming` 195 → 251 (+6 KiB: `fetch`'s resource timings, which Node keeps in a buffer of 250 by default); pdfmake's font objects (`TTFGlyph` 119 → 122) |
+| API | 89.5 → 90.1 MiB (+0.61 MiB) | `(compiled code)` 201 321 → 202 193 objects, +0.43 MiB; `(hidden)` +0.17 MiB; then nothing above 2.3 KiB: `AbortSignal` and `Listener` +24 each, `WeakRef` +48, `Map` +24, the `pg` `Client`s 8 → 11 (connections the pool had open at that moment) |
+
+By retained size the same: in the worker `(compiled code)` +1.09 MiB, the closures that hold it +0.91 MiB, `Object` +0.68 MiB and pdfmake's printer and fonts +0.15 MiB; in the API `(compiled code)` +0.44 MiB and its closures +0.32 MiB. No class of the application, of BullMQ, `ioredis`, `pg` or pino grew. What grows inside both heaps is V8's compiled code: functions compiled or optimised for the first time as the traffic reaches them, which the code that exists bounds. So the heap snapshots show no leak in the JS heap of either process. The rest of the worker's RSS growth is outside V8's heap (anonymous memory, above), which a heap snapshot cannot show.
+
+Two lessons for such runs, now in [`../backend/test/load/README.md`](../backend/test/load/README.md): a first attempt (D65, from 09:50 UTC) sent `SIGUSR2`, which Nest's `enableShutdownHooks()` also takes as a shutdown signal: the worker closed itself at the first snapshot, and the run was stopped and discarded at minute 41. The script now sends `SIGWINCH`, and a 3-minute check (D3) showed both processes keep running with one snapshot per signal. And a snapshot costs memory the process keeps: after two, D65b's worker peaked at 456.3 MiB (55.7 MiB under its `MemoryMax`) and the API at 625.4 MiB. On the VM, under the units' limits, two snapshots of the worker would come close to its `MemoryMax`.
+
+### What the run shows
+
+1. **Neither process settles by the rule, and neither leaks in its JS heap.** The API's RSS settles (+0.017 MiB a minute over minutes 90–180, +0.014 over the last hour); its heap-used slope of +0.025 (r² 0.00) is the collections' saw-tooth, its least heap used stayed within 88 to 94 MiB, and its live heap grew 0.6 MiB in 30 minutes, almost all of it compiled code. The worker's RSS rose +0.024 MiB a minute over minutes 90–180 (r² 0.94) and +0.021 over the last hour, down from +0.111 over minutes 30–90; about half of it was its JS heap, which the snapshots show to be compiled code, and half anonymous memory outside it.
+2. **Both stay far from their limits.** The API peaked at 357.3 MiB (410.7 MiB under its `MemoryMax`) and the worker at 222.1 MiB (289.9 MiB under). At the worker's rate over minutes 90–180, never slowing and never restarted, its headroom would last about 8 days; every deploy restarts both units.
+3. **External memory and array buffers are flat** (slopes within ±0.001 MiB a minute): no `Buffer` or array buffer piles up. RSS, heap and garbage collection (0.64 % and 0.29 % of the phase) match §10's 30-minute run on Node 24.
+4. **The run found one unbounded table instead:** `flight_offers` keeps every checkout's search (below).
+
+**The follow-up the lead must decide.** Step 4's rule, read as written, says neither process settles, and the heap snapshots name no growing object but V8's compiled code. Options, none of which changes a unit's flags:
+
+- (a) Accept the memory as it is, on the figures above: no leak in either heap, the worker's growth slowing, both far under their `MemoryMax`, and the throwaway VM's `MemoryPeak` checks of [`node-upgrade.md`](../../docs/mvp/runbooks/node-upgrade.md) §5 and each deploy's restart as the guard.
+- (b) Run the worker longer, for example 8 or 24 hours, on this machine or on the throwaway VM under its unit's `MemoryMax` with `MemoryCurrent` sampled, and judge its last hours with the same rule (a task of its own).
+- (c) Find out where the worker's memory outside the JS heap goes (for example the allocator's arenas, with `MALLOC_ARENA_MAX` in a diagnosis run): a change to how a unit starts is a lead decision and a task of its own.
+
+The rule itself is a lead decision too: its heap-used test on 5-second samples measures the API's saw-tooth more than a trend (r² 0.00, a standard error of 0.016 against the bound of 0.02).
+
+### A finding for the lead: `flight_offers` and the purge
+
+Asked for by the lead on 2026-11-19, with no code change. Read-only samplers beside the run, as the test admin role, read `flight_offers` of the five tenant schemas every 5 minutes: the live rows (`pg_stat_user_tables`), the size of the table with its indexes and TOAST, the database's size, the searches and the expired ones still there; at each 30-minute mark also the exact `count(*)`; and the dead rows and autovacuum's runs.
+
+| Minute | Rows (exact) | Searches (expired, not yet deleted) | `flight_offers` with indexes (MiB) | Database (MiB) |
+|---|---|---|---|---|
+| 0 | 1 500 | 11 (0) | 4.2 | 37.1 |
+| 30 | 559 650 | 3 731 (17) | 1 284.4 | 1 434.4 |
+| 60 | 813 150 | 5 421 (1 709) | 1 961.4 | 2 213.4 |
+| 90 | 831 900 | 5 547 (1 834) | 2 037.8 | 2 377.9 |
+| 120 | 848 550 | 5 657 (1 946) | 2 090.2 | 2 516.6 |
+| 150 | 865 800 | 5 772 (2 061) | 2 139.6 | 2 651.4 |
+| 180 | 884 100 | 5 894 (2 187) | 2 189.1 | 2 789.9 |
+
+The 30-minute marks fall 13 minutes after a purge and 2 minutes before the next, so they show each cycle near its most rows; 3 minutes after each purge from minute 50 on the table held about 625 000 to 700 000. A search stores 150 offers, 0.344 MiB of `flight_offers` with its indexes (1 070.4 MiB for the first 3 110 searches, before any purge). At the end the table held 2 189 MiB of the database's 2 790 MiB; the rest is mostly `supplier_requests` (279 MiB, kept 90 days) and `idempotency_keys` (220 MiB, kept a day), as §6 item 5 expects. Autovacuum ran on the five tables 150 times and no sample found a dead row, so each purge's space was reused.
+
+**Whether the OTA purges expired offers: yes.** The schedule `offers.purge` ([`jobs/schedulers.ts`](../backend/src/jobs/schedulers.ts), pattern `*/15 * * * *`, OBE-024) adds a `fan-out` job to the queue `ota-maintenance` every 15 minutes of the clock; the fan-out ([`jobs/fan-out.ts`](../backend/src/jobs/fan-out.ts)) adds one `offers.purge` job per active or suspended tenant to the same queue; `OffersPurgeProcessor` ([`shopping/offers-purge.processor.ts`](../backend/src/shopping/offers-purge.processor.ts)) deletes up to 500 of the tenant's expired searches, oldest first (`JOB_BATCH_LIMITS.searchPurge`, [`jobs/limits.ts`](../backend/src/jobs/limits.ts)), and the foreign keys cascade each delete to the search's offers (`flight_offers.search_id … ON DELETE CASCADE`), upsells and priced offers. A full batch enqueues the job again, at most 20 times a run (`MAX_CONTINUATIONS`): up to 10 500 searches per tenant every 15 minutes. A search expires `offer_ttl_minutes` after it was made (30 by default, 5 to 240 per storefront), so its offers live 30 to 45 minutes. In the run the 60 `offers.purge` jobs, about 370 searches each, took at most 1.6 s.
+
+**What the purge keeps: the whole answer behind every checkout, for good.** A search stays while a checkout references one of its priced offers (`checkouts.priced_offer_id` and `base_priced_offer_id`, `ON DELETE RESTRICT`; [OADR-0002](adr/0002-offer-and-priced-offer-caching.md) point 6, [data model §6](data-model.md)), and no job deletes checkouts: `retention.daily` ([`jobs/retention.processor.ts`](../backend/src/jobs/retention.processor.ts)) purges `supplier_requests`, `queue_snapshots`, `idempotency_keys` and expired sessions, reset tokens and booking access tokens, and keeps bookings with their checkouts as financial records. So every checkout, paid or abandoned, keeps all 150 offers of its search (up to 250), though it bought one. At minute 175 the tenants held 1 614 expired searches; 587 of them were held by a checkout, and the 527 that had expired more than 15 minutes earlier (which the purge at 09:30 UTC had passed) held 79 050 offers. That is why the table kept growing from minute 60 to minute 180: by about 590 rows a minute (70 950 in 120 minutes, about 473 searches' offers), the run's 4 checkouts a minute × 150 offers, and by 1.9 MiB a minute (228 MiB in 120 minutes), 0.48 MiB per search it kept. That is more than the 1.4 MiB a minute that 0.344 MiB per search would give: the rows kept took 3.3 KiB each with the indexes, against 2.35 KiB in the first 25 minutes, before any purge, so the space the purges freed was not refilled as densely. Without them, the table would have stayed at the size of the last 30 to 45 minutes of searches, about 2 GiB at the run's 2 searches a second (§6 item 5 counted only that part).
+
+**What it means for a real VM's disk.** The live offers stay bounded by the search rate, as §6 item 5 says: about 0.34 MiB × the searches of the last 45 minutes (0.9 GiB at one search a second). The offers kept by checkouts grow with the checkouts and are never deleted: about 0.34 GiB per 1 000 checkouts at the density of the first fill and 0.47 GiB at the rate this run's table grew (0.56 and 0.78 GiB with 250 offers per search). At 100 checkouts a day that is about 12 to 17 GiB a year; at 1 000 a day about 120 to 170 GiB a year, more than the 112 GB at which [deployment §14](../../docs/mvp/deployment-single-vm.md#14-capacity-limits-of-one-vm) resizes the 160 GB disk; at the run's rate (5 760 a day) about 1.9 to 2.7 GiB a day. So nothing breaks at launch: at 100 checkouts a day the disk holds years of it. But of the three lines (the live offers, `supplier_requests`' 90 days and these), it is the only one without a bound, and it grows with the bookings the OTAs want. It is a decision for the lead (below), not a change of this task: for example, keep only the offer and priced offers a checkout references and let the purge delete the rest of its search, or end the hold for checkouts that never became bookings after a while. The development PostgreSQL ran autovacuum less often than the VM's (see Set-up); with the purge's space reused either way, that does not change the growth.

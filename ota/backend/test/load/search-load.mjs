@@ -734,8 +734,12 @@ export async function startAmadeus(
  * the process's CPU time since the last `reset` (`process.cpuUsage`, user and system), sums the time the process spent
  * in garbage collection per minute since the last `reset` (OBE-103: a `PerformanceObserver` on Node's `gc` entries,
  * each the main-thread pause of one collection, from V8's GC prologue to its epilogue; with their count and time by
- * kind), and answers the load test's `stats`, `sample` and `reset` messages on the IPC channel. Durations, counts,
- * sizes and job names only: never a statement's parameters, a row, a job's data or a connection string.
+ * kind), and answers the load test's `stats`, `sample`, `take` and `reset` messages on the IPC channel. A `sample`
+ * gives the RSS and the heap figures of `process.memoryUsage()` (heap used and total, external, array buffers; the last
+ * three since OBE-104). A `take` (OBE-104) hands over the statements, pool waits and jobs recorded since the last
+ * `reset` or `take` and starts them anew, so a long run of booking-load.mjs, which takes them with every sample, keeps
+ * the measured process from holding hours of its own recordings in the heap it measures. Durations, counts, sizes and
+ * job names only: never a statement's parameters, a row, a job's data or a connection string.
  */
 const PRELOAD_SOURCE = `"use strict";
 // Written by ota/backend/test/load/search-load.mjs (or booking-load.mjs) into the run's temporary folder and preloaded
@@ -931,12 +935,32 @@ if (typeof process.send === "function") {
       process.send({ id: message.id, body: null });
     } else if (message.type === "stats") {
       process.send({ id: message.id, body: snapshot() });
+    } else if (message.type === "take") {
+      // OBE-104: the recordings since the last reset or take, handed over and started anew.
+      const taken = {
+        statements: Object.fromEntries(statements),
+        poolWaitsMs: poolWaits,
+        jobs: BULLMQ === null ? undefined : { starts: jobStarts, ends: jobEnds },
+      };
+      statements = new Map();
+      poolWaits = [];
+      jobStarts = [];
+      jobEnds = [];
+      process.send({ id: message.id, body: taken });
     } else if (message.type === "sample") {
       const memory = process.memoryUsage();
       peakRss = Math.max(peakRss, memory.rss);
       process.send({
         id: message.id,
-        body: { at: Date.now(), rssBytes: memory.rss, heapUsedBytes: memory.heapUsed, cpuMs: cpuMs() },
+        body: {
+          at: Date.now(),
+          rssBytes: memory.rss,
+          heapUsedBytes: memory.heapUsed,
+          heapTotalBytes: memory.heapTotal,
+          externalBytes: memory.external,
+          arrayBuffersBytes: memory.arrayBuffers,
+          cpuMs: cpuMs(),
+        },
       });
     }
   });
@@ -1009,6 +1033,7 @@ export async function startService(run, { name, entry, nodeOptions, env, pool, b
     logFile,
     stats: () => ask(child, "stats"),
     sample: () => ask(child, "sample"),
+    take: () => ask(child, "take"),
     reset: () => ask(child, "reset"),
     stop: () => stopProcess(child),
     exited: () => child.exitCode !== null || child.signalCode !== null,
@@ -1130,13 +1155,16 @@ export function gcText(gc) {
   );
 }
 
-/** Starts the built API with the preload; resolves once GET /health/ready answers 200. */
-export async function startApi(options, run) {
+/**
+ * Starts the built API with the preload; resolves once GET /health/ready answers 200. `extraNodeOptions` are added after
+ * the unit's flags, for a diagnosis only (booking-load.mjs's `--heap-snapshots`, OBE-104): never a unit's flag.
+ */
+export async function startApi(options, run, { extraNodeOptions = [] } = {}) {
   const url = `http://127.0.0.1:${run.apiPort}`;
   const service = await startService(run, {
     name: "api",
     entry: "main.js",
-    nodeOptions: unitNodeOptions(API_UNIT),
+    nodeOptions: [...unitNodeOptions(API_UNIT), ...extraNodeOptions],
     env: apiEnv(options, run),
     pool: API_POOL,
     readyUrl: `${url}/health/ready`,
