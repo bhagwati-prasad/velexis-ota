@@ -9,12 +9,12 @@ Related: [`roadmap.md`](roadmap.md), [`../../../AGENTS.md`](../../../AGENTS.md) 
 | File | Style | Scope | Task ids | Answers |
 |---|---|---|---|---|
 | [`roadmap.md`](roadmap.md) | Master plan | Foundation and both groups | References all ids | When does each milestone happen, with and without agents? Which tasks run in parallel? What are the review gates, demos, go/no-go criteria, critical path and risks? |
-| [`foundation-tasks.md`](foundation-tasks.md) | Agent tasks | Monorepo, shared packages, CI, baselines, migration runner, VM, users per trust zone, deploy, backups, monitoring, Amadeus stub, PCI controls of the VM | `X-001` … `X-045` | What exactly is built for the shared base, and which task provides what the components depend on? |
+| [`foundation-tasks.md`](foundation-tasks.md) | Agent tasks | Monorepo, shared packages, CI, baselines, migration runner, VM, users per trust zone, deploy, backups, monitoring, Amadeus stub, PCI controls of the VM | `X-001` … `X-050` | What exactly is built for the shared base, and which task provides what the components depend on? |
 | [`platform/docs/plans/implementation-plan.md`](../../../platform/docs/plans/implementation-plan.md) | Implementation plan | Platform backend, portal, platform admin | `PBE-`, `PFE-`, `PAD-` (referenced) | Per milestone: goal, epics, demo, exit criteria, interface with the OTA group, risks; traceability from PF features to tasks |
-| [`platform/docs/plans/agent-tasks.md`](../../../platform/docs/plans/agent-tasks.md) | Agent tasks | Platform backend, portal, platform admin | `PBE-001` … `PBE-075`, `PFE-001` … `PFE-031`, `PAD-001` … `PAD-017` | What exactly does each platform task change, and how is it proven? |
+| [`platform/docs/plans/agent-tasks.md`](../../../platform/docs/plans/agent-tasks.md) | Agent tasks | Platform backend, portal, platform admin | `PBE-001` … `PBE-077`, `PFE-001` … `PFE-031`, `PAD-001` … `PAD-017` | What exactly does each platform task change, and how is it proven? |
 | [`platform/docs/plans/solo-developer-plan.md`](../../../platform/docs/plans/solo-developer-plan.md) | Solo developer (week by week) | Platform group, without agents | References platform ids | In which order does one developer build the platform, week by week (37 platform weeks: Weeks 1–31, the follow-up Weeks 30a and 30b of 2026-11-06, Weeks 30c and 30d of 2026-11-11, Week 30e of 2026-11-13 and Week 30f of 2026-11-16)? |
 | [`ota/docs/plans/implementation-plan.md`](../../../ota/docs/plans/implementation-plan.md) | Implementation plan | OTA backend, storefront, OTA admin, JS SDK | `OBE-`, `OFE-`, `OAD-`, `SDK-` (referenced) | Per milestone: goal, epics, demo, exit criteria, interface with the platform group, risks; traceability from OF features and operations to tasks |
-| [`ota/docs/plans/agent-tasks.md`](../../../ota/docs/plans/agent-tasks.md) | Agent tasks | OTA backend, storefront, OTA admin, JS SDK | `OBE-001` … `OBE-102`, `OFE-001` … `OFE-032`, `OAD-001` … `OAD-023`, `SDK-001` … `SDK-018` | What exactly does each OTA task change, and how is it proven? |
+| [`ota/docs/plans/agent-tasks.md`](../../../ota/docs/plans/agent-tasks.md) | Agent tasks | OTA backend, storefront, OTA admin, JS SDK | `OBE-001` … `OBE-104`, `OFE-001` … `OFE-032`, `OAD-001` … `OAD-023`, `SDK-001` … `SDK-019` | What exactly does each OTA task change, and how is it proven? |
 | [`ota/docs/plans/solo-developer-plan.md`](../../../ota/docs/plans/solo-developer-plan.md) | Solo developer (week by week) | OTA group, without agents | References OTA ids | In which order does one developer build the OTA side, week by week (46 OTA weeks: Weeks 1–40, the follow-up Week 39a of 2026-11-06, Weeks 39b, 39c and 39d of 2026-11-11, Week 39e of 2026-11-13 and Week 39f of 2026-11-16)? |
 
 ## 2. How they relate
@@ -35,7 +35,7 @@ flowchart TD
 - **Decisions flow down.** [`decisions.md`](../decisions.md) wins over everything. The ADRs refine it, the implementation plans apply it per milestone, and the task blocks turn it into work.
 - **Task blocks are the single source of scope.** Each task is defined once, in one agent task plan. The solo plans and the roadmap reference task ids and never redefine a task.
 - **Dependencies cross files.** Component tasks depend on `X-` tasks, and some platform and OTA tasks depend on each other (for example OBE-003 on PBE-002, and OAD-016 on PFE-017). A few platform tasks carry a **Gate** that names an OTA feature (PBE-035, PBE-036, PAD-011, PFE-019).
-- **The roadmap combines them.** It schedules all 352 tasks (317 at its re-baseline of 2026-11-06, then OFE-029, X-041 and OFE-030 of 2026-11-10, seven more at its re-baseline of 2026-11-11, OBE-101, which OBE-088 added the same day, five more at its second re-baseline of that day, X-042, which X-032 added the same day, X-043, which X-031 added on 2026-11-12, five more at its re-baseline of 2026-11-13, PFE-031 of 2026-11-15, X-045 and SDK-018 of the same day, and the nine tasks of the move to Node.js 24 at its re-baseline of 2026-11-16) in one calendar, maps the two solo plans' week numbers to calendar weeks, and keeps the milestone status, outside steps and change log.
+- **The roadmap combines them.** It schedules all 353 tasks (317 at its re-baseline of 2026-11-06, then OFE-029, X-041 and OFE-030 of 2026-11-10, seven more at its re-baseline of 2026-11-11, OBE-101, which OBE-088 added the same day, five more at its second re-baseline of that day, X-042, which X-032 added the same day, X-043, which X-031 added on 2026-11-12, five more at its re-baseline of 2026-11-13, PFE-031 of 2026-11-15, X-045 and SDK-018 of the same day, the nine tasks of the move to Node.js 24 at its re-baseline of 2026-11-16, and OBE-104, which the lead added on 2026-11-18) in one calendar, maps the two solo plans' week numbers to calendar weeks, and keeps the milestone status, outside steps and change log.
 
 ## 3. Which file to open
 
@@ -124,10 +124,12 @@ Calendars: **31 working weeks** with AI agents (without X-043 M6 has 8 h of buff
 |---|---|---|---|
 | Foundation (`X-`) | 50 | 220 | 55 |
 | Platform (`PBE-` 77, `PFE-` 31, `PAD-` 17) | 125 | 614 | 153.5 |
-| OTA (`OBE-` 103, `OFE-` 32, `OAD-` 23, `SDK-` 19) | 177 | 772 | 193 |
-| **Total** | **352** | **1,606** | **401.5** |
+| OTA (`OBE-` 104, `OFE-` 32, `OAD-` 23, `SDK-` 19) | 178 | 776 | 194 |
+| **Total** | **353** | **1,610** | **402.5** |
 
 Calendars: **32 working weeks** with AI agents (M0 keeps its three weeks with 13 h of buffer; M6 gets a fifth week for X-045, SDK-018 and the four M6 Node.js 24 tasks, with 23 h of buffer), **86 working weeks** without (a Node.js 24 block C81–C83 before the launch block holds the nine tasks, because PBE-077 needs PBE-049 of M5, together with X-029 and X-032, which leave the launch block so that X-045's day fits it; the launch block is C84–C86; 30.5 buffer days; [`roadmap.md`](roadmap.md) §1.2 and §1.3). The launch exceptions are unchanged.
+
+*Note (2026-11-18, lead decision (29c), approved by the owner).* The table above includes OBE-104 (M, 4 h, 1 solo day; after OBE-103: the OTA API and the worker run for three hours on Node.js 24 to show whether their memory settles), which the lead added on 2026-11-18. `node tools/plan-lint/plan-lint.mjs`: `tasks: 353  estimated hours: 1610`, `ERRORS: 0`, the same critical path of 168 h over 31 tasks. The 4 h are added to M6 without a new re-baseline: with agents M6 keeps its five weeks and its buffer falls from 23 h to 22 h; without agents OBE-104 joins the OTA's Week 39f in the Node.js 24 block and takes 1 of its 2½ days of buffer, so both calendars keep their 32 and 86 weeks and the buffer days are 29.5 ([`roadmap.md`](roadmap.md) §1 and §4.5).
 
 ## 6. Changing a plan
 

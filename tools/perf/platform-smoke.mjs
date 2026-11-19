@@ -4,10 +4,10 @@
 //
 //   node tools/perf/platform-smoke.mjs --base http://127.0.0.1:3100
 //
-// Plain Node 22: `fetch`, a small concurrency limiter and the standard library. No dependency, no workspace package,
-// no database connection: it talks to a RUNNING platform API (a production build, `node dist/main.js`, with its worker)
-// as the portal and Caddy do, and reads the RSS of both processes from /proc. Point it only at a scratch stack (README
-// "Run it"): it signs up accounts and creates OTAs on the API it is given.
+// Plain Node (the `.nvmrc` major): `fetch`, a small concurrency limiter and the standard library. No dependency, no
+// workspace package, no database connection: it talks to a RUNNING platform API (a production build, `node
+// dist/main.js`, with its worker) as the portal and Caddy do, and reads the RSS of both processes from /proc. Point it
+// only at a scratch stack (README "Run it"): it signs up accounts and creates OTAs on the API it is given.
 //
 // One run:
 //   1. Set-up (not measured). It checks `GET /health/ready`, finds the processes that listen on the API's port and on
@@ -35,16 +35,23 @@
 //      p50, p95, p99 and the slowest answer of the expected answers (client side, from sending to the last byte), the
 //      p95 target and whether it was met, the CPU seconds the API and the worker used, and the load average at the
 //      phase's start and end; then the RSS of the API and the worker (after start-up, peak, end, VmHWM) against their
-//      MemoryMax budgets (768 MiB and 512 MiB, docs/mvp/architecture.md §3). --json <file> writes the same as JSON.
+//      MemoryMax budgets (768 MiB and 512 MiB, docs/mvp/architecture.md §3) with the room left under them, the Node.js
+//      executable and the NODE_OPTIONS each process runs with (/proc/<pid>/exe and, of its environment, NODE_OPTIONS
+//      only), and, with --api-gc-log and --worker-gc-log (PBE-076), each process's share of time in garbage collection
+//      over the measured seconds, from the lines the preload gc-observer.cjs writes once a minute into the process's
+//      log file. --json <file> writes the same as JSON.
 //
 // Targets (PBE-063): p95 below 300 ms for the reads (getTenant, listApiKeys, an uncached ask), below 800 ms for signIn
-// (Argon2id), below 20 ms for a cached ask; RSS within the budgets. createTenant is reported without a target.
+// (Argon2id), below 20 ms for a cached ask; RSS within the budgets. createTenant is reported without a target. Since
+// PBE-076 (ADR-0029 items 3 and 5) also: each peak RSS at least 64 MiB under its MemoryMax, and at most 5 % of each
+// process's time in garbage collection, where it was measured.
 //
 // Exit codes: 0 every answer was expected, every phase kept its rate, every target met and both processes measured and
 // within their budgets; 1 an unexpected answer, a missed target, a phase that did not keep its rate, a process over its
-// budget or not measured, or a set-up that failed; 2 a usage error; 130 interrupted (the report shows what was measured
-// until then). Nothing it prints or writes carries a password, a token, the BFF key or a request or response body:
-// errors are the operation, the HTTP status and the error code.
+// budget, less than 64 MiB under it or not measured, a process with more than 5 % of its time in garbage collection,
+// or a set-up that failed; 2 a usage error; 130 interrupted (the report shows what was measured until then). Nothing it
+// prints or writes carries a password, a token, the BFF key or a request or response body: errors are the operation,
+// the HTTP status and the error code.
 import { execFileSync } from "node:child_process";
 import { randomBytes, randomInt, randomUUID } from "node:crypto";
 import { readdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from "node:fs";
@@ -66,6 +73,10 @@ const PHASES = Object.freeze([
 const PHASE_IDS = PHASES.map((phase) => phase.id);
 /** The MemoryMax of each unit (deploy/systemd, docs/mvp/architecture.md §3), in MiB. */
 const RSS_BUDGET_MIB = Object.freeze({ api: 768, worker: 512 });
+/** The room a process's peak RSS must leave under its MemoryMax (ADR-0029, PBE-076 step 4), in MiB. */
+const RSS_HEADROOM_MIB = 64;
+/** The share of its time a process may spend in garbage collection (ADR-0029, PBE-076 step 4), in per cent. */
+const GC_SHARE_LIMIT_PERCENT = 5;
 /** The `authenticated` limit of api-inventory §2: 300 requests per account per fixed 60-second window. */
 const ACCOUNT_LIMIT_PER_MINUTE = 300;
 /** The share of that limit a run may use, so the set-up's calls and a window spanning two phases stay below it. */
@@ -119,12 +130,16 @@ Options:
   --worker-port <port>             The worker's health port, to find its process. Default 3101
   --api-pid <pid>, --worker-pid <pid>   The processes to sample, instead of finding them by port
   --mailpit <url>                  Mailpit's API. Default MAILPIT_API_URL or http://127.0.0.1:8025
+  --api-gc-log <file>, --worker-gc-log <file>   The process's log file, where the preload gc-observer.cjs writes
+                                   its garbage-collection lines; the report then gives its share of time in garbage
+                                   collection. Default: not measured
   --json <file>                    Also write the figures as JSON
   --help                           This text
 
 Environment: PLATFORM_BFF_KEY (required), the API's value; it is never printed.
-Exit codes: 0 all targets met, 1 an error, a missed target, a rate not kept, an RSS over budget or not measured, or a
-set-up failure, 2 usage, 130 interrupted.`;
+Exit codes: 0 all targets met, 1 an error, a missed target, a rate not kept, an RSS over budget, less than 64 MiB under
+it or not measured, more than 5 % of a process's time in garbage collection, or a set-up failure, 2 usage, 130
+interrupted.`;
 
 class UsageError extends Error {}
 
@@ -164,6 +179,8 @@ function parseOptions(argv) {
         "api-pid": { type: "string" },
         "worker-pid": { type: "string" },
         mailpit: { type: "string", default: process.env.MAILPIT_API_URL || "http://127.0.0.1:8025" },
+        "api-gc-log": { type: "string" },
+        "worker-gc-log": { type: "string" },
         json: { type: "string" },
         help: { type: "boolean", default: false },
       },
@@ -214,6 +231,7 @@ function parseOptions(argv) {
     workerPid:
       values["worker-pid"] === undefined ? undefined : positiveInt("--worker-pid", values["worker-pid"]),
     mailpit: mailpit.origin,
+    gcLogs: { api: values["api-gc-log"], worker: values["worker-gc-log"] },
     json: values.json,
   };
   // Each phase at its plan rate times --rate-scale.
@@ -388,6 +406,140 @@ function cpuSecondsOf(pid) {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The value of NODE_OPTIONS in a process's environment as /proc/<pid>/environ holds it (`NAME=value` entries, each
+ * ended by a NUL), `""` when it has none. Nothing else of the environment, which holds the stack's secrets, leaves it.
+ */
+function nodeOptionsOf(environ) {
+  const entry = environ.split("\0").find((variable) => variable.startsWith("NODE_OPTIONS="));
+  return entry === undefined ? "" : entry.slice("NODE_OPTIONS=".length);
+}
+
+/**
+ * The Node.js executable of `pid` and the NODE_OPTIONS it was started with (`""` when it has none), each undefined when
+ * /proc does not show it. Only NODE_OPTIONS is taken from the environment (nodeOptionsOf).
+ */
+function runtimeOf(pid) {
+  let exe;
+  let nodeOptions;
+  try {
+    exe = readlinkSync(`/proc/${pid}/exe`);
+  } catch {
+    exe = undefined;
+  }
+  try {
+    nodeOptions = nodeOptionsOf(readFileSync(`/proc/${pid}/environ`, "utf8"));
+  } catch {
+    nodeOptions = undefined;
+  }
+  return { exe, nodeOptions };
+}
+
+/**
+ * The lines gc-observer.cjs wrote for process `pid`, in the order of the text (a log file); every other line, a line
+ * of another process and a line cut short are skipped. Each line gets `timeMs`, its `time` in epoch milliseconds.
+ */
+function gcObserverLines(text, pid) {
+  const lines = [];
+  for (const raw of text.split("\n")) {
+    if (!raw.startsWith('{"gcObserver":')) {
+      continue;
+    }
+    let line;
+    try {
+      line = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    const timeMs = Date.parse(line?.time);
+    if (
+      line?.gcObserver !== 1 ||
+      line.pid !== pid ||
+      !Number.isFinite(line.uptimeMs) ||
+      !Number.isFinite(line.gcMs) ||
+      Number.isNaN(timeMs)
+    ) {
+      continue;
+    }
+    lines.push({ ...line, timeMs });
+  }
+  return lines;
+}
+
+/**
+ * A process's garbage collection over the measured seconds, `fromMs` to `toMs` (epoch milliseconds): from the first to
+ * the last of its gc-observer lines written in that time, the milliseconds in garbage collection over the process's
+ * uptime between them, the highest share between two lines, the pauses and the longest one. Undefined when fewer than
+ * two lines fall in that time (the observer writes one a minute).
+ */
+function gcFigures(lines, fromMs, toMs) {
+  const inside = lines.filter((line) => line.timeMs >= fromMs && line.timeMs <= toMs);
+  if (inside.length < 2) {
+    return undefined;
+  }
+  const first = inside[0];
+  const last = inside.at(-1);
+  const spanMs = last.uptimeMs - first.uptimeMs;
+  if (!(spanMs > 0)) {
+    return undefined;
+  }
+  let highest = 0;
+  let longest = 0;
+  for (let index = 1; index < inside.length; index++) {
+    const stepMs = inside[index].uptimeMs - inside[index - 1].uptimeMs;
+    if (stepMs > 0) {
+      highest = Math.max(highest, (inside[index].gcMs - inside[index - 1].gcMs) / stepMs);
+    }
+    longest = Math.max(longest, inside[index].intervalMaxMs ?? 0);
+  }
+  const gcMs = last.gcMs - first.gcMs;
+  return {
+    node: last.node,
+    heapLimitMiB: last.heapLimitMiB,
+    lines: inside.length,
+    windowS: round(spanMs / 1000),
+    gcMs: round(gcMs),
+    pauses:
+      Number.isFinite(last.gcCount) && Number.isFinite(first.gcCount)
+        ? last.gcCount - first.gcCount
+        : undefined,
+    sharePercent: round((100 * gcMs) / spanMs, 2),
+    highestPercent: round(100 * highest, 2),
+    longestPauseMs: round(longest),
+  };
+}
+
+/**
+ * The garbage-collection figures of a measured process from its log file, or `{ notMeasured: <why> }`. Without a log
+ * file (no --<name>-gc-log) it is undefined: garbage collection was not asked for.
+ */
+function gcOfProcess(file, pid, measured) {
+  if (file === undefined) {
+    return undefined;
+  }
+  if (pid === undefined) {
+    return { notMeasured: "process not found" };
+  }
+  if (measured?.toMs === undefined) {
+    return { notMeasured: "no phase measured" };
+  }
+  let text;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (error) {
+    return { notMeasured: `log not readable (${error?.code ?? "error"})` };
+  }
+  const lines = gcObserverLines(text, pid);
+  if (lines.length === 0) {
+    return { notMeasured: `no gc-observer line of pid ${pid}` };
+  }
+  return (
+    gcFigures(lines, measured.fromMs, measured.toMs) ?? {
+      notMeasured: "fewer than two gc-observer lines in the measured seconds, at one a minute",
+    }
+  );
 }
 
 /** Samples the RSS of the processes once a second; `mark()` starts a new window for a phase. */
@@ -963,9 +1115,48 @@ function problemsOf(run) {
       problems.push(`the ${process_.name}'s RSS went over ${process_.budgetMiB} MiB`);
     } else if (process_.withinBudget === undefined) {
       problems.push(`the ${process_.name}'s RSS was not measured`);
+    } else if (process_.headroomMiB !== undefined && process_.headroomMiB < RSS_HEADROOM_MIB) {
+      problems.push(
+        `the ${process_.name}'s peak RSS left ${fmt(process_.headroomMiB, 1)} MiB under its ${process_.budgetMiB} MiB, ` +
+          `less than ${RSS_HEADROOM_MIB} MiB`,
+      );
+    }
+    const share = process_.gc?.sharePercent;
+    if (share !== undefined && share > GC_SHARE_LIMIT_PERCENT) {
+      problems.push(
+        `the ${process_.name} spent ${fmt(share, 2)} % of its time in garbage collection, more than ` +
+          `${GC_SHARE_LIMIT_PERCENT} %`,
+      );
     }
   }
   return problems;
+}
+
+/** The RSS verdict of a process: `within`, `LOW HEADROOM` (less than 64 MiB under its budget), `OVER` or not measured. */
+function rssVerdict(process_) {
+  if (process_.withinBudget === undefined) {
+    return "not measured";
+  }
+  if (!process_.withinBudget) {
+    return "OVER";
+  }
+  return process_.headroomMiB !== undefined && process_.headroomMiB < RSS_HEADROOM_MIB
+    ? "LOW HEADROOM"
+    : "within";
+}
+
+/**
+ * The garbage-collection verdict of a process: `within`, `OVER` (more than 5 %), `not measured` (the report says why
+ * below its table) or `not asked` (no --<name>-gc-log).
+ */
+function gcVerdict(gc) {
+  if (gc === undefined) {
+    return "not asked";
+  }
+  if (gc.sharePercent === undefined) {
+    return "not measured";
+  }
+  return gc.sharePercent > GC_SHARE_LIMIT_PERCENT ? "OVER" : "within";
 }
 
 function report(context, run) {
@@ -1042,6 +1233,17 @@ function report(context, run) {
     );
   }
   lines.push("");
+  const runtimeRows = run.processes.map((process) => [
+    process.name,
+    process.pid ?? "not found",
+    process.runtime?.exe ?? "—",
+    process.runtime?.nodeOptions === undefined
+      ? "—"
+      : process.runtime.nodeOptions === ""
+        ? "(none)"
+        : process.runtime.nodeOptions,
+  ]);
+  lines.push(table(["Process (runtime)", "PID", "Executable", "NODE_OPTIONS"], runtimeRows, 4), "");
   const memoryRows = run.processes.map((process) => [
     process.name,
     process.pid ?? "not found",
@@ -1050,10 +1252,15 @@ function report(context, run) {
     fmt(process.rssMiB.last, 0),
     fmt(process.rssMiB.hwm, 0),
     process.budgetMiB,
-    process.withinBudget === undefined ? "not measured" : process.withinBudget ? "within" : "OVER",
+    fmt(process.headroomMiB, 0),
+    rssVerdict(process),
   ]);
   lines.push(
-    table(["Process (RSS MiB)", "PID", "Start", "Peak", "End", "VmHWM", "Budget", "Result"], memoryRows, 2),
+    table(
+      ["Process (RSS MiB)", "PID", "Start", "Peak", "End", "VmHWM", "Budget", "Headroom", "Result"],
+      memoryRows,
+      2,
+    ),
   );
   const perPhase = run.phases.map((result) => [
     result.label,
@@ -1067,6 +1274,50 @@ function report(context, run) {
       "",
       table(["RSS MiB at phase end (peak)", ...run.processes.map((process) => process.name)], perPhase),
     );
+  }
+  if (run.processes.some((process) => process.gc !== undefined)) {
+    const gcRows = run.processes.map((process) => {
+      const gc = process.gc ?? {};
+      return [
+        process.name,
+        gc.node ?? "—",
+        gc.heapLimitMiB ?? "—",
+        fmt(gc.windowS, 0),
+        fmt(gc.gcMs, 0),
+        gc.pauses ?? "—",
+        gc.sharePercent === undefined ? "—" : `${fmt(gc.sharePercent, 2)} %`,
+        gc.highestPercent === undefined ? "—" : `${fmt(gc.highestPercent, 2)} %`,
+        fmt(gc.longestPauseMs, 1),
+        gcVerdict(process.gc),
+      ];
+    });
+    lines.push(
+      "",
+      table(
+        [
+          "Process (garbage collection)",
+          "Node",
+          "Heap limit MiB",
+          "Window s",
+          "GC ms",
+          "Pauses",
+          "Share",
+          "Highest minute",
+          "Longest pause ms",
+          "Result",
+        ],
+        gcRows,
+        2,
+      ),
+    );
+    const unmeasured = run.processes.filter((process) => process.gc?.notMeasured !== undefined);
+    if (unmeasured.length > 0) {
+      lines.push(
+        "",
+        "Garbage collection not measured: " +
+          unmeasured.map((process) => `${process.name} (${process.gc.notMeasured})`).join(", "),
+      );
+    }
   }
   lines.push("", `Result: ${run.result}`);
   return lines.join("\n");
@@ -1173,6 +1424,8 @@ async function main() {
     context.sampler = new MemorySampler(context.processes);
     process.stderr.write(`platform-smoke: set-up of ${options.accounts} accounts…\n`);
     run.setup = await setUp(context);
+    // The measured seconds, warm-ups included, over which the processes' garbage collection is reported.
+    context.measured = { fromMs: Date.now(), toMs: undefined };
     for (const phase of options.phases) {
       if (context.stopping) {
         break;
@@ -1181,6 +1434,7 @@ async function main() {
         `platform-smoke: ${phase.label} at ${phase.rate}/s for ${options.warmupS} + ${options.durationS} s…\n`,
       );
       run.phases.push(await runPhase(context, phase));
+      context.measured.toMs = Date.now();
     }
   } catch (error) {
     if (!(error instanceof Interrupted)) {
@@ -1188,6 +1442,12 @@ async function main() {
     }
   }
   context.sampler?.stop();
+  if (context.measured?.toMs !== undefined) {
+    run.measured = {
+      from: new Date(context.measured.fromMs).toISOString(),
+      to: new Date(context.measured.toMs).toISOString(),
+    };
+  }
   run.interrupted = context.stopping;
   run.loadAverage.end = loadAverage();
   run.processes = context.processes.map((process_) => {
@@ -1199,12 +1459,16 @@ async function main() {
       hwm: round(state?.hwm),
     };
     const peak = Math.max(rssMiB.peak ?? 0, rssMiB.hwm ?? 0);
+    const measuredRss = state?.first !== undefined;
     return {
       name: process_.name,
       pid: process_.pid,
+      runtime: process_.pid === undefined ? undefined : runtimeOf(process_.pid),
       budgetMiB: process_.budgetMiB,
       rssMiB,
-      withinBudget: state?.first === undefined ? undefined : peak <= process_.budgetMiB,
+      headroomMiB: measuredRss ? round(process_.budgetMiB - peak) : undefined,
+      withinBudget: measuredRss ? peak <= process_.budgetMiB : undefined,
+      gc: gcOfProcess(options.gcLogs[process_.name], process_.pid, context.measured),
     };
   });
   const problems = problemsOf(run);
@@ -1251,7 +1515,12 @@ export {
   errorKey,
   failureKey,
   fmt,
+  gcFigures,
+  gcObserverLines,
+  gcOfProcess,
+  gcVerdict,
   loadText,
+  nodeOptionsOf,
   parseOptions,
   percentile,
   phaseRequests,
@@ -1260,6 +1529,7 @@ export {
   problemsOf,
   publicOptions,
   round,
+  rssVerdict,
   table,
 };
 

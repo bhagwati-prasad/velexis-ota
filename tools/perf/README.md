@@ -1,8 +1,8 @@
 # Performance smoke tests
 
-`platform-smoke.mjs` is the M6 performance smoke test of the platform API (PBE-063 of [`platform/docs/plans/agent-tasks.md`](../../platform/docs/plans/agent-tasks.md)). It measures the operations that see the most traffic, and the RSS of the API and its worker against the memory budget of [`docs/mvp/architecture.md` §3](../../docs/mvp/architecture.md#3-hosts-ports-and-the-vm). The recorded runs, the targets and what was decided from them are in [`platform/docs/performance.md`](../../platform/docs/performance.md). The OTA backend's load tests are in [`ota/backend/test/load/`](../../ota/backend/test/load/README.md).
+`platform-smoke.mjs` is the M6 performance smoke test of the platform API (PBE-063 of [`platform/docs/plans/agent-tasks.md`](../../platform/docs/plans/agent-tasks.md)). It measures the operations that see the most traffic, and the RSS of the API and its worker against the memory budget of [`docs/mvp/architecture.md` §3](../../docs/mvp/architecture.md#3-hosts-ports-and-the-vm). Since PBE-076 it also reports each process's share of time in garbage collection, which the preload [`gc-observer.cjs`](#garbage-collection) measures. The recorded runs, the targets and what was decided from them are in [`platform/docs/performance.md`](../../platform/docs/performance.md). The OTA backend's load tests are in [`ota/backend/test/load/`](../../ota/backend/test/load/README.md).
 
-- **Plain Node 22, no dependency.** It uses `fetch`, a small concurrency limiter and the standard library. It has no `package.json` and loads no workspace package.
+- **Plain Node (the `.nvmrc` major), no dependency.** It uses `fetch`, a small concurrency limiter and the standard library. It has no `package.json` and loads no workspace package.
 - **A client of a running API.** It talks to a production build of the platform API (`node dist/main.js`) and its worker, as the portal's server and Caddy do. It opens no database connection.
 - **The measurement is not part of `pnpm test`, `pnpm test:int` or CI.** It measures the machine it runs on, so it runs by hand. Every recorded run names the machine, `nproc` and the load average. Its pure helpers have unit tests that CI runs ([below](#lint-and-unit-tests)).
 - **Scratch stacks only.** It signs up accounts and creates OTAs on the API it is given. Run it against the scratch stack below, never against the VM or the development database `velexis`.
@@ -13,10 +13,10 @@ The folder has no `package.json`, so Turborepo neither lints nor tests it. CI's 
 
 ```bash
 pnpm exec eslint tools/perf
-node --test tools/perf/*.test.mjs        # plain Node 22, no running API, about a second
+node --test tools/perf/*.test.mjs        # plain Node (the .nvmrc major), no running API, about a second
 ```
 
-`platform-smoke.test.mjs` imports the helpers that `platform-smoke.mjs` exports (the options and their usage errors, `accountsNeeded` and `phaseRequests`, `percentile`, the error keys, the verdicts and `problemsOf`, `table`, `publicOptions`) and checks them without a network: the 33 accounts of the defaults and the 8 of `--duration 10`, nearest-rank percentiles, a remote `--base` refused, and the BFF key in neither an error nor the JSON options. Importing the script measures nothing: it runs only when Node runs the file itself.
+`platform-smoke.test.mjs` imports the helpers that `platform-smoke.mjs` exports (the options and their usage errors, `accountsNeeded` and `phaseRequests`, `percentile`, the error keys, the verdicts and `problemsOf`, `table`, `publicOptions`, and since PBE-076 the reading of the garbage-collection lines, `gcObserverLines`, `gcFigures` and `gcOfProcess`, with `rssVerdict`, `gcVerdict` and `nodeOptionsOf`) and checks them without a network: the 33 accounts of the defaults and the 8 of `--duration 10`, nearest-rank percentiles, a remote `--base` refused, the BFF key in neither an error nor the JSON options, `NODE_OPTIONS` alone taken from a process's environment, the share of time in garbage collection over the lines written in the measured seconds, and a run that fails when a peak RSS leaves less than 64 MiB under its `MemoryMax` or a process spends more than 5 % of its time in garbage collection. It also runs `gc-observer.cjs` in eight child processes (in a `before` hook with a budget of 30 seconds; they take about a second, and a child still running after 20 seconds is killed, so a broken observer fails its test instead of leaving a process behind): one that allocates with a 1 MiB semi-space, whose lines it checks one by one; one ended by `SIGTERM`; one whose own `SIGTERM` listener cleans up and then ends it by sending the signal again, as NestJS's shutdown hooks do, and which must be given the signal once; one whose listener calls `process.exit`; one that exits while the observer's callback has not yet been handed its last collections; one with a worker thread; one with an interval below the minimum; and one that collects once (`--expose-gc`) and then idles, whose later intervals report no collection and no longest pause. Importing the script measures nothing: it runs only when Node runs the file itself.
 
 ## The units' heap flags
 
@@ -30,6 +30,25 @@ node tools/perf/unit-node-options.mjs deploy/systemd/velexis-platform-api.servic
 It refuses, with the file and the line (exit 1), a unit without `NODE_OPTIONS` and an `Environment=` word that systemd would ignore: unquoted, `Environment=NODE_OPTIONS=--max-old-space-size=640 --max-semi-space-size=16` gives systemd the assignment `NODE_OPTIONS=--max-old-space-size=640` and the word `--max-semi-space-size=16`, which it drops with only a warning in the journal. So every app unit writes its flags as one quoted assignment, `Environment="NODE_OPTIONS=--max-old-space-size=<MiB> --max-semi-space-size=<MiB>"`. The OTA load tests ([`ota/backend/test/load/`](../../ota/backend/test/load/README.md)) and step 4 below start their processes with these flags instead of copies.
 
 `unit-node-options.test.mjs` checks the seven app units: each `NODE_OPTIONS` is one quoted assignment, alone on one physical line as the units smoke test reads it (no indentation, no continued line), that sets `--max-old-space-size` and `--max-semi-space-size` (0 counts as unset, as V8 reads it) to the values of [`deployment-single-vm.md`](../../docs/mvp/deployment-single-vm.md) §14, V8's heap limit with them, old + 3 × semi MiB, is below the unit's `MemoryMax`, and the Node that runs the test reports exactly that heap limit for each unit's flags. A scratch unit whose line is unquoted fails with its file and line. Under systemd itself, the units smoke test checks the same in each real unit ([`deploy/systemd/test/units-smoke.sh`](../../deploy/systemd/test/units-smoke.sh), step 5).
+
+## Garbage collection
+
+`gc-observer.cjs` (PBE-076, [ADR-0029](../../docs/mvp/adr/0029-nodejs-24-runtime.md) item 5) is a preload, `node --require tools/perf/gc-observer.cjs …`, that measures how much of a process's time goes into garbage collection. It sums the `gc` entries of a `PerformanceObserver`, each one a pause of the main thread for a scavenge, a mark-sweep or another collection, and writes one JSON line to stderr per minute and one at exit:
+
+```json
+{"gcObserver":1,"at":"minute","pid":4242,"node":"v24.22.3","heapLimitMiB":688,"time":"2026-11-18T10:00:00.000Z","uptimeMs":60001.2,"gcMs":412.7,"gcCount":388,"intervalMs":60000.4,"intervalGcMs":401.3,"intervalCount":377,"intervalMaxMs":6.1,"kinds":{"minor":{"count":380,"ms":350.2},"incremental":{"count":4,"ms":3.6},"major":{"count":4,"ms":58.9}}}
+```
+
+| Field | What it is |
+|---|---|
+| `at` | `minute` for the timer's lines, `exit` for the last one. The exit line is written once, at the process's `exit` event or at the first `SIGTERM` or `SIGINT` (then with `signal`), whichever comes first: a NestJS application ends on `SIGTERM` by sending the signal to itself again after its shutdown hooks, and then no `exit` event comes. The observer leaves the signal alone: without another listener it sends it to the process again, so the process ends as it would have without it. |
+| `node`, `heapLimitMiB` | The runtime and V8's heap limit, which is old + 3 × semi-space MiB with the units' two flags ([below](#the-units-heap-flags)): 688 for the API, 403 for the worker. They show what the process ran with. |
+| `uptimeMs`, `gcMs`, `gcCount`, `kinds` | The time since the process started, and the milliseconds and pauses in garbage collection since then, also per kind (`minor` for scavenges, `major`, `incremental`, `weakcb`). `gcMs` / `uptimeMs` is the share since start-up; the difference of two lines is the share between them. |
+| `intervalMs`, `intervalGcMs`, `intervalCount`, `intervalMaxMs` | The same since the line before, and the longest pause in that interval |
+
+Only the main thread is measured: a worker thread gets the same preload, and the observer does nothing there. It writes with `fs.writeSync`, so no line is lost at exit, and its timer never keeps a process alive. `GC_OBSERVER_INTERVAL_MS` sets another interval (at least 50 ms; the unit tests use 100). The observer itself costs one small object per collection.
+
+`platform-smoke.mjs --api-gc-log <file> --worker-gc-log <file>` reads these lines from the processes' log files at the end of a run and reports each process's share of time in garbage collection over the measured seconds: from its first to its last line written in them (so about the run's length minus up to two minutes), with the highest share of any minute and the longest pause. A run shorter than two minutes of phases, such as `--duration 10`, has fewer than two lines in its measured seconds, and its report says so instead of a share.
 
 ## Run it
 
@@ -83,15 +102,16 @@ EOF
 
 `SMTP_URL` is Mailpit's SMTP port, because the set-up reads the verification e-mails from Mailpit. The Amadeus lines are the official hosts, the only ones `APP_ENV=production` accepts; the run calls neither. `DNS_RESOLVERS` is a loopback port where nothing answers, so no lookup leaves the machine.
 
-**4. The worker and the API, as their systemd units start them.** The units are [`deploy/systemd/velexis-platform-worker.service`](../../deploy/systemd/velexis-platform-worker.service) and [`velexis-platform-api.service`](../../deploy/systemd/velexis-platform-api.service). Each gets a clean environment, `NODE_ENV=production`, the `NODE_OPTIONS` of its unit (its old and young generation, read from the unit file with [`unit-node-options.mjs`](#the-units-heap-flags), never copied) and `--enable-source-maps`. The ports are the units' defaults: 3100 for the API and 3101 for the worker's health server.
+**4. The worker and the API, as their systemd units start them.** The units are [`deploy/systemd/velexis-platform-worker.service`](../../deploy/systemd/velexis-platform-worker.service) and [`velexis-platform-api.service`](../../deploy/systemd/velexis-platform-api.service). Each gets a clean environment, `NODE_ENV=production`, the `NODE_OPTIONS` of its unit (its old and young generation, read from the unit file with [`unit-node-options.mjs`](#the-units-heap-flags), never copied) and `--enable-source-maps`, and, which the units do not have, the preload [`gc-observer.cjs`](#garbage-collection), whose lines go to the log file with the process's own output. The ports are the units' defaults: 3100 for the API and 3101 for the worker's health server. Each process runs on the first `node` on `PATH`.
 
 ```bash
+GC_OBSERVER=$PWD/tools/perf/gc-observer.cjs
 start() {   # <entry> <systemd unit> <log file>; prints the pid
   local flags
   flags=$(node tools/perf/unit-node-options.mjs "deploy/systemd/$2.service") || return 1
   nohup env -i PATH="$PATH" HOME="$HOME" NODE_ENV=production NODE_OPTIONS="$flags" \
-    bash -c 'cd platform/backend && set -a && . "$0" && set +a && exec node --enable-source-maps "$1"' \
-    "$ENV_FILE" "$1" > "$3" 2>&1 < /dev/null &
+    bash -c 'cd platform/backend && set -a && . "$0" && set +a && exec node --require "$2" --enable-source-maps "$1"' \
+    "$ENV_FILE" "$1" "$GC_OBSERVER" > "$3" 2>&1 < /dev/null &
   echo $!
 }
 WORKER_PID=$(start dist/worker.js velexis-platform-worker /tmp/platform-worker.log)
@@ -106,11 +126,14 @@ until curl -fsS -o /dev/null http://127.0.0.1:3100/health/ready \
 export PLATFORM_BFF_KEY=$(sed -n 's/^PLATFORM_BFF_KEY=//p' "$ENV_FILE" | tail -n 1)
 export MAILPIT_API_URL=http://127.0.0.1:8025
 node tools/perf/platform-smoke.mjs --base http://127.0.0.1:3100 --duration 10      # the Verify command of PBE-063
-node tools/perf/platform-smoke.mjs --base http://127.0.0.1:3100 --json run.json    # the recorded run: 60 s per phase
+node tools/perf/platform-smoke.mjs --base http://127.0.0.1:3100 --json run.json \
+  --api-gc-log /tmp/platform-api.log --worker-gc-log /tmp/platform-worker.log      # the recorded run: 60 s per phase
 node tools/perf/platform-smoke.mjs --help
 ```
 
 A second run on the same stack works: every run makes accounts and OTAs of its own. A recorded run starts from a fresh stack, so the RSS after start-up is the API's own.
+
+**Two runtimes on one build** (PBE-076). Build once (step 1), then repeat steps 2 to 6 for each runtime with its `bin` folder first on `PATH` for the whole run (`export PATH=/opt/node22/bin:$PATH`, say): steps 4 and 5 then start the API, the worker and the test on it, and the report's runtime table names the executable. Interleave the runtimes (A, B, A, B), so that a change in the machine's load does not fall on one of them.
 
 **6. Clean-up.**
 
@@ -135,6 +158,7 @@ rm -f "$ENV_FILE"
 | `--worker-port <port>` | 3101 | The worker's health port, to find the worker's process |
 | `--api-pid`, `--worker-pid` | found by port | The processes whose RSS and CPU are sampled |
 | `--mailpit <url>` | `MAILPIT_API_URL` or `http://127.0.0.1:8025` | Mailpit's API, where the set-up reads the verification e-mails |
+| `--api-gc-log <file>`, `--worker-gc-log <file>` | — | The process's log file, where [`gc-observer.cjs`](#garbage-collection) writes its lines. The report then gives the process's share of time in garbage collection; without the option it says "not asked". |
 | `--json <file>` | — | Also writes the figures as JSON (no account, password, token or key) |
 
 `PLATFORM_BFF_KEY` must be the API's value. The test sends it with every portal call, as the portal's server does ([PADR-0019](../../platform/docs/adr/0019-end-user-ip-forwarding-from-the-portal-and-admin.md)). It is read from the environment only, so it never shows in the process list, and it is never printed.
@@ -142,7 +166,7 @@ rm -f "$ENV_FILE"
 Exit codes:
 
 - **0:** every answer was expected, every phase kept its rate, every target was met, and both processes were measured and stayed within their budgets.
-- **1:** an unexpected answer, a missed target, a phase that did not keep its rate, a process over its budget or not measured, or a set-up that failed. The `Result:` line names each problem.
+- **1:** an unexpected answer, a missed target, a phase that did not keep its rate, a process over its budget or not measured, or a set-up that failed. Since PBE-076 also a peak RSS less than 64 MiB under its `MemoryMax`, and a process that spent more than 5 % of its measured time in garbage collection ([ADR-0029](../../docs/mvp/adr/0029-nodejs-24-runtime.md), PBE-076 step 4); a share that was not measured fails nothing. The `Result:` line names each problem.
 - **2:** a usage error.
 - **130:** interrupted. The report shows what was measured until then. A second Ctrl-C stops at once.
 
@@ -162,7 +186,7 @@ Exit codes:
    | `createTenant` | 1/s | `POST /v1/tenants` with an `Idempotency-Key`, for an account that owns fewer than `--max-tenants-per-account` OTAs |
 
    Every phase that needs access tokens first signs in again any account whose token would not outlive the phase by a minute (tokens live 15 minutes).
-4. **The report.** The test prints the report and, with `--json`, writes it. It leaves the accounts and OTAs in the scratch database, which the clean-up drops.
+4. **The report.** The test reads the processes' Node.js executable (`/proc/<pid>/exe`) and `NODE_OPTIONS` (only that variable of `/proc/<pid>/environ`, which holds the stack's secrets), and with `--api-gc-log` and `--worker-gc-log` their [garbage-collection lines](#garbage-collection). It prints the report and, with `--json`, writes it. It leaves the accounts and OTAs in the scratch database, which the clean-up drops.
 
 ## Reading the report
 
@@ -174,6 +198,8 @@ Exit codes:
 | p95 target, Result | The targets of PBE-063: below 300 ms for the reads (`getTenant`, `listApiKeys`, an uncached `ask`), below 800 ms for `signIn`, below 20 ms for a cached `ask`. `createTenant` has no target. `met` (or `no target`), else what went wrong: `MISSED`, `errors` when an answer was unexpected, `rate not kept`. |
 | API CPU s, Worker CPU s | User plus system CPU seconds each process used during the measured seconds (`/proc/<pid>/stat`) |
 | Load 1m | The 1-minute load average at the start and the end of the measured seconds. The header line gives `nproc` and the three load averages at the start and end of the whole run. |
-| RSS table | `VmRSS` in MiB after start-up (the first sample, before the set-up), at its sampled peak and at the end, and `VmHWM` (the kernel's peak since the process started), against the unit's `MemoryMax` (768 MiB for the API, 512 MiB for the worker). `within` when both the peak and `VmHWM` are at most the budget; `not measured` (a failed run) when the process was not found or its `/proc` files could not be read. The second table gives the RSS at the end of each phase with that phase's peak. |
+| Runtime table | Each process's pid, its Node.js executable and its `NODE_OPTIONS` (`(none)` without one). With the units' flags: `--max-old-space-size=640 --max-semi-space-size=16` for the API, `--max-old-space-size=400 --max-semi-space-size=1` for the worker. |
+| RSS table | `VmRSS` in MiB after start-up (the first sample, before the set-up), at its sampled peak and at the end, and `VmHWM` (the kernel's peak since the process started), against the unit's `MemoryMax` (768 MiB for the API, 512 MiB for the worker). **Headroom** is the budget less the larger of the peak and `VmHWM`. `within` when both are at most the budget with at least 64 MiB to spare; `LOW HEADROOM` when less than 64 MiB is left; `OVER` above the budget; `not measured` (a failed run) when the process was not found or its `/proc` files could not be read. The second table gives the RSS at the end of each phase with that phase's peak. |
+| Garbage-collection table | With `--api-gc-log` and `--worker-gc-log`: the process's runtime and heap limit from its observer lines, the seconds of uptime between its first and last line in the measured seconds (warm-ups included), the milliseconds and pauses in garbage collection in them and their **share** of that time, the highest share between two consecutive lines, and the longest pause. `within` up to 5 %, `OVER` above it, `not measured` (with the reason below the table) when fewer than two lines fell in the measured seconds, the log could not be read, or it held no line of the process. |
 
 The figures are what one process uses next to the others on a shared machine. `MemoryMax` limits the unit's cgroup, which also counts the page cache the process causes; `VmRSS` is the process's resident memory, which is what the budget of architecture §3 adds up.

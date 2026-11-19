@@ -3,6 +3,7 @@
 **Status:** Accepted
 **Date:** 2026-10-12
 **Deciders:** OTA frontend and SDK tech lead. Decided during planning; revisit when the ESM bundle approaches the 25 KB budget, when a consumer needs CommonJS, or when the `next` and `react` helpers are built after the MVP.
+**Revisions:** 2026-11-18 ([ADR-0029](../../../docs/mvp/adr/0029-nodejs-24-runtime.md) item 9, its decisions D5 and D16 approved by the owner on 2026-11-16; task SDK-019): point 7 gains the supported Node versions, Node.js 22.12 and later and 24, declared in `engines.node` (`>=22.12`) and tested in CI on 22.12.0; the CommonJS alternative names the versions that `require()` the ES module bundle (dated notes).
 
 ## Context
 
@@ -54,6 +55,7 @@ Still open:
    - **`exports`:** `"."` → `{ types, development: "./src/index.js", import }`, `"./iife"`; `"sideEffects": false`. The `development` condition lets Vite's dev server use the unbundled source.
    - **Published types:** for npm, the build copies the OTA part of `@velexis/api-types` into `dist/types/api-types.d.ts` and rewrites the import specifier, so the published package has no dependencies, not even for types.
    - **Size:** at most 25 KB min+gzip for the ESM bundle, checked in CI.
+   - **Node versions** (2026-11-18, [ADR-0029](../../../docs/mvp/adr/0029-nodejs-24-runtime.md) item 9, task SDK-019): the SDK supports Node.js 22.12 and later and 24, and `package.json` declares it in `engines.node` (`>=22.12`), which the npm package carries. 22.12.0 is the floor because `require()` of the ES module bundle is on by default from it; on 22.12.x it still prints an `ExperimentalWarning` when the requiring file is outside `node_modules`, which 22.13.0 dropped. CI's non-required job `sdk-node22` runs the unit and contract tests on 22.12.0 until Node 22's end of life on 2027-04-30; every other job runs the `.nvmrc` major.
 8. **Versioning and publication.**
    - `0.x` inside the workspace until M6, then `1.0.0` on npm.
    - A change the contract test would reject is a major version; new methods and options are minor; fixes are patches.
@@ -88,7 +90,7 @@ Still open:
 - **Hand-written interfaces in JSDoc `@typedef` objects.** Duplicates every method signature and its documentation.
 - **Plain interface assignability as the contract check.** Misses narrowed parameters because of method bivariance.
 - **Publishing `@velexis/api-types` as a second npm package.** Two packages to version together for no user benefit.
-- **A CommonJS build.** Node 22 can `require()` ES modules; a second format doubles the test matrix.
+- **A CommonJS build.** Node.js 22.12 and later and 24 `require()` ES modules (22.12.x with an `ExperimentalWarning` outside `node_modules`; until 2026-11-18 this said "Node 22", SDK-019); a second format doubles the test matrix.
 
 ## References
 

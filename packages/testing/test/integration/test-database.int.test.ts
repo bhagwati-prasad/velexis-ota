@@ -11,8 +11,10 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   createTestDatabase,
   databaseUrl,
+  dropDatabase,
   REFERENCE_FIXTURE,
   runIdOfTemplate,
+  TEMPLATE_DATABASE_KEY,
   TEMPLATE_DATABASE_PREFIX,
   TEST_DATABASE_PREFIX,
   TEST_ROLE_NAMES,
@@ -324,6 +326,7 @@ describe("the global setup", () => {
   interface SetupRun {
     readonly name: string | undefined;
     readonly existed: boolean;
+    readonly throwawayExisted: boolean;
     readonly sessions: unknown[];
     readonly cloneCustomers: Awaited<ReturnType<typeof customerIds>>;
     readonly leftoverExisted: boolean;
@@ -344,11 +347,14 @@ describe("the global setup", () => {
     const name = provided.get("velexisTestTemplateDatabase");
     const leftovers: string[] = [];
     let existed: boolean;
+    let throwawayExisted: boolean;
     let sessions: unknown[];
     let cloneCustomers: SetupRun["cloneCustomers"];
     let leftoverExisted: boolean;
     try {
       existed = await databaseExists(name as string);
+      // The throwaway database whose DROP flushed the template's files (flushTemplateFiles) is gone again.
+      throwawayExisted = await databaseExists(`${name as string}_flush`);
       // A template keeps no session of its own after the build, so it can be cloned: once the build's sessions have
       // exited (a bounded wait, SESSIONS_END_WAIT), none is left; the test asserts that.
       sessions = await sessionsLeftOn(name as string);
@@ -368,6 +374,7 @@ describe("the global setup", () => {
     observed = {
       name,
       existed,
+      throwawayExisted,
       sessions,
       cloneCustomers,
       leftoverExisted,
@@ -393,6 +400,11 @@ describe("the global setup", () => {
     for (const existsAfter of observed.leftoversAfterTeardown) {
       expect(existsAfter).toBe(false);
     }
+  });
+
+  it("leaves no throwaway database of the build behind [FIX-W60-TESTS]", () => {
+    expect(observed.existed).toBe(true);
+    expect(observed.throwawayExisted).toBe(false);
   });
 });
 
@@ -425,4 +437,62 @@ describe("two test files running in parallel", () => {
     },
     BARRIER_TIMEOUT_MS + 10_000,
   );
+});
+
+describe("the global setup's teardown while a clone's drop still runs", () => {
+  /** How the clone's drop and the teardown ended (`fulfilled`, or the reason), and what was left. */
+  interface RaceRun {
+    readonly outcomes: readonly string[];
+    readonly cloneExistsAfter: boolean;
+    readonly templateExistsAfter: boolean;
+  }
+  let observed: RaceRun;
+  /** The template and the clone this block made; afterAll removes what a failed run left of them. */
+  const made: string[] = [];
+
+  // A file's afterAll that went past its hook budget leaves its clone's DROP running while Vitest starts the global
+  // teardown (FIX-W60-TESTS). During that DROP, PostgreSQL marks the clone invalid (datconnlimit -2), and an ALTER
+  // DATABASE on it fails with a FATAL 55000; the teardown must still drop the clone and the template. Whether the
+  // teardown meets the clone in that window depends on timing (it did in 6 of 6 local runs with the dropDatabase of
+  // before FIX-W60-TESTS, and this test failed each time with "cannot alter invalid database"); the outcome must not.
+  // The global setup builds a whole template, so this runs in the setup hook with TEMPLATE_TIMEOUT_MS, and not inside
+  // the test's 5 s. The block comes after "two test files running in parallel", so its template build never delays
+  // this file's arrival at the barrier, where test-database-parallel.int.test.ts waits at most BARRIER_TIMEOUT_MS.
+  beforeAll(async () => {
+    const provided = new Map<string, string>();
+    const teardown = await setup({ provide: (key, value) => provided.set(key, value) });
+    const template = provided.get(TEMPLATE_DATABASE_KEY) as string;
+    made.push(template);
+    let clone: TestDatabase;
+    try {
+      clone = await createTestDatabase({ template });
+    } catch (error) {
+      await teardown();
+      throw error;
+    }
+    made.push(clone.name);
+    // The clone's drop starts first and is not awaited before the teardown starts.
+    const settled = await Promise.allSettled([clone.drop(), teardown()]);
+    observed = {
+      outcomes: settled.map((result) =>
+        result.status === "fulfilled" ? "fulfilled" : String(result.reason),
+      ),
+      cloneExistsAfter: await databaseExists(clone.name),
+      templateExistsAfter: await databaseExists(template),
+    };
+  }, TEMPLATE_TIMEOUT_MS);
+
+  // Nothing is left when the test passes. After a failure the clone and the template go here, best effort, so that a
+  // failed run leaves no database behind (this run's teardown drops only the clones of its own run id).
+  afterAll(async () => {
+    for (const name of made) {
+      await dropDatabase(adminUrl, name).catch(() => undefined);
+    }
+  });
+
+  it("lets both resolve and leaves neither the clone nor the template [FIX-W60-TESTS]", () => {
+    expect(observed.outcomes).toEqual(["fulfilled", "fulfilled"]);
+    expect(observed.cloneExistsAfter).toBe(false);
+    expect(observed.templateExistsAfter).toBe(false);
+  });
 });

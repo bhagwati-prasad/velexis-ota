@@ -6,7 +6,7 @@ Read first: [ADR-0018](../../../docs/mvp/adr/0018-hosted-storefront-custom-domai
 
 ## Run it
 
-It needs no root and no network beyond `127.0.0.1`: the Velexis Caddy build, Node 22, `curl`, `openssl`, `awk` and `sha256sum`. The app ports 3000, 3001, 3002, 3100 and 4000 (echo upstream), 8080 and 8443 (Caddy) must be free, and nothing may listen on 2019. A run takes about 15 seconds.
+It needs no root and no network beyond `127.0.0.1`: the Velexis Caddy build, any `node` (`SMOKE_NODE`, else the one on `PATH`), `curl`, `openssl`, `awk` and `sha256sum`. The app ports 3000, 3001, 3002, 3100 and 4000 (echo upstream), 8080 and 8443 (Caddy) must be free, and nothing may listen on 2019. A run takes about 15 seconds.
 
 ```bash
 # The Velexis Caddy build (Linux x86_64, outbound HTTPS to proxy.golang.org and sum.golang.org, about 2 minutes;

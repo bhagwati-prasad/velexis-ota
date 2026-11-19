@@ -2,7 +2,7 @@
 // @ts-check
 // fetch.mjs: build the vendored reference datasets of @velexis/reference-data (task X-017, ADR-0024).
 //
-// Usage (plain Node 22, no dependencies):
+// Usage (plain Node of the `.nvmrc` major, no dependencies):
 //   node tools/reference-data/scripts/fetch.mjs --check   validate the committed files offline and exit (CI-safe)
 //   node tools/reference-data/scripts/fetch.mjs           download the sources and rewrite data/*.csv and SOURCES.md
 //

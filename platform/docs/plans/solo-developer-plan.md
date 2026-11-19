@@ -360,7 +360,7 @@ Each week lists its goal, the tasks in order with their days, the deliverables, 
 - **Tasks:** PBE-077 (½ day, M0 tag, before the switch X-048), PBE-076 (1 day, after X-048 and PBE-063).
 - **Deliverables:** one exported check that every `xn--` label of a host name decodes and encodes back to itself, used by the custom-domain rules and the API-key origin rules, with the same results on Node 22 and 24 (PBE-077); the platform API's and worker's figures on Node.js 24 beside Node 22's, from one build and the units' flags, with their share of time in garbage collection, in [`../performance.md`](../performance.md) (PBE-076).
 - **Demo:** `xn--zz.example.com` refused as a custom domain on both runtimes; both runtimes' p95 and peak RSS side by side.
-- **Overlap:** the roadmap's Node.js 24 block: PBE-077 in C81 with X-046 and X-047, PBE-076 in C83 with OTA Week 39f (OBE-103, SDK-019) and X-029 and X-032.
+- **Overlap:** the roadmap's Node.js 24 block: PBE-077 in C81 with X-046 and X-047, PBE-076 in C83 with OTA Week 39f (OBE-103, SDK-019 and, since 2026-11-18, OBE-104) and X-029 and X-032.
 
 ### Week 31 — M6 exit: suites, switch removal and launch
 

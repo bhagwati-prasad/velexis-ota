@@ -147,7 +147,7 @@ Related: [`architecture.md`](architecture.md) (where each piece runs), [`convent
 
 | Aspect | Choice |
 |---|---|
-| Runtime | Browsers (ES2022) and Node.js 22. Only platform APIs. |
+| Runtime | Browsers (ES2022), Node.js 22.12 and later and 24 (`engines.node` `>=22.12`; on 22.12.x a `require()` of the ES module bundle prints an `ExperimentalWarning`, gone from 22.13.0), edge runtimes. Only platform APIs. CI runs the SDK's tests on the `.nvmrc` major and, in the non-required job `sdk-node22`, on 22.12.0 until Node 22's end of life on 2027-04-30 ([ADR-0029](adr/0029-nodejs-24-runtime.md) item 9; SDK-019). |
 | Framework | None. **No runtime dependencies.** |
 | Key libraries | `@velexis/api-types` (types only, in JSDoc) |
 | Test tools | Vitest with a fake `fetch`, `tsc --checkJs`, the contract check against `docs/velexis-sdk/sdk/src/` |

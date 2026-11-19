@@ -28,11 +28,12 @@ import { parseWorkflow, scalar, withOf } from "./workflow-reader.mjs";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 /**
- * Jobs (by job id, in any workflow) whose actions/setup-node step may set its own `node-version`. Empty now; SDK-019
- * adds `sdk-node22`, the SDK's tests on the oldest Node.js it supports (ADR-0029 item 9). An entry that names no job
- * with an actions/setup-node step fails, so the list cannot outlive its job.
+ * Jobs (by job id, in any workflow) whose actions/setup-node step may set its own `node-version`. Only ci.yml's
+ * `sdk-node22` (SDK-019, ADR-0029 item 9): the SDK's unit and contract tests on Node.js 22.12.0, the oldest Node.js
+ * the SDK supports, until Node 22's end of life on 2027-04-30, when a task removes the job and this entry. An entry
+ * that names no job with an actions/setup-node step fails, so the list cannot outlive its job.
  */
-const EXEMPT_JOBS = [];
+const EXEMPT_JOBS = ["sdk-node22"];
 
 const NVMRC = ".nvmrc";
 const PROVISION = "deploy/scripts/provision-vm.sh";
@@ -507,11 +508,30 @@ describe("the Node.js major of .nvmrc", () => {
     const dir = scratchCopy({
       [`${WORKFLOWS}/scratch.yml`]: SCRATCH_WORKFLOW([`node-version: ${MAJOR - 2}.12.0`]),
     });
-    assert.deepEqual(majorProblems(dir, { exemptJobs: ["scratch-job"] }).problems.map(format), []);
-    assert.deepEqual(majorProblems(dir, { exemptJobs: ["scratch-job", "sdk-node22"] }).problems.map(format), [
-      `${WORKFLOWS}: EXEMPT_JOBS names sdk-node22, which no workflow runs actions/setup-node in`,
+    assert.deepEqual(
+      majorProblems(dir, { exemptJobs: ["scratch-job", ...EXEMPT_JOBS] }).problems.map(format),
+      [],
+    );
+    assert.deepEqual(
+      majorProblems(dir, { exemptJobs: ["scratch-job", ...EXEMPT_JOBS, "sdk-node20"] }).problems.map(format),
+      [`${WORKFLOWS}: EXEMPT_JOBS names sdk-node20, which no workflow runs actions/setup-node in`],
+    );
+  });
+
+  it("[SDK-019 AC2] the exemption list is ci.yml's sdk-node22 alone, and without it that job's node-version fails", () => {
+    assert.deepEqual(EXEMPT_JOBS, ["sdk-node22"], "SDK-019's job (ADR-0029 items 2 and 9), nothing else");
+    const CI = `${WORKFLOWS}/ci.yml`;
+    const [line] = linesWith(CI, "node-version: 22.12.0");
+    assert.ok(line > 0, "ci.yml's sdk-node22 job sets node-version: 22.12.0");
+    const step = linesWith(CI, "uses: actions/setup-node@")
+      .filter((at) => at < line)
+      .at(-1);
+    // Exempt by name only: the same repository without the entry fails on that job's step, and nowhere else.
+    assert.deepEqual(majorProblems(ROOT, { exemptJobs: [] }).problems.map(format), [
+      `${CI}:${line}: the job sdk-node22 sets node-version: 22.12.0 (Node.js 22); .nvmrc names ${MAJOR}, and only the jobs of EXEMPT_JOBS may set their own`,
+      `${CI}:${step}: the job sdk-node22's actions/setup-node step reads no node-version-file, not node-version-file: .nvmrc (Node.js ${MAJOR})`,
     ]);
-    assert.deepEqual(EXEMPT_JOBS, [], "empty until SDK-019 adds sdk-node22 with its job (ADR-0029 item 9)");
+    assert.deepEqual(majorProblems(ROOT).problems.map(format), []);
   });
 
   it("[X-047 AC1] an @types/node or a demo-page nvm command of another major fails, naming its line", () => {

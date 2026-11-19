@@ -25,7 +25,7 @@ The vendored reference datasets of the `reference` schema ([`reference.sql`](../
 
 ## Commands
 
-The scripts are plain Node 22 without dependencies. The loader is TypeScript (`pnpm build` → `dist/`) and depends on `pg`, `@velexis/config` and `@velexis/logger`.
+The scripts are plain Node (the `.nvmrc` major) without dependencies. The loader is TypeScript (`pnpm build` → `dist/`) and depends on `pg`, `@velexis/config` and `@velexis/logger`.
 
 | Command | What it does |
 |---|---|
@@ -47,7 +47,7 @@ The scripts are plain Node 22 without dependencies. The loader is TypeScript (`p
 ## Refreshing the snapshot (quarterly, as a normal pull request)
 
 1. Read the [CLDR release notes](https://cldr.unicode.org/index/downloads) and, if a newer release exists, bump `CLDR_TAG` in `scripts/fetch.mjs` (a [cldr-json](https://github.com/unicode-org/cldr-json) tag). OpenTravelData has no releases: the script reads the `master` branch and records the SHA-256 of what it got.
-2. Run `NODE_USE_ENV_PROXY=1 node tools/reference-data/scripts/fetch.mjs` on Node 22. It:
+2. Run `NODE_USE_ENV_PROXY=1 node tools/reference-data/scripts/fetch.mjs` on the `.nvmrc` major (Node 24). It:
    - stops if the OpenTravelData README no longer states CC BY 4.0 or the CLDR `LICENSE` is no longer the Unicode License v3 (the licences are re-checked on every snapshot, ADR-0024);
    - stops, writing nothing, if the new snapshot fails validation, including a table shorter than its plausible minimum (`MIN_ROWS`);
    - keeps `data/overrides.csv` as it is (an override whose key disappeared now fails validation: remove it or move the fix upstream).

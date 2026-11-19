@@ -5,12 +5,12 @@
 #
 #   sudo env SMOKE_NODE="$(command -v node)" bash deploy/systemd/test/units-smoke.sh
 #
-# Needs root, systemd as PID 1, Node 22 (SMOKE_NODE; the units run a root-owned copy of it), openssl, nft (package
-# nftables) and ip (iproute2), PostgreSQL and Redis on loopback, outbound DNS and HTTPS, and a Mailpit. CI runs it in
-# the "systemd-units" job of .github/workflows/ci.yml (ubuntu-24.04 runner, PostgreSQL, Redis and Mailpit service
-# containers). On a throwaway VM, start Mailpit first (mailpit --smtp 127.0.0.1:1025 --listen 127.0.0.1:8025). Never
-# run it on the production VM: it stops nothing there, but it creates and removes test units, users and folders.
-# Without systemd as PID 1 it runs steps 1 to 3 and then fails.
+# Needs root, systemd as PID 1, Node of the `.nvmrc` major (SMOKE_NODE; the units run a root-owned copy of it),
+# openssl, nft (package nftables) and ip (iproute2), PostgreSQL and Redis on loopback, outbound DNS and HTTPS, and a
+# Mailpit. CI runs it in the "systemd-units" job of .github/workflows/ci.yml (service containers). On a throwaway VM,
+# install Mailpit before provision-vm.sh's step egress or through docs/mvp/runbooks/outbound-allow-list.md §4 (the
+# emergency opening), and start it first (mailpit --smtp 127.0.0.1:1025 --listen 127.0.0.1:8025). Never run it on the
+# production VM: it creates and removes test units, users and folders. Without systemd as PID 1 it fails after step 3.
 #
 # What it proves (docs/mvp/plans/foundation-tasks.md; a check that proves an acceptance criterion ends in
 # [<task> AC<n>]):
@@ -66,10 +66,10 @@
 #      journal, the mail or the outputs of the one-off commands (X-021, X-033).
 #
 # Settings (environment), with defaults: SMOKE_NODE (node on PATH), SMOKE_PG (127.0.0.1:5432), SMOKE_REDIS
-# (127.0.0.1:6379), SMOKE_HTTPS_URL (https://api.github.com/), SMOKE_SMTP_URL (smtp://127.0.0.1:1025),
+# (127.0.0.1:6379), SMOKE_HTTPS_URL (https://api.github.com/, which a provisioned VM's allow-list refuses: there use a
+# host of deploy/egress/allowed-hosts.conf, such as https://api.stripe.com/), SMOKE_SMTP_URL (smtp://127.0.0.1:1025),
 # MAILPIT_API_URL (http://127.0.0.1:8025), SMOKE_SMTP_TLS (ALERT_SMTP_TLS of the test alert.env: none),
-# SMOKE_NODE_EXTRA_CA_CERTS (a CA bundle, only where an egress proxy re-signs TLS), SMOKE_KEEP=1 (keep the
-# prefix, the test units and users for inspection).
+# SMOKE_NODE_EXTRA_CA_CERTS (a CA bundle where a proxy re-signs TLS), SMOKE_KEEP=1 (keep the prefix, units, users).
 # =====================================================================================================
 set -euo pipefail
 umask 022

@@ -44,18 +44,28 @@
 //      last claimed by a sync, 7 hours ago, so every booking with an order is due for the booking sync: each
 //      `bookings.sync_scan` (every 10 minutes) then enqueues its most, up to 20 bookings per tenant; and it rewrites the
 //      bookings whose order came back without tickets as card-paid issuance retries (`deferredToRetries`);
-//   6. every --sample-s seconds: the RSS of the API and the worker, the connections of the run's database
+//   6. every --sample-s seconds: the RSS of the API and the worker and their heap figures (heap used and total,
+//      external, array buffers; the last three since OBE-104), the connections of the run's database
 //      (`pg_stat_activity`, by application), Redis's memory, clients and keys, the worker's `/health/ready` queues
-//      (waiting jobs, the oldest wait, failures in the last hour) and the 1-minute load average;
+//      (waiting jobs, the oldest wait, failures in the last hour) and the 1-minute load average; with every sample the
+//      run takes the preloads' recordings (pool waits, jobs) out of the two processes (OBE-104), so they never hold more
+//      than one interval of them in the heap the run measures; every --window-minutes it prints a progress line with
+//      `nproc` and the load average, which the JSON keeps;
 //   7. the report: p50/p95/p99 per operation, the journeys, the Amadeus calls, the e-mails, the API's and the worker's
-//      CPU and RSS against their `MemoryMax` (768 and 512 MiB), the connections against the pools and
+//      CPU, their RSS against the `MemoryMax` of their units (read from the unit files with X-050's parseUnitMemoryMax,
+//      768 and 512 MiB; a unit that cannot be read stops the run) with the headroom under it, and the time each spent
+//      in garbage collection (OBE-103: per process, per minute and per window), the connections against the pools and
 //      `max_connections`, Redis's memory against the VM's `maxmemory` (512 MiB) and `MEMORY USAGE` of the run's keys
 //      by kind and of its jobs by name at the end (what one completed job holds), what the completed jobs hold at the
 //      run's rate, each queue's for the retention its jobs carry (OBE-101), the queue latency per queue and per
 //      job against
 //      --queue-budget-s for `ota-ticketing` and `ota-bookings`, the bookings' outcomes, the database and
-//      document storage growth, a timeline per --window-minutes, and the run (date, commit, `nproc`, the load average
-//      at the start, at the end and per window). --json <file> writes the same figures as JSON.
+//      document storage growth, a timeline per --window-minutes, the memory over time (OBE-104: per process, a row per
+//      --table-minutes with each memory figure and the share of time in garbage collection, the least-squares slope of
+//      each figure in MiB per minute with r² over minutes 30-90, 90-180 and the last 60, and whether its memory settles:
+//      an RSS slope below 0.02 MiB per minute over minutes 90-180 with a heap-used slope not above it), and the run
+//      (date, commit, `nproc`, the load average at the start, at the end and per window). --json <file> writes the
+//      same figures as JSON.
 // Everything is removed at the end, also after Ctrl-C or a SIGTERM: the processes, the database, the Redis database's
 // keys and the temporary folder (with the documents the worker rendered).
 //
@@ -66,7 +76,16 @@
 // password, a token, a card number or a connection string; the card is test data and lives in memory only.
 import { fork } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { closeSync, mkdtempSync, openSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { createServer as createNetServer } from "node:net";
 import os from "node:os";
@@ -77,6 +96,7 @@ import { parseArgs } from "node:util";
 
 import { unitNodeOptions } from "../../../../tools/perf/unit-node-options.mjs";
 import {
+  API_UNIT,
   apiEnv,
   ask,
   BACKEND_DIR,
@@ -88,11 +108,15 @@ import {
   commitOf,
   err,
   freePort,
+  GC_SHARE_BOUND_PERCENT,
+  gcFiguresOf,
+  gcText,
   interruption,
   isoDay,
   LOG_TAIL_LINES,
   loadAverage,
   loadPackages,
+  MEMORY_HEADROOM_BYTES,
   mib,
   out,
   pauseFor,
@@ -100,6 +124,7 @@ import {
   REPO_ROOT,
   RESULTS_LIMIT,
   round1,
+  round2,
   rounded,
   seedTenants,
   serveAmadeus,
@@ -112,6 +137,7 @@ import {
   tail,
   TENANT_KEYS,
   throwIfInterrupted,
+  unitMemoryMax,
   UsageError,
   visitorAddress,
   writeKeyFiles,
@@ -131,8 +157,9 @@ const WORKER_POOL = "ota-worker";
 const POOL_MAX = Object.freeze({ "ota-api": 20, "ota-worker": 10 });
 /** The OTA worker's systemd unit: the worker starts with the flags of its NODE_OPTIONS, read from the file (X-050). */
 const WORKER_UNIT = join(REPO_ROOT, "deploy", "systemd", "velexis-ota-worker.service");
-/** `MemoryMax` of the units (deploy/systemd), in bytes: docs/mvp/architecture.md §3. */
-const MEMORY_MAX = Object.freeze({ api: 768 * 1_048_576, worker: 512 * 1_048_576 });
+// The units' `MemoryMax` (docs/mvp/architecture.md §3) is read from the unit files at the start of a run
+// (`unitMemoryMax` of search-load.mjs, X-050's parseUnitMemoryMax; lead decision (27g) of 2026-11-17): a unit that
+// cannot be read or sets no limit stops the run before its set-up.
 /** The VM's PostgreSQL `max_connections` and Redis `maxmemory` (docs/mvp/deployment-single-vm.md §5). */
 const VM_MAX_CONNECTIONS = 100;
 const VM_REDIS_MAXMEMORY = 512 * 1_048_576;
@@ -210,6 +237,41 @@ const TABLES_SHOWN = 14;
 const DRAIN_MS = 120_000;
 /** The airline card's limit of completions an hour per tenant (`airlineCardPerTenant`, src/common/http/rate-limits.ts). */
 const AIRLINE_CARD_PER_TENANT_PER_HOUR = 60;
+/**
+ * The memory figures of each process's samples (OBE-104): `process.memoryUsage()`'s rss, heapUsed, heapTotal, external
+ * and arrayBuffers, by the suffix of their keys in a sample (`apiRssBytes`, `workerHeapBytes`, …).
+ */
+const MEMORY_FIGURES = Object.freeze([
+  ["rss", "RssBytes"],
+  ["heapUsed", "HeapBytes"],
+  ["heapTotal", "HeapTotalBytes"],
+  ["external", "ExternalBytes"],
+  ["arrayBuffers", "ArrayBuffersBytes"],
+]);
+/**
+ * The windows of the memory slopes (OBE-104 step 2), in minutes of the phase: minutes 30-90, 90-180 and the last 60 of
+ * --minutes. A window the run's --minutes does not reach is still fitted over the samples it has, and marked so.
+ */
+const SLOPE_WINDOWS = Object.freeze([
+  { label: "30-90", from: 30, to: 90 },
+  { label: "90-180", from: 90, to: 180 },
+  { label: "last 60", last: 60 },
+]);
+/**
+ * A process's memory settles when its RSS slope over minutes 90-180 is below 0.02 MiB a minute (about 1 MiB an hour)
+ * and its heap-used slope over the same window is not above it (OBE-104 step 4). Reported; not part of the exit code.
+ */
+const SETTLE_WINDOW = "90-180";
+const SETTLE_SLOPE_MIB_PER_MINUTE = 0.02;
+/** A window needs this many samples for a slope. */
+const SLOPE_MIN_SAMPLES = 3;
+/**
+ * The signal of a diagnosis run's heap snapshots (`--heap-snapshots`, OBE-104 step 4). Not SIGUSR2: Nest's
+ * `enableShutdownHooks()`, which the API and the worker call with no list, closes the application on SIGUSR2 too (and
+ * sends it to itself again once closed), so OBE-104's first diagnosis run lost its worker at the first snapshot.
+ * SIGWINCH is in no shutdown list, and a process without the handler ignores it.
+ */
+const HEAP_SNAPSHOT_SIGNAL = "SIGWINCH";
 
 const USAGE = `Usage: node ota/backend/test/load/booking-load.mjs [options]
 
@@ -233,9 +295,14 @@ const USAGE = `Usage: node ota/backend/test/load/booking-load.mjs [options]
   --queue-budget-s <n>            the longest wait of an ota-ticketing or ota-bookings job (default 60)
   --sample-s <n>                  seconds between two samples of the processes, PostgreSQL and Redis (default 5)
   --window-minutes <n>            minutes per row of the timeline (default 5)
+  --table-minutes <n>             minutes per row of the memory table (default 30)
   --redis-db <n>                  the Redis database of the run, 1 to 15, emptied before and after (default 13)
   --app-env <env>                 APP_ENV of the API and the worker: production (as on the VM) or test
   --json <file>                   also write the figures as JSON
+  --heap-snapshots <processes>    api, worker or api,worker: start each with --heapsnapshot-signal and take a heap
+                                  snapshot of it at each of --heap-snapshot-minutes (a diagnosis run, OBE-104 step 4)
+  --heap-snapshot-minutes <list>  minutes of the phase for the snapshots, comma-separated (default 30,60)
+  --heap-snapshot-dir <dir>       an existing folder for the snapshots (they outlive the run's temporary folder)
   -h, --help                      this text
 
 Build first with \`${BUILD_COMMAND}\`; PostgreSQL and Redis must run (TEST_DATABASE_ADMIN_URL, REDIS_URL).
@@ -260,6 +327,7 @@ const INTEGER_OPTIONS = Object.freeze([
   ["queue-budget-s", 60, 1, 3_600],
   ["sample-s", 5, 1, 60],
   ["window-minutes", 5, 1, 60],
+  ["table-minutes", 30, 1, 240],
   ["redis-db", 13, 1, 15],
 ]);
 
@@ -276,6 +344,9 @@ function parseOptions(argv) {
       options: {
         ...Object.fromEntries(INTEGER_OPTIONS.map(([name]) => [name, { type: "string" }])),
         "app-env": { type: "string" },
+        "heap-snapshots": { type: "string" },
+        "heap-snapshot-minutes": { type: "string" },
+        "heap-snapshot-dir": { type: "string" },
         json: { type: "string" },
         role: { type: "string" },
         help: { type: "boolean", short: "h" },
@@ -304,6 +375,25 @@ function parseOptions(argv) {
     throw new UsageError("--app-env must be production or test");
   }
   options.appEnv = appEnv;
+  // OBE-104 step 4: heap snapshots of the processes whose memory does not settle.
+  const snapshots = values["heap-snapshots"];
+  if (snapshots !== undefined) {
+    const processes = [...new Set(snapshots.split(","))];
+    if (processes.some((name) => name !== "api" && name !== "worker")) {
+      throw new UsageError("--heap-snapshots must be api, worker or api,worker");
+    }
+    const minutes = (values["heap-snapshot-minutes"] ?? "30,60").split(",").map((m) => Number(m));
+    if (minutes.some((m) => !Number.isSafeInteger(m) || m < 1 || m > options.minutes)) {
+      throw new UsageError("--heap-snapshot-minutes must be whole minutes of the phase, from 1 to --minutes");
+    }
+    const dir = values["heap-snapshot-dir"];
+    if (dir === undefined || !existsSync(dir) || !statSync(dir).isDirectory()) {
+      throw new UsageError("--heap-snapshots needs --heap-snapshot-dir, an existing folder");
+    }
+    options.heapSnapshots = { processes, minutes, dir: resolve(dir) };
+  } else if (values["heap-snapshot-minutes"] !== undefined || values["heap-snapshot-dir"] !== undefined) {
+    throw new UsageError("--heap-snapshot-minutes and --heap-snapshot-dir need --heap-snapshots");
+  }
   if (options.role !== undefined && options.role !== AMADEUS_ROLE && options.role !== MAIL_ROLE) {
     throw new UsageError(`unknown --role ${options.role}`);
   }
@@ -1152,12 +1242,64 @@ async function takeSample({ api, worker, monitor, redis, workerReadyUrl, started
     workerRssBytes: workerSample?.rssBytes,
     apiHeapBytes: apiSample?.heapUsedBytes,
     workerHeapBytes: workerSample?.heapUsedBytes,
+    // OBE-104: the rest of process.memoryUsage(), for the memory over time.
+    apiHeapTotalBytes: apiSample?.heapTotalBytes,
+    workerHeapTotalBytes: workerSample?.heapTotalBytes,
+    apiExternalBytes: apiSample?.externalBytes,
+    workerExternalBytes: workerSample?.externalBytes,
+    apiArrayBuffersBytes: apiSample?.arrayBuffersBytes,
+    workerArrayBuffersBytes: workerSample?.arrayBuffersBytes,
     connections: connections === undefined ? undefined : { total, active, byApp },
     redisUsedBytes: memory === undefined ? undefined : Number(memory.used_memory),
     redisRssBytes: memory === undefined ? undefined : Number(memory.used_memory_rss),
     redisClients: clients === undefined ? undefined : Number(clients.connected_clients),
     redisKeys: keys,
     queues,
+  };
+}
+
+/**
+ * The preloads' recordings the run took out of the processes during the phase (OBE-104, header step 6): their pool
+ * waits and, the worker's, its jobs. A take that was not answered counts as `lost`: its recordings are missing.
+ */
+function newRecordings() {
+  return { poolWaitsMs: [], jobs: { starts: [], ends: [] }, takes: 0, lost: 0 };
+}
+
+/**
+ * Takes the recordings of `service`'s preload into `recordings` (a `take`, which the preload answers with what it
+ * recorded since the last reset or take, and starts anew). Their statements are left out: this report has none.
+ */
+async function takeRecordings(service, recordings) {
+  try {
+    const taken = await service.take();
+    recordings.takes += 1;
+    for (const ms of taken.poolWaitsMs ?? []) {
+      recordings.poolWaitsMs.push(ms);
+    }
+    for (const start of taken.jobs?.starts ?? []) {
+      recordings.jobs.starts.push(start);
+    }
+    for (const end of taken.jobs?.ends ?? []) {
+      recordings.jobs.ends.push(end);
+    }
+  } catch {
+    recordings.lost += 1;
+  }
+}
+
+/** The end `stats` of a process with the recordings taken before them in front of its own (OBE-104). */
+function withRecordings(end, recordings) {
+  return {
+    ...end,
+    poolWaitsMs: recordings.poolWaitsMs.concat(end.poolWaitsMs ?? []),
+    jobs:
+      end.jobs === undefined
+        ? undefined
+        : {
+            starts: recordings.jobs.starts.concat(end.jobs.starts),
+            ends: recordings.jobs.ends.concat(end.jobs.ends),
+          },
   };
 }
 
@@ -1386,7 +1528,7 @@ const most = (samples, pick) => {
 };
 
 /** The timeline (header step 7): one row per --window-minutes of the measured phase. */
-function timelineOf(options, records, outcomes, samples, jobs, phaseMs) {
+function timelineOf(options, records, outcomes, samples, jobs, phaseMs, gc) {
   const windowMs = options.windowMinutes * 60_000;
   const windows = Math.max(1, Math.ceil(phaseMs / windowMs));
   const rows = [];
@@ -1398,6 +1540,20 @@ function timelineOf(options, records, outcomes, samples, jobs, phaseMs) {
     const samplesIn = samples.filter((s) => inWindow(s.at));
     const p95 = (operation) => summarize(okTimes(recordsIn, operation)).p95;
     const loads = samplesIn.map((s) => s.load1);
+    // The share of the window a process spent in garbage collection, from its preload's sums per minute (they count
+    // from the reset at the phase's start): the window's whole minutes of the phase, over their length. The minute
+    // that holds the phase's end also holds the collections after it, up to the report, and the minutes after it
+    // only those, so none of them counts: a last window without a whole minute of the phase (the seconds of the
+    // journeys still in flight after the last full window) gets none.
+    const gcShareOf = (figures) => {
+      const first = index * options.windowMinutes;
+      const minutes = Math.min(options.windowMinutes, Math.floor(phaseMs / 60_000) - first);
+      if (figures === undefined || minutes <= 0) {
+        return undefined;
+      }
+      const ms = figures.perMinuteMs.slice(first, first + minutes).reduce((total, value) => total + value, 0);
+      return round1((ms / (minutes * 60_000)) * 100);
+    };
     const waitsOf = (queue) =>
       jobs.starts
         .filter(([q, , at, wait]) => q === queue && wait !== null && inWindow(at - jobs.startedAtEpoch))
@@ -1415,6 +1571,8 @@ function timelineOf(options, records, outcomes, samples, jobs, phaseMs) {
       workerRssMiB: mib(most(samplesIn, (s) => s.workerRssBytes)),
       connections: most(samplesIn, (s) => s.connections?.total),
       redisMiB: mib(most(samplesIn, (s) => s.redisUsedBytes)),
+      apiGcPercent: gcShareOf(gc.api),
+      workerGcPercent: gcShareOf(gc.worker),
       maxWaitMs: Object.fromEntries(
         ["ota-ticketing", "ota-bookings", "ota-notifications", "ota-documents", "ota-maintenance"].map(
           (q) => [q, round1(most(waitsOf(q), (value) => value))],
@@ -1427,6 +1585,135 @@ function timelineOf(options, records, outcomes, samples, jobs, phaseMs) {
     });
   }
   return rows;
+}
+
+const round4 = (value) => (value === undefined ? undefined : Math.round(value * 10_000) / 10_000);
+
+/**
+ * The least-squares line through `points` (`[x, y]`): its slope and r² (`undefined` for a flat series, whose r² is
+ * not defined), or `undefined` with fewer than SLOPE_MIN_SAMPLES points or a single x.
+ */
+export function leastSquares(points) {
+  const n = points.length;
+  if (n < SLOPE_MIN_SAMPLES) {
+    return undefined;
+  }
+  let sumX = 0;
+  let sumY = 0;
+  for (const [x, y] of points) {
+    sumX += x;
+    sumY += y;
+  }
+  const meanX = sumX / n;
+  const meanY = sumY / n;
+  let sxx = 0;
+  let sxy = 0;
+  let syy = 0;
+  for (const [x, y] of points) {
+    sxx += (x - meanX) ** 2;
+    sxy += (x - meanX) * (y - meanY);
+    syy += (y - meanY) ** 2;
+  }
+  if (sxx === 0) {
+    return undefined;
+  }
+  return { slope: sxy / sxx, r2: syy === 0 ? undefined : (sxy * sxy) / (sxx * syy), n };
+}
+
+/**
+ * The memory over time (OBE-104, header step 7), per process: a row per --table-minutes of the phase with each memory
+ * figure's mean, most and last sample (MiB) and the share of the row's whole minutes the process spent in garbage
+ * collection; the least-squares slope of each figure in MiB per minute with r² over SLOPE_WINDOWS; and whether its
+ * memory settles (SETTLE_WINDOW, SETTLE_SLOPE_MIB_PER_MINUTE). The rows are --table-minutes each from the phase's
+ * start over --minutes; the last one is shorter when --minutes is not a multiple of --table-minutes (named
+ * `<from>-end`, as is the one row of a phase shorter than a row), and it also holds the samples after the last minute
+ * (the journeys still in flight and the run's last sample). `gc` is `{api, worker}` of gcFiguresOf.
+ */
+export function memoryOverTime(options, samples, phaseMs, gc) {
+  const rows = Math.max(1, Math.ceil(options.minutes / options.tableMinutes));
+  const minuteOf = (sample) => sample.at / 60_000;
+  const wholeMinutes = Math.floor(phaseMs / 60_000);
+  const gcShareOf = (figures, from, to) => {
+    const minutes = Math.min(to, wholeMinutes) - from;
+    if (figures === undefined || minutes <= 0) {
+      return undefined;
+    }
+    const ms = figures.perMinuteMs.slice(from, from + minutes).reduce((total, value) => total + value, 0);
+    return round2((ms / (minutes * 60_000)) * 100);
+  };
+  const windows = SLOPE_WINDOWS.map((w) => {
+    const from = w.last === undefined ? w.from : options.minutes - w.last;
+    const to = w.last === undefined ? w.to : options.minutes;
+    // A window the run's traffic does not reach is fitted over the samples it has, and marked as not covered.
+    return { label: w.label, from: Math.max(0, from), to, covered: from >= 0 && options.minutes >= to };
+  });
+  const processes = {};
+  for (const name of ["api", "worker"]) {
+    const valuesOf = (list, suffix) =>
+      list.map((s) => s[`${name}${suffix}`]).filter((value) => typeof value === "number");
+    const table = [];
+    for (let index = 0; index < rows; index += 1) {
+      const from = index * options.tableMinutes;
+      const to = from + options.tableMinutes;
+      const last = index === rows - 1;
+      const inRow = samples.filter((s) => minuteOf(s) >= from && (last || minuteOf(s) < to));
+      const figures = {};
+      for (const [figure, suffix] of MEMORY_FIGURES) {
+        const values = valuesOf(inRow, suffix);
+        figures[figure] =
+          values.length === 0
+            ? {}
+            : {
+                meanMiB: mib(values.reduce((a, b) => a + b, 0) / values.length),
+                maxMiB: mib(Math.max(...values)),
+                endMiB: mib(values.at(-1)),
+              };
+      }
+      table.push({
+        minutes: `${from}-${phaseMs >= to * 60_000 ? to : "end"}`,
+        samples: inRow.length,
+        ...figures,
+        gcPercent: gcShareOf(gc[name], from, to),
+      });
+    }
+    const slopes = {};
+    for (const w of windows) {
+      const inWindow = samples.filter((s) => minuteOf(s) >= w.from && minuteOf(s) <= w.to);
+      const fits = {};
+      for (const [figure, suffix] of MEMORY_FIGURES) {
+        const points = inWindow
+          .filter((s) => typeof s[`${name}${suffix}`] === "number")
+          .map((s) => [minuteOf(s), s[`${name}${suffix}`] / 1_048_576]);
+        const fit = leastSquares(points);
+        fits[figure] =
+          fit === undefined
+            ? undefined
+            : { slopeMiBPerMinute: round4(fit.slope), r2: round2(fit.r2), raw: fit.slope };
+      }
+      slopes[w.label] = { from: w.from, to: w.to, covered: w.covered, samples: inWindow.length, ...fits };
+    }
+    // OBE-104 step 4, on the unrounded slopes: the RSS slope over minutes 90-180 below the bound, and the heap's not
+    // above it. Undefined when the run does not reach minute 180.
+    const window = slopes[SETTLE_WINDOW];
+    const settles =
+      window.covered && window.rss !== undefined && window.heapUsed !== undefined
+        ? window.rss.raw < SETTLE_SLOPE_MIB_PER_MINUTE && window.heapUsed.raw <= SETTLE_SLOPE_MIB_PER_MINUTE
+        : undefined;
+    for (const fit of Object.values(slopes)) {
+      for (const [figure] of MEMORY_FIGURES) {
+        if (fit[figure] !== undefined) {
+          delete fit[figure].raw;
+        }
+      }
+    }
+    processes[name] = { table, slopes, settles };
+  }
+  return {
+    tableMinutes: options.tableMinutes,
+    settleWindow: SETTLE_WINDOW,
+    settleSlopeMiBPerMinute: SETTLE_SLOPE_MIB_PER_MINUTE,
+    ...processes,
+  };
 }
 
 const OPERATIONS = Object.freeze([
@@ -1466,7 +1753,7 @@ function figuresOf(input) {
     workerEnd,
   } = input;
   const { samples, database, storage, redisStart, redisEnd, redisKinds, maxConnections, skipped } = input;
-  const { unfinished, maxStartLateMs } = input;
+  const { unfinished, maxStartLateMs, lostTakes } = input;
   const { records, outcomes } = visits;
   const latency = Object.fromEntries(
     OPERATIONS.filter((operation) => records.some((r) => r.operation === operation)).map((operation) => [
@@ -1518,6 +1805,11 @@ function figuresOf(input) {
       ? [`${unfinished} journeys still running ${DRAIN_MS / 1000} s after the last one started`]
       : []),
     ...[...new Set(context.fixtureErrors)].map((message) => `a fixture of the run failed: ${message}`),
+    ...(lostTakes > 0
+      ? [
+          `${lostTakes} takes of the preloads' recordings were not answered: their pool waits and jobs are missing`,
+        ]
+      : []),
   ];
   const processFigures = (start, end, budget, rssKey, heapKey) => {
     const peak = Math.max(end.peakRssBytes, end.maxRssBytes, most(samples, (s) => s[rssKey]) ?? 0);
@@ -1532,9 +1824,13 @@ function figuresOf(input) {
       memoryMaxMiB: mib(budget),
       peakShareOfMemoryMax: round1((peak / budget) * 100),
       within: peak <= budget,
+      // The headroom under the unit's MemoryMax at the peak: ADR-0029's measurement keeps at least 64 MiB (OBE-103).
+      headroomMiB: mib(budget - peak),
+      headroomWithinBound: budget - peak >= MEMORY_HEADROOM_BYTES,
       poolWaitMs: rounded(summarize(end.poolWaitsMs)),
       poolMaxWaiting: end.maxWaiting,
       eventLoopDelayMs: rounded(end.eventLoopDelayMs),
+      gc: gcFiguresOf(end.gc, cpuMs),
     };
   };
   const jobs = jobFigures(workerEnd.jobs ?? { starts: [], ends: [] }, options);
@@ -1575,14 +1871,15 @@ function figuresOf(input) {
     }
   }
   const loads = samples.map((s) => s.load1);
-  const api = processFigures(apiStart, apiEnd, MEMORY_MAX.api, "apiRssBytes", "apiHeapBytes");
+  const api = processFigures(apiStart, apiEnd, input.memoryMax.api, "apiRssBytes", "apiHeapBytes");
   const worker = processFigures(
     workerStart,
     workerEnd,
-    MEMORY_MAX.worker,
+    input.memoryMax.worker,
     "workerRssBytes",
     "workerHeapBytes",
   );
+  const memory = memoryOverTime(options, samples, phaseMs, { api: api.gc, worker: worker.gc });
   return {
     load: {
       tenants: tenants.map((t) => t.key),
@@ -1690,11 +1987,21 @@ function figuresOf(input) {
       samples,
       workerEnd.jobs ?? { starts: [], ends: [] },
       phaseMs,
+      { api: api.gc, worker: worker.gc },
     ),
+    memory,
     verdict: {
       apiWithinMemoryMax: api.within,
       workerWithinMemoryMax: worker.within,
       bookingCriticalQueuesWithinBudget: Object.values(jobs.critical).every((q) => q.within),
+      // ADR-0029's measurement (OBE-103 step 4), reported and not part of the exit code: at least 64 MiB under each
+      // MemoryMax at the peak, and at most 5 % of the phase in garbage collection.
+      headroomWithinBound: api.headroomWithinBound && worker.headroomWithinBound,
+      gcWithinBound: api.gc?.within === true && worker.gc?.within === true,
+      // OBE-104 step 4, reported and not part of the exit code: each process's memory settles over minutes 90-180
+      // (undefined in a run shorter than 180 minutes).
+      apiMemorySettles: memory.api.settles,
+      workerMemorySettles: memory.worker.settles,
     },
     unexpected,
   };
@@ -1706,6 +2013,57 @@ const pad = (value, width) => String(value ?? "-").padStart(width);
 const SUMMARY_HEADER = `${pad("count", 7)}${pad("p50", 9)}${pad("p95", 9)}${pad("p99", 9)}${pad("max", 9)}`;
 const summaryLine = (label, s, width) =>
   `  ${label.padEnd(width)}${pad(s.count, 7)}${pad(s.p50, 9)}${pad(s.p95, 9)}${pad(s.p99, 9)}${pad(s.max, 9)}\n`;
+
+/** "settles", "does NOT settle" or why it was not judged (memoryOverTime's `settles`). */
+const settleText = (settles) =>
+  settles === undefined
+    ? "not judged (the run does not reach minute 180)"
+    : settles
+      ? "settles"
+      : "does NOT settle";
+
+/** A slope and its r² as the memory section prints them: `+0.0123 (0.45)`. */
+const slopeText = (fit) =>
+  fit === undefined
+    ? "-"
+    : `${fit.slopeMiBPerMinute >= 0 ? "+" : ""}${fit.slopeMiBPerMinute.toFixed(4)} (${fit.r2 === undefined ? "-" : fit.r2.toFixed(2)})`;
+
+/** The report's memory section (OBE-104): memoryOverTime's rows, slopes and verdict per process. */
+function memoryText(memory) {
+  const lines = [
+    `\nMemory over time (OBE-104): per ${memory.tableMinutes} minutes of the phase, each figure's mean / most / last ` +
+      `sample in MiB and the share of the row's whole minutes in garbage collection; then the least-squares slope ` +
+      `in MiB per minute (r²)\n`,
+  ];
+  const figures = MEMORY_FIGURES.map(([figure]) => figure);
+  for (const [name, label] of [
+    ["api", "API"],
+    ["worker", "Worker"],
+  ]) {
+    const p = memory[name];
+    lines.push(
+      `  ${label.padEnd(10)}${pad("samples", 8)}${figures.map((f) => pad(f, 20)).join("")}${pad("gc%", 7)}\n`,
+    );
+    for (const row of p.table) {
+      const cells = figures.map((f) => {
+        const c = row[f];
+        return pad(c.meanMiB === undefined ? "-" : `${c.meanMiB}/${c.maxMiB}/${c.endMiB}`, 20);
+      });
+      lines.push(
+        `  ${row.minutes.padEnd(10)}${pad(row.samples, 8)}${cells.join("")}${pad(row.gcPercent, 7)}\n`,
+      );
+    }
+    for (const [window, fit] of Object.entries(p.slopes)) {
+      const span = `${window}${window.startsWith("last") ? ` (${fit.from}-${fit.to})` : ""}`;
+      lines.push(
+        `  ${`slope ${span}`.padEnd(28)}${pad(fit.samples, 6)} samples${fit.covered ? "" : " (not covered)"}: ` +
+          `${figures.map((f) => `${f} ${slopeText(fit[f])}`).join(", ")}\n`,
+      );
+    }
+    lines.push(`  ${label} memory ${settleText(p.settles)}\n`);
+  }
+  return lines.join("");
+}
 
 function report(run, figures) {
   const lines = [];
@@ -1785,9 +2143,11 @@ function report(run, figures) {
     add(
       `\n${name}: CPU ${p.cpuSeconds} s (${p.cpuShareOfOneCore} % of one core); RSS ${p.rssPhaseStartMiB} MiB at the ` +
         `start of the phase (after the warm-up), ${p.rssPeakMiB} MiB peak (${p.peakShareOfMemoryMax} % of MemoryMax ${p.memoryMaxMiB} MiB: ` +
-        `${p.within ? "within" : "OVER"}), ${p.rssEndMiB} MiB at the end, heap used peak ${p.heapUsedPeakMiB} MiB; ` +
+        `${p.within ? "within" : "OVER"}; ${p.headroomMiB} MiB under it, ${MEMORY_HEADROOM_BYTES / 1_048_576} MiB bound: ` +
+        `${p.headroomWithinBound ? "within" : "OVER"}), ${p.rssEndMiB} MiB at the end, heap used peak ${p.heapUsedPeakMiB} MiB; ` +
         `pool wait p95 ${p.poolWaitMs.p95 ?? "-"} ms, max ${p.poolWaitMs.max ?? "-"} ms, at most ${p.poolMaxWaiting} ` +
-        `waiting; event-loop delay p99 ${p.eventLoopDelayMs.p99} ms, max ${p.eventLoopDelayMs.max} ms\n`,
+        `waiting; event-loop delay p99 ${p.eventLoopDelayMs.p99} ms, max ${p.eventLoopDelayMs.max} ms\n` +
+        `  ${gcText(p.gc)}\n`,
     );
   }
   const pg = figures.postgres;
@@ -1881,19 +2241,22 @@ function report(run, figures) {
   );
   add(
     `  ${"minutes".padEnd(9)}${pad("jrn", 5)}${pad("bkg", 5)}${pad("search", 8)}${pad("price", 7)}${pad("compl", 7)}` +
-      `${pad("con.lst", 8)}${pad("API MiB", 8)}${pad("wrk MiB", 8)}${pad("pg", 4)}${pad("redis", 7)}${pad("tkt", 7)}` +
+      `${pad("con.lst", 8)}${pad("API MiB", 8)}${pad("wrk MiB", 8)}${pad("API gc%", 8)}${pad("wrk gc%", 8)}` +
+      `${pad("pg", 4)}${pad("redis", 7)}${pad("tkt", 7)}` +
       `${pad("bkgq", 7)}${pad("notif", 7)}${pad("docs", 7)}${pad("maint", 7)}${pad("load", 11)}\n`,
   );
   for (const w of figures.timeline) {
     add(
       `  ${w.minutes.padEnd(9)}${pad(w.journeys, 5)}${pad(w.bookings, 5)}${pad(w.searchP95, 8)}${pad(w.priceP95, 7)}` +
         `${pad(w.completionP95, 7)}${pad(w.consoleListP95, 8)}${pad(w.apiRssMiB, 8)}${pad(w.workerRssMiB, 8)}` +
+        `${pad(w.apiGcPercent, 8)}${pad(w.workerGcPercent, 8)}` +
         `${pad(w.connections, 4)}${pad(w.redisMiB, 7)}${pad(w.maxWaitMs["ota-ticketing"], 7)}` +
         `${pad(w.maxWaitMs["ota-bookings"], 7)}${pad(w.maxWaitMs["ota-notifications"], 7)}` +
         `${pad(w.maxWaitMs["ota-documents"], 7)}${pad(w.maxWaitMs["ota-maintenance"], 7)}` +
         `${pad(`${w.load1.mean}/${w.load1.max}`, 11)}\n`,
     );
   }
+  add(memoryText(figures.memory));
   const v = figures.verdict;
   const critical = Object.entries(figures.queues.critical)
     .map(
@@ -1906,6 +2269,19 @@ function report(run, figures) {
     `\nVerdict: API RSS ${v.apiWithinMemoryMax ? "within" : "OVER"} its MemoryMax, worker RSS ` +
       `${v.workerWithinMemoryMax ? "within" : "OVER"} its MemoryMax; ${critical}: ` +
       `${v.bookingCriticalQueuesWithinBudget ? "within" : "OVER"} the budget of ${figures.queues.budgetMs / 1000} s\n`,
+  );
+  add(
+    `ADR-0029's measurement (OBE-103; reported, not part of the exit code): headroom under MemoryMax at the peak ` +
+      `API ${figures.api.headroomMiB} MiB, worker ${figures.worker.headroomMiB} MiB ` +
+      `(${MEMORY_HEADROOM_BYTES / 1_048_576} MiB bound: ${v.headroomWithinBound ? "within" : "OVER"}); ` +
+      `garbage collection API ${figures.api.gc?.shareOfPhasePercent ?? "-"} %, worker ` +
+      `${figures.worker.gc?.shareOfPhasePercent ?? "-"} % of the phase (${GC_SHARE_BOUND_PERCENT} % bound: ` +
+      `${v.gcWithinBound ? "within" : "OVER"})\n`,
+  );
+  add(
+    `Memory over time (OBE-104; reported, not part of the exit code): API ${settleText(v.apiMemorySettles)}, ` +
+      `worker ${settleText(v.workerMemorySettles)} (RSS slope over minutes ${figures.memory.settleWindow} below ` +
+      `${figures.memory.settleSlopeMiBPerMinute} MiB/min, heap used not above it)\n`,
   );
   if (figures.unexpected.length > 0) {
     add(`Unexpected: ${figures.unexpected.join("; ")}\n`);
@@ -2069,6 +2445,7 @@ async function run(options) {
   process.on("SIGTERM", onSignal);
 
   try {
+    const memoryMax = { api: unitMemoryMax(API_UNIT), worker: unitMemoryMax(WORKER_UNIT) };
     const keys = writeKeyFiles(runDir);
     const runId = `load_${Date.now().toString(36)}_${randomBytes(3).toString("hex")}`;
     const database = await packages.testing.createTemplateDatabase({
@@ -2123,14 +2500,20 @@ async function run(options) {
       tenantRows: tenantRowsOf,
     });
     throwIfInterrupted();
-    const api = await startApi(options, run);
+    // OBE-104 step 4: the flags of a diagnosis run, never a unit's: a heap snapshot on HEAP_SNAPSHOT_SIGNAL, into the
+    // given folder.
+    const snapshotFlags = (name) =>
+      options.heapSnapshots?.processes.includes(name)
+        ? [`--heapsnapshot-signal=${HEAP_SNAPSHOT_SIGNAL}`, `--diagnostic-dir=${options.heapSnapshots.dir}`]
+        : [];
+    const api = await startApi(options, run, { extraNodeOptions: snapshotFlags("api") });
     cleanups.push(() => api.stop());
     throwIfInterrupted();
     const workerReadyUrl = `http://127.0.0.1:${run.workerHealthPort}/health/ready`;
     const worker = await startService(run, {
       name: "worker",
       entry: "worker.js",
-      nodeOptions: unitNodeOptions(WORKER_UNIT),
+      nodeOptions: [...unitNodeOptions(WORKER_UNIT), ...snapshotFlags("worker")],
       env: workerEnv(options, run),
       pool: WORKER_POOL,
       bullmq: true,
@@ -2229,15 +2612,67 @@ async function run(options) {
     const phaseStarted = performance.now();
     const startedAtEpoch = Date.now();
     const samples = [];
+    // OBE-104: the preloads' recordings, taken out of the processes with every sample (header step 6).
+    const recordings = { api: newRecordings(), worker: newRecordings() };
+    const takeAll = () =>
+      Promise.all([takeRecordings(api, recordings.api), takeRecordings(worker, recordings.worker)]);
     let sampling = true;
     const sampler = (async () => {
       while (sampling && !interruption.signal.aborted) {
         samples.push(
           await takeSample({ api, worker, monitor, redis, workerReadyUrl, startedAt: phaseStarted }),
         );
+        await takeAll();
         await pauseFor(options.sampleS * 1000);
       }
     })();
+    // OBE-104 step 3: every --window-minutes (5 by default), `nproc`, the load average and the latest sample's memory,
+    // printed and kept for the JSON.
+    const progress = [];
+    const reporter = setInterval(() => {
+      const minute = round1((performance.now() - phaseStarted) / 60_000);
+      const latest = samples.at(-1) ?? {};
+      const entry = { minute, nproc: os.availableParallelism(), loadAverage: loadAverage() };
+      progress.push(entry);
+      out(
+        `booking-load: minute ${minute} of ${options.minutes}: load average ${entry.loadAverage.join(" ")} ` +
+          `(nproc ${entry.nproc}); API RSS ${mib(latest.apiRssBytes) ?? "-"} MiB, heap used ` +
+          `${mib(latest.apiHeapBytes) ?? "-"} MiB; worker RSS ${mib(latest.workerRssBytes) ?? "-"} MiB, heap used ` +
+          `${mib(latest.workerHeapBytes) ?? "-"} MiB\n`,
+      );
+    }, options.windowMinutes * 60_000);
+    cleanups.push(async () => clearInterval(reporter));
+    // OBE-104 step 4: the heap snapshots of a diagnosis run, at their minutes of the phase.
+    const heapSnapshots = [];
+    const snapshotTimers = (options.heapSnapshots?.minutes ?? []).map((minute) =>
+      setTimeout(() => {
+        for (const name of options.heapSnapshots.processes) {
+          const service = name === "api" ? api : worker;
+          // A process that has exited is not signalled: `process.kill` would throw in this timer and end the run
+          // without its clean-up. The run fails on such a process anyway (its takes and its stats go unanswered).
+          let sent = false;
+          if (!service.exited()) {
+            try {
+              sent = process.kill(service.pid, HEAP_SNAPSHOT_SIGNAL);
+            } catch {
+              sent = false;
+            }
+          }
+          heapSnapshots.push({
+            process: name,
+            minute,
+            at: round1((performance.now() - phaseStarted) / 60_000),
+            sent,
+          });
+          out(
+            sent
+              ? `booking-load: heap snapshot of the ${name} asked for at minute ${minute}\n`
+              : `booking-load: no heap snapshot of the ${name} at minute ${minute}: it is no longer running\n`,
+          );
+        }
+      }, minute * 60_000),
+    );
+    cleanups.push(async () => snapshotTimers.forEach((timer) => clearTimeout(timer)));
     const fixtureFailed = (error) => {
       context.fixtureErrors.push(error instanceof Error ? error.message : String(error));
       return 0;
@@ -2269,13 +2704,18 @@ async function run(options) {
     const phaseMs = performance.now() - phaseStarted;
     samples.push(await takeSample({ api, worker, monitor, redis, workerReadyUrl, startedAt: phaseStarted }));
     sampling = false;
+    clearInterval(reporter);
+    snapshotTimers.forEach((timer) => clearTimeout(timer));
     interruption.signal.aborted || (await Promise.all([sampler, ageing]).catch(() => undefined));
-    const [amadeusFigures, mailFigures, apiEnd, workerEnd] = await Promise.all([
+    await takeAll();
+    const [amadeusFigures, mailFigures, apiStats, workerStats] = await Promise.all([
       amadeus.stats(),
       mail.stats(),
       api.stats(),
       worker.stats(),
     ]);
+    const apiEnd = withRecordings(apiStats, recordings.api);
+    const workerEnd = withRecordings(workerStats, recordings.worker);
     runInfo.loadAverage.end = loadAverage();
     runInfo.postgres = (await monitor.query("SHOW server_version")).rows[0]?.server_version ?? "unknown";
     runInfo.redis = redisVersion;
@@ -2303,11 +2743,13 @@ async function run(options) {
       redisEnd,
       redisKinds,
       maxConnections,
+      memoryMax,
       skipped,
       unfinished,
       maxStartLateMs,
+      lostTakes: recordings.api.lost + recordings.worker.lost,
     });
-    out(report(runInfo, figures));
+    // The JSON first (OBE-104): a run of hours keeps its figures even if the report could not be printed.
     if (options.json !== undefined) {
       const file = resolve(options.json);
       const attempts = records.map(({ operation, tenant, status, code, attempt, at, ms }) => ({
@@ -2321,10 +2763,11 @@ async function run(options) {
       }));
       writeFileSync(
         file,
-        `${JSON.stringify({ run: runInfo, ...figures, samples, records: attempts }, null, 2)}\n`,
+        `${JSON.stringify({ run: runInfo, ...figures, progress, heapSnapshots, samples, records: attempts }, null, 2)}\n`,
       );
       out(`booking-load: figures written to ${file}\n`);
     }
+    out(report(runInfo, figures));
     const { verdict } = figures;
     return figures.unexpected.length === 0 &&
       verdict.apiWithinMemoryMax &&

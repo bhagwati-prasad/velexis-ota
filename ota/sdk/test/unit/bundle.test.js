@@ -33,7 +33,7 @@ import { Window } from "happy-dom";
 import ts from "typescript";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { GLOBAL_NAME, OUTPUTS, bundleOptions } from "../../scripts/build.mjs";
+import { API_TYPES_FILE, GLOBAL_NAME, OUTPUTS, bundleOptions } from "../../scripts/build.mjs";
 import { BUDGET_BYTES, KB, measure } from "../../scripts/check-size.mjs";
 import * as source from "../../src/index.js";
 import { op } from "../../src/internal/operations.js";
@@ -183,7 +183,8 @@ const report = { calls: callsAtImport, changed, exports: Object.keys(ns).sort() 
 if (typeof ns.createVelexisClient === "function") {
   report.resolved = import.meta.resolve(specifier);
   report.iife = import.meta.resolve(specifier + "/iife");
-  // ESM only: CommonJS code loads the same module with Node 22's require() of an ES module.
+  // ESM only: CommonJS code loads the same module with require() of an ES module, which the supported Node versions
+  // (README) have.
   const { createRequire } = await import("node:module");
   const require = createRequire(process.cwd() + "/consumer.cjs");
   try {
@@ -367,7 +368,8 @@ describe("package.json", () => {
       default: `./dist/${OUTPUTS.esm}`,
     });
     // Conditions match in object order: `types` first for TypeScript, `development` before `import` for Vite's dev
-    // server, and `default` last, for require() (Node 22 loads the ES module; there is no CommonJS build).
+    // server, and `default` last, for require() (the supported Node versions (README) load the ES module; there is no
+    // CommonJS build).
     expect(Object.keys(pkg.exports["."])).toEqual(["types", "development", "import", "default"]);
   });
 
@@ -474,8 +476,9 @@ try {
   it("emits one declaration and its map per source module, index.d.ts being the types entry [SDK-007 AC1]", () => {
     const declarations = listFiles(join(DIST, OUTPUTS.types));
     const modules = listFiles(join(SDK_ROOT, "src")).filter((file) => file.endsWith(".js"));
+    // Besides them, since SDK-015, the copy of the OTA API types they import (without a map; test/unit/pack.test.js).
     expect(declarations.filter((file) => file.endsWith(".d.ts"))).toEqual(
-      modules.map((file) => file.replace(/\.js$/, ".d.ts")),
+      [API_TYPES_FILE, ...modules.map((file) => file.replace(/\.js$/, ".d.ts"))].sort(),
     );
     expect(declarations.filter((file) => file.endsWith(".d.ts.map"))).toEqual(
       modules.map((file) => file.replace(/\.js$/, ".d.ts.map")),

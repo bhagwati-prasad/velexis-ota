@@ -1,4 +1,4 @@
-// Tests of plan-lint.mjs with the Node 22 test runner (no dependencies): node --test tools/plan-lint/test/
+// Tests of plan-lint.mjs with Node's own test runner (no dependencies): node --test tools/plan-lint/test/
 // Each test runs the script as a child process, on the fixture plan (fixtures/plan.md) or on a variant of it
 // written to a temporary folder.
 import assert from "node:assert/strict";

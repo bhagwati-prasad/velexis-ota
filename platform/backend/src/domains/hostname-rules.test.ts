@@ -169,7 +169,8 @@ describe("checkCustomHostname: refusals", () => {
 
   // ADR-0029 item 7: Node 24's URL parser (ada 4.0.0) returns a punycode label that does not decode unchanged, where
   // Node 22's (ada 2.9.2) answered ""; `xn--ab-` decodes on Node 22 (to `ab`) but does not encode back to itself. These
-  // cases run on Node 22 and on Node 24 (PBE-077's Verify) and answer the same on both.
+  // cases were run on Node 22 and on Node 24 in PBE-077's Verify, with the same answers; CI runs them on the .nvmrc
+  // major (24).
   it.each([["xn--zz.example.com"], ["xn--a.com"], ["xn--ab-.com"], ["a.xn--zz"]])(
     "[PBE-077 AC1] refuses %j, whose punycode label does not decode and encode back to itself, as syntax",
     (input) => {

@@ -9,7 +9,7 @@ Related: [`docs/routes.md`](docs/routes.md) (every route: SDK calls, permissions
 | Item | Value |
 |---|---|
 | Package | `@velexis/ota-admin` (private) |
-| Runtime | Node.js 22, Next.js 15 App Router, React 19, TypeScript strict, `output: "standalone"` |
+| Runtime | Node.js 24 (the `.nvmrc` major), Next.js 15 App Router, React 19, TypeScript strict, `output: "standalone"` |
 | UI | Tailwind CSS 4, shadcn/ui (Radix), `lucide-react`, `@tanstack/react-table`; Zod 4 for server-action input (§12) |
 | API access | `@velexis/ota-sdk` on the server only (`import "server-only"`), server mode: `secretKey` = `OTA_ADMIN_SERVICE_KEY`, staff `accessToken`, `sessionKind: "staff"`, `environment` |
 | Host and port | `admin.ota.example.com` → Caddy → `127.0.0.1:3002`; `http://localhost:3002` in development |
