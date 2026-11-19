@@ -100,6 +100,6 @@ updates:
       github-actions:
         patterns: ["*"]
     ignore:
-      # docs/mvp/tech-stack.md §1 pins the v4 line of every action; a new major is a reviewed change by hand.
+      # docs/mvp/tech-stack.md §1 pins one major line per action (pnpm/action-setup v5, the others v4); a new major is a reviewed change by hand.
       - dependency-name: "*"
         update-types: ["version-update:semver-major"]

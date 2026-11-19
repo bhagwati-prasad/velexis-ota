@@ -126,6 +126,8 @@ psql "$TEST_DATABASE_ADMIN_URL" -At -c "SELECT datname FROM pg_database WHERE da
 psql "$TEST_DATABASE_ADMIN_URL" -c 'DROP DATABASE "velexis_test_…" WITH (FORCE)'   # one by one, when no run is active
 ```
 
+*Note (2026-11-19, lead decision (30e) of 2026-11-19, approved by the owner; FIX-W61-SHARED).* No automatic clean-up of an interrupted run's leftovers for now: neither the set-up nor the teardown removes another run's `velexis_test_*` databases, and the manual steps above stand. `TEST_DATABASE_DROP_BUDGET_MS` stays the budget of `tenant-0002.int.test.ts`'s file-level `afterAll` alone, the one hook with a measured slow drop; no other hook takes it.
+
 ### `deploy/postgres/schemas.sql`
 
 The in-database part of [`bootstrap.sql`](../../deploy/postgres/bootstrap.sql), from `REVOKE ALL ON SCHEMA public FROM PUBLIC;` to the end, byte for byte and without psql meta-commands. `bootstrap.sql` stays whole because [`provision-vm.sh`](../../deploy/scripts/provision-vm.sh) feeds it to psql on stdin, where `\ir schemas.sql` would not resolve. [`src/schemas-sql.test.ts`](src/schemas-sql.test.ts) fails when `bootstrap.sql` does not end with `schemas.sql` verbatim, when `bootstrap.sql` has a statement after `\connect :db_name` that `schemas.sql` lacks, or when `schemas.sql` holds a meta-command or a psql variable. **Change both files in the same commit.**
