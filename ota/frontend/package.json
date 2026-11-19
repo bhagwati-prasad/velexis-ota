@@ -20,10 +20,10 @@
     "@tailwindcss/vite": "4.1.18",
     "eslint": "9.39.5",
     "happy-dom": "21.0.4",
-    "lighthouse": "13.5.0",
+    "lighthouse": "13.6.0",
     "puppeteer-core": "25.17.0",
     "tailwindcss": "4.1.18",
-    "vite": "6.4.5",
+    "vite": "6.4.6",
     "vitest": "4.1.12"
   }
 }
