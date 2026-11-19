@@ -79,19 +79,27 @@ Do this once per VM, and again when rebuilding after a disaster. Allow one to tw
 
 It never prints a value: env files are compared by variable name, the shared values and key copies are compared without output, the Redis password reaches `redis-cli` through its environment, `caddy validate` messages are shown with every value of `caddy.env` replaced by `<redacted>` (bash's own errors about a malformed line of that file are dropped, because they would quote part of a value), and of a TOTP secret file only the owner, the mode and its time-based marker line are read. Run it after provisioning, after editing anything in `/etc/velexis`, and when a deploy is refused for missing variables. [`deploy/scripts/test/check-vm.test.sh`](../../deploy/scripts/test/check-vm.test.sh) tests it, with fake system tools, against the layout `provision-vm.sh` creates.
 
-**Rehearsal on a throwaway VM.** Before the production VM, and whenever `provision-vm.sh` changes a lot, run it twice on a throwaway Ubuntu 24.04 VM (never the production VM; at least 4 GB of RAM, because `velexis.conf` gives PostgreSQL 1.5 GB of shared buffers) and keep both outputs. Enrol the admin's second factor first ([`runbooks/ssh-access.md`](runbooks/ssh-access.md) §2 steps 1 to 3, with the throwaway VM's `authorized_keys`), so that the first run applies it. Both `check-vm.sh` runs must show only `PASS`, and the second provisioning run must change no generated file and no sshd drop-in:
+**Rehearsal on a throwaway VM.** Before the production VM, and whenever `provision-vm.sh` changes a lot, run it twice on a throwaway Ubuntu 24.04 VM (never the production VM; at least 4 GB of RAM, because `velexis.conf` gives PostgreSQL 1.5 GB of shared buffers) and keep both outputs. Enrol the admin's second factor first ([`runbooks/ssh-access.md`](runbooks/ssh-access.md) §2 steps 1 to 3, with the throwaway VM's `authorized_keys`), so that the first run applies it. Copy the Velexis Caddy build with the deploy folder, as step 4 above does (`caddy`, the build of the same commit), and give both runs `CADDY_BINARY=/tmp/caddy`: a throwaway VM has no release to take the build from, and the step `caddy` refuses a binary whose SHA-256 is not `CADDY_SHA256` of `deploy/caddy/build/versions.env`. Both `check-vm.sh` runs must show only `PASS`, and the second provisioning run must change no generated file and no sshd drop-in:
 
 ```bash
-scp -r deploy/ velexis-deploy.pub ubuntu@<throwaway-vm>:/tmp/
+scp -r deploy/ velexis-deploy.pub caddy ubuntu@<throwaway-vm>:/tmp/
 ssh ubuntu@<throwaway-vm>
-sudo DEPLOY_SSH_PUBKEY_FILE=/tmp/velexis-deploy.pub ADMIN_USER=ubuntu ADMIN_MFA=fido2 bash /tmp/deploy/scripts/provision-vm.sh 2>&1 | tee ~/provision-1.txt
+sudo DEPLOY_SSH_PUBKEY_FILE=/tmp/velexis-deploy.pub ADMIN_USER=ubuntu ADMIN_MFA=fido2 CADDY_BINARY=/tmp/caddy bash /tmp/deploy/scripts/provision-vm.sh 2>&1 | tee ~/provision-1.txt
+# Before the first check: the SMTP URLs and the backup remote below, then sudo velexis-egress refresh
 sudo bash /tmp/deploy/scripts/check-vm.sh | tee ~/check-1.txt   # after removing the plain key (ssh-access.md §2 steps 5 and 6)
 fp() { sudo find /etc/velexis /home/deploy/.ssh /etc/redis/velexis.conf /etc/ssh/sshd_config.d /etc/pam.d/sshd -type f -printf '%p %i %T@ %C@ %s %m %u:%g\n' | sort; }
 fp > ~/fp-1.txt
-sudo DEPLOY_SSH_PUBKEY_FILE=/tmp/velexis-deploy.pub ADMIN_USER=ubuntu ADMIN_MFA=fido2 bash /tmp/deploy/scripts/provision-vm.sh 2>&1 | tee ~/provision-2.txt
+sudo DEPLOY_SSH_PUBKEY_FILE=/tmp/velexis-deploy.pub ADMIN_USER=ubuntu ADMIN_MFA=fido2 CADDY_BINARY=/tmp/caddy bash /tmp/deploy/scripts/provision-vm.sh 2>&1 | tee ~/provision-2.txt
 sudo bash /tmp/deploy/scripts/check-vm.sh | tee ~/check-2.txt
 fp > ~/fp-2.txt && diff ~/fp-1.txt ~/fp-2.txt && echo "second run changed no generated file"
 ```
+
+**The SMTP and bucket lines on a throwaway VM** (2026-11-18, X-020). `check-vm.sh` reports `PASS` for the outbound allow-list's lines `env:platform-backend.env:SMTP_URL`, `env:ota-backend.env:SMTP_URL`, `env:alert.env:ALERT_SMTP_URL` and `rclone:backup.env` only when the last refresh found an address for each ("every line of … has an address in the sets") and the SMTP URLs use their lines' port 465 ("the URLs of the allow-list's env: lines use the ports their lines allow"). The templates' `smtp.example.com` and `offsite:velexis-backups-CHANGE_ME` give no address, so before the first `check-vm.sh` run the throwaway VM needs these values, set as steps 6 and 7 set them:
+
+- `SMTP_URL` in `/etc/velexis/platform-backend.env` and `/etc/velexis/ota-backend.env`, and `ALERT_SMTP_URL` in `/etc/velexis/alert.env`: an `smtps://` URL on port 465 (named, or left out, since `smtps` means 465; an `smtp://` URL without a port counts as 587 in the backends and 25 in `alert.env`, and fails) whose host is an IP address or a name that the VM's own resolvers answer with an address (`getent ahosts <host>`).
+- `/etc/velexis/backup.env`: `RCLONE_REMOTE` as `<remote>:<bucket>` and `RCLONE_CONFIG` naming a readable `rclone.conf` whose `[<remote>]` section has an `endpoint` line; that endpoint's host, or `<bucket>.<endpoint host>`, must resolve the same way.
+
+Then run `sudo velexis-egress refresh` (or wait for `velexis-egress-refresh.timer`, at most 2 minutes). For these lines `check-vm.sh` checks only the addresses the refresh kept (and, for the three SMTP URLs, the port) and connects to nothing; which relay and bucket a throwaway VM uses is the owner's decision.
 
 The fingerprints hold paths, inodes, modification and change times, sizes, modes and owners, never contents: a rewritten file gets a new time or inode. The same session also gives the human check of X-037: a plain key refused and the security key accepted for the admin, and a Deploy workflow run to the throwaway VM ([`runbooks/ssh-access.md`](runbooks/ssh-access.md) §7). Delete the VM afterwards; its generated keys and passwords are never reused.
 

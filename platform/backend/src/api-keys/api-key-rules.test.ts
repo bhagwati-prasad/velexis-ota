@@ -107,8 +107,9 @@ describe("origins of publishable keys", () => {
   });
 
   // ADR-0029 item 7: Node 24's URL parser (ada 4.0.0) accepts a host whose punycode label does not decode, where Node
-  // 22's (ada 2.9.2) threw ERR_INVALID_URL. These cases run on Node 22 and on Node 24 (PBE-077's Verify) and answer the
-  // same on both: the origin error, also for an upper-case prefix (not notCanonical).
+  // 22's (ada 2.9.2) threw ERR_INVALID_URL. These cases were run on Node 22 and on Node 24 in PBE-077's Verify, with
+  // the same answer on both: the origin error, also for an upper-case prefix (not notCanonical). CI runs them on the
+  // .nvmrc major (24).
   it.each([
     ["https://xn--zz.example", "live"],
     ["https://xn--zz.example", "test"],
