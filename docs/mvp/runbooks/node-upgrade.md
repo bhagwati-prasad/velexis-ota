@@ -291,7 +291,7 @@ pnpm build && pnpm test
 
 ## 5. The VM
 
-The throwaway-VM steps of X-020 and X-021 run this checklist after the switch, on Node.js 24 (the dated notes of X-020, X-021, X-023, X-024, X-030, X-037, X-038, X-039 and X-041; [ADR-0029](../adr/0029-nodejs-24-runtime.md) items 3, 6, 8 and 10). It adds about 1.5 to 3 hours to the rehearsal. `<deploy>` is the deploy folder the steps run from: the repository's `deploy/` before the first release, `/srv/velexis/current/deploy` after it. Record each result, with no secret, in the rehearsal's notes; a `FAIL` or a missing line stops the rehearsal for a report.
+The throwaway-VM steps of X-020 and X-021 run this checklist after the switch, on Node.js 24 (the dated notes of X-020, X-021, X-023, X-024, X-030, X-037, X-038, X-039 and X-041; [ADR-0029](../adr/0029-nodejs-24-runtime.md) items 3, 6, 8 and 10). Steps 1 to 8 add about 1.5 to 3 hours to the rehearsal; step 9 then runs unattended for 8 to 24 hours. `<deploy>` is the deploy folder the steps run from: the repository's `deploy/` before the first release, `/srv/velexis/current/deploy` after it. Record each result, with no secret, in the rehearsal's notes; a `FAIL` or a missing line stops the rehearsal for a report.
 
 1. **NodeSource's package.** Provision as [`deployment-single-vm.md`](../deployment-single-vm.md) §3 says, with the default `NODE_MAJOR` (24). Then:
    - `apt-cache policy nodejs`: the installed version and the candidate are a `24.*` from `https://deb.nodesource.com/node_24.x nodistro/main`, and the pin shows priority 1001;
@@ -390,6 +390,81 @@ The throwaway-VM steps of X-020 and X-021 run this checklist after the switch, o
    ```
 
    Each `provision-vm.sh` run writes NodeSource's line and the pin, runs `apt-get update` and installs `nodejs` with `--allow-downgrades`; a second run with the same `NODE_MAJOR` changes nothing. corepack finds pnpm 9.15.9 in root's cache from the first provisioning; if `corepack prepare` is refused a connection to `registry.npmjs.org`, open it for the run as [`outbound-allow-list.md`](outbound-allow-list.md) §4 says. The next daily AIDE check lists `nodejs`'s files (`/usr/bin/node`, `/usr/lib/node_modules/`, `/usr/include/node/`, `/usr/share/doc/nodejs/`): because both runs are in `/var/log/velexis/provision.log` (`provision-vm.sh started by …: steps node`), `velexis-logreview`'s daily summary counts them as expected (`after the <time> provision-vm.sh (expected)`) instead of raising `aide-change`; `/var/log/dpkg.log` names the two versions. Record which of the two the review showed, and explain an `aide-change` alert, if one comes, from those two logs.
+
+9. **Memory over 8 to 24 hours** (lead decision (30a) of 2026-11-19, approved by the owner; from OBE-104's three-hour run, [`ota/docs/performance.md`](../../../ota/docs/performance.md) §11, in which the OTA worker's RSS still rose about 1.4 MiB an hour at the end). After step 8's restart, the OTA worker and the OTA API beside it run for at least 8 hours, up to 24, under traffic, with their memory sampled every minute. No unit, flag or env file changes for it.
+
+   *What drives the traffic.* `booking-load.mjs` cannot: it starts its own API, worker, database and Amadeus stub and never talks to a deployed API ([`ota/backend/test/load/README.md`](../../../ota/backend/test/load/README.md)), so it would measure its own processes, not the units under their `MemoryMax`. The step uses the rehearsal's own traffic instead, which reaches the units as production traffic does and changes nothing on the VM:
+   - **The units' own work.** The worker's schedules run every 1 to 15 minutes for each active OTA whatever the traffic (`checkouts.expire`, `notifications.sweep` and `bookings.reconcile_scan` every minute, `ticketing.scan` and `refunds.sweep` every 5, `bookings.sync_scan` every 10, `offers.purge` and `queues.poll` every 15, `customers.erase` hourly, `retention.daily` and `payments.authorisation_watch` once a day; `ota/backend/src/jobs/schedulers.ts`). So the throwaway VM needs one active OTA: the demo OTA of the [platform launch checklist](../../../platform/docs/runbooks/launch-checklist.md#6-manual-trials-before-billing) §6 (`sudo velexis-run platform node dist/cli.js tenants:create-demo`, test-mode Amadeus, no live payments), created now if the rehearsal has none. `velexis-healthcheck.timer` adds its checks every 5 minutes.
+   - **Visitors, from the developer's machine**, for the whole run: the demo storefront's home page and the two OTA API calls its pages make before a search, through Caddy's storefront edge (`getStorefront` and a location lookup, which read the OTA's settings and the reference data and call no supplier), and the other public hosts' pages of step 5, one round and then a pause of 2 seconds (two requests to the OTA API a round, so at most one a second):
+
+     ```bash
+     D=demo.<STOREFRONT_BASE_DOMAIN>                 # the throwaway VM's demo storefront
+     while :; do
+       for url in "https://$D/" "https://$D/api/v1/storefront" "https://$D/api/v1/reference/locations?keyword=par" \
+         <the portal's, the platform admin's and the OTA admin's sign-in pages, as in step 5>; do
+         curl -s -o /dev/null --max-time 10 "$url"
+       done
+       sleep 2
+     done
+     ```
+
+   Searches, prices and bookings are left out: on the throwaway VM they go to Amadeus's test environment, whose monthly quota a day of them would use up, and to Stripe's test mode, and the airline card stays switched off until OBE-086. So this run is far lighter than OBE-104's 2 searches a second and 4 bookings a minute: it shows whether the units' memory levels off over a day of the work they do at launch, while R180 (§11) remains the measurement under heavy traffic.
+
+   *How the memory is sampled.* Every minute, read-only: each unit's `MemoryCurrent` (`systemctl show`, what systemd holds against `MemoryMax`, page cache included) and its main process's RSS (`ps -o rss`, the figure of OBE-104's rule). The JS heap is not sampled on the VM: a running unit's heap cannot be read without changing the unit (`booking-load.mjs` reads it through a preload that the unit would have to load with `--require` in its `NODE_OPTIONS`, and the inspector that `SIGUSR1` would open lets anyone on the VM run code as the unit's user), so this step judges RSS alone. As root, save the sampler in a scratch folder and start it right after step 8's restart, so its first sample is the units' minute 0:
+
+     ```bash
+     #!/usr/bin/env bash
+     # memory-sampler.sh: every minute, the memory of the OTA API and worker units, read-only (node-upgrade.md §5 step 9).
+     # Usage: sudo bash memory-sampler.sh <csv file>; it writes its PID to <csv file>.pid and runs until it is stopped.
+     set -u
+     out="$1"
+     echo "$$" > "$out.pid"
+     [ -e "$out" ] || echo "epoch,unit,pid,memory_current_bytes,rss_kib" > "$out"
+     while :; do
+       now="$(date +%s)"
+       for unit in velexis-ota-api velexis-ota-worker; do
+         pid="$(systemctl show -p MainPID --value "$unit.service")"
+         current="$(systemctl show -p MemoryCurrent --value "$unit.service")"
+         rss=""
+         [ "$pid" -gt 0 ] && rss="$(ps -o rss= -p "$pid" | tr -d ' ')"
+         echo "$now,$unit,$pid,$current,$rss" >> "$out"
+       done
+       sleep 60
+     done
+     ```
+
+     ```bash
+     sudo setsid nohup bash memory-sampler.sh /root/ota-memory.csv > /dev/null 2>&1 < /dev/null &
+     # Stop it at the end with the PID it wrote itself (`$!` names setsid's parent, which exits at once):
+     # sudo kill "$(sudo cat /root/ota-memory.csv.pid)"
+     ```
+
+   *How it is judged.* By OBE-104's rule for RSS, which lead decision (30b) keeps: the least-squares slope of each unit's RSS over 90 minutes must be below 0.02 MiB a minute (about 1 MiB an hour). The verdict at 8 hours takes minutes 390–480 of the run; a run that goes on to 24 hours is judged again over its last 90 minutes (`FROM=1350 TO=1440` at 24 hours). Where a run of `booking-load.mjs` samples the heap too, (30b) adds that the slope of its floor (the least heap used of each 5 minutes) must not be above 0.02 MiB a minute; on the VM there is no heap to judge. On the VM, as root:
+
+     ```bash
+     FROM=390 TO=480
+     awk -F, -v from="$FROM" -v to="$TO" '
+       NR == 1 || $5 == "" { next }
+       !($2 in t0) { t0[$2] = $1; pid0[$2] = $3 }
+       $3 != pid0[$2] { restarted[$2] = 1 }
+       {
+         m = ($1 - t0[$2]) / 60
+         if (m >= from && m <= to) {
+           y = $5 / 1024; n[$2]++; sx[$2] += m; sy[$2] += y; sxx[$2] += m * m; sxy[$2] += m * y; syy[$2] += y * y
+         }
+       }
+       END {
+         for (u in n) {
+           dx = n[u] * sxx[u] - sx[u] * sx[u]; dy = n[u] * syy[u] - sy[u] * sy[u]; c = n[u] * sxy[u] - sx[u] * sy[u]
+           slope = c / dx; r2 = dy > 0 ? c * c / (dx * dy) : 0
+           verdict = restarted[u] ? "not judged: the unit restarted during the run" : slope < 0.02 ? "settles" : "STILL RISING"
+           printf "%s: RSS slope %+.4f MiB a minute (r2 %.2f) over minutes %d-%d, %d samples: %s\n", u, slope, r2, from, to,
+             n[u], verdict
+         }
+       }' /root/ota-memory.csv
+     ```
+
+   Record both lines (and the 24-hour ones if the run went on), the first and the last sample of each unit, and step 5's `MemoryPeak` loop at the end (each unit's peak since its start, at least 64 MiB under its `MemoryMax`). A unit that restarted during the run (its `pid` changed) is not judged: find out why from `journalctl -u <unit>` and start the step again. **What follows:** a unit that is still rising by the rule after 8 hours (`STILL RISING` over minutes 390–480) becomes a follow-up task: the owner reports it to the lead with the CSV and the lines above, letting the run go on to 24 hours first where possible (lead decision (30a)). Both units settling closes the question OBE-104 left open. Either way, add the result to [ADR-0029](../adr/0029-nodejs-24-runtime.md)'s Results.
 
 ## 6. Rollback
 

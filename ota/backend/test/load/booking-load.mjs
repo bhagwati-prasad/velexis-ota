@@ -62,8 +62,10 @@
 //      --queue-budget-s for `ota-ticketing` and `ota-bookings`, the bookings' outcomes, the database and
 //      document storage growth, a timeline per --window-minutes, the memory over time (OBE-104: per process, a row per
 //      --table-minutes with each memory figure and the share of time in garbage collection, the least-squares slope of
-//      each figure in MiB per minute with r² over minutes 30-90, 90-180 and the last 60, and whether its memory settles:
-//      an RSS slope below 0.02 MiB per minute over minutes 90-180 with a heap-used slope not above it), and the run
+//      each figure in MiB per minute with r² over minutes 30-90, 90-180 and the last 60, the same for the JS heap's
+//      floor after collections (lead decision (30b) of 2026-11-19: the least heap used of each --floor-minutes, 5 by
+//      default), and whether its memory settles: an RSS slope below 0.02 MiB per minute over minutes 90-180 with the
+//      heap floor's slope not above it, the heap used's own slope printed for information), and the run
 //      (date, commit, `nproc`, the load average at the start, at the end and per window). --json <file> writes the
 //      same figures as JSON.
 // Everything is removed at the end, also after Ctrl-C or a SIGTERM: the processes, the database, the Redis database's
@@ -259,10 +261,24 @@ const SLOPE_WINDOWS = Object.freeze([
 ]);
 /**
  * A process's memory settles when its RSS slope over minutes 90-180 is below 0.02 MiB a minute (about 1 MiB an hour)
- * and its heap-used slope over the same window is not above it (OBE-104 step 4). Reported; not part of the exit code.
+ * and the slope of its JS heap's floor over the same window is not above it (lead decision (30b) of 2026-11-19, which
+ * replaced OBE-104 step 4's test of the heap used's own slope: on 5-second samples that slope measures the saw-tooth
+ * of the collections more than a trend). Reported; not part of the exit code.
  */
 const SETTLE_WINDOW = "90-180";
-const SETTLE_SLOPE_MIB_PER_MINUTE = 0.02;
+export const SETTLE_SLOPE_MIB_PER_MINUTE = 0.02;
+/**
+ * The JS heap's floor after collections (lead decision (30b)): the least heap used of each window of this many minutes
+ * (--floor-minutes). Five, from R180, OBE-104's three-hour run (ota/docs/performance.md §11): a window must hold a
+ * collection of the old generation, or its least sample is only the young generation's low point. The worker's drops of
+ * heap used between two 5-second samples are mostly its scavenges' (563 of 789 under 1.5 MiB, with a 1 MiB semi-space)
+ * or of 2 MiB and more (213); over minutes 90-180 those above 1.5 MiB came at most 2.0 minutes apart. A sample cannot
+ * tell the API's scavenges (a 32 MiB semi-space, and its large objects) from its mark-compacts (783 in R180, one every
+ * 14 s on average), and its largest drops, above 32 MiB, came at most 3.8 minutes apart. So every 5-minute window of
+ * minutes 90-180 held one of each, while one of the API's 3-minute windows held none. Five is the fewest whole minutes
+ * that divide the rule's 90 and do so; it leaves 18 floors to fit.
+ */
+export const FLOOR_WINDOW_MINUTES = 5;
 /** A window needs this many samples for a slope. */
 const SLOPE_MIN_SAMPLES = 3;
 /**
@@ -296,6 +312,9 @@ const USAGE = `Usage: node ota/backend/test/load/booking-load.mjs [options]
   --sample-s <n>                  seconds between two samples of the processes, PostgreSQL and Redis (default 5)
   --window-minutes <n>            minutes per row of the timeline (default 5)
   --table-minutes <n>             minutes per row of the memory table (default 30)
+  --floor-minutes <n>             minutes per window of the JS heap's floor (the least heap used of each), whose
+                                  slope decides whether the memory settles; 1 to 30 (default ${FLOOR_WINDOW_MINUTES},
+                                  lead decision (30b); a shorter one only for a short diagnosis run)
   --redis-db <n>                  the Redis database of the run, 1 to 15, emptied before and after (default 13)
   --app-env <env>                 APP_ENV of the API and the worker: production (as on the VM) or test
   --json <file>                   also write the figures as JSON
@@ -328,6 +347,7 @@ const INTEGER_OPTIONS = Object.freeze([
   ["sample-s", 5, 1, 60],
   ["window-minutes", 5, 1, 60],
   ["table-minutes", 30, 1, 240],
+  ["floor-minutes", FLOOR_WINDOW_MINUTES, 1, 30],
   ["redis-db", 13, 1, 15],
 ]);
 
@@ -1621,15 +1641,57 @@ export function leastSquares(points) {
 }
 
 /**
+ * The floor of a saw-tooth (lead decision (30b) of 2026-11-19, for the JS heap after its collections): minutes `from`
+ * to `to` cut into windows of `floorMinutes` from `from` on, and of each window that holds a point, its least point
+ * (the first of equal ones), at that point's own minute. A window holds the points from its first minute up to but not
+ * including its last, so a point on the edge of two windows belongs to the later one; a remainder at the end shorter
+ * than a window is left out, as are the points before `from` and from `to` on. `points` are `[minute, value]`.
+ */
+export function floorsOf(points, from, to, floorMinutes) {
+  const floors = [];
+  for (let start = from; start + floorMinutes <= to; start += floorMinutes) {
+    const end = start + floorMinutes;
+    let least;
+    for (const point of points) {
+      if (point[0] >= start && point[0] < end && (least === undefined || point[1] < least[1])) {
+        least = point;
+      }
+    }
+    if (least !== undefined) {
+      floors.push(least);
+    }
+  }
+  return floors;
+}
+
+/**
+ * Whether a process's memory settles (lead decision (30b) of 2026-11-19), from its unrounded slopes in MiB a minute
+ * over SETTLE_WINDOW: `rssBelow`, its RSS slope below SETTLE_SLOPE_MIB_PER_MINUTE; `floorNotAbove`, the slope of its
+ * heap floor (floorsOf) not above it; `settles`, both. A missing slope makes its test and `settles` undefined.
+ */
+export function memorySettles(rssSlope, floorSlope) {
+  const rssBelow = rssSlope === undefined ? undefined : rssSlope < SETTLE_SLOPE_MIB_PER_MINUTE;
+  const floorNotAbove = floorSlope === undefined ? undefined : floorSlope <= SETTLE_SLOPE_MIB_PER_MINUTE;
+  return {
+    rssBelow,
+    floorNotAbove,
+    settles: rssBelow === undefined || floorNotAbove === undefined ? undefined : rssBelow && floorNotAbove,
+  };
+}
+
+/**
  * The memory over time (OBE-104, header step 7), per process: a row per --table-minutes of the phase with each memory
  * figure's mean, most and last sample (MiB) and the share of the row's whole minutes the process spent in garbage
- * collection; the least-squares slope of each figure in MiB per minute with r² over SLOPE_WINDOWS; and whether its
- * memory settles (SETTLE_WINDOW, SETTLE_SLOPE_MIB_PER_MINUTE). The rows are --table-minutes each from the phase's
+ * collection; the least-squares slope of each figure in MiB per minute with r² over SLOPE_WINDOWS, and of the heap
+ * used's floor (`heapFloor`: the least heap used of each --floor-minutes of the window, `floors`, lead decision (30b));
+ * and whether its memory settles (SETTLE_WINDOW, memorySettles). The rows are --table-minutes each from the phase's
  * start over --minutes; the last one is shorter when --minutes is not a multiple of --table-minutes (named
  * `<from>-end`, as is the one row of a phase shorter than a row), and it also holds the samples after the last minute
- * (the journeys still in flight and the run's last sample). `gc` is `{api, worker}` of gcFiguresOf.
+ * (the journeys still in flight and the run's last sample). The floors' windows end by --minutes, so those samples
+ * are in none. `gc` is `{api, worker}` of gcFiguresOf.
  */
 export function memoryOverTime(options, samples, phaseMs, gc) {
+  const floorMinutes = options.floorMinutes ?? FLOOR_WINDOW_MINUTES;
   const rows = Math.max(1, Math.ceil(options.minutes / options.tableMinutes));
   const minuteOf = (sample) => sample.at / 60_000;
   const wholeMinutes = Math.floor(phaseMs / 60_000);
@@ -1676,40 +1738,61 @@ export function memoryOverTime(options, samples, phaseMs, gc) {
         gcPercent: gcShareOf(gc[name], from, to),
       });
     }
+    const fitOf = (points) => {
+      const fit = leastSquares(points);
+      return fit === undefined
+        ? undefined
+        : { slopeMiBPerMinute: round4(fit.slope), r2: round2(fit.r2), raw: fit.slope };
+    };
+    const heapPoints = samples
+      .filter((s) => typeof s[`${name}HeapBytes`] === "number")
+      .map((s) => [minuteOf(s), s[`${name}HeapBytes`] / 1_048_576]);
     const slopes = {};
     for (const w of windows) {
       const inWindow = samples.filter((s) => minuteOf(s) >= w.from && minuteOf(s) <= w.to);
       const fits = {};
       for (const [figure, suffix] of MEMORY_FIGURES) {
-        const points = inWindow
-          .filter((s) => typeof s[`${name}${suffix}`] === "number")
-          .map((s) => [minuteOf(s), s[`${name}${suffix}`] / 1_048_576]);
-        const fit = leastSquares(points);
-        fits[figure] =
-          fit === undefined
-            ? undefined
-            : { slopeMiBPerMinute: round4(fit.slope), r2: round2(fit.r2), raw: fit.slope };
+        fits[figure] = fitOf(
+          inWindow
+            .filter((s) => typeof s[`${name}${suffix}`] === "number")
+            .map((s) => [minuteOf(s), s[`${name}${suffix}`] / 1_048_576]),
+        );
       }
-      slopes[w.label] = { from: w.from, to: w.to, covered: w.covered, samples: inWindow.length, ...fits };
+      // Lead decision (30b): the least heap used of each --floor-minutes of the window, up to the run's --minutes.
+      const floors = floorsOf(heapPoints, w.from, Math.min(w.to, options.minutes), floorMinutes);
+      slopes[w.label] = {
+        from: w.from,
+        to: w.to,
+        covered: w.covered,
+        samples: inWindow.length,
+        ...fits,
+        heapFloor: fitOf(floors),
+        floors: floors.map(([minute, value]) => ({ minute: round2(minute), heapUsedMiB: round2(value) })),
+      };
     }
-    // OBE-104 step 4, on the unrounded slopes: the RSS slope over minutes 90-180 below the bound, and the heap's not
-    // above it. Undefined when the run does not reach minute 180.
+    // Lead decision (30b), on the unrounded slopes: the RSS slope over minutes 90-180 below the bound, and the heap
+    // floor's not above it (the heap used's own slope is for information). Undefined when the run does not reach
+    // minute 180.
     const window = slopes[SETTLE_WINDOW];
-    const settles =
-      window.covered && window.rss !== undefined && window.heapUsed !== undefined
-        ? window.rss.raw < SETTLE_SLOPE_MIB_PER_MINUTE && window.heapUsed.raw <= SETTLE_SLOPE_MIB_PER_MINUTE
-        : undefined;
+    const checks = window.covered ? memorySettles(window.rss?.raw, window.heapFloor?.raw) : {};
     for (const fit of Object.values(slopes)) {
-      for (const [figure] of MEMORY_FIGURES) {
+      for (const figure of [...MEMORY_FIGURES.map(([f]) => f), "heapFloor"]) {
         if (fit[figure] !== undefined) {
           delete fit[figure].raw;
         }
       }
     }
-    processes[name] = { table, slopes, settles };
+    processes[name] = {
+      table,
+      slopes,
+      settles: checks.settles,
+      rssBelowBound: checks.rssBelow,
+      heapFloorNotAboveBound: checks.floorNotAbove,
+    };
   }
   return {
     tableMinutes: options.tableMinutes,
+    floorMinutes,
     settleWindow: SETTLE_WINDOW,
     settleSlopeMiBPerMinute: SETTLE_SLOPE_MIB_PER_MINUTE,
     ...processes,
@@ -1998,8 +2081,8 @@ function figuresOf(input) {
       // MemoryMax at the peak, and at most 5 % of the phase in garbage collection.
       headroomWithinBound: api.headroomWithinBound && worker.headroomWithinBound,
       gcWithinBound: api.gc?.within === true && worker.gc?.within === true,
-      // OBE-104 step 4, reported and not part of the exit code: each process's memory settles over minutes 90-180
-      // (undefined in a run shorter than 180 minutes).
+      // OBE-104 step 4 with lead decision (30b)'s heap floor, reported and not part of the exit code: each process's
+      // memory settles over minutes 90-180 (undefined in a run shorter than 180 minutes).
       apiMemorySettles: memory.api.settles,
       workerMemorySettles: memory.worker.settles,
     },
@@ -2028,12 +2111,32 @@ const slopeText = (fit) =>
     ? "-"
     : `${fit.slopeMiBPerMinute >= 0 ? "+" : ""}${fit.slopeMiBPerMinute.toFixed(4)} (${fit.r2 === undefined ? "-" : fit.r2.toFixed(2)})`;
 
-/** The report's memory section (OBE-104): memoryOverTime's rows, slopes and verdict per process. */
-function memoryText(memory) {
+/**
+ * A process's verdict line in the memory section (lead decision (30b) of 2026-11-19): the verdict and the two slopes it
+ * rests on over SETTLE_WINDOW, then the heap used's own slope, for information. `p` is memoryOverTime's process.
+ */
+function settleLine(label, p, memory) {
+  if (p.settles === undefined) {
+    return `  ${label} memory ${settleText(p.settles)}\n`;
+  }
+  const w = p.slopes[memory.settleWindow];
+  const bound = memory.settleSlopeMiBPerMinute;
+  const yes = (check) => (check ? "yes" : "no");
+  return (
+    `  ${label} memory ${settleText(p.settles)} over minutes ${memory.settleWindow}: RSS ${slopeText(w.rss)}, ` +
+    `below ${bound}: ${yes(p.rssBelowBound)}; heap floor per ${memory.floorMinutes} min ` +
+    `${slopeText(w.heapFloor)}, not above ${bound}: ${yes(p.heapFloorNotAboveBound)}; heap used ` +
+    `${slopeText(w.heapUsed)}, for information\n`
+  );
+}
+
+/** The report's memory section (OBE-104): memoryOverTime's rows, slopes, heap floors and verdict per process. */
+export function memoryText(memory) {
   const lines = [
     `\nMemory over time (OBE-104): per ${memory.tableMinutes} minutes of the phase, each figure's mean / most / last ` +
       `sample in MiB and the share of the row's whole minutes in garbage collection; then the least-squares slope ` +
-      `in MiB per minute (r²)\n`,
+      `in MiB per minute (r²), and that of the heap floor: the least heap used of each ${memory.floorMinutes} ` +
+      `minutes, after the collections (lead decision (30b))\n`,
   ];
   const figures = MEMORY_FIGURES.map(([figure]) => figure);
   for (const [name, label] of [
@@ -2059,8 +2162,15 @@ function memoryText(memory) {
         `  ${`slope ${span}`.padEnd(28)}${pad(fit.samples, 6)} samples${fit.covered ? "" : " (not covered)"}: ` +
           `${figures.map((f) => `${f} ${slopeText(fit[f])}`).join(", ")}\n`,
       );
+      const floorValues = fit.floors.map((floor) => floor.heapUsedMiB);
+      const range =
+        floorValues.length === 0 ? "" : `, ${Math.min(...floorValues)} to ${Math.max(...floorValues)} MiB`;
+      lines.push(
+        `  ${`heap floor ${span}`.padEnd(28)}${pad(fit.floors.length, 6)} floors of ${memory.floorMinutes} min` +
+          `${range}${fit.covered ? "" : " (not covered)"}: ${slopeText(fit.heapFloor)}\n`,
+      );
     }
-    lines.push(`  ${label} memory ${settleText(p.settles)}\n`);
+    lines.push(settleLine(label, p, memory));
   }
   return lines.join("");
 }
@@ -2281,7 +2391,8 @@ function report(run, figures) {
   add(
     `Memory over time (OBE-104; reported, not part of the exit code): API ${settleText(v.apiMemorySettles)}, ` +
       `worker ${settleText(v.workerMemorySettles)} (RSS slope over minutes ${figures.memory.settleWindow} below ` +
-      `${figures.memory.settleSlopeMiBPerMinute} MiB/min, heap used not above it)\n`,
+      `${figures.memory.settleSlopeMiBPerMinute} MiB/min, the slope of the heap's floor per ` +
+      `${figures.memory.floorMinutes} min not above it: lead decision (30b))\n`,
   );
   if (figures.unexpected.length > 0) {
     add(`Unexpected: ${figures.unexpected.join("; ")}\n`);
