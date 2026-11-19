@@ -1,10 +1,26 @@
 # Changelog of `@velexis/ota-sdk`
 
-Every change that a consumer of the SDK can notice is recorded here by hand, newest first ([OADR-0016](../docs/adr/0016-sdk-packaging-and-type-contract.md) point 8). The SDK follows [semantic versioning](https://semver.org/): a change that the contract test would reject is a major version, new methods and options are minor, fixes are patches. Versions `0.x` live only in the workspace (`workspace:*` in the storefront and the OTA admin); `1.0.0` is the first npm release (M6). `VERSION` in `src/version.js` always equals `version` in `package.json` (a unit test fails otherwise), so a release changes both and adds its section here.
+Every change that a consumer of the SDK can notice is recorded here by hand, newest first ([OADR-0016](../docs/adr/0016-sdk-packaging-and-type-contract.md) point 8). The SDK follows [semantic versioning](https://semver.org/): a change that the contract test would reject is a major version, new methods and options are minor, fixes are patches. Versions `0.x` lived only in the workspace (`workspace:*` in the storefront and the OTA admin, which keep using it); `1.0.0` is the first npm release (M6). `VERSION` in `src/version.js` always equals `version` in `package.json` (a unit test fails otherwise), so a release changes both and adds its section here.
 
 A method that will be removed is marked `@deprecated` in its JSDoc for at least one minor release first, and the deprecation is listed here.
 
+## 1.0.0 (unreleased)
+
+The first npm release (SDK-015, [OADR-0016](../docs/adr/0016-sdk-packaging-and-type-contract.md) point 8), prepared on 2026-11-18. It is published with provenance from the tag `sdk-v1.0.0` once the owner has chosen the licence and approved the publish workflow's lines ([README §9](README.md#9-versioning-publishing-and-what-is-deferred)); this heading then gets the date of the release. 1.0.0 contains every change listed under 0.1.0 below, which never left the workspace:
+
+- 129 methods in 8 namespaces (`storefront`, `reference`, `flights`, `checkout`, `bookings`, `auth`, `account`, `console`), one per `x-sdk-method` of the OTA booking API: the 96 of the contract and 33 MVP additions ([`docs/extensions.md`](docs/extensions.md)), checked against the frozen contract declarations by the contract test.
+- Three session modes: cookie mode for the hosted storefront (same-origin cookies and CSRF, one refresh shared by the clients derived from one client), token mode with a publishable key and server mode with a secret key (one refresh per refresh token in a family of clients, and the rotation rules of README §4.2 and §4.3).
+- The contract's error classes and `isVelexisError`, `Page<T>` with `for await`, retries with one `Idempotency-Key` per call, timeouts, `Retry-After` and the `onResponse` hook.
+- An ESM bundle (15.8 KB min+gzip of its 25 KB budget) and an IIFE (`window.Velexis`), both ES2022 and without dependencies, and declarations that include the OTA API's types; Node.js 22.12 and later and 24, evergreen browsers and edge runtimes.
+
+### Changed
+
+- The declarations are self-contained (SDK-015, OADR-0016 point 7): the build copies the OTA part of `@velexis/api-types` (the generated `components`, `paths`, `operations`, `webhooks` and `$defs` of the OTA booking API) into `dist/types/api-types.d.ts`, and the declarations import `./api-types.js` instead of `@velexis/api-types`, their declaration maps moved to match. A project that installs the package from npm needs nothing else, not even for its types; `test/unit/pack.test.js` compiles what `npm pack` makes in an empty project with `strict` and without `skipLibCheck`. The types themselves are unchanged, so code that also imports `@velexis/api-types` (inside the monorepo) stays compatible.
+- `VERSION` and `package.json`'s `version` are `1.0.0`.
+
 ## 0.1.0 (unreleased, workspace only)
+
+Never published on its own: these changes reach npm with 1.0.0 (above).
 
 ### Changed
 

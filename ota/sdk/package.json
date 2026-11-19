@@ -1,6 +1,6 @@
 {
   "name": "@velexis/ota-sdk",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Velexis OTA JavaScript SDK: vanilla ES2022 modules with JSDoc types checked by tsc --checkJs and no runtime dependencies, one method per OpenAPI operation of the OTA booking API (ADR-0019, OADR-0016).",
   "license": "UNLICENSED",

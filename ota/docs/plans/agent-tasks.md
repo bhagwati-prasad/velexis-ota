@@ -2977,6 +2977,7 @@ Security review, the PCI controls of the airline-card flow and the gate for live
 - **Verify:** `E2E_WITH_OTA=1 pnpm test:e2e -- --project=ota-admin specs/ota-admin/a11y-headers.e2e.ts specs/ota-admin/session-expiry.e2e.ts`
 
 ### SDK-015 · Publish @velexis/ota-sdk 1.0.0 to npm
+- **Status:** in progress (branch claude/intelligent-bardeen-90hhu7; pending: the owner's licence choice (H-14) and approval of sdk-publish.yml's lines, then step 3's npm organisation, token, tag and publish with provenance)
 - **Component:** ota-sdk
 - **Milestone:** M6
 - **Depends on:** SDK-014, OBE-084

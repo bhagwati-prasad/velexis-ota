@@ -33,7 +33,7 @@ import { Window } from "happy-dom";
 import ts from "typescript";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { GLOBAL_NAME, OUTPUTS, bundleOptions } from "../../scripts/build.mjs";
+import { API_TYPES_FILE, GLOBAL_NAME, OUTPUTS, bundleOptions } from "../../scripts/build.mjs";
 import { BUDGET_BYTES, KB, measure } from "../../scripts/check-size.mjs";
 import * as source from "../../src/index.js";
 import { op } from "../../src/internal/operations.js";
@@ -476,8 +476,9 @@ try {
   it("emits one declaration and its map per source module, index.d.ts being the types entry [SDK-007 AC1]", () => {
     const declarations = listFiles(join(DIST, OUTPUTS.types));
     const modules = listFiles(join(SDK_ROOT, "src")).filter((file) => file.endsWith(".js"));
+    // Besides them, since SDK-015, the copy of the OTA API types they import (without a map; test/unit/pack.test.js).
     expect(declarations.filter((file) => file.endsWith(".d.ts"))).toEqual(
-      modules.map((file) => file.replace(/\.js$/, ".d.ts")),
+      [API_TYPES_FILE, ...modules.map((file) => file.replace(/\.js$/, ".d.ts"))].sort(),
     );
     expect(declarations.filter((file) => file.endsWith(".d.ts.map"))).toEqual(
       modules.map((file) => file.replace(/\.js$/, ".d.ts.map")),
