@@ -50,6 +50,8 @@ const pkg = JSON.parse(readFileSync(join(SDK_ROOT, "package.json"), "utf8"));
  * process. Alone that takes about 7 s; while Turborepo runs every package's tests at once on a CI runner, much
  * longer. So the hook gets this budget instead of Vitest's default, more than the sum of its steps' own limits below
  * (360 s), so that a step that hangs is killed and fails with its own output before the hook's budget runs out.
+ * It is this new hook's own explicit budget, not a raised test or configured hook timeout, so it needs no AGENTS.md §7
+ * approval (lead decision (30h) of 2026-11-19).
  */
 const SETUP_TIMEOUT_MS = 400_000;
 /** The build, as in bundle.test.js. */
