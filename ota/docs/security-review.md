@@ -219,6 +219,10 @@ audit of 2026-11-04 listed 16, as its total of 19 moderate shows, and so does a 
   the `multer` it requires instead of being held at 2.5.0. 2.5.0 is a minor release of `multer` with the same API; the
   OTA API still parses multipart bodies itself (`common/http/body-parsers.ts`) and mounts no `FileInterceptor`. Remove
   the entry when the backends move to a NestJS release that requires `multer` 2.5.0 or later (an owner's decision).
+  *2026-11-19 (Dependabot PR #40, merged 2026-11-19):* the backends now pin every `@nestjs/*` package of that group
+  (`common`, `core`, `platform-express`, `testing`) at 11.2.10, still NestJS 11, and `@nestjs/platform-express` 11.2.10
+  itself depends on `multer` 2.5.0, so the entry no longer changes what the lockfile resolves (`pnpm why multer -r`:
+  2.5.0 on every path). It stays until the owner decides to remove it.
 - **`fast-uri` 3.1.9** (the latest 3.x, inside `ajv` 8.20.0's `^3.0.1`) and **`qs` 6.17.1** (the latest 6.x, inside
   `stripe` 18.5.0's `^6.11.0`) by a lockfile refresh without an override (`pnpm update fast-uri qs -r`, which changes no
   `package.json`). The refresh also moves the `qs` of `body-parser`, of the backends' own `express` 5.3.0 and of
