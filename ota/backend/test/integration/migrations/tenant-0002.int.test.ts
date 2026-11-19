@@ -42,7 +42,7 @@ import {
   migrateTenantSchema,
   TenantMigrationFailedError,
 } from "@velexis/db/migrate";
-import { createTestDatabase, type TestDatabase } from "@velexis/testing";
+import { createTestDatabase, TEST_DATABASE_DROP_BUDGET_MS, type TestDatabase } from "@velexis/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Clock } from "../../../src/common/clock";
 import { newId } from "../../../src/common/ids";
@@ -126,13 +126,16 @@ beforeAll(async () => {
   );
 });
 
+// The drop's budget (lead decision (29g), TEST_DATABASE_DROP_BUDGET_MS of @velexis/testing): DROP DATABASE waits for a
+// forced checkpoint, then removes the clone's files; run alone beside four busy loops on four CPUs, this file's drop
+// took about 10 s, Vitest's default hook budget, though the global setup flushes the template. No test timeout raised.
 afterAll(async () => {
   await provisioner?.pool.end();
   await migratorPool?.end();
   await otaPool?.end();
   await db?.drop();
   await Promise.all(folders.map((dir) => rm(dir, { recursive: true, force: true })));
-});
+}, TEST_DATABASE_DROP_BUDGET_MS);
 
 // ---- Schemas ----------------------------------------------------------------------------------------------------
 

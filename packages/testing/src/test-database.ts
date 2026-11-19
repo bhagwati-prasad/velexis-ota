@@ -46,12 +46,36 @@ export const TEMPLATE_DATABASE_PREFIX = "velexis_test_tpl_";
 /** `velexis_test_<runId>_<random>`: one clone. The run id ties a clone to its template. */
 export const TEST_DATABASE_PREFIX = "velexis_test_";
 
+/**
+ * The budget of an `afterAll` hook that drops a test database (`drop()`), for a file that may drop first in a loaded
+ * run (lead decision (29g) of 2026-11-18, AGENTS.md §7: a hook budget with its reason, never a test's own timeout or
+ * a config-level `hookTimeout`). PostgreSQL 16's DROP DATABASE waits for an immediate checkpoint, then removes the
+ * database's files. Beside four busy loops on four CPUs, the first drop of a run (tenant-0002.int.test.ts alone) took
+ * 9.9 to 10.2 s although the global setup had already flushed the template's files (`flushTemplateFiles`), and 13.7 to
+ * 15.0 s without that; on an idle machine it takes under 1 s. Vitest's default hook budget is 10 s, and a hook that
+ * times out leaves its DROP running while Vitest starts the global teardown.
+ */
+export const TEST_DATABASE_DROP_BUDGET_MS = 60_000;
+
 const OWNER = TEST_ROLES.migrator.user;
 const APPLICATION_NAME = "velexis-testing";
 /** How often `drop()` retries when a session slipped in while the database was being dropped. */
 const DROP_ATTEMPTS = 5;
 /** The pause before retry n of `drop()` is n times this. */
 const DROP_RETRY_DELAY_MS = 50;
+/**
+ * `pg_database.datconnlimit` of a database that a DROP DATABASE has marked invalid (PostgreSQL 16's
+ * DATCONNLIMIT_INVALID_DB): the running drop sets it before its irreversible steps, and the row goes when that drop
+ * commits; an interrupted drop leaves it so for good. Nobody can connect to such a database, and ALTER DATABASE
+ * refuses it with a FATAL 55000, which also closes the session; only DROP DATABASE accepts it.
+ */
+const INVALID_DATABASE_CONNLIMIT = -2;
+/**
+ * The SQLSTATEs after which `drop()` tries again, on a new connection: 42501, a session of a role velexis_test_admin
+ * may not signal appeared; 55006, a session did not exit in time; 3D000, someone else dropped it meanwhile; 55000,
+ * another drop marked it invalid between the check and the ALTER.
+ */
+const DROP_RETRY_STATES: readonly string[] = ["42501", "55006", "3D000", "55000"];
 /**
  * How long an app role waits for each of its terminated sessions to exit (`pg_terminate_backend(pid, timeout)`):
  * a session that is still exiting would make DROP DATABASE … WITH (FORCE) fail with "permission denied".
@@ -303,31 +327,40 @@ async function terminateForeignSessions(admin: pg.Client, adminUrl: string, data
  * (`ALLOW_CONNECTIONS false`, so pools cannot reconnect), has the app roles end their own sessions, then runs
  * `DROP DATABASE … WITH (FORCE)`, which terminates the remaining sessions (velexis_migrator, velexis_provisioner,
  * velexis_test_admin) and waits for them to exit. A missing database is not an error.
+ *
+ * A database that another drop has marked invalid (`datconnlimit` -2: that drop still runs, or it was interrupted)
+ * gets the DROP alone: it waits for the running drop's lock and then finds nothing, or removes what the interrupted
+ * drop left. Every attempt opens a connection of its own, because the FATAL 55000 of an ALTER that meets such a
+ * database closes the session (lead decision (29g) of 2026-11-18).
  */
 export async function dropDatabase(adminUrl: string, database: string): Promise<void> {
   const name = pg.escapeIdentifier(database);
-  await withClient(adminUrl, async (admin) => {
-    for (let attempt = 1; ; attempt += 1) {
-      const { rowCount } = await admin.query("SELECT 1 FROM pg_database WHERE datname = $1", [database]);
-      if (rowCount === 0) {
-        return;
-      }
-      try {
-        await admin.query(`ALTER DATABASE ${name} WITH ALLOW_CONNECTIONS false`);
-        await terminateForeignSessions(admin, adminUrl, database);
-        await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
-        return;
-      } catch (error) {
-        // 42501: a session of a role velexis_test_admin may not signal appeared; 55006: a session did not exit in
-        // time; 3D000: someone else dropped it meanwhile. Anything else is a real failure.
-        const state = sqlState(error);
-        if (attempt >= DROP_ATTEMPTS || !["42501", "55006", "3D000"].includes(state ?? "")) {
-          throw error;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await withClient(adminUrl, async (admin) => {
+        const { rows } = await admin.query<{ connlimit: number }>(
+          "SELECT datconnlimit AS connlimit FROM pg_database WHERE datname = $1",
+          [database],
+        );
+        const found = rows[0];
+        if (found === undefined) {
+          return;
         }
+        if (found.connlimit !== INVALID_DATABASE_CONNLIMIT) {
+          await admin.query(`ALTER DATABASE ${name} WITH ALLOW_CONNECTIONS false`);
+          await terminateForeignSessions(admin, adminUrl, database);
+        }
+        await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+      });
+      return;
+    } catch (error) {
+      // A state outside DROP_RETRY_STATES, or the last attempt, is a real failure.
+      if (attempt >= DROP_ATTEMPTS || !DROP_RETRY_STATES.includes(sqlState(error) ?? "")) {
+        throw error;
       }
-      await delay(DROP_RETRY_DELAY_MS * attempt);
     }
-  });
+    await delay(DROP_RETRY_DELAY_MS * attempt);
+  }
 }
 
 /**
@@ -368,6 +401,21 @@ async function createDatabase(adminUrl: string, database: string, template: stri
       await admin.query(`DROP DATABASE IF EXISTS ${name}`).catch(() => undefined);
       throw error;
     }
+  });
+}
+
+/**
+ * Creates and drops a throwaway database (`velexis_test_tpl_<runId>_flush`, from template0). Its DROP DATABASE forces
+ * an immediate checkpoint, which flushes and fsyncs the template's files now, in the global setup that Vitest does not
+ * time-bound, instead of in the `afterAll` of the run's first test file (lead decision (29g) of 2026-11-18). Measured
+ * beside four busy loops on four CPUs (tenant-0002.int.test.ts alone, three runs each): the first file's DROP DATABASE
+ * took 9.9 to 10.2 s with it and 13.7 to 15.0 s without; the throwaway's DROP took 2.5 to 4.3 s in the global setup.
+ */
+async function flushTemplateFiles(adminUrl: string, runId: string): Promise<void> {
+  const throwaway = pg.escapeIdentifier(`${TEMPLATE_DATABASE_PREFIX}${runId}_flush`);
+  await withClient(adminUrl, async (admin) => {
+    await admin.query(`CREATE DATABASE ${throwaway} TEMPLATE template0`);
+    await admin.query(`DROP DATABASE ${throwaway}`);
   });
 }
 
@@ -423,7 +471,9 @@ async function insertReferenceFixture(url: string): Promise<void> {
  *    and `reference` exist with their USAGE grants and default privileges;
  * 3. applies the platform and reference sets with `runMigrations` as velexis_migrator, and the tenant set to
  *    tenant_alpha and tenant_beta with `migrateTenantSchema({ create: true })`, the provisioning path;
- * 4. inserts `REFERENCE_FIXTURE` as velexis_platform_app.
+ * 4. inserts `REFERENCE_FIXTURE` as velexis_platform_app;
+ * 5. creates and drops a throwaway database, whose forced checkpoint flushes the template's files now
+ *    (`flushTemplateFiles`), so that the run's first `drop()` does not have to.
  * On any failure it drops what it created and rethrows. No connection to the template stays open, because
  * PostgreSQL refuses to clone a database that has sessions.
  */
@@ -459,6 +509,7 @@ export async function createTemplateDatabase(
       await migrateTenantSchema({ schema, dir: TENANT_MIGRATIONS_DIR, url: migratorUrl, create: true });
     }
     await insertReferenceFixture(databaseUrl(adminUrl, name, TEST_ROLES.platform));
+    await flushTemplateFiles(adminUrl, runId);
   } catch (error) {
     await drop().catch(() => undefined);
     throw error;

@@ -82,9 +82,10 @@ await db.drop();       // DROP DATABASE … WITH (FORCE); idempotent
 1. `CREATE DATABASE … OWNER velexis_migrator` (UTF-8, `C.UTF-8`, from `template0`) with the database-level grants of [`bootstrap.sql`](../../deploy/postgres/bootstrap.sql): nothing for `PUBLIC`, `CONNECT` and `TEMPORARY` for `velexis_platform_app` and `velexis_ota_app`, `CREATE` as well for `velexis_provisioner`, everything for `velexis_migrator`;
 2. [`deploy/postgres/schemas.sql`](../../deploy/postgres/schemas.sql) as `velexis_migrator`: `public` closed, the `platform` and `reference` schemas, their `USAGE` grants and default privileges;
 3. the platform and reference sets with `runMigrations`, and `tenant_alpha` and `tenant_beta` with `migrateTenantSchema({ create: true })`: the real runner of [`@velexis/db/migrate`](../db/README.md), as `velexis_migrator`, from `platform/backend/migrations/` and `ota/backend/migrations/tenant/`;
-4. the reference fixture `REFERENCE_FIXTURE` as `velexis_platform_app` (the role of `pnpm db:seed:reference`): 3 currencies (EUR, GBP, USD), 3 countries (FR, GB, US), 5 airports (CDG, ORY, LHR, JFK, LAX) and 3 airlines (AF, BA, AA). Cities and time zones stay empty, so `city_code` and `time_zone` are `NULL`.
+4. the reference fixture `REFERENCE_FIXTURE` as `velexis_platform_app` (the role of `pnpm db:seed:reference`): 3 currencies (EUR, GBP, USD), 3 countries (FR, GB, US), 5 airports (CDG, ORY, LHR, JFK, LAX) and 3 airlines (AF, BA, AA). Cities and time zones stay empty, so `city_code` and `time_zone` are `NULL`;
+5. a throwaway `CREATE DATABASE velexis_test_tpl_<runId>_flush TEMPLATE template0` and its `DROP DATABASE` (`flushTemplateFiles`): the drop forces a checkpoint, which flushes and fsyncs the template's files (about 1,210) now, in the global setup, which Vitest does not time-bound, instead of in the `afterAll` of the run's first test file (FIX-W60-TESTS).
 
-It provides the template's name to the test files with Vitest's `provide` and `inject`. When the run ends it drops the clones of this run that are still there (`velexis_test_<runId>_*`, left by a test file that crashed before its `afterAll`; `dropRunClones`), then the template. Building it takes about 1 s locally.
+It provides the template's name to the test files with Vitest's `provide` and `inject`. When the run ends it drops the clones of this run that are still there (`velexis_test_<runId>_*`, left by a test file that crashed before its `afterAll`, or whose drop still runs after its hook timed out; `dropRunClones`), then the template. Building it takes about 1 s locally, plus about 0.5 s for the throwaway database of step 5.
 
 ### One clone per test file
 
@@ -108,13 +109,17 @@ These are the development values that `dev-setup.sh` and the CI bootstrap set, n
 1. sets `ALLOW_CONNECTIONS false`, so pools cannot reconnect;
 2. logs in as each app role that still has sessions there (to the maintenance database of `TEST_DATABASE_ADMIN_URL`, `postgres`) and terminates that role's own sessions, which every role may do, waiting until each has exited (`pg_terminate_backend(pid, 5000)`): `WITH (FORCE)` refuses while a session it may not signal is still listed, even one that is already exiting;
 3. runs `DROP DATABASE … WITH (FORCE)`, which ends the remaining sessions and waits for them;
-4. retries a few times, after a short pause, if a session slipped in meanwhile.
+4. retries a few times, after a short pause, if a session slipped in meanwhile, each time on a connection of its own.
 
 Close your pools first when you can; `drop()` copes when you cannot (a failed test, a pool held by the app under test).
 
+PostgreSQL 16 marks a database invalid (`pg_database.datconnlimit` = -2) while it drops it, and for good when that drop is interrupted; nobody can connect to it, and `ALTER DATABASE` refuses it with a FATAL `55000` that also closes the session. `drop()` reads `datconnlimit` with its existence check: an invalid database gets step 3 alone, whose `DROP DATABASE IF EXISTS … WITH (FORCE)` waits for the running drop and then finds nothing, or removes what an interrupted one left; and a `55000` (another drop marked it invalid between the check and the `ALTER`) is retried on a new connection. So the global teardown no longer stops before the template when a file's `afterAll` timed out and its clone's drop still runs (lead decision (29g) of 2026-11-18, FIX-W60-TESTS; `the global setup's teardown while a clone's drop still runs` in [`test-database.int.test.ts`](test/integration/test-database.int.test.ts), and the `dropDatabase` cases of [`test-database.test.ts`](src/test-database.test.ts) with a fake `pg`, because `velexis_test_admin` cannot make an invalid database itself).
+
+Every `DROP DATABASE` waits for a checkpoint and then removes the database's files. Unloaded a clone's drop takes under a second; beside four busy loops on four CPUs, the first drop of a run (`tenant-0002.int.test.ts` alone, three runs each) took 13.7 to 15.0 s when its checkpoint still had to flush the template's files, and 9.9 to 10.2 s since the global setup flushes them (step 5 of the template, whose own drop took 2.5 to 4.3 s there): still about Vitest's default hook budget of 10 s. A file that may drop first in a loaded run gives the `afterAll` that calls `drop()` the exported budget `TEST_DATABASE_DROP_BUDGET_MS` (60 s; `ota/backend/test/integration/migrations/tenant-0002.int.test.ts`), with a comment saying why: a hook budget with its reason, never a test's own timeout or a config-level `hookTimeout` (AGENTS.md §7).
+
 ### After an interrupted run
 
-A run stopped with Ctrl-C may leave `velexis_test_*` databases behind, because the teardown never ran (a test file that crashed is covered: the teardown drops its clone). They are harmless; to remove them:
+A run stopped with Ctrl-C, or by a machine that stopped, may leave `velexis_test_*` databases behind, because the teardown never ran (a test file that crashed is covered: the teardown drops its clone). The next run does not remove them: its set-up builds a template under a run id of its own, and its teardown drops only that run's clones. A drop that was interrupted leaves its database marked invalid (`datconnlimit` -2), which the same `DROP DATABASE … WITH (FORCE)` removes. They are harmless; to remove them:
 
 ```bash
 psql "$TEST_DATABASE_ADMIN_URL" -At -c "SELECT datname FROM pg_database WHERE datname LIKE 'velexis\_test\_%'"
