@@ -23,7 +23,7 @@
     "lighthouse": "13.5.0",
     "puppeteer-core": "25.16.0",
     "tailwindcss": "4.1.18",
-    "vite": "6.4.5",
+    "vite": "6.4.6",
     "vitest": "4.1.12"
   }
 }
