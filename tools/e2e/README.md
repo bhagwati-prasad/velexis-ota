@@ -879,7 +879,7 @@ All `devDependencies`, exact versions ([`tech-stack.md`](../../docs/mvp/tech-sta
 
 | Package | Version | Why |
 |---|---|---|
-| `@playwright/test` | 1.65.0 | The runner and Chromium driver (tech-stack: Playwright 1.6x) |
+| `@playwright/test` | 1.65.1 | The runner and Chromium driver (tech-stack: Playwright 1.6x; 1.65.0 until Dependabot PR #49, merged 2026-11-19) |
 | `@axe-core/playwright` | 4.14.0 | axe in the page (tech-stack: 4.x) |
 | `otplib` | 12.0.1 | TOTP codes, the library the platform backend uses (tech-stack: 12.x; upstream marks 12 deprecated in favour of 13) |
 | `@velexis/testing`, `@velexis/config`, `@velexis/api-types`, `@velexis/db` | workspace | Mailpit client, builders, test roles and `dropDatabase`; the harness settings; the platform request and response types and the invalidation channel; `tenantTx` for the demo OTA's data (OFE-008) |
