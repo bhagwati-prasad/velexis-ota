@@ -311,7 +311,7 @@ importers:
         version: 21.0.4
       lighthouse:
         specifier: 13.6.0
-        version: 13.6.0(ajv@8.20.0)(rollup@4.65.0)
+        version: 13.6.0(ajv@8.20.0)(rollup@4.68.7)
       puppeteer-core:
         specifier: 25.17.0
         version: 25.17.0
@@ -368,8 +368,8 @@ importers:
         version: 3.0.1(ajv@8.20.0)
     devDependencies:
       '@redocly/cli':
-        specifier: 2.78.0
-        version: 2.78.0
+        specifier: 2.79.0
+        version: 2.79.0
       '@types/node':
         specifier: 24.19.2
         version: 24.19.2
@@ -2175,8 +2175,8 @@ packages:
   '@redocly/ajv@8.11.2':
     resolution: {integrity: sha512-io1JpnwtIcvojV7QKDUSIuMN/ikdOUd1ReEnUnMKGfDVridQZ31J0MmIuqwuRjWDZfmvr+Q0MqCcfHM2gTivOg==}
 
-  '@redocly/cli@2.78.0':
-    resolution: {integrity: sha512-ozrbcxLabQUxQr62nt0R8HE2T7kmlmIu1hTa/hyN1h5iht9v3Bh4fA2FXLj4wEhtN4xmdqoySHfba8+vFbONJA==}
+  '@redocly/cli@2.79.0':
+    resolution: {integrity: sha512-MbaH+fA0KqUoGPm82vc/MBhY9D097QK8vSQbZJGzHUcYl3evwnVL9c9hAe5J9C0BenlKTSDPe70YCRGZ/DLHlg==}
     engines: {node: '>=22.12.0 || >=20.19.0 <21.0.0', npm: '>=10'}
     hasBin: true
 
@@ -6079,7 +6079,7 @@ snapshots:
       require-from-string: 2.0.2
       uri-js-replace: 1.0.1
 
-  '@redocly/cli@2.78.0': {}
+  '@redocly/cli@2.79.0': {}
 
   '@redocly/config@0.22.0': {}
 
@@ -6175,7 +6175,7 @@ snapshots:
   '@rollup/rollup-win32-x64-msvc@4.68.7':
     optional: true
 
-  '@sentry/bundler-plugins@11.15.0(rollup@4.65.0)':
+  '@sentry/bundler-plugins@11.15.0(rollup@4.68.7)':
     dependencies:
       '@sentry/core': 11.15.0
       dotenv: 17.4.2
@@ -6184,7 +6184,7 @@ snapshots:
       oxc-parser: 0.152.0
       sentry: 0.49.0
     optionalDependencies:
-      rollup: 4.65.0
+      rollup: 4.68.7
 
   '@sentry/conventions@0.33.0': {}
 
@@ -6192,10 +6192,10 @@ snapshots:
     dependencies:
       '@sentry/conventions': 0.33.0
 
-  '@sentry/node@11.15.0(rollup@4.65.0)':
+  '@sentry/node@11.15.0(rollup@4.68.7)':
     dependencies:
       '@opentelemetry/api': 1.9.1
-      '@sentry/bundler-plugins': 11.15.0(rollup@4.65.0)
+      '@sentry/bundler-plugins': 11.15.0(rollup@4.68.7)
       '@sentry/conventions': 0.33.0
       '@sentry/core': 11.15.0
       '@sentry/opentelemetry': 11.15.0(@opentelemetry/api@1.9.1)
@@ -7642,10 +7642,10 @@ snapshots:
 
   lighthouse-stack-packs@1.12.3: {}
 
-  lighthouse@13.6.0(ajv@8.20.0)(rollup@4.65.0):
+  lighthouse@13.6.0(ajv@8.20.0)(rollup@4.68.7):
     dependencies:
       '@paulirish/trace_engine': 0.0.67
-      '@sentry/node': 11.15.0(rollup@4.65.0)
+      '@sentry/node': 11.15.0(rollup@4.68.7)
       ajv-formats: 3.0.1(ajv@8.20.0)
       axe-core: 4.14.0
       chrome-launcher: 1.2.3
