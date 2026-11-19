@@ -430,6 +430,41 @@ The first paint and the configuration's phases were 0 with the machine's fonts; 
 
 The same as the 23-character figures of FIX-W52-OTA's probe above (and OFE-032's, to the third decimal), and within the 0.0024 to 0.0048 the decision expected. The first paint and the configuration's phases were 0 with the machine's fonts; without Inter the first paint had the bundled face's swap only (0.0005 at 1024 px on both storefronts, 0.0003 at 1280 px on the demo OTA and 0.0003 or none there with the long name, every shift a change of size), and the configuration 0. The whole spec (72 tests) passed with the machine's fonts (4.9 minutes) and with a fontconfig without Inter (5.0 minutes, and again in the review, 5.0 minutes, the same session figures), and the whole `storefront` project (163 tests, 6.5 minutes) with the machine's fonts, the same figures in it.
 
+### 3.9 Lighthouse 13.6.0 (Dependabot PR #47, 2026-11-19)
+
+Taken for PR #47 (Lighthouse 13.5.0 to 13.6.0, `puppeteer-core` still 25.16.0) on its merged state: Dependabot's e3e8eaf with the integration branch at 6330004 merged in (08fc2ba), whose storefront build is the base's (Lighthouse is a devDependency the build does not use). Since this PR the script measures with Lighthouse 13.6.0; the figures of §3.1 to §3.8 were taken with 13.5.0.
+
+**Method.** §3.1 with the script as a visitor: `node ota/frontend/scripts/lighthouse.mjs --width 412 --width 360 --runs 3`, headless Chromium 153.0.8010.12 (`/opt/pw-browsers/chromium`; the report names it `Chrome/153.0.8010.12` under both Lighthouse versions), the demo OTA's test storefront (EUR) in the e2e harness's preview on 4173, whose stack a scratch spec, not committed, held under the machine's e2e lock while the script ran; the agents' Linux machine, 4 CPUs, load average 1.42 at the start and 1.99 at the end. In a second session of the same stack, as a control, the base's Lighthouse 13.5.0 (the same script, from a checkout of 6330004) and then 13.6.0 again, back to back against the same build (load average 1.22, 0.98 and 1.62 at their starts and end).
+
+| Page | Run | Performance score | FCP | LCP (≤ 2.5 s) | CLS (≤ 0.1) | TBT | INP (≤ 200 ms) |
+|---|---|---|---|---|---|---|---|
+| Home, 412 px | 1 | 0.99 | 0.77 s | 0.77 s | 0 | 104 ms | 50 ms |
+| Home, 412 px | 2 | 1.00 | 0.76 s | 0.76 s | 0 | 8 ms | 22 ms |
+| Home, 412 px | 3 | 1.00 | 0.76 s | 0.76 s | 0 | 0 ms | 28 ms |
+| Home, 360 px | 1 | 1.00 | 0.76 s | 0.76 s | 0 | 18 ms | 26 ms |
+| Home, 360 px | 2 | 1.00 | 0.76 s | 0.76 s | 0 | 16 ms | 30 ms |
+| Home, 360 px | 3 | 1.00 | 0.76 s | 0.76 s | 0 | 15 ms | 24 ms |
+| Results, 412 px | 1 | 0.99 | 0.76 s | 2.13 s | 0.027 | 24 ms | 60 ms |
+| Results, 412 px | 2 | 0.99 | 0.76 s | 1.96 s | 0.027 | 17 ms | 51 ms |
+| Results, 412 px | 3 | 0.99 | 0.76 s | 1.97 s | 0.027 | 26 ms | 56 ms |
+| Results, 360 px | 1 | 0.99 | 0.77 s | 2.00 s | 0.048 | 31 ms | 52 ms |
+| Results, 360 px | 2 | 0.99 | 0.76 s | 2.11 s | 0.048 | 13 ms | 50 ms |
+| Results, 360 px | 3 | 0.99 | 0.76 s | 2.14 s | 0.048 | 32 ms | 53 ms |
+
+Medians: home LCP 0.76 s, CLS 0, INP 26 to 28 ms; results LCP 1.97 s at 412 px and 2.11 s at 360 px, CLS 0.027 and 0.048, INP 52 to 56 ms. Bytes transferred: home 119.7 to 126.3 KB, results 163.0 to 169.6 KB; fonts 48.7 KB on both. The layout shifts are §3.7's: none on home, the results page's own `main > div.mt-6` (0.027 at 412 px, 0.048 at 360 px).
+
+The control session's medians, the same build:
+
+| Page | Lighthouse 13.5.0: FCP / LCP / CLS / INP | Lighthouse 13.6.0: FCP / LCP / CLS / INP |
+|---|---|---|
+| Home, 412 px | 1.59 s / 1.62 s / 0 / 28 ms | 0.77 s / 0.77 s / 0 / 25 ms |
+| Home, 360 px | 1.58 s / 1.58 s / 0 / 32 ms | 0.76 s / 0.76 s / 0 / 34 ms |
+| Results, 412 px | 1.74 s / 2.10 s / 0.027 / 50 ms | 0.77 s / 2.08 s / 0.027 / 77 ms |
+| Results, 360 px | 1.72 s / 2.08 s / 0.048 / 54 ms | 0.76 s / 2.07 s / 0.048 / 68 ms |
+
+- **Every target is met on both pages at both widths in each run** of both 13.6.0 sessions: LCP at most 2.14 s, CLS at most 0.048, INP at most 87 ms (13.5.0's control: 2.14 s, 0.048 and 90 ms).
+- **Lighthouse 13.6.0 changes FCP and the home page's LCP, not the page.** On the same build, FCP falls from 1.56 to 1.76 s to 0.76 to 0.77 s on both pages, and the home page's LCP, its text, now equals FCP (0.76 to 0.77 s instead of 1.58 to 1.93 s); the performance score rises from 0.98 or 0.99 to 0.99 or 1.00. Its release notes name the cause: the Lantern simulation now takes a request's render-blocking status from the protocol and uses the FCP graph when a text LCP is painted in the same frame as FCP. The results page's LCP (the search's answer), CLS, INP and the bytes stay where 13.5.0 and §3.8 had them (§3.8's visitor medians: LCP 1.57 to 2.04 s, CLS 0 / 0.027 / 0.048, INP 23 to 44 ms; the results page's INP medians differ between sessions by up to about 25 ms: 52 to 56 ms in the first 13.6.0 session, 50 to 54 ms with 13.5.0 and 68 to 77 ms with 13.6.0 right after it). Figures of §3.1 to §3.8 compare with these for CLS, INP and the results page's LCP only.
+
 ## 4. Font budget
 
 `ota/frontend/scripts/check-budgets.mjs` (every `build`, CI included) adds a FONT row per page: at most 2 families and 120 KB of woff2 files (counted as served: woff2 is compressed already). A page's text has two slots, the body text and the headings, which `lib/theme.js` sets to one bundled family each; the size is the worst choice an OTA can make among the families the page's stylesheets declare, with the faces a browser picks for the body text's weights (every `font-weight` of the stylesheets) and for the headings' (the weight classes of the page's h1 to h3 and `font-heading` elements, 400 without one, 600 for the headings the modules create), plus any preloaded font. Unit tests: `ota/frontend/test/budgets.test.js` (`[OFE-024]`).
