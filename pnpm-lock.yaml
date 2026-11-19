@@ -426,8 +426,8 @@ importers:
         specifier: workspace:*
         version: link:../logger
       kysely:
-        specifier: 0.28.19
-        version: 0.28.19
+        specifier: 0.28.20
+        version: 0.28.20
       pg:
         specifier: 8.23.1
         version: 8.23.1
@@ -440,7 +440,7 @@ importers:
         version: 8.23.1
       kysely-codegen:
         specifier: 0.20.0
-        version: 0.20.0(kysely@0.28.19)(pg@8.23.1)(typescript@5.6.3)
+        version: 0.20.0(kysely@0.28.20)(pg@8.23.1)(typescript@5.6.3)
       typescript:
         specifier: 5.6.3
         version: 5.6.3
@@ -3605,8 +3605,8 @@ packages:
       tedious:
         optional: true
 
-  kysely@0.28.19:
-    resolution: {integrity: sha512-sXoKWuQjtorwxDLiws0ZSPGGne/hs+fGHIII7vXquSBFgHwLXgFIHN9tTv3kNdVkJ5d3xtXC84GjjWMYLqdFWg==}
+  kysely@0.28.20:
+    resolution: {integrity: sha512-D7rXCs0Psxq2hqjg15PGzk/k2bsWY1ohT9o/Xzl8SzgWExT6GiHCz4Z0NP1z5uOE3WBG7gJ46kYdgLYCOlaLoA==}
     engines: {node: '>=20.0.0'}
 
   legacy-javascript@0.0.4:
@@ -7449,14 +7449,14 @@ snapshots:
     dependencies:
       json-buffer: 3.0.1
 
-  kysely-codegen@0.20.0(kysely@0.28.19)(pg@8.23.1)(typescript@5.6.3):
+  kysely-codegen@0.20.0(kysely@0.28.20)(pg@8.23.1)(typescript@5.6.3):
     dependencies:
       chalk: 4.1.2
       cosmiconfig: 9.0.2(typescript@5.6.3)
       diff: 8.0.4
       dotenv: 17.4.1
       dotenv-expand: 12.0.3
-      kysely: 0.28.19
+      kysely: 0.28.20
       micromatch: 4.0.8
       minimist: 1.2.8
       pluralize: 8.0.0
@@ -7466,7 +7466,7 @@ snapshots:
     transitivePeerDependencies:
       - typescript
 
-  kysely@0.28.19: {}
+  kysely@0.28.20: {}
 
   legacy-javascript@0.0.4: {}
 
