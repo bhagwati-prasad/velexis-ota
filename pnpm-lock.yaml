@@ -103,8 +103,8 @@ importers:
         specifier: 2.1.1
         version: 2.1.1
       lucide-react:
-        specifier: 1.72.0
-        version: 1.72.0(@types/react@19.3.0)(react@19.3.1)
+        specifier: 1.73.0
+        version: 1.73.0(@types/react@19.3.0)(react@19.3.1)
       next:
         specifier: 15.5.29
         version: 15.5.29(@opentelemetry/api@1.9.1)(@playwright/test@1.65.1)(@types/node@24.19.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -311,7 +311,7 @@ importers:
         version: 21.0.4
       lighthouse:
         specifier: 13.6.0
-        version: 13.6.0(ajv@8.20.0)(rollup@4.65.0)
+        version: 13.6.0(ajv@8.20.0)(rollup@4.68.7)
       puppeteer-core:
         specifier: 25.17.0
         version: 25.17.0
@@ -577,8 +577,8 @@ importers:
         specifier: 2.1.1
         version: 2.1.1
       lucide-react:
-        specifier: 1.72.0
-        version: 1.72.0(@types/react@19.3.0)(react@19.3.1)
+        specifier: 1.73.0
+        version: 1.73.0(@types/react@19.3.0)(react@19.3.1)
       next:
         specifier: 15.5.29
         version: 15.5.29(@opentelemetry/api@1.9.1)(@playwright/test@1.65.1)(@types/node@24.19.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -804,8 +804,8 @@ importers:
         specifier: 2.1.1
         version: 2.1.1
       lucide-react:
-        specifier: 1.72.0
-        version: 1.72.0(@types/react@19.3.0)(react@19.3.1)
+        specifier: 1.73.0
+        version: 1.73.0(@types/react@19.3.0)(react@19.3.1)
       next:
         specifier: 15.5.29
         version: 15.5.29(@opentelemetry/api@1.9.1)(@playwright/test@1.65.1)(@types/node@24.19.2)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -3820,8 +3820,8 @@ packages:
     resolution: {integrity: sha512-U4N8FgzmWxc8k1VH8Kr6lQg18U7Fjvby6wXHVRX/ZZ7IwWbRMgrRbP0Wrb5q5NVinryp4SQampHKdvtecItxUg==}
     engines: {node: 20 || >=22}
 
-  lucide-react@1.72.0:
-    resolution: {integrity: sha512-fbF5i1GU8GODETa3Q7rXqrJrcx3iPYrQtxthom103zGx+Z0BGwKYAW9s+9435ohYJ7hQm0av0PoZcqI1CRwNrg==}
+  lucide-react@1.73.0:
+    resolution: {integrity: sha512-fVOzGviL9mTfHenG1PbCfIceavyGlnpYNSYr+aGZHLRymAJ7DTP6KHuqt0uBkCKAoenr1UVkwSbDIYt2xIesEQ==}
     peerDependencies:
       '@types/react': '*'
       react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
@@ -6175,7 +6175,7 @@ snapshots:
   '@rollup/rollup-win32-x64-msvc@4.68.7':
     optional: true
 
-  '@sentry/bundler-plugins@11.15.0(rollup@4.65.0)':
+  '@sentry/bundler-plugins@11.15.0(rollup@4.68.7)':
     dependencies:
       '@sentry/core': 11.15.0
       dotenv: 17.4.2
@@ -6184,7 +6184,7 @@ snapshots:
       oxc-parser: 0.152.0
       sentry: 0.49.0
     optionalDependencies:
-      rollup: 4.65.0
+      rollup: 4.68.7
 
   '@sentry/conventions@0.33.0': {}
 
@@ -6192,10 +6192,10 @@ snapshots:
     dependencies:
       '@sentry/conventions': 0.33.0
 
-  '@sentry/node@11.15.0(rollup@4.65.0)':
+  '@sentry/node@11.15.0(rollup@4.68.7)':
     dependencies:
       '@opentelemetry/api': 1.9.1
-      '@sentry/bundler-plugins': 11.15.0(rollup@4.65.0)
+      '@sentry/bundler-plugins': 11.15.0(rollup@4.68.7)
       '@sentry/conventions': 0.33.0
       '@sentry/core': 11.15.0
       '@sentry/opentelemetry': 11.15.0(@opentelemetry/api@1.9.1)
@@ -7642,10 +7642,10 @@ snapshots:
 
   lighthouse-stack-packs@1.12.3: {}
 
-  lighthouse@13.6.0(ajv@8.20.0)(rollup@4.65.0):
+  lighthouse@13.6.0(ajv@8.20.0)(rollup@4.68.7):
     dependencies:
       '@paulirish/trace_engine': 0.0.67
-      '@sentry/node': 11.15.0(rollup@4.65.0)
+      '@sentry/node': 11.15.0(rollup@4.68.7)
       ajv-formats: 3.0.1(ajv@8.20.0)
       axe-core: 4.14.0
       chrome-launcher: 1.2.3
@@ -7743,7 +7743,7 @@ snapshots:
 
   lru-cache@11.5.3: {}
 
-  lucide-react@1.72.0(@types/react@19.3.0)(react@19.3.1):
+  lucide-react@1.73.0(@types/react@19.3.0)(react@19.3.1):
     dependencies:
       react: 19.3.1
     optionalDependencies:
