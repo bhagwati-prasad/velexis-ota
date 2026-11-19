@@ -233,8 +233,8 @@ importers:
         specifier: 4.6.1
         version: 4.6.1(@nestjs/common@11.2.10(reflect-metadata@0.2.2)(rxjs@7.8.2))(pino-http@10.5.0)(pino@9.14.0)(rxjs@7.8.2)
       nodemailer:
-        specifier: 10.5.0
-        version: 10.5.0
+        specifier: 10.6.0
+        version: 10.6.0
       pdfmake:
         specifier: 0.2.23
         version: 0.2.23
@@ -311,7 +311,7 @@ importers:
         version: 21.0.4
       lighthouse:
         specifier: 13.6.0
-        version: 13.6.0(ajv@8.20.0)(rollup@4.65.0)
+        version: 13.6.0(ajv@8.20.0)(rollup@4.68.7)
       puppeteer-core:
         specifier: 25.17.0
         version: 25.17.0
@@ -529,8 +529,8 @@ importers:
         specifier: workspace:*
         version: link:../../tools/amadeus-stub
       nodemailer:
-        specifier: 10.5.0
-        version: 10.5.0
+        specifier: 10.6.0
+        version: 10.6.0
       stripe:
         specifier: 18.5.0
         version: 18.5.0(@types/node@24.19.2)
@@ -710,8 +710,8 @@ importers:
         specifier: 4.6.1
         version: 4.6.1(@nestjs/common@11.2.10(reflect-metadata@0.2.2)(rxjs@7.8.2))(pino-http@10.5.0)(pino@9.14.0)(rxjs@7.8.2)
       nodemailer:
-        specifier: 10.5.0
-        version: 10.5.0
+        specifier: 10.6.0
+        version: 10.6.0
       otplib:
         specifier: 12.0.1
         version: 12.0.1
@@ -4017,8 +4017,8 @@ packages:
   node-readfiles@0.2.0:
     resolution: {integrity: sha512-SU00ZarexNlE4Rjdm83vglt5Y9yiQ+XI1XpflWlb7q7UTN1JUItm69xMeiQCTxtTfnzt+83T8Cx+vI2ED++VDA==}
 
-  nodemailer@10.5.0:
-    resolution: {integrity: sha512-L/w/HH5MqpzMDuZD7fQdt/+KqymuvrpaApaIjAH2XA3ILePwlcvXCVVvP75xVrXCEt2ggK2marrrHHFB5Qu0kA==}
+  nodemailer@10.6.0:
+    resolution: {integrity: sha512-jWanL7D9GD3jvUDYKmoC5rWTiG8MnBgnN2yV68bgMKip1zUJhiSTyz7Eg+18y8sk5OvdVDzws5nZK5arSI4f5Q==}
     engines: {node: '>=20.0.0'}
 
   oas-kit-common@1.0.8:
@@ -6175,7 +6175,7 @@ snapshots:
   '@rollup/rollup-win32-x64-msvc@4.68.7':
     optional: true
 
-  '@sentry/bundler-plugins@11.15.0(rollup@4.65.0)':
+  '@sentry/bundler-plugins@11.15.0(rollup@4.68.7)':
     dependencies:
       '@sentry/core': 11.15.0
       dotenv: 17.4.2
@@ -6184,7 +6184,7 @@ snapshots:
       oxc-parser: 0.152.0
       sentry: 0.49.0
     optionalDependencies:
-      rollup: 4.65.0
+      rollup: 4.68.7
 
   '@sentry/conventions@0.33.0': {}
 
@@ -6192,10 +6192,10 @@ snapshots:
     dependencies:
       '@sentry/conventions': 0.33.0
 
-  '@sentry/node@11.15.0(rollup@4.65.0)':
+  '@sentry/node@11.15.0(rollup@4.68.7)':
     dependencies:
       '@opentelemetry/api': 1.9.1
-      '@sentry/bundler-plugins': 11.15.0(rollup@4.65.0)
+      '@sentry/bundler-plugins': 11.15.0(rollup@4.68.7)
       '@sentry/conventions': 0.33.0
       '@sentry/core': 11.15.0
       '@sentry/opentelemetry': 11.15.0(@opentelemetry/api@1.9.1)
@@ -7642,10 +7642,10 @@ snapshots:
 
   lighthouse-stack-packs@1.12.3: {}
 
-  lighthouse@13.6.0(ajv@8.20.0)(rollup@4.65.0):
+  lighthouse@13.6.0(ajv@8.20.0)(rollup@4.68.7):
     dependencies:
       '@paulirish/trace_engine': 0.0.67
-      '@sentry/node': 11.15.0(rollup@4.65.0)
+      '@sentry/node': 11.15.0(rollup@4.68.7)
       ajv-formats: 3.0.1(ajv@8.20.0)
       axe-core: 4.14.0
       chrome-launcher: 1.2.3
@@ -7908,7 +7908,7 @@ snapshots:
     dependencies:
       es6-promise: 3.3.1
 
-  nodemailer@10.5.0: {}
+  nodemailer@10.6.0: {}
 
   oas-kit-common@1.0.8:
     dependencies:
