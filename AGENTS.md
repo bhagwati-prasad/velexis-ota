@@ -15,7 +15,7 @@ Humans should read it too. It is the short version of [`docs/mvp/conventions.md`
 
 Velexis is a multi-tenant OTA platform. A person signs up on the **portal**, subscribes, and gets their own **OTA** (a tenant with its own PostgreSQL schema `tenant_<key>`). The OTA sells **Amadeus Enterprise** flights through a hosted **storefront** and runs operations in the **OTA admin**. There are six components in two groups (`platform/`, `ota/`), a vanilla JS **SDK** (`ota/sdk`), shared packages (`packages/`), and everything runs on **one VM without Docker**.
 
-Status: **planning is done, implementation starts with milestone M0.**
+Status: **325 of the plans' 354 tasks were done on 2026-11-20, and every open task waits on a human step, a nightly run with the Stripe test secrets or the launch**; `node tools/plan-lint/plan-lint.mjs` prints the live count (updated 2026-11-20, lead decision (32g), approved by the owner; FIX-W63-DOCS).
 
 ## 2. Read order
 
@@ -74,7 +74,7 @@ If you were given a task id, do that task. Otherwise pick one like this:
 
 - The integration branch `claude/intelligent-bardeen-90hhu7` is merged into `main` once with a **merge commit, not a squash**, so every task commit with its `Task:` footer stays in `main`'s history (the ancestry check of precondition P21 in [`ota/docs/runbooks/airline-card-go-live.md`](ota/docs/runbooks/airline-card-go-live.md) works as written). `main` then becomes the repository's default branch, so the nightly E2E schedule and Dependabot run on it.
 - In a later wave each task still has its own branch, which the integrator squash-merges into the integration branch; the integration branch reaches `main` as **one PR per wave**, which the developer reviews and merges with a merge commit. A task done outside a wave still opens its own PR (items 1 to 9).
-- `main`'s protection allows merge commits and squash merging (a wave's PR is merged with a merge commit, a single task's PR is squash-merged; decision (24f)), does not require linear history, keeps blocking force pushes and keeps the six required checks ([`tools/ci/README.md`](tools/ci/README.md#human-steps-the-developer)). It requires **no approval** while the developer is the only person with write access, because GitHub does not let a PR's author approve it: the required checks and, where the runbook asks for one, the second-agent review comment below are the review record. It requires one approval once a second person with write access joins.
+- `main`'s protection allows merge commits and squash merging (a wave's PR is merged with a merge commit, a single task's PR is squash-merged; decision (24f)), does not require linear history, keeps blocking force pushes and keeps the six required checks ([`tools/ci/README.md`](tools/ci/README.md#human-steps-the-developer)). It requires **no approval** while the developer is the only person with write access, because GitHub does not let a PR's author approve it: the required checks and, where the runbook asks for one, the second-agent review comment below are the review record. It requires one approval once a second person with write access joins. *Note (2026-11-20, lead decisions (32b), (32c) and (32g), approved by the owner; FIX-W63-DOCS):* branches must be up to date before merging (decision (31j)) on `main` and on the integration branch; `main` is protected before the first merge and binds the developer too, and the integration branch's ruleset requires the checks only, with the developer's admin bypass, so the integrator's direct pushes to it still work. If GitHub ever refuses an integrator push because of a rule, the bypass is gone: stop and ask, never work around it ([`tools/ci/README.md`](tools/ci/README.md#human-steps-the-developer), "Protect `main`" and "Protect the integration branch").
 - *Note (2026-11-16, lead decision (26e) of 2026-11-16, approved by the owner; FIX-W57-DOCS):* once `main` is the default branch, the developer squash-merges Dependabot's pull requests on `main`, and at the start of each wave the wave integrator takes in what landed there by merging `main` into the integration branch **with a merge commit, never a rebase**, so the task commits keep their hashes and `Task:` footers ([ADR-0028](docs/mvp/adr/0028-how-work-reaches-main.md) item 7, [conventions §11](docs/mvp/conventions.md#11-git-workflow)).
 
 **Second-agent review.** For the deep-review PRs of M3 (money and card code), and for other PRs when the developer asks, a fresh, read-only agent session without secrets reviews the PR before the developer does, and its findings are posted as one PR comment ([`docs/mvp/runbooks/second-agent-review.md`](docs/mvp/runbooks/second-agent-review.md)). Every high finding is fixed or answered before the merge. If you are started as that reviewing session, follow [`docs/mvp/runbooks/second-agent-review-prompt.md`](docs/mvp/runbooks/second-agent-review-prompt.md) as it is on `main`: read only, never push commits, never change anything on GitHub.
@@ -146,7 +146,7 @@ If a decision is unavoidable, take the conservative, simple option for a solo de
 
 ## 10. Commands cheat sheet
 
-The root scripts are created by the M0 foundation tasks. Until they exist, only the plan linter works. If a script name differs in `package.json`, `package.json` wins and this table is fixed in the same PR.
+The root scripts below exist; the M0 foundation tasks created them. If a script name differs in `package.json`, `package.json` wins and this table is fixed in the same PR.
 
 | Command | What it does |
 |---|---|
@@ -183,6 +183,6 @@ Local services: PostgreSQL `127.0.0.1:5432`, Redis `127.0.0.1:6379`, Mailpit SMT
 | `ota/backend`, `ota/frontend`, `ota/admin`, `ota/sdk` | OTA API (NestJS), hosted storefront (vanilla), OTA admin (Next.js), JS SDK |
 | `packages/*` | `config`, `logger`, `db`, `crypto`, `errors`, `api-types`, `testing` (devDependency only) |
 | `deploy/` | Caddyfile, systemd units, VM, deploy and backup scripts, env templates |
-| `tools/` | `plan-lint`, `reference-data`, `amadeus-stub`, `e2e` |
+| `tools/` | `plan-lint`, `reference-data`, `amadeus-stub`, `e2e`, `ci` (the CI checks and their tests), `dev` (local development helpers), `perf` (performance smoke tests and their helpers) |
 | `docs/mvp/` | Decisions, architecture, conventions, tech stack, ADRs, plans, runbooks |
 | `docs/velexis-sdk/`, `docs/amadeus-api/` | Reference contracts and designs (reuse, do not redo, do not edit) |
