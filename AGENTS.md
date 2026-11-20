@@ -92,6 +92,7 @@ A task is done only when **all** of these hold:
 - [ ] No test was deleted, skipped, loosened or given a longer timeout to make it pass (§7).
 - [ ] Migrations, if any, follow [`conventions.md` §9](docs/mvp/conventions.md#9-database-migrations), run from scratch and as an upgrade, and the regenerated table types are committed.
 - [ ] Docs are updated: README or docs files affected by the change, the [configuration matrix](docs/mvp/architecture.md#6-configuration-matrix), `.env.example` and the `deploy/env` template for new variables (with the human step "add it to `/etc/velexis` before the next deploy" in the PR), and an **ADR** for any new or changed decision (status `Proposed`).
+- [ ] The guidebook is current: a change to a screen, endpoint, table, flow or term also updates [`guidebook/content`](guidebook/README.md) and rebuilds the bundle (`node guidebook/tools/build.mjs`), a fixed known issue updates or removes its entry in `guidebook/content/issues/issues.json`, and `node --test guidebook/tools/guidebook.test.mjs` passes, as CI runs it (lead decisions (35d) and (35e) of 2026-11-20, approved by the owner; FIX-W66-DOCS).
 - [ ] The plan status is set to `done (PR #n)`, the task heading ends with ` ✅`, and `node tools/plan-lint/plan-lint.mjs` passes.
 - [ ] The security checklist in [`conventions.md` §12](docs/mvp/conventions.md#12-security-checklist-every-pr) is ticked.
 - [ ] M3 deep-review PRs: the [second-agent review](docs/mvp/runbooks/second-agent-review.md) comment is linked in the PR, and every high finding is fixed or answered.
@@ -170,6 +171,8 @@ The root scripts below exist; the M0 foundation tasks created them. If a script 
 | `pnpm dev:keys` | Create local key files in `.local/keys/` |
 | `pnpm stub:amadeus` | Start the Amadeus stub on `127.0.0.1:4900` |
 | `node tools/plan-lint/plan-lint.mjs` (or `pnpm plan:lint`) | Validate the task plans and print the critical path (`--graph` for a Mermaid graph) |
+| `node guidebook/tools/build.mjs` | Validate the guidebook's content and rebuild its bundle `guidebook/dist/content.js` (`--check --strict` only checks that the bundle is up to date, with no error and no warning; [`guidebook/README.md`](guidebook/README.md)) |
+| `node --test guidebook/tools/guidebook.test.mjs` | The guidebook's tests, as CI's `build-test` runs them: they fail on a stale bundle or a broken reference |
 | `stripe listen --forward-to localhost:4000/webhooks/stripe/velexis/test` | Forward Stripe test webhooks to the local OTA backend |
 | `stripe listen --forward-to localhost:3100/webhooks/stripe/billing` | Forward Stripe billing webhooks to the local platform backend |
 
@@ -184,5 +187,6 @@ Local services: PostgreSQL `127.0.0.1:5432`, Redis `127.0.0.1:6379`, Mailpit SMT
 | `packages/*` | `config`, `logger`, `db`, `crypto`, `errors`, `api-types`, `testing` (devDependency only) |
 | `deploy/` | Caddyfile, systemd units, VM, deploy and backup scripts, env templates |
 | `tools/` | `plan-lint`, `reference-data`, `amadeus-stub`, `e2e`, `ci` (the CI checks and their tests), `dev` (local development helpers), `perf` (performance smoke tests and their helpers) |
+| `guidebook/` | The Velexis guidebook: a static HTML guide to every app (usage and architecture, journeys, known issues, glossary), its content in `guidebook/content` ([`guidebook/README.md`](guidebook/README.md)) |
 | `docs/mvp/` | Decisions, architecture, conventions, tech stack, ADRs, plans, runbooks |
 | `docs/velexis-sdk/`, `docs/amadeus-api/` | Reference contracts and designs (reuse, do not redo, do not edit) |
