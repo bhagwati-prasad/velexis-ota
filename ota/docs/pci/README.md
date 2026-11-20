@@ -82,43 +82,10 @@ Every reference of the pack to code, a test or a VM setting is a relative link, 
 Line numbers move when the files change; the piece finds the line again. Choose a piece that occurs on that line alone in its file where the line allows it (`AllowUsers ${ADMIN_USER} ${DEPLOY_USER}`, not `AllowUsers`, which a comment can hold too). This command, run from the repository root, checks that every linked file exists, every linked heading of a Markdown file exists, every line exists, and every piece is on its line; for a piece that is not, it says where the piece is now, or on which lines when several hold it (then read them and choose). It prints each problem and exits 1 when there is one (when the pack was written on `6d8ab82`, all 394 references passed). Run it at each review and after changes to the files the pack points at, and correct the line numbers it reports.
 
 ```bash
-node --input-type=module - <<'EOF'
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-const dir = "ota/docs/pci";
-const slug = (h) => h.replace(/^#+ /, "").trim().toLowerCase().replace(/[^\p{L}\p{N} _-]/gu, "").replace(/ /g, "-");
-const link = /\[((?:[^[\]]|\[[^\]]*\])*)\]\(([^)\s]+)\)(?: `((?:[^`\\]|\\.)+)`)?/g;
-let checked = 0, problems = 0;
-const problem = (text) => { problems += 1; console.log(`PROBLEM ${text}`); };
-for (const file of readdirSync(dir).filter((f) => f.endsWith(".md"))) {
-  const text = readFileSync(join(dir, file), "utf8").replace(/```[\s\S]*?```/g, (m) => m.replace(/[^\n]/g, " "));
-  for (const [, , target, piece] of text.matchAll(link)) {
-    if (/^[a-z]+:/.test(target) || target.startsWith("#")) continue;
-    checked += 1;
-    const [path, anchor] = target.split("#");
-    const abs = resolve(dirname(join(dir, file)), path);
-    if (!existsSync(abs)) { problem(`${file}: ${target}: no such file`); continue; }
-    if (anchor === undefined) continue;
-    const lines = /^L(\d+)$/.exec(anchor);
-    if (lines === null) {
-      const headings = readFileSync(abs, "utf8").split("\n").filter((l) => /^#{1,6} /.test(l)).map(slug);
-      if (abs.endsWith(".md") && !headings.includes(anchor)) problem(`${file}: ${target}: no such heading`);
-      continue;
-    }
-    const content = statSync(abs).isFile() ? readFileSync(abs, "utf8").split("\n") : [];
-    const line = content[Number(lines[1]) - 1];
-    if (piece === undefined) { problem(`${file}: ${target}: no piece of the line after the link`); continue; }
-    const wanted = piece.replace(/\\\|/g, "|");
-    if (line !== undefined && line.includes(wanted)) continue;
-    const now = content.flatMap((l, i) => (l.includes(wanted) ? [i + 1] : []));
-    const where = now.length === 0 ? "no line has it" : now.length === 1 ? `now on line ${now[0]}` : `on lines ${now.join(", ")}`;
-    problem(`${file}: ${target}: \`${piece}\` is not on ${line === undefined ? "that line (no such line)" : "that line"}: ${where}`);
-  }
-}
-console.log(`${checked} references checked, ${problems} problems`);
-process.exitCode = problems === 0 ? 0 : 1;
-EOF
+node tools/ci/check-pci-refs.mjs
 ```
+
+*Note (2026-11-20, lead decision (33i), approved by the owner; FIX-W64-TOOLS):* the command is the committed script [`tools/ci/check-pci-refs.mjs`](../../../tools/ci/check-pci-refs.mjs), which replaces the copy of it this section held, with the same checks, output and exit code; it finds the repository from its own location, so it also runs from another folder (`--root <dir>` checks another tree). Its partner `node tools/ci/fix-pci-refs.mjs [--dry-run]` moves each line number whose piece has left its line to the nearest line that holds the piece, in the link's URL and in its text, and prints every move; with `--dry-run` it prints the same and writes nothing. A `CHECK` line means that several lines hold the piece and the reference moved to the nearest of them: read the target and correct the line by hand when the nearest line is not the right one (the check passes either way, so only reading tells). A `CANNOT PLACE` line means that no line holds the piece, or that two lines are equally near: the reference stays as it was, to be corrected by hand (with a new piece chosen by the rule above when the old one is gone), and the fixer exits 1. Run the check first (the fixer stops with an error at a line link to a file that no longer exists), then the fixer, read every `CHECK` and `CANNOT PLACE` line, and run the check again. The repository's own references are checked by running this command (at each review, by every task that touches a file the pack points at, and by the wave integrator after the merges), not by CI: a pull request, a Dependabot one included, never goes red over a moved reference that only an agent can place. CI runs only the two scripts' tests (`tools/ci/pci-refs.test.mjs`), on small trees of their own; the one exception, older than this note, is the pack's references into `.github/workflows/ci.yml`, which `tools/ci/ci-workflow.test.mjs` also checks (SDK-019, ADR-0029 decision D18), a file whose lines only agents move.
 
 ## 6. Review record
 
