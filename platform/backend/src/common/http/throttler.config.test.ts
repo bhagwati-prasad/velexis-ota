@@ -1,8 +1,10 @@
 // The `ip` tracker of the platform API's rate limits (PBE-009, throttler.config.ts). Every end-user address counts as
 // @nestjs/throttler's `normalizeIp(ip, DEFAULT_IPV6_SUBNET_PREFIX)` has it (lead decision (32f) of 2026-11-20): an
 // IPv4-mapped address and, since 6.8.0, a NAT64 well-known-prefix address count as their embedded IPv4 address, any
-// other IPv6 address for its /64. 6.7.1 counted every NAT64 address for 64:ff9b::/64, one bucket for all the IPv4
-// hosts behind NAT64. Documentation addresses only (RFC 5737, RFC 3849; the prefixes of RFC 6052 and RFC 8215).
+// other IPv6 address for its /64, except the loopback address ::1, which stays '::1' (normalizeIp's own special case;
+// lead decision (33g) of 2026-11-20). 6.7.1 counted every NAT64 address for 64:ff9b::/64, one bucket for all the IPv4
+// hosts behind NAT64. Documentation addresses only (RFC 5737, RFC 3849; the prefixes of RFC 6052 and RFC 8215), and
+// the loopback address.
 import { describe, expect, it } from "vitest";
 import { BFF_KEY_HEADER, BffKey, END_USER_IP_HEADER, resolveEndUser } from "./end-user";
 import { trackerValue } from "./throttler.config";
@@ -29,6 +31,14 @@ const COUNTED_PER_64 = [
   ["64:ff9b:1::c000:201", "64:ff9b:1::/64"],
 ] as const;
 
+/** The loopback address ::1 in written forms that net.isIP accepts. */
+const LOOPBACK_FORMS = [
+  "::1",
+  "0:0:0:0:0:0:0:1",
+  "0000:0000:0000:0000:0000:0000:0000:0001",
+  "::0:1",
+] as const;
+
 /** The `ip` tracker value the rate-limit guards count for a request whose context holds end-user IP `ip`. */
 function ipTracker(ip: string): string | undefined {
   return trackerValue("ip", {}, { ip, actor: undefined });
@@ -43,9 +53,24 @@ describe("the ip tracker", () => {
   });
 
   it("counts any other IPv6 address for its /64 [FIX-W63-PLATFORM]", () => {
+    // Except the loopback address ::1, which stays '::1' (normalizeIp's own special case; lead decision (33g), the
+    // case below).
     for (const [ip, tracker] of COUNTED_PER_64) {
       expect(ipTracker(ip), ip).toBe(tracker);
     }
+  });
+
+  it("counts the loopback address ::1, in any written form, as '::1', not for ::/64 [FIX-W64-TRACKERS]", () => {
+    // normalizeIp's own special case (lead decision (33g) of 2026-11-20): the loopback address keeps a bucket of its
+    // own, also as the request's own address (a call on the VM itself without the BFF key), while every other address
+    // of ::/64 counts for ::/64, as other IPv6 addresses count for their /64 above.
+    for (const ip of LOOPBACK_FORMS) {
+      const socket = resolveEndUser({ headers: {}, ip, socket: { remoteAddress: ip } }, key);
+      expect(ipTracker(ip), ip).toBe("::1");
+      expect(socket.source, ip).toBe("socket");
+      expect(ipTracker(socket.ip), `${ip} as the request's address`).toBe("::1");
+    }
+    expect(ipTracker("::2")).toBe("::/64");
   });
 
   it("counts the same after EndUserMiddleware has put the address into the request context [FIX-W63-PLATFORM]", () => {

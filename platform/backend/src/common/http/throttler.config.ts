@@ -12,8 +12,9 @@
 //   `normalizeIp` (the library's own default tracker) has it: an IPv4-mapped (`::ffff:a.b.c.d`) address and, since
 //   6.8.0, a NAT64 well-known-prefix (`64:ff9b::a.b.c.d`) address as its embedded IPv4 address, in dotted or hex
 //   notation (`::ffff:192.0.2.1` and `64:ff9b::192.0.2.1` → `192.0.2.1`); any other IPv6 address for its /64
-//   (`2001:db8:0:7::1` → `2001:db8:0:7::/64`): one IPv6 user holds a whole /64 and could otherwise take a fresh
-//   bucket with every address of it;
+//   (`2001:db8:0:7::1` → `2001:db8:0:7::/64`), except the loopback address `::1`, which stays `::1` (`normalizeIp`'s
+//   own special case, in any written form): one IPv6 user holds a whole /64 and could otherwise take a fresh bucket
+//   with every address of it;
 // - `email`: the `email` of the request body, trimmed and lower-cased;
 // - `account`: the authenticated account of the request context (set by the auth guard, PBE-012);
 // - `domain`: the `domainId` path parameter.
@@ -205,8 +206,9 @@ export function trackerDigest(by: RateLimitTracker, value: string): string {
  * The tracker value of `by` for a request, or `undefined` when the request has none (no account yet, no `email`, no
  * `domainId`). The IP is @nestjs/throttler's `normalizeIp(ip, DEFAULT_IPV6_SUBNET_PREFIX)`: an IPv4 address is itself,
  * an IPv4-mapped (`::ffff:192.0.2.1`) or, since 6.8.0, NAT64 well-known-prefix (`64:ff9b::192.0.2.1`) address its
- * embedded IPv4 address (`192.0.2.1`), any other IPv6 address its /64 (`2001:db8:0:7::1` → `2001:db8:0:7::/64`). The
- * IP always exists inside the API's pipeline; its absence is a bug and throws.
+ * embedded IPv4 address (`192.0.2.1`), any other IPv6 address its /64 (`2001:db8:0:7::1` → `2001:db8:0:7::/64`),
+ * except the loopback address `::1`, which stays `::1` (`normalizeIp`'s own special case, in any written form). The IP
+ * always exists inside the API's pipeline; its absence is a bug and throws.
  */
 export function trackerValue(
   by: RateLimitTracker,

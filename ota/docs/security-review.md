@@ -166,6 +166,13 @@ bucket `64:ff9b::/64`. No behaviour changed (only the tracker's comment): a unit
 and the `bookings.lookup` failure counters use, and fails both when the tracker skips the library's normalisation and
 when it maps NAT64 addresses as 6.7.1 did.
 
+*Note (2026-11-20, lead decision (33g), approved by the owner; FIX-W64-TRACKERS):* of the other IPv6 addresses the note
+above counts for their /64, one is excepted: the loopback address `::1`, which stays `::1` (`normalizeIp`'s own special
+case, in any written form, `0:0:0:0:0:0:0:1` included), so it never shares the bucket `::/64` of the other addresses of
+that /64. No behaviour changed (only the tracker's comment): a unit test of
+[`rate-limits.test.ts`](../backend/src/common/http/rate-limits.test.ts) pins `::1` → `::1` through the tracker and fails
+when the tracker counts the loopback address for `::/64`.
+
 ### 3.3 Response headers
 
 Every JSON answer carries `Content-Security-Policy: default-src 'none';frame-ancestors 'none'`, HSTS,

@@ -171,7 +171,8 @@ describe("trackers", () => {
 
   it("count an IPv4-mapped or NAT64 well-known-prefix address as its IPv4, other IPv6 for its /64 [FIX-W63-OTA]", () => {
     // @nestjs/throttler 6.8.0's normalizeIp, which the tracker calls (lead decision (32f) of 2026-11-20). 6.7.1 counted
-    // every NAT64 address for 64:ff9b::/64, one bucket for all the IPv4 hosts behind NAT64.
+    // every NAT64 address for 64:ff9b::/64, one bucket for all the IPv4 hosts behind NAT64. Of the other IPv6 addresses,
+    // the loopback address ::1 stays '::1' (normalizeIp's own special case; lead decision (33g), the case below).
     const ipOf = (ip: string) => trackerValue("ip", sources({ ip }));
 
     for (const ip of [
@@ -186,6 +187,17 @@ describe("trackers", () => {
     // The local-use prefix 64:ff9b:1::/48 (RFC 8215) is not the well-known one: the address counts for its /64.
     expect(ipOf("64:ff9b:1::c000:201")).toBe("64:ff9b:1::/64");
     expect(ipOf("2001:db8:0:7::1")).toBe("2001:db8:0:7::/64");
+  });
+
+  it("count the loopback address ::1, in any written form, as '::1', not for ::/64 [FIX-W64-TRACKERS]", () => {
+    // normalizeIp's own special case (lead decision (33g) of 2026-11-20): the loopback address keeps a bucket of its
+    // own, while every other address of ::/64 counts for ::/64, as other IPv6 addresses count for their /64 above.
+    const ipOf = (ip: string) => trackerValue("ip", sources({ ip }));
+
+    for (const ip of ["::1", "0:0:0:0:0:0:0:1", "0000:0000:0000:0000:0000:0000:0000:0001", "::0:1"]) {
+      expect(ipOf(ip), ip).toBe("::1");
+    }
+    expect(ipOf("::2")).toBe("::/64");
   });
 
   it("read the e-mail trimmed and in lower case, and the booking reference of the tenant", () => {

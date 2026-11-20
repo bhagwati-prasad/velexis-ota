@@ -17,8 +17,9 @@
 //   requires and checks (OBE-060, OADR-0011 point 9), so the console sign-ins of every OTA, which all arrive from the
 //   admin server, never share one bucket. Every address counts as @nestjs/throttler's `normalizeIp` (the library's own
 //   default tracker) has it: an IPv4-mapped (`::ffff:a.b.c.d`) address and, since 6.8.0, a NAT64 well-known-prefix
-//   (`64:ff9b::a.b.c.d`) address as its embedded IPv4 address; any other IPv6 address for its /64: one IPv6 user holds
-//   a whole /64;
+//   (`64:ff9b::a.b.c.d`) address as its embedded IPv4 address; any other IPv6 address for its /64, except the loopback
+//   address `::1`, which stays `::1` (`normalizeIp`'s own special case, in any written form): one IPv6 user holds a
+//   whole /64;
 // - `email`: the request body's `email`, trimmed and lower-cased (a body without one is not counted by that limit);
 // - `tenant`: the resolved tenant (tenant guard);
 // - `principal`: the staff session (`asn_…`) of a request with a signed-in staff member (the staff guard, OBE-059),
